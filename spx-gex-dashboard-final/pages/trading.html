@@ -1,0 +1,321 @@
+    <!-- ═══ PAGE: TRADING ═══ -->
+  <div id="page-trading" style="display:none;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+    <header style="display:flex;align-items:center;justify-content:space-between;padding:16px 32px;border-bottom:1px solid #23252b;background:#141519;position:sticky;top:0;z-index:10;flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="font-size:14px;font-weight:700">Journaling Dashboard</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div class="market-badge">Market Open</div>
+      </div>
+    </header>
+    <div class="dashboard-body">
+      <!-- Stats extraction results land here -->
+      <div id="stats-results-area"></div>
+      <div class="filters-bar">
+        <div class="filter-group">
+          <button class="trading-btn active" onclick="filterJournals('all',this)">All Journals</button>
+          <button class="trading-btn" onclick="filterJournals('verified',this)"><span style="color:#5e626d">✓</span> Verified</button>
+          <button class="trading-btn" onclick="filterJournals('manual',this)"><span style="color:#5e626d">✎</span> Manual</button>
+          <div style="width:1px;height:16px;background:#23252b;margin:0 8px"></div>
+          <button class="trading-btn" onclick="toggleDropdown('accounts',this)">All Accounts ▾</button>
+          <button class="trading-btn" onclick="toggleDropdown('strategies',this)">All Strategies ▾</button>
+          <button class="trading-btn" onclick="toggleDropdown('date',this)">May 14, 2026 ▾</button>
+        </div>
+        <div class="filter-group">
+          <button class="trading-btn" onclick="exportCSV()">Export CSV</button>
+          <button class="trading-btn active" style="background:#f0f0f5;color:#0b0c10" onclick="syncData()">Sync</button>
+          <button class="trading-btn" onclick="openNewJournalModal()">+ New Journal</button>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab active" onclick="switchJournalTab('journal',this)">Journal</div>
+        <div class="tab" onclick="switchJournalTab('comparison',this)">Comparison</div>
+        <div class="tab" onclick="switchJournalTab('analysis',this)">Analysis</div>
+      </div>
+      <div class="trade-panel">
+        <div class="kpi-strip">
+          <div class="kpi-card">
+            <div class="kpi-title">Day Win %</div>
+            <div class="kpi-val" style="color:#5e626d">—</div>
+            <div class="kpi-sub" style="color:#5e626d">0W - 0L</div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" style="width:0%;background:#10b981"></div>
+              <div class="progress-bar-fill" style="width:0%;background:#ef4444"></div>
+            </div>
+            <div class="kpi-footer-text">
+              <span class="trade-text-green">0 wins</span>
+              <span class="trade-text-red">0 losses</span>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Avg Win / Loss</div>
+            <div class="kpi-val" style="color:#5e626d">—</div>
+            <div class="kpi-sub">Avg Absolute Trade</div>
+            <div style="margin-top:auto">
+              <div class="mini-stat"><span style="width:12px">W</span><div class="mini-bar"><div style="width:0%;height:100%;background:#10b981"></div></div><span class="trade-text-green">—</span></div>
+              <div class="mini-stat"><span style="width:12px">L</span><div class="mini-bar"><div style="width:0%;height:100%;background:#ef4444"></div></div><span class="trade-text-red">—</span></div>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Long vs Short</div>
+            <div class="kpi-val" style="color:#5e626d">—</div>
+            <div class="kpi-sub">Total Net PnL</div>
+            <div style="margin-top:auto">
+              <div class="mini-stat"><span style="width:12px">L</span><div class="mini-bar"><div style="width:0%;height:100%;background:#10b981"></div></div><span class="trade-text-green">—</span></div>
+              <div class="mini-stat"><span style="width:12px">S</span><div class="mini-bar"><div style="width:0%;height:100%;background:#ef4444"></div></div><span class="trade-text-red">—</span></div>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Max Streaks</div>
+            <div class="kpi-val" style="color:#5e626d">—</div>
+            <div class="kpi-sub">Best win streak</div>
+            <div style="margin-top:auto">
+              <div class="mini-stat"><span>Consecutive wins</span><span class="trade-text-green">—</span></div>
+              <div class="mini-stat"><span>Consecutive losses</span><span class="trade-text-red">—</span></div>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Avg Duration</div>
+            <div class="kpi-val" style="color:#5e626d">—</div>
+            <div class="kpi-sub">Per trade</div>
+            <div style="margin-top:auto">
+              <div class="mini-stat"><span>Total Trades</span><span style="color:#f0f0f5">0</span></div>
+              <div class="mini-stat"><span>Net PnL/Trade</span><span class="trade-text-green">—</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="charts-strip">
+        <div class="trade-panel">
+          <div class="trade-panel-header">Capture Efficiency Score</div>
+          <div class="chart-container"><canvas id="efficiencyChart"></canvas></div>
+        </div>
+        <div class="trade-panel">
+          <div class="trade-panel-header">Cumulative PnL <span class="trade-text-green">—</span></div>
+          <div class="chart-container"><canvas id="cumulChart"></canvas></div>
+        </div>
+        <div class="trade-panel">
+          <div class="trade-panel-header">Drawdown (Max) <span class="trade-text-red">—</span></div>
+          <div class="chart-container"><canvas id="drawdownChart"></canvas></div>
+        </div>
+        <div class="trade-panel">
+          <div class="trade-panel-header">PnL Per Trade</div>
+          <div class="chart-container"><canvas id="pnlBarChart"></canvas></div>
+        </div>
+      </div>
+      <div class="blueprint-grid">
+        <div class="bp-card" style="opacity:0.3">
+          <div class="bp-title">1. Replication Blueprint</div>
+          <div class="bp-desc">Start trading to generate insights and build your personalized trading plan.</div>
+        </div>
+        <div class="bp-card" style="opacity:0.3">
+          <div class="bp-title">2. Risk Analysis</div>
+          <div class="bp-desc">Track your win/loss ratios and risk patterns as you build your session history.</div>
+        </div>
+        <div class="bp-card" style="opacity:0.3">
+          <div class="bp-title">3. Performance Metrics</div>
+          <div class="bp-desc">Monitor your ETD, capture efficiency, and drawdown to optimize your strategy.</div>
+        </div>
+        <div class="bp-card" style="opacity:0.3">
+          <div class="bp-title">4. Daily Discipline</div>
+          <div class="bp-desc">Maintain consistent execution and track key performance indicators each day.</div>
+        </div>
+      </div>
+      <div class="alert-banner" style="opacity:0.3">
+        <div style="font-size:20px">⚠️</div>
+        <div>
+          <strong>Risk Management</strong>
+          <p>Your alerts and warnings will appear here as you log trades. Start by creating your first journal entry for today.</p>
+        </div>
+      </div>
+      <div class="tables-grid">
+        <div class="trade-panel">
+          <div class="trade-panel-header collapsible-header" onclick="togglePanel('targetsPanel',this)">
+            <span>Session vs Targets</span>
+            <span class="chevron">▼</span>
+          </div>
+          <div id="targetsPanel" class="panel-content">
+            <table class="trade-table" style="background:transparent">
+              <tbody>
+                <tr>
+                  <td style="color:#5e626d;border-bottom:1px solid #23252b">Avg Win</td>
+                  <td style="text-align:right;border-bottom:1px solid #23252b;color:#5e626d">—</td>
+                </tr>
+                <tr>
+                  <td style="color:#5e626d;border-bottom:1px solid #23252b">Avg Loss</td>
+                  <td style="text-align:right;border-bottom:1px solid #23252b;color:#5e626d">—</td>
+                </tr>
+                <tr>
+                  <td style="color:#5e626d;border-bottom:1px solid #23252b">Avg MAE</td>
+                  <td style="text-align:right;border-bottom:1px solid #23252b;color:#5e626d">—</td>
+                </tr>
+                <tr>
+                  <td style="color:#5e626d;border-bottom:none">Win Ratio</td>
+                  <td style="text-align:right;border-bottom:none;color:#5e626d">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="trade-panel">
+          <div class="trade-panel-header collapsible-header" onclick="togglePanel('logPanel',this)">
+            <span>Session Trade Log (0 Executions)</span>
+            <span class="chevron">▼</span>
+          </div>
+          <div id="logPanel" class="panel-content">
+            <div class="trade-table-wrapper">
+              <table class="trade-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Side</th>
+                    <th>Net P&L</th>
+                    <th>Cum P&L</th>
+                    <th>MAE</th>
+                    <th>MFE</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody id="tradeLog"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="trade-panel">
+        <div class="calendar-header">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="font-weight:700;font-size:14px">Session Calendar</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:16px">
+            <span style="color:#8b8f98;cursor:pointer">&lt; &nbsp; <strong style="color:#f0f0f5">May 2026</strong> &nbsp; &gt;</span>
+            <button class="trading-btn" onclick="triggerUpload()">Upload Data</button>
+          </div>
+        </div>
+        <input type="file" id="dataUploader" accept="image/*,.csv" style="display:none" onchange="handleFileUpload(event)">
+        <div class="calendar-grid">
+          <div class="cal-day-header">Sun</div><div class="cal-day-header">Mon</div><div class="cal-day-header">Tue</div><div class="cal-day-header">Wed</div><div class="cal-day-header">Thu</div><div class="cal-day-header">Fri</div><div class="cal-day-header">Sat</div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell" onclick="selectDay(this,1)"><div class="cal-date">1</div></div>
+          <div class="cal-cell" onclick="selectDay(this,2)"><div class="cal-date">2</div></div>
+          <div class="cal-cell" onclick="selectDay(this,3)"><div class="cal-date">3</div></div>
+          <div class="cal-cell" onclick="selectDay(this,4)"><div class="cal-date">4</div></div>
+          <div class="cal-cell" onclick="selectDay(this,5)"><div class="cal-date">5</div></div>
+          <div class="cal-cell" onclick="selectDay(this,6)"><div class="cal-date">6</div></div>
+          <div class="cal-cell" onclick="selectDay(this,7)"><div class="cal-date">7</div></div>
+          <div class="cal-cell" onclick="selectDay(this,8)"><div class="cal-date">8</div></div>
+          <div class="cal-cell" onclick="selectDay(this,9)"><div class="cal-date">9</div></div>
+          <div class="cal-cell" onclick="selectDay(this,10)"><div class="cal-date">10</div></div>
+          <div class="cal-cell" onclick="selectDay(this,11)"><div class="cal-date">11</div></div>
+          <div class="cal-cell" onclick="selectDay(this,12)"><div class="cal-date">12</div></div>
+          <div class="cal-cell" onclick="selectDay(this,13)"><div class="cal-date">13</div></div>
+          <div class="cal-cell" onclick="selectDay(this,14)"><div class="cal-date">14</div></div>
+          <div class="cal-cell active" onclick="selectDay(this,15)"><div class="cal-date" style="color:#f0f0f5;font-weight:700">15</div></div>
+          <div class="cal-cell" onclick="selectDay(this,16)"><div class="cal-date">16</div></div>
+          <div class="cal-cell" onclick="selectDay(this,17)"><div class="cal-date">17</div></div>
+          <div class="cal-cell" onclick="selectDay(this,18)"><div class="cal-date">18</div></div>
+          <div class="cal-cell" onclick="selectDay(this,19)"><div class="cal-date">19</div></div>
+          <div class="cal-cell" onclick="selectDay(this,20)"><div class="cal-date">20</div></div>
+          <div class="cal-cell" onclick="selectDay(this,21)"><div class="cal-date">21</div></div>
+          <div class="cal-cell" onclick="selectDay(this,22)"><div class="cal-date">22</div></div>
+          <div class="cal-cell" onclick="selectDay(this,23)"><div class="cal-date">23</div></div>
+          <div class="cal-cell" onclick="selectDay(this,24)"><div class="cal-date">24</div></div>
+          <div class="cal-cell" onclick="selectDay(this,25)"><div class="cal-date">25</div></div>
+          <div class="cal-cell" onclick="selectDay(this,26)"><div class="cal-date">26</div></div>
+          <div class="cal-cell" onclick="selectDay(this,27)"><div class="cal-date">27</div></div>
+          <div class="cal-cell" onclick="selectDay(this,28)"><div class="cal-date">28</div></div>
+          <div class="cal-cell" onclick="selectDay(this,29)"><div class="cal-date">29</div></div>
+          <div class="cal-cell" onclick="selectDay(this,30)"><div class="cal-date">30</div></div>
+          <div class="cal-cell" onclick="selectDay(this,31)"><div class="cal-date">31</div></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+          <div class="cal-cell empty"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEW JOURNAL MODAL -->
+  <div class="modal-overlay" id="newJournalModal">
+    <div class="modal" style="max-width:520px;width:95vw">
+      <div class="modal-header">
+        <div class="modal-title">New Journal Entry</div>
+        <button class="close-btn" onclick="closeNewJournalModal()">×</button>
+      </div>
+      <div class="modal-body" style="gap:10px">
+
+        <!-- Date -->
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Trading Date</label>
+          <input type="date" id="journalDate" class="form-input">
+        </div>
+
+        <!-- Row 1: Net P&L · Trades -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Net P&amp;L ($)</label>
+            <input type="number" id="jNetPnl" class="form-input" placeholder="e.g. 312.50" step="0.01">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Total Trades</label>
+            <input type="number" id="jTrades" class="form-input" placeholder="e.g. 8" step="1" min="0">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Win Rate (%)</label>
+            <input type="number" id="jWinRate" class="form-input" placeholder="e.g. 62.5" step="0.1" min="0" max="100">
+          </div>
+        </div>
+
+        <!-- Row 2: Avg Win · Avg Loss · Profit Factor -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Avg Win ($)</label>
+            <input type="number" id="jAvgWin" class="form-input" placeholder="e.g. 187.00" step="0.01">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Avg Loss ($)</label>
+            <input type="number" id="jAvgLoss" class="form-input" placeholder="e.g. -95.00" step="0.01">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Profit Factor</label>
+            <input type="number" id="jProfitFactor" class="form-input" placeholder="e.g. 1.87" step="0.01" min="0">
+          </div>
+        </div>
+
+        <!-- Row 3: Avg MAE · Avg MFE · Commissions -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Avg MAE ($)</label>
+            <input type="number" id="jAvgMAE" class="form-input" placeholder="e.g. -44.00" step="0.01">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Avg MFE ($)</label>
+            <input type="number" id="jAvgMFE" class="form-input" placeholder="e.g. 210.00" step="0.01">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Commissions ($)</label>
+            <input type="number" id="jCommissions" class="form-input" placeholder="e.g. -24.00" step="0.01">
+          </div>
+        </div>
+
+        <!-- Notes -->
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Notes</label>
+          <textarea id="jNotes" class="form-input" rows="2" placeholder="Market conditions, key trades, observations…" style="resize:vertical;min-height:48px;font-family:Arial,sans-serif;font-size:12px"></textarea>
+        </div>
+
+      </div>
+      <div id="journal-modal-error" style="font-size:11px;color:#ff4757;padding:0 20px;min-height:0;transition:all .2s"></div>
+      <div class="modal-footer">
+        <button class="trading-btn" onclick="closeNewJournalModal()">Cancel</button>
+        <button class="trading-btn active" onclick="saveNewJournal()" style="background:#f0f0f5;color:#0b0c10">Save Entry</button>
+      </div>
+    </div>
+  </div>

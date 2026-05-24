@@ -1,0 +1,31 @@
+{
+  "name": "spx-gex-dashboard-tastytrade",
+  "version": "2.0.0",
+  "description": "SPX GEX Dashboard — TastyTrade + dxLink WebSocket",
+  "main": "proxy-tastytrade.js",
+  "scripts": {
+    "start": "node proxy-tastytrade.js",
+    "dev": "nodemon proxy-tastytrade.js"
+  },
+  "keywords": [
+    "spx",
+    "gex",
+    "options",
+    "tastytrade",
+    "dxlink",
+    "dashboard"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.18.2",
+    "socket.io": "^4.8.3",
+    "ws": "^8.20.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

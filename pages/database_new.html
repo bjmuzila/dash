@@ -1,0 +1,363 @@
+<!-- ═══ PAGE: DATABASE ═══ -->
+<div id="page-database" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+  <!-- Tab Bar -->
+  <div style="display:flex;gap:0;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;padding:0">
+    <button class="db-main-tab active" onclick="showDatabaseTab('data')" style="flex:0 0 auto;padding:8px 16px;font-size:10px;background:var(--bg1);border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.08em">📊 Data</button>
+    <button class="db-main-tab" onclick="showDatabaseTab('moves')" style="flex:0 0 auto;padding:8px 16px;font-size:10px;background:var(--bg1);border:none;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;font-weight:700;text-transform:uppercase;letter-spacing:.08em">📈 Est. Moves</button>
+  </div>
+
+  <!-- DATA TAB -->
+  <div id="db-data-section" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden">
+    <div style="padding:7px 16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">🗄 Database</span>
+        <span id="db-record-count" style="font-size:9px;color:var(--text3)">—</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="dbRefreshCounts()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Refresh</button>
+        <button onclick="exportDatabaseToJSON()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--green);cursor:pointer;border-radius:3px">Export JSON</button>
+      </div>
+    </div>
+    
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <!-- Tabs -->
+      <div style="display:flex;gap:1px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 8px">
+        <button onclick="dbShowTab('mvc')" class="db-tab active" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan)">MVC</button>
+        <button onclick="dbShowTab('premium')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Premium Flow</button>
+        <button onclick="dbShowTab('delta')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Cumulative Delta</button>
+        <button onclick="dbShowTab('greeks')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Greeks</button>
+      </div>
+      
+      <!-- Tab Content -->
+      <div style="flex:1;overflow-y:auto;padding:12px">
+        <!-- MVC Tab -->
+        <div id="db-tab-mvc" style="display:block">
+          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Max Volume Concentration (Last 24h)</div>
+          <table id="mvc-table" style="width:100%;font-size:9px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">OI+Vol Strike</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Value</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Vol Strike</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Price</th>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- Premium Flow Tab -->
+        <div id="db-tab-premium" style="display:none">
+          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Largest Premium Flows (Last 1h)</div>
+          <table id="premium-table" style="width:100%;font-size:9px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Strike</th>
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Exp</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Net Flow</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Total Vol</th>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- Cumulative Delta Tab -->
+        <div id="db-tab-delta" style="display:none">
+          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Latest Cumulative Delta Snapshot</div>
+          <table id="delta-table" style="width:100%;font-size:9px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Strike</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Call Δ</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Put Δ</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Net Δ</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Cumulative</th>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- Greeks Tab -->
+        <div id="db-tab-greeks" style="display:none">
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input type="number" id="greeks-strike" placeholder="Strike" style="width:80px;padding:4px;font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text1)">
+            <input type="text" id="greeks-exp" placeholder="YYYY-MM-DD" style="width:120px;padding:4px;font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text1)">
+            <button onclick="dbLoadGreeks()" style="padding:4px 8px;font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Load</button>
+          </div>
+          <table id="greeks-table" style="width:100%;font-size:9px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
+              <th style="text-align:right;padding:6px;color:var(--orange)">Call Δ</th>
+              <th style="text-align:right;padding:6px;color:var(--orange)">Call Γ</th>
+              <th style="text-align:right;padding:6px;color:var(--orange)">Call IV</th>
+              <th style="text-align:right;padding:6px;color:var(--red)">Put Δ</th>
+              <th style="text-align:right;padding:6px;color:var(--red)">Put Γ</th>
+              <th style="text-align:right;padding:6px;color:var(--red)">Put IV</th>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ESTIMATED MOVES TAB -->
+  <div id="db-moves-section" style="display:none;flex:1;flex-direction:column;min-height:0;overflow:hidden">
+    <div style="padding:7px 16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">📈 Estimated Moves</span>
+        <span id="em-target-date" style="font-size:9px;color:var(--text3)">—</span>
+        <div id="em-period-tabs" style="display:flex;align-items:center;gap:4px;margin-left:8px">
+          <button class="em-period-tab" data-period="daily" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('daily')" style="background:var(--bg2);border:1px solid var(--border);color:var(--cyan);font-size:10px;padding:4px 8px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Daily</button>
+          <button class="em-period-tab" data-period="weekly" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('weekly')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2);font-size:10px;padding:4px 8px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Weekly</button>
+          <select id="em-weekly-exp-select" onchange="window.onWeeklyExpChange && window.onWeeklyExpChange(this.value)"
+            style="display:none;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);font-size:9px;padding:4px 6px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.06em;outline:none">
+            <option value="">-- Auto --</option>
+          </select>
+          <button class="em-period-tab" data-period="monthly" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('monthly')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2);font-size:10px;padding:4px 8px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Monthly</button>
+          <select id="em-monthly-exp-select" onchange="window.onMonthlyExpChange && window.onMonthlyExpChange(this.value)"
+            style="display:none;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);font-size:9px;padding:4px 6px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.06em;outline:none">
+            <option value="">-- Auto --</option>
+          </select>
+        </div>
+        
+      </div>
+      <div style="display:flex;gap:8px">
+        <span id="em-status" style="font-size:10px;color:var(--text3);letter-spacing:.1em;text-transform:uppercase">Ready</span>
+        <button id="em-start-btn" onclick="window.refreshEstimatedMoves && window.refreshEstimatedMoves()" style="background:var(--bg2);border:1px solid var(--border);color:var(--cyan);font-size:10px;padding:4px 8px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Start</button>
+      </div>
+    </div>
+    
+    <div style="flex:1;display:flex;min-height:0;overflow:hidden;background:var(--bg0)">
+      <div style="width:180px;min-width:180px;flex-shrink:0;background:var(--bg0);border-right:1px solid var(--border);padding:12px;box-sizing:border-box;overflow-y:auto">
+        <div style="font-size:9px;color:var(--text3);letter-spacing:.1em;text-transform:uppercase;font-weight:700;margin-bottom:8px">Symbols</div>
+        <div id="em-symbol-list" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+          <div style="font-size:9px;color:var(--text3);letter-spacing:.1em;text-transform:uppercase;font-weight:700;margin-bottom:4px">Last Sync</div>
+          <div id="em-last-sync" style="font-size:10px;color:var(--text2);font-variant-numeric:tabular-nums">—</div>
+        </div>
+      </div>
+      
+      <div style="flex:1;min-width:0;overflow-y:auto;padding:12px">
+        <div style="background:var(--bg1);border:1px solid var(--border);border-radius:4px">
+          <div style="border-bottom:1px solid var(--border);background:var(--bg1);padding:10px;text-align:center">
+            <div style="font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:.12em;text-transform:uppercase"><span id="em-period-title">Daily</span> Estimated Move</div>
+          </div>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:10px">
+              <thead style="background:var(--bg2)">
+                <tr style="border-bottom:1px solid var(--border);color:var(--cyan);text-align:center;font-size:9px;letter-spacing:.1em;text-transform:uppercase">
+                  <th style="padding:8px;border-right:1px solid var(--border)">Ticker</th>
+                  <th style="padding:8px;border-right:1px solid var(--border)">Close</th>
+                  <th style="padding:8px;border-right:1px solid var(--border)">Exp</th>
+                  <th style="padding:8px;border-right:1px solid var(--border)">EM</th>
+                  <th style="padding:8px;border-right:1px solid var(--border)">Up</th>
+                  <th style="padding:8px">Down</th>
+                </tr>
+              </thead>
+              <tbody id="em-table-body" style="font-family:Consolas,Monaco,monospace"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ========== MAIN TAB SWITCHING ==========
+  function showDatabaseTab(section) {
+    const dataSection = document.getElementById('db-data-section');
+    const movesSection = document.getElementById('db-moves-section');
+    const buttons = document.querySelectorAll('.db-main-tab');
+    
+    if (section === 'data') {
+      dataSection.style.display = 'flex';
+      movesSection.style.display = 'none';
+      buttons[0].style.color = 'var(--cyan)';
+      buttons[0].style.borderBottomColor = 'var(--cyan)';
+      buttons[1].style.color = 'var(--text2)';
+      buttons[1].style.borderBottomColor = 'transparent';
+      dbRefreshCounts();
+      dbLoadMVC();
+    } else {
+      dataSection.style.display = 'none';
+      movesSection.style.display = 'flex';
+      buttons[0].style.color = 'var(--text2)';
+      buttons[0].style.borderBottomColor = 'transparent';
+      buttons[1].style.color = 'var(--cyan)';
+      buttons[1].style.borderBottomColor = 'var(--cyan)';
+      window.init_database && window.init_database();
+    }
+  }
+
+  // ========== DATA TAB FUNCTIONS ==========
+  function dbShowTab(tab) {
+    document.getElementById('db-tab-mvc').style.display = 'none';
+    document.getElementById('db-tab-premium').style.display = 'none';
+    document.getElementById('db-tab-delta').style.display = 'none';
+    document.getElementById('db-tab-greeks').style.display = 'none';
+    
+    document.querySelectorAll('.db-tab').forEach(b => {
+      b.style.borderBottomColor = 'transparent';
+      b.style.color = 'var(--text2)';
+    });
+    
+    document.getElementById('db-tab-' + tab).style.display = 'block';
+    event.target.style.borderBottomColor = 'var(--cyan)';
+    event.target.style.color = 'var(--cyan)';
+    
+    if (tab === 'mvc') dbLoadMVC();
+    else if (tab === 'premium') dbLoadPremium();
+    else if (tab === 'delta') dbLoadDelta();
+  }
+  
+  async function dbRefreshCounts() {
+    if (!DB || !DB.db) return;
+    const mvc = await DB._getAllRecords('mvc');
+    const pf = await DB._getAllRecords('premiumFlow');
+    const cd = await DB._getAllRecords('cumulativeDelta');
+    const gh = await DB._getAllRecords('greeksHistory');
+    const total = mvc.length + pf.length + cd.length + gh.length;
+    document.getElementById('db-record-count').textContent = `${total} records`;
+  }
+  
+  async function dbLoadMVC() {
+    if (!DB || !DB.db) return;
+    const records = await queryMVC_Recent(24);
+    const tbody = document.getElementById('mvc-table');
+    const rows = tbody.querySelectorAll('tr:not(:first-child)');
+    rows.forEach(r => r.remove());
+    
+    records.slice(-20).reverse().forEach(r => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border)';
+      tr.innerHTML = `
+        <td style="padding:6px;color:var(--text2)">${r.time || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${r.strikeOIVol?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${r.mvcValueOIVol?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${r.strikeVolOnly?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--cyan)">${r.currentPrice?.toFixed(2) || '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+  
+  async function dbLoadPremium() {
+    if (!DB || !DB.db) return;
+    const records = await queryPremiumFlow_TopTrades(1);
+    const tbody = document.getElementById('premium-table');
+    const rows = tbody.querySelectorAll('tr:not(:first-child)');
+    rows.forEach(r => r.remove());
+    
+    records.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border)';
+      const flowColor = r.flow > 0 ? 'var(--green)' : 'var(--red)';
+      tr.innerHTML = `
+        <td style="padding:6px;color:var(--text2)">${r.strike?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;color:var(--text2)">${r.expiration || '—'}</td>
+        <td style="padding:6px;text-align:right;color:${flowColor}">${r.flow?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--text3)">${r.volume?.toFixed(0) || '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+  
+  async function dbLoadDelta() {
+    if (!DB || !DB.db) return;
+    const records = await queryCumulativeDelta_Chart(1);
+    const tbody = document.getElementById('delta-table');
+    const rows = tbody.querySelectorAll('tr:not(:first-child)');
+    rows.forEach(r => r.remove());
+    
+    records.filter((_, i) => i % 2 === 0).forEach(r => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border)';
+      tr.innerHTML = `
+        <td style="padding:6px;color:var(--text2)">${r.strike?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${r.callDelta?.toFixed(3) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${r.putDelta?.toFixed(3) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--cyan)">${r.netDelta?.toFixed(3) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${r.cumulativeSum?.toFixed(3) || '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+  
+  async function dbLoadGreeks() {
+    const strike = parseFloat(document.getElementById('greeks-strike').value);
+    const exp = document.getElementById('greeks-exp').value;
+    if (!strike || !exp || !DB || !DB.db) return;
+    
+    const records = await DB.getGreeksHistory(strike, exp, 24);
+    const tbody = document.getElementById('greeks-table');
+    const rows = tbody.querySelectorAll('tr:not(:first-child)');
+    rows.forEach(r => r.remove());
+    
+    records.slice(-10).reverse().forEach(r => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border)';
+      const time = new Date(r.timestamp).toLocaleTimeString();
+      tr.innerHTML = `
+        <td style="padding:6px;color:var(--text2)">${time}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${r.call?.delta?.toFixed(3) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${r.call?.gamma?.toFixed(4) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${r.call?.iv?.toFixed(2) || '—'}%</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${r.put?.delta?.toFixed(3) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${r.put?.gamma?.toFixed(4) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${r.put?.iv?.toFixed(2) || '—'}%</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // Helper status setter for Estimated Moves
+  function setStatus(status, color) {
+    const el = document.getElementById('em-status');
+    if (el) {
+      el.textContent = status;
+      el.style.color = color;
+    }
+  }
+
+  // ========== ESTIMATED MOVES - FULL WORKING CODE ==========
+  const SYMBOLS = ['ESM','NQM','SPY','QQQ','SPX','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NDX','NFLX','SMH','PLTR'];
+  const API_SYMBOL = { ESM:'/ESM6', NQM:'/NQM6', SPX:'$SPX', NDX:'$NDX' };
+  const CHAIN_SYMBOL = { SPX:'$SPX', NDX:'$NDX' };
+  const FUTURE_PROXY = { ESM:'SPX', NQM:'NDX' };
+  const PERIODS = {
+    daily: { title:'Daily', minDays:0, maxDays:2, fallbackScale:1, note:'Daily uses yesterday\'s 4 PM Eastern close and the nearest available expiration ATM straddle when no daily expiration is listed.' },
+    weekly: { title:'Weekly', minDays:0, maxDays:10, fallbackScale:1, note:'Weekly pulls the nearest listed weekly expiration and estimates the move from the ATM straddle mid.' },
+    monthly: { title:'Monthly', minDays:21, maxDays:45, fallbackScale:Math.sqrt(4), note:'Monthly targets the nearest listed expiration about one month out. If unavailable, the weekly move is scaled by sqrt(4).' }
+  };
+  let activePeriod = 'daily';
+  let refreshBusy = false;
+  let lastDailyCloseLabel = '';
+  let weeklyExpOverride = '';
+  let monthlyExpOverride = '';
+  let knownExpirations = [];
+  let knownWeeklyExps = [];
+  let knownMonthlyExps = [];
+
+  function labelForDate(exp){ return exp ? new Date(exp+'T12:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric'}) : nextFridayLabel(); }
+  function nextFridayLabel(){ const d=new Date(); const add=(5-d.getDay()+7)%7 || 7; d.setDate(d.getDate()+add); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'}); }
+  function daysTo(exp){ return Math.ceil((new Date(exp+'T16:00:00') - new Date()) / 86400000); }
+  function previousTradingDate(){ const d=new Date(); d.setDate(d.getDate()-1); while(d.getDay()===0 || d.getDay()===6) d.setDate(d.getDate()-1); return d; }
+  function fmtPrice(ticker, num){ const n=(ticker === 'ESM' || ticker === 'NQM') ? Math.round(Number(num)*4)/4 : Number(num); return Number.isFinite(n) ? n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'; }
+  function fmtEm(num){ const n=Number(num); return Number.isFinite(n) ? n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:3}) : ''; }
+  function rowHtml(row){ const muted=row.error?'opacity:.55':''; return `<tr style="text-align:center;border-bottom:1px solid #1a2a3a;${muted}" title="${row.error ? row.error.replace(/"/g,'&quot;') : ''}"><td style="padding:8px;border-right:1px solid #1a2a3a;font-weight:700;color:#e8edf5">${row.ticker}</td><td style="padding:8px;border-right:1px solid #1a2a3a;color:#cbd5e1">${fmtPrice(row.ticker,row.close)}</td><td style="padding:8px;border-right:1px solid #1a2a3a;color:#7ab8ff">${row.expiration ? labelForDate(row.expiration) : ''}</td><td style="padding:8px;border-right:1px solid #1a2a3a;color:#e8c060">${fmtEm(row.em)}</td><td style="padding:8px;border-right:1px solid #1a2a3a;color:#00e676">${fmtPrice(row.ticker,row.up)}</td><td style="padding:8px;color:#ff4757">${fmtPrice(row.ticker,row.down)}</td></tr>`; }
+  function normalizeOptions(chain){ return (Array.isArray(chain?.options) ? chain.options : []).map(o=>({expiration:o.expiration || o.expirationDate,strike:Number(o.strike || o.strikePrice),type:String(o.optionType || o.type || '').toUpperCase(),bid:Number(o.bid || o.bidPrice || 0),ask:Number(o.ask || o.askPrice || 0),last:Number(o.last || o.mark || 0),iv:Number(o.iv || o.volatility || o.impliedVolatility || 0),dte:Number(o.dte || 0)})).filter(o=>o.expiration && Number.isFinite(o.strike)); }
+  function mid(o){ return Number.isFinite(o.bid) && Number.isFinite(o.ask) && o.bid>0 && o.ask>0 ? (o.bid+o.ask)/2 : (Number.isFinite(o.last) ? o.last : 0); }
+  async function fetchQuoteDetail(ticker){ const quoteSymbol=API_SYMBOL[ticker] || ticker; const quote=await window.API.fetchQuote(quoteSymbol); let previousClose=Number(quote.close || quote.closePrice || quote.previousClose); if(!Number.isFinite(previousClose) || previousClose<=0){ try{ const raw=await fetch(`http://localhost:3001/proxy/api/tt/quote/${encodeURIComponent(quoteSymbol)}`).then(r=>r.ok?r.json():null); const q=(raw?.data?.items || []).find(i=>i.symbol===quoteSymbol) || raw?.data?.items?.[0] || {}; previousClose=Number(q['close-price'] || q.close || q['prev-close'] || q['previous-close']); }catch(e){} } return { quote, close:Number(quote.price || quote.last || quote.close), previousClose }; }
+  async function fetchPrevious4pmClose(ticker){ const quoteSymbol=API_SYMBOL[ticker] || ticker; try{ const date=previousTradingDate(); const end=new Date(date); end.setHours(15,55,0,0); const start=new Date(end.getTime()-45*60000); const url=`http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=2&frequencyType=minute&frequency=5&startDate=${start.getTime()}&endDate=${end.getTime()}&needExtendedHoursData=false`; const data=await fetch(url).then(r=>r.ok?r.json():null); const candles=(data?.candles || []).filter(c=>Number.isFinite(Number(c.close))).sort((a,b)=>Number(a.datetime)-Number(b.datetime)); const closeCandle=candles.filter(c=>Number(c.datetime)<=end.getTime()).pop() || candles.pop(); const close=Number(closeCandle?.close); if(Number.isFinite(close) && close>0) { lastDailyCloseLabel=date.toLocaleDateString('en-US',{month:'numeric',day:'numeric'}); return close; } }catch(e){} return null; }
+  async function fetchFridayClose(ticker){ const quoteSymbol=API_SYMBOL[ticker] || ticker; try{ const today=new Date(); let fridayDate=new Date(today); const daysUntilFriday=(5-today.getDay()+7)%7 || 7; fridayDate.setDate(today.getDate()-daysUntilFriday); const end=new Date(fridayDate); end.setHours(15,55,0,0); const start=new Date(end.getTime()-45*60000); const url=`http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=2&frequencyType=minute&frequency=5&startDate=${start.getTime()}&endDate=${end.getTime()}&needExtendedHoursData=false`; const data=await fetch(url).then(r=>r.ok?r.json():null); const candles=(data?.candles || []).filter(c=>Number.isFinite(Number(c.close))).sort((a,b)=>Number(a.datetime)-Number(b.datetime)); const closeCandle=candles.filter(c=>Number(c.datetime)<=end.getTime()).pop() || candles.pop(); const close=Number(closeCandle?.close); if(Number.isFinite(close) && close>0) return close; }catch(e){} return null; }
+  function populateExpDropdown(id, expirations, overrideVal){ const sel=document.getElementById(id); if(!sel) return; const current=overrideVal || sel.value; sel.innerHTML='<option value="">-- Auto --</option>'; expirations.forEach(exp=>{ const opt=document.createElement('option'); opt.value=exp; const isWeekly=id==='em-weekly-exp-select'; opt.textContent=isWeekly ? exp : labelForDate(exp)+' ('+daysTo(exp)+'d)'; if(exp===current) opt.selected=true; sel.appendChild(opt); }); }
+  function updateExpPickerVisibility(){ const ws=document.getElementById('em-weekly-exp-select'); const ms=document.getElementById('em-monthly-exp-select'); if(ws) ws.style.display=(activePeriod==='weekly') ? 'inline-block' : 'none'; if(ms) ms.style.display=(activePeriod==='monthly') ? 'inline-block' : 'none'; }
+  window.onWeeklyExpChange=function(val){ weeklyExpOverride=val; };
+  window.onMonthlyExpChange=function(val){ monthlyExpOverride=val; };
+  function chooseExpiration(expirations, period){ if(!expirations.length) return ''; const cfg=PERIODS[period]; if(!cfg) return expirations[0]; return expirations.find(e=>{ const dt=daysTo(e); return dt >= cfg.minDays && dt <= cfg.maxDays; }) || expirations[0]; }
+  async function estimateMove(ticker){ if(FUTURE_PROXY[ticker]) return estimateFutureMove(ticker, FUTURE_PROXY[ticker]); const quoteDetail=await fetchQuoteDetail(ticker); let dailyClose=null; if(activePeriod === 'daily'){ dailyClose = await fetchPrevious4pmClose(ticker); } else if(activePeriod === 'weekly'){ dailyClose = await fetchFridayClose(ticker); } const close=activePeriod === 'daily' || activePeriod === 'weekly' ? (Number.isFinite(dailyClose) && dailyClose>0 ? dailyClose : quoteDetail.close) : quoteDetail.close; if(!Number.isFinite(close) || close<=0) throw new Error('No quote'); const targetExpForFetch = activePeriod === 'daily' ? (weeklyExpOverride || knownExpirations.find(e=>daysTo(e)>=0 && daysTo(e)<=1) || knownExpirations[0] || '') : activePeriod === 'weekly' ? (weeklyExpOverride || knownExpirations.find(e=>daysTo(e)>=1 && daysTo(e)<=7) || knownExpirations[0] || '') : (monthlyExpOverride || knownExpirations.find(e=>daysTo(e)>=21 && daysTo(e)<=45) || knownExpirations[0] || ''); const chainSym = (CHAIN_SYMBOL[ticker] || ticker).replace(/^\$/,''); const expParam = targetExpForFetch ? `&expiration=${encodeURIComponent(targetExpForFetch)}` : ''; const chainUrl = `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?atmOnly=true${expParam}`; const chain = await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}).catch(()=>({options:[]})); const options=normalizeOptions(chain); const expirations=[...new Set(options.map(o=>o.expiration))].sort(); const weeklyExp=chooseExpiration(expirations.length ? expirations : knownExpirations, 'weekly'); const targetExp=targetExpForFetch || (activePeriod === 'daily' ? chooseExpiration(expirations, 'weekly') : chooseExpiration(expirations, activePeriod)); const expOptions=options.filter(o=>o.expiration===targetExp); const strike=[...new Set(expOptions.map(o=>o.strike))].sort((a,b)=>Math.abs(a-close)-Math.abs(b-close))[0]; if(!Number.isFinite(strike)) throw new Error('No option strikes'); const call=expOptions.find(o=>o.strike===strike && (o.type==='CALL' || o.type==='C')); const put=expOptions.find(o=>o.strike===strike && (o.type==='PUT' || o.type==='P')); if(!call || !put) throw new Error('Missing ATM straddle'); const avgIV = ((call.iv || 0) + (put.iv || 0)) / 2; const dte = call.dte || put.dte || daysTo(targetExp); let em; if(avgIV > 0 && dte > 0){ em = 0.84 * avgIV * close * Math.sqrt(dte / 365); } else { em = mid(call) + mid(put); } if(activePeriod==='monthly' && targetExp===weeklyExp) em *= PERIODS[activePeriod].fallbackScale; return { ticker, close, em, up:close+em, down:close-em, expiration:targetExp, strike }; }
+  async function estimateFutureMove(futureTicker, indexTicker){ const futureQuote=await fetchQuoteDetail(futureTicker); const indexQuote=await fetchQuoteDetail(indexTicker); let futureDailyClose=null, indexDailyClose=null; if(activePeriod === 'daily'){ futureDailyClose = await fetchPrevious4pmClose(futureTicker); indexDailyClose = await fetchPrevious4pmClose(indexTicker); } else if(activePeriod === 'weekly'){ futureDailyClose = await fetchFridayClose(futureTicker); indexDailyClose = await fetchFridayClose(indexTicker); } const futureClose=activePeriod === 'daily' || activePeriod === 'weekly' ? (Number.isFinite(futureDailyClose) && futureDailyClose>0 ? futureDailyClose : futureQuote.previousClose) : futureQuote.close; const indexClose=activePeriod === 'daily' || activePeriod === 'weekly' ? (Number.isFinite(indexDailyClose) && indexDailyClose>0 ? indexDailyClose : indexQuote.previousClose) : indexQuote.close; if(!Number.isFinite(futureClose) || futureClose<=0 || !Number.isFinite(indexClose) || indexClose<=0) throw new Error('No quote'); const indexMove=await estimateMove(indexTicker); const basis=futureClose - indexClose; const up=indexMove.up + basis; const down=indexMove.down + basis; return { ticker:futureTicker, close:futureClose, em:indexMove.em, up, down, expiration:indexMove.expiration, strike:indexMove.strike }; }
+  function updatePeriodChrome(label){ const cfg=PERIODS[activePeriod]; document.querySelectorAll('.em-period-tab').forEach(btn=>{ const active=btn.dataset.period===activePeriod; btn.style.color=active ? '#00e5ff' : '#5a7a99'; btn.style.borderColor=active ? '#00e5ff' : '#1e3a5f'; }); const title=document.getElementById('em-period-title'); if(title) title.textContent=cfg.title; ['em-target-date'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=label || nextFridayLabel(); }); }
+  function toDateStr(d){ return d.toISOString().slice(0,10); }
+  function nextFridays(n){ const dates=[]; const d=new Date(); d.setHours(0,0,0,0); for(let i=1;dates.length<n;i++){ const t=new Date(d); t.setDate(d.getDate()+i); if(t.getDay()===5) dates.push(toDateStr(t)); } return dates; }
+  function lastTradingDaysOfMonth(n){ const dates=[]; const now=new Date(); for(let m=0;dates.length<n;m++){ const lastDay=new Date(now.getFullYear(), now.getMonth()+m+1, 0); while(lastDay.getDay()===0||lastDay.getDay()===6) lastDay.setDate(lastDay.getDate()-1); const s=toDateStr(lastDay); if(new Date(s+'T16:00:00')>=now) dates.push(s); } return dates; }
+  window.setEstimatedMovePeriod=function(period){ if(!PERIODS[period] || activePeriod===period) return; activePeriod=period; updatePeriodChrome(); updateExpPickerVisibility(); };
+  window.refreshEstimatedMoves=async function(){ if(refreshBusy) return; refreshBusy=true; setStatus('Syncing','#00e5ff'); const btn=document.getElementById('em-start-btn'); if(btn) btn.textContent='Refresh'; if(activePeriod==='weekly'){ const expSel=document.getElementById('em-weekly-exp-select'); const selectedExp=expSel?.value; if(selectedExp && selectedExp!==''){ await fetchWeeklyQuoteData(selectedExp); return; } } const body=document.getElementById('em-table-body'); if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570">Loading estimated moves...</td></tr>'; try{ if(!window.API?.isReady?.()) await new Promise(resolve=>window.addEventListener('api-ready', resolve, { once:true })); const settled=[]; for(let i=0;i<SYMBOLS.length;i+=4){ const batch=SYMBOLS.slice(i,i+4); const results=await Promise.allSettled(batch.map(estimateMove)); settled.push(...results); if(i+4<SYMBOLS.length) await new Promise(r=>setTimeout(r,400)); } const rows=settled.map((r,i)=>r.status==='fulfilled' ? r.value : { ticker:SYMBOLS[i], error:r.reason?.message || 'Unavailable' }); if(body) body.innerHTML=rows.map(rowHtml).join(''); const exp=rows.find(r=>r.expiration)?.expiration; const label=labelForDate(exp); try{ const chainSym=(CHAIN_SYMBOL['SPX'] || 'SPX').replace(/^\$/,''); const chainUrl=`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?daysToExpiration=90`; const ch=await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}); const opts=normalizeOptions(ch); const allExps=[...new Set(opts.map(o=>o.expiration))].filter(e=>daysTo(e)>=0).sort(); if(allExps.length){ knownExpirations=allExps; knownWeeklyExps=allExps.filter(e=>new Date(e+'T12:00:00').getDay()===5); knownMonthlyExps=allExps.filter(e=>{ const d=new Date(e+'T12:00:00'); const lastDay=new Date(d.getFullYear(),d.getMonth()+1,0); return (lastDay.getDate()-d.getDate())<=3; }); } }catch(e){} if(!knownWeeklyExps.length) knownWeeklyExps=nextFridays(8); if(!knownMonthlyExps.length) knownMonthlyExps=lastTradingDaysOfMonth(6); populateExpDropdown('em-weekly-exp-select', knownWeeklyExps, weeklyExpOverride); populateExpDropdown('em-monthly-exp-select', knownMonthlyExps, monthlyExpOverride); updateExpPickerVisibility(); updatePeriodChrome(label); const sync=document.getElementById('em-last-sync'); if(sync) sync.textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); setStatus('Live','#00e676'); }catch(e){ setStatus('Error','#ff4757'); if(body) body.innerHTML=`<tr><td colspan="6" style="padding:24px;text-align:center;color:#ff4757">${e.message}</td></tr>`; }finally{ refreshBusy=false; updateExpPickerVisibility(); } };
+  async function fetchWeeklyQuoteData(expiration){ const body=document.getElementById('em-table-body'); if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570">Fetching quote data and pricing history...</td></tr>'; try{ const chainSym=(CHAIN_SYMBOL['SPX'] || 'SPX').replace(/^\$/,''); const expParam=`&expiration=${encodeURIComponent(expiration)}`; const chainUrl=`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?atmOnly=true${expParam}`; const chain=await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}).catch(()=>({options:[]})); const options=normalizeOptions(chain); const priceHistUrl=`http://localhost:3001/proxy/api/tt/pricehistory/${encodeURIComponent(chainSym)}?expiration=${encodeURIComponent(expiration)}`; const priceHist=await fetch(priceHistUrl).then(r=>r.ok?r.json():null).catch(()=>null); const rows=options.slice(0,20).map((o,i)=>{ const histEntry=priceHist?.history?.find(h=>h.strike===o.strike && h.type===o.type); return `<tr style="border-bottom:1px solid var(--border);${i%2?'background:var(--bg2)':''}"><td style="padding:8px">${o.strike}</td><td style="padding:8px">${o.type}</td><td style="padding:8px;text-align:right">${o.bid.toFixed(2)}</td><td style="padding:8px;text-align:right">${o.ask.toFixed(2)}</td><td style="padding:8px;text-align:right">${histEntry?histEntry.prevClose.toFixed(2):'-'}</td><td style="padding:8px;text-align:right">${histEntry?histEntry.volume:'-'}</td></tr>`; }); if(body){ body.innerHTML=rows.length ? `<tr style="border-bottom:1px solid var(--border);background:var(--bg2);color:var(--cyan)"><td style="padding:8px">Strike</td><td style="padding:8px">Type</td><td style="padding:8px">Bid</td><td style="padding:8px">Ask</td><td style="padding:8px">Prev Close</td><td style="padding:8px">Volume</td></tr>${rows.join('')}` : '<tr><td colspan="6" style="padding:24px;text-align:center;color:#ff4757">No data returned</td></tr>'; } setStatus('Loaded','#00e676'); }catch(e){ setStatus('Error','#ff4757'); if(body) body.innerHTML=`<tr><td colspan="6" style="padding:24px;text-align:center;color:#ff4757">${e.message}</td></tr>`; } }
+  window.init_database=async function(){ const list=document.getElementById('em-symbol-list'); if(list) list.innerHTML=SYMBOLS.map(s=>`<span style="font-size:13px;color:#7ab8ff;background:#07111d;border:1px solid #13253a;padding:4px 7px;border-radius:2px">${s === 'CORNER' ? 'COIN' : s}</span>`).join(''); const label=nextFridayLabel(); updatePeriodChrome(label); setStatus('Ready','#5a7a99'); const body=document.getElementById('em-table-body'); if(body) body.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#3a5570">Click Start to load estimated moves</td></tr>'; try{ const chainSym=(CHAIN_SYMBOL['SPX'] || 'SPX').replace(/^\$/,''); const chainUrl=`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?daysToExpiration=90`; const ch=await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}); const opts=normalizeOptions(ch); const allExps=[...new Set(opts.map(o=>o.expiration))].filter(e=>daysTo(e)>=0).sort(); if(allExps.length){ knownWeeklyExps=allExps.filter(e=>new Date(e+'T12:00:00').getDay()===5); knownMonthlyExps=allExps.filter(e=>{ const d=new Date(e+'T12:00:00'); const lastDay=new Date(d.getFullYear(),d.getMonth()+1,0); return (lastDay.getDate()-d.getDate())<=3; }); } }catch(e){} if(!knownWeeklyExps.length) knownWeeklyExps=nextFridays(8); if(!knownMonthlyExps.length) knownMonthlyExps=lastTradingDaysOfMonth(6); populateExpDropdown('em-weekly-exp-select', knownWeeklyExps, weeklyExpOverride); populateExpDropdown('em-monthly-exp-select', knownMonthlyExps, monthlyExpOverride); updateExpPickerVisibility(); };
+</script>

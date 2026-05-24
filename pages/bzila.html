@@ -1,0 +1,1113 @@
+  <!-- ═══ PAGE: BZILA FLOW ═══ -->
+  <div id="page-bzila" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:#0a0f16">
+    
+    <!-- Header Controls -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0d1520;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:12px">
+        <svg style="width:24px;height:24px;color:#10b981" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+        </svg>
+        <h1 style="font-size:18px;font-weight:700;color:#fff;margin:0">Futures Order Flow</h1>
+        <div id="bzila-status" style="font-size:11px;padding:4px 8px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">● CONNECTING</div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:20px">
+        <!-- Fade Time -->
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:11px;color:#6a8aaa;font-weight:600">Fade (min)</label>
+          <input id="bzila-fade" type="range" min="5" max="60" value="15" 
+            style="width:120px;height:4px;background:#1a2a3a;border-radius:2px;outline:none;cursor:pointer" />
+          <span id="bzila-fade-val" style="font-size:11px;color:#fff;font-family:monospace;width:24px">15</span>
+        </div>
+
+        <!-- ES Min Size -->
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:11px;color:#6a8aaa;font-weight:600">ES Min</label>
+          <input id="bzila-es-min" type="range" min="50" max="250" step="5" value="100" 
+            style="width:120px;height:4px;background:#1a2a3a;border-radius:2px;outline:none;cursor:pointer" />
+          <span id="bzila-es-min-val" style="font-size:11px;color:#fff;font-family:monospace;width:24px">100</span>
+        </div>
+
+        <!-- NQ Min Size -->
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:11px;color:#6a8aaa;font-weight:600">NQ Min</label>
+          <input id="bzila-nq-min" type="range" min="50" max="200" step="5" value="50" 
+            style="width:120px;height:4px;background:#1a2a3a;border-radius:2px;outline:none;cursor:pointer" />
+          <span id="bzila-nq-min-val" style="font-size:11px;color:#fff;font-family:monospace;width:24px">50</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content: SPX Premium Flow + Cumulative Delta + Cluster Events -->
+    <div style="flex:1;display:grid;grid-template-columns:1fr 1fr 320px;gap:12px;padding:12px;overflow:hidden;min-height:0">
+      
+      <!-- SPX Premium Flow Chart -->
+      <div style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+        <div style="padding:12px;border-bottom:1px solid #1a2a3a;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
+          <h2 style="font-size:13px;font-weight:700;color:#10b981;margin:0;display:flex;align-items:center;gap:8px">
+            <svg style="width:18px;height:18px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+            </svg>
+            SPX 0DTE Premium Flow
+          </h2>
+          <div style="display:flex;gap:12px;font-size:11px;font-family:monospace">
+            <div><span style="color:#10b981">●</span> <span id="bzila-call-flow" style="color:#cbd5e1">$0</span></div>
+            <div><span style="color:#ef4444">●</span> <span id="bzila-put-flow" style="color:#cbd5e1">$0</span></div>
+            <div><span style="color:#fbbf24">●</span> NET: <span id="bzila-net-flow" style="color:#fbbf24;font-weight:700">$0</span></div>
+          </div>
+        </div>
+        <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+          <canvas id="bzila-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+        </div>
+      </div>
+
+      <!-- Cumulative Delta + Divergence -->
+      <div style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+        <div style="padding:12px;border-bottom:1px solid #1a2a3a;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
+          <h2 style="font-size:13px;font-weight:700;color:#a78bfa;margin:0;display:flex;align-items:center;gap:8px">
+            <svg style="width:18px;height:18px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
+            </svg>
+            Cumulative Delta + Divergence
+          </h2>
+          <div style="display:flex;gap:12px;font-size:11px;font-family:monospace">
+            <div><span style="color:#a78bfa">●</span> CVD: <span id="bzila-cvd-val" style="color:#cbd5e1">0</span></div>
+            <div><span style="color:#fbbf24">●</span> ES: <span id="bzila-spx-val" style="color:#fbbf24">--</span></div>
+            <div id="bzila-divergence" style="padding:2px 6px;border-radius:3px;background:#1a2a3a;color:#94a3b8">NO DIV</div>
+          </div>
+        </div>
+        <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+          <canvas id="bzila-cvd-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+        </div>
+      </div>
+
+      <!-- Cluster Events Feed -->
+      <div style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+        <div style="padding:12px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+          <h2 style="font-size:13px;font-weight:700;color:#fbbf24;margin:0;display:flex;align-items:center;gap:8px">
+            <svg style="width:18px;height:18px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+            </svg>
+            Cluster Events
+          </h2>
+        </div>
+        <div id="bzila-events" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:0"></div>
+      </div>
+
+    </div>
+  </div><!-- /page-bzila -->
+
+  <script>
+  (function() {
+    'use strict';
+
+    const PRICE_BUCKET_ES = 0.50;
+    const PRICE_BUCKET_NQ = 2.00;
+    const ES_REST_SYMBOL = '/ESM6';
+    const NQ_REST_SYMBOL = '/NQM6';
+    const ES_STREAM_SYMBOL = '/ESM26:XCME';
+    const NQ_STREAM_SYMBOL = '/NQM26:XCME';
+
+    // State
+    const defaultState = {
+      esMinSize: 100,
+      nqMinSize: 50,
+      fadeMinutes: 15,
+      esPrice: 5900.00,
+      nqPrice: 20800.00,
+      esTrades: [],
+      nqTrades: [],
+      events: [],
+      ws: null,
+      connected: false,
+      // SPX 0DTE Premium Flow state
+      spxPrice: 0,
+      callPremiumFlow: 0,    // Cumulative OTM call net drift ($)
+      putPremiumFlow: 0,     // Cumulative OTM put net drift, visually inverted ($)
+      netPremiumFlow: 0,     // Call drift + inverted put drift
+      flowHistory: [],       // [{ts, call, put, net, spx}] - snapshots for chart
+      // Cumulative Volume Delta state
+      cvd: 0,                // Running CVD from ES futures
+      cvdHistory: [],        // [{ts, cvd, price}] - ES-only chart + divergence
+      lastDivergence: null,  // 'bullish' | 'bearish' | null
+      lastFlowCross: null,
+      // SPX option quotes cache (for NBBO lookup at trade time)
+      spxQuotes: {},         // symbol -> {bid, ask, ts}
+      futureQuotes: {},      // symbol -> {bid, ask, ts}
+      lastTradeBySymbol: {}, // symbol -> last trade price for side fallback
+      lastCvdTs: 0
+    };
+    const state = window.__bzilaFlowState || defaultState;
+    window.__bzilaFlowState = state;
+
+    // Elements
+    const elements = {
+      fade: document.getElementById('bzila-fade'),
+      fadeVal: document.getElementById('bzila-fade-val'),
+      esMin: document.getElementById('bzila-es-min'),
+      esMinVal: document.getElementById('bzila-es-min-val'),
+      nqMin: document.getElementById('bzila-nq-min'),
+      nqMinVal: document.getElementById('bzila-nq-min-val'),
+      status: document.getElementById('bzila-status'),
+      events: document.getElementById('bzila-events'),
+      // SPX Premium Flow
+      premiumCanvas: document.getElementById('bzila-premium-canvas'),
+      callFlow: document.getElementById('bzila-call-flow'),
+      putFlow: document.getElementById('bzila-put-flow'),
+      netFlow: document.getElementById('bzila-net-flow'),
+      // CVD + Divergence
+      cvdCanvas: document.getElementById('bzila-cvd-canvas'),
+      cvdVal: document.getElementById('bzila-cvd-val'),
+      spxVal: document.getElementById('bzila-spx-val'),
+      divergence: document.getElementById('bzila-divergence')
+    };
+
+    // Handle premium chart hover
+    elements.premiumCanvas?.addEventListener('mousemove', (e) => {
+      if (!state.premiumChartConfig) return;
+      const rect = elements.premiumCanvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const cfg = state.premiumChartConfig;
+      const { hist, padding, xAt, yAt, min, max } = cfg;
+
+      // Find closest point
+      let closest = -1, minDist = Infinity;
+      hist.forEach((p, i) => {
+        const px = xAt(i);
+        const dist = Math.abs(px - x);
+        if (dist < 30 && dist < minDist) {
+          minDist = dist;
+          closest = i;
+        }
+      });
+
+      if (closest >= 0) {
+        const p = hist[closest];
+        const time = new Date(p.ts).toLocaleTimeString();
+        const html = `
+          <div style="background:#0d1520;border:1px solid #1a2a3a;border-radius:6px;padding:10px;font-size:11px;font-family:monospace">
+            <div style="color:#94a3b8;margin-bottom:6px">${time}</div>
+            <div style="color:#22c55e;margin-bottom:4px">Calls: <strong>${fmtMoney(p.call)}</strong></div>
+            <div style="color:#ef4444;margin-bottom:4px">Puts: <strong>${fmtMoney(p.put)}</strong></div>
+            <div style="color:#fbbf24;border-top:1px solid #1a2a3a;padding-top:6px;margin-top:6px">NET: <strong>${fmtMoney(p.net)}</strong></div>
+          </div>
+        `;
+        showTooltip(e, html);
+      } else {
+        hideTooltip();
+      }
+    });
+
+    elements.premiumCanvas?.addEventListener('mouseleave', hideTooltip);
+
+    // Tooltip helpers
+    let tooltipEl = null;
+    function showTooltip(e, html) {
+      if (!tooltipEl) {
+        tooltipEl = document.createElement('div');
+        tooltipEl.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;max-width:200px;';
+        document.body.appendChild(tooltipEl);
+      }
+      tooltipEl.innerHTML = html;
+      tooltipEl.style.left = (e.clientX + 10) + 'px';
+      tooltipEl.style.top = (e.clientY + 10) + 'px';
+      tooltipEl.style.display = 'block';
+    }
+    function hideTooltip() {
+      if (tooltipEl) tooltipEl.style.display = 'none';
+    }
+    function hideTooltip() {
+      if (tooltipEl) tooltipEl.style.display = 'none';
+    }
+
+    // Control listeners
+    elements.fade?.addEventListener('input', e => {
+      state.fadeMinutes = parseInt(e.target.value);
+      elements.fadeVal.textContent = state.fadeMinutes;
+    });
+    elements.esMin?.addEventListener('input', e => {
+      state.esMinSize = parseInt(e.target.value);
+      elements.esMinVal.textContent = state.esMinSize;
+    });
+    elements.nqMin?.addEventListener('input', e => {
+      state.nqMinSize = parseInt(e.target.value);
+      elements.nqMinVal.textContent = state.nqMinSize;
+    });
+
+    function syncControls() {
+      if (elements.fade) elements.fade.value = state.fadeMinutes;
+      if (elements.fadeVal) elements.fadeVal.textContent = state.fadeMinutes;
+      if (elements.esMin) elements.esMin.value = state.esMinSize;
+      if (elements.esMinVal) elements.esMinVal.textContent = state.esMinSize;
+      if (elements.nqMin) elements.nqMin.value = state.nqMinSize;
+      if (elements.nqMinVal) elements.nqMinVal.textContent = state.nqMinSize;
+      updateFlowLabels();
+    }
+
+    // Setup canvas
+    function setupCanvas(canvas) {
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = parent.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      return ctx;
+    }
+
+    // Format money compactly
+    function fmtMoney(n) {
+      const abs = Math.abs(n);
+      const sign = n < 0 ? '-' : '';
+      if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(2) + 'B';
+      if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M';
+      if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'K';
+      return sign + '$' + abs.toFixed(0);
+    }
+
+    // ════════════════════════════════════════════
+    // SPX 0DTE PREMIUM FLOW LOGIC
+    // ════════════════════════════════════════════
+
+    // Determine if SPX option symbol is a Call or Put
+    // OCC format: SPXW  YYMMDDC00000000 / P00000000
+    function getOptionType(symbol) {
+      const m = symbol.match(/\d{6}([CP])\d/);
+      return m ? m[1] : null; // 'C' or 'P'
+    }
+
+    // Check if symbol is 0DTE SPX (expires today)
+    function isSpx0DTE(symbol) {
+      if (!symbol.startsWith('.SPXW') && !symbol.startsWith('SPXW')) return false;
+      const m = symbol.match(/(\d{6})[CP]/);
+      if (!m) return false;
+      const dateStr = m[1]; // YYMMDD
+      const today = new Date();
+      const yy = String(today.getFullYear()).slice(2);
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      return dateStr === `${yy}${mm}${dd}`;
+    }
+
+    function getOptionStrike(symbol) {
+      const m = symbol.match(/[CP](\d+(?:\.\d+)?)$/);
+      if (!m) return null;
+      const raw = m[1];
+      const strike = parseFloat(raw);
+      if (!Number.isFinite(strike)) return null;
+      return raw.length === 8 ? strike / 1000 : strike;
+    }
+
+    function isOtmOption(symbol, optType) {
+      const strike = getOptionStrike(symbol);
+      const refPrice = state.spxPrice || state.esPrice || 0;
+      if (!strike || !refPrice) return false;
+      if (optType === 'C') return strike > refPrice;
+      if (optType === 'P') return strike < refPrice;
+      return false;
+    }
+
+    function getAggressorDirection(item, quote) {
+      const tradePrice = parseFloat(item.price || 0);
+      if (quote && quote.bid > 0 && quote.ask > 0) {
+        if (tradePrice >= quote.ask) return 1;
+        if (tradePrice <= quote.bid) return -1;
+        return 0;
+      }
+      const ag = item.aggressorSide || '';
+      if (ag === 'BUY') return 1;
+      if (ag === 'SELL') return -1;
+      return 0;
+    }
+
+    // Process incoming SPX option trade
+    function processSpxTrade(item) {
+      const symbol = item.eventSymbol || '';
+      if (!isSpx0DTE(symbol)) return;
+
+      const optType = getOptionType(symbol);
+      if (!optType) return;
+      if (!isOtmOption(symbol, optType)) return;
+
+      const tradePrice = parseFloat(item.price || 0);
+      const size = parseInt(item.size || 0);
+      if (!tradePrice || !size) return;
+
+      const quote = state.spxQuotes[symbol];
+      const direction = getAggressorDirection(item, quote);
+      if (direction === 0) return;
+
+      const premium = tradePrice * size * 100;
+      const driftContribution = premium * direction;
+
+      if (optType === 'C') state.callPremiumFlow += driftContribution;
+      else if (optType === 'P') state.putPremiumFlow += -driftContribution;
+
+      state.netPremiumFlow = state.callPremiumFlow + state.putPremiumFlow;
+      updateFlowLabels();
+    }
+
+    // Process SPX quote update (track NBBO for each option)
+    function processSpxQuote(item) {
+      const symbol = item.eventSymbol || '';
+      if (!symbol.startsWith('.SPXW') && !symbol.startsWith('SPXW')) return;
+      const bid = parseFloat(item.bidPrice || 0);
+      const ask = parseFloat(item.askPrice || 0);
+      if (bid > 0 && ask > 0) {
+        state.spxQuotes[symbol] = { bid, ask, ts: Date.now() };
+      }
+    }
+
+    function normalizeFeedData(data) {
+      if (!Array.isArray(data)) return [];
+      if (data.length && typeof data[0] === 'object' && !Array.isArray(data[0])) return data;
+      const eventType = data[0];
+      const rows = data[1];
+      if (typeof eventType !== 'string' || !Array.isArray(rows)) return [];
+      const fieldsByType = {
+        Quote: ['bidPrice','askPrice','bidSize','askSize'],
+        Trade: ['price','dayVolume','size'],
+        TradeETH: ['price','dayVolume','size']
+      };
+      const fields = fieldsByType[eventType];
+      if (!fields) return [];
+      const rowsIncludeType = rows[0] === eventType;
+      const step = fields.length + (rowsIncludeType ? 2 : 1);
+      const out = [];
+      for (let i = 0; i <= rows.length - step; i += step) {
+        const base = i + (rowsIncludeType ? 2 : 1);
+        const item = {
+          eventType: rowsIncludeType ? rows[i] : eventType,
+          eventSymbol: rowsIncludeType ? rows[i + 1] : rows[i],
+          time: Date.now()
+        };
+        fields.forEach((field, j) => item[field] = rows[base + j]);
+        out.push(item);
+      }
+      return out;
+    }
+
+    function getSessionOpenTs() {
+      const now = new Date();
+      const open = new Date();
+      open.setHours(9, 30, 0, 0);
+      if (now < open) open.setDate(open.getDate() - 1);
+      return open.getTime();
+    }
+
+    function addEvent(evt) {
+      state.events.unshift({ id: Math.random().toString(), timestamp: Date.now(), ...evt });
+      if (state.events.length > 50) state.events.pop();
+      renderEvents();
+    }
+
+    // Real-time cluster detection from time & sales
+    function detectCluster(instrument, currentTrade, minSize) {
+      // Post any individual trade that meets or exceeds the minimum size
+      if (currentTrade.size < minSize) return;
+      
+      addEvent({
+        timestamp: currentTrade.timestamp,
+        instrument: instrument,
+        price: currentTrade.price,
+        side: currentTrade.side,
+        volume: currentTrade.size,
+        trades: 1
+      });
+    }
+
+    // Snapshot flow + cvd every 30 seconds for full-session chart history
+    function snapshotFlow() {
+      const ts = Date.now();
+      const prev = state.flowHistory[state.flowHistory.length - 1];
+      state.flowHistory.push({
+        ts,
+        call: state.callPremiumFlow,
+        put: state.putPremiumFlow,
+        net: state.netPremiumFlow,
+        spx: state.esPrice
+      });
+      state.cvdHistory.push({
+        ts,
+        cvd: state.cvd,
+        price: state.esPrice
+      });
+      const sessionOpen = getSessionOpenTs();
+      state.flowHistory = state.flowHistory.filter(p => p.ts >= sessionOpen);
+      state.cvdHistory = state.cvdHistory.filter(p => p.ts >= sessionOpen);
+
+      if (prev) {
+        // Compare calls vs puts directly (not the net)
+        const prevCallAbovePut = prev.call > prev.put;
+        const currCallAbovePut = state.callPremiumFlow > state.putPremiumFlow;
+        
+        // Detect cross: was calls below puts, now calls above puts (or vice versa)
+        if (prevCallAbovePut !== currCallAbovePut) {
+          if (currCallAbovePut && !prevCallAbovePut) {
+            // Calls crossed above puts
+            state.lastFlowCross = 'calls-over-puts';
+            addEvent({
+              type: 'flow-cross',
+              title: 'CALLS OVER PUTS',
+              side: 'buy',
+              volume: Math.round(Math.abs(state.callPremiumFlow)),
+              trades: 1,
+              instrument: 'FLOW',
+              price: state.esPrice
+            });
+          } else if (!currCallAbovePut && prevCallAbovePut) {
+            // Puts crossed above calls
+            state.lastFlowCross = 'puts-over-calls';
+            addEvent({
+              type: 'flow-cross',
+              title: 'PUTS OVER CALLS',
+              side: 'sell',
+              volume: Math.round(Math.abs(state.putPremiumFlow)),
+              trades: 1,
+              instrument: 'FLOW',
+              price: state.esPrice
+            });
+          }
+        }
+      }
+
+      detectDivergence();
+      updateFlowLabels();
+    }
+
+    function updateFlowLabels() {
+      if (elements.callFlow) elements.callFlow.textContent = fmtMoney(state.callPremiumFlow);
+      if (elements.putFlow) elements.putFlow.textContent = fmtMoney(state.putPremiumFlow);
+      if (elements.netFlow) {
+        elements.netFlow.textContent = fmtMoney(state.netPremiumFlow);
+        elements.netFlow.style.color = state.netPremiumFlow >= 0 ? '#10b981' : '#ef4444';
+      }
+      if (elements.cvdVal) {
+        elements.cvdVal.textContent = state.cvd.toLocaleString();
+        elements.cvdVal.style.color = state.cvd >= 0 ? '#10b981' : '#ef4444';
+      }
+      if (elements.spxVal) elements.spxVal.textContent = state.esPrice ? state.esPrice.toFixed(2) : '--';
+    }
+
+    // ════════════════════════════════════════════
+    // DIVERGENCE DETECTION (CVD vs Price)
+    // ════════════════════════════════════════════
+    function detectDivergence() {
+      const hist = state.cvdHistory;
+      if (hist.length < 60) return; // need at least 2min of data
+
+      // Look at last ~5 minutes (150 snapshots @ 2s)
+      const window = hist.slice(-150);
+      if (window.length < 2) return;
+      
+      const prices = window.map(p => p.price);
+      const cvds = window.map(p => p.cvd);
+
+      const priceFirst = prices[0], priceLast = prices[prices.length - 1];
+      const cvdFirst = cvds[0], cvdLast = cvds[cvds.length - 1];
+
+      const priceChange = priceLast - priceFirst;
+      const cvdChange = cvdLast - cvdFirst;
+
+      const priceThreshold = state.esPrice * 0.0005; // 0.05%
+      const cvdThreshold = 500;
+
+      let div = null;
+      let divTitle = null;
+      
+      // Divergence 1: Price down, CVD up (bullish) OR Price up, CVD down (bearish)
+      if (priceChange < -priceThreshold && cvdChange > cvdThreshold) {
+        div = 'bullish';
+        divTitle = 'PRICE DOWN / CVD UP';
+      } else if (priceChange > priceThreshold && cvdChange < -cvdThreshold) {
+        div = 'bearish';
+        divTitle = 'PRICE UP / CVD DOWN';
+      }
+
+      // Divergence 2: CVD makes lower low but price doesn't
+      const priceMin = Math.min(...prices);
+      const priceMinIdx = prices.indexOf(priceMin);
+      const cvdMin = Math.min(...cvds);
+      const cvdMinIdx = cvds.indexOf(cvdMin);
+      
+      if (cvdMinIdx > priceMinIdx && cvds[cvdMinIdx] < cvds[0]) {
+        // CVD made a lower low more recently than price
+        const priceAtCvdLow = prices[cvdMinIdx];
+        if (priceAtCvdLow >= priceMin) {
+          div = 'bullish';
+          divTitle = 'CVD LOWER LOW / PRICE NOT';
+        }
+      }
+
+      // Update UI and send event
+      if (div && div !== state.lastDivergence) {
+        state.lastDivergence = div;
+        addEvent({
+          type: 'divergence',
+          title: divTitle,
+          side: div === 'bullish' ? 'buy' : 'sell',
+          volume: Math.abs(cvdChange),
+          trades: 1,
+          instrument: 'DIV',
+          price: state.esPrice
+        });
+      } else if (!div) {
+        state.lastDivergence = null;
+      }
+
+      if (elements.divergence) {
+        if (div === 'bullish') {
+          elements.divergence.textContent = '⬆ BULL DIV';
+          elements.divergence.style.background = '#065f46';
+          elements.divergence.style.color = '#6ee7b7';
+        } else if (div === 'bearish') {
+          elements.divergence.textContent = '⬇ BEAR DIV';
+          elements.divergence.style.background = '#7f1d1d';
+          elements.divergence.style.color = '#fca5a5';
+        } else {
+          elements.divergence.textContent = 'NO DIV';
+          elements.divergence.style.background = '#1a2a3a';
+          elements.divergence.style.color = '#94a3b8';
+        }
+      }
+    }
+
+    function processFutureQuote(item) {
+      const symbol = item.eventSymbol || '';
+      if (!symbol.startsWith('/ES') && !symbol.startsWith('/NQ')) return;
+      const bid = parseFloat(item.bidPrice || 0);
+      const ask = parseFloat(item.askPrice || 0);
+      if (bid > 0 && ask > 0) {
+        state.futureQuotes[symbol] = { bid, ask, ts: Date.now() };
+      }
+    }
+
+    function getAggressorSide(symbol, price, item) {
+      const bid = parseFloat(item.bidPrice || 0);
+      const ask = parseFloat(item.askPrice || 0);
+      const quote = (bid > 0 && ask > 0) ? { bid, ask } : state.futureQuotes[symbol];
+      if (quote && quote.bid > 0 && quote.ask > 0) {
+        if (price >= quote.ask) return 'buy';
+        if (price <= quote.bid) return 'sell';
+      }
+      const ag = item.aggressorSide || '';
+      if (ag === 'BUY') return 'buy';
+      if (ag === 'SELL') return 'sell';
+      const prev = state.lastTradeBySymbol[symbol];
+      if (prev == null || price === prev) return null;
+      return price > prev ? 'buy' : 'sell';
+    }
+
+    function pushLiveCvdPoint(timestamp) {
+      updateFlowLabels();
+      if (timestamp - state.lastCvdTs < 1000) return;
+      state.lastCvdTs = timestamp;
+      state.cvdHistory.push({ ts: timestamp, cvd: state.cvd, price: state.esPrice });
+      const sessionOpen = getSessionOpenTs();
+      state.cvdHistory = state.cvdHistory.filter(p => p.ts >= sessionOpen);
+    }
+
+    // ════════════════════════════════════════════
+    // CHART RENDERERS
+    // ════════════════════════════════════════════
+    function renderPremiumChart() {
+      const canvas = elements.premiumCanvas;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const W = parseFloat(canvas.style.width);
+      const H = parseFloat(canvas.style.height);
+      if (!W || !H) return;
+      ctx.clearRect(0, 0, W, H);
+
+      const padding = { l: 60, r: 10, t: 10, b: 20 };
+      const cw = W - padding.l - padding.r;
+      const ch = H - padding.t - padding.b;
+
+      const hist = state.flowHistory;
+      if (hist.length < 2) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Waiting for SPX 0DTE flow...', W / 2, H / 2);
+        return;
+      }
+
+      // Auto-range premium flow from calls and inverted puts.
+      let min = Infinity, max = -Infinity;
+      hist.forEach(p => {
+        min = Math.min(min, p.call, -p.put, 0);  // Puts inverted
+        max = Math.max(max, p.call, -p.put, 0);
+      });
+      if (min === max) { min -= 1; max += 1; }
+      const pad = (max - min) * 0.1;
+      min -= pad; max += pad;
+
+      const xAt = i => padding.l + (i / (hist.length - 1)) * cw;
+      const yAt = v => padding.t + ch - ((v - min) / (max - min)) * ch;
+
+      // Grid + zero line
+      ctx.strokeStyle = '#1a2a3a';
+      ctx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const y = padding.t + (g / 4) * ch;
+        ctx.beginPath();
+        ctx.moveTo(padding.l, y);
+        ctx.lineTo(W - padding.r, y);
+        ctx.stroke();
+      }
+
+      // Zero line
+      if (min < 0 && max > 0) {
+        const zy = yAt(0);
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(padding.l, zy);
+        ctx.lineTo(W - padding.r, zy);
+        ctx.stroke();
+        // Label zero line
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = 'bold 10px ui-sans-serif, monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('0', padding.l - 6, zy - 6);
+      }
+
+      // Y-axis labels
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px ui-sans-serif, monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (let g = 0; g <= 4; g++) {
+        const v = max - (g / 4) * (max - min);
+        const y = padding.t + (g / 4) * ch;
+        ctx.fillText(fmtMoney(v), padding.l - 6, y);
+      }
+
+      const drawLine = (key, color, lw, invert) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        hist.forEach((p, i) => {
+          const x = xAt(i);
+          const val = invert ? -p[key] : p[key];
+          const y = yAt(val);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      };
+
+      drawLine('call', '#22c55e', 2, false);
+      drawLine('put', '#ef4444', 2, true);  // Invert puts
+
+      // SPX Price line (gold/amber) - normalized to chart scale
+      if (hist.length > 0) {
+        const spxMin = Math.min(...hist.map(p => p.spx));
+        const spxMax = Math.max(...hist.map(p => p.spx));
+        const spxRange = spxMax - spxMin || 1;
+        const spxNormalize = (price) => {
+          const normalized = (price - spxMin) / spxRange;
+          return min + normalized * (max - min);
+        };
+
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        hist.forEach((p, i) => {
+          const x = xAt(i);
+          const y = yAt(spxNormalize(p.spx));
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Store chart config for hover detection
+      state.premiumChartConfig = { hist, padding, xAt, yAt, min, max, cw, ch, W, H };
+    }
+
+    function renderCvdChart() {
+      const canvas = elements.cvdCanvas;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const W = parseFloat(canvas.style.width);
+      const H = parseFloat(canvas.style.height);
+      if (!W || !H) return;
+      ctx.clearRect(0, 0, W, H);
+
+      const padding = { l: 60, r: 60, t: 10, b: 20 };
+      const cw = W - padding.l - padding.r;
+      const ch = H - padding.t - padding.b;
+
+      const hist = state.cvdHistory;
+      if (hist.length < 2) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Waiting for CVD data...', W / 2, H / 2);
+        return;
+      }
+
+      // CVD range
+      let cMin = Infinity, cMax = -Infinity;
+      hist.forEach(p => {
+        cMin = Math.min(cMin, p.cvd); cMax = Math.max(cMax, p.cvd);
+      });
+      if (cMin === cMax) { cMin -= 1; cMax += 1; }
+      const cPad = (cMax - cMin) * 0.1;
+      cMin -= cPad; cMax += cPad;
+      
+      // Price scale: fixed ±$20 from current ES price
+      const pMin = state.esPrice - 20;
+      const pMax = state.esPrice + 20;
+
+      // Show all available history (full session) with scrolling
+      // Each point is spaced proportionally across the chart
+      const xAt = i => padding.l + (i / Math.max(1, hist.length - 1)) * cw;
+      const cvdY = v => padding.t + ch - ((v - cMin) / (cMax - cMin)) * ch;
+      const priceY = v => padding.t + ch - ((v - pMin) / (pMax - pMin)) * ch;
+
+      // Grid
+      ctx.strokeStyle = '#1a2a3a';
+      ctx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const y = padding.t + (g / 4) * ch;
+        ctx.beginPath();
+        ctx.moveTo(padding.l, y);
+        ctx.lineTo(W - padding.r, y);
+        ctx.stroke();
+      }
+
+      // Y-axis labels - CVD (left, purple)
+      ctx.fillStyle = '#a78bfa';
+      ctx.font = '10px ui-sans-serif, monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (let g = 0; g <= 4; g++) {
+        const v = cMax - (g / 4) * (cMax - cMin);
+        const y = padding.t + (g / 4) * ch;
+        ctx.fillText(Math.round(v).toLocaleString(), padding.l - 6, y);
+      }
+
+      // Y-axis labels - Price (right, amber)
+      ctx.fillStyle = '#fbbf24';
+      ctx.textAlign = 'left';
+      for (let g = 0; g <= 4; g++) {
+        const v = pMax - (g / 4) * (pMax - pMin);
+        const y = padding.t + (g / 4) * ch;
+        ctx.fillText(v.toFixed(2), W - padding.r + 6, y);
+      }
+
+      // CVD line (purple)
+      ctx.strokeStyle = '#a78bfa';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      hist.forEach((p, i) => {
+        const x = xAt(i);
+        const y = cvdY(p.cvd);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Price line (amber)
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      hist.forEach((p, i) => {
+        const x = xAt(i);
+        const y = priceY(p.price);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Divergence highlight overlay
+      if (state.lastDivergence) {
+        ctx.fillStyle = state.lastDivergence === 'bullish' 
+          ? 'rgba(16, 185, 129, 0.08)' 
+          : 'rgba(239, 68, 68, 0.08)';
+        const overlayStart = Math.max(0, hist.length - 150);
+        const x1 = xAt(overlayStart);
+        const x2 = xAt(hist.length - 1);
+        ctx.fillRect(x1, padding.t, x2 - x1, ch);
+      }
+    }
+
+    // Render events feed
+    function renderEvents() {
+      if (!elements.events) return;
+      const html = state.events.map(evt => {
+        const age = Math.floor((Date.now() - evt.timestamp) / 60000);
+        const sideColor = evt.side === 'buy' ? '#10b981' : '#ef4444';
+        const title = evt.title || evt.instrument;
+        // Format time in EST
+        const estTime = new Date(evt.timestamp).toLocaleTimeString('en-US', { 
+          timeZone: 'America/New_York',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        });
+        return `
+          <div style="background:#0a0f16;border-radius:6px;padding:10px;border:1px solid #1a2a3a">
+            <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:4px">
+              <span style="font-size:11px;font-weight:700;color:#cbd5e1">${title}</span>
+              <span style="font-size:10px;color:#64748b">${estTime}</span>
+            </div>
+            <div style="font-size:13px;font-family:monospace;color:#fff;margin-bottom:4px">${evt.price.toFixed(2)}</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:10px">
+              <span style="font-weight:700;color:${sideColor}">${evt.side.toUpperCase()}</span>
+              <span style="color:#94a3b8">${evt.volume} vol · ${evt.trades} trd</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+      elements.events.innerHTML = html || '<div style="text-align:center;color:#64748b;font-size:12px;padding:40px">Waiting for clusters...</div>';
+    }
+
+    // Fetch initial prices
+    async function fetchInitialPrices() {
+      try {
+        const resp = await fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?future[]=${encodeURIComponent(ES_REST_SYMBOL)}&future[]=${encodeURIComponent(NQ_REST_SYMBOL)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          const items = data?.data?.items || [];
+          items.forEach(q => {
+            const sym = q.symbol || '';
+            const price = parseFloat(q.last || q.mark || q.mid || 0);
+            if (sym.startsWith('/ES') && price > 0) state.esPrice = price;
+            if (sym.startsWith('/NQ') && price > 0) state.nqPrice = price;
+          });
+          updateFlowLabels();
+        }
+      } catch (e) {
+        console.error('Failed to fetch initial prices:', e);
+      }
+    }
+
+    // WebSocket connection
+    function connectWebSocket() {
+      if (state.ws) state.ws.close();
+      
+      const ws = new WebSocket('ws://localhost:3001/ws/dxlink');
+      state.ws = ws;
+
+      ws.onopen = () => {
+        console.log('Bzila: dxLink connected');
+        state.connected = true;
+        elements.status.textContent = '● LIVE';
+        elements.status.style.background = '#065f46';
+        elements.status.style.color = '#6ee7b7';
+        
+        ws.send(JSON.stringify({
+          type: 'subscribe',
+          symbols: [ES_STREAM_SYMBOL, NQ_STREAM_SYMBOL],
+          feedTypes: ['Trade', 'Quote'],
+          spxSubscribe: true  // flag for proxy to also subscribe SPX 0DTE options
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          
+          if (msg.type === 'FEED_DATA' && Array.isArray(msg.data)) {
+            normalizeFeedData(msg.data).forEach(item => {
+              const symbol = item.eventSymbol || '';
+              const eventType = item.eventType || '';
+
+              if (eventType === 'Quote' && (symbol.startsWith('/ES') || symbol.startsWith('/NQ'))) {
+                processFutureQuote(item);
+                return;
+              }
+
+              // ── SPX Quote: cache NBBO for aggressor-side detection ──
+              if (eventType === 'Quote' && (symbol.startsWith('.SPXW') || symbol.startsWith('SPXW'))) {
+                processSpxQuote(item);
+                return;
+              }
+
+              if (eventType !== 'Trade' && eventType !== 'TradeETH') return;
+
+              const price = parseFloat(item.price || 0);
+              const size = parseInt(item.size || 0);
+              const timestamp = item.time || Date.now();
+              if (!price || !size) return;
+
+              // ── SPX 0DTE Option Trade ──
+              if (symbol.startsWith('.SPXW') || symbol.startsWith('SPXW')) {
+                processSpxTrade(item);
+                return;
+              }
+
+              const side = getAggressorSide(symbol, price, item);
+
+              // ── ES Futures Trade ──
+              if (symbol.startsWith('/ES')) {
+                state.esPrice = price;
+                if (!state.spxPrice) state.spxPrice = price;
+
+                // CVD: only count trades with known aggressor
+                if (side === 'buy') state.cvd += size;
+                else if (side === 'sell') state.cvd -= size;
+                state.lastTradeBySymbol[symbol] = price;
+                pushLiveCvdPoint(timestamp);
+
+                if (!side) return;
+                const trade = { timestamp, price, size, side };
+                state.esTrades.push(trade);
+
+                // Real-time cluster detection using current slider filter
+                detectCluster('ESM6', trade, state.esMinSize);
+                if (state.esTrades.length > 5000) state.esTrades.splice(0, 1000);
+                
+                // CVD alert: significant moves
+                if (Math.abs(state.cvd) > 5000) {
+                  addEvent({
+                    type: 'cvd-alert',
+                    title: state.cvd > 0 ? 'STRONG BUY CVD' : 'STRONG SELL CVD',
+                    side: state.cvd > 0 ? 'buy' : 'sell',
+                    volume: Math.abs(Math.round(state.cvd)),
+                    trades: 1,
+                    instrument: 'CVD',
+                    price: state.esPrice
+                  });
+                }
+
+              // ── NQ Futures Trade ──
+              } else if (symbol.startsWith('/NQ')) {
+                state.nqPrice = price;
+                state.lastTradeBySymbol[symbol] = price;
+                if (!side) return;
+                const trade = { timestamp, price, size, side };
+                state.nqTrades.push(trade);
+
+                // Real-time cluster detection using current slider filter
+                detectCluster('NQM6', trade, state.nqMinSize);
+                if (state.nqTrades.length > 5000) state.nqTrades.splice(0, 1000);
+              }
+            });
+          }
+        } catch (e) {
+          console.error('Bzila WS message error:', e);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('Bzila WS error:', err);
+        state.connected = false;
+        elements.status.textContent = '● ERROR';
+        elements.status.style.background = '#7f1d1d';
+        elements.status.style.color = '#fca5a5';
+      };
+
+      ws.onclose = () => {
+        if (ws !== state.ws) return;
+        console.log('Bzila WS closed');
+        state.connected = false;
+        elements.status.textContent = '● DISCONNECTED';
+        elements.status.style.background = '#7f1d1d';
+        elements.status.style.color = '#fca5a5';
+        
+        // Auto-reconnect after 5s
+        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+      };
+    }
+
+    // ── Animation loop for charts ──
+    let animFrame = null;
+    let snapshotInterval = null;
+    let dailyResetTimeout = null;
+    let reconnectTimeout = null;
+    function animate() {
+      renderPremiumChart();
+      renderCvdChart();
+      animFrame = requestAnimationFrame(animate);
+    }
+
+    // ── Daily reset at 9:30 AM ET ──
+    function scheduleDailyReset() {
+      const now = new Date();
+      const next = new Date();
+      next.setHours(9, 30, 0, 0);
+      if (next <= now) next.setDate(next.getDate() + 1);
+      const msUntil = next - now;
+      dailyResetTimeout = setTimeout(() => {
+        state.callPremiumFlow = 0;
+        state.putPremiumFlow = 0;
+        state.netPremiumFlow = 0;
+        state.cvd = 0;
+        state.flowHistory = [];
+        state.cvdHistory = [];
+      state.events = [];
+      state.spxQuotes = {};
+      state.futureQuotes = {};
+      state.lastTradeBySymbol = {};
+      state.lastFlowCross = null;
+      state.lastDivergence = null;
+        renderEvents();
+        updateFlowLabels();
+        console.log('Bzila: daily reset at 9:30 AM ET');
+        scheduleDailyReset();
+      }, msUntil);
+    }
+
+    // Initialize when page loads
+    window.initBzilaFlow = function() {
+      if (state.ws || animFrame || snapshotInterval) window.cleanupBzilaFlow();
+      console.log('Initializing Bzila Flow...');
+      syncControls();
+      setupCanvas(elements.premiumCanvas);
+      setupCanvas(elements.cvdCanvas);
+      fetchInitialPrices();
+      connectWebSocket();
+      renderEvents(); // Show empty state
+
+      snapshotFlow();
+      snapshotInterval = setInterval(snapshotFlow, 5000);
+      // Continuous CVD update every 5 seconds with scrolling canvas
+      setInterval(() => {
+        const ts = Date.now();
+        state.cvdHistory.push({
+          ts,
+          cvd: state.cvd,
+          price: state.esPrice
+        });
+        const sessionOpen = getSessionOpenTs();
+        state.cvdHistory = state.cvdHistory.filter(p => p.ts >= sessionOpen);
+        renderCvdChart();
+      }, 5000);
+
+      // Start animation loop
+      animate();
+
+      // Schedule daily reset
+      scheduleDailyReset();
+    };
+
+    // Cleanup
+    window.cleanupBzilaFlow = function() {
+      if (animFrame) cancelAnimationFrame(animFrame);
+      animFrame = null;
+      if (snapshotInterval) clearInterval(snapshotInterval);
+      snapshotInterval = null;
+      if (dailyResetTimeout) clearTimeout(dailyResetTimeout);
+      dailyResetTimeout = null;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+      if (state.ws) state.ws.close();
+      state.ws = null;
+    };
+    window.init_bzila = window.initBzilaFlow;
+  })();
+  </script>

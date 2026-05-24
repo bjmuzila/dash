@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPX GEX Terminal</title>
+<link rel="stylesheet" href="shared/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:12px;min-width:0;overflow:hidden;flex-shrink:1;flex-wrap:wrap">
+    <div class="logo" style="flex-shrink:0">SPX<span> // </span>GEX</div>
+
+    <!-- Clock + VIX -->
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+      <span id="est-clock" style="font-size:15px;font-weight:700;color:#e8edf5;font-variant-numeric:tabular-nums;letter-spacing:.05em">—</span>
+      <span id="est-session" style="font-size:11px;color:var(--text3);letter-spacing:.1em;text-transform:uppercase">ET</span>
+      <span style="color:#1e3050">|</span>
+      <span style="font-size:11px;color:#3a5570;letter-spacing:.1em;text-transform:uppercase">VIX</span>
+      <span id="topbar-vix" style="font-size:15px;font-weight:700;color:#e8c060;font-variant-numeric:tabular-nums">—</span>
+      <span id="topbar-vix-chg" style="font-size:12px">—</span>
+    </div>
+
+    <span style="color:#1e3050;flex-shrink:0">|</span>
+
+    <!-- ES Price -->
+    <div style="display:flex;align-items:baseline;gap:5px;flex-shrink:0">
+      <span style="font-size:11px;color:#3a5570;letter-spacing:.1em;text-transform:uppercase;font-weight:700">ES</span>
+      <span id="topbar-es-price" style="font-size:17px;font-weight:700;color:#e8edf5;font-variant-numeric:tabular-nums">—</span>
+      <span id="topbar-es-chg" style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums">—</span>
+    </div>
+
+    <span style="color:#1e3050;flex-shrink:0">|</span>
+
+    <!-- SPX Price -->
+    <div style="display:flex;align-items:baseline;gap:5px;flex-shrink:0">
+      <span style="font-size:11px;color:#3a5570;letter-spacing:.1em;text-transform:uppercase;font-weight:700">SPX</span>
+      <span id="spx-price" style="font-size:17px;font-weight:700;color:#e8edf5;font-variant-numeric:tabular-nums">—</span>
+      <span id="spx-change" style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums">—</span>
+    </div>
+
+    <span style="color:#1e3050;flex-shrink:0">|</span>
+
+    <!-- MVC: Max Vol Concentration strike -->
+    <div style="display:flex;align-items:baseline;gap:5px;flex-shrink:0" title="Max Volume Concentration — strike with highest net GEX by OI+Vol / Vol only">
+      <span style="font-size:11px;color:#ffb300;letter-spacing:.1em;text-transform:uppercase;font-weight:700">MVC</span>
+      <span style="font-size:11px;color:#3a5570">OI+V:</span>
+      <span id="mvc-oi" style="font-size:15px;font-weight:700;color:#00e5ff;font-variant-numeric:tabular-nums">—</span>
+      <span style="font-size:11px;color:#3a5570;margin-left:6px">Vol:</span>
+      <span id="mvc-vol" style="font-size:15px;font-weight:700;color:#a0d4ff;font-variant-numeric:tabular-nums">—</span>
+    </div>
+    <span style="color:#1e3050;flex-shrink:0">|</span>
+
+    <!-- PEAK GEX RECORDER -->
+    <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
+      <span style="font-size:11px;color:#ffb300;letter-spacing:.1em;text-transform:uppercase;font-weight:700">PEAK GEX</span>
+      <div id="gex-peak-list" style="display:flex;gap:4px;align-items:center"></div>
+      <button onclick="gexTakeSnapshot()" title="Snap current peak GEX" style="font-size:11px;padding:2px 8px;background:#0d1f2f;border:1px solid #1e3050;color:#00e5ff;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">⊕</button>
+    </div>
+  </div>
+    <span class="tag tag-warn" id="status-tag" style="display:none">● live</span>
+    <span id="topbar-updated" style="font-size:11px;color:#3a5570;font-variant-numeric:tabular-nums;letter-spacing:.05em"></span>
+    <div id="auto-controls" style="display:flex;align-items:center;gap:8px;" class="topbar-ctrl">
+      Next: <span class="bw"><span class="bf" id="countdown-bar" style="width:100%"></span></span>
+      <span style="color:var(--cyan);font-weight:600;min-width:24px" id="countdown-val">30s</span>
+      <button class="btn btn-ghost btn-sm" id="auto-toggle-btn" onclick="toggleAutoRefresh()">⏸ Pause</button>
+      <button class="btn btn-ghost btn-sm" onclick="manualRefresh()">↻ Now</button>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="logout-btn" onclick="window.API.doLogout()">Disconnect</button>
+  </div>
+</div>
+
+<div class="main">
+<!-- LEFT NAV -->
+<div class="lnav" id="left-nav" style="width:160px;min-width:160px;max-width:160px;flex-shrink:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg1);border-right:1px solid var(--border)">
+  <div class="lnav-top">
+    <div class="nav-item active" id="nav-overview" onclick="loadPage('overview')" data-page="overview">
+      <span class="nav-icon">⊞</span>Overview
+    </div>
+    <div class="nav-item" id="nav-gex" onclick="loadPage('gex')" data-page="gex">
+      <span class="nav-icon">⚡</span>GEX
+    </div>
+    <div class="nav-item" id="nav-bzila" onclick="loadPage('bzila')" data-page="bzila">
+      <span class="nav-icon" style="font-size:11px;font-weight:700">B</span>Bzila Flow
+    </div>
+    <div class="nav-divider"></div>
+    <div class="nav-item" id="nav-database" onclick="loadPage('database')" data-page="database">
+      <span class="nav-icon">🗄</span>Database
+    </div>
+    <div class="nav-item" id="nav-trading" onclick="loadPage('trading')" data-page="trading">
+      <span class="nav-icon">📊</span>Trading
+    </div>
+    <div class="nav-item" id="nav-stats" onclick="loadPage('stats')" data-page="stats">
+      <span class="nav-icon">📈</span>Stats
+    </div>
+    <div class="nav-item" id="nav-insights" onclick="loadPage('insights')" data-page="insights">
+      <span class="nav-icon">💡</span>Insights
+    </div>
+    <div class="nav-divider"></div>
+    
+    <!-- DTE Filters -->
+    <div class="nav-filters">
+      <div class="nf-label">DTE View</div>
+      <div id="dte-gex-pills" style="display:flex;flex-wrap:wrap;gap:2px">
+        <span class="nav-pill active" onclick="setDTEGEXView(0,this)" style="font-size:10px;padding:3px 6px">0DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(1,this)" style="font-size:10px;padding:3px 6px">1DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(7,this)" style="font-size:10px;padding:3px 6px">7DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(14,this)" style="font-size:10px;padding:3px 6px">14DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(21,this)" style="font-size:10px;padding:3px 6px">21DTE</span>
+      </div>
+      <div style="margin-top:4px">
+        <span class="nav-pill" id="dte-gex-pill-combined" onclick="setDTEGEXView('combined',this)" style="width:100%;text-align:center;display:block;font-size:10px;padding:3px 6px">1-7DTE Combined</span>
+      </div>
+    </div>
+    
+    <!-- Strike Count Filter -->
+    <div class="nav-filters">
+      <div class="nf-label">Strikes</div>
+      <div style="display:flex;align-items:center;gap:4px">
+        <input type="number" id="strike-count-input" value="40" min="10" max="200" step="5" style="width:50px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border2);color:var(--text0);border-radius:2px;font-size:10px;text-align:center" />
+        <button onclick="updateStrikeCount()" class="btn-sm" style="padding:3px 8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text1);border-radius:2px;font-size:10px;cursor:pointer">Set</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- QUOTES PANEL -->
+  <div class="quotes-panel">
+    <div class="quotes-header">
+      <span style="color:#4a6a84;font-weight:700;letter-spacing:.12em">QUOTES</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span id="quotes-countdown" style="font-size:9px;font-weight:700;color:#29b6f6;font-variant-numeric:tabular-nums;min-width:22px;text-align:right">—</span>
+        <span id="quotes-ts" style="color:#1e3050;font-size:9px;font-variant-numeric:tabular-nums"></span>
+      </div>
+    </div>
+    <div id="quotes-list">
+      <div style="color:var(--text3);font-size:10px;padding:8px 10px">Connect to load…</div>
+    </div>
+  </div>
+
+  <!-- GEX KEY -->
+  <div class="lnav-bottom">
+    <div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">GEX Key</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">
+      <div style="width:8px;height:8px;background:var(--green2);border-radius:1px;flex-shrink:0"></div>
+      <span style="font-size:10px;color:var(--text2)">Positive — dealers buy dips, sell rallies (suppresses vol)</span>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+      <div style="width:8px;height:8px;background:var(--red2);border-radius:1px;flex-shrink:0"></div>
+      <span style="font-size:10px;color:var(--text2)">Negative — dealers buy rallies, sell dips (amplifies vol)</span>
+    </div>
+    <div style="font-size:9px;color:var(--text3);line-height:1.5;border-top:1px solid var(--border);padding-top:6px">
+      <span style="color:var(--text2);font-weight:700">Net GEX</span> = (Call γ − Put γ) × OI × 100 × Spot²<br>
+      <span style="color:#6a8aaa">Dollars dealers must trade per 1% move to stay delta-neutral. Values shown in $B.</span>
+    </div>
+  </div>
+</div>
+
+<!-- CENTER CONTENT PANEL - Pages load here -->
+<div class="center-col" id="content-panel" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;min-width:0;position:relative">
+  <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#3a5570">
+    Loading...
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<!-- Refresh overlay -->
+<div class="refresh-overlay" id="refresh-overlay" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.8);z-index:200;align-items:center;justify-content:center">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+    <div class="refresh-dot" style="width:12px;height:12px;background:#00e5ff;border-radius:50%;animation:pulse 1s infinite"></div>
+    <span style="color:#00e5ff;font-size:14px;font-weight:700;letter-spacing:.1em">Refreshing…</span>
+  </div>
+</div>
+
+<!-- SHARED SCRIPTS -->
+<script src="shared/api.js"></script>
+<script src="shared/calculations.js"></script>
+<script src="shared/app.js"></script>
+
+<script>
+// ===========================
+// PAGE LOADING SYSTEM
+// ===========================
+
+let currentPage = null;
+
+async function loadPage(pageName) {
+  try {
+    console.log(`Loading page: ${pageName}`);
+    
+    // Update nav active state
+    document.querySelectorAll('.nav-item').forEach(item => {
+      if (item.getAttribute('data-page') === pageName) {
+        item.classList.add('active');
+      } else {
+        item.classList.remove('active');
+      }
+    });
+    
+    // Show loading state
+    document.getElementById('content-panel').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#3a5570">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+          <div style="width:12px;height:12px;background:#00e5ff;border-radius:50%;animation:pulse 1s infinite"></div>
+          <span style="font-size:12px;letter-spacing:.1em">Loading ${pageName}...</span>
+        </div>
+      </div>
+    `;
+    
+    // Load the page HTML
+    const response = await fetch(`pages/${pageName}.html`);
+    if (!response.ok) {
+      throw new Error(`Failed to load ${pageName}: ${response.statusText}`);
+    }
+    
+    const html = await response.text();
+    document.getElementById('content-panel').innerHTML = html;
+    
+    // Call page-specific init function if it exists
+    currentPage = pageName;
+    window.AppState.currentPage = pageName;
+    
+    // Emit page-changed event
+    window.EventBus.emit('page-changed', pageName);
+    
+    // Call init function if exists
+    if (window[`init_${pageName}`]) {
+      console.log(`Calling init_${pageName}()`);
+      window[`init_${pageName}`]();
+    }
+    
+    console.log(`✓ Page loaded: ${pageName}`);
+  } catch (error) {
+    console.error('Error loading page:', error);
+    document.getElementById('content-panel').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px">
+        <div style="font-size:48px;opacity:0.2">⚠️</div>
+        <div style="font-size:14px;color:#ff4757;font-weight:700">Failed to load ${pageName}</div>
+        <div style="font-size:11px;color:#3a5570">${error.message}</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadPage('${pageName}')">↻ Retry</button>
+      </div>
+    `;
+  }
+}
+
+// DTE filter functions (placeholders - implement in pages)
+function setDTEGEXView(dte, element) {
+  console.log('DTE View changed:', dte);
+  document.querySelectorAll('#dte-gex-pills .nav-pill').forEach(el => {
+    el.classList.remove('active');
+  });
+  if (element) element.classList.add('active');
+  window.AppState.selectedDTE = dte;
+  window.EventBus.emit('dte-changed', dte);
+}
+
+function updateStrikeCount() {
+  const input = document.getElementById('strike-count-input');
+  const count = parseInt(input.value);
+  if (count >= 10 && count <= 200) {
+    window.AppState.strikeCount = count;
+    window.EventBus.emit('strike-count-changed', count);
+    console.log('Strike count updated:', count);
+  }
+}
+
+function gexTakeSnapshot() {
+  console.log('GEX snapshot taken');
+  window.EventBus.emit('gex-snapshot');
+}
+
+// Load overview page on startup
+window.addEventListener('DOMContentLoaded', () => {
+  console.log('App initialized');
+  loadPage('overview');
+});
+
+// Pulse animation
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.2); }
+  }
+`;
+document.head.appendChild(style);
+</script>
+
+</body>
+</html>

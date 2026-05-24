@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPX / SPXW GEX Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:#06101e; --bg1:#0a1628; --bg2:#0d1e32; --bg3:#111f38;
+  --border:#1a2e48; --border2:#223652;
+  --cyan:#00e5ff; --green:#00e676; --red:#ff4040; --yellow:#ffd93d;
+  --blue:#4fc3f7; --pink:#ff6b9d; --purple:#9c6aff;
+  --t1:#c8ddef; --t2:#7ab8d0; --t3:#3a6080; --t4:#1f3d58;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg0);color:var(--t1);font-family:'Space Mono',monospace;font-size:11px}
+body{display:flex;flex-direction:column}
+
+/* ══ TOP METRICS BAR ══ */
+#top-bar{
+  display:grid;
+  grid-template-columns: 120px 100px 90px 90px 90px 130px 130px 160px 160px 1fr;
+  gap:0;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  height:68px;
+}
+.tm{
+  border-right:1px solid var(--border);
+  padding:6px 10px;
+  display:flex;flex-direction:column;justify-content:center;
+  background:var(--bg1);
+}
+.tm-label{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.09em;font-weight:700;margin-bottom:3px}
+.tm-val{font-family:'Syne',sans-serif;font-size:22px;font-weight:700;line-height:1}
+.tm-sub{font-size:8px;color:var(--t3);margin-top:2px}
+
+/* stock filter select */
+.stock-select{
+  font-family:'Space Mono',monospace;
+  font-size:15px;font-weight:700;
+  background:#0a1628;color:var(--t1);
+  border:1px solid var(--border2);
+  border-radius:3px;padding:4px 8px;width:90px;cursor:pointer;
+}
+
+/* gauge */
+.gauge-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px 0}
+.gauge-label{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.09em;font-weight:700;margin-bottom:2px}
+.gauge-val{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;margin-top:1px}
+
+/* toggle buttons */
+.itm-wrap{display:flex;flex-direction:column;justify-content:center;padding:6px 12px;gap:4px}
+.itm-label{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.09em;font-weight:700}
+.itm-row{display:flex;align-items:center;gap:8px}
+.itm-circle{width:18px;height:18px;border-radius:50%;background:#1a6aff;border:2px solid #2a7aff}
+.itm-pct{font-size:11px;font-weight:700;color:var(--t1)}
+
+/* expiry filter */
+.expiry-wrap{display:flex;flex-direction:column;justify-content:center;padding:6px 12px}
+.expiry-select{
+  font-family:'Space Mono',monospace;font-size:11px;font-weight:700;
+  background:#0a1628;color:var(--t1);
+  border:1px solid var(--border2);border-radius:3px;padding:4px 8px;
+  width:90px;margin-top:4px;cursor:pointer;
+}
+
+/* ══ BODY ══ */
+#body{display:grid;grid-template-columns:1fr 420px;flex:1;min-height:0;overflow:hidden;gap:0}
+
+/* ══ LEFT COLUMN ══ */
+#left{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border)}
+
+/* history table */
+#history-section{flex-shrink:0;border-bottom:1px solid var(--border);background:var(--bg1)}
+#history-section .sec-title{
+  padding:6px 10px;font-size:9px;font-weight:700;color:var(--t2);
+  letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);
+}
+.hist-table{width:100%;border-collapse:collapse}
+.hist-table th{font-size:8px;color:var(--t3);text-align:left;padding:4px 8px;font-weight:700;border-bottom:1px solid var(--border)}
+.hist-table td{font-size:9px;padding:3px 8px;border-bottom:1px solid rgba(26,46,72,0.5);color:var(--t2)}
+.hist-table td:first-child{color:var(--t3)}
+.hist-table tr:hover td{background:rgba(0,229,255,0.03)}
+
+/* positioning table */
+#pos-section{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+#pos-section .sec-title{
+  padding:6px 10px;font-size:9px;font-weight:700;color:var(--t2);
+  letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);
+  background:var(--bg1);flex-shrink:0;
+}
+#pos-table-head{
+  display:grid;
+  grid-template-columns:60px 120px 120px 90px 90px 80px 90px 60px;
+  padding:5px 8px;
+  background:var(--bg2);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  position:sticky;top:0;z-index:2;
+}
+.pth{font-size:8px;color:var(--blue);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.pth.r{text-align:right}
+#pos-table-body{flex:1;overflow-y:auto}
+#pos-table-body::-webkit-scrollbar{width:4px}
+#pos-table-body::-webkit-scrollbar-thumb{background:var(--border2)}
+
+.pr{
+  display:grid;
+  grid-template-columns:60px 120px 120px 90px 90px 80px 90px 60px;
+  padding:3px 8px;
+  border-bottom:1px solid rgba(26,46,72,0.4);
+  align-items:center;
+  position:relative;
+}
+.pr:hover{background:rgba(0,229,255,0.025)}
+.pr.res{border-left:2px solid var(--red)}
+.pr.sup{border-left:2px solid var(--green)}
+.pr.flip{border-left:2px solid var(--yellow);opacity:.85}
+.pr.cur{background:rgba(0,229,255,0.04);border-left:2px solid var(--cyan)}
+.pr.total{background:var(--bg2);border-top:1px solid var(--border2);border-left:none}
+.pc{font-size:9px}
+.pc.r{text-align:right}
+.pc.strike{font-size:10px;font-weight:700;color:var(--t1)}
+.pc.red{color:var(--red)}
+.pc.green{color:var(--green)}
+.pc.blue{color:var(--blue)}
+.pc.muted{color:var(--t3)}
+
+/* bar cell */
+.bar-cell{position:relative;height:16px;overflow:hidden}
+.bar-bg{position:absolute;top:3px;bottom:3px;border-radius:1px;opacity:.5}
+.bar-txt{position:relative;z-index:1;font-size:9px;font-weight:700;padding:0 3px;line-height:16px}
+
+/* delta cell highlight */
+.delta-hi{background:rgba(29,105,210,0.35);border-radius:1px}
+
+/* ══ RIGHT COLUMN ══ */
+#right{display:flex;flex-direction:column;overflow:hidden;background:var(--bg0)}
+
+.rpanel{flex:1;border-bottom:1px solid var(--border);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.rpanel:last-child{border-bottom:none}
+.rpanel .ptitle{
+  padding:6px 10px;font-size:9px;color:var(--t2);font-weight:700;
+  text-transform:uppercase;letter-spacing:.1em;
+  border-bottom:1px solid var(--border);background:var(--bg1);flex-shrink:0;
+}
+.rpanel .pcontent{flex:1;min-height:0;overflow:hidden;padding:8px}
+
+/* OI twin */
+.oi-twin{display:grid;grid-template-columns:1fr 1fr;gap:8px;height:100%}
+.oi-sub{display:flex;flex-direction:column;height:100%}
+.oi-sub-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+
+<!-- ══ TOP BAR ══ -->
+<div id="top-bar">
+  <!-- Stock Filter -->
+  <div class="tm" style="--accent:var(--cyan)">
+    <div class="tm-label">Stock Filter</div>
+    <select class="stock-select" id="stock-filter" onchange="handleStockChange()">
+      <option>SPY</option>
+      <option>SPX</option>
+      <option>SPXW</option>
+      <option>QQQ</option>
+    </select>
+  </div>
+  <!-- Stock Price -->
+  <div class="tm">
+    <div class="tm-label">Stock Price</div>
+    <div class="tm-val" style="color:var(--cyan)" id="m-price">--</div>
+  </div>
+  <!-- Resistance -->
+  <div class="tm">
+    <div class="tm-label">Resistance</div>
+    <div class="tm-val" style="color:var(--red)" id="m-resistance">--</div>
+  </div>
+  <!-- Support -->
+  <div class="tm">
+    <div class="tm-label">Support</div>
+    <div class="tm-val" style="color:var(--green)" id="m-support">--</div>
+  </div>
+  <!-- Neutral -->
+  <div class="tm">
+    <div class="tm-label">Neutral</div>
+    <div class="tm-val" style="color:var(--yellow)" id="m-neutral">--</div>
+  </div>
+  <!-- $Gamma gauge -->
+  <div class="tm" style="padding:0">
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:4px 8px">
+      <div class="tm-label" style="margin-bottom:2px">$Gamma</div>
+      <canvas id="gauge-gamma" width="100" height="44" style="width:100px;height:44px"></canvas>
+      <div style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;color:var(--red);margin-top:1px" id="m-gamma-val">--</div>
+    </div>
+  </div>
+  <!-- CPG Ratio gauge -->
+  <div class="tm" style="padding:0">
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:4px 8px">
+      <div class="tm-label" style="margin-bottom:2px">CPG Ratio</div>
+      <canvas id="gauge-cpg" width="100" height="44" style="width:100px;height:44px"></canvas>
+      <div style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;color:var(--red);margin-top:1px" id="m-cpg-val">--</div>
+    </div>
+  </div>
+  <!-- Calls ITM -->
+  <div class="itm-wrap">
+    <div class="itm-label">Calls ITM = RED</div>
+    <div class="itm-row">
+      <div class="itm-circle" style="background:#1a6aff;border-color:#3a8aff"></div>
+      <span class="itm-pct" id="calls-itm-pct">100%</span>
+    </div>
+  </div>
+  <!-- Puts ITM -->
+  <div class="itm-wrap">
+    <div class="itm-label">Puts ITM = RED</div>
+    <div class="itm-row">
+      <div class="itm-circle" style="background:#1a6aff;border-color:#3a8aff"></div>
+      <span class="itm-pct" id="puts-itm-pct">100%</span>
+    </div>
+  </div>
+  <!-- Expiry Filter -->
+  <div class="expiry-wrap">
+    <div class="itm-label">Expiry Filter</div>
+    <select class="expiry-select" id="expiry-filter" onchange="renderAll()">
+      <option>All</option>
+      <option>0DTE</option>
+      <option>Weekly</option>
+      <option>Monthly</option>
+    </select>
+  </div>
+</div>
+
+<!-- ══ BODY ══ -->
+<div id="body">
+
+  <!-- LEFT COLUMN -->
+  <div id="left">
+
+    <!-- History -->
+    <div id="history-section">
+      <div class="sec-title">History Of Key Level Changes</div>
+      <table class="hist-table" id="hist-table">
+        <thead><tr>
+          <th>Date</th><th>Stock Price</th><th>Resistance</th><th>Support</th>
+          <th>Zero Gamma</th><th>$Gamma</th><th>CPG Ratio</th>
+          <th>R2</th><th>S2</th><th>Open Int</th>
+        </tr></thead>
+        <tbody id="hist-body">
+          <tr><td colspan="10" style="color:var(--t4);padding:8px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Positioning Table -->
+    <div id="pos-section">
+      <div class="sec-title">Strike Level Net Gamma &amp; CALL/PUT Open Interest Positioning</div>
+      <div id="pos-table-head">
+        <div class="pth">Strike</div>
+        <div class="pth r">Net Gamma</div>
+        <div class="pth r">Net Delta</div>
+        <div class="pth r">Call OI</div>
+        <div class="pth r">Call OI Chg</div>
+        <div class="pth r">Put OI</div>
+        <div class="pth r">Put OI Chg</div>
+        <div class="pth r">V</div>
+      </div>
+      <div id="pos-table-body">
+        <div style="padding:16px;color:var(--t3)">Fetching chain data...</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div id="right">
+
+    <!-- OI by Expiration -->
+    <div class="rpanel" style="flex:0 0 200px">
+      <div class="ptitle">Open Interest by Expiration</div>
+      <div class="pcontent">
+        <div class="oi-twin">
+          <div class="oi-sub">
+            <div class="oi-sub-title" style="color:var(--cyan)">CALL</div>
+            <canvas id="canvas-oi-calls"></canvas>
+          </div>
+          <div class="oi-sub">
+            <div class="oi-sub-title" style="color:var(--red)">PUT</div>
+            <canvas id="canvas-oi-puts"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Net Gamma Exposure By Strike -->
+    <div class="rpanel">
+      <div class="ptitle">Net Gamma Exposure By Strike</div>
+      <div class="pcontent" style="padding:6px 8px">
+        <canvas id="canvas-gex-profile"></canvas>
+      </div>
+    </div>
+
+    <!-- Call/Put Gamma Exposure By Strike -->
+    <div class="rpanel">
+      <div class="ptitle">Call/Put Gamma Exposure By Strike
+        <span style="margin-left:12px;font-size:8px">
+          <span style="color:var(--red)">● CallGEX</span>
+          <span style="color:var(--blue);margin-left:6px">● PutGEX</span>
+        </span>
+      </div>
+      <div class="pcontent" style="padding:6px 8px">
+        <canvas id="canvas-cpgex"></canvas>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════
+let spxwGexData = null;
+let spxQuoteData = null;
+let historyData = [];
+
+// ═══════════════════════════════════════════════════════
+//  BLACK-SCHOLES
+// ═══════════════════════════════════════════════════════
+const NormalCDF = (() => {
+  const c = {};
+  return x => {
+    const k = (Math.abs(x)*1000|0)/1000;
+    if (c[k]!==undefined) return c[k];
+    const t=1/(1+0.2316419*Math.abs(x)), d=0.3989423*Math.exp(-x*x/2);
+    const p=0.319381530+t*(-0.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429)));
+    return c[k]=(x>=0?1-d*t*p:d*t*p);
+  };
+})();
+const NormalPDF = x => (1/Math.sqrt(2*Math.PI))*Math.exp(-x*x/2);
+
+function calcGreeks(S,K,T,r,sigma,type='call'){
+  if(T<=0.001) return {delta:type==='call'?(S>K?1:0):(S<K?-1:0),gamma:0,theta:0,vega:0};
+  const sqrtT=Math.sqrt(T);
+  const d1=(Math.log(S/K)+(r+sigma*sigma/2)*T)/(sigma*sqrtT);
+  const d2=d1-sigma*sqrtT;
+  const pdf1=NormalPDF(d1), expRT=Math.exp(-r*T);
+  const delta=type==='call'?NormalCDF(d1):NormalCDF(d1)-1;
+  const gamma=pdf1/(S*sigma*sqrtT);
+  const tBase=-S*pdf1*sigma/(2*sqrtT);
+  const theta=type==='call'?(tBase-r*K*expRT*NormalCDF(d2))/365:(tBase+r*K*expRT*NormalCDF(-d2))/365;
+  return {delta,gamma,theta,vega:S*pdf1*sqrtT/100};
+}
+function calcGEX(gamma,oi,S){ return gamma*oi*100*S*S; }
+
+// ═══════════════════════════════════════════════════════
+//  FETCH
+// ═══════════════════════════════════════════════════════
+async function fetchData(){
+  try {
+    const [chainRes, quoteRes] = await Promise.all([
+      fetch('http://localhost:3001/proxy/api/tt/chains/SPXW'),
+      fetch('http://localhost:3001/proxy/api/tt/quotes-batch?equity[]=SPX')
+    ]);
+    const chainData = await chainRes.json();
+    const quoteData = await quoteRes.json();
+    if(chainData?.data?.items?.[0]) spxwGexData = chainData.data.items[0];
+    if(quoteData?.data?.items?.[0]) spxQuoteData = quoteData.data.items[0];
+    renderAll();
+  } catch(e){
+    console.error('Fetch error, loading demo data:', e);
+    loadDemo();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  DEMO DATA
+// ═══════════════════════════════════════════════════════
+function loadDemo(){
+  const S = 501.25;
+  const strikes = {};
+  for(let k=480;k<=525;k+=0.5){
+    const m=(k-S)/S;
+    const cIV=0.13+Math.abs(m)*1.2;
+    const pIV=0.13+Math.abs(m)*1.3+0.01;
+    const cOI=Math.round(Math.max(50,300000*Math.exp(-Math.pow((k-S*1.005)/4,2))));
+    const pOI=Math.round(Math.max(50,350000*Math.exp(-Math.pow((k-S*0.994)/5,2))));
+    strikes[k]={
+      call:{'implied-volatility':cIV,'open-interest':cOI,'open-interest-change':Math.round((Math.random()-0.45)*8000)},
+      put: {'implied-volatility':pIV,'open-interest':pOI,'open-interest-change':Math.round((Math.random()-0.55)*9000)}
+    };
+  }
+  spxwGexData={strikes};
+  spxQuoteData={'last-price':'501.25','net-change':'+2.87'};
+
+  // fake history
+  historyData=[
+    {date:'2/12/24',price:501.25,res:504,sup:490,zg:493,gamma:'0.79bn',cpg:1.22,r2:502,s2:470,oi:'21.8M'},
+    {date:'2/9/24', price:498.28,res:500,sup:492,zg:493,gamma:'1.15bn',cpg:1.33,r2:502,s2:470,oi:'22.3M'},
+    {date:'2/8/24', price:498.12,res:500,sup:470,zg:492,gamma:'0.98bn',cpg:1.28,r2:502,s2:486,oi:'22.0M'},
+    {date:'2/7/24', price:492.88,res:495,sup:489,zg:489,gamma:'0.85bn',cpg:1.22,r2:500,s2:470,oi:'21.0M'},
+  ];
+  renderAll();
+}
+
+// ═══════════════════════════════════════════════════════
+//  GAUGES
+// ═══════════════════════════════════════════════════════
+function drawGauge(canvasId, value, min, max, color){
+  const canvas=document.getElementById(canvasId);
+  if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  const w=canvas.width, h=canvas.height;
+  ctx.clearRect(0,0,w,h);
+  const cx=w/2, cy=h-4, r=h-8;
+  const startA=Math.PI, endA=2*Math.PI;
+  const frac=Math.min(1,Math.max(0,(value-min)/(max-min)));
+  const valA=startA+frac*(endA-startA);
+
+  // track
+  ctx.beginPath(); ctx.arc(cx,cy,r,startA,endA);
+  ctx.strokeStyle='rgba(26,46,72,0.8)'; ctx.lineWidth=5; ctx.stroke();
+  // fill
+  ctx.beginPath(); ctx.arc(cx,cy,r,startA,valA);
+  ctx.strokeStyle=color; ctx.lineWidth=5; ctx.stroke();
+  // needle
+  const nx=cx+r*Math.cos(valA), ny=cy+r*Math.sin(valA);
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(nx,ny);
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+}
+
+// ═══════════════════════════════════════════════════════
+//  MAIN RENDER
+// ═══════════════════════════════════════════════════════
+function renderAll(){
+  if(!spxwGexData?.strikes) return;
+  const strikes=spxwGexData.strikes;
+  const strikeArray=Object.keys(strikes).map(Number).sort((a,b)=>a-b);
+  const S=parseFloat(spxQuoteData?.['last-price'] || strikeArray[Math.floor(strikeArray.length/2)]);
+  const T=1/365, r=0.05;
+
+  // Compute per-strike data
+  const data={};
+  let totalCallGEX=0, totalPutGEX=0;
+  let totalCallOI=0, totalPutOI=0;
+  let totalCallOIChg=0, totalPutOIChg=0;
+  let totalNetGamma=0, totalNetDelta=0;
+
+  strikeArray.forEach(K=>{
+    const sd=strikes[K];
+    const cOI=parseInt(sd.call?.['open-interest']||0)||0;
+    const pOI=parseInt(sd.put?.['open-interest']||0)||0;
+    const cChg=parseInt(sd.call?.['open-interest-change']||0)||0;
+    const pChg=parseInt(sd.put?.['open-interest-change']||0)||0;
+    const cIV=parseFloat(sd.call?.['implied-volatility']||0.25)||0.25;
+    const pIV=parseFloat(sd.put?.['implied-volatility']||0.25)||0.25;
+
+    const cG=calcGreeks(S,K,T,r,cIV,'call');
+    const pG=calcGreeks(S,K,T,r,pIV,'put');
+
+    const callGEX=cOI>0?calcGEX(cG.gamma,cOI,S):0;
+    const putGEX=pOI>0?calcGEX(pG.gamma,pOI,S):0;
+    const netGEX=callGEX-putGEX;
+    const netDelta=(cG.delta*cOI+pG.delta*pOI)*100*S;
+
+    totalCallGEX+=callGEX; totalPutGEX+=putGEX;
+    totalCallOI+=cOI; totalPutOI+=pOI;
+    totalCallOIChg+=cChg; totalPutOIChg+=pChg;
+    totalNetGamma+=netGEX; totalNetDelta+=netDelta;
+
+    data[K]={callGEX,putGEX,netGEX,netDelta,cOI,pOI,cChg,pChg,cIV,pIV};
+  });
+
+  // Key levels
+  let resStrike=null, supStrike=null;
+  let maxPosGEX=-Infinity, maxNegGEX=Infinity;
+  strikeArray.forEach(K=>{
+    if(data[K].netGEX>maxPosGEX){maxPosGEX=data[K].netGEX;resStrike=K;}
+    if(data[K].netGEX<maxNegGEX){maxNegGEX=data[K].netGEX;supStrike=K;}
+  });
+
+  // Gamma flip (zero-crossing in cumulative)
+  let cumGEX=0, flipStrike=S;
+  for(let i=0;i<strikeArray.length;i++){
+    const prev=cumGEX; cumGEX+=data[strikeArray[i]].netGEX;
+    if(i>0&&prev*cumGEX<0){
+      const pK=strikeArray[i-1],cK=strikeArray[i];
+      const ratio=Math.abs(prev)/(Math.abs(prev)+Math.abs(cumGEX));
+      flipStrike=Math.round(pK+ratio*(cK-pK));
+      break;
+    }
+  }
+
+  const cpgRatio=totalPutGEX>0?(totalCallGEX/totalPutGEX):0;
+  const netGammaB=totalNetGamma/1e9;
+
+  // ── TOP METRICS ──
+  document.getElementById('m-price').textContent=S.toFixed(2);
+  document.getElementById('m-resistance').textContent=Math.round(resStrike||0).toLocaleString();
+  document.getElementById('m-support').textContent=Math.round(supStrike||0).toLocaleString();
+  document.getElementById('m-neutral').textContent=Math.round(flipStrike).toLocaleString();
+  document.getElementById('m-gamma-val').textContent=(Math.abs(netGammaB)<1?
+    (totalNetGamma/1e6).toFixed(1)+'M':netGammaB.toFixed(2)+'B');
+  document.getElementById('m-cpg-val').textContent=cpgRatio.toFixed(2);
+
+  drawGauge('gauge-gamma', Math.abs(netGammaB), 0, 2, '#ff4040');
+  drawGauge('gauge-cpg', cpgRatio, 0, 3, '#ff4040');
+
+  // ── HISTORY ──
+  if(historyData.length){
+    document.getElementById('hist-body').innerHTML=historyData.map(h=>`
+      <tr>
+        <td>${h.date}</td>
+        <td>${h.price}</td>
+        <td style="color:var(--red)">${h.res}</td>
+        <td style="color:var(--green)">${h.sup}</td>
+        <td style="color:var(--yellow)">${h.zg}</td>
+        <td>${h.gamma}</td>
+        <td>${h.cpg}</td>
+        <td>${h.r2}</td>
+        <td>${h.s2}</td>
+        <td>${h.oi}</td>
+      </tr>`).join('');
+  }
+
+  // ── POSITIONING TABLE ──
+  const maxAbsNG=Math.max(...strikeArray.map(K=>Math.abs(data[K].netGEX)),1);
+  const maxAbsND=Math.max(...strikeArray.map(K=>Math.abs(data[K].netDelta)),1);
+
+  // Focus: ±30 strikes from spot (show reasonable range)
+  const focusStrikes=strikeArray
+    .filter(K=>K>=S-25&&K<=S+25)
+    .sort((a,b)=>b-a);
+
+  let rowsHTML='';
+  focusStrikes.forEach(K=>{
+    const d=data[K];
+    const isCur=Math.abs(K-S)<=0.3;
+    const isRes=K===resStrike;
+    const isSup=K===supStrike;
+    const isFlip=Math.abs(K-flipStrike)<=0.5;
+
+    let cls='pr';
+    if(isCur) cls+=' cur';
+    else if(isRes) cls+=' res';
+    else if(isSup) cls+=' sup';
+    else if(isFlip) cls+=' flip';
+
+    // Net Gamma bar
+    const ngPct=(Math.abs(d.netGEX)/maxAbsNG*100).toFixed(1);
+    const ngColor=d.netGEX>=0?'#1a6aff':'var(--red)';
+    const ngBarLeft=d.netGEX>=0?'0':'auto';
+    const ngBarRight=d.netGEX<0?'0':'auto';
+    const ngLabel=fmtGEX(d.netGEX);
+
+    // Net Delta cell
+    const ndPct=(Math.abs(d.netDelta)/maxAbsND);
+    const ndBg=ndPct>0.3?`background:rgba(29,105,210,${(ndPct*0.5).toFixed(2)})`:''
+    const ndLabel=fmtLarge(d.netDelta);
+
+    // Call OI Chg color
+    const cChgColor=d.cChg>0?'var(--green)':(d.cChg<0?'var(--red)':'var(--t3)');
+    const pChgColor=d.pChg>0?'var(--green)':(d.pChg<0?'var(--red)':'var(--t3)');
+
+    // Velocity indicator (V col)
+    const vel=Math.abs(d.cChg+d.pChg);
+    const velBar=vel>1000?'▲':'';
+
+    rowsHTML+=`<div class="${cls}">
+      <div class="pc strike">${K.toFixed(1)}</div>
+      <div class="bar-cell">
+        <div class="bar-bg" style="background:${ngColor};width:${ngPct}%;left:${ngBarLeft};right:${ngBarRight}"></div>
+        <div class="bar-txt" style="color:${d.netGEX>=0?'var(--blue)':'var(--red)'}">${ngLabel}</div>
+      </div>
+      <div class="pc r" style="${ndBg};padding:1px 3px;border-radius:1px">${ndLabel}</div>
+      <div class="pc r">${d.cOI.toLocaleString()}</div>
+      <div class="pc r" style="color:${cChgColor}">${d.cChg>0?'+':''}${d.cChg.toLocaleString()}</div>
+      <div class="pc r">${d.pOI.toLocaleString()}</div>
+      <div class="pc r" style="color:${pChgColor}">${d.pChg>0?'+':''}${d.pChg.toLocaleString()}</div>
+      <div class="pc r muted">${velBar}</div>
+    </div>`;
+  });
+
+  // Totals row
+  rowsHTML+=`<div class="pr total">
+    <div class="pc strike" style="color:var(--t2)">Total</div>
+    <div class="pc r" style="color:var(--blue)">${fmtGEX(totalNetGamma)}</div>
+    <div class="pc r">${fmtLarge(totalNetDelta)}</div>
+    <div class="pc r">${totalCallOI.toLocaleString()}</div>
+    <div class="pc r" style="color:${totalCallOIChg>=0?'var(--green)':'var(--red)'}">${totalCallOIChg>0?'+':''}${totalCallOIChg.toLocaleString()}</div>
+    <div class="pc r">${totalPutOI.toLocaleString()}</div>
+    <div class="pc r" style="color:${totalPutOIChg>=0?'var(--green)':'var(--red)'}">${totalPutOIChg>0?'+':''}${totalPutOIChg.toLocaleString()}</div>
+    <div class="pc r"></div>
+  </div>`;
+
+  document.getElementById('pos-table-body').innerHTML=rowsHTML;
+
+  // ── RIGHT CHARTS ──
+  requestAnimationFrame(()=>{
+    renderGEXProfile(data, strikeArray, S, resStrike, supStrike, flipStrike);
+    renderCPGEX(data, strikeArray, S);
+    renderOIExpiry(data, strikeArray);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  FORMAT HELPERS
+// ═══════════════════════════════════════════════════════
+function fmtGEX(v){
+  const a=Math.abs(v);
+  if(a>=1e9) return (v/1e9).toFixed(2)+'bn';
+  if(a>=1e6) return (v/1e6).toFixed(1)+'M';
+  return v.toLocaleString('en-US',{maximumFractionDigits:0});
+}
+function fmtLarge(v){
+  const a=Math.abs(v);
+  if(a>=1e9) return (v/1e9).toFixed(2)+'B';
+  if(a>=1e6) return (v/1e6).toFixed(1)+'M';
+  return v.toLocaleString('en-US',{maximumFractionDigits:0});
+}
+
+// ═══════════════════════════════════════════════════════
+//  CHART: NET GEX PROFILE (area curve)
+// ═══════════════════════════════════════════════════════
+function renderGEXProfile(data, strikeArray, S, res, sup, flip){
+  const canvas=document.getElementById('canvas-gex-profile');
+  if(!canvas) return;
+  const parent=canvas.parentElement;
+  canvas.width=parent.clientWidth; canvas.height=parent.clientHeight;
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height;
+  ctx.fillStyle='#06101e'; ctx.fillRect(0,0,W,H);
+
+  const focus=strikeArray.filter(K=>K>=S-25&&K<=S+25);
+  if(!focus.length) return;
+
+  const gexVals=focus.map(K=>data[K].netGEX);
+  const maxAbs=Math.max(...gexVals.map(Math.abs),1);
+
+  const pad={t:20,r:14,b:28,l:52};
+  const cw=W-pad.l-pad.r, ch=H-pad.t-pad.b;
+  const cy0=pad.t+ch/2;
+
+  // grid lines
+  const gridLevels=[0.25,0.5,0.75,1];
+  gridLevels.forEach(f=>{
+    const yP=cy0-(ch/2)*f, yN=cy0+(ch/2)*f;
+    ctx.strokeStyle='rgba(26,46,72,0.6)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(pad.l,yP); ctx.lineTo(W-pad.r,yP); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l,yN); ctx.lineTo(W-pad.r,yN); ctx.stroke();
+    const lbl=(maxAbs/1e9*f).toFixed(2)+'bn';
+    ctx.fillStyle='rgba(58,96,128,0.7)'; ctx.font='7px Space Mono,monospace';
+    ctx.textAlign='right';
+    ctx.fillText('+'+lbl, pad.l-3, yP+3);
+    ctx.fillText('-'+lbl, pad.l-3, yN+3);
+  });
+
+  // zero line
+  ctx.strokeStyle='rgba(58,96,128,0.5)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(pad.l,cy0); ctx.lineTo(W-pad.r,cy0); ctx.stroke();
+  ctx.fillStyle='rgba(58,96,128,0.6)'; ctx.textAlign='right';
+  ctx.fillText('0.0bn', pad.l-3, cy0+3);
+
+  // compute x positions
+  const xOf=i=>pad.l+(i+0.5)*(cw/focus.length);
+  const yOf=v=>cy0-(v/maxAbs)*(ch/2)*0.92;
+
+  // area fill (split positive/negative)
+  const buildPath=(positive)=>{
+    ctx.beginPath();
+    let started=false;
+    const pts=[];
+    focus.forEach((K,i)=>{
+      const v=data[K].netGEX;
+      if((positive&&v>0)||(!positive&&v<0)){ pts.push({x:xOf(i),y:yOf(v),i}); }
+    });
+    if(!pts.length) return;
+    ctx.moveTo(pts[0].x, cy0);
+    ctx.lineTo(pts[0].x, pts[0].y);
+    pts.forEach(p=>ctx.lineTo(p.x,p.y));
+    ctx.lineTo(pts[pts.length-1].x, cy0);
+    ctx.closePath();
+  };
+
+  // positive area
+  const grad=ctx.createLinearGradient(0,pad.t,0,cy0);
+  grad.addColorStop(0,'rgba(255,64,64,0.5)');
+  grad.addColorStop(1,'rgba(255,64,64,0.05)');
+  buildPath(true); ctx.fillStyle=grad; ctx.fill();
+
+  // negative area
+  const grad2=ctx.createLinearGradient(0,cy0,0,H-pad.b);
+  grad2.addColorStop(0,'rgba(79,195,247,0.05)');
+  grad2.addColorStop(1,'rgba(79,195,247,0.3)');
+  buildPath(false); ctx.fillStyle=grad2; ctx.fill();
+
+  // line
+  ctx.beginPath();
+  focus.forEach((K,i)=>{ const x=xOf(i),y=yOf(data[K].netGEX); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+  ctx.strokeStyle='rgba(200,80,80,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
+
+  // value labels at peaks
+  let prevWasLoc=false;
+  focus.forEach((K,i)=>{
+    const v=data[K].netGEX;
+    const isLocal=(i===0||i===focus.length-1)||
+      (Math.abs(v)>Math.abs(data[focus[i-1]]?.netGEX||0)&&Math.abs(v)>Math.abs(data[focus[Math.min(i+1,focus.length-1)]]?.netGEX||0));
+    if(isLocal&&Math.abs(v)>maxAbs*0.04&&!prevWasLoc){
+      const x=xOf(i), y=yOf(v);
+      ctx.fillStyle=v>=0?'rgba(255,140,140,0.9)':'rgba(79,195,247,0.9)';
+      ctx.font='7px Space Mono,monospace'; ctx.textAlign='center';
+      ctx.fillText(fmtGEX(v), x, v>=0?y-4:y+10);
+      prevWasLoc=true;
+    } else prevWasLoc=false;
+  });
+
+  // price line
+  const pi=focus.findIndex(K=>K>=S);
+  if(pi>=0){
+    const px=xOf(pi);
+    ctx.strokeStyle='rgba(255,217,61,0.8)'; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(px,pad.t); ctx.lineTo(px,H-pad.b); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='var(--yellow)'; ctx.font='7px Space Mono,monospace'; ctx.textAlign='center';
+    ctx.fillText(S.toFixed(0),px,pad.t-4);
+  }
+
+  // X labels
+  ctx.fillStyle='rgba(58,96,128,0.8)'; ctx.font='7px Space Mono,monospace'; ctx.textAlign='center';
+  const step=Math.max(1,Math.ceil(focus.length/8));
+  focus.forEach((K,i)=>{ if(i%step===0) ctx.fillText(K.toFixed(0),xOf(i),H-pad.b+10); });
+}
+
+// ═══════════════════════════════════════════════════════
+//  CHART: CALL/PUT GEX HISTOGRAM (mirrored)
+// ═══════════════════════════════════════════════════════
+function renderCPGEX(data, strikeArray, S){
+  const canvas=document.getElementById('canvas-cpgex');
+  if(!canvas) return;
+  const parent=canvas.parentElement;
+  canvas.width=parent.clientWidth; canvas.height=parent.clientHeight;
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height;
+  ctx.fillStyle='#06101e'; ctx.fillRect(0,0,W,H);
+
+  const focus=strikeArray.filter(K=>K>=S-25&&K<=S+25);
+  if(!focus.length) return;
+
+  const maxAbs=Math.max(...focus.flatMap(K=>[data[K].callGEX,data[K].putGEX]),1);
+
+  const pad={t:14,r:14,b:28,l:52};
+  const cw=W-pad.l-pad.r, ch=H-pad.t-pad.b;
+  const cy0=pad.t+ch/2;
+  const bw=Math.max(1,(cw/focus.length)*0.38);
+
+  // zero line
+  ctx.strokeStyle='rgba(58,96,128,0.5)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(pad.l,cy0); ctx.lineTo(W-pad.r,cy0); ctx.stroke();
+
+  // grid
+  [0.5,1].forEach(f=>{
+    const yP=cy0-(ch/2)*f, yN=cy0+(ch/2)*f;
+    ctx.strokeStyle='rgba(26,46,72,0.5)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(pad.l,yP); ctx.lineTo(W-pad.r,yP); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l,yN); ctx.lineTo(W-pad.r,yN); ctx.stroke();
+    const lbl=(maxAbs/1e9*f).toFixed(2)+'bn';
+    ctx.fillStyle='rgba(58,96,128,0.7)'; ctx.font='7px Space Mono,monospace';
+    ctx.textAlign='right';
+    ctx.fillText(lbl, pad.l-3, yP+3);
+    ctx.fillText(lbl, pad.l-3, yN+3);
+  });
+
+  focus.forEach((K,i)=>{
+    const d=data[K];
+    const x=pad.l+(i+0.5)*(cw/focus.length);
+    // Call bar UP
+    const ch2=(d.callGEX/maxAbs)*(ch/2)*0.9;
+    ctx.fillStyle='rgba(255,64,64,0.75)';
+    ctx.fillRect(x-bw-0.5, cy0-ch2, bw, ch2);
+    // Put bar DOWN
+    const ph=(d.putGEX/maxAbs)*(ch/2)*0.9;
+    ctx.fillStyle='rgba(79,195,247,0.65)';
+    ctx.fillRect(x+0.5, cy0, bw, ph);
+  });
+
+  // price line
+  const pi=focus.findIndex(K=>K>=S);
+  if(pi>=0){
+    const px=pad.l+(pi+0.5)*(cw/focus.length);
+    ctx.strokeStyle='rgba(255,217,61,0.7)'; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(px,pad.t); ctx.lineTo(px,H-pad.b); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // X labels
+  ctx.fillStyle='rgba(58,96,128,0.8)'; ctx.font='7px Space Mono,monospace'; ctx.textAlign='center';
+  const step=Math.max(1,Math.ceil(focus.length/8));
+  focus.forEach((K,i)=>{ if(i%step===0) ctx.fillText(K.toFixed(0),pad.l+(i+0.5)*(cw/focus.length),H-pad.b+10); });
+
+  // axis label
+  ctx.fillStyle='rgba(140,140,160,0.6)'; ctx.textAlign='center';
+  ctx.fillText('Strike', W/2, H-1);
+}
+
+// ═══════════════════════════════════════════════════════
+//  CHART: OI BY EXPIRATION
+// ═══════════════════════════════════════════════════════
+function renderOIExpiry(data, strikeArray){
+  const labels=['2/12','2/15','2/16','2/20','2/21','2/22','2/23','2/26','2/29','3/01'];
+  // bucket strikes into date buckets roughly
+  const n=labels.length;
+  const bucket=Math.ceil(strikeArray.length/n);
+  const callBuckets=new Array(n).fill(0);
+  const putBuckets=new Array(n).fill(0);
+  strikeArray.forEach((K,i)=>{
+    const b=Math.min(n-1,Math.floor(i/bucket));
+    callBuckets[b]+=data[K].cOI;
+    putBuckets[b]+=data[K].pOI;
+  });
+  drawOIBars('canvas-oi-calls', callBuckets, labels, 'rgba(79,195,247,0.7)', 'rgba(79,195,247,0.15)');
+  drawOIBars('canvas-oi-puts',  putBuckets,  labels, 'rgba(255,64,64,0.7)', 'rgba(255,64,64,0.12)');
+}
+
+function drawOIBars(canvasId, vals, labels, color, gradColor){
+  const canvas=document.getElementById(canvasId);
+  if(!canvas) return;
+  const parent=canvas.parentElement;
+  canvas.width=parent.clientWidth; canvas.height=parent.clientHeight;
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height;
+  ctx.fillStyle='#06101e'; ctx.fillRect(0,0,W,H);
+
+  const maxV=Math.max(...vals,1);
+  const pad={t:16,r:6,b:22,l:8};
+  const cw=W-pad.l-pad.r, ch=H-pad.t-pad.b;
+  const bw=(cw/vals.length)*0.55;
+
+  vals.forEach((v,i)=>{
+    const x=pad.l+(i+0.5)*(cw/vals.length);
+    const bh=(v/maxV)*ch*0.85;
+    const grad=ctx.createLinearGradient(0,pad.t+ch-bh,0,pad.t+ch);
+    grad.addColorStop(0,color); grad.addColorStop(1,gradColor);
+    ctx.fillStyle=grad;
+    ctx.fillRect(x-bw/2, pad.t+ch-bh, bw, bh);
+    // value label
+    ctx.fillStyle=color; ctx.font='6px Space Mono,monospace'; ctx.textAlign='center';
+    const lbl=v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1000).toFixed(0)+'k':v.toFixed(0);
+    ctx.fillText(lbl, x, pad.t+ch-bh-2);
+    // date label
+    ctx.fillStyle='rgba(58,96,128,0.8)'; ctx.font='6px Space Mono,monospace';
+    ctx.fillText(labels[i]||'', x, H-2);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  STOCK CHANGE HANDLER (hook for future multi-symbol)
+// ═══════════════════════════════════════════════════════
+function handleStockChange(){ renderAll(); }
+
+// ═══════════════════════════════════════════════════════
+//  RESIZE
+// ═══════════════════════════════════════════════════════
+let resizeTimer;
+window.addEventListener('resize',()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{ if(spxwGexData?.strikes) renderAll(); },100);
+});
+
+// ═══════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',fetchData);
+else fetchData();
+setInterval(fetchData, 30000);
+</script>
+</body>
+</html>
