@@ -5,7 +5,7 @@
   "main": "proxy-tastytrade.js",
   "scripts": {
     "start": "node proxy-tastytrade.js",
-    "dev": "nodemon proxy-tastytrade.js"
+  "dev": "start-tastytrade.bat"
   },
   "keywords": [
     "spx",

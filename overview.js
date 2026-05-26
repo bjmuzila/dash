@@ -475,6 +475,8 @@ let ovYScale=1;
 let ovStrikeOffset=0; // Offset for panning the left chart
 let ovCompareStrikeOffset=0; // Offset for panning the right chart
 let showOverviewDEX=false;
+const gexExpiryFetchCache = new Map();
+let lastGexDateKey = '';
 
 function getESCloseBasis(){
   if(esPrevClose>0&&spxPrevClose>0) return esPrevClose-spxPrevClose;
@@ -1075,8 +1077,12 @@ async function fetchGEX(){
 // ── LAZY DTE CHAIN FETCH — called when user clicks 1/2/3DTE pill ──
 async function fetchLazyDTEChain(expiryDate) {
   if (!expiryDate) return;
+  if (expiryMap?.[expiryDate] && Object.keys(expiryMap[expiryDate].calls || {}).length) {
+    return expiryMap[expiryDate];
+  }
+  if (gexExpiryFetchCache.has(expiryDate)) return gexExpiryFetchCache.get(expiryDate);
   console.log('[GEX] Lazy-fetching chain for', expiryDate);
-  try {
+  const fetchPromise = (async () => {
     const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?strikeCount=500&range=all&expiration=${encodeURIComponent(expiryDate)}`);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const chainData = await res.json();
@@ -1110,7 +1116,13 @@ async function fetchLazyDTEChain(expiryDate) {
       delete expiryMap[expDate]._stub;
       console.log(`[GEX] Lazy load ${expDate}: ${Object.keys(callMap).length} strikes`);
     });
+    return expiryMap?.[expiryDate] || null;
+  })();
+  gexExpiryFetchCache.set(expiryDate, fetchPromise);
+  try {
+    return await fetchPromise;
   } catch(e) {
+    gexExpiryFetchCache.delete(expiryDate);
     console.error('[GEX] fetchLazyDTEChain error:', e);
     throw e;
   }
@@ -1119,12 +1131,47 @@ async function fetchLazyDTEChain(expiryDate) {
 
 function updateSPXDisplay(quote) {
   if (!quote) return;
+  const num = (...vals) => {
+    for (const v of vals) {
+      const n = parseFloat(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  };
+  const nyParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(new Date());
+  const part = type => nyParts.find(p => p.type === type)?.value || '';
+  const day = part('weekday');
+  const mins = (parseInt(part('hour'), 10) || 0) * 60 + (parseInt(part('minute'), 10) || 0);
+  const isWeekday = !['Sat', 'Sun'].includes(day);
+  const spxOpen = isWeekday && mins >= 570 && mins < 960;
+  const quoteLast = num(quote.lastPrice, quote.last, quote.mark, quote.price, quote.mid);
+  const quotePrev = num(quote.closePrice, quote.previousClose, quote.prevClose, quote.close, quote.priorClose);
+  if (quotePrev > 0) spxPrevClose = quotePrev;
+  const canConvertFromES = esPrice > 0 && esPrevClose > 0 && spxPrevClose > 0;
+  const impliedSPX = canConvertFromES ? esPrice - (esPrevClose - spxPrevClose) : 0;
+  if (quoteLast > 0 && (spxOpen || !canConvertFromES)) spotPrice = quoteLast;
+  const displayPrice = !spxOpen && impliedSPX > 0 ? impliedSPX : (spotPrice || quoteLast);
+  if (displayPrice > 0 && !spxOpen && canConvertFromES) spotPrice = displayPrice;
   if (spotPrice > 0 && window.GEX_SPOTS) window.GEX_SPOTS.SPX = spotPrice;
   else if (spotPrice > 0 && typeof GEX_SPOTS !== 'undefined') GEX_SPOTS.SPX = spotPrice;
-  document.getElementById('spx-price').textContent=spotPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pxEl=document.getElementById('spx-price');
+  if(pxEl){
+    pxEl.textContent=displayPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    pxEl.title=!spxOpen&&canConvertFromES?'ES-implied SPX: SPX 4pm close + ES move from its 4pm close':'';
+  }
   const chEl=document.getElementById('spx-change');
-  const chg = quote.change || 0;
-  const pct = quote.changePercent || 0;
+  const chg = (!spxOpen && displayPrice > 0 && spxPrevClose > 0)
+    ? displayPrice - spxPrevClose
+    : num(quote.change, quote.netChange);
+  const pct = (!spxOpen && spxPrevClose > 0)
+    ? (chg / spxPrevClose) * 100
+    : num(quote.changePercent, quote.netPercentChange, quote.netPercentChangeInDouble);
   const chgSign = chg>=0?'+':'';
   chEl.textContent=chgSign+chg.toFixed(2)+' ('+chgSign+pct.toFixed(2)+'%)';
   chEl.style.color = chg>=0?'#00e676':'#ff4757';
@@ -1213,6 +1260,9 @@ function updateESPriceDisplay(){
     tbEsChg.textContent=sign+esChg.toFixed(2)+' ('+sign+esPct.toFixed(2)+'%)';
     tbEsChg.style.color=esChg>=0?'#00e676':'#ff4757';
   }
+  if(spxPrevClose>0&&typeof updateSPXDisplay==='function'){
+    updateSPXDisplay({ lastPrice: spotPrice, closePrice: spxPrevClose });
+  }
 }
 
 // ── PROCESS CHAIN ──────────────────────────────────────────────────
@@ -1230,7 +1280,10 @@ window.processChain = function processChain(chainData){
   all.forEach(k=>{const d=k.split(':')[0];if(!expiryMap[d])expiryMap[d]={calls:{},puts:{}};if(callMap[k])Object.assign(expiryMap[d].calls,callMap[k]);if(putMap[k])Object.assign(expiryMap[d].puts,putMap[k]);});
   const sorted=Object.keys(expiryMap).sort();
   const today=getNYDateString();
-  if(!sorted.includes(today)){sorted.unshift(today);if(!expiryMap[today])expiryMap[today]={calls:{},puts:{}};}
+  if(isGexTradingDay(today) && !sorted.includes(today)){
+    sorted.unshift(today);
+    if(!expiryMap[today]) expiryMap[today]={calls:{},puts:{}};
+  }
   // expiry dropdown populated by buildDTEPills()
   // On first load, auto-select 0DTE (calendar DTE = 0)
   if(rawChain.length === 0){
@@ -1409,8 +1462,9 @@ function applyDTEMode(){
   let datesToUse = matchingDates;
   if(datesToUse.length === 0){
     const nearest = sorted.filter(d=>{
-      const dow=new Date(d+'T12:00:00').getDay();
-      return dow!==0&&dow!==6;
+      const exp = expiryMap[d] || {};
+      const hasData = Object.keys(exp.calls || {}).length || Object.keys(exp.puts || {}).length;
+      return isGexTradingDay(d) && hasData;
     });
     datesToUse = nearest.slice(0,1);
     if(navLbl && datesToUse.length) navLbl.textContent = 'No exact match — using '+datesToUse[0]+' ('+getDTE(datesToUse[0])+'DTE)';
@@ -1422,6 +1476,17 @@ function applyDTEMode(){
 
 
 function computeGEXMulti(dateKeys){
+  const normalizedDateKeys = (dateKeys || []).filter(Boolean).sort();
+  const nextDateKey = normalizedDateKeys.join('|');
+  const expiryChanged = nextDateKey !== lastGexDateKey;
+  if(expiryChanged){
+    lastGexDateKey = nextDateKey;
+    ovStrikeOffset = 0;
+    ovCompareStrikeOffset = 0;
+    gexZoom = 1;
+    gexPan = 0;
+    gexInitialized = false;
+  }
   // Aggregate GEX across multiple expiries
   const combined={};
   const toNum = v => Number(v ?? 0) || 0;
@@ -1430,7 +1495,7 @@ function computeGEXMulti(dateKeys){
   
   console.log('[GEX] computeGEXMulti for dates:', dateKeys);
   
-  dateKeys.forEach(dateKey=>{
+  normalizedDateKeys.forEach(dateKey=>{
     if(!expiryMap[dateKey]) return;
     const {calls,puts}=expiryMap[dateKey];
     
@@ -1494,7 +1559,7 @@ function computeGEXMulti(dateKeys){
     r.volNetDEX=(r.callVolDEX||0)-(r.putVolDEX||0);
     return r;
   }).sort((a,b)=>a.strike-b.strike);
-  const fallbackDte = typeof getDTE === 'function' ? getDTE(dateKeys[0]) : null;
+  const fallbackDte = typeof getDTE === 'function' ? getDTE(normalizedDateKeys[0]) : null;
   const fallbackRows = (typeof GEX_DATA !== 'undefined' && GEX_DATA?.SPX?.[String(fallbackDte)]) || [];
   if(fallbackRows.length){
     const fallbackByStrike = new Map(fallbackRows.map(r => [Number(r.strike), r]));
@@ -1523,12 +1588,14 @@ function computeGEXMulti(dateKeys){
       (r.callVolume||0) > 0 || (r.putVolume||0) > 0
     );
     const fitCount = exposureStrikes.length > 0 ? exposureStrikes.length : rawChain.length;
+    const centeredCount = Math.min(Math.max(MIN_GEX_STRIKE_COUNT, 80), fitCount || rawChain.length);
     currentStrikeCount = fitCount;
-    if (window.AppState) window.AppState.strikeCount = fitCount;
+    currentStrikeCount = centeredCount;
+    if (window.AppState) window.AppState.strikeCount = centeredCount;
     window._gexFirstLoadDone = true;
   }
   // Reuse rest of computeGEX logic
-  finishGEXCompute(dateKeys[0]);
+  finishGEXCompute(normalizedDateKeys[0]);
 }
 
 function computeGEX(dateKey){
@@ -1610,6 +1677,7 @@ function finishGEXCompute(dateKey){
   
   // Update combined 1-7 DTE GEX display
   updateCombined1to7DTE();
+  if (typeof renderInsights0DTE === 'function') renderInsights0DTE();
 }
 
 function updateCombined1to7DTE(){
@@ -1904,6 +1972,12 @@ function scheduleGEXRender(){
   });
 }
 
+function resetGEXProfileView(){
+  gexZoom = 1;
+  gexPan = 0;
+  gexInitialized = false;
+}
+
 function renderGEXProfile(){
   const canvas = document.getElementById('gex-profile-canvas');
   if(!canvas || !rawChain.length) return;
@@ -1946,8 +2020,12 @@ function renderGEXProfile(){
   const strikeRange = maxS - minS;
   const viewWidth = strikeRange / gexZoom;
   const viewCenter = minS + strikeRange * 0.5 + (gexPan * strikeRange * 0.5);
-  const viewMin = viewCenter - viewWidth * 0.5;
-  const viewMax = viewCenter + viewWidth * 0.5;
+  let viewMin = viewCenter - viewWidth * 0.5;
+  let viewMax = viewCenter + viewWidth * 0.5;
+  if(viewMin < minS){ viewMax += minS - viewMin; viewMin = minS; }
+  if(viewMax > maxS){ viewMin -= viewMax - maxS; viewMax = maxS; }
+  viewMin = Math.max(minS, viewMin);
+  viewMax = Math.min(maxS, viewMax);
 
   // Only use visible strikes for y-axis scaling
   const visibleData = data.filter(d => d.strike >= viewMin && d.strike <= viewMax);
@@ -1995,9 +2073,9 @@ function renderGEXProfile(){
     ctx.fillText(lbl, PAD.l-6, y+3);
   }
   // Vertical grid lines
-  const sStep = getNiceStep((maxS-minS)/6);
-  const firstS = Math.ceil(minS/sStep)*sStep;
-  for(let s=firstS; s<=maxS; s+=sStep){
+  const sStep = getNiceStep((viewMax-viewMin)/6);
+  const firstS = Math.ceil(viewMin/sStep)*sStep;
+  for(let s=firstS; s<=viewMax; s+=sStep){
     const x=xFor(s);
     ctx.strokeStyle='#1a2535'; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+cH); ctx.stroke();
@@ -2039,6 +2117,7 @@ function renderGEXProfile(){
   const startIdx = Math.max(0, visIdx - 1);
   const endIdx = data.findIndex((d,i) => i > startIdx && d.strike > viewMax);
   const drawData = endIdx === -1 ? data.slice(startIdx) : data.slice(startIdx, endIdx + 1);
+  if(!drawData.length) return;
   
   // Clip to chart area so curve doesn't bleed into padding
   ctx.save();
@@ -2161,9 +2240,10 @@ function renderGEXProfile(){
 }
 
 // GEX profile mouse handlers - setup once
-(function setupGEXProfileHandlers(){
+function setupGEXProfileHandlers(){
   const canvas = document.getElementById('gex-profile-canvas');
-  if(!canvas) return;
+  if(!canvas || canvas.dataset.gexProfileHandlers === '1') return;
+  canvas.dataset.gexProfileHandlers = '1';
   
   canvas.style.cursor = 'grab';
   
@@ -2192,7 +2272,7 @@ function renderGEXProfile(){
     const dx = e.clientX - gexDragStartX;
     gexDragStartX = e.clientX;
     const panSensitivity = 0.002;
-    gexPan += dx * panSensitivity * gexZoom;
+    gexPan -= dx * panSensitivity / Math.max(gexZoom, 1);
     gexPan = Math.max(-1, Math.min(1, gexPan));
     scheduleGEXRender();
   });
@@ -2204,7 +2284,9 @@ function renderGEXProfile(){
     gexInitialized = false; // re-center on spot
     scheduleGEXRender();
   });
-})();
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupGEXProfileHandlers);
+else setupGEXProfileHandlers();
 
 
 
@@ -4965,6 +5047,7 @@ function initOvEvents(){
 
   scroll.addEventListener('wheel',e=>{
     e.preventDefault();
+    e.stopPropagation();
     const rect=scroll.getBoundingClientRect();
     const relX=(e.clientX-rect.left)/rect.width;
     const onRightEdge = relX > 0.88;
@@ -4975,13 +5058,17 @@ function initOvEvents(){
       ovYScale=Math.max(0.1,Math.min(20,ovYScale));
     } else {
       // Scroll elsewhere = zoom X (strike count)
-      const factor=e.deltaY>0?1.15:0.87;
+      const factor=e.deltaY>0?1.12:0.86;
       const compareSource = compareRawChain.length ? compareRawChain : buildFallbackCompareRows(overviewCompareTicker);
       const activeLen = relX >= 0.5 ? (compareSource.length || rawChain.length) : rawChain.length;
       // Start zoom from full data length when showing all strikes
       const baseCount = currentStrikeCount > 0 ? currentStrikeCount : activeLen;
-      const newCount=Math.max(5,Math.min(activeLen,Math.round(baseCount*factor)));
-      setConfiguredStrikeCount(newCount);
+      const newCount=Math.round(baseCount*factor);
+      if(e.deltaY > 0 && newCount >= activeLen){
+        setConfiguredStrikeCount(0);
+      } else {
+        setConfiguredStrikeCount(Math.max(MIN_GEX_STRIKE_COUNT, Math.min(activeLen - 1, newCount)));
+      }
     }
     drawOverviewChart();
   },{passive:false});
@@ -4999,7 +5086,7 @@ function initOvEvents(){
   let axisDragStartY = 0;
   let axisDragStartScale = 1;
   
-  scroll.addEventListener('mousedown',e=>{
+  scroll.addEventListener('pointerdown',e=>{
     const rect = scroll.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -5025,17 +5112,28 @@ function initOvEvents(){
       // Original pan behavior
       _ovDragPanel = mx >= DIVX ? 'right' : 'left';
       // If no strike count set, initialize from full data length so pan activates
-      if(currentStrikeCount === 0 && rawChain.length > 0){
-        setConfiguredStrikeCount(rawChain.length);
+      if(rawChain.length > 0){
+        const compareSource = compareRawChain.length ? compareRawChain : buildFallbackCompareRows(overviewCompareTicker);
+        const activeLen = _ovDragPanel === 'right' ? (compareSource.length || rawChain.length) : rawChain.length;
+        const configured = getConfiguredStrikeCount();
+        if(configured <= 0 || configured >= activeLen){
+          const dragCount = activeLen > MIN_GEX_STRIKE_COUNT
+            ? Math.min(activeLen - 1, Math.max(MIN_GEX_STRIKE_COUNT, Math.min(80, activeLen - 1)))
+            : activeLen;
+          setConfiguredStrikeCount(dragCount);
+        }
       }
       _ovDrag=true;
       _ovStartX=e.clientX;
       _ovStartOffset = ovStrikeOffset || 0;
       _ovStartCompareOffset = ovCompareStrikeOffset || 0;
+      _ovStartCount = getConfiguredStrikeCount();
+      _ovDragPxPerStrike = Math.max(4, rect.width / Math.max(_ovStartCount || 80, 1));
       const tt=document.getElementById('ov-tooltip');
       if(tt) tt.style.display='none';
       scroll.style.cursor='grabbing';
       e.preventDefault();
+      try { scroll.setPointerCapture(e.pointerId); } catch(err) {}
     }
   });
   
@@ -5052,7 +5150,7 @@ function initOvEvents(){
       }
       if(!_ovDrag||!rawChain.length) return;
       const dx = e.clientX - _ovStartX;
-      const strikeShift = Math.round(-dx / 20);
+      const strikeShift = Math.round(-dx / (_ovDragPxPerStrike || 10));
       if(_ovDragPanel === 'right'){
         ovCompareStrikeOffset = _ovStartCompareOffset + strikeShift;
       } else {
@@ -5093,6 +5191,16 @@ function initOvEvents(){
     }
   });
 }
+
+window.initOvEvents = initOvEvents;
+window.drawOverviewChart = drawOverviewChart;
+window.init_overview = function init_overview(){
+  setTimeout(() => {
+    try { initOvEvents(); } catch(e) {}
+    try { drawOverviewChart(); } catch(e) {}
+  }, 30);
+};
+
 window.addEventListener('resize',()=>{
   if(currentMode==='overview'){
     drawOverviewChart();
@@ -5123,16 +5231,16 @@ let gexTableMode = 'net'; // 'net' or 'vol'
 function setOVTab(tab){
   ovTab = tab;
   const chartView = document.getElementById('ov-chart-view');
-  const historyView = document.getElementById('ov-history-view');
+  const bzilaView = document.getElementById('ov-bzila-view');
   const chartBtn  = document.getElementById('ovtab-chart');
-  const historyBtn = document.getElementById('ovtab-history');
+  const bzilaBtn = document.getElementById('ovtab-bzila');
   const chartControls = document.getElementById('chart-mode-controls');
 
   const isChart   = tab === 'chart';
-  const isHistory = tab === 'history';
+  const isBzila   = tab === 'bzila';
 
   if(chartView)   chartView.style.display   = isChart   ? 'flex'  : 'none';
-  if(historyView){ historyView.style.display = isHistory ? 'flex'  : 'none'; }
+  if(bzilaView)   bzilaView.style.display   = isBzila   ? 'flex'  : 'none';
   if(chartControls) chartControls.style.display = isChart ? 'flex' : 'none';
   const gexControls = document.getElementById('gex-mode-controls');
   if(gexControls) gexControls.style.display = isChart ? 'flex' : 'none';
@@ -5141,9 +5249,40 @@ function setOVTab(tab){
 
   const activeStyle = (btn, active) => { if(btn){ btn.style.background=active?'#1a2a3a':'transparent'; btn.style.color=active?'#00e5ff':'#3a5570'; }};
   activeStyle(chartBtn,   isChart);
-  activeStyle(historyBtn, isHistory);
+  activeStyle(bzilaBtn,   isBzila);
   if(isChart) { setTimeout(()=>{ initOvEvents(); drawOverviewChart(); }, 30); }
-  if(isHistory){ setTimeout(()=>renderGexHistoryChart(), 30); }
+  if(isBzila){ loadOverviewBzilaFlow(); }
+}
+
+async function loadOverviewBzilaFlow(){
+  const bzilaView = document.getElementById('ov-bzila-view');
+  if(!bzilaView) return;
+  if(bzilaView.dataset.loaded === '1'){
+    if(typeof window.init_bzila === 'function') setTimeout(()=>window.init_bzila(), 30);
+    return;
+  }
+  bzilaView.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#3a5570;font-size:12px;letter-spacing:.1em">Loading Bzila Flow...</div>';
+  try {
+    const response = await fetch('pages/bzila.html');
+    if(!response.ok) throw new Error(response.statusText || 'Failed to load Bzila Flow');
+    const html = await response.text();
+    bzilaView.innerHTML = html;
+    bzilaView.querySelectorAll('script').forEach(oldScript => {
+      const newScript = document.createElement('script');
+      [...oldScript.attributes].forEach(a => newScript.setAttribute(a.name, a.value));
+      newScript.textContent = oldScript.textContent;
+      oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
+    const page = bzilaView.querySelector('#page-bzila');
+    if(page){
+      page.style.width = '100%';
+      page.style.height = '100%';
+    }
+    bzilaView.dataset.loaded = '1';
+    if(typeof window.init_bzila === 'function') setTimeout(()=>window.init_bzila(), 30);
+  } catch (error) {
+    bzilaView.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:8px;color:#ff4757;font-size:12px"><strong>Failed to load Bzila Flow</strong><span style="color:#3a5570">${error.message}</span></div>`;
+  }
 }
 
 window.setGEXMode = function(mode, btn){
@@ -6802,12 +6941,21 @@ window.gexTakeSnapshot = function gexTakeSnapshot() {
   if (DB && DB.db && rawChain && rawChain.length) {
     const mvcOI  = rawChain.reduce((a,b) => Math.abs(b.netGEX) > Math.abs(a.netGEX) ? b : a, rawChain[0]);
     const mvcVol = rawChain.reduce((a,b) => Math.abs(b.netVolGEX||0) > Math.abs(a.netVolGEX||0) ? b : a, rawChain[0]);
+    const mvcDEX = rawChain.reduce((a,b) => Math.abs(b.netDEX||0) > Math.abs(a.netDEX||0) ? b : a, rawChain[0]);
     const price  = spotPrice > 0 ? spotPrice : (esPrice > 0 ? esPrice : 0);
+    const totalGEX = rawChain.reduce((s,r) => s + (r.netGEX || 0), 0);
+    const totalNetDEX_OI  = rawChain.reduce((s,r) => s + (r.netDEX    || 0), 0);
+    const totalNetDEX_Vol = rawChain.reduce((s,r) => s + (r.volNetDEX || 0), 0);
     DB.saveMVCSnapshot(
       { strike: mvcOI.strike,  value: mvcOI.netGEX,       volume: mvcOI.callVolume  + mvcOI.putVolume  },
       { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
       price,
-      'manual'
+      selectedExpiry || '-',
+      'manual',
+      totalGEX,
+      mvcDEX?.strike ?? null,
+      totalNetDEX_OI,
+      totalNetDEX_Vol
     ).then(() => console.log(`✓ DB MVC saved [manual]: ${mvcOI.strike} @ ${price}`))
      .catch(e  => console.error('DB MVC save failed:', e));
   }
@@ -6861,13 +7009,22 @@ function gexAutoSnapshot() {
       // Save to database
       if (DB && DB.db) {
         const mvcVol = rawChain.reduce((a,b) => Math.abs(b.netVolGEX||0) > Math.abs(a.netVolGEX||0) ? b : a, rawChain[0]);
+        const mvcDEX = rawChain.reduce((a,b) => Math.abs(b.netDEX||0) > Math.abs(a.netDEX||0) ? b : a, rawChain[0]);
         const price  = spotPrice > 0 ? spotPrice : (esPrice > 0 ? esPrice : 0);
         const label  = `auto-${time}`;
+        const totalGEX = rawChain.reduce((s,r) => s + (r.netGEX || 0), 0);
+        const totalNetDEX_OI  = rawChain.reduce((s,r) => s + (r.netDEX    || 0), 0);
+        const totalNetDEX_Vol = rawChain.reduce((s,r) => s + (r.volNetDEX || 0), 0);
         DB.saveMVCSnapshot(
           { strike: peak.strike,   value: peak.netGEX,        volume: peak.callVolume   + peak.putVolume   },
           { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
           price,
-          label
+          selectedExpiry || '-',
+          label,
+          totalGEX,
+          mvcDEX?.strike ?? null,
+          totalNetDEX_OI,
+          totalNetDEX_Vol
         ).then(() => console.log(`✓ DB MVC saved [${label}]: ${peak.strike} @ ${price}`))
          .catch(e  => console.error('DB MVC auto-save failed:', e));
       }
@@ -7211,7 +7368,11 @@ if (false) {}
           spotPrice = price;
           const change = parseFloat(q.change || 0);
           if (typeof updateSPXDisplay === 'function') {
-            updateSPXDisplay({ lastPrice: price, netChange: change });
+            updateSPXDisplay({
+              lastPrice: price,
+              netChange: change,
+              closePrice: parseFloat(q.close || q['close-price'] || q.prevClose || q['previous-close'] || 0)
+            });
           }
         }
       } catch (e) { console.warn('TT SPX quote failed:', e); }
@@ -7276,6 +7437,314 @@ if (false) {}
   window.init_gex = function init_gex() {
     try { if (typeof initGexPage === 'function') initGexPage(); } catch(e){ console.error('init_gex:', e); }
   };
+  window.init_insights = function init_insights() {
+    try { renderInsights0DTE(); } catch(e){ console.error('init_insights:', e); }
+  };
+  function insightsFmtMoney(v) {
+    const n = Number(v) || 0;
+    const a = Math.abs(n);
+    const s = n >= 0 ? '+' : '-';
+    if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(2) + 'M';
+    if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'K';
+    return s + '$' + a.toFixed(0);
+  }
+  function insightsSet(id, value, color) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value;
+    if (color) el.style.color = color;
+  }
+  function insightsSetConfidence(key, score, note) {
+    const pct = Math.max(0, Math.min(100, Math.round(score || 0)));
+    insightsSet(`insights-conf-${key}`, `${pct}%`);
+    insightsSet(`insights-conf-${key}-note`, note);
+    const bar = document.getElementById(`insights-conf-${key}-bar`);
+    if (bar) bar.style.width = `${pct}%`;
+  }
+  function insightsText(id, fallback = '--') {
+    return (document.getElementById(id)?.textContent || fallback).replace(/\s+/g, ' ').trim();
+  }
+  function cleanInsightsLines(lines) {
+    return lines.map(line => String(line || '').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  }
+  function getInsightsShareModel() {
+    return {
+      title: insightsText('insights-main-title', '0DTE Exposure Read'),
+      updated: insightsText('insights-updated', ''),
+      short: insightsText('insights-analysis-short', ''),
+      body: insightsText('insights-full-analysis', ''),
+      gex: insightsText('insights-gex-value'),
+      dex: insightsText('insights-dex-value'),
+      chex: insightsText('insights-chex-value'),
+      vex: insightsText('insights-vex-value'),
+      callWall: insightsText('insights-call-wall'),
+      putWall: insightsText('insights-put-wall'),
+      flip: insightsText('insights-flip'),
+      volgex: insightsText('insights-volgex')
+    };
+  }
+  function getInsightsShareText(limit = 0) {
+    const m = getInsightsShareModel();
+    const text = cleanInsightsLines([
+      `SPX 0DTE Exposure Stack: ${m.title}`,
+      `GEX ${m.gex} | DEX ${m.dex} | CHEX ${m.chex} | VEX ${m.vex}`,
+      `Call Wall ${m.callWall} | Put Wall ${m.putWall} | Flip ${m.flip} | Vol GEX ${m.volgex}`,
+      m.short,
+      m.body,
+      m.updated ? `Updated ${m.updated}` : ''
+    ]);
+    return limit > 0 && text.length > limit ? text.slice(0, Math.max(0, limit - 1)).trim() + '…' : text;
+  }
+  async function insightsLoadHtml2Canvas() {
+    if (typeof window.html2canvas === 'function') return window.html2canvas;
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    return window.html2canvas;
+  }
+  async function getInsightsShareBlob() {
+    const left = document.getElementById('insights-share-left');
+    const main = document.getElementById('insights-share-main');
+    if (!left || !main) throw new Error('Insights share card not found');
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:fixed;left:-10000px;top:0;z-index:-1;display:grid;grid-template-columns:420px 760px;width:1180px;background:#05080d;color:#e8edf5;border:1px solid #1a2a3a;box-sizing:border-box;overflow:hidden';
+    const leftClone = left.cloneNode(true);
+    const mainClone = main.cloneNode(true);
+    leftClone.style.cssText += ';width:420px;height:auto;max-height:none;overflow:visible;box-sizing:border-box;border-right:1px solid #1a2a3a;';
+    mainClone.style.cssText += ';width:760px;max-width:none;height:auto;overflow:visible;box-sizing:border-box;padding:18px 20px;background:#05080d;';
+    mainClone.querySelectorAll('button').forEach(btn => btn.remove());
+    leftClone.querySelectorAll('button').forEach(btn => btn.remove());
+    wrapper.appendChild(leftClone);
+    wrapper.appendChild(mainClone);
+    document.body.appendChild(wrapper);
+    try {
+      const html2canvasFn = await insightsLoadHtml2Canvas();
+      const canvas = await html2canvasFn(wrapper, {
+        backgroundColor: '#05080d',
+        scale: Math.min(2, window.devicePixelRatio || 1),
+        useCORS: true,
+        logging: false
+      });
+      return await new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Screenshot failed')), 'image/png');
+      });
+    } finally {
+      wrapper.remove();
+    }
+  }
+  async function copyInsightsScreenshot() {
+    const blob = await getInsightsShareBlob();
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') throw new Error('Image clipboard unavailable');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return blob;
+  }
+  window.insightsCopyAnalysis = async function insightsCopyAnalysis() {
+    try {
+      await copyInsightsScreenshot();
+      insightsSet('insights-updated', 'copied');
+    } catch (e) {
+      const text = getInsightsShareText();
+      const area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+      insightsSet('insights-updated', 'copied');
+    }
+  };
+  window.insightsPostX = async function insightsPostX() {
+    try {
+      await copyInsightsScreenshot();
+      insightsSet('insights-updated', 'image copied');
+    } catch (e) {
+      insightsSet('insights-updated', 'text fallback');
+    }
+    const text = getInsightsShareText(240);
+    window.open('https://twitter.com/intent/tweet?text=' + encodeURIComponent(text), '_blank', 'noopener,noreferrer');
+  };
+  window.insightsPostDiscord = async function insightsPostDiscord() {
+    const m = getInsightsShareModel();
+    const payload = {
+      content: `SPX 0DTE Exposure Stack: ${m.title}`,
+      embeds: [{
+        title: m.title,
+        description: [m.short, m.body].filter(Boolean).join('\n').slice(0, 3900),
+        color: m.title.toLowerCase().includes('downside') ? 16729943 : m.title.toLowerCase().includes('upside') ? 589797 : 15658734,
+        fields: [
+          { name: 'GEX', value: m.gex, inline: true },
+          { name: 'DEX', value: m.dex, inline: true },
+          { name: 'CHEX', value: m.chex, inline: true },
+          { name: 'VEX', value: m.vex, inline: true },
+          { name: 'Call Wall', value: m.callWall, inline: true },
+          { name: 'Put Wall', value: m.putWall, inline: true },
+          { name: 'GEX Flip', value: m.flip, inline: true },
+          { name: 'Vol GEX', value: m.volgex, inline: true }
+        ],
+        footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
+      }]
+    };
+    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || 'http://localhost:3001/proxy/discord-webhook';
+    const blob = await getInsightsShareBlob();
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify(payload));
+    form.append('files[0]', blob, 'spx-0dte-insights.png');
+    const res = await fetch(webhook, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`Discord webhook failed: ${res.status}`);
+    insightsSet('insights-updated', 'posted');
+  };
+  window.insightsRefreshAll = async function insightsRefreshAll() {
+    insightsSet('insights-updated', 'refreshing');
+    try {
+      if (typeof window.fetchQuotes === 'function') await window.fetchQuotes();
+    } catch (e) {}
+    try {
+      if (typeof window.fetchGEX === 'function') await window.fetchGEX();
+      else if (typeof fetchGEX === 'function') await fetchGEX();
+    } catch (e) {
+      insightsSet('insights-updated', 'refresh failed');
+      throw e;
+    }
+    try {
+      if (typeof refreshCompareChain === 'function') await refreshCompareChain();
+    } catch (e) {}
+    try {
+      if (typeof renderInsights0DTE === 'function') renderInsights0DTE();
+    } catch (e) {}
+    if (typeof resetCountdown === 'function') resetCountdown();
+  };
+  function insightsNum(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function getInsights0DTERows() {
+    const expiries = Object.keys(expiryMap || {}).sort();
+    const exp = expiries.find(d => typeof getDTE === 'function' && getDTE(d) === 0) || expiries[0];
+    if (!exp || !expiryMap[exp]) return { exp: null, rows: [] };
+    const src = expiryMap[exp];
+    const strikes = new Set([...Object.keys(src.calls || {}), ...Object.keys(src.puts || {})]);
+    const s = spotPrice || esPrice || 0;
+    const rows = [];
+    strikes.forEach(strikeKey => {
+      const strike = parseFloat(strikeKey);
+      const c = Array.isArray(src.calls?.[strikeKey]) ? src.calls[strikeKey][0] : src.calls?.[strikeKey];
+      const p = Array.isArray(src.puts?.[strikeKey]) ? src.puts[strikeKey][0] : src.puts?.[strikeKey];
+      const cPos = insightsNum(c?.openInterest) + insightsNum(c?.totalVolume);
+      const pPos = insightsNum(p?.openInterest) + insightsNum(p?.totalVolume);
+      const cGamma = insightsNum(c?.gamma), pGamma = insightsNum(p?.gamma);
+      const cDelta = insightsNum(c?.delta), pDelta = Math.abs(insightsNum(p?.delta));
+      const cTheta = insightsNum(c?.theta), pTheta = insightsNum(p?.theta);
+      const cVega = insightsNum(c?.vega), pVega = insightsNum(p?.vega);
+      const callGEX = calcDollarGammaExposure(cGamma, cPos, s);
+      const putGEX = calcPutGammaExposure(pGamma, pPos, s);
+      const callDEX = Math.abs(cDelta) * cPos * s * 100;
+      const putDEX = pDelta * pPos * s * 100;
+      const callCHEX = -cTheta * cPos * s * 100;
+      const putCHEX = pTheta * pPos * s * 100;
+      const callVEX = cVega * cPos * s * 100;
+      const putVEX = -pVega * pPos * s * 100;
+      const liveSignedVolGEX = spxSignedVolGEXByStrike instanceof Map ? insightsNum(spxSignedVolGEXByStrike.get(strike)) : 0;
+      rows.push({
+        strike,
+        callGEX,
+        putGEX,
+        netGEX: callGEX + putGEX,
+        netDEX: callDEX - putDEX,
+        netCHEX: callCHEX + putCHEX,
+        netVEX: callVEX + putVEX,
+        netVolGEX: liveSignedVolGEX || (calcVolumeGammaExposure(cGamma, insightsNum(c?.totalVolume), s, true) + calcVolumeGammaExposure(pGamma, insightsNum(p?.totalVolume), s, false))
+      });
+    });
+    return { exp, rows: rows.sort((a, b) => a.strike - b.strike) };
+  }
+  function findInsightsFlip(rows) {
+    const sorted = [...rows].sort((a, b) => a.strike - b.strike);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i], b = sorted[i + 1];
+      if ((a.netGEX < 0 && b.netGEX > 0) || (a.netGEX > 0 && b.netGEX < 0)) {
+        return a.strike - a.netGEX * (b.strike - a.strike) / (b.netGEX - a.netGEX);
+      }
+    }
+    const near = sorted.reduce((best, r) => !best || Math.abs(r.netGEX) < Math.abs(best.netGEX) ? r : best, null);
+    return near?.strike || null;
+  }
+  function renderInsights0DTE() {
+    if (!document.getElementById('page-insights')) return;
+    const { exp, rows } = getInsights0DTERows();
+    if (!rows.length) {
+      insightsSet('insights-bias', 'Waiting for 0DTE exposure');
+      insightsSet('insights-analysis-short', 'Open the Overview page or refresh the chain so the SPX 0DTE option map can populate.');
+      return;
+    }
+    const total = rows.reduce((m, r) => {
+      m.gex += r.netGEX; m.dex += r.netDEX; m.chex += r.netCHEX; m.vex += r.netVEX; m.volgex += r.netVolGEX;
+      return m;
+    }, { gex: 0, dex: 0, chex: 0, vex: 0, volgex: 0 });
+    const spot = spotPrice || esPrice || 0;
+    const nearRows = rows.filter(r => !spot || Math.abs(r.strike - spot) <= 50);
+    const active = nearRows.length ? nearRows : rows;
+    const callWall = rows.reduce((a, b) => b.callGEX > (a?.callGEX ?? -Infinity) ? b : a, null);
+    const putWall = rows.reduce((a, b) => Math.abs(b.putGEX) > Math.abs(a?.putGEX ?? 0) ? b : a, null);
+    const dexFloor = rows.reduce((a, b) => b.netDEX < (a?.netDEX ?? Infinity) ? b : a, null);
+    const dexCeil = rows.reduce((a, b) => b.netDEX > (a?.netDEX ?? -Infinity) ? b : a, null);
+    const flip = findInsightsFlip(rows);
+    const localDex = active.reduce((s, r) => s + r.netDEX, 0);
+    const localChex = active.reduce((s, r) => s + r.netCHEX, 0);
+    const localVex = active.reduce((s, r) => s + r.netVEX, 0);
+    const grossFor = field => rows.reduce((s, r) => s + Math.abs(r[field] || 0), 0);
+    const dominance = (field, value) => {
+      const gross = grossFor(field);
+      return gross > 0 ? Math.min(1, Math.abs(value || 0) / gross) : 0;
+    };
+    const flipDistancePct = spot && flip ? Math.abs(spot - flip) / spot * 100 : 0;
+    const flipScore = flipDistancePct > 2 ? 100 : flipDistancePct >= 0.5 ? 55 + ((flipDistancePct - 0.5) / 1.5) * 35 : Math.max(10, flipDistancePct / 0.5 * 45);
+    const isPositiveGex = total.gex >= 0;
+    const vannaAligned = isPositiveGex ? total.vex <= 0 : Math.abs(total.vex) > 0;
+    const gexScore = Math.min(100, (isPositiveGex ? 50 : 25) + dominance('netGEX', total.gex) * 25 + flipScore * 0.25);
+    const vexScore = Math.min(100, (vannaAligned ? 45 : 20) + dominance('netVEX', total.vex) * 30 + (isPositiveGex && total.vex <= 0 ? 25 : 0));
+    const dexScore = Math.min(100, 35 + dominance('netDEX', total.dex) * 45 + (Math.sign(localDex || total.dex) === Math.sign(total.volgex || localDex || 1) ? 20 : 0));
+    const chexScore = Math.min(100, 35 + dominance('netCHEX', total.chex) * 45 + (Math.sign(localChex || total.chex) === Math.sign(localDex || total.dex || 1) ? 20 : 0));
+    const overallScore = Math.round((gexScore * 0.45) + (vexScore * 0.25) + (flipScore * 0.20) + (dexScore * 0.05) + (chexScore * 0.05));
+    const gexRegime = total.gex >= 0 ? 'Positive gamma pinning' : 'Negative gamma momentum';
+    const dexRead = localDex > 0 ? 'upside inventory pressure' : 'downside inventory pressure';
+    const chexRead = localChex > 0 ? 'time decay supports bids' : 'time decay leans offered';
+    const vexRead = localVex > 0 ? 'IV crush can support upside' : 'IV expansion can pressure downside';
+    let bias = 'Balanced / wait for confirmation';
+    if (total.gex < 0 && localDex > 0 && total.volgex >= 0) bias = 'Upside squeeze watch';
+    else if (total.gex < 0 && localDex < 0 && total.volgex < 0) bias = 'Downside acceleration risk';
+    else if (total.gex >= 0 && spot && callWall && Math.abs(spot - callWall.strike) < 25) bias = 'Call wall fade / pin risk';
+    else if (total.gex >= 0) bias = 'Controlled positive-gamma tape';
+    const shortText = `${gexRegime}. Near spot, DEX shows ${dexRead}; CHEX says ${chexRead}; VEX says ${vexRead}.`;
+    const full = `0DTE ${exp || ''}: net GEX is ${insightsFmtMoney(total.gex)}, putting the session in a ${total.gex >= 0 ? 'dampened / pinning' : 'faster-moving / momentum'} regime. The call wall is ${callWall?.strike?.toLocaleString() || '--'} and the put wall is ${putWall?.strike?.toLocaleString() || '--'}, with the GEX flip near ${flip ? flip.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--'}. DEX is ${insightsFmtMoney(total.dex)} overall, with the strongest downside inventory trough near ${dexFloor?.strike?.toLocaleString() || '--'} and the strongest upside inventory shelf near ${dexCeil?.strike?.toLocaleString() || '--'}. CHEX is ${insightsFmtMoney(total.chex)}, so time decay is currently ${total.chex >= 0 ? 'more supportive of buy pressure' : 'more supportive of sell pressure'}. VEX is ${insightsFmtMoney(total.vex)}, which matters most if IV starts moving; ${total.vex >= 0 ? 'falling IV would be the cleaner upside-support condition' : 'rising IV would be the cleaner downside-pressure condition'}. Signed Vol GEX is ${insightsFmtMoney(total.volgex)}, so today's flow is ${total.volgex >= 0 ? 'confirming upside or stabilizing demand' : 'confirming downside or supply pressure'}.`;
+    insightsSet('insights-updated', new Date().toLocaleTimeString('en-US', { hour12: false }));
+    insightsSet('insights-bias', bias, bias.includes('Downside') ? '#ff4757' : bias.includes('Upside') ? '#00e676' : '#e8edf5');
+    insightsSet('insights-analysis-short', shortText);
+    insightsSet('insights-gex-value', insightsFmtMoney(total.gex), total.gex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-dex-value', insightsFmtMoney(total.dex), total.dex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-chex-value', insightsFmtMoney(total.chex), total.chex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-vex-value', insightsFmtMoney(total.vex), total.vex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-gex-note', total.gex >= 0 ? 'Positive GEX favors pinning and mean reversion around walls.' : 'Negative GEX favors faster directional moves through pockets.');
+    insightsSet('insights-dex-note', `Near spot: ${dexRead}. Watch ${(localDex >= 0 ? dexCeil?.strike : dexFloor?.strike)?.toLocaleString?.() || '--'} as the active inventory zone.`);
+    insightsSet('insights-chex-note', chexRead + '. This grows more important later in the session.');
+    insightsSet('insights-vex-note', vexRead + '. Treat as active only when IV is moving.');
+    insightsSet('insights-call-wall', callWall?.strike?.toLocaleString() || '--');
+    insightsSet('insights-put-wall', putWall?.strike?.toLocaleString() || '--');
+    insightsSet('insights-flip', flip ? flip.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--');
+    insightsSet('insights-volgex', insightsFmtMoney(total.volgex), total.volgex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-main-title', bias);
+    insightsSet('insights-confidence-total', `${overallScore}% overall`);
+    insightsSetConfidence('gex', gexScore, `${isPositiveGex ? 'Positive GEX dampening' : 'Negative GEX amplification'}; flip ${flipDistancePct.toFixed(2)}% away`);
+    insightsSetConfidence('dex', dexScore, localDex >= 0 ? 'Directional tilt: upside pressure' : 'Directional tilt: downside pressure');
+    insightsSetConfidence('chex', chexScore, localChex >= 0 ? '0DTE time decay supports bids' : '0DTE time decay leans offered');
+    insightsSetConfidence('vex', vexScore, vannaAligned ? 'Vanna aligned with gamma regime' : 'Vanna fighting gamma regime');
+    const fullEl = document.getElementById('insights-full-analysis');
+    if (fullEl) fullEl.textContent = full;
+  }
   // Other pages don't have explicit inits — they're static UI placeholders without TastyTrade data.
 
   // The mock's switchPage assumed all pages were siblings in one DOM.
@@ -7322,8 +7791,9 @@ if (false) {}
           return 0;
         };
         const price    = num(q.last, q.mark, q.mid, q['last-price'], q['mark-price'], q['mid-price'], q['last-trade-price']);
-        const prev     = num(q.prevClose, q.close, q['prev-close'], q['close-price'], q['previous-close'], q['settlement-price']);
-        const change   = num(q.change, q.netChange, q['net-change'], q['day-change']) || (prev > 0 ? price - prev : 0);
+        const rawChange = num(q.change, q.netChange, q['net-change'], q['day-change']);
+        const prev     = num(q.prevClose, q.close, q['prev-close'], q['close-price'], q['previous-close'], q['settlement-price']) || (price > 0 && rawChange !== 0 ? price - rawChange : 0);
+        const change   = rawChange || (prev > 0 ? price - prev : 0);
         const changePct= num(q.changePct, q.percentChange, q['percent-change'], q['net-percent-change']) || (prev > 0 ? (change / prev) * 100 : 0);
         const entry = {
           quote: {
@@ -7377,6 +7847,16 @@ if (false) {}
           // Reposition the CURRENT ES row based on live price
           repositionESPriceRow(price);
         }
+      }
+      const spxEntry = data['$SPX'] || data['SPX'] || null;
+      if (spxEntry && typeof updateSPXDisplay === 'function') {
+        const q = spxEntry.quote || spxEntry;
+        updateSPXDisplay({
+          lastPrice: q.lastPrice || q.mark || q.last || 0,
+          netChange: q.netChange || q.change || 0,
+          netPercentChange: q.netPercentChange || q.changePercent || q.netPercentChangeInDouble || 0,
+          closePrice: q.closePrice || q.previousClose || q.prevClose || 0
+        });
       }
     } catch (e) {
       console.error('fetchQuotes (TastyTrade) error:', e);
@@ -7444,13 +7924,13 @@ if (false) {}
   // ── Kick off the first fetch ONLY when overview DOM exists ───────────
   console.log('✓ TastyTrade adapter installed over mock JS — waiting for DOM');
   function whenOverviewReady(cb) {
-    if (document.getElementById('overview-canvas') && document.getElementById('gex-table-wrap')) {
+    if (document.getElementById('overview-canvas')) {
       cb();
       return;
     }
     // Poll for the elements (loadPage injects them async)
     const obs = new MutationObserver(() => {
-      if (document.getElementById('overview-canvas') && document.getElementById('gex-table-wrap')) {
+      if (document.getElementById('overview-canvas')) {
         obs.disconnect();
         cb();
       }

@@ -287,17 +287,23 @@ function setConfiguredStrikeCount(count) {
   const parsed = parseInt(count, 10);
   const next = parsed > 0 ? Math.max(MIN_GEX_STRIKE_COUNT, parsed) : 0;
   currentStrikeCount = next;
-  if (window.AppState) window.AppState.strikeCount = next;
+  if (!window.AppState) window.AppState = {};
+  window.AppState.strikeCount = next;
   const input = document.getElementById('strike-count-input');
   if (input && parseInt(input.value, 10) !== next) input.value = String(next);
   return next;
 }
 
 function getConfiguredStrikeCount() {
-  const parsed = parseInt(window.AppState?.strikeCount, 10);
-  const configured = parsed > 0 ? Math.max(MIN_GEX_STRIKE_COUNT, parsed) : 0;
-  if (currentStrikeCount !== configured) currentStrikeCount = configured;
-  return configured;
+  // Prefer AppState if set, otherwise use currentStrikeCount
+  const fromState = parseInt(window.AppState?.strikeCount, 10);
+  if (Number.isFinite(fromState) && fromState >= 0) {
+    const configured = fromState > 0 ? Math.max(MIN_GEX_STRIKE_COUNT, fromState) : 0;
+    if (currentStrikeCount !== configured) currentStrikeCount = configured;
+    return configured;
+  }
+  // Fall back to currentStrikeCount when AppState is missing
+  return currentStrikeCount > 0 ? Math.max(MIN_GEX_STRIKE_COUNT, currentStrikeCount) : 0;
 }
 
 function getVisibleStrikeRows(rows, spot, count = getConfiguredStrikeCount(), descending = false) {
@@ -412,7 +418,7 @@ function getDefaultDTE() {
 }
 
 // Initialize with time-based default, but let buildDTEPills override if needed
-let selectedDTEs = new Set([0]); // Will be updated by buildDTEPills based on time
+let selectedDTEs = new Set(); // stores expiry date strings e.g. '2026-05-27'
 let gexSelectedTicker='SPX'; // SPX, SPY, or QQQ for overview GEX chart/table
 let overviewCompareTicker='SPY';
 
@@ -462,7 +468,7 @@ let hmMode='now_only', hmCols={net:true,call:true,put:true,oi:true}, hmThreshold
 let ovViewMin=0, ovViewMax=0, ovIsDragging=false;
 let ovDragStartY=0, ovDragStartMin=0, ovDragStartMax=0;
 // Pan/drag state for initOvEvents (hoisted so window listeners share one closure)
-let _ovDrag=false, _ovStartX=0, _ovStartOffset=0, _ovStartCompareOffset=0, _ovDragPanel='left';
+let _ovDrag=false, _ovStartX=0, _ovStartOffset=0, _ovStartCompareOffset=0, _ovStartCount=0, _ovDragPxPerStrike=10, _ovDragPanel='left';
 let _ovAxisDragging=false, _ovAxisDragPanel=null, _ovAxisDragStartY=0, _ovAxisDragStartScale=1;
 let _ovWindowListenersAdded=false;
 let esPrice=0, esPrevClose=0, spxPrevClose=0, esBasis=null, isFetching=false;
@@ -475,6 +481,8 @@ let ovYScale=1;
 let ovStrikeOffset=0; // Offset for panning the left chart
 let ovCompareStrikeOffset=0; // Offset for panning the right chart
 let showOverviewDEX=false;
+const gexExpiryFetchCache = new Map();
+let lastGexDateKey = '';
 
 function getESCloseBasis(){
   if(esPrevClose>0&&spxPrevClose>0) return esPrevClose-spxPrevClose;
@@ -959,7 +967,7 @@ async function fetchGEX(){
     };
     
     const t0 = performance.now();
-    const chainRes = await fetch(PROXY + '/proxy/api/tt/chains/SPX?strikeCount=500&range=all');
+    const chainRes = await fetch(PROXY + '/proxy/api/tt/chains/SPX?range=100');
     const chainData = await chainRes.json();
     const t1 = performance.now();
     console.log(`[GEX] Chain fetch: ${(t1-t0).toFixed(0)}ms`);
@@ -1075,9 +1083,13 @@ async function fetchGEX(){
 // ── LAZY DTE CHAIN FETCH — called when user clicks 1/2/3DTE pill ──
 async function fetchLazyDTEChain(expiryDate) {
   if (!expiryDate) return;
+  if (expiryMap?.[expiryDate] && Object.keys(expiryMap[expiryDate].calls || {}).length) {
+    return expiryMap[expiryDate];
+  }
+  if (gexExpiryFetchCache.has(expiryDate)) return gexExpiryFetchCache.get(expiryDate);
   console.log('[GEX] Lazy-fetching chain for', expiryDate);
-  try {
-    const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?strikeCount=500&range=all&expiration=${encodeURIComponent(expiryDate)}`);
+  const fetchPromise = (async () => {
+    const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?range=100&expiration=${encodeURIComponent(expiryDate)}`);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const chainData = await res.json();
     if (!chainData.data?.items) throw new Error('No items in lazy chain response');
@@ -1110,7 +1122,13 @@ async function fetchLazyDTEChain(expiryDate) {
       delete expiryMap[expDate]._stub;
       console.log(`[GEX] Lazy load ${expDate}: ${Object.keys(callMap).length} strikes`);
     });
+    return expiryMap?.[expiryDate] || null;
+  })();
+  gexExpiryFetchCache.set(expiryDate, fetchPromise);
+  try {
+    return await fetchPromise;
   } catch(e) {
+    gexExpiryFetchCache.delete(expiryDate);
     console.error('[GEX] fetchLazyDTEChain error:', e);
     throw e;
   }
@@ -1119,12 +1137,47 @@ async function fetchLazyDTEChain(expiryDate) {
 
 function updateSPXDisplay(quote) {
   if (!quote) return;
+  const num = (...vals) => {
+    for (const v of vals) {
+      const n = parseFloat(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  };
+  const nyParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(new Date());
+  const part = type => nyParts.find(p => p.type === type)?.value || '';
+  const day = part('weekday');
+  const mins = (parseInt(part('hour'), 10) || 0) * 60 + (parseInt(part('minute'), 10) || 0);
+  const isWeekday = !['Sat', 'Sun'].includes(day);
+  const spxOpen = isWeekday && mins >= 570 && mins < 960;
+  const quoteLast = num(quote.lastPrice, quote.last, quote.mark, quote.price, quote.mid);
+  const quotePrev = num(quote.closePrice, quote.previousClose, quote.prevClose, quote.close, quote.priorClose);
+  if (quotePrev > 0) spxPrevClose = quotePrev;
+  const canConvertFromES = esPrice > 0 && esPrevClose > 0 && spxPrevClose > 0;
+  const impliedSPX = canConvertFromES ? esPrice - (esPrevClose - spxPrevClose) : 0;
+  if (quoteLast > 0 && (spxOpen || !canConvertFromES)) spotPrice = quoteLast;
+  const displayPrice = !spxOpen && impliedSPX > 0 ? impliedSPX : (spotPrice || quoteLast);
+  if (displayPrice > 0 && !spxOpen && canConvertFromES) spotPrice = displayPrice;
   if (spotPrice > 0 && window.GEX_SPOTS) window.GEX_SPOTS.SPX = spotPrice;
   else if (spotPrice > 0 && typeof GEX_SPOTS !== 'undefined') GEX_SPOTS.SPX = spotPrice;
-  document.getElementById('spx-price').textContent=spotPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pxEl=document.getElementById('spx-price');
+  if(pxEl){
+    pxEl.textContent=displayPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    pxEl.title=!spxOpen&&canConvertFromES?'ES-implied SPX: SPX 4pm close + ES move from its 4pm close':'';
+  }
   const chEl=document.getElementById('spx-change');
-  const chg = quote.change || 0;
-  const pct = quote.changePercent || 0;
+  const chg = (!spxOpen && displayPrice > 0 && spxPrevClose > 0)
+    ? displayPrice - spxPrevClose
+    : num(quote.change, quote.netChange);
+  const pct = (!spxOpen && spxPrevClose > 0)
+    ? (chg / spxPrevClose) * 100
+    : num(quote.changePercent, quote.netPercentChange, quote.netPercentChangeInDouble);
   const chgSign = chg>=0?'+':'';
   chEl.textContent=chgSign+chg.toFixed(2)+' ('+chgSign+pct.toFixed(2)+'%)';
   chEl.style.color = chg>=0?'#00e676':'#ff4757';
@@ -1213,6 +1266,9 @@ function updateESPriceDisplay(){
     tbEsChg.textContent=sign+esChg.toFixed(2)+' ('+sign+esPct.toFixed(2)+'%)';
     tbEsChg.style.color=esChg>=0?'#00e676':'#ff4757';
   }
+  if(spxPrevClose>0&&typeof updateSPXDisplay==='function'){
+    updateSPXDisplay({ lastPrice: spotPrice, closePrice: spxPrevClose });
+  }
 }
 
 // ── PROCESS CHAIN ──────────────────────────────────────────────────
@@ -1230,7 +1286,10 @@ window.processChain = function processChain(chainData){
   all.forEach(k=>{const d=k.split(':')[0];if(!expiryMap[d])expiryMap[d]={calls:{},puts:{}};if(callMap[k])Object.assign(expiryMap[d].calls,callMap[k]);if(putMap[k])Object.assign(expiryMap[d].puts,putMap[k]);});
   const sorted=Object.keys(expiryMap).sort();
   const today=getNYDateString();
-  if(!sorted.includes(today)){sorted.unshift(today);if(!expiryMap[today])expiryMap[today]={calls:{},puts:{}};}
+  if(isGexTradingDay(today) && !sorted.includes(today)){
+    sorted.unshift(today);
+    if(!expiryMap[today]) expiryMap[today]={calls:{},puts:{}};
+  }
   // expiry dropdown populated by buildDTEPills()
   // On first load, auto-select 0DTE (calendar DTE = 0)
   if(rawChain.length === 0){
@@ -1243,13 +1302,7 @@ window.processChain = function processChain(chainData){
     });
     if(hasTradingExpiry){
       // Default to calendar 0DTE
-      if(!selectedDTEs.has(0)){
-        selectedDTEs = new Set([0]);
-        document.querySelectorAll('#dte-nav-tabs .nav-pill').forEach(p=>{
-          const calDte = parseInt(p.dataset.caldte ?? p.id.replace('dte-pill-',''));
-          if(!isNaN(calDte)) p.classList.toggle('active', selectedDTEs.has(calDte));
-        });
-      }
+      // selectedDTEs is now expiry date strings; leave auto-select to buildDTEPills
     }
   }
   applyDTEMode();
@@ -1271,29 +1324,24 @@ window.processChain = function processChain(chainData){
   }
 }
 
-function toggleDTE(dte, el){
-  // Single selection only - deselect all others
-  selectedDTEs = new Set([dte]);
+function toggleDTE(expiry, el){
+  // expiry is now a date string e.g. '2026-05-27'
+  selectedDTEs = new Set([expiry]);
   document.querySelectorAll('#dte-nav-tabs .nav-pill').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
-  // Clear dropdown selection
   const sel=document.getElementById('expiry-select');
   if(sel) sel.value='';
   if(Object.keys(expiryMap).length) applyDTEMode();
-  
-  // Update right panel (SPY/QQQ) with selected DTE
   refreshCompareChain();
 }
 
 function toggleDTEAll(el){
-  // Select all available expiry DTEs
   const sorted = Object.keys(expiryMap).sort();
   selectedDTEs = new Set();
   sorted.forEach(d=>{
     const dow=new Date(d+'T12:00:00').getDay();
     if(dow===0||dow===6) return;
-    const dte=getDTE(d);
-    if(dte>=0&&dte<=7) selectedDTEs.add(dte);
+    if(getDTE(d)>=0&&getDTE(d)<=7) selectedDTEs.add(d);
   });
   document.querySelectorAll('#dte-nav-tabs .nav-pill').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
@@ -1316,11 +1364,11 @@ function buildDTEPills(){
   // Build pills — just show the expiration date (M/D), no DTE number
   let html = tradingExpiries.map(date => {
     const calDTE = getDTE(date);
-    const isActive = selectedDTEs.has(calDTE);
+    const isActive = selectedDTEs.has(date);
     const d = new Date(date+'T12:00:00');
     const dayName = d.toLocaleDateString('en-US',{weekday:'short'});
     const mmdd = d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
-    return `<span class="nav-pill${isActive?' active':''}" id="dte-pill-${calDTE}" data-expiry="${date}" data-caldte="${calDTE}" onclick="toggleDTE(${calDTE},this)" title="${date} (${calDTE}DTE)" style="font-size:10px;display:inline-flex;flex-direction:column;align-items:center;padding:3px 8px;line-height:1.2"><span style="font-weight:700">${mmdd}</span><span style="font-size:8px;opacity:0.55;margin-top:1px">${dayName}</span></span>`;
+    return `<span class="nav-pill${isActive?' active':''}" id="dte-pill-${date}" data-expiry="${date}" data-caldte="${calDTE}" onclick="toggleDTE('${date}',this)" title="${date}" style="font-size:10px;display:inline-flex;flex-direction:column;align-items:center;padding:3px 8px;line-height:1.2"><span style="font-weight:700">${mmdd}</span><span style="font-size:8px;opacity:0.55;margin-top:1px">${dayName}</span></span>`;
   }).join('');
   container.innerHTML = html;
 
@@ -1343,23 +1391,15 @@ function buildDTEPills(){
     });
   }
 
-  // Auto-select based on time-based default if nothing active
-  if(dtes.length){
-    const hasActive = dtes.some(d=>selectedDTEs.has(d));
-    if(!hasActive){
-      const defaultDTE = getDefaultDTE();
-      // Try to use time-based default, otherwise fall back to first available
-      const targetDTE = dtes.includes(defaultDTE) ? defaultDTE : dtes[0];
-      selectedDTEs = new Set([targetDTE]);
-      const pill = document.getElementById('dte-pill-'+targetDTE);
-      if(pill) pill.classList.add('active');
-    }
-    // Highlight pill for currently selected expiry from dropdown
-    dtes.forEach(dte=>{
-      const pill=document.getElementById('dte-pill-'+dte);
-      if(pill) pill.classList.toggle('active', selectedDTEs.has(dte));
-    });
+  // Auto-select first available expiry if nothing active
+  const allPills = container.querySelectorAll('.nav-pill[data-expiry]');
+  const hasActive = [...allPills].some(p => selectedDTEs.has(p.dataset.expiry));
+  if(!hasActive && allPills.length){
+    const firstExpiry = allPills[0].dataset.expiry;
+    selectedDTEs = new Set([firstExpiry]);
+    allPills[0].classList.add('active');
   }
+  allPills.forEach(p => p.classList.toggle('active', selectedDTEs.has(p.dataset.expiry)));
 }
 
 
@@ -1370,23 +1410,14 @@ function applyDTEMode(){
   // Rebuild pills if needed
   buildDTEPills();
 
-  // Resolve selected pills to actual expiry dates via the pill's data-expiry attribute.
-  // Pills now use actual calendar DTE as their id and data-dte attributes
-  const pillEls = document.querySelectorAll('#dte-nav-tabs .nav-pill');
-  const matchingDates = [];
-  pillEls.forEach(p=>{
-    const calDte = parseInt(p.dataset.caldte ?? p.id.replace('dte-pill-',''));
-    if(!isNaN(calDte) && selectedDTEs.has(calDte)){
-      const exp = p.dataset.expiry;
-      if(exp && expiryMap[exp]) matchingDates.push(exp);
-    }
-  });
+  // selectedDTEs now stores date strings directly
+  const matchingDates = [...selectedDTEs].filter(d => expiryMap[d]);
 
   // Update nav label
   const navLbl=document.getElementById('nav-expiry-label');
   if(navLbl){
     if(matchingDates.length===0) navLbl.textContent='No matching expiries';
-    else if(matchingDates.length===1) navLbl.textContent=matchingDates[0]+' ('+getDTE(matchingDates[0])+'DTE)';
+    else if(matchingDates.length===1) navLbl.textContent=matchingDates[0];
     else navLbl.textContent=matchingDates.length+' expiries selected';
   }
   // Populate expiry dropdown with all available weekday dates
@@ -1409,11 +1440,12 @@ function applyDTEMode(){
   let datesToUse = matchingDates;
   if(datesToUse.length === 0){
     const nearest = sorted.filter(d=>{
-      const dow=new Date(d+'T12:00:00').getDay();
-      return dow!==0&&dow!==6;
+      const exp = expiryMap[d] || {};
+      const hasData = Object.keys(exp.calls || {}).length || Object.keys(exp.puts || {}).length;
+      return isGexTradingDay(d) && hasData;
     });
     datesToUse = nearest.slice(0,1);
-    if(navLbl && datesToUse.length) navLbl.textContent = 'No exact match — using '+datesToUse[0]+' ('+getDTE(datesToUse[0])+'DTE)';
+    if(navLbl && datesToUse.length) navLbl.textContent = datesToUse[0];
   }
   if(datesToUse.length===0) return;
   selectedExpiry = datesToUse[0];
@@ -1422,6 +1454,17 @@ function applyDTEMode(){
 
 
 function computeGEXMulti(dateKeys){
+  const normalizedDateKeys = (dateKeys || []).filter(Boolean).sort();
+  const nextDateKey = normalizedDateKeys.join('|');
+  const expiryChanged = nextDateKey !== lastGexDateKey;
+  if(expiryChanged){
+    lastGexDateKey = nextDateKey;
+    ovStrikeOffset = 0;
+    ovCompareStrikeOffset = 0;
+    gexZoom = 1;
+    gexPan = 0;
+    gexInitialized = false;
+  }
   // Aggregate GEX across multiple expiries
   const combined={};
   const toNum = v => Number(v ?? 0) || 0;
@@ -1430,7 +1473,7 @@ function computeGEXMulti(dateKeys){
   
   console.log('[GEX] computeGEXMulti for dates:', dateKeys);
   
-  dateKeys.forEach(dateKey=>{
+  normalizedDateKeys.forEach(dateKey=>{
     if(!expiryMap[dateKey]) return;
     const {calls,puts}=expiryMap[dateKey];
     
@@ -1494,7 +1537,7 @@ function computeGEXMulti(dateKeys){
     r.volNetDEX=(r.callVolDEX||0)-(r.putVolDEX||0);
     return r;
   }).sort((a,b)=>a.strike-b.strike);
-  const fallbackDte = typeof getDTE === 'function' ? getDTE(dateKeys[0]) : null;
+  const fallbackDte = typeof getDTE === 'function' ? getDTE(normalizedDateKeys[0]) : null;
   const fallbackRows = (typeof GEX_DATA !== 'undefined' && GEX_DATA?.SPX?.[String(fallbackDte)]) || [];
   if(fallbackRows.length){
     const fallbackByStrike = new Map(fallbackRows.map(r => [Number(r.strike), r]));
@@ -1523,12 +1566,13 @@ function computeGEXMulti(dateKeys){
       (r.callVolume||0) > 0 || (r.putVolume||0) > 0
     );
     const fitCount = exposureStrikes.length > 0 ? exposureStrikes.length : rawChain.length;
-    currentStrikeCount = fitCount;
-    if (window.AppState) window.AppState.strikeCount = fitCount;
+    const centeredCount = Math.min(Math.max(MIN_GEX_STRIKE_COUNT, 80), fitCount || rawChain.length);
+    currentStrikeCount = centeredCount;
+    if (window.AppState) window.AppState.strikeCount = centeredCount;
     window._gexFirstLoadDone = true;
   }
   // Reuse rest of computeGEX logic
-  finishGEXCompute(dateKeys[0]);
+  finishGEXCompute(normalizedDateKeys[0]);
 }
 
 function computeGEX(dateKey){
@@ -1590,6 +1634,21 @@ function finishGEXCompute(dateKey){
   safeSet('sb-updated',new Date().toLocaleTimeString('en-US',{hour12:false}));
   safeSet('rs-strikes',currentStrikeCount>0?Math.min(currentStrikeCount,rawChain.length)+'/'+rawChain.length:rawChain.length);
   safeSet('rs-updated',new Date().toLocaleTimeString('en-US',{hour12:false}));
+  
+  // Process any pending Discord snap (text only)
+  if (window.pendingDiscordSnap) {
+    const snap = window.pendingDiscordSnap;
+    window.pendingDiscordSnap = null;
+    const text = `Current SPX MVC (${snap.strike})`;
+    fetch('http://localhost:3001/proxy/discord-webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text })
+    }).then(res => {
+      if (res.ok) console.log(`✓ Discord snap sent: ${text}`);
+      else console.warn('Discord snap failed:', res.status);
+    }).catch(e => console.warn('Discord snap error:', e));
+  }
   const tbUpd = document.getElementById('topbar-updated');
   const tbUpdDD = document.getElementById('topbar-updated-dd');
   const ts = 'Updated ' + new Date().toLocaleTimeString('en-US',{hour12:false});
@@ -1610,6 +1669,7 @@ function finishGEXCompute(dateKey){
   
   // Update combined 1-7 DTE GEX display
   updateCombined1to7DTE();
+  if (typeof renderInsights0DTE === 'function') renderInsights0DTE();
 }
 
 function updateCombined1to7DTE(){
@@ -1700,11 +1760,11 @@ function buildDTEGEXPills(){
   let html = '';
   tradingExpiries.forEach(date => {
     const calDTE = getDTE(date);
-    const isActive = savedDte !== 'combined' && (savedDte !== null ? parseInt(savedDte) === calDTE : calDTE === 0);
+    const isActive = savedDte !== 'combined' && (savedDte !== null ? savedDte === date : calDTE === 0);
     const dateObj = new Date(date+'T12:00:00');
     const dayName = dateObj.toLocaleDateString('en-US',{weekday:'short'});
     const mmdd = (dateObj.getMonth()+1)+'/'+(dateObj.getDate());
-    html += `<span class="nav-pill${isActive?' active':''}" data-dte="${calDTE}" data-expiry="${date}" onclick="setDTEGEXView(${calDTE},this)" title="${date} (${calDTE}DTE)" style="font-size:10px">${mmdd} <span style="font-size:8px;opacity:0.55">${dayName}</span></span>`;
+    html += `<span class="nav-pill${isActive?' active':''}" data-dte="${calDTE}" data-expiry="${date}" onclick="setDTEGEXView('${date}',this)" title="${date}" style="font-size:10px">${mmdd} <span style="font-size:8px;opacity:0.55">${dayName}</span></span>`;
   });
 
   container.innerHTML = html;
@@ -1718,13 +1778,14 @@ function setDTEGEXView(dte, el){
   if(el) el.classList.add('active');
 
   // Persist selection
-  try{ localStorage.setItem('dteGexView', dte === 'combined' ? 'combined' : String(dte)); }catch(e){}
+  try{ localStorage.setItem('dteGexView', dte === 'combined' ? 'combined' : String(dte)); }catch(e){} // dte is now expiry date string
 
   // Sync to GEX page ladder (gexSelectedDTE drives renderGEXLadder)
   if(dte === 'combined') {
     gexSelectedDTE = null; // combined = all DTEs
   } else {
-    gexSelectedDTE = typeof dte === 'number' ? dte : parseInt(dte) || null;
+    // dte is now an expiry date string; convert to integer DTE for GEX ladder rendering
+    gexSelectedDTE = (typeof dte === 'string' && dte.includes('-')) ? getDTE(dte) : (parseInt(dte) || null);
   }
   // If GEX page is currently visible, re-render it
   if(document.getElementById('page-gex')) {
@@ -1753,13 +1814,12 @@ function setDTEGEXView(dte, el){
   const _dteGexDisplay = document.getElementById('dte-gex-display');
   if (_dteGexDisplay) _dteGexDisplay.style.display = 'block';
   const label = document.getElementById('dte-gex-label');
-  if(label) label.textContent = dte + 'DTE';
+  if(label){ const _d=new Date((typeof dte==='string'&&dte.includes('-')?dte:date)+'T12:00:00'); label.textContent=_d.toLocaleDateString('en-US',{weekday:'short',month:'numeric',day:'numeric'}); }
   
-  // Find the expiration date for this pill index.
-  let matchingExpiry = el && el.dataset && el.dataset.expiry ? el.dataset.expiry : null;
+  // dte is now an expiry date string — use directly
+  let matchingExpiry = (typeof dte === 'string' && dte.includes('-')) ? dte : (el?.dataset?.expiry || null);
   if(!matchingExpiry && expiryMap){
-    // dte is now calendar DTE — find the expiry whose getDTE matches
-    const calDte = typeof dte === 'number' ? dte : parseInt(dte);
+    const calDte = parseInt(dte);
     const allExpiries = Object.keys(expiryMap).sort();
     matchingExpiry = allExpiries.find(d => isGexTradingDay(d) && getDTE(d) === calDte) || null;
   }
@@ -1904,6 +1964,12 @@ function scheduleGEXRender(){
   });
 }
 
+function resetGEXProfileView(){
+  gexZoom = 1;
+  gexPan = 0;
+  gexInitialized = false;
+}
+
 function renderGEXProfile(){
   const canvas = document.getElementById('gex-profile-canvas');
   if(!canvas || !rawChain.length) return;
@@ -1946,8 +2012,12 @@ function renderGEXProfile(){
   const strikeRange = maxS - minS;
   const viewWidth = strikeRange / gexZoom;
   const viewCenter = minS + strikeRange * 0.5 + (gexPan * strikeRange * 0.5);
-  const viewMin = viewCenter - viewWidth * 0.5;
-  const viewMax = viewCenter + viewWidth * 0.5;
+  let viewMin = viewCenter - viewWidth * 0.5;
+  let viewMax = viewCenter + viewWidth * 0.5;
+  if(viewMin < minS){ viewMax += minS - viewMin; viewMin = minS; }
+  if(viewMax > maxS){ viewMin -= viewMax - maxS; viewMax = maxS; }
+  viewMin = Math.max(minS, viewMin);
+  viewMax = Math.min(maxS, viewMax);
 
   // Only use visible strikes for y-axis scaling
   const visibleData = data.filter(d => d.strike >= viewMin && d.strike <= viewMax);
@@ -1995,9 +2065,9 @@ function renderGEXProfile(){
     ctx.fillText(lbl, PAD.l-6, y+3);
   }
   // Vertical grid lines
-  const sStep = getNiceStep((maxS-minS)/6);
-  const firstS = Math.ceil(minS/sStep)*sStep;
-  for(let s=firstS; s<=maxS; s+=sStep){
+  const sStep = getNiceStep((viewMax-viewMin)/6);
+  const firstS = Math.ceil(viewMin/sStep)*sStep;
+  for(let s=firstS; s<=viewMax; s+=sStep){
     const x=xFor(s);
     ctx.strokeStyle='#1a2535'; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+cH); ctx.stroke();
@@ -2039,6 +2109,7 @@ function renderGEXProfile(){
   const startIdx = Math.max(0, visIdx - 1);
   const endIdx = data.findIndex((d,i) => i > startIdx && d.strike > viewMax);
   const drawData = endIdx === -1 ? data.slice(startIdx) : data.slice(startIdx, endIdx + 1);
+  if(!drawData.length) return;
   
   // Clip to chart area so curve doesn't bleed into padding
   ctx.save();
@@ -2157,13 +2228,14 @@ function renderGEXProfile(){
   // ── Title ──
   ctx.fillStyle='#a8b8cc'; ctx.font='bold 12px Arial'; ctx.textAlign='center';
   const dte=selectedExpiry?getDTE(selectedExpiry):null;
-  ctx.fillText('SPX Gamma Exposure | '+(selectedExpiry||'')+(dte!==null?' ('+dte+'DTE)':''), W/2, PAD.t-18);
+  ctx.fillText('SPX Gamma Exposure | '+(selectedExpiry||''), W/2, PAD.t-18);
 }
 
 // GEX profile mouse handlers - setup once
-(function setupGEXProfileHandlers(){
+function setupGEXProfileHandlers(){
   const canvas = document.getElementById('gex-profile-canvas');
-  if(!canvas) return;
+  if(!canvas || canvas.dataset.gexProfileHandlers === '1') return;
+  canvas.dataset.gexProfileHandlers = '1';
   
   canvas.style.cursor = 'grab';
   
@@ -2192,7 +2264,7 @@ function renderGEXProfile(){
     const dx = e.clientX - gexDragStartX;
     gexDragStartX = e.clientX;
     const panSensitivity = 0.002;
-    gexPan += dx * panSensitivity * gexZoom;
+    gexPan -= dx * panSensitivity / Math.max(gexZoom, 1);
     gexPan = Math.max(-1, Math.min(1, gexPan));
     scheduleGEXRender();
   });
@@ -2204,7 +2276,9 @@ function renderGEXProfile(){
     gexInitialized = false; // re-center on spot
     scheduleGEXRender();
   });
-})();
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupGEXProfileHandlers);
+else setupGEXProfileHandlers();
 
 
 
@@ -2453,7 +2527,306 @@ function startEconCalendar(){
   _econTimer=setInterval(renderEconCalendar,10000);
 }
 
-// US Federal Holidays 2025-2026 (YYYY-MM-DD)
+// ── ECONOMIC CALENDAR SHARE ───────────────────────────────────────────
+async function copyEconCalendarScreenshot(){
+  const btn=document.getElementById('cal-copy-shot-btn');
+  const panel=document.getElementById('panel-calendar');
+  if(!panel||typeof html2canvas==='undefined') return;
+  if(btn){btn.innerHTML='…';btn.style.color='#ffb300';}
+  try{
+    const canvas=await html2canvas(panel,{backgroundColor:'#05080d',scale:2,useCORS:true,logging:false});
+    canvas.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        if(btn){btn.innerHTML='✓';btn.style.color='#00e676';setTimeout(()=>{btn.innerHTML='COPY<br>SHOT';btn.style.color='#00e5ff';},1500);}
+      }catch(e){
+        if(btn){btn.innerHTML='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.innerHTML='COPY<br>SHOT';btn.style.color='#00e5ff';},1500);}
+      }
+    },'image/png');
+  }catch(e){
+    if(btn){btn.innerHTML='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.innerHTML='COPY<br>SHOT';btn.style.color='#00e5ff';},1500);}
+  }
+}
+
+async function shareEconCalendar(platform){
+  const btn=platform==='x'?document.getElementById('cal-share-x-btn'):document.getElementById('cal-share-discord-btn');
+  const panel=document.getElementById('panel-calendar');
+  if(!panel||typeof html2canvas==='undefined') return;
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.textContent='…';btn.style.color='#ffb300';}
+  try{
+    const canvas=await html2canvas(panel,{backgroundColor:'#05080d',scale:2,useCORS:true,logging:false});
+    canvas.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        if(btn){btn.textContent='✓';btn.style.color='#00e676';}
+        setTimeout(()=>{
+          if(btn){btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';}
+          if(platform==='x') window.open('https://twitter.com/intent/tweet?text=Economic+Calendar','_blank');
+          else window.open('https://discord.com','_blank');
+        },600);
+      }catch(e){
+        if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';},1500);}
+      }
+    },'image/png');
+  }catch(e){
+    if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';},1500);}
+  }
+}
+
+// ── GEX CHART & HEATMAP SHARE ─────────────────────────────────────────
+async function copyActiveGexChartScreenshot(){
+  const btn=document.getElementById('gex-copy-shot-btn');
+  const canvas=document.getElementById('overview-canvas');
+  if(!canvas||typeof html2canvas==='undefined') return;
+  if(btn){btn.textContent='…';btn.style.color='#ffb300';}
+  try{
+    // Capture the canvas with a wrapper that has background
+    const wrapper = document.createElement('div');
+    wrapper.style.backgroundColor = '#05080d';
+    wrapper.style.display = 'inline-block';
+    wrapper.style.padding = '10px';
+    const canvasClone = canvas.cloneNode(true);
+    wrapper.appendChild(canvasClone);
+    
+    // Temporarily add to DOM for html2canvas to render properly
+    document.body.appendChild(wrapper);
+    
+    const shot=await html2canvas(wrapper,{backgroundColor:'#05080d',scale:2,useCORS:true,logging:false,allowTaint:true});
+    
+    // Remove temporary wrapper
+    document.body.removeChild(wrapper);
+    
+    shot.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        if(btn){btn.textContent='✓';btn.style.color='#00e676';setTimeout(()=>{btn.textContent='COPY SHOT';btn.style.color='#00e5ff';},1500);}
+      }catch(e){
+        if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent='COPY SHOT';btn.style.color='#00e5ff';},1500);}
+      }
+    },'image/png');
+  }catch(e){
+    if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent='COPY SHOT';btn.style.color='#00e5ff';},1500);}
+  }
+}
+
+async function shareActiveGexChart(platform){
+  const btn=platform==='x'?document.getElementById('gex-share-x-btn'):document.getElementById('gex-share-discord-btn');
+  const canvas=document.getElementById('overview-canvas');
+  if(!canvas||typeof html2canvas==='undefined') return;
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.textContent='…';btn.style.color='#ffb300';}
+  try{
+    const shot=await html2canvas(canvas,{backgroundColor:'#05080d',scale:2,useCORS:true,logging:false});
+    shot.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        if(btn){btn.textContent='✓';btn.style.color='#00e676';}
+        setTimeout(()=>{
+          if(btn){btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';}
+          if(platform==='x') window.open('https://twitter.com/intent/tweet?text=SPX+Options+GEX','_blank');
+          else window.open('https://discord.com','_blank');
+        },600);
+      }catch(e){
+        if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';},1500);}
+      }
+    },'image/png');
+  }catch(e){
+    if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';},1500);}
+  }
+}
+
+async function copyHeatmapScreenshot(){
+  const btn=document.getElementById('hm-copy-shot-btn');
+  // Capture the parent container that has the background color
+  const panel=document.getElementById('options-ladder');
+  if(!panel||typeof html2canvas==='undefined') return;
+  if(btn){btn.innerHTML='…';btn.style.color='#ffb300';}
+  try{
+    // Create a wrapper div with explicit background
+    const wrapper = document.createElement('div');
+    wrapper.style.backgroundColor = '#05080d';
+    wrapper.style.padding = '0';
+    wrapper.style.margin = '0';
+    wrapper.appendChild(panel.cloneNode(true));
+    
+    const shot=await html2canvas(wrapper,{backgroundColor:null,scale:2,useCORS:true,logging:false,allowTaint:true});
+    shot.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        if(btn){btn.innerHTML='✓';btn.style.color='#00e676';setTimeout(()=>{btn.innerHTML='COPY<br>SHOT';btn.style.color='#00e5ff';},1500);}
+      }catch(e){
+        if(btn){btn.innerHTML='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.innerHTML='COPY<br>SHOT';btn.style.color='#00e5ff';},1500);}
+      }
+    },'image/png');
+  }catch(e){
+    if(btn){btn.innerHTML='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.innerHTML='COPY<br>SHOT';btn.style.color='#00e5ff';},1500);}
+  }
+}
+
+async function shareHeatmapShot(platform){
+  const btn=platform==='x'?document.getElementById('hm-share-x-btn'):document.getElementById('hm-share-discord-btn');
+  const panel=document.getElementById('selected-panel')||document.querySelector('[data-selected-tab]');
+  if(!panel||typeof html2canvas==='undefined') return;
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.textContent='…';btn.style.color='#ffb300';}
+  try{
+    const shot=await html2canvas(panel,{backgroundColor:'#05080d',scale:2,useCORS:true,logging:false});
+    shot.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        if(btn){btn.textContent='✓';btn.style.color='#00e676';}
+        setTimeout(()=>{
+          if(btn){btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';}
+          if(platform==='x') window.open('https://twitter.com/intent/tweet?text=SPX+Greeks','_blank');
+          else window.open('https://discord.com','_blank');
+        },600);
+      }catch(e){
+        if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';},1500);}
+      }
+    },'image/png');
+  }catch(e){
+    if(btn){btn.textContent='ERR';btn.style.color='#ff4757';setTimeout(()=>{btn.textContent=orig;btn.style.color=platform==='discord'?'#7289da':'#00e5ff';},1500);}
+  }
+}
+
+(() => {
+  let html2canvasPromise = null;
+  const DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/1466249857122570454/REDACTED';
+
+
+  function loadHtml2CanvasSafe() {
+    if (typeof window.html2canvas === 'function') return Promise.resolve(window.html2canvas);
+    if (html2canvasPromise) return html2canvasPromise;
+    html2canvasPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.async = true;
+      script.onload = () => resolve(window.html2canvas);
+      script.onerror = () => reject(new Error('html2canvas failed to load'));
+      document.head.appendChild(script);
+    });
+    return html2canvasPromise;
+  }
+
+  function setShotButton(btn, state, restoreText, restoreColor) {
+    if (!btn) return;
+    const isHtml = restoreText && restoreText.includes('<br>');
+    if (state === 'loading') {
+      btn.textContent = '...';
+      btn.style.color = '#ffb300';
+      return;
+    }
+    btn.textContent = state === 'ok' ? 'OK' : 'ERR';
+    btn.style.color = state === 'ok' ? '#00e676' : '#ff4757';
+    setTimeout(() => {
+      if (isHtml) btn.innerHTML = restoreText;
+      else btn.textContent = restoreText;
+      btn.style.color = restoreColor;
+    }, 1500);
+  }
+
+  function canvasToBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Screenshot failed')), 'image/png');
+    });
+  }
+
+  async function copyBlob(blob) {
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') throw new Error('Clipboard image write is unavailable');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  }
+
+  async function renderElement(element) {
+    if (element instanceof HTMLCanvasElement) return element;
+    const html2canvasFn = await loadHtml2CanvasSafe();
+    return html2canvasFn(element, {
+      backgroundColor: '#05080d',
+      scale: Math.min(2, window.devicePixelRatio || 1),
+      useCORS: true,
+      logging: false,
+      ignoreElements: el => el.id === 'ov-tooltip' || el.id === 'gex-math-tooltip'
+    });
+  }
+
+  function gexTarget() {
+    return document.getElementById('overview-canvas') || document.getElementById('ov-chart-view') || document.getElementById('overview-scroll');
+  }
+
+  function heatmapTarget() {
+    return document.getElementById('options-ladder') || document.getElementById('heatmap-body') || document.getElementById('ladder-body');
+  }
+
+  async function copyTarget(target, btn, restoreText, restoreColor) {
+    if (!target) {
+      setShotButton(btn, 'err', restoreText, restoreColor);
+      return false;
+    }
+    setShotButton(btn, 'loading', restoreText, restoreColor);
+    try {
+      const canvas = await renderElement(target);
+      const blob = await canvasToBlob(canvas);
+      await copyBlob(blob);
+      setShotButton(btn, 'ok', restoreText, restoreColor);
+      return true;
+    } catch (err) {
+      console.error('Screenshot copy failed:', err);
+      setShotButton(btn, 'err', restoreText, restoreColor);
+      return false;
+    }
+  }
+
+  async function captureBlob(target) {
+    if (!target) throw new Error('No capture target');
+    const canvas = await renderElement(target);
+    return canvasToBlob(canvas);
+  }
+
+  async function postDiscordWebhook(target, text) {
+    const blob = await captureBlob(target);
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({ content: text }));
+    form.append('files[0]', blob, `${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'screenshot'}.png`);
+    const res = await fetch(DISCORD_WEBHOOK_URL, { method: 'POST', body: form });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('Discord response:', errText);
+      throw new Error(`Discord webhook failed: ${res.status}`);
+    }
+  }
+
+  async function shareTarget(target, btn, restoreText, restoreColor, platform, text) {
+    if (platform === 'x') {
+      window.open('https://twitter.com', '_blank');
+      return;
+    }
+    if (!target) return setShotButton(btn, 'err', restoreText, restoreColor);
+    setShotButton(btn, 'loading', restoreText, restoreColor);
+    try {
+      await postDiscordWebhook(target, text);
+      setShotButton(btn, 'ok', restoreText, restoreColor);
+    } catch (err) {
+      console.error('Discord share failed:', err);
+      setShotButton(btn, 'err', restoreText, restoreColor);
+    }
+  }
+
+  window.copyActiveGexChartScreenshot = () => copyTarget(gexTarget(), document.getElementById('gex-copy-shot-btn'), 'COPY SHOT', '#00e5ff');
+  window.shareActiveGexChart = platform => {
+    const btn = platform === 'x' ? document.getElementById('gex-share-x-btn') : document.getElementById('gex-share-discord-btn');
+    return shareTarget(gexTarget(), btn, btn ? btn.textContent : '', platform === 'discord' ? '#7289da' : '#00e5ff', platform, 'SPX Options GEX');
+  };
+  window.copyEconCalendarScreenshot = () => copyTarget(document.getElementById('panel-calendar'), document.getElementById('cal-copy-shot-btn'), 'COPY<br>SHOT', '#00e5ff');
+  window.shareEconCalendar = platform => {
+    const btn = platform === 'x' ? document.getElementById('cal-share-x-btn') : document.getElementById('cal-share-discord-btn');
+    return shareTarget(document.getElementById('panel-calendar'), btn, btn ? btn.textContent : '', platform === 'discord' ? '#7289da' : '#00e5ff', platform, 'Economic Calendar');
+  };
+  window.copyHeatmapScreenshot = () => copyTarget(heatmapTarget(), document.getElementById('hm-copy-shot-btn'), 'COPY<br>SHOT', '#00e5ff');
+  window.shareHeatmapShot = platform => {
+    const btn = platform === 'x' ? document.getElementById('hm-share-x-btn') : document.getElementById('hm-share-discord-btn');
+    return shareTarget(heatmapTarget(), btn, btn ? btn.textContent : '', platform === 'discord' ? '#7289da' : '#00e5ff', platform, 'SPX Greeks Heatmap');
+  };
+})();
 
 
 
@@ -2966,6 +3339,11 @@ function updateStatsPanel(){
   // Uses esPrice as the reference (ES futures price)
   const ref = esPrice > 0 ? esPrice : (spotPrice > 0 ? spotPrice : 0);
   if(!ref) return;
+  const excelStats = window.esStatsCache || {};
+  const excelLevel = key => {
+    const n = parseFloat(String(excelStats[key] || '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  };
 
   // ES/SPX ratio for converting SPX levels → ES
   const ratio = esPrice > 0 && spotPrice > 0 ? esPrice / spotPrice : 1;
@@ -3018,7 +3396,7 @@ function updateStatsPanel(){
 
   // Weekly Estimated Move (use existing estUp/estDn from _levels, already in SPX)
   const eu = lv.estUp, ed = lv.estDn;
-  const euES = eu ? eu * ratio : null, edES = ed ? ed * ratio : null;
+  const euES = excelLevel('UP') ?? (eu ? eu * ratio : null), edES = excelLevel('DOWN') ?? (ed ? ed * ratio : null);
   const uEl=document.getElementById('st-est-up'), dEl=document.getElementById('st-est-dn');
   const udEl=document.getElementById('st-est-up-dist'), ddEl=document.getElementById('st-est-dn-dist');
   if(uEl) uEl.textContent = euES ? Math.round(euES).toLocaleString() : '—';
@@ -3027,7 +3405,12 @@ function updateStatsPanel(){
   if(ddEl){ ddEl.textContent = dist(edES); ddEl.style.color = '#fff'; }
 
   // Weekly Volume Profile — manually set ES levels each week
-  const VP = { vah: 7483, vpoc: 7432, val: 7398, mid: 7452 };
+  const VP = {
+    vah: excelLevel('VAH') ?? 7483,
+    vpoc: excelLevel('VPOC') ?? 7432,
+    val: excelLevel('VAL') ?? 7398,
+    mid: excelLevel('MID') ?? 7452
+  };
   const setESLevel = (valId, distId, esLv, color) => {
     const el = document.getElementById(valId);
     const dl = document.getElementById(distId);
@@ -3040,7 +3423,10 @@ function updateStatsPanel(){
   setESLevel('st-mid',  'st-mid-dist',  VP.mid,  '#fff');
 
   // No Long / No Short — hardcoded ES levels, update each week
-  const ZONES = { noLong: 7617, noShort: 7264 };
+  const ZONES = {
+    noLong: excelLevel('NO LONG') ?? 7617,
+    noShort: excelLevel('NO SHORT') ?? 7264
+  };
   setESLevel('st-nolong-hi',  'st-nolong-hi-dist',  ZONES.noLong,  '#fff');
   setESLevel('st-noshort-hi', 'st-noshort-hi-dist', ZONES.noShort, '#fff');
 }
@@ -3131,7 +3517,7 @@ function renderChart(){
   gexChart=new Chart(canvas.getContext('2d'),{
     type:'bar',data:{labels,datasets:[{data:values,backgroundColor:bgC,borderColor:bdC,borderWidth:1,borderRadius:1,borderSkipped:false}]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,animation:{duration:200},
-      plugins:{legend:{display:false},tooltip:{enabled:false}},
+      plugins:{legend:{display:false},tooltip:{enabled:false},zoom:{pan:{enabled:true,mode:'y',modifierKey:'shift'},zoom:{wheel:{enabled:true,modifierKey:'shift'},pinch:{enabled:true},mode:'y'}}},
       scales:{
         y:{grid:{color:'rgba(42,64,96,0.35)',lineWidth:0.5},ticks:{color:'#5a7a99',font:{family:'Arial',size:11}},border:{color:'#1e3050'}},
         x:{grid:{color:ctx=>ctx.tick.value===0?'rgba(200,200,200,.25)':'rgba(42,64,96,.35)',lineWidth:ctx=>ctx.tick.value===0?1.5:0.5},
@@ -3558,20 +3944,16 @@ function onExpirySelectChange(){
   const sel = document.getElementById('expiry-select');
   if(!sel || !sel.value) return;
   const date = sel.value;
-  const dte = getDTE(date);
-  selectedDTEs = new Set();
-  document.querySelectorAll('#dte-nav-tabs .nav-pill').forEach(p=>p.classList.remove('active'));
-  if(dte>=0 && dte<=7){
-    selectedDTEs.add(dte);
-    const pill = document.getElementById('dte-pill-'+dte);
-    if(pill) pill.classList.add('active');
-  }
+  selectedDTEs = new Set([date]);
+  document.querySelectorAll('#dte-nav-tabs .nav-pill').forEach(p=>{
+    p.classList.toggle('active', p.dataset.expiry === date);
+  });
   selectedExpiry = date;
   computeGEXMulti([date]);
   const lbl = document.getElementById('nav-expiry-label');
   if(lbl){
     const d=new Date(date+'T12:00:00');
-    lbl.textContent = d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})+' ('+dte+'DTE)';
+    lbl.textContent = d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   }
 }
 
@@ -3638,9 +4020,25 @@ function getNiceStep(rawStep){
 function buildTTChainRows(items, price){
   const combined = {};
   const spot = price || 1;
+  const asArray = value => Array.isArray(value) ? value : (value ? [value] : []);
+  const getStrikeGroups = expGroup => {
+    const raw = expGroup?.strikes || expGroup?.['option-strikes'] || expGroup?.strikeMap || expGroup?.strike_map || [];
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === 'object') {
+      return Object.entries(raw).map(([strike, value]) => {
+        if (Array.isArray(value)) return { strike, options: value };
+        if (value && typeof value === 'object') return { strike, ...value };
+        return { strike };
+      });
+    }
+    return [];
+  };
+  const sideFromOption = opt => String(
+    opt?.type || opt?.optionType || opt?.['option-type'] || opt?.putCall || opt?.['put-call'] || opt?.symbol || ''
+  ).toUpperCase().includes('P') ? 'put' : 'call';
   for (const expGroup of (items || [])) {
-    for (const strikeGroup of (expGroup.strikes || expGroup['option-strikes'] || [])) {
-      const strike = parseFloat(strikeGroup['strike-price'] || strikeGroup.strike || 0);
+    for (const strikeGroup of getStrikeGroups(expGroup)) {
+      const strike = parseFloat(strikeGroup['strike-price'] || strikeGroup.strikePrice || strikeGroup.strike || 0);
       if (!strike) continue;
       if (!combined[strike]) {
         combined[strike] = {
@@ -3682,8 +4080,12 @@ function buildTTChainRows(items, price){
           row.putVolDEX += delta * vol * spot * 100;
         }
       };
-      addSide(strikeGroup.call, 'call');
-      addSide(strikeGroup.put, 'put');
+      asArray(strikeGroup.call || strikeGroup.calls || strikeGroup['call-option'] || strikeGroup.callOption)
+        .forEach(opt => addSide(opt, 'call'));
+      asArray(strikeGroup.put || strikeGroup.puts || strikeGroup['put-option'] || strikeGroup.putOption)
+        .forEach(opt => addSide(opt, 'put'));
+      asArray(strikeGroup.options || strikeGroup.option || strikeGroup.legs)
+        .forEach(opt => addSide(opt, sideFromOption(opt)));
     }
   }
 
@@ -3833,12 +4235,9 @@ function filterCompareExpirations(items){
   
   let filtered = items.filter(expGroup => allowed.has(expGroup['expiration-date']));
   
-  // If we have selected DTEs, filter to match them
+  // Filter to selected expiry date strings
   if (selectedDTEs && selectedDTEs.size > 0) {
-    const matched = filtered.filter(g => {
-      const dte = getDTELocal(g['expiration-date'] || '');
-      return selectedDTEs.has(dte);
-    });
+    const matched = filtered.filter(g => selectedDTEs.has(g['expiration-date'] || ''));
     if (matched.length) filtered = matched;
   }
   
@@ -3861,8 +4260,8 @@ async function fetchOverviewCompareGEX() {
   try {
     const selectedCompareExpiration = getCompareExpirationForDTE(window.AppState?.selectedDTE ?? gexSelectedDTE);
     const compareChainUrl = selectedCompareExpiration
-      ? `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(ticker)}?expiration=${encodeURIComponent(selectedCompareExpiration)}`
-      : `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(ticker)}`;
+      ? `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=100&expiration=${encodeURIComponent(selectedCompareExpiration)}`
+      : `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=100`;
     const [chainResp, quoteResp] = await Promise.all([
       fetch(compareChainUrl),
       fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?equity[]=${encodeURIComponent(ticker)}`)
@@ -3879,7 +4278,12 @@ async function fetchOverviewCompareGEX() {
         qItem['last-trade-price'] || 0
       ) || 0;
     }
+    // Fallback to underlying price from chain response
+    if (!price && chainRaw?.data?.underlyingPrice) {
+      price = chainRaw.data.underlyingPrice;
+    }
     compareSpotPrice = price || GEX_SPOTS?.[ticker] || 0;
+    console.log(`[GEX] Compare ${ticker}: spot=${compareSpotPrice}, items=${(chainRaw?.data?.items||[]).length}, strikes=${(chainRaw?.data?.items||[]).reduce((s,g)=>(s+(g.strikes||[]).length),0)}`);
     compareRawChain = buildTTChainRows(filterCompareExpirations(chainRaw?.data?.items), compareSpotPrice);
     if (!compareRawChain.length) {
       compareRawChain = buildFallbackCompareRows(ticker);
@@ -3934,7 +4338,9 @@ function drawOverviewChart(){
   );
 
   // Use all strikes for pan/zoom (filtered view was preventing scroll/drag from working)
-  let data = [...rawChain].sort((a,b)=>a.strike-b.strike);
+  // But filter out strikes with zero exposure so chart focuses on actual data
+  let data = [...rawChain].filter(hasChartExposure).sort((a,b)=>a.strike-b.strike);
+  if(!data.length) data = [...rawChain].sort((a,b)=>a.strike-b.strike);
   if(configuredStrikeCount > 0 && spotPrice > 0 && data.length > configuredStrikeCount){
     const ai = data.reduce((bi,r,i)=>Math.abs(r.strike-spotPrice)<Math.abs(data[bi].strike-spotPrice)?i:bi, 0);
     const half = Math.floor(configuredStrikeCount/2);
@@ -3943,7 +4349,8 @@ function drawOverviewChart(){
     data = data.slice(s, s+configuredStrikeCount);
   }
   const rightSpot = compareSpotPrice || GEX_SPOTS?.[overviewCompareTicker] || spotPrice;
-  let compareData = [...compareSource].sort((a,b)=>a.strike-b.strike);
+  let compareData = [...compareSource].filter(hasChartExposure).sort((a,b)=>a.strike-b.strike);
+  if(!compareData.length) compareData = [...compareSource].sort((a,b)=>a.strike-b.strike);
   if(configuredStrikeCount > 0 && rightSpot > 0 && compareData.length > configuredStrikeCount){
     const ai = compareData.reduce((bi,r,i)=>Math.abs(r.strike-rightSpot)<Math.abs(compareData[bi].strike-rightSpot)?i:bi, 0);
     const half = Math.floor(configuredStrikeCount/2);
@@ -4427,6 +4834,15 @@ function drawOverviewChart(){
       ctx.beginPath(); ctx.moveTo(xLeft,PAD.t); ctx.lineTo(xLeft,PAD.t+cH); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(xLeft,yZero,5,0,Math.PI*2); ctx.fill();
+      // Spot price label badge on X-axis
+      const spotLabel = spotPrice.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+      ctx.font='bold 9px Arial'; ctx.textAlign='center';
+      const slW = ctx.measureText(spotLabel).width + 8;
+      const slX = xLeft - slW/2;
+      const slY = PAD.t+cH+22;
+      ctx.fillStyle='rgba(0,229,255,0.15)'; ctx.fillRect(slX,slY,slW,14);
+      ctx.strokeStyle='#00e5ff'; ctx.lineWidth=1; ctx.strokeRect(slX,slY,slW,14);
+      ctx.fillStyle='#00e5ff'; ctx.fillText(spotLabel, xLeft, slY+10);
       ctx.restore();
     }
   }
@@ -4438,20 +4854,42 @@ function drawOverviewChart(){
       ctx.beginPath(); ctx.moveTo(xRight,PAD.t); ctx.lineTo(xRight,PAD.t+cH); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(xRight,yZero,5,0,Math.PI*2); ctx.fill();
+      // Spot price label badge on X-axis (right panel)
+      const rSpotLabel = rightSpot.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+      ctx.font='bold 9px Arial'; ctx.textAlign='center';
+      const rslW = ctx.measureText(rSpotLabel).width + 8;
+      const rslX = xRight - rslW/2;
+      const rslY = PAD.t+cH+22;
+      ctx.fillStyle='rgba(0,229,255,0.15)'; ctx.fillRect(rslX,rslY,rslW,14);
+      ctx.strokeStyle='#00e5ff'; ctx.lineWidth=1; ctx.strokeRect(rslX,rslY,rslW,14);
+      ctx.fillStyle='#00e5ff'; ctx.fillText(rSpotLabel, xRight, rslY+10);
       ctx.restore();
     }
   }
 
   // ── X axis strike labels (shared, both panels) ──
-  ctx.fillStyle='#2a4060'; ctx.font='9px Arial'; ctx.textAlign='center';
-  const labelStep=Math.max(1,Math.floor(n/8));
-  const labelStepR=Math.max(1,Math.floor(nR/8));
+  ctx.fillStyle='#5a7a99'; ctx.font='bold 9px Arial'; ctx.textAlign='center';
+  // Show more labels — target ~12-16 labels for readability
+  const labelStep=Math.max(1,Math.floor(n/16));
+  const labelStepR=Math.max(1,Math.floor(nR/16));
+  // Always show ATM strike label
+  const atmIdx_L = spotPrice > 0 ? data.reduce((bi,r,i)=>Math.abs(r.strike-spotPrice)<Math.abs(data[bi].strike-spotPrice)?i:bi, 0) : -1;
+  const atmIdx_R = (()=>{
+    const rs = compareSpotPrice || spotPrice;
+    return rs > 0 && compareData.length ? compareData.reduce((bi,r,i)=>Math.abs(r.strike-rs)<Math.abs(compareData[bi].strike-rs)?i:bi, 0) : -1;
+  })();
   data.forEach((r,i)=>{
-    if(i%labelStep!==0) return;
+    const isATM = i === atmIdx_L;
+    if(!isATM && i%labelStep!==0) return;
+    ctx.fillStyle = isATM ? '#00e5ff' : '#5a7a99';
+    ctx.font = isATM ? 'bold 10px Arial' : '9px Arial';
     ctx.fillText(r.strike.toLocaleString(), xL(i), PAD.t+cH+14);
   });
   compareData.forEach((r,i)=>{
-    if(i%labelStepR!==0) return;
+    const isATM = i === atmIdx_R;
+    if(!isATM && i%labelStepR!==0) return;
+    ctx.fillStyle = isATM ? '#00e5ff' : '#5a7a99';
+    ctx.font = isATM ? 'bold 10px Arial' : '9px Arial';
     ctx.fillText(r.strike.toLocaleString(), xR(i), PAD.t+cH+14);
   });
 
@@ -4838,6 +5276,17 @@ function initOvEvents(){
   const scroll=document.getElementById('overview-scroll');
   if(!scroll||scroll._ovEventsAdded) return;
   scroll._ovEventsAdded=true;
+  scroll.style.touchAction = 'none';
+  scroll.style.userSelect = 'none';
+  const getOvPointerZones = (mx, rectWidth) => {
+    const divX = Math.floor(rectWidth / 2);
+    return {
+      divX,
+      leftAxis: mx < 50 || (mx > divX - 58 && mx < divX - 2),
+      rightAxis: mx > rectWidth - 50 || (mx > rectWidth - 58 && mx < rectWidth - 2),
+      rightPanel: mx >= divX
+    };
+  };
 
   // Hover tooltip
   let ttDiv = document.getElementById('ov-tooltip');
@@ -4903,22 +5352,7 @@ function initOvEvents(){
     const r=visData[idx];
     if(!r){ttDiv.style.display='none';return;}
     
-    // Check if mouse Y is within the chart area (over bars, not empty space)
-    const vals = visData.map(row=>row.netGEX||0);
-    const valMax = Math.max(...vals.map(Math.abs).filter(v=>v>0), 1);
-    const maxG = (valMax * 1.15) / (ovYScale||1);
-    const yZero = PAD_T + cH/2;
-    const yFor = v => PAD_T + cH/2 - (v/maxG)*(cH/2);
-    
-    const barValue = r.netGEX||0;
-    const barTop = barValue >= 0 ? yFor(barValue) : yZero;
-    const barBottom = barValue >= 0 ? yZero : yFor(barValue);
-    
-    // Only show tooltip if mouse Y is within the bar bounds
-    if(my < Math.max(PAD_T, barTop) || my > Math.min(PAD_T+cH, barBottom)){
-      ttDiv.style.display='none';
-      return;
-    }
+    // Show tooltip for any strike column within chart area (removed bar-bounds restriction)
     
     const fmtG=v=>{const a=Math.abs(v);const s=v>=0?'+':'-';if(a>=1e9)return s+'$'+(a/1e9).toFixed(2)+'B';if(a>=1e6)return s+'$'+(a/1e6).toFixed(2)+'M';if(a>=1e3)return s+'$'+(a/1e3).toFixed(2)+'K';return s+'$'+a.toFixed(2);};
     const fmtPx=v=>v>0?'$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
@@ -4965,23 +5399,36 @@ function initOvEvents(){
 
   scroll.addEventListener('wheel',e=>{
     e.preventDefault();
+    e.stopPropagation();
     const rect=scroll.getBoundingClientRect();
-    const relX=(e.clientX-rect.left)/rect.width;
-    const onRightEdge = relX > 0.88;
-    if(relX < 0.12 || onRightEdge || e.shiftKey){
-      // Scroll on either Y-axis edge OR shift+scroll = zoom Y axis
-      const factor=e.deltaY>0?1.2:0.83;
+    const W = rect.width;
+    const mx = e.clientX - rect.left;
+    const zones = getOvPointerZones(mx, W);
+    const onLeftAxisEdge = zones.leftAxis;
+    const onRightAxisEdge = zones.rightAxis;
+    const onRightPanel = zones.rightPanel;
+    
+    if(onLeftAxisEdge || onRightAxisEdge || e.shiftKey){
+      // Scroll on Y-axis edge OR shift+scroll = zoom Y axis
+      const factor=e.deltaY>0?1.15:0.87;
       ovYScale=(ovYScale||1)*factor;
       ovYScale=Math.max(0.1,Math.min(20,ovYScale));
     } else {
-      // Scroll elsewhere = zoom X (strike count)
-      const factor=e.deltaY>0?1.15:0.87;
+      // Scroll on chart body = zoom X (strike count)
+      // Use additive step for predictable visible change
+      const activeLen = rawChain.length || 200;
       const compareSource = compareRawChain.length ? compareRawChain : buildFallbackCompareRows(overviewCompareTicker);
-      const activeLen = relX >= 0.5 ? (compareSource.length || rawChain.length) : rawChain.length;
-      // Start zoom from full data length when showing all strikes
-      const baseCount = currentStrikeCount > 0 ? currentStrikeCount : activeLen;
-      const newCount=Math.max(5,Math.min(activeLen,Math.round(baseCount*factor)));
-      setConfiguredStrikeCount(newCount);
+      const compareLen = compareSource.length || activeLen;
+      // Step is proportional to smaller of the two so both panels visibly change
+      const refLen = Math.min(activeLen, compareLen);
+      const step = Math.max(2, Math.round(refLen * 0.15));
+      // Initialize count if in "show all" mode
+      let cur = currentStrikeCount > 0 ? currentStrikeCount : Math.min(40, refLen);
+      const newCount = e.deltaY > 0 ? cur + step : cur - step;
+      const clamped = Math.max(MIN_GEX_STRIKE_COUNT, Math.min(activeLen - 1, newCount));
+      setConfiguredStrikeCount(clamped);
+      if(onRightPanel) ovCompareStrikeOffset = 0;
+      else ovStrikeOffset = 0;
     }
     drawOverviewChart();
   },{passive:false});
@@ -4999,16 +5446,17 @@ function initOvEvents(){
   let axisDragStartY = 0;
   let axisDragStartScale = 1;
   
-  scroll.addEventListener('mousedown',e=>{
+  const startOverviewDrag = e => {
+    if (e.button !== undefined && e.button !== 0) return;
     const rect = scroll.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     const W = rect.width;
-    const DIVX = Math.floor(W / 2);
+    const zones = getOvPointerZones(mx, W);
     
-    // Define Y-axis drag zone for both panels
-    const leftAxisZone = mx < 75;
-    const rightAxisZone = mx > rect.width - 75;
+    // Define Y-axis drag zone for both panels (matches wheel Y-axis zones)
+    const leftAxisZone = zones.leftAxis;
+    const rightAxisZone = zones.rightAxis;
     
     // Check if in vertical drag zone (avoid top/bottom 40px for headers/labels)
     const inVerticalZone = my > 40 && my < rect.height - 40;
@@ -5023,20 +5471,34 @@ function initOvEvents(){
       e.preventDefault();
     } else {
       // Original pan behavior
-      _ovDragPanel = mx >= DIVX ? 'right' : 'left';
+      _ovDragPanel = zones.rightPanel ? 'right' : 'left';
       // If no strike count set, initialize from full data length so pan activates
-      if(currentStrikeCount === 0 && rawChain.length > 0){
-        setConfiguredStrikeCount(rawChain.length);
+      if(rawChain.length > 0){
+        const compareSource = compareRawChain.length ? compareRawChain : buildFallbackCompareRows(overviewCompareTicker);
+        const activeLen = _ovDragPanel === 'right' ? (compareSource.length || rawChain.length) : rawChain.length;
+        const configured = getConfiguredStrikeCount();
+        if(configured <= 0 || configured >= activeLen){
+          const dragCount = activeLen > MIN_GEX_STRIKE_COUNT
+            ? Math.min(activeLen - 1, Math.max(MIN_GEX_STRIKE_COUNT, Math.min(80, activeLen - 1)))
+            : activeLen;
+          setConfiguredStrikeCount(dragCount);
+        }
       }
       _ovDrag=true;
       _ovStartX=e.clientX;
       _ovStartOffset = ovStrikeOffset || 0;
       _ovStartCompareOffset = ovCompareStrikeOffset || 0;
+      _ovStartCount = getConfiguredStrikeCount();
+      _ovDragPxPerStrike = Math.max(4, rect.width / Math.max(_ovStartCount || 80, 1));
       const tt=document.getElementById('ov-tooltip');
       if(tt) tt.style.display='none';
       scroll.style.cursor='grabbing';
       e.preventDefault();
     }
+  };
+  scroll.addEventListener('pointerdown', e => {
+    startOverviewDrag(e);
+    try { scroll.setPointerCapture(e.pointerId); } catch(err) {}
   });
   
   if(!_ovWindowListenersAdded){
@@ -5052,7 +5514,7 @@ function initOvEvents(){
       }
       if(!_ovDrag||!rawChain.length) return;
       const dx = e.clientX - _ovStartX;
-      const strikeShift = Math.round(-dx / 20);
+      const strikeShift = Math.round(-dx / (_ovDragPxPerStrike || 10));
       if(_ovDragPanel === 'right'){
         ovCompareStrikeOffset = _ovStartCompareOffset + strikeShift;
       } else {
@@ -5072,6 +5534,34 @@ function initOvEvents(){
       const s=document.getElementById('overview-scroll');
       if(s)s.style.cursor='default';
     });
+    window.addEventListener('pointermove',e=>{
+      if(!_ovDrag && !_ovAxisDragging) return;
+      if(_ovAxisDragging){
+        const dy = _ovAxisDragStartY - e.clientY;
+        const sensitivity = 0.003;
+        const scaleFactor = Math.exp(dy * sensitivity);
+        ovYScale = Math.max(0.1, Math.min(20, _ovAxisDragStartScale * scaleFactor));
+        drawOverviewChart();
+        return;
+      }
+      if(!rawChain.length) return;
+      const dx = e.clientX - _ovStartX;
+      const strikeShift = Math.round(-dx / (_ovDragPxPerStrike || 10));
+      if(_ovDragPanel === 'right'){
+        ovCompareStrikeOffset = _ovStartCompareOffset + strikeShift;
+      } else {
+        ovStrikeOffset = _ovStartOffset + strikeShift;
+      }
+      drawOverviewChart();
+    });
+    window.addEventListener('pointerup',()=>{
+      _ovAxisDragging = false;
+      _ovAxisDragPanel = null;
+      _ovDrag=false;
+      _ovDragPanel='left';
+      const s=document.getElementById('overview-scroll');
+      if(s)s.style.cursor='default';
+    });
   }
   
   // Update cursor on hover to show axis drag zone
@@ -5080,19 +5570,31 @@ function initOvEvents(){
     const rect = scroll.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    const DIVX = Math.floor(rect.width / 2);
+    const zones = getOvPointerZones(mx, rect.width);
     
-    const leftAxisZone = mx < 75;
-    const rightAxisZone = mx > rect.width - 75;
+    const leftAxisZone = zones.leftAxis;
+    const rightAxisZone = zones.rightAxis;
     const inVerticalZone = my > 40 && my < rect.height - 40;
     
     if(inVerticalZone && (leftAxisZone || rightAxisZone)){
       scroll.style.cursor = 'ns-resize';
+    } else if(inVerticalZone) {
+      scroll.style.cursor = 'grab';
     } else {
       scroll.style.cursor = 'default';
     }
   });
 }
+
+window.initOvEvents = initOvEvents;
+window.drawOverviewChart = drawOverviewChart;
+window.init_overview = function init_overview(){
+  setTimeout(() => {
+    try { initOvEvents(); } catch(e) {}
+    try { drawOverviewChart(); } catch(e) {}
+  }, 30);
+};
+
 window.addEventListener('resize',()=>{
   if(currentMode==='overview'){
     drawOverviewChart();
@@ -5123,16 +5625,16 @@ let gexTableMode = 'net'; // 'net' or 'vol'
 function setOVTab(tab){
   ovTab = tab;
   const chartView = document.getElementById('ov-chart-view');
-  const historyView = document.getElementById('ov-history-view');
+  const bzilaView = document.getElementById('ov-bzila-view');
   const chartBtn  = document.getElementById('ovtab-chart');
-  const historyBtn = document.getElementById('ovtab-history');
+  const bzilaBtn = document.getElementById('ovtab-bzila');
   const chartControls = document.getElementById('chart-mode-controls');
 
   const isChart   = tab === 'chart';
-  const isHistory = tab === 'history';
+  const isBzila   = tab === 'bzila';
 
   if(chartView)   chartView.style.display   = isChart   ? 'flex'  : 'none';
-  if(historyView){ historyView.style.display = isHistory ? 'flex'  : 'none'; }
+  if(bzilaView)   bzilaView.style.display   = isBzila   ? 'flex'  : 'none';
   if(chartControls) chartControls.style.display = isChart ? 'flex' : 'none';
   const gexControls = document.getElementById('gex-mode-controls');
   if(gexControls) gexControls.style.display = isChart ? 'flex' : 'none';
@@ -5141,9 +5643,40 @@ function setOVTab(tab){
 
   const activeStyle = (btn, active) => { if(btn){ btn.style.background=active?'#1a2a3a':'transparent'; btn.style.color=active?'#00e5ff':'#3a5570'; }};
   activeStyle(chartBtn,   isChart);
-  activeStyle(historyBtn, isHistory);
+  activeStyle(bzilaBtn,   isBzila);
   if(isChart) { setTimeout(()=>{ initOvEvents(); drawOverviewChart(); }, 30); }
-  if(isHistory){ setTimeout(()=>renderGexHistoryChart(), 30); }
+  if(isBzila){ loadOverviewBzilaFlow(); }
+}
+
+async function loadOverviewBzilaFlow(){
+  const bzilaView = document.getElementById('ov-bzila-view');
+  if(!bzilaView) return;
+  if(bzilaView.dataset.loaded === '1'){
+    if(typeof window.init_bzila === 'function') setTimeout(()=>window.init_bzila(), 30);
+    return;
+  }
+  bzilaView.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#3a5570;font-size:12px;letter-spacing:.1em">Loading Bzila Flow...</div>';
+  try {
+    const response = await fetch('pages/bzila.html');
+    if(!response.ok) throw new Error(response.statusText || 'Failed to load Bzila Flow');
+    const html = await response.text();
+    bzilaView.innerHTML = html;
+    bzilaView.querySelectorAll('script').forEach(oldScript => {
+      const newScript = document.createElement('script');
+      [...oldScript.attributes].forEach(a => newScript.setAttribute(a.name, a.value));
+      newScript.textContent = oldScript.textContent;
+      oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
+    const page = bzilaView.querySelector('#page-bzila');
+    if(page){
+      page.style.width = '100%';
+      page.style.height = '100%';
+    }
+    bzilaView.dataset.loaded = '1';
+    if(typeof window.init_bzila === 'function') setTimeout(()=>window.init_bzila(), 30);
+  } catch (error) {
+    bzilaView.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:8px;color:#ff4757;font-size:12px"><strong>Failed to load Bzila Flow</strong><span style="color:#3a5570">${error.message}</span></div>`;
+  }
 }
 
 window.setGEXMode = function(mode, btn){
@@ -6798,21 +7331,19 @@ window.gexTakeSnapshot = function gexTakeSnapshot() {
   window.gexPeakSnaps.push({ time, strike, auto: false });
   gexRenderSnapshots();
 
+  // Send to Discord (deferred until functions are available)
+  window.pendingDiscordSnap = { strike, time: Date.now() };
+
   // Save to database
   if (DB && DB.db && rawChain && rawChain.length) {
     const mvcOI  = rawChain.reduce((a,b) => Math.abs(b.netGEX) > Math.abs(a.netGEX) ? b : a, rawChain[0]);
     const mvcVol = rawChain.reduce((a,b) => Math.abs(b.netVolGEX||0) > Math.abs(a.netVolGEX||0) ? b : a, rawChain[0]);
     const price  = spotPrice > 0 ? spotPrice : (esPrice > 0 ? esPrice : 0);
-    // Get expiration: use selectedExpiry if available, else try to get from first chain item
-    const expiration = selectedExpiry || (rawChain[0] && rawChain[0].expiration) || '—';
-    const totalGEX = rawChain.reduce((s,r) => s + r.netGEX, 0);
     DB.saveMVCSnapshot(
       { strike: mvcOI.strike,  value: mvcOI.netGEX,       volume: mvcOI.callVolume  + mvcOI.putVolume  },
       { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
       price,
-      expiration,
-      'manual',
-      totalGEX
+      'manual'
     ).then(() => console.log(`✓ DB MVC saved [manual]: ${mvcOI.strike} @ ${price}`))
      .catch(e  => console.error('DB MVC save failed:', e));
   }
@@ -6863,21 +7394,19 @@ function gexAutoSnapshot() {
       gexRenderSnapshots();
       console.log(`✓ Auto-snapshot at ${time} ET: strike ${peak.strike}`);
 
+      // Send to Discord (deferred)
+      window.pendingDiscordSnap = { strike: peak.strike, time: Date.now() };
+
       // Save to database
       if (DB && DB.db) {
         const mvcVol = rawChain.reduce((a,b) => Math.abs(b.netVolGEX||0) > Math.abs(a.netVolGEX||0) ? b : a, rawChain[0]);
         const price  = spotPrice > 0 ? spotPrice : (esPrice > 0 ? esPrice : 0);
         const label  = `auto-${time}`;
-        // Get expiration: use selectedExpiry if available, else try to get from first chain item
-        const expiration = selectedExpiry || (rawChain[0] && rawChain[0].expiration) || '—';
-        const totalGEX = rawChain.reduce((s,r) => s + r.netGEX, 0);
         DB.saveMVCSnapshot(
           { strike: peak.strike,   value: peak.netGEX,        volume: peak.callVolume   + peak.putVolume   },
           { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
           price,
-          expiration,
-          label,
-          totalGEX
+          label
         ).then(() => console.log(`✓ DB MVC saved [${label}]: ${peak.strike} @ ${price}`))
          .catch(e  => console.error('DB MVC auto-save failed:', e));
       }
@@ -7108,7 +7637,7 @@ if (false) {}
       const ticker = gexSelectedTicker || 'SPX';
       const tickerEncoded = encodeURIComponent(ticker === 'SPX' ? '$SPX' : ticker);
       const _t0 = performance.now();
-      const resp = await fetch(`http://localhost:3001/proxy/api/tt/chains/${tickerEncoded}`);
+      const resp = await fetch(`http://localhost:3001/proxy/api/tt/chains/${tickerEncoded}?range=100`);
       if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
       const raw = await resp.json();
       console.log(`[GEX] Chain fetch: ${(performance.now()-_t0).toFixed(0)}ms`);
@@ -7221,7 +7750,11 @@ if (false) {}
           spotPrice = price;
           const change = parseFloat(q.change || 0);
           if (typeof updateSPXDisplay === 'function') {
-            updateSPXDisplay({ lastPrice: price, netChange: change });
+            updateSPXDisplay({
+              lastPrice: price,
+              netChange: change,
+              closePrice: parseFloat(q.close || q['close-price'] || q.prevClose || q['previous-close'] || 0)
+            });
           }
         }
       } catch (e) { console.warn('TT SPX quote failed:', e); }
@@ -7286,6 +7819,259 @@ if (false) {}
   window.init_gex = function init_gex() {
     try { if (typeof initGexPage === 'function') initGexPage(); } catch(e){ console.error('init_gex:', e); }
   };
+  window.init_insights = function init_insights() {
+    try { renderInsights0DTE(); } catch(e){ console.error('init_insights:', e); }
+  };
+  function insightsFmtMoney(v) {
+    const n = Number(v) || 0;
+    const a = Math.abs(n);
+    const s = n >= 0 ? '+' : '-';
+    if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(2) + 'M';
+    if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'K';
+    return s + '$' + a.toFixed(0);
+  }
+  function insightsSet(id, value, color) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value;
+    if (color) el.style.color = color;
+  }
+  function insightsText(id, fallback = '--') {
+    return (document.getElementById(id)?.textContent || fallback).replace(/\s+/g, ' ').trim();
+  }
+  function cleanInsightsLines(lines) {
+    return lines.map(line => String(line || '').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  }
+  function getInsightsShareModel() {
+    return {
+      title: insightsText('insights-main-title', '0DTE Exposure Read'),
+      updated: insightsText('insights-updated', ''),
+      short: insightsText('insights-analysis-short', ''),
+      body: insightsText('insights-full-analysis', ''),
+      gex: insightsText('insights-gex-value'),
+      dex: insightsText('insights-dex-value'),
+      chex: insightsText('insights-chex-value'),
+      vex: insightsText('insights-vex-value'),
+      callWall: insightsText('insights-call-wall'),
+      putWall: insightsText('insights-put-wall'),
+      flip: insightsText('insights-flip'),
+      volgex: insightsText('insights-volgex')
+    };
+  }
+  function getInsightsShareText(limit = 0) {
+    const m = getInsightsShareModel();
+    const text = cleanInsightsLines([
+      `SPX 0DTE Exposure Stack: ${m.title}`,
+      `GEX ${m.gex} | DEX ${m.dex} | CHEX ${m.chex} | VEX ${m.vex}`,
+      `Call Wall ${m.callWall} | Put Wall ${m.putWall} | Flip ${m.flip} | Vol GEX ${m.volgex}`,
+      m.short,
+      m.body,
+      m.updated ? `Updated ${m.updated}` : ''
+    ]);
+    return limit > 0 && text.length > limit ? text.slice(0, Math.max(0, limit - 1)).trim() + '…' : text;
+  }
+  async function insightsLoadHtml2Canvas() {
+    if (typeof window.html2canvas === 'function') return window.html2canvas;
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    return window.html2canvas;
+  }
+  async function getInsightsShareBlob() {
+    const target = document.getElementById('insights-share-card') || document.getElementById('page-insights');
+    if (!target) throw new Error('Insights share card not found');
+    const buttons = target.querySelectorAll('button');
+    buttons.forEach(btn => btn.dataset.prevVisibility = btn.style.visibility || '');
+    buttons.forEach(btn => btn.style.visibility = 'hidden');
+    try {
+      const html2canvasFn = await insightsLoadHtml2Canvas();
+      const canvas = await html2canvasFn(target, {
+        backgroundColor: '#05080d',
+        scale: Math.min(2, window.devicePixelRatio || 1),
+        useCORS: true,
+        logging: false
+      });
+      return await new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Screenshot failed')), 'image/png');
+      });
+    } finally {
+      buttons.forEach(btn => btn.style.visibility = btn.dataset.prevVisibility || '');
+    }
+  }
+  async function copyInsightsScreenshot() {
+    const blob = await getInsightsShareBlob();
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') throw new Error('Image clipboard unavailable');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return blob;
+  }
+  window.insightsCopyAnalysis = async function insightsCopyAnalysis() {
+    try {
+      await copyInsightsScreenshot();
+      insightsSet('insights-updated', 'copied');
+    } catch (e) {
+      const text = getInsightsShareText();
+      const area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+      insightsSet('insights-updated', 'copied');
+    }
+  };
+  window.insightsPostX = async function insightsPostX() {
+    try {
+      await copyInsightsScreenshot();
+      insightsSet('insights-updated', 'image copied');
+    } catch (e) {
+      insightsSet('insights-updated', 'text fallback');
+    }
+    const text = getInsightsShareText(240);
+    window.open('https://twitter.com/intent/tweet?text=' + encodeURIComponent(text), '_blank', 'noopener,noreferrer');
+  };
+  window.insightsPostDiscord = async function insightsPostDiscord() {
+    const m = getInsightsShareModel();
+    const payload = {
+      content: `SPX 0DTE Exposure Stack: ${m.title}`,
+      embeds: [{
+        title: m.title,
+        description: [m.short, m.body].filter(Boolean).join('\n').slice(0, 3900),
+        color: m.title.toLowerCase().includes('downside') ? 16729943 : m.title.toLowerCase().includes('upside') ? 589797 : 15658734,
+        fields: [
+          { name: 'GEX', value: m.gex, inline: true },
+          { name: 'DEX', value: m.dex, inline: true },
+          { name: 'CHEX', value: m.chex, inline: true },
+          { name: 'VEX', value: m.vex, inline: true },
+          { name: 'Call Wall', value: m.callWall, inline: true },
+          { name: 'Put Wall', value: m.putWall, inline: true },
+          { name: 'GEX Flip', value: m.flip, inline: true },
+          { name: 'Vol GEX', value: m.volgex, inline: true }
+        ],
+        footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
+      }]
+    };
+    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || 'http://localhost:3001/proxy/discord-webhook';
+    const blob = await getInsightsShareBlob();
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify(payload));
+    form.append('files[0]', blob, 'spx-0dte-insights.png');
+    const res = await fetch(webhook, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`Discord webhook failed: ${res.status}`);
+    insightsSet('insights-updated', 'posted');
+  };
+  function insightsNum(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function getInsights0DTERows() {
+    const expiries = Object.keys(expiryMap || {}).sort();
+    const exp = expiries.find(d => typeof getDTE === 'function' && getDTE(d) === 0) || expiries[0];
+    if (!exp || !expiryMap[exp]) return { exp: null, rows: [] };
+    const src = expiryMap[exp];
+    const strikes = new Set([...Object.keys(src.calls || {}), ...Object.keys(src.puts || {})]);
+    const s = spotPrice || esPrice || 0;
+    const rows = [];
+    strikes.forEach(strikeKey => {
+      const strike = parseFloat(strikeKey);
+      const c = Array.isArray(src.calls?.[strikeKey]) ? src.calls[strikeKey][0] : src.calls?.[strikeKey];
+      const p = Array.isArray(src.puts?.[strikeKey]) ? src.puts[strikeKey][0] : src.puts?.[strikeKey];
+      const cPos = insightsNum(c?.openInterest) + insightsNum(c?.totalVolume);
+      const pPos = insightsNum(p?.openInterest) + insightsNum(p?.totalVolume);
+      const cGamma = insightsNum(c?.gamma), pGamma = insightsNum(p?.gamma);
+      const cDelta = insightsNum(c?.delta), pDelta = Math.abs(insightsNum(p?.delta));
+      const cTheta = insightsNum(c?.theta), pTheta = insightsNum(p?.theta);
+      const cVega = insightsNum(c?.vega), pVega = insightsNum(p?.vega);
+      const callGEX = calcDollarGammaExposure(cGamma, cPos, s);
+      const putGEX = calcPutGammaExposure(pGamma, pPos, s);
+      const callDEX = Math.abs(cDelta) * cPos * s * 100;
+      const putDEX = pDelta * pPos * s * 100;
+      const callCHEX = -cTheta * cPos * s * 100;
+      const putCHEX = pTheta * pPos * s * 100;
+      const callVEX = cVega * cPos * s * 100;
+      const putVEX = -pVega * pPos * s * 100;
+      const liveSignedVolGEX = spxSignedVolGEXByStrike instanceof Map ? insightsNum(spxSignedVolGEXByStrike.get(strike)) : 0;
+      rows.push({
+        strike,
+        callGEX,
+        putGEX,
+        netGEX: callGEX + putGEX,
+        netDEX: callDEX - putDEX,
+        netCHEX: callCHEX + putCHEX,
+        netVEX: callVEX + putVEX,
+        netVolGEX: liveSignedVolGEX || (calcVolumeGammaExposure(cGamma, insightsNum(c?.totalVolume), s, true) + calcVolumeGammaExposure(pGamma, insightsNum(p?.totalVolume), s, false))
+      });
+    });
+    return { exp, rows: rows.sort((a, b) => a.strike - b.strike) };
+  }
+  function findInsightsFlip(rows) {
+    const sorted = [...rows].sort((a, b) => a.strike - b.strike);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i], b = sorted[i + 1];
+      if ((a.netGEX < 0 && b.netGEX > 0) || (a.netGEX > 0 && b.netGEX < 0)) {
+        return a.strike - a.netGEX * (b.strike - a.strike) / (b.netGEX - a.netGEX);
+      }
+    }
+    const near = sorted.reduce((best, r) => !best || Math.abs(r.netGEX) < Math.abs(best.netGEX) ? r : best, null);
+    return near?.strike || null;
+  }
+  function renderInsights0DTE() {
+    if (!document.getElementById('page-insights')) return;
+    const { exp, rows } = getInsights0DTERows();
+    if (!rows.length) {
+      insightsSet('insights-bias', 'Waiting for 0DTE exposure');
+      insightsSet('insights-analysis-short', 'Open the Overview page or refresh the chain so the SPX 0DTE option map can populate.');
+      return;
+    }
+    const total = rows.reduce((m, r) => {
+      m.gex += r.netGEX; m.dex += r.netDEX; m.chex += r.netCHEX; m.vex += r.netVEX; m.volgex += r.netVolGEX;
+      return m;
+    }, { gex: 0, dex: 0, chex: 0, vex: 0, volgex: 0 });
+    const spot = spotPrice || esPrice || 0;
+    const nearRows = rows.filter(r => !spot || Math.abs(r.strike - spot) <= 50);
+    const active = nearRows.length ? nearRows : rows;
+    const callWall = rows.reduce((a, b) => b.callGEX > (a?.callGEX ?? -Infinity) ? b : a, null);
+    const putWall = rows.reduce((a, b) => Math.abs(b.putGEX) > Math.abs(a?.putGEX ?? 0) ? b : a, null);
+    const dexFloor = rows.reduce((a, b) => b.netDEX < (a?.netDEX ?? Infinity) ? b : a, null);
+    const dexCeil = rows.reduce((a, b) => b.netDEX > (a?.netDEX ?? -Infinity) ? b : a, null);
+    const flip = findInsightsFlip(rows);
+    const localDex = active.reduce((s, r) => s + r.netDEX, 0);
+    const localChex = active.reduce((s, r) => s + r.netCHEX, 0);
+    const localVex = active.reduce((s, r) => s + r.netVEX, 0);
+    const gexRegime = total.gex >= 0 ? 'Positive gamma pinning' : 'Negative gamma momentum';
+    const dexRead = localDex > 0 ? 'upside inventory pressure' : 'downside inventory pressure';
+    const chexRead = localChex > 0 ? 'time decay supports bids' : 'time decay leans offered';
+    const vexRead = localVex > 0 ? 'IV crush can support upside' : 'IV expansion can pressure downside';
+    let bias = 'Balanced / wait for confirmation';
+    if (total.gex < 0 && localDex > 0 && total.volgex >= 0) bias = 'Upside squeeze watch';
+    else if (total.gex < 0 && localDex < 0 && total.volgex < 0) bias = 'Downside acceleration risk';
+    else if (total.gex >= 0 && spot && callWall && Math.abs(spot - callWall.strike) < 25) bias = 'Call wall fade / pin risk';
+    else if (total.gex >= 0) bias = 'Controlled positive-gamma tape';
+    const shortText = `${gexRegime}. Near spot, DEX shows ${dexRead}; CHEX says ${chexRead}; VEX says ${vexRead}.`;
+    const full = `0DTE ${exp || ''}: net GEX is ${insightsFmtMoney(total.gex)}, putting the session in a ${total.gex >= 0 ? 'dampened / pinning' : 'faster-moving / momentum'} regime. The call wall is ${callWall?.strike?.toLocaleString() || '--'} and the put wall is ${putWall?.strike?.toLocaleString() || '--'}, with the GEX flip near ${flip ? flip.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--'}. DEX is ${insightsFmtMoney(total.dex)} overall, with the strongest downside inventory trough near ${dexFloor?.strike?.toLocaleString() || '--'} and the strongest upside inventory shelf near ${dexCeil?.strike?.toLocaleString() || '--'}. CHEX is ${insightsFmtMoney(total.chex)}, so time decay is currently ${total.chex >= 0 ? 'more supportive of buy pressure' : 'more supportive of sell pressure'}. VEX is ${insightsFmtMoney(total.vex)}, which matters most if IV starts moving; ${total.vex >= 0 ? 'falling IV would be the cleaner upside-support condition' : 'rising IV would be the cleaner downside-pressure condition'}. Signed Vol GEX is ${insightsFmtMoney(total.volgex)}, so today's flow is ${total.volgex >= 0 ? 'confirming upside or stabilizing demand' : 'confirming downside or supply pressure'}.`;
+    insightsSet('insights-updated', new Date().toLocaleTimeString('en-US', { hour12: false }));
+    insightsSet('insights-bias', bias, bias.includes('Downside') ? '#ff4757' : bias.includes('Upside') ? '#00e676' : '#e8edf5');
+    insightsSet('insights-analysis-short', shortText);
+    insightsSet('insights-gex-value', insightsFmtMoney(total.gex), total.gex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-dex-value', insightsFmtMoney(total.dex), total.dex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-chex-value', insightsFmtMoney(total.chex), total.chex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-vex-value', insightsFmtMoney(total.vex), total.vex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-gex-note', total.gex >= 0 ? 'Positive GEX favors pinning and mean reversion around walls.' : 'Negative GEX favors faster directional moves through pockets.');
+    insightsSet('insights-dex-note', `Near spot: ${dexRead}. Watch ${(localDex >= 0 ? dexCeil?.strike : dexFloor?.strike)?.toLocaleString?.() || '--'} as the active inventory zone.`);
+    insightsSet('insights-chex-note', chexRead + '. This grows more important later in the session.');
+    insightsSet('insights-vex-note', vexRead + '. Treat as active only when IV is moving.');
+    insightsSet('insights-call-wall', callWall?.strike?.toLocaleString() || '--');
+    insightsSet('insights-put-wall', putWall?.strike?.toLocaleString() || '--');
+    insightsSet('insights-flip', flip ? flip.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--');
+    insightsSet('insights-volgex', insightsFmtMoney(total.volgex), total.volgex >= 0 ? '#00e676' : '#ff4757');
+    insightsSet('insights-main-title', bias);
+    const fullEl = document.getElementById('insights-full-analysis');
+    if (fullEl) fullEl.textContent = full;
+  }
   // Other pages don't have explicit inits — they're static UI placeholders without TastyTrade data.
 
   // The mock's switchPage assumed all pages were siblings in one DOM.
@@ -7332,8 +8118,9 @@ if (false) {}
           return 0;
         };
         const price    = num(q.last, q.mark, q.mid, q['last-price'], q['mark-price'], q['mid-price'], q['last-trade-price']);
-        const prev     = num(q.prevClose, q.close, q['prev-close'], q['close-price'], q['previous-close'], q['settlement-price']);
-        const change   = num(q.change, q.netChange, q['net-change'], q['day-change']) || (prev > 0 ? price - prev : 0);
+        const rawChange = num(q.change, q.netChange, q['net-change'], q['day-change']);
+        const prev     = num(q.prevClose, q.close, q['prev-close'], q['close-price'], q['previous-close'], q['settlement-price']) || (price > 0 && rawChange !== 0 ? price - rawChange : 0);
+        const change   = rawChange || (prev > 0 ? price - prev : 0);
         const changePct= num(q.changePct, q.percentChange, q['percent-change'], q['net-percent-change']) || (prev > 0 ? (change / prev) * 100 : 0);
         const entry = {
           quote: {
@@ -7387,6 +8174,16 @@ if (false) {}
           // Reposition the CURRENT ES row based on live price
           repositionESPriceRow(price);
         }
+      }
+      const spxEntry = data['$SPX'] || data['SPX'] || null;
+      if (spxEntry && typeof updateSPXDisplay === 'function') {
+        const q = spxEntry.quote || spxEntry;
+        updateSPXDisplay({
+          lastPrice: q.lastPrice || q.mark || q.last || 0,
+          netChange: q.netChange || q.change || 0,
+          netPercentChange: q.netPercentChange || q.changePercent || q.netPercentChangeInDouble || 0,
+          closePrice: q.closePrice || q.previousClose || q.prevClose || 0
+        });
       }
     } catch (e) {
       console.error('fetchQuotes (TastyTrade) error:', e);
@@ -7454,13 +8251,13 @@ if (false) {}
   // ── Kick off the first fetch ONLY when overview DOM exists ───────────
   console.log('✓ TastyTrade adapter installed over mock JS — waiting for DOM');
   function whenOverviewReady(cb) {
-    if (document.getElementById('overview-canvas') && document.getElementById('gex-table-wrap')) {
+    if (document.getElementById('overview-canvas')) {
       cb();
       return;
     }
     // Poll for the elements (loadPage injects them async)
     const obs = new MutationObserver(() => {
-      if (document.getElementById('overview-canvas') && document.getElementById('gex-table-wrap')) {
+      if (document.getElementById('overview-canvas')) {
         obs.disconnect();
         cb();
       }
@@ -7515,6 +8312,12 @@ if (false) {}
     if (document.getElementById('page-gex')) {
       renderGEXLadder();
       if (ladderViewMode === 'grid') renderGEXLadderGrid();
+    }
+  });
+
+  window.EventBus?.on('gex-snapshot', () => {
+    if (typeof window.gexTakeSnapshot === 'function') {
+      window.gexTakeSnapshot();
     }
   });
 })();

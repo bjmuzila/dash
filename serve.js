@@ -39,9 +39,6 @@ http.createServer((req, res) => {
   // Build full path
   const fullPath = path.join(ROOT, filePath);
   
-  // Debug output
-  console.log('  Request:', req.url, '-> Looking for:', fullPath);
-  
   // Security: prevent directory traversal
   if (!fullPath.startsWith(ROOT)) {
     res.writeHead(403, {'Content-Type': 'text/plain'});
@@ -57,7 +54,6 @@ http.createServer((req, res) => {
   fs.readFile(fullPath, (err, data) => {
     if (err) {
       if (err.code === 'ENOENT') {
-        console.log('  ❌ File not found:', fullPath);
         res.writeHead(404, {'Content-Type': 'text/plain'});
         res.end('404 Not Found: ' + filePath + '\n\nLooking in: ' + ROOT + '\nFull path: ' + fullPath);
       } else {
@@ -67,7 +63,6 @@ http.createServer((req, res) => {
       return;
     }
     
-    console.log('  ✓ Served:', filePath);
     res.writeHead(200, {
       'Content-Type': contentType,
       'Cache-Control': 'no-cache'
@@ -75,21 +70,4 @@ http.createServer((req, res) => {
     res.end(data);
   });
 
-}).listen(PORT, '127.0.0.1', () => {
-  console.log('\n  Dashboard Server: http://localhost:' + PORT);
-  console.log('  Root directory:   ' + ROOT);
-  
-  // Check if directory exists
-  if (fs.existsSync(ROOT)) {
-    console.log('  ✓ Directory exists');
-    const files = fs.readdirSync(ROOT);
-    console.log('  Files found:', files.join(', '));
-  } else {
-    console.log('  ❌ Directory NOT FOUND!');
-    console.log('\n  PLEASE:');
-    console.log('  1. Extract spx-gex-dashboard.zip');
-    console.log('  2. Place the "spx-gex-dashboard" folder here:');
-    console.log('     ' + __dirname);
-  }
-  console.log('');
-});
+}).listen(PORT, '127.0.0.1');

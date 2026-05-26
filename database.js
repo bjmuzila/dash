@@ -70,21 +70,45 @@ const DB = {
   // MVC SNAPSHOTS
   // triggerType: 'manual' | 'auto-9:45' | 'auto-10:30' | 'auto-12:00'
   // ========================================================================
-  async saveMVCSnapshot(mvcOIVol, mvcVolOnly, currentPrice, triggerType = 'manual') {
+  async saveMVCSnapshot(mvcOIVol, mvcVolOnly, currentPrice, expiration, triggerType = 'manual', totalNetGEX = 0, netDexStrike = null, totalNetDEX_OI = 0, totalNetDEX_Vol = 0, timeRangeStart = null) {
     const now = new Date();
+    const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()];
+    const pctOIVol  = totalNetGEX !== 0 ? parseFloat((Math.abs(mvcOIVol.value)  / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
+    const pctVolOnly = totalNetGEX !== 0 ? parseFloat((Math.abs(mvcVolOnly.value) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
+
+    // Calculate duration from previous snap time string (HH:MM:SS)
+    let durationMinutes = null;
+    if (timeRangeStart) {
+      const [h, m] = timeRangeStart.split(':').map(Number);
+      const prevDate = new Date();
+      prevDate.setHours(h, m, 0, 0);
+      durationMinutes = Math.round((now.getTime() - prevDate.getTime()) / 60000);
+    }
+
     const record = {
-      timestamp: now.getTime(),
-      date: now.toISOString().split('T')[0],
-      time: now.toTimeString().split(' ')[0],
-      triggerType: triggerType,
-      strikeOIVol: mvcOIVol.strike,
-      mvcValueOIVol: mvcOIVol.value,
-      volumeOIVol: mvcOIVol.volume,
-      strikeVolOnly: mvcVolOnly.strike,
-      mvcValueVolOnly: mvcVolOnly.value,
-      volumeVolOnly: mvcVolOnly.volume,
-      currentPrice: currentPrice
+      timestamp:        now.getTime(),
+      date:             now.toISOString().split('T')[0],
+      day:              dayName,
+      time:             now.toTimeString().split(' ')[0],
+      triggerType:      triggerType,
+      expiration:       expiration || '—',
+      strikeOIVol:      mvcOIVol.strike,
+      mvcValueOIVol:    mvcOIVol.value,
+      pctNetGEXOIVol:   pctOIVol,
+      volumeOIVol:      mvcOIVol.volume,
+      strikeVolOnly:    mvcVolOnly.strike,
+      mvcValueVolOnly:  mvcVolOnly.value,
+      pctNetGEXVolOnly: pctVolOnly,
+      volumeVolOnly:    mvcVolOnly.volume,
+      currentPrice:     currentPrice,
+      totalNetGEX:      totalNetGEX,
+      netDexStrike:     netDexStrike,
+      totalNetDEX_OI:   totalNetDEX_OI,
+      totalNetDEX_Vol:  totalNetDEX_Vol,
+      timeRangeStart:   timeRangeStart || null,
+      durationMinutes:  durationMinutes
     };
+    console.log('📊 MVC saving:', { triggerType, expiration: record.expiration, totalNetDEX_OI, totalNetDEX_Vol, durationMinutes });
     return this._insert('mvc', record);
   },
 
@@ -162,20 +186,18 @@ const DB = {
   // ========================================================================
   // PREMIUM FLOW — 1-MINUTE BUCKETS
   // Call once per minute with rolled-up totals from the options chain.
-  // netCallPremium: positive = net buying, negative = net selling
-  // netPutPremium:  positive = net buying, negative = net selling
+  // callFlow / putFlow: 1-minute premium flow buckets
   // ========================================================================
-  async saveMinutePremiumFlow(netCallPremium, netPutPremium, spxPrice) {
+  async saveMinutePremiumFlow(callFlow, putFlow, esPrice) {
     const now = new Date();
     const record = {
       timestamp: now.getTime(),
       date: now.toISOString().split('T')[0],
       time: now.toTimeString().split(' ')[0],
-      netCallPremium: netCallPremium,
-      netPutPremium: netPutPremium,
-      totalPremium: netCallPremium + netPutPremium,
-      callPutRatio: netPutPremium !== 0 ? (netCallPremium / Math.abs(netPutPremium)) : null,
-      spxPrice: spxPrice
+      callFlow: callFlow,
+      putFlow: putFlow,
+      netFlow: callFlow + putFlow,
+      esPrice: esPrice
     };
     return this._insert('premiumFlow', record);
   },
@@ -195,17 +217,15 @@ const DB = {
 
   // ========================================================================
   // CUMULATIVE DELTA — 1-MINUTE ES SCALAR
-  // cumulativeDelta: running sum for the session (resets each day)
-  // deltaThisMinute: the raw delta added this minute
+  // cvd: running cumulative volume delta for the session
   // ========================================================================
-  async saveMinuteCumulativeDelta(cumulativeDelta, deltaThisMinute, esPrice) {
+  async saveMinuteCumulativeDelta(cvd, esPrice) {
     const now = new Date();
     const record = {
       timestamp: now.getTime(),
       date: now.toISOString().split('T')[0],
       time: now.toTimeString().split(' ')[0],
-      cumulativeDelta: cumulativeDelta,
-      deltaThisMinute: deltaThisMinute,
+      cvd: cvd,
       esPrice: esPrice
     };
     return this._insert('cumulativeDelta', record);
@@ -315,14 +335,14 @@ const DB = {
     return records
       .map(r => ({
         time: r.time,
-        netCallPremium: r.netCallPremium,
-        netPutPremium: r.netPutPremium,
-        totalPremium: r.totalPremium,
-        spxPrice: r.spxPrice,
-        flow: r.totalPremium,
-        volume: Math.abs(r.netCallPremium) + Math.abs(r.netPutPremium)
+        time: r.time,
+        timestamp: r.timestamp,
+        callFlow: r.callFlow ?? r.netCallPremium ?? 0,
+        putFlow: r.putFlow ?? r.netPutPremium ?? 0,
+        netFlow: r.netFlow ?? r.totalPremium ?? ((r.netCallPremium || 0) + (r.netPutPremium || 0)),
+        esPrice: r.esPrice ?? r.spxPrice ?? 0
       }))
-      .sort((a, b) => Math.abs(b.totalPremium) - Math.abs(a.totalPremium));
+      .sort((a, b) => b.timestamp - a.timestamp);
   },
 
   async queryCumulativeDelta_Chart(hoursBack = 1) {
@@ -449,10 +469,10 @@ window.addEventListener('DOMContentLoaded', () => {
 //    });
 //
 // 3. PREMIUM FLOW — call every 1 minute from your polling loop:
-//    await DB.saveMinutePremiumFlow(netCallPremium, netPutPremium, spxPrice);
+//    await DB.saveMinutePremiumFlow(callFlow, putFlow, esPrice);
 //
 // 4. CUMULATIVE DELTA — call every 1 minute from your polling loop:
-//    await DB.saveMinuteCumulativeDelta(runningTotal, deltaThisMinute, esPrice);
+//    await DB.saveMinuteCumulativeDelta(cvd, esPrice);
 //
 // 5. BZILA CHART QUERIES:
 //    const pfSeries = await DB.queryPremiumFlow_TimeSeries(6);   // last 6h

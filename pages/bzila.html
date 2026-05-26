@@ -139,6 +139,13 @@
     };
     const state = window.__bzilaFlowState || defaultState;
     window.__bzilaFlowState = state;
+    if (!state.dbMinuteBaseline) {
+      state.dbMinuteBaseline = {
+        callPremiumFlow: state.callPremiumFlow || 0,
+        putPremiumFlow: state.putPremiumFlow || 0,
+        cvd: state.cvd || 0
+      };
+    }
 
     // Elements
     const elements = {
@@ -493,6 +500,129 @@
         elements.cvdVal.style.color = state.cvd >= 0 ? '#10b981' : '#ef4444';
       }
       if (elements.spxVal) elements.spxVal.textContent = state.esPrice ? state.esPrice.toFixed(2) : '--';
+    }
+
+    async function saveMinuteFlowToDatabase() {
+      if (typeof DB === 'undefined' || !DB?.db) return;
+      const baseline = state.dbMinuteBaseline || {
+        callPremiumFlow: state.callPremiumFlow || 0,
+        putPremiumFlow: state.putPremiumFlow || 0,
+        cvd: state.cvd || 0
+      };
+      const callPremiumDelta = (state.callPremiumFlow || 0) - (baseline.callPremiumFlow || 0);
+      const putPremiumDisplayDelta = (state.putPremiumFlow || 0) - (baseline.putPremiumFlow || 0);
+      const cvdDelta = (state.cvd || 0) - (baseline.cvd || 0);
+      const price = state.spxPrice || state.esPrice || 0;
+
+      try {
+        await Promise.all([
+          DB.saveMinutePremiumFlow(callPremiumDelta, -putPremiumDisplayDelta, price),
+          DB.saveMinuteCumulativeDelta(state.cvd || 0, state.esPrice || price)
+        ]);
+        state.dbMinuteBaseline = {
+          callPremiumFlow: state.callPremiumFlow || 0,
+          putPremiumFlow: state.putPremiumFlow || 0,
+          cvd: state.cvd || 0
+        };
+      } catch (err) {
+        console.error('Bzila DB minute save failed:', err);
+      }
+    }
+
+    async function hydratePremiumFlowFromDatabase() {
+      if (typeof DB === 'undefined' || !DB?.db) return;
+      try {
+        let records = [];
+        try {
+          records = typeof DB.queryPremiumFlow_Today === 'function'
+            ? await DB.queryPremiumFlow_Today()
+            : await DB.queryPremiumFlow_TimeSeries(8);
+        } catch (err) {
+          if (err?.name !== 'NotFoundError' || typeof DB._getAllRecords !== 'function') throw err;
+          const today = new Date().toISOString().split('T')[0];
+          records = (await DB._getAllRecords('premiumFlow')).filter(r => r.date === today);
+        }
+        const sorted = (records || []).slice().sort((a, b) => a.timestamp - b.timestamp);
+        if (!sorted.length) return;
+
+        let callTotal = 0;
+        let putDisplayTotal = 0;
+        state.flowHistory = sorted.map(r => {
+          callTotal += Number(r.callFlow ?? r.netCallPremium ?? 0);
+          putDisplayTotal += Number(r.putFlow ?? -(r.netPutPremium || 0));
+          return {
+            ts: Number(r.timestamp || Date.now()),
+            call: callTotal,
+            put: putDisplayTotal,
+            net: callTotal + putDisplayTotal,
+            spx: Number(r.esPrice || r.spxPrice || state.spxPrice || state.esPrice || 0)
+          };
+        });
+
+        state.callPremiumFlow = callTotal;
+        state.putPremiumFlow = putDisplayTotal;
+        state.netPremiumFlow = callTotal + putDisplayTotal;
+        state.dbMinuteBaseline = {
+          callPremiumFlow: state.callPremiumFlow || 0,
+          putPremiumFlow: state.putPremiumFlow || 0,
+          cvd: state.cvd || 0
+        };
+        updateFlowLabels();
+      } catch (err) {
+        console.error('Bzila premium history load failed:', err);
+      }
+    }
+
+    async function hydrateCvdFromDatabase() {
+      if (typeof DB === 'undefined' || !DB?.db) return;
+      try {
+        let records = [];
+        try {
+          records = typeof DB.queryCumulativeDelta_Today === 'function'
+            ? await DB.queryCumulativeDelta_Today()
+            : await DB.queryCumulativeDelta_TimeSeries(8);
+        } catch (err) {
+          if (err?.name !== 'NotFoundError' || typeof DB._getAllRecords !== 'function') throw err;
+          const today = new Date().toISOString().split('T')[0];
+          records = (await DB._getAllRecords('cumulativeDelta')).filter(r => r.date === today);
+        }
+        const cutoff = Date.now() - 5 * 60 * 1000;
+        const historical = (records || [])
+          .slice()
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .filter(r => Number(r.timestamp) < cutoff);
+        if (!historical.length) return;
+
+        state.cvdHistory = historical.map(r => ({
+          ts: Number(r.timestamp || Date.now()),
+          cvd: Number(r.cvd || 0),
+          price: Number(r.esPrice || state.esPrice || 0)
+        }));
+
+        const latest = historical[historical.length - 1];
+        if (Number.isFinite(Number(latest.cvd))) state.cvd = Number(latest.cvd);
+        if (Number.isFinite(Number(latest.esPrice)) && Number(latest.esPrice) > 0) state.esPrice = Number(latest.esPrice);
+        state.dbMinuteBaseline = {
+          callPremiumFlow: state.callPremiumFlow || 0,
+          putPremiumFlow: state.putPremiumFlow || 0,
+          cvd: state.cvd || 0
+        };
+        updateFlowLabels();
+      } catch (err) {
+        console.error('Bzila CVD history load failed:', err);
+      }
+    }
+
+    function hydratePremiumFlowWhenDatabaseReady() {
+      if (typeof DB !== 'undefined' && DB?.db) {
+        hydratePremiumFlowFromDatabase();
+        hydrateCvdFromDatabase();
+        return;
+      }
+      window.addEventListener('db-ready', () => {
+        hydratePremiumFlowFromDatabase();
+        hydrateCvdFromDatabase();
+      }, { once: true });
     }
 
     // ════════════════════════════════════════════
@@ -1027,6 +1157,7 @@
     // ── Animation loop for charts ──
     let animFrame = null;
     let snapshotInterval = null;
+    let dbMinuteInterval = null;
     let dailyResetTimeout = null;
     let reconnectTimeout = null;
     function animate() {
@@ -1055,6 +1186,11 @@
       state.lastTradeBySymbol = {};
       state.lastFlowCross = null;
       state.lastDivergence = null;
+      state.dbMinuteBaseline = {
+        callPremiumFlow: 0,
+        putPremiumFlow: 0,
+        cvd: 0
+      };
         renderEvents();
         updateFlowLabels();
         console.log('Bzila: daily reset at 9:30 AM ET');
@@ -1072,9 +1208,16 @@
       fetchInitialPrices();
       connectWebSocket();
       renderEvents(); // Show empty state
+      hydratePremiumFlowWhenDatabaseReady();
 
       snapshotFlow();
       snapshotInterval = setInterval(snapshotFlow, 5000);
+      state.dbMinuteBaseline = {
+        callPremiumFlow: state.callPremiumFlow || 0,
+        putPremiumFlow: state.putPremiumFlow || 0,
+        cvd: state.cvd || 0
+      };
+      if (!window.__flowRecorderStarted) dbMinuteInterval = setInterval(saveMinuteFlowToDatabase, 60 * 1000);
       // Continuous CVD update every 5 seconds with scrolling canvas
       setInterval(() => {
         const ts = Date.now();
@@ -1101,6 +1244,8 @@
       animFrame = null;
       if (snapshotInterval) clearInterval(snapshotInterval);
       snapshotInterval = null;
+      if (dbMinuteInterval) clearInterval(dbMinuteInterval);
+      dbMinuteInterval = null;
       if (dailyResetTimeout) clearTimeout(dailyResetTimeout);
       dailyResetTimeout = null;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);

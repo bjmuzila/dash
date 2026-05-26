@@ -10,9 +10,8 @@
     dashboardAttempts.push(`${kind}: ${from}${to && to !== from ? ` -> ${to}` : ""}`);
     if (dashboardAttempts.length > 12) dashboardAttempts.shift();
   }
-    function showDashboardAttempts() {
-      return;
-      const paint = () => {
+  function showDashboardAttempts() {
+    const paint = () => {
       const existing = document.getElementById("dashboard-connection-monitor");
       if (existing) existing.remove();
       const panel = document.createElement("div");
@@ -167,6 +166,12 @@
 </script>
 <script>
 (() => {
+  const fallbackMessages = [
+    "Live data is still warming up.",
+    "The dashboard shell is ready, but the overview did not finish its first render.",
+    "Proxy status: check http://localhost:3001/proxy/api/status"
+  ];
+
   function replaceStuckLoader() {
     const textNodes = [];
     const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
@@ -183,7 +188,8 @@
       parent.innerHTML = `
         <div style="display:grid;place-items:center;min-height:320px;color:#8fb7e8;font:13px Consolas,monospace;text-align:center">
           <div>
-            <div style="color:#00d8ff;margin-bottom:10px">waiting.....</div>
+            <div style="color:#00d8ff;margin-bottom:10px">Overview waiting for first data packet</div>
+            ${fallbackMessages.map((line) => `<div style="margin:4px 0">${line}</div>`).join("")}
           </div>
         </div>
       `;
@@ -222,137 +228,6 @@
 .topbar>div:nth-child(2) #mvc-vol{font-size:15px!important}
 .topbar>div:nth-child(2) button{font-size:12px!important;padding:2px 8px!important}
 </style>
-  <script>
-    console.log = () => {};
-    console.info = () => {};
-    console.debug = () => {};
-
-    (() => {
-      const isServedPrompt = (element) => {
-        if (!element || element === document.body || element === document.documentElement) return false;
-        const text = (element.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        return (
-          text.startsWith('served by ') ||
-          text.includes('served by dashboard-server.js') ||
-          text.includes('dashboard load blocked') ||
-          text.includes('uncaught referenceerror')
-        );
-      };
-
-      const removeServedPrompts = () => {
-        document.querySelectorAll('body *').forEach((element) => {
-          if (isServedPrompt(element)) element.remove();
-        });
-      };
-
-      const startServedPromptCleaner = () => {
-        removeServedPrompts();
-        new MutationObserver(removeServedPrompts).observe(document.body || document.documentElement, {
-          childList: true,
-          subtree: true,
-          characterData: true,
-        });
-        setInterval(removeServedPrompts, 250);
-      };
-
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startServedPromptCleaner, { once: true });
-      } else {
-        startServedPromptCleaner();
-      }
-    })();
-  </script>
-  <style>
-    .bottom-panels,
-    .bottom-panel-grid,
-    .dashboard-bottom,
-    .lower-panels {
-      display: grid !important;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) !important;
-      grid-auto-flow: column;
-      align-items: stretch;
-      overflow: hidden !important;
-    }
-
-    #codex-bottom-panel-cluster {
-      display: grid !important;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) !important;
-      gap: 0 !important;
-      width: 100% !important;
-      max-width: none !important;
-      justify-self: stretch !important;
-      align-self: stretch !important;
-      overflow: hidden !important;
-    }
-
-    .economic-calendar-panel,
-    .calendar-panel,
-    .es-stats-ladder-panel,
-    .stats-ladder-panel,
-    .mvc-snapshots-panel,
-    .mvc-panel {
-      min-width: 0;
-    }
-
-    #codex-bottom-panel-cluster > :nth-child(3),
-    #codex-bottom-panel-cluster > :nth-child(3) *,
-    [data-codex-mvc-panel],
-    [data-codex-mvc-panel] * {
-      /* background override removed */
-    }
-
-    [data-codex-mvc-panel],
-    [data-codex-mvc-panel] * {
-      max-width: 100% !important;
-      min-width: 0 !important;
-      box-sizing: border-box !important;
-      overflow: visible !important;
-    }
-
-    [data-codex-mvc-panel] {
-      container-type: inline-size;
-      overflow: hidden !important;
-      position: relative;
-    }
-
-    [data-codex-mvc-panel] > * {
-      transform-origin: top left;
-    }
-
-    [data-codex-mvc-inner] {
-      transform-origin: top left;
-      display: grid !important;
-      grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
-      grid-auto-rows: minmax(0, 1fr) !important;
-      gap: 8px !important;
-      width: 100% !important;
-      height: 100% !important;
-      padding: 8px !important;
-      box-sizing: border-box !important;
-    }
-
-    [data-codex-mvc-inner] > * {
-      width: 100% !important;
-      height: 100% !important;
-      margin: 0 !important;
-    }
-
-    @container (max-width: 520px) {
-      [data-codex-mvc-panel] {
-        font-size: 10px !important;
-      }
-    }
-
-    @container (max-width: 420px) {
-      [data-codex-mvc-panel] {
-        font-size: 8px !important;
-      }
-    }
-
-    [data-codex-served-prompt] {
-      display: none !important;
-    }
-  </style>
 </head>
 <body>
 
@@ -495,6 +370,9 @@
       <span class="nav-icon">⊞</span>Overview
     </div>
 
+    <div class="nav-item" id="nav-bzila" onclick="loadPage('bzila')" data-page="bzila">
+      <span class="nav-icon" style="font-size:11px;font-weight:700">B</span>Bzila Flow
+    </div>
     <div class="nav-divider"></div>
     <div class="nav-item" id="nav-database" onclick="loadPage('database')" data-page="database">
       <span class="nav-icon">🗄</span>Database
@@ -518,7 +396,11 @@
     <div class="nav-filters">
       <div class="nf-label">DTE View</div>
       <div id="dte-gex-pills" style="display:flex;flex-wrap:wrap;gap:2px">
-        <!-- populated dynamically by buildDTEGEXPills() in overview.js -->
+        <span class="nav-pill active" onclick="setDTEGEXView(0,this)" style="font-size:10px;padding:3px 6px">0DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(1,this)" style="font-size:10px;padding:3px 6px">1DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(7,this)" style="font-size:10px;padding:3px 6px">7DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(14,this)" style="font-size:10px;padding:3px 6px">14DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(21,this)" style="font-size:10px;padding:3px 6px">21DTE</span>
       </div>
       <div style="margin-top:4px">
         <span class="nav-pill" id="dte-gex-pill-combined" onclick="setDTEGEXView('combined',this)" style="width:100%;text-align:center;display:block;font-size:10px;padding:3px 6px">1-7DTE Combined</span>
@@ -577,9 +459,7 @@
 <script src="shared/calculations.js"></script>
 <script src="shared/app.js"></script>
 <script src="shared/database.js"></script> 
-<script src="shared/flow-recorder.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="pages/overview.js?v=20260526-gex-pan-cache-v1"></script>
+<script src="pages/overview.js" defer></script>
 
 <script>
 // ===========================
@@ -901,43 +781,116 @@ document.addEventListener('click', function(e) {
 </script>
 
 <!-- Database modules -->
-<script src="es-stats-spx-price.js?v=20260525-spx-conversion"></script>
-<script src="estimated-moves.js?v=20260525-estimated-moves-restored"></script>
+<script src="es-stats-spx-price.js?v=20260525-spx-implied"></script>
+<script src="estimated-moves.js?v=20260525-copy-shot-tabs-fix"></script>
 
 <script>
+async function fetchESStats() {
+  try {
+    const SHEET_ID = '1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg';
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
+    const response = await fetch(url);
+    const text = await response.text();
+    const json = JSON.parse(text.substring(47).slice(0, -2));
+    
+    if (!json.table) return;
+    
+    const stats = {};
+    const fmtESStat = value => {
+      const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : value;
+    };
+    for (let row of json.table.rows) {
+      const label = row.c[0]?.v;
+      const value = row.c[1]?.v;
+      if (label && value) {
+        stats[label.toString().trim().toUpperCase()] = fmtESStat(value);
+      }
+    }
+    
+    if (stats['NO LONG']) {
+      const el = document.getElementById('st-nolong-hi');
+      if (el) el.textContent = stats['NO LONG'];
+    }
+    if (stats['UP']) {
+      const el = document.getElementById('st-est-up');
+      if (el) el.textContent = stats['UP'];
+    }
+    if (stats['VAH']) {
+      const el = document.getElementById('st-vah');
+      if (el) el.textContent = stats['VAH'];
+    }
+    if (stats['VPOC']) {
+      const el = document.getElementById('st-vpoc');
+      if (el) el.textContent = stats['VPOC'];
+    }
+    if (stats['MID']) {
+      const el = document.getElementById('st-mid');
+      if (el) el.textContent = stats['MID'];
+    }
+    if (stats['DOWN']) {
+      const el = document.getElementById('st-est-dn');
+      if (el) el.textContent = stats['DOWN'];
+    }
+    if (stats['VAL']) {
+      const el = document.getElementById('st-val');
+      if (el) el.textContent = stats['VAL'];
+    }
+    if (stats['NO SHORT']) {
+      const el = document.getElementById('st-noshort-hi');
+      if (el) el.textContent = stats['NO SHORT'];
+    }
+    
+    // Store in window so we can restore if overwritten
+    window.esStatsCache = stats;
+  } catch (err) {
+    console.error('Error fetching ES stats:', err);
+  }
+}
+
+// Protect against overwrites by watching for changes and restoring
+function protectESStats() {
+  if (!window.esStatsCache) return;
+  
+  const ids = ['st-nolong-hi', 'st-est-up', 'st-vah', 'st-vpoc', 'st-mid', 'st-est-dn', 'st-val', 'st-noshort-hi'];
+  const keyMap = {
+    'st-nolong-hi': 'NO LONG',
+    'st-est-up': 'UP',
+    'st-vah': 'VAH',
+    'st-vpoc': 'VPOC',
+    'st-mid': 'MID',
+    'st-est-dn': 'DOWN',
+    'st-val': 'VAL',
+    'st-noshort-hi': 'NO SHORT'
+  };
+  
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && window.esStatsCache[keyMap[id]] && el.textContent === '—') {
+      el.textContent = window.esStatsCache[keyMap[id]];
+    }
+  });
+}
+
+if (window.EventBus) {
+  window.EventBus.on('page-changed', function(page) {
+    if (page === 'overview') {
+      setTimeout(fetchESStats, 200);
+      // Protect every 1 second after page load
+      setTimeout(() => {
+        setInterval(protectESStats, 1000);
+      }, 500);
+    }
+  });
+}
+
+setInterval(fetchESStats, 300000);
+
 // Initialize dashboard - must be at end after all functions defined
 console.log('Inline script end - readyState:', document.readyState);
 console.log('Calling initDashboard directly...');
 initDashboard();
 </script>
 
-  <script>
-    (() => {
-      const labels = ['ECONOMIC CALENDAR', 'ES STATS LADDER', 'MVC SNAPSHOTS'];
-      const normalize = (value) => value.replace(/\s+/g, ' ').trim().toUpperCase();
-
-      const findPanel = (label) => {
-        const matches = [...document.querySelectorAll('div, section, article, aside')]
-          .filter((element) => normalize(element.textContent || '').includes(label))
-          .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length);
-
-        for (const match of matches) {
-          let panel = match;
-          while (panel.parentElement && panel.offsetHeight < 120 && panel.parentElement.children.length <= 6) {
-            panel = panel.parentElement;
-          }
-          if (panel.offsetWidth > 80 && panel.offsetHeight > 120) return panel;
-        }
-
-        return null;
-      };
-
-      const applyBottomPanelLayout = () => { return; };
-
-      window.addEventListener('load', applyBottomPanelLayout);
-      window.addEventListener('resize', applyBottomPanelLayout);
-      setTimeout(applyBottomPanelLayout, 250);
-    })();
-  </script>
 </body>
 </html>

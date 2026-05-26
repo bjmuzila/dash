@@ -14,7 +14,8 @@
         <span id="db-record-count" style="font-size:9px;color:var(--text3)">—</span>
       </div>
       <div style="display:flex;gap:8px">
-        <button onclick="dbRefreshCounts(); dbLoadMVC();" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Refresh</button>
+        <button onclick="dbRefreshAll()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">↻ Refresh</button>
+        <button onclick="exportDatabaseToExcel()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--orange);cursor:pointer;border-radius:3px">Export Excel</button>
         <button onclick="exportDatabaseToJSON()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--green);cursor:pointer;border-radius:3px">Export JSON</button>
       </div>
     </div>
@@ -25,7 +26,6 @@
         <button onclick="dbShowTab('mvc')" class="db-tab active" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan)">MVC</button>
         <button onclick="dbShowTab('premium')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Premium Flow</button>
         <button onclick="dbShowTab('delta')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Cumulative Delta</button>
-        <button onclick="dbShowTab('greeks')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Greeks</button>
       </div>
       
       <!-- Tab Content -->
@@ -33,18 +33,19 @@
         <!-- MVC Tab -->
         <div id="db-tab-mvc" style="display:block">
           <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Max Volume Concentration (Last 24h)</div>
-          <table id="mvc-table" style="width:100%;font-size:9px;border-collapse:collapse">
+          <table id="mvc-table" style="width:100%;font-size:12px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Day</th>
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Date</th>
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">OI+Vol Strike</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Value</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">% of Net GEX</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Vol Strike</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Price</th>
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Trigger</th>
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Expiration</th>
+              <th style="text-align:left;padding:6px;color:#fff">Day</th>
+              <th style="text-align:left;padding:6px;color:#fff">Date</th>
+              <th style="text-align:left;padding:6px;color:#fff">Time</th>
+              <th style="text-align:right;padding:6px;color:#fff">OI+Vol Strike</th>
+              <th style="text-align:right;padding:6px;color:#fff">Value</th>
+              <th style="text-align:right;padding:6px;color:#fff">Vol Strike</th>
+              <th style="text-align:right;padding:6px;color:#fff">Price</th>
+              <th style="text-align:right;padding:6px;color:#fff">Net DEX Strike</th>
+              <th style="text-align:right;padding:6px;color:#fff">Net DEX Total (M)</th>
+              <th style="text-align:left;padding:6px;color:#fff">Trigger</th>
+              <th style="text-align:left;padding:6px;color:#fff">Expiration</th>
               <th style="padding:6px"></th>
             </tr>
           </table>
@@ -55,10 +56,11 @@
           <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Largest Premium Flows (Last 1h)</div>
           <table id="premium-table" style="width:100%;font-size:9px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Strike</th>
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Exp</th>
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Call Flow</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Put Flow</th>
               <th style="text-align:right;padding:6px;color:var(--cyan)">Net Flow</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Total Vol</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">ES Price</th>
             </tr>
           </table>
         </div>
@@ -68,34 +70,13 @@
           <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Latest Cumulative Delta Snapshot</div>
           <table id="delta-table" style="width:100%;font-size:9px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Strike</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Call Δ</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Put Δ</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Net Δ</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">Cumulative</th>
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">ES Price</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">CVD</th>
             </tr>
           </table>
         </div>
         
-        <!-- Greeks Tab -->
-        <div id="db-tab-greeks" style="display:none">
-          <div style="display:flex;gap:8px;margin-bottom:12px">
-            <input type="number" id="greeks-strike" placeholder="Strike" style="width:80px;padding:4px;font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text1)">
-            <input type="text" id="greeks-exp" placeholder="YYYY-MM-DD" style="width:120px;padding:4px;font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text1)">
-            <button onclick="dbLoadGreeks()" style="padding:4px 8px;font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Load</button>
-          </div>
-          <table id="greeks-table" style="width:100%;font-size:9px;border-collapse:collapse">
-            <tr style="border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
-              <th style="text-align:right;padding:6px;color:var(--orange)">Call Δ</th>
-              <th style="text-align:right;padding:6px;color:var(--orange)">Call Γ</th>
-              <th style="text-align:right;padding:6px;color:var(--orange)">Call IV</th>
-              <th style="text-align:right;padding:6px;color:var(--red)">Put Δ</th>
-              <th style="text-align:right;padding:6px;color:var(--red)">Put Γ</th>
-              <th style="text-align:right;padding:6px;color:var(--red)">Put IV</th>
-            </tr>
-          </table>
-        </div>
       </div>
     </div>
   </div>
@@ -140,7 +121,10 @@
       <div style="flex:1;min-width:0;overflow-y:auto;padding:12px">
         <div style="background:var(--bg1);border:1px solid var(--border);border-radius:4px">
           <div style="border-bottom:1px solid var(--border);background:var(--bg1);padding:10px;text-align:center">
-            <div style="font-size:12px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase"><span id="em-period-title">Daily</span> Estimated Move For <span id="em-exp-label" style="color:#ff9f43">—</span></div>
+            <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+              <div style="font-size:12px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase"><span id="em-period-title">Daily</span> Estimated Move For <span id="em-exp-label" style="color:#ff9f43"></span></div>
+              <button id="em-copy-table-btn" type="button" onclick="window.copyEstimatedMovesTable && window.copyEstimatedMovesTable()" style="background:var(--bg2);border:1px solid var(--border);color:var(--cyan);font-size:10px;padding:4px 8px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Copy</button>
+            </div>
           </div>
           <div style="overflow-x:auto">
             <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -164,7 +148,7 @@
 </div>
 
 <script>
-  // ========== MAIN TAB SWITCHING ==========
+(function() {
   function showDatabaseTab(section) {
     const dataSection = document.getElementById('db-data-section');
     const movesSection = document.getElementById('db-moves-section');
@@ -178,7 +162,8 @@
       buttons[1].style.color = 'var(--text2)';
       buttons[1].style.borderBottomColor = 'transparent';
       dbRefreshCounts();
-      dbLoadMVC();
+      // Small defer to ensure DB is initialized before loading
+      setTimeout(() => dbLoadMVC(), 100);
     } else {
       dataSection.style.display = 'none';
       movesSection.style.display = 'flex';
@@ -195,7 +180,6 @@
     document.getElementById('db-tab-mvc').style.display = 'none';
     document.getElementById('db-tab-premium').style.display = 'none';
     document.getElementById('db-tab-delta').style.display = 'none';
-    document.getElementById('db-tab-greeks').style.display = 'none';
     
     document.querySelectorAll('.db-tab').forEach(b => {
       b.style.borderBottomColor = 'transparent';
@@ -212,100 +196,91 @@
   }
   
   async function dbRefreshCounts() {
+    if (!DB || !DB.db) {
+      await new Promise(resolve => window.addEventListener('db-ready', resolve, { once: true }));
+    }
     if (!DB || !DB.db) return;
     const mvc = await DB._getAllRecords('mvc');
     const pf = await DB._getAllRecords('premiumFlow');
     const cd = await DB._getAllRecords('cumulativeDelta');
-    const gh = await DB._getAllRecords('greeksHistory');
-    const total = mvc.length + pf.length + cd.length + gh.length;
+    const total = mvc.length + pf.length + cd.length;
     document.getElementById('db-record-count').textContent = `${total} records`;
   }
   
   async function dbLoadMVC() {
-    if (!DB || !DB.db) return;
-    const records = await queryMVC_Recent(24);
-    const tbody = document.getElementById('mvc-table');
-    const rows = tbody.querySelectorAll('tr:not(:first-child)');
-    rows.forEach(r => r.remove());
-    
-    // Helper function to format date and extract day info
-    function getDateInfo(timestamp) {
-      const date = new Date(timestamp);
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return {
-        day: dayNames[date.getDay()],
-        month: monthNames[date.getMonth()],
-        date: date.getDate(),
-        year: date.getFullYear(),
-        formatted: `${monthNames[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`
-      };
+    // Wait for DB if not ready yet
+    if (!DB || !DB.db) {
+      await new Promise(resolve => window.addEventListener('db-ready', resolve, { once: true }));
     }
-    
-    // Sort records newest first
-    const sorted = records.slice().sort((a,b) => b.timestamp - a.timestamp);
-    
-    // Render each row individually
-    sorted.slice(0, 50).forEach((r) => {
+    if (!DB || !DB.db) { console.warn('dbLoadMVC: DB still not ready'); return; }
+    const records = await queryMVC_Recent(24);
+    console.log('📋 dbLoadMVC: got', records.length, 'records');
+    const tbody = document.getElementById('mvc-table');
+    if (!tbody) { console.warn('dbLoadMVC: mvc-table not found'); return; }
+    tbody.querySelectorAll('tr:not(:first-child)').forEach(r => r.remove());
+
+    const dayNames   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    records.slice().sort((a,b) => b.timestamp - a.timestamp).slice(0,50).forEach(r => {
+      const d    = new Date(r.timestamp || Date.now());
+      const day  = r.day  || dayNames[d.getDay()];
+      const date = r.date || (monthNames[d.getMonth()] + ' ' + d.getDate());
+      const time = r.time || '—';
+
+      // Value in billions
+      const valB = r.mvcValueOIVol != null
+        ? (Math.abs(r.mvcValueOIVol) / 1_000_000_000).toFixed(2) + 'B'
+        : '—';
+
+      // % of Net GEX
+      let pctGEX = '—';
+      if (r.pctNetGEXOIVol != null) {
+        pctGEX = r.pctNetGEXOIVol.toFixed(2) + '%';
+      } else if (r.totalNetGEX && r.mvcValueOIVol) {
+        pctGEX = (Math.abs(r.mvcValueOIVol) / Math.abs(r.totalNetGEX) * 100).toFixed(2) + '%';
+      }
+
+      // Trigger — old records stored expiration in triggerType; new records have explicit fields
+      const isDateStr = /^\d{4}-\d{2}-\d{2}$/.test(r.triggerType || '');
+      const trigger    = isDateStr ? 'Manual' : (r.triggerType || 'manual').startsWith('auto') ? 'Auto' : 'Manual';
+      const expiration = r.expiration && r.expiration !== '—'
+        ? r.expiration
+        : (isDateStr ? r.triggerType : '—');
+
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
       
-      // Get date info from timestamp
-      const dateInfo = getDateInfo(r.timestamp || Date.now());
-      
-      const day = r.day || dateInfo.day;
-      const date = r.date || (dateInfo.month + ' ' + dateInfo.date);
-      const time = r.time || '—';
-      
-      // Value in billions — raw netGEX is in dollar units (e.g. 5,990,000,000)
-      let mvcValueB = '—';
-      if (r.mvcValueOIVol != null) {
-        mvcValueB = (Math.abs(r.mvcValueOIVol) / 1_000_000_000).toFixed(2);
-      }
-      
-      // % of Net GEX — compute live from stored values
-      let pctGEX = '—';
-      if (r.pctNetGEXOIVol != null && r.pctNetGEXOIVol !== undefined) {
-        pctGEX = r.pctNetGEXOIVol.toFixed(2);
-      } else if (r.totalNetGEX && r.mvcValueOIVol) {
-        pctGEX = (Math.abs(r.mvcValueOIVol) / Math.abs(r.totalNetGEX) * 100).toFixed(2);
-      }
-      
-      // Trigger: show 'Manual' or 'Auto' cleanly
-      const rawTrigger = r.triggerType || r.trigger || 'manual';
-      const triggerLabel = rawTrigger.startsWith('auto') ? 'Auto' : 'Manual';
-      
-      const expiration = r.expiration || '—';
+      // Determine strike colors based on GEX sign
+      const oiVolColor = r.mvcValueOIVol >= 0 ? '#00e676' : '#ff4757';
+      const volOnlyColor = r.mvcValueVolOnly >= 0 ? '#00e676' : '#ff4757';
       
       tr.innerHTML = `
-        <td style="padding:6px;color:var(--text2)">${day}</td>
-        <td style="padding:6px;color:var(--text2)">${date}</td>
-        <td style="padding:6px;color:var(--text2)">${time}</td>
-        <td style="padding:6px;text-align:right;color:var(--green)">${r.strikeOIVol?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--orange)">${mvcValueB}B</td>
-        <td style="padding:6px;text-align:right;color:var(--cyan)">${pctGEX}%</td>
-        <td style="padding:6px;text-align:right;color:var(--green)">${r.strikeVolOnly?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--cyan)">${r.currentPrice?.toFixed(2) || '—'}</td>
-        <td style="padding:6px;color:var(--text2)">${triggerLabel}</td>
-        <td style="padding:6px;color:var(--text2)">${expiration}</td>
-        <td style="padding:4px 6px">
-          <button onclick="dbDeleteMVC(${r.id}, this)" style="padding:2px 7px;font-size:9px;background:#1a0a0a;border:1px solid #3a1515;color:#ff4757;cursor:pointer;border-radius:10px;line-height:1.4">✕</button>
-        </td>
+        <td style="padding:6px;color:#fff">${day}</td>
+        <td style="padding:6px;color:#fff">${date}</td>
+        <td style="padding:6px;color:#fff">${time}</td>
+        <td style="padding:6px;text-align:right;color:${oiVolColor}">${r.strikeOIVol?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:#fff">${valB}</td>
+        <td style="padding:6px;text-align:right;color:${volOnlyColor}">${r.strikeVolOnly?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:#fff">${r.currentPrice?.toFixed(2) || '—'}</td>
+        <td style="padding:6px;text-align:right;color:#fff">${Number.isFinite(Number(r.netDexStrike)) ? Number(r.netDexStrike).toFixed(0) : '-'}</td>
+        <td style="padding:6px;text-align:right;color:#fff">${(r.totalNetDEX_OI ?? r.totalNetDEX) != null ? ((r.totalNetDEX_OI ?? r.totalNetDEX) / 1e6).toFixed(2) + 'M' : '-'}</td>
+        <td style="padding:6px;color:#fff">${trigger}</td>
+        <td style="padding:6px;color:#fff">${expiration}</td>
+        <td style="padding:4px 6px"><button onclick="dbDeleteMVC(${r.id},this)" style="padding:2px 7px;font-size:9px;background:#1a0a0a;border:1px solid #3a1515;color:#ff4757;cursor:pointer;border-radius:10px">✕</button></td>
       `;
       tbody.appendChild(tr);
     });
   }
-  
+
   async function dbDeleteMVC(id, btn) {
     if (!DB || !DB.db) return;
     await new Promise((resolve, reject) => {
-      const tx = DB.db.transaction(['mvc'], 'readwrite');
-      const store = tx.objectStore('mvc');
-      const req = store.delete(id);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+      const tx  = DB.db.transaction(['mvc'], 'readwrite');
+      const req = tx.objectStore('mvc').delete(id);
+      req.onsuccess = resolve;
+      req.onerror   = () => reject(req.error);
     });
-    // Remove the row from the DOM
     btn.closest('tr').remove();
     dbRefreshCounts();
   }
@@ -320,12 +295,13 @@
     records.forEach(r => {
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
-      const flowColor = r.flow > 0 ? 'var(--green)' : 'var(--red)';
+      const flowColor = r.netFlow > 0 ? 'var(--green)' : 'var(--red)';
       tr.innerHTML = `
-        <td style="padding:6px;color:var(--text2)">${r.strike?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;color:var(--text2)">${r.expiration || '—'}</td>
-        <td style="padding:6px;text-align:right;color:${flowColor}">${r.flow?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--text3)">${r.volume?.toFixed(0) || '—'}</td>
+        <td style="padding:6px;color:var(--text2)">${r.time || '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${Number.isFinite(Number(r.callFlow)) ? Number(r.callFlow).toFixed(0) : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${Number.isFinite(Number(r.putFlow)) ? Number(r.putFlow).toFixed(0) : '?'}</td>
+        <td style="padding:6px;text-align:right;color:${flowColor}">${Number.isFinite(Number(r.netFlow)) ? Number(r.netFlow).toFixed(0) : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${Number.isFinite(Number(r.esPrice)) ? Number(r.esPrice).toFixed(2) : '?'}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -342,96 +318,75 @@
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
       tr.innerHTML = `
-        <td style="padding:6px;color:var(--text2)">${r.strike?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--green)">${r.callDelta?.toFixed(3) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--red)">${r.putDelta?.toFixed(3) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--cyan)">${r.netDelta?.toFixed(3) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--orange)">${r.cumulativeSum?.toFixed(3) || '—'}</td>
+        <td style="padding:6px;color:var(--text2)">${r.time || '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${Number.isFinite(Number(r.esPrice)) ? Number(r.esPrice).toFixed(2) : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--cyan)">${Number.isFinite(Number(r.cvd)) ? Number(r.cvd).toLocaleString() : '?'}</td>
       `;
       tbody.appendChild(tr);
     });
   }
   
-  async function dbLoadGreeks() {
-    const strike = parseFloat(document.getElementById('greeks-strike').value);
-    const exp = document.getElementById('greeks-exp').value;
-    if (!strike || !exp || !DB || !DB.db) return;
+  async function exportDatabaseToExcel() {
+    if (!DB || !DB.db) { console.warn('Database not ready'); return; }
     
-    const records = await DB.getGreeksHistory(strike, exp, 24);
-    const tbody = document.getElementById('greeks-table');
-    const rows = tbody.querySelectorAll('tr:not(:first-child)');
-    rows.forEach(r => r.remove());
-    
-    records.slice(-10).reverse().forEach(r => {
-      const tr = document.createElement('tr');
-      tr.style.borderBottom = '1px solid var(--border)';
-      const time = new Date(r.timestamp).toLocaleTimeString();
-      tr.innerHTML = `
-        <td style="padding:6px;color:var(--text2)">${time}</td>
-        <td style="padding:6px;text-align:right;color:var(--green)">${r.call?.delta?.toFixed(3) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--green)">${r.call?.gamma?.toFixed(4) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--green)">${r.call?.iv?.toFixed(2) || '—'}%</td>
-        <td style="padding:6px;text-align:right;color:var(--red)">${r.put?.delta?.toFixed(3) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--red)">${r.put?.gamma?.toFixed(4) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:var(--red)">${r.put?.iv?.toFixed(2) || '—'}%</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  // Helper status setter for Estimated Moves
-  function setStatus(status, color) {
-    const el = document.getElementById('em-status');
-    if (el) {
-      el.textContent = status;
-      el.style.color = color;
+    try {
+      // Fetch all MVC records
+      const mvcRecords = await DB._getAllRecords('mvc');
+      
+      // Load external library for Excel export
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js';
+      script.onload = () => {
+        // Create workbook with MVC sheet only
+        const wb = XLSX.utils.book_new();
+        
+        // MVC Sheet
+        if (mvcRecords.length > 0) {
+          const mvcWs = XLSX.utils.json_to_sheet(mvcRecords);
+          XLSX.utils.book_append_sheet(wb, mvcWs, 'MVC');
+        } else {
+          alert('No MVC records to export');
+          return;
+        }
+        
+        // Generate filename with date
+        const date = new Date().toISOString().split('T')[0];
+        const filename = `MVC_Database_${date}.xlsx`;
+        
+        // Save file
+        XLSX.writeFile(wb, filename);
+        console.log(`✓ Excel exported: ${filename}`);
+      };
+      script.onerror = () => {
+        console.error('Failed to load XLSX library');
+        alert('Could not load Excel export library. Try again.');
+      };
+      document.head.appendChild(script);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Export failed: ' + err.message);
     }
   }
 
-  // ========== ESTIMATED MOVES - FULL WORKING CODE ==========
-  const SYMBOLS = ['ESM','NQM','SPY','QQQ','SPX','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NDX','NFLX','SMH','PLTR'];
-  const API_SYMBOL = { ESM:'/ESM6', NQM:'/NQM6', SPX:'$SPX', NDX:'$NDX' };
-  const CHAIN_SYMBOL = { SPX:'$SPX', NDX:'$NDX' };
-  const FUTURE_PROXY = { ESM:'SPX', NQM:'NDX' };
-  const PERIODS = {
-    daily: { title:'Daily', minDays:0, maxDays:2, fallbackScale:1, note:'Daily uses yesterday\'s 4 PM Eastern close and the nearest available expiration ATM straddle when no daily expiration is listed.' },
-    weekly: { title:'Weekly', minDays:0, maxDays:10, fallbackScale:1, note:'Weekly pulls the nearest listed weekly expiration and estimates the move from the ATM straddle mid.' },
-    monthly: { title:'Monthly', minDays:21, maxDays:45, fallbackScale:Math.sqrt(4), note:'Monthly targets the nearest listed expiration about one month out. If unavailable, the weekly move is scaled by sqrt(4).' }
-  };
-  let activePeriod = 'daily';
-  let refreshBusy = false;
-  let lastDailyCloseLabel = '';
-  let weeklyExpOverride = '';
-  let monthlyExpOverride = '';
-  let knownExpirations = [];
-  let knownWeeklyExps = [];
-  let knownMonthlyExps = [];
+  window.showDatabaseTab  = showDatabaseTab;
+  window.dbShowTab        = dbShowTab;
+  window.dbRefreshCounts  = dbRefreshCounts;
+  window.dbLoadMVC        = dbLoadMVC;
+  window.dbLoadPremium    = dbLoadPremium;
+  window.dbLoadDelta      = dbLoadDelta;
+  window.dbDeleteMVC      = dbDeleteMVC;
+  window.exportDatabaseToExcel = exportDatabaseToExcel;
 
-  function labelForDate(exp){ return exp ? new Date(exp+'T12:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric'}) : nextFridayLabel(); }
-  function nextFridayLabel(){ const d=new Date(); const add=(5-d.getDay()+7)%7 || 7; d.setDate(d.getDate()+add); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'}); }
-  function daysTo(exp){ return Math.ceil((new Date(exp+'T16:00:00') - new Date()) / 86400000); }
-  function previousTradingDate(){ const d=new Date(); d.setDate(d.getDate()-1); while(d.getDay()===0 || d.getDay()===6) d.setDate(d.getDate()-1); return d; }
-  function fmtPrice(ticker, num){ const n=(ticker === 'ESM' || ticker === 'NQM') ? Math.round(Number(num)*4)/4 : Number(num); return Number.isFinite(n) ? n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'; }
-  function fmtEm(num){ const n=Number(num); return Number.isFinite(n) ? n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:3}) : ''; }
-  const DIVIDER_AFTER = 'TSLA';
-  function rowHtml(row, addDivider){ const muted=row.error?'opacity:.55':''; const base=`<tr style="text-align:center;border-bottom:1px solid #1a2a3a;${muted}" title="${row.error ? row.error.replace(/"/g,'&quot;') : ''}"><td style="padding:10px 14px;border-right:1px solid #1a2a3a;font-weight:700;color:#00e5ff;letter-spacing:.08em;font-size:13px;white-space:nowrap">${row.ticker==='CORNER'?'COIN':row.ticker}</td><td style="padding:10px 18px;border-right:1px solid #1a2a3a;color:#cbd5e1;font-size:13px;white-space:nowrap">${fmtPrice(row.ticker,row.close)}</td><td style="padding:10px 12px;border-right:1px solid #1a2a3a;color:#7ab8ff;font-size:13px;white-space:nowrap">${row.expiration ? labelForDate(row.expiration) : ''}</td><td style="padding:10px 16px;border-right:1px solid #1a2a3a;color:#e8c060;font-weight:700;font-size:13px;white-space:nowrap">${fmtEm(row.em)}</td><td style="padding:10px 20px;border-right:1px solid #1a2a3a;color:#00e676;font-weight:700;font-size:13px;white-space:nowrap">${fmtPrice(row.ticker,row.up)}</td><td style="padding:10px 20px;color:#ff4757;font-weight:700;font-size:13px;white-space:nowrap">${fmtPrice(row.ticker,row.down)}</td></tr>`; const divider=addDivider?`<tr><td colspan="6" style="padding:7px;text-align:center;background:#07111d;color:#ffffff;font-size:11px;letter-spacing:.15em;text-transform:uppercase;border-bottom:1px solid #1a2a3a">x.com/bzilatrades</td></tr>`:''; return base+divider; }
-  function normalizeOptions(chain){ return (Array.isArray(chain?.options) ? chain.options : []).map(o=>({expiration:o.expiration || o.expirationDate,strike:Number(o.strike || o.strikePrice),type:String(o.optionType || o.type || '').toUpperCase(),bid:Number(o.bid || o.bidPrice || 0),ask:Number(o.ask || o.askPrice || 0),last:Number(o.last || o.mark || 0),iv:Number(o.iv || o.volatility || o.impliedVolatility || 0),dte:Number(o.dte || 0)})).filter(o=>o.expiration && Number.isFinite(o.strike)); }
-  function mid(o){ return Number.isFinite(o.bid) && Number.isFinite(o.ask) && o.bid>0 && o.ask>0 ? (o.bid+o.ask)/2 : (Number.isFinite(o.last) ? o.last : 0); }
-  async function fetchQuoteDetail(ticker){ const quoteSymbol=API_SYMBOL[ticker] || ticker; const quote=await window.API.fetchQuote(quoteSymbol); let previousClose=Number(quote.close || quote.closePrice || quote.previousClose); if(!Number.isFinite(previousClose) || previousClose<=0){ try{ const raw=await fetch(`http://localhost:3001/proxy/api/tt/quote/${encodeURIComponent(quoteSymbol)}`).then(r=>r.ok?r.json():null); const q=(raw?.data?.items || []).find(i=>i.symbol===quoteSymbol) || raw?.data?.items?.[0] || {}; previousClose=Number(q['close-price'] || q.close || q['prev-close'] || q['previous-close']); }catch(e){} } return { quote, close:Number(quote.price || quote.last || quote.close), previousClose }; }
-  async function fetchPrevious4pmClose(ticker){ const quoteSymbol=API_SYMBOL[ticker] || ticker; try{ const date=previousTradingDate(); const end=new Date(date); end.setHours(15,55,0,0); const start=new Date(end.getTime()-45*60000); const url=`http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=2&frequencyType=minute&frequency=5&startDate=${start.getTime()}&endDate=${end.getTime()}&needExtendedHoursData=false`; const data=await fetch(url).then(r=>r.ok?r.json():null); const candles=(data?.candles || []).filter(c=>Number.isFinite(Number(c.close))).sort((a,b)=>Number(a.datetime)-Number(b.datetime)); const closeCandle=candles.filter(c=>Number(c.datetime)<=end.getTime()).pop() || candles.pop(); const close=Number(closeCandle?.close); if(Number.isFinite(close) && close>0) { lastDailyCloseLabel=date.toLocaleDateString('en-US',{month:'numeric',day:'numeric'}); return close; } }catch(e){} return null; }
-  async function fetchFridayClose(ticker){ const quoteSymbol=API_SYMBOL[ticker] || ticker; try{ const today=new Date(); let fridayDate=new Date(today); const daysUntilFriday=(5-today.getDay()+7)%7 || 7; fridayDate.setDate(today.getDate()-daysUntilFriday); const end=new Date(fridayDate); end.setHours(15,55,0,0); const start=new Date(end.getTime()-45*60000); const url=`http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=2&frequencyType=minute&frequency=5&startDate=${start.getTime()}&endDate=${end.getTime()}&needExtendedHoursData=false`; const data=await fetch(url).then(r=>r.ok?r.json():null); const candles=(data?.candles || []).filter(c=>Number.isFinite(Number(c.close))).sort((a,b)=>Number(a.datetime)-Number(b.datetime)); const closeCandle=candles.filter(c=>Number(c.datetime)<=end.getTime()).pop() || candles.pop(); const close=Number(closeCandle?.close); if(Number.isFinite(close) && close>0) return close; }catch(e){} return null; }
-  function populateExpDropdown(id, expirations, overrideVal){ const sel=document.getElementById(id); if(!sel) return; const current=overrideVal || sel.value; sel.innerHTML='<option value="">-- Auto --</option>'; expirations.forEach(exp=>{ const opt=document.createElement('option'); opt.value=exp; const isWeekly=id==='em-weekly-exp-select'; opt.textContent=isWeekly ? exp : labelForDate(exp)+' ('+daysTo(exp)+'d)'; if(exp===current) opt.selected=true; sel.appendChild(opt); }); }
-  function updateExpPickerVisibility(){ const ws=document.getElementById('em-weekly-exp-select'); const ms=document.getElementById('em-monthly-exp-select'); if(ws) ws.style.display=(activePeriod==='weekly') ? 'inline-block' : 'none'; if(ms) ms.style.display=(activePeriod==='monthly') ? 'inline-block' : 'none'; }
-  window.onWeeklyExpChange=function(val){ weeklyExpOverride=val; };
-  window.onMonthlyExpChange=function(val){ monthlyExpOverride=val; };
-  function chooseExpiration(expirations, period){ if(!expirations.length) return ''; const cfg=PERIODS[period]; if(!cfg) return expirations[0]; return expirations.find(e=>{ const dt=daysTo(e); return dt >= cfg.minDays && dt <= cfg.maxDays; }) || expirations[0]; }
-  async function estimateMove(ticker){ if(FUTURE_PROXY[ticker]) return estimateFutureMove(ticker, FUTURE_PROXY[ticker]); const quoteDetail=await fetchQuoteDetail(ticker); let dailyClose=null; if(activePeriod === 'daily'){ dailyClose = await fetchPrevious4pmClose(ticker); } else if(activePeriod === 'weekly'){ dailyClose = await fetchFridayClose(ticker); } const close=activePeriod === 'daily' || activePeriod === 'weekly' ? (Number.isFinite(dailyClose) && dailyClose>0 ? dailyClose : quoteDetail.close) : quoteDetail.close; if(!Number.isFinite(close) || close<=0) throw new Error('No quote'); const targetExpForFetch = activePeriod === 'daily' ? (weeklyExpOverride || knownExpirations.find(e=>daysTo(e)>=0 && daysTo(e)<=1) || knownExpirations[0] || '') : activePeriod === 'weekly' ? (weeklyExpOverride || knownExpirations.find(e=>daysTo(e)>=1 && daysTo(e)<=7) || knownExpirations[0] || '') : (monthlyExpOverride || knownExpirations.find(e=>daysTo(e)>=21 && daysTo(e)<=45) || knownExpirations[0] || ''); const chainSym = (CHAIN_SYMBOL[ticker] || ticker).replace(/^\$/,''); const expParam = targetExpForFetch ? `&expiration=${encodeURIComponent(targetExpForFetch)}` : ''; const chainUrl = `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?atmOnly=true${expParam}`; const chain = await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}).catch(()=>({options:[]})); const options=normalizeOptions(chain); const expirations=[...new Set(options.map(o=>o.expiration))].sort(); const weeklyExp=chooseExpiration(expirations.length ? expirations : knownExpirations, 'weekly'); const targetExp=targetExpForFetch || (activePeriod === 'daily' ? chooseExpiration(expirations, 'weekly') : chooseExpiration(expirations, activePeriod)); const expOptions=options.filter(o=>o.expiration===targetExp); const strike=[...new Set(expOptions.map(o=>o.strike))].sort((a,b)=>Math.abs(a-close)-Math.abs(b-close))[0]; if(!Number.isFinite(strike)) throw new Error('No option strikes'); const call=expOptions.find(o=>o.strike===strike && (o.type==='CALL' || o.type==='C')); const put=expOptions.find(o=>o.strike===strike && (o.type==='PUT' || o.type==='P')); if(!call || !put) throw new Error('Missing ATM straddle'); const avgIV = ((call.iv || 0) + (put.iv || 0)) / 2; const dte = call.dte || put.dte || daysTo(targetExp); let em; if(avgIV > 0 && dte > 0){ em = 0.84 * avgIV * close * Math.sqrt(dte / 365); } else { em = mid(call) + mid(put); } if(activePeriod==='monthly' && targetExp===weeklyExp) em *= PERIODS[activePeriod].fallbackScale; return { ticker, close, em, up:close+em, down:close-em, expiration:targetExp, strike }; }
-  async function estimateFutureMove(futureTicker, indexTicker){ const futureQuote=await fetchQuoteDetail(futureTicker); const indexQuote=await fetchQuoteDetail(indexTicker); let futureDailyClose=null, indexDailyClose=null; if(activePeriod === 'daily'){ futureDailyClose = await fetchPrevious4pmClose(futureTicker); indexDailyClose = await fetchPrevious4pmClose(indexTicker); } else if(activePeriod === 'weekly'){ futureDailyClose = await fetchFridayClose(futureTicker); indexDailyClose = await fetchFridayClose(indexTicker); } const futureClose=activePeriod === 'daily' || activePeriod === 'weekly' ? (Number.isFinite(futureDailyClose) && futureDailyClose>0 ? futureDailyClose : futureQuote.previousClose) : futureQuote.close; const indexClose=activePeriod === 'daily' || activePeriod === 'weekly' ? (Number.isFinite(indexDailyClose) && indexDailyClose>0 ? indexDailyClose : indexQuote.previousClose) : indexQuote.close; if(!Number.isFinite(futureClose) || futureClose<=0 || !Number.isFinite(indexClose) || indexClose<=0) throw new Error('No quote'); const indexMove=await estimateMove(indexTicker); const basis=futureClose - indexClose; const up=indexMove.up + basis; const down=indexMove.down + basis; return { ticker:futureTicker, close:futureClose, em:indexMove.em, up, down, expiration:indexMove.expiration, strike:indexMove.strike }; }
-  function updatePeriodChrome(label){ const cfg=PERIODS[activePeriod]; document.querySelectorAll('.em-period-tab').forEach(btn=>{ const active=btn.dataset.period===activePeriod; btn.style.color=active ? '#00e5ff' : '#5a7a99'; btn.style.borderColor=active ? '#00e5ff' : '#1e3a5f'; }); const title=document.getElementById('em-period-title'); if(title) title.textContent=cfg.title; const expLbl=document.getElementById('em-exp-label'); if(expLbl) expLbl.textContent=label || nextFridayLabel(); ['em-target-date'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=label || nextFridayLabel(); }); }
-  function toDateStr(d){ return d.toISOString().slice(0,10); }
-  function nextFridays(n){ const dates=[]; const d=new Date(); d.setHours(0,0,0,0); for(let i=1;dates.length<n;i++){ const t=new Date(d); t.setDate(d.getDate()+i); if(t.getDay()===5) dates.push(toDateStr(t)); } return dates; }
-  function lastTradingDaysOfMonth(n){ const dates=[]; const now=new Date(); for(let m=0;dates.length<n;m++){ const lastDay=new Date(now.getFullYear(), now.getMonth()+m+1, 0); while(lastDay.getDay()===0||lastDay.getDay()===6) lastDay.setDate(lastDay.getDate()-1); const s=toDateStr(lastDay); if(new Date(s+'T16:00:00')>=now) dates.push(s); } return dates; }
-  window.setEstimatedMovePeriod=function(period){ if(!PERIODS[period] || activePeriod===period) return; activePeriod=period; updatePeriodChrome(); updateExpPickerVisibility(); };
-  window.refreshEstimatedMoves=async function(){ if(refreshBusy) return; refreshBusy=true; setStatus('Syncing','#00e5ff'); const btn=document.getElementById('em-start-btn'); if(btn) btn.textContent='Refresh'; const body=document.getElementById('em-table-body'); if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570">Loading estimated moves...</td></tr>'; try{ if(!window.API?.isReady?.()) await new Promise(resolve=>window.addEventListener('api-ready', resolve, { once:true })); const settled=[]; for(let i=0;i<SYMBOLS.length;i+=4){ const batch=SYMBOLS.slice(i,i+4); const results=await Promise.allSettled(batch.map(estimateMove)); settled.push(...results); if(i+4<SYMBOLS.length) await new Promise(r=>setTimeout(r,400)); } const rows=settled.map((r,i)=>r.status==='fulfilled' ? r.value : { ticker:SYMBOLS[i], error:r.reason?.message || 'Unavailable' }); if(body) body.innerHTML=rows.map((r,i)=>rowHtml(r, r.ticker===DIVIDER_AFTER||(r.ticker==='CORNER'&&DIVIDER_AFTER==='COIN'))).join(''); const exp=rows.find(r=>r.expiration)?.expiration; const label=labelForDate(exp); try{ const chainSym=(CHAIN_SYMBOL['SPX'] || 'SPX').replace(/^\$/,''); const chainUrl=`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?daysToExpiration=90`; const ch=await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}); const opts=normalizeOptions(ch); const allExps=[...new Set(opts.map(o=>o.expiration))].filter(e=>daysTo(e)>=0).sort(); if(allExps.length){ knownExpirations=allExps; knownWeeklyExps=allExps.filter(e=>new Date(e+'T12:00:00').getDay()===5); knownMonthlyExps=allExps.filter(e=>{ const d=new Date(e+'T12:00:00'); const lastDay=new Date(d.getFullYear(),d.getMonth()+1,0); return (lastDay.getDate()-d.getDate())<=3; }); } }catch(e){} if(!knownWeeklyExps.length) knownWeeklyExps=nextFridays(8); if(!knownMonthlyExps.length) knownMonthlyExps=lastTradingDaysOfMonth(6); populateExpDropdown('em-weekly-exp-select', knownWeeklyExps, weeklyExpOverride); populateExpDropdown('em-monthly-exp-select', knownMonthlyExps, monthlyExpOverride); updateExpPickerVisibility(); updatePeriodChrome(label); const sync=document.getElementById('em-last-sync'); if(sync) sync.textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); setStatus('Live','#00e676'); }catch(e){ setStatus('Error','#ff4757'); if(body) body.innerHTML=`<tr><td colspan="6" style="padding:24px;text-align:center;color:#ff4757">${e.message}</td></tr>`; }finally{ refreshBusy=false; updateExpPickerVisibility(); } };
-  window.init_database=async function(){ const list=document.getElementById('em-symbol-list'); if(list) list.innerHTML=SYMBOLS.map(s=>`<span style="font-size:13px;color:#7ab8ff;background:#07111d;border:1px solid #13253a;padding:4px 7px;border-radius:2px">${s === 'CORNER' ? 'COIN' : s}</span>`).join(''); const label=nextFridayLabel(); updatePeriodChrome(label); setStatus('Ready','#5a7a99'); const body=document.getElementById('em-table-body'); if(body) body.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#3a5570">Click Start to load estimated moves</td></tr>'; try{ const chainSym=(CHAIN_SYMBOL['SPX'] || 'SPX').replace(/^\$/,''); const chainUrl=`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?daysToExpiration=90`; const ch=await fetch(chainUrl).then(r=>r.ok?r.json():{options:[]}); const opts=normalizeOptions(ch); const allExps=[...new Set(opts.map(o=>o.expiration))].filter(e=>daysTo(e)>=0).sort(); if(allExps.length){ knownWeeklyExps=allExps.filter(e=>new Date(e+'T12:00:00').getDay()===5); knownMonthlyExps=allExps.filter(e=>{ const d=new Date(e+'T12:00:00'); const lastDay=new Date(d.getFullYear(),d.getMonth()+1,0); return (lastDay.getDate()-d.getDate())<=3; }); } }catch(e){} if(!knownWeeklyExps.length) knownWeeklyExps=nextFridays(8); if(!knownMonthlyExps.length) knownMonthlyExps=lastTradingDaysOfMonth(6); populateExpDropdown('em-weekly-exp-select', knownWeeklyExps, weeklyExpOverride); populateExpDropdown('em-monthly-exp-select', knownMonthlyExps, monthlyExpOverride); updateExpPickerVisibility(); };
+  window.dbRefreshAll = function() {
+    dbRefreshCounts();
+    // Reload whichever sub-tab is currently visible
+    const mvc     = document.getElementById('db-tab-mvc');
+    const premium = document.getElementById('db-tab-premium');
+    const delta   = document.getElementById('db-tab-delta');
+    if (mvc     && mvc.style.display     !== 'none') dbLoadMVC();
+    if (premium && premium.style.display !== 'none') dbLoadPremium();
+    if (delta   && delta.style.display   !== 'none') dbLoadDelta();
+  };
+
+})();
 </script>

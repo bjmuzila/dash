@@ -298,7 +298,7 @@
     #codex-bottom-panel-cluster > :nth-child(3) *,
     [data-codex-mvc-panel],
     [data-codex-mvc-panel] * {
-      /* background override removed */
+      background-color: #070c11 !important;
     }
 
     [data-codex-mvc-panel],
@@ -495,6 +495,9 @@
       <span class="nav-icon">⊞</span>Overview
     </div>
 
+    <div class="nav-item" id="nav-bzila" onclick="loadPage('bzila')" data-page="bzila">
+      <span class="nav-icon" style="font-size:11px;font-weight:700">B</span>Bzila Flow
+    </div>
     <div class="nav-divider"></div>
     <div class="nav-item" id="nav-database" onclick="loadPage('database')" data-page="database">
       <span class="nav-icon">🗄</span>Database
@@ -518,7 +521,11 @@
     <div class="nav-filters">
       <div class="nf-label">DTE View</div>
       <div id="dte-gex-pills" style="display:flex;flex-wrap:wrap;gap:2px">
-        <!-- populated dynamically by buildDTEGEXPills() in overview.js -->
+        <span class="nav-pill active" onclick="setDTEGEXView(0,this)" style="font-size:10px;padding:3px 6px">0DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(1,this)" style="font-size:10px;padding:3px 6px">1DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(7,this)" style="font-size:10px;padding:3px 6px">7DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(14,this)" style="font-size:10px;padding:3px 6px">14DTE</span>
+        <span class="nav-pill" onclick="setDTEGEXView(21,this)" style="font-size:10px;padding:3px 6px">21DTE</span>
       </div>
       <div style="margin-top:4px">
         <span class="nav-pill" id="dte-gex-pill-combined" onclick="setDTEGEXView('combined',this)" style="width:100%;text-align:center;display:block;font-size:10px;padding:3px 6px">1-7DTE Combined</span>
@@ -577,9 +584,7 @@
 <script src="shared/calculations.js"></script>
 <script src="shared/app.js"></script>
 <script src="shared/database.js"></script> 
-<script src="shared/flow-recorder.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="pages/overview.js?v=20260526-gex-pan-cache-v1"></script>
+<script src="pages/overview.js?v=20260526-gex-pan-cache-v1" defer></script>
 
 <script>
 // ===========================
@@ -905,6 +910,107 @@ document.addEventListener('click', function(e) {
 <script src="estimated-moves.js?v=20260525-estimated-moves-restored"></script>
 
 <script>
+async function fetchESStats() {
+  try {
+    const SHEET_ID = '1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg';
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
+    const response = await fetch(url);
+    const text = await response.text();
+    const json = JSON.parse(text.substring(47).slice(0, -2));
+    
+    if (!json.table) return;
+    
+    const stats = {};
+    const fmtESStat = value => {
+      const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : value;
+    };
+    for (let row of json.table.rows) {
+      const label = row.c[0]?.v;
+      const value = row.c[1]?.v;
+      if (label && value) {
+        stats[label.toString().trim().toUpperCase()] = fmtESStat(value);
+      }
+    }
+    
+    if (stats['NO LONG']) {
+      const el = document.getElementById('st-nolong-hi');
+      if (el) el.textContent = stats['NO LONG'];
+    }
+    if (stats['UP']) {
+      const el = document.getElementById('st-est-up');
+      if (el) el.textContent = stats['UP'];
+    }
+    if (stats['VAH']) {
+      const el = document.getElementById('st-vah');
+      if (el) el.textContent = stats['VAH'];
+    }
+    if (stats['VPOC']) {
+      const el = document.getElementById('st-vpoc');
+      if (el) el.textContent = stats['VPOC'];
+    }
+    if (stats['MID']) {
+      const el = document.getElementById('st-mid');
+      if (el) el.textContent = stats['MID'];
+    }
+    if (stats['DOWN']) {
+      const el = document.getElementById('st-est-dn');
+      if (el) el.textContent = stats['DOWN'];
+    }
+    if (stats['VAL']) {
+      const el = document.getElementById('st-val');
+      if (el) el.textContent = stats['VAL'];
+    }
+    if (stats['NO SHORT']) {
+      const el = document.getElementById('st-noshort-hi');
+      if (el) el.textContent = stats['NO SHORT'];
+    }
+    
+    // Store in window so we can restore if overwritten
+    window.esStatsCache = stats;
+  } catch (err) {
+    console.error('Error fetching ES stats:', err);
+  }
+}
+
+// Protect against overwrites by watching for changes and restoring
+function protectESStats() {
+  if (!window.esStatsCache) return;
+  
+  const ids = ['st-nolong-hi', 'st-est-up', 'st-vah', 'st-vpoc', 'st-mid', 'st-est-dn', 'st-val', 'st-noshort-hi'];
+  const keyMap = {
+    'st-nolong-hi': 'NO LONG',
+    'st-est-up': 'UP',
+    'st-vah': 'VAH',
+    'st-vpoc': 'VPOC',
+    'st-mid': 'MID',
+    'st-est-dn': 'DOWN',
+    'st-val': 'VAL',
+    'st-noshort-hi': 'NO SHORT'
+  };
+  
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && window.esStatsCache[keyMap[id]] && el.textContent === '—') {
+      el.textContent = window.esStatsCache[keyMap[id]];
+    }
+  });
+}
+
+if (window.EventBus) {
+  window.EventBus.on('page-changed', function(page) {
+    if (page === 'overview') {
+      setTimeout(fetchESStats, 200);
+      // Protect every 1 second after page load
+      setTimeout(() => {
+        setInterval(protectESStats, 1000);
+      }, 500);
+    }
+  });
+}
+
+setInterval(fetchESStats, 300000);
+
 // Initialize dashboard - must be at end after all functions defined
 console.log('Inline script end - readyState:', document.readyState);
 console.log('Calling initDashboard directly...');
@@ -932,7 +1038,97 @@ initDashboard();
         return null;
       };
 
-      const applyBottomPanelLayout = () => { return; };
+      const applyBottomPanelLayout = () => {
+        [...document.querySelectorAll('div, span, code, pre')]
+          .filter((element) => {
+            const text = (element.textContent || '').trim();
+            return /^served by\s+/i.test(text) || /dashboard load blocked|uncaught referenceerror/i.test(text);
+          })
+          .forEach((element) => {
+            element.setAttribute('data-codex-served-prompt', 'true');
+            element.style.display = 'none';
+          });
+
+        const panels = labels.map(findPanel);
+        if (panels.some((panel) => !panel)) return;
+
+        const row = panels[0].parentElement;
+        if (!row || panels.some((panel) => panel.parentElement !== row)) return;
+        if (row.children.length > 6) {
+          row.removeAttribute('id');
+          row.removeAttribute('style');
+          return;
+        }
+
+        row.id = 'codex-bottom-panel-cluster';
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr)';
+        row.style.gridAutoFlow = 'column';
+        row.style.alignItems = 'stretch';
+        row.style.justifyContent = 'stretch';
+        row.style.gap = '0';
+        row.style.width = '100%';
+        row.style.maxWidth = 'none';
+        row.style.overflow = 'hidden';
+        row.style.marginLeft = '0';
+        row.style.marginRight = '0';
+
+        panels[2].setAttribute('data-codex-mvc-panel', 'true');
+        panels.forEach((panel, index) => {
+          panel.style.minWidth = '0';
+          panel.style.width = 'auto';
+          panel.style.maxWidth = 'none';
+          panel.style.overflow = 'hidden';
+          panel.style.marginLeft = '0';
+          panel.style.marginRight = '0';
+          panel.style.gridColumn = String(index + 1);
+        });
+
+        const mvcPanel = panels[2];
+        const fitMvcSnapshots = () => {
+          const available = mvcPanel.clientWidth;
+          const availableHeight = mvcPanel.clientHeight;
+          let inner = mvcPanel.querySelector(':scope > [data-codex-mvc-inner]');
+          if (!inner) {
+            inner = document.createElement('div');
+            inner.setAttribute('data-codex-mvc-inner', 'true');
+            while (mvcPanel.firstChild) inner.appendChild(mvcPanel.firstChild);
+            mvcPanel.appendChild(inner);
+          }
+
+          inner.style.transform = '';
+          inner.style.width = '100%';
+          inner.style.height = '100%';
+          inner.style.maxWidth = 'none';
+
+          const widest = Math.max(
+            inner.scrollWidth,
+            inner.getBoundingClientRect().width,
+            0
+          );
+          const rightEdge = Math.max(
+            ...[...inner.querySelectorAll('*'), inner].map((element) => element.getBoundingClientRect().right),
+            0
+          );
+          const leftEdge = inner.getBoundingClientRect().left;
+          const visualWidth = Math.max(widest, rightEdge - leftEdge);
+          const widthScale = visualWidth > 0 && available > 0 ? available / visualWidth : 1;
+          const tallest = Math.max(inner.scrollHeight, inner.getBoundingClientRect().height, 0);
+          const heightScale = tallest > availableHeight && availableHeight > 0 ? availableHeight / tallest : 1;
+          const scale = 1;
+
+          mvcPanel.style.setProperty('--codex-mvc-scale', scale);
+          mvcPanel.style.height = '';
+          inner.style.transformOrigin = 'top left';
+          inner.style.transform = '';
+          inner.style.width = '';
+          inner.style.height = '';
+          inner.style.maxWidth = 'none';
+        };
+
+        fitMvcSnapshots();
+        requestAnimationFrame(fitMvcSnapshots);
+      };
 
       window.addEventListener('load', applyBottomPanelLayout);
       window.addEventListener('resize', applyBottomPanelLayout);

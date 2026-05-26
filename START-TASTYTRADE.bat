@@ -1,39 +1,25 @@
 @echo off
-title SPX GEX Dashboard — TastyTrade
-chcp 65001 >nul
-
-echo.
-echo  SPX GEX Dashboard — TastyTrade Edition
-echo  ========================================
-echo.
-
+title SPX GEX Dashboard Launcher
 cd /d "%~dp0"
 
-if not exist node_modules\ws (
-    echo  Installing dependencies...
-    npm install
-    echo.
-)
+echo Starting SPX GEX Dashboard...
+echo Dashboard: http://localhost:8080/
+echo Proxy API:  http://localhost:3001/proxy/api/status
+echo.
 
-REM Kill any existing node processes on port 3001 and 8080
-echo  Cleaning up existing processes...
-taskkill /F /IM node.exe 2>nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3001"') do taskkill /PID %%a /F >nul 2>nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8080"') do taskkill /PID %%a /F >nul 2>nul
 
-timeout /t 1 /nobreak >nul
-
-echo  Starting proxy on port 3001...
-start "TT Proxy :3001" node proxy-tastytrade.js
-
-echo  Waiting for proxy to start...
-timeout /t 3 /nobreak >nul
-
-echo  Starting dashboard on port 8080...
-start "Dashboard :8080" node serve.js
+taskkill /F /FI "WINDOWTITLE eq Dashboard :8080*" >nul 2>nul
+taskkill /F /FI "WINDOWTITLE eq TT Proxy :3001*" >nul 2>nul
 
 timeout /t 2 /nobreak >nul
 
-echo  Opening browser...
-start "" http://localhost:8080
+start "TT Proxy :3001" cmd /k "cd /d ""%~dp0"" && node proxy-tastytrade.js"
 
-echo.
-echo  Both windows are open. Close them to stop the services.
+start "Dashboard :8080" cmd /k "cd /d ""%~dp0"" && node dashboard-server.js"
+
+timeout /t 5 /nobreak >nul
+start "" "http://localhost:8080/"
+
+echo Started. Use http://localhost:8080/ for the dashboard.

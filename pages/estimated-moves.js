@@ -168,6 +168,9 @@ window.setEstimatedMovePeriod = function(period){
   EM.activePeriod=period;
   EM.updatePeriodChrome();
   EM.updateExpPickerVisibility();
+  const body=document.getElementById('em-table-body');
+  const hasData=body && body.querySelector('td[style*="color:#e8edf5"]');
+  if(hasData) window.refreshEstimatedMoves();
 };
 
 window.onWeeklyExpChange = function(val){ EM.weeklyExpOverride=val; };
@@ -183,20 +186,6 @@ window.refreshEstimatedMoves = async function(){
   if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570">Loading...</td></tr>';
   try{
     if(!window.API?.isReady?.()) await new Promise(resolve=>window.addEventListener('api-ready', resolve, { once:true }));
-    
-    // Fetch expirations on first click
-    if(!EM.knownExpirations.length){
-      const chainSymbol=EM.CHAIN_SYMBOL['SPX'] || 'SPX';
-      const ch=await fetch(`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSymbol)}`).then(r=>r.ok?r.json():{options:[]}).catch(()=>({options:[]}));
-      const opts=EM.normalizeOptions(ch);
-      const chainExps=[...new Set(opts.map(o=>o.expiration))].filter(e=>new Date(e+'T16:00:00')>=new Date()).sort();
-      if(chainExps.length){ 
-        EM.knownExpirations=chainExps;
-        EM.populateExpDropdown('em-weekly-exp-select', EM.knownExpirations);
-        EM.populateExpDropdown('em-monthly-exp-select', EM.knownExpirations);
-        EM.updateExpPickerVisibility();
-      }
-    }
     
     const settled=[];
     for(let i=0;i<EM.SYMBOLS.length;i+=4){

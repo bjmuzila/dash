@@ -7,10 +7,10 @@
     <!-- TAB BAR -->
     <div id="gex-level-bar" style="display:flex;align-items:center;gap:6px;padding:4px 10px;background:#0a0f16;border-bottom:1px solid #1a2a3a;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto">
 
-      <!-- GEX Chart / History toggle -->
+      <!-- GEX Chart / Flow toggle -->
       <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
         <button id="ovtab-chart" onclick="setOVTab('chart')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-weight:700;font-family:Arial">GEX Chart</button>
-        <button id="ovtab-history" onclick="setOVTab('history')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-weight:700;font-family:Arial">GEX History</button>
+        <button id="ovtab-bzila" onclick="setOVTab('bzila')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-weight:700;font-family:Arial">Bzila Flow</button>
       </div>
 
       <span style="color:#1a2a3a;flex-shrink:0">|</span>
@@ -36,12 +36,28 @@
 
       <span style="color:#1a2a3a;flex-shrink:0">|</span>
 
+      <!-- DEX overlay toggle + mode switcher -->
+      <button id="ov-dex-toggle" onclick="toggleOverviewDEX(this)" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ Net DEX</button>
+      <div id="ov-dex-mode-pills" style="display:none;flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+        <button id="ov-dex-btn-net" onclick="setOvDEXMode('net')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#1a2a3a;color:#a0d4ff;cursor:pointer;font-family:Arial;font-weight:700">Net DEX</button>
+        <button id="ov-dex-btn-cum" onclick="setOvDEXMode('cum')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Cum DEX</button>
+      </div>
+
+      <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
       <!-- GEX Levels inline -->
       <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:2px">
         <span style="color:#3a5570;font-size:9px;white-space:nowrap">Call Wall <b id="ov-callwall" style="color:#00e676">&#x2014;</b></span>
         <span style="color:#3a5570;font-size:9px;white-space:nowrap">Put Wall <b id="ov-putwall" style="color:#ff4757">&#x2014;</b></span>
         <span style="color:#3a5570;font-size:9px;white-space:nowrap">GEX Flip <b id="ov-flip" style="color:#ffb300">&#x2014;</b></span>
         <span style="color:#3a5570;font-size:9px;white-space:nowrap">Net GEX <b id="ov-netgex" style="color:#fff">&#x2014;</b></span>
+      </div>
+
+      <!-- Share -->
+      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0;margin-left:auto">
+        <button id="gex-copy-shot-btn" onclick="copyActiveGexChartScreenshot()" title="Copy active GEX chart screenshot" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY SHOT</button>
+        <button id="gex-share-x-btn" onclick="shareActiveGexChart('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+        <button id="gex-share-discord-btn" onclick="shareActiveGexChart('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
       </div>
 
     </div>
@@ -80,6 +96,9 @@
         min-height: 0 !important;
         font-variant-numeric: tabular-nums !important;
       }
+      #stats-body[data-loading="1"] .esl-row {
+        visibility: hidden !important;
+      }
       .hm-bar-cell {
         height: 18px !important;
         font-family: 'Courier New', Courier, monospace !important;
@@ -111,22 +130,8 @@
         </div>
       </div>
 
-      <!-- GEX History view -->
-      <div id="ov-history-view" style="display:none;flex:1;min-height:0;overflow:hidden;flex-direction:column;background:#05080d">
-        <div style="padding:5px 12px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap">
-          <span style="font-size:9px;color:#3a5570;letter-spacing:.1em;text-transform:uppercase">Top 10 · 1-min · right=Δ1min · hover for details · click legend to toggle</span>
-          <div style="display:flex;gap:3px;background:#0d1520;border-radius:2px;padding:2px;margin-left:8px">
-            <button id="ghist-net" onclick="setGexHistoryMode('net')" style="font-size:9px;padding:2px 7px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial">OI+Vol</button>
-            <button id="ghist-vol" onclick="setGexHistoryMode('vol')" style="font-size:9px;padding:2px 7px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial">Vol Only</button>
-          </div>
-          <span id="gex-history-ts" style="font-size:9px;color:#2a4060;margin-left:auto"></span>
-          <button onclick="clearGexHistory()" style="font-size:9px;padding:1px 7px;background:transparent;border:1px solid #1e3050;color:#3a5570;border-radius:2px;cursor:pointer;font-family:Arial">Clear</button>
-        </div>
-        <div style="flex:1;min-height:0;position:relative;overflow:hidden">
-          <canvas id="gex-history-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-        </div>
-        <div id="gex-history-legend" style="padding:6px 12px;background:#070c14;border-top:1px solid #1a2a3a;display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0"></div>
-      </div>
+<!-- Bzila Flow view -->
+      <div id="ov-bzila-view" style="display:none;flex:1;min-height:0;overflow:hidden;background:#0a0f16"></div>
 
     </div><!-- /main content -->
 
@@ -137,6 +142,11 @@
       <div id="panel-calendar" style="flex:1;display:flex;flex-direction:column;border-right:1px solid #1a2a3a;overflow:hidden">
         <div style="padding:6px 12px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:8px;flex-shrink:0">
           <span style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#3a5570;font-weight:700">📅 Economic Calendar</span>
+          <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0;margin-left:auto">
+            <button id="cal-copy-shot-btn" type="button" onclick="copyEconCalendarScreenshot()" title="Copy calendar screenshot" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;line-height:1">COPY<br>SHOT</button>
+            <button id="cal-share-x-btn" type="button" onclick="shareEconCalendar('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+            <button id="cal-share-discord-btn" type="button" onclick="shareEconCalendar('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+          </div>
         </div>
         <div id="calendar-body" style="flex:1;overflow-y:auto;padding:4px 8px 8px;font-size:11px;color:#2a4060">
           <span style="color:#1e3050;font-size:11px">Loading…</span>
@@ -150,17 +160,98 @@
           <span style="margin-left:auto;font-size:8px;color:#3a5570">ES</span>
           <span id="stats-es-price-hdr" style="font-size:11px;font-weight:700;color:#00e5ff;font-variant-numeric:tabular-nums">—</span>
         </div>
-        <div id="stats-body" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#04070c;position:relative;min-height:0">
+        <script>
+          if (window.esStatsLoaded && typeof window.fetchOverviewESStats === 'function') {
+            window.fetchOverviewESStats();
+          }
+          if (!window.esStatsLoaded) {
+            window.esStatsLoaded = true;
+            const SHEET_ID = '1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg';
+            const statsLoading = document.getElementById('stats-loading');
+            if (statsLoading) statsLoading.style.display = 'flex';
+            ['st-nolong-hi','st-est-up','st-vah','st-vpoc','st-mid','st-est-dn','st-val','st-noshort-hi',
+             'st-nolong-hi-dist','st-est-up-dist','st-vah-dist','st-vpoc-dist','st-mid-dist','st-est-dn-dist','st-val-dist','st-noshort-hi-dist']
+              .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = ''; });
+            
+            function applyOverviewESStats(stats) {
+              const map = {
+                'st-nolong-hi': 'NO LONG',
+                'st-est-up': 'UP',
+                'st-vah': 'VAH',
+                'st-vpoc': 'VPOC',
+                'st-mid': 'MID',
+                'st-est-dn': 'DOWN',
+                'st-val': 'VAL',
+                'st-noshort-hi': 'NO SHORT'
+              };
+              Object.entries(map).forEach(([id, key]) => {
+                const el = document.getElementById(id);
+                if (el && stats[key]) el.textContent = stats[key];
+              });
+              const body = document.getElementById('stats-body');
+              if (body) body.removeAttribute('data-loading');
+              const loading = document.getElementById('stats-loading');
+              if (loading) loading.style.display = 'none';
+              if (typeof window.updateStatsPanel === 'function') window.updateStatsPanel();
+            }
+
+            async function fetchESStats() {
+              try {
+                const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
+                const response = await fetch(url);
+                const text = await response.text();
+                const jsonText = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?\s*$/)?.[1]
+                  || text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+                const json = JSON.parse(jsonText);
+                
+                if (!json.table) return;
+                
+                const stats = {};
+                const fmtESStat = value => {
+                  const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+                  return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : value;
+                };
+                for (let row of json.table.rows) {
+                  const label = row.c[0]?.v;
+                  const value = row.c[1]?.v;
+                  if (label && value) {
+                    stats[label.toString().trim().toUpperCase()] = fmtESStat(value);
+                  }
+                }
+                
+                window.esStatsCache = stats;
+                window.esStatsReady = true;
+                applyOverviewESStats(stats);
+                if (typeof window.updateStatsDebug === 'function') window.updateStatsDebug('inline sheet fetched');
+              } catch (err) {
+                if (typeof window.updateStatsDebug === 'function') window.updateStatsDebug('inline fetch error: ' + (err && err.message ? err.message : err));
+                console.error('Error fetching ES stats:', err);
+              }
+            }
+            window.fetchOverviewESStats = fetchESStats;
+            
+            // Delay fetch to after page load
+            window.addEventListener('load', function() {
+              setTimeout(fetchESStats, 500);
+              setInterval(fetchESStats, 300000);
+            });
+            
+            // Also run on this script's own load
+            setTimeout(fetchESStats, 100);
+          }
+        </script>
+        <div id="stats-body" data-loading="1" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#04070c;position:relative;min-height:0">
 
         <!-- Vertical spine line — positioned at the dot column (right edge of label column) -->
         <div id="esl-spine" style="position:absolute;left:0;top:0;bottom:0;width:1px;background:#0d1f30;pointer-events:none;z-index:0"></div>
+        <div id="stats-loading" style="position:absolute;inset:0;display:flex;align-items:flex-start;padding:4px 8px 8px;background:#04070c;color:#1e3050;font-size:11px;z-index:5">Loadingâ€¦</div>
 
         <!-- NO LONG ZONE -->
         <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">NO LONG</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff4757;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff6b6b;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-nolong-hi" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-nolong-hi-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -172,7 +263,7 @@
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;white-space:nowrap">↑ WEEKLY EST</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #1a4a2a;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e676;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-est-up" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-est-up-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -202,7 +293,7 @@
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VAH</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #1e3050;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e5ff;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-vah" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-vah-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -214,7 +305,7 @@
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VPOC</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #1a3a5a;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ffb300;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-vpoc" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-vpoc-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -226,7 +317,7 @@
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">MID</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #3a2a00;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e5ff;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-mid" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-mid-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -238,7 +329,7 @@
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;white-space:nowrap">↓ WEEKLY EST</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #4a1a1a;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff4757;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-est-dn" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-est-dn-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -250,7 +341,7 @@
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
             <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VAL</div>
           </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #1e3050;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff9060;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-val" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-val-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
@@ -270,10 +361,142 @@
         </div>
 
       </div><!-- /stats-body -->
+      <pre id="stats-debug-terminal" style="display:none;margin:0;height:86px;overflow:auto;background:#02050a;border-top:1px solid #1a2a3a;color:#29b6f6;font-size:9px;line-height:1.25;font-family:'Courier New',monospace;padding:5px 7px;white-space:pre-wrap;flex-shrink:0">waiting for ES stats...</pre>
       </div>
 
-      <!-- CHART PANEL — intentionally blank -->
-      <div id="panel-livefeed" style="flex:1;min-width:0;background:#05070a"></div>
+      <!-- ES STATS LADDER PANEL -->
+      <div style="display:none">
+        <!-- ES Header -->
+        <div style="padding:8px;background:#0a0f16;border-bottom:1px solid #1a2a3a;text-align:center">
+          <div style="font-size:12px;font-weight:700;color:#00e5ff;letter-spacing:.1em">ES</div>
+        </div>
+
+        <!-- WEEKLY ESTIMATED MOVE -->
+        <div style="padding:6px;border-bottom:1px solid #0a1420">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#3a5570;margin-bottom:4px">Weekly Est Move</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#3a5570;text-transform:uppercase;font-weight:700">Up</div>
+              <div id="es-est-up" style="font-size:11px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">7590</div>
+            </div>
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#3a5570;text-transform:uppercase;font-weight:700">Down</div>
+              <div id="es-est-dn" style="font-size:11px;font-weight:700;color:#ff4757;font-variant-numeric:tabular-nums">7379</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- WEEKLY VOLUME PROFILE -->
+        <div style="padding:6px;border-bottom:1px solid #0a1420">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#3a5570;margin-bottom:4px">Volume Profile</div>
+          <div style="display:flex;flex-direction:column;gap:3px;font-size:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#3a5570;font-weight:700">VAH</span>
+              <span id="es-vah" style="color:#fff;font-variant-numeric:tabular-nums">7483</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#3a5570;font-weight:700">VPOC</span>
+              <span id="es-vpoc" style="color:#fff;font-variant-numeric:tabular-nums">7432</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#3a5570;font-weight:700">VAL</span>
+              <span id="es-val" style="color:#fff;font-variant-numeric:tabular-nums">7398</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#3a5570;font-weight:700">MID</span>
+              <span id="es-mid" style="color:#fff;font-variant-numeric:tabular-nums">7452</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- NO SHORT/LONG ZONES -->
+        <div style="padding:6px">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#3a5570;margin-bottom:4px">Short/Long Zones</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#3a5570;text-transform:uppercase;font-weight:700">No Long</div>
+              <div id="es-nolong" style="font-size:11px;font-weight:700;color:#ff9060;font-variant-numeric:tabular-nums">—</div>
+            </div>
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#3a5570;text-transform:uppercase;font-weight:700">No Short</div>
+              <div id="es-noshort" style="font-size:11px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">7284</div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /ES stats -->
+
+      <!-- MVC SNAPSHOT DASHBOARD -->
+      <div id="panel-mvc" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid #1a2a3a">
+        <div style="padding:5px 10px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:8px;flex-shrink:0;position:relative">
+          <span style="font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#3a5570;font-weight:700">MVC SNAPSHOTS</span>
+          <span style="position:absolute;left:50%;transform:translateX(-50%);font-size:9px;font-weight:700;color:#1e3a52;letter-spacing:.1em">@bzilatrades</span>
+          <div style="margin-left:auto;display:flex;gap:4px">
+            <button onclick="captureMVCPanel()" style="font-size:9px;padding:2px 8px;background:#0d3a5c;border:1px solid #00b4d8;color:#00e5ff;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700">COPY STATS</button>
+          </div>
+        </div>
+        <div id="mvc-body" style="flex:1;overflow:hidden;padding:8px;display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:1fr 1fr;gap:8px">
+          
+          <!-- CURRENT MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">VS VALUE AREA</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-current" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- 9:45 MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">9:45 MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-945" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- 10:30 MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">10:30 MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-1030" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- 12:00 MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">12:00 MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-1200" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- SPX MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">SPX MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-spx" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- Market Quality Score Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #00b4d8;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">MARKET QUALITY SCORE</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-quality" style="font-size:16px;font-weight:700;color:#00e5ff;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- Initial Balance Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden;grid-column:span 4">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">INITIAL BALANCE</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-ib" style="font-size:16px;font-weight:400;color:#7ab8ff">—</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+
 
     </div><!-- /bottom-panels -->
 
@@ -284,9 +507,13 @@
   <div id="options-ladder" style="width:530px;min-width:160px;max-width:900px;flex-shrink:0;overflow-y:auto;background:#05080d;display:flex;flex-direction:column;border-left:1px solid #1a2a3a">
     <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#0a0f16;border-bottom:1px solid #1a2a3a;position:sticky;top:0;z-index:11">
       <span style="font-size:11px;color:#3a5570;text-transform:uppercase">Intensity</span>
-      <input type="range" id="ladder-intensity" min="1" max="20" value="10" step="1" style="flex:1;height:3px;accent-color:#00e5ff" oninput="setLadderIntensity(this.value)">
-      <span id="ladder-intensity-val" style="font-size:12px;color:#00e5ff;font-weight:700;min-width:28px">1.0×</span>
-      <span id="gex-snapshot-age" style="font-size:10px;color:#3a5570"></span>
+      <input type="range" id="ladder-intensity" min="1" max="20" value="7" step="1" style="flex:1;height:3px;accent-color:#00e5ff" oninput="setLadderIntensity(this.value)">
+      <span id="ladder-intensity-val" style="font-size:12px;color:#00e5ff;font-weight:700;min-width:28px">0.7×</span>
+      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+        <button id="hm-copy-shot-btn" type="button" onclick="copyHeatmapScreenshot()" title="Copy selected heatmap/table screenshot" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;line-height:1">COPY<br>SHOT</button>
+        <button id="hm-share-x-btn" type="button" onclick="shareHeatmapShot('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+        <button id="hm-share-discord-btn" type="button" onclick="shareHeatmapShot('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+      </div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;background:#070c14;border-bottom:1px solid #1a2a3a;padding:3px 6px;position:sticky;top:31px;z-index:12">
       <div style="display:flex;gap:2px;background:#040810;border-radius:3px;padding:2px;border:1px solid #1a2a3a">
@@ -300,13 +527,8 @@
       <div style="padding:5px 4px;font-size:10px;color:#7ab8ff;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">Net GEX</div>
       <div style="padding:5px 4px;font-size:10px;color:#7ab8ff;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">Vol Only GEX</div>
       <div style="padding:5px 4px;font-size:10px;color:#7ab8ff;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">DEX</div>
-      <div style="padding:3px 4px;font-size:10px;color:#ffb300;text-align:center;font-weight:700;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:4px">
-        <span>Change of Net GEX</span>
-        <select id="gex-change-window-toolbar" onchange="setGEXChangeWindow(this.value)" style="font-size:10px;padding:1px 3px;background:#111a24;color:#ffb300;border:1px solid #2a4060;border-radius:2px;font-family:Arial;font-weight:700">
-          <option value="5" selected>5 min</option>
-          <option value="15">15 min</option>
-          <option value="30">30 min</option>
-        </select>
+      <div style="padding:5px 4px;font-size:10px;color:#ffb300;text-align:center;font-weight:700;text-transform:uppercase">
+        Change of Net GEX
       </div>
     </div>
     <div id="ladder-header" style="display:none;grid-template-columns:90px 72px 68px 76px 76px 76px;background:#0a0f16;border-bottom:2px solid #1a2a3a;position:sticky;top:62px;z-index:10">

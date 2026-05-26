@@ -1,3 +1,8 @@
+<script>
+window.addEventListener('api-ready', () => {
+  if(window.init_database) window.init_database();
+});
+</script>
 <!-- PAGE: ESTIMATED MOVES -->
 <div id="page-database" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
   <div style="padding:7px 16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px;justify-content:space-between">
@@ -10,7 +15,7 @@
         <button class="em-period-tab" data-period="monthly" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('monthly')" style="background:#0a1628;border:1px solid #1e3a5f;color:#5a7a99;font-size:12px;padding:6px 10px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Monthly</button>
       </div>
       <!-- Weekly expiration picker -->
-      <div id="em-weekly-exp-wrap" style="display:flex;align-items:center;gap:6px;margin-left:12px">
+      <div id="em-weekly-exp-wrap" style="display:none;align-items:center;gap:6px;margin-left:12px">
         <span style="font-size:11px;color:#3a5570;letter-spacing:.12em;text-transform:uppercase;font-weight:700">Weekly Exp</span>
         <select id="em-weekly-exp-select" onchange="window.onWeeklyExpChange && window.onWeeklyExpChange(this.value)"
           style="background:#04070c;border:1px solid #1e3a5f;color:#7ab8ff;font-size:12px;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em;outline:none">
@@ -18,7 +23,7 @@
         </select>
       </div>
       <!-- Monthly expiration picker -->
-      <div id="em-monthly-exp-wrap" style="display:flex;align-items:center;gap:6px;margin-left:12px">
+      <div id="em-monthly-exp-wrap" style="display:none;align-items:center;gap:6px;margin-left:12px">
         <span style="font-size:11px;color:#3a5570;letter-spacing:.12em;text-transform:uppercase;font-weight:700">Monthly Exp</span>
         <select id="em-monthly-exp-select" onchange="window.onMonthlyExpChange && window.onMonthlyExpChange(this.value)"
           style="background:#04070c;border:1px solid #1e3a5f;color:#7ab8ff;font-size:12px;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em;outline:none">
@@ -301,6 +306,9 @@
     activePeriod=period;
     updatePeriodChrome();
     updateExpPickerVisibility();
+    const body=document.getElementById('em-table-body');
+    const hasData=body && body.querySelector('td[style*="color:#e8edf5"]');
+    if(hasData) window.refreshEstimatedMoves();
   };
   window.refreshEstimatedMoves=async function(){
     if(refreshBusy) return;
@@ -309,7 +317,10 @@
     const body=document.getElementById('em-table-body');
     if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570;letter-spacing:.12em;text-transform:uppercase">Loading estimated moves...</td></tr>';
     try{
-      if(!window.API?.isReady?.()) await new Promise(resolve=>window.addEventListener('api-ready', resolve, { once:true }));
+      if(!window.API?.isReady?.()) await new Promise(resolve=>{
+        window.addEventListener('api-ready', resolve, { once:true });
+        setTimeout(resolve, 8000);
+      });
       // Fetch in batches of 4 with delay to avoid dxLink rate limit
       const settled=[];
       for(let i=0;i<SYMBOLS.length;i+=4){
