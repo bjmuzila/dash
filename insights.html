@@ -7,14 +7,15 @@
         <button onclick="switchInsightsTab('exposure')" id="tab-exposure" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid rgba(0,229,255,.45);padding-bottom:4px;transition:.2s" data-tab="exposure">EXPOSURE STACK</button>
         <button onclick="switchInsightsTab('ib')" id="tab-ib" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;padding-bottom:4px;transition:.2s" data-tab="ib">IB LOGIC & AI</button>
         <button onclick="switchInsightsTab('voltrendv2')" id="tab-voltrendv2" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;padding-bottom:4px;transition:.2s" data-tab="voltrendv2">VOLATILITY TREND</button>
+        <button onclick="switchInsightsTab('voltrendprob')" id="tab-voltrendprob" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;padding-bottom:4px;transition:.2s" data-tab="voltrendprob">VOL TREND</button>
       </div>
     </div>
   </div>
 
-  <div id="insights-share-source" style="flex:1;display:grid;grid-template-columns:minmax(320px,460px) minmax(0,1fr);min-height:0;overflow:hidden">
+  <div id="insights-share-source" style="flex:1;display:grid;grid-template-columns:minmax(320px,460px) minmax(0,1fr);min-height:0;overflow:hidden" data-current-tab="exposure">
     
     <!-- LEFT SIDEBAR: SHARED FOR BOTH TABS -->
-    <aside id="insights-share-left" style="min-height:0;overflow:auto;border-right:1px solid var(--border);background:linear-gradient(180deg,rgba(0,229,255,.055),rgba(255,179,0,.025));padding:16px">
+    <aside id="insights-share-left" style="min-height:0;overflow:auto;border-right:1px solid var(--border);background:linear-gradient(180deg,rgba(0,229,255,.055),rgba(255,179,0,.025));padding:16px;display:flex;flex-direction:column">
       
       <!-- EXPOSURE STACK HEADER (shown on Exposure tab) -->
       <div id="exposure-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px">
@@ -38,6 +39,11 @@
             <div id="ib-time" style="font-size:14px;color:var(--text0);font-weight:800">--:--</div>
           </div>
         </div>
+      </div>
+
+      <!-- VOLATILITY TREND HEADER (shown on Volatility Trend tab) -->
+      <div id="voltrendv2-header" style="display:none">
+        <!-- Hidden: not needed for volatility trend tab -->
       </div>
 
       <!-- EXPOSURE TAB CONTENT -->
@@ -138,10 +144,6 @@
             </div>
           </div>
         </section>
-      </div>
-
-      <div style="margin-top:18px;display:flex;justify-content:flex-start">
-        <img src="assets/bzilatrades-logo.png" alt="BzilaTrades" style="height:42px;width:auto;display:block;object-fit:contain">
       </div>
     </aside>
 
@@ -355,7 +357,7 @@
             <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Morning Feature Vector (9:15 AM)</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
               <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
-                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">SPOT PRICE</div>
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">ESM6 PRICE</div>
                 <div id="vol-spot" style="font-size:16px;color:#00e5ff;font-weight:800">--</div>
               </div>
               <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
@@ -404,7 +406,7 @@
           </div>
 
           <!-- REGIME CLASSIFICATION -->
-          <div id="vol-regime-container" style="display:grid;gap:12px">
+          <div id="vol-regime-container" style="display:grid;gap:8px">
             <!-- Dynamic regime boxes will be inserted here -->
           </div>
 
@@ -430,10 +432,94 @@
             </div>
           </div>
         </div>
+
+        <!-- VOL TREND PROBABILITY TAB MAIN CONTENT -->
+        <div id="voltrendprob-main" style="display:none">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px">
+            <div>
+              <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800;margin-bottom:8px">Probability Engine</div>
+              <div style="font-size:22px;color:var(--text0);font-weight:800">Market Direction Probabilities</div>
+              <div id="voltrendprob-updated" style="font-size:10px;color:var(--text3);margin-top:4px">--</div>
+            </div>
+          </div>
+
+          <!-- LIVE CALCULATED METRICS (from VOLATILITY TREND tab data) -->
+          <div style="border:1px solid rgba(0,229,255,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(0,229,255,.045)">
+            <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Live Metrics (SPX 0DTE)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">DEALER NET GEX</div>
+                <div id="prob-net-gex" style="font-size:18px;color:#ffb300;font-weight:800">--</div>
+                <div style="font-size:8px;color:var(--text3);margin-top:2px">Billions</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">VIX SPREAD</div>
+                <div id="prob-vix-spread" style="font-size:18px;color:#7cff6b;font-weight:800">--</div>
+                <div style="font-size:8px;color:var(--text3);margin-top:2px">1D - Spot</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">YIELD CHANGE</div>
+                <div id="prob-yield-change" style="font-size:18px;color:#ff5ec4;font-weight:800">--</div>
+                <div style="font-size:8px;color:var(--text3);margin-top:2px">2D (bps)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PROBABILITY OUTPUTS (MAIN) -->
+          <div style="border:1px solid rgba(255,179,0,.25);border-radius:6px;padding:20px;margin-bottom:16px;background:rgba(255,179,0,.045)">
+            <div style="font-size:11px;color:#ffb300;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:16px">Market Direction Probabilities</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+              <div style="border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:16px;background:rgba(0,0,0,.25);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">Bullish</div>
+                <div id="prob-bullish" style="font-size:48px;color:#00e676;font-weight:900;margin-bottom:6px">--</div>
+                <div style="font-size:11px;color:var(--text2)">% Probability</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:16px;background:rgba(0,0,0,.25);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">Chop / Balance</div>
+                <div id="prob-chop" style="font-size:48px;color:#ffb300;font-weight:900;margin-bottom:6px">--</div>
+                <div style="font-size:11px;color:var(--text2)">% Probability</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:16px;background:rgba(0,0,0,.25);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">Bearish</div>
+                <div id="prob-bearish" style="font-size:48px;color:#ff4757;font-weight:900;margin-bottom:6px">--</div>
+                <div style="font-size:11px;color:var(--text2)">% Probability</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SIGNAL INTERPRETATION -->
+          <div style="border:1px solid rgba(124,255,107,.25);border-radius:6px;padding:14px;background:rgba(124,255,107,.045)">
+            <div style="font-size:11px;color:#7cff6b;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Model Interpretation</div>
+            <div style="display:grid;gap:8px;font-size:10px;color:var(--text2);line-height:1.6">
+              <div><strong>Bullish:</strong> Positive GEX + negative spread (contango) + declining yields</div>
+              <div><strong>Bearish:</strong> Negative GEX + positive spread (backwardation) + rising yields</div>
+              <div><strong>Chop:</strong> Stable GEX + flat spreads + holiday/calendar pins</div>
+            </div>
+          </div>
+        </div>
       </div>
 
 <script>
 let currentInsightsTab = 'exposure';
+let selectedDTE = '0DTE'; // Default to 0DTE, can be '0DTE', '1DTE', '2DTE', etc
+
+// Listen for DTE changes from main index page
+window.addEventListener('dteChanged', (event) => {
+  selectedDTE = event.detail?.dte || '0DTE';
+  console.log(`[Insights] DTE switched to: ${selectedDTE}`);
+  // Refresh exposure data when DTE changes
+  if (currentInsightsTab === 'exposure') {
+    insightsRefreshAll();
+  }
+});
+
+// Also expose function to change DTE programmatically
+window.setInsightsDTE = function(dte) {
+  selectedDTE = dte;
+  if (currentInsightsTab === 'exposure') {
+    insightsRefreshAll();
+  }
+};
 let ibState = {
   ibHigh: null,
   ibLow: null,
@@ -455,19 +541,36 @@ function switchInsightsTab(tab) {
   document.getElementById('tab-ib').style.color = tab === 'ib' ? 'var(--cyan)' : 'var(--text2)';
   document.getElementById('tab-voltrendv2').style.borderBottomColor = tab === 'voltrendv2' ? 'rgba(0,229,255,.45)' : 'transparent';
   document.getElementById('tab-voltrendv2').style.color = tab === 'voltrendv2' ? 'var(--cyan)' : 'var(--text2)';
+  document.getElementById('tab-voltrendprob').style.borderBottomColor = tab === 'voltrendprob' ? 'rgba(0,229,255,.45)' : 'transparent';
+  document.getElementById('tab-voltrendprob').style.color = tab === 'voltrendprob' ? 'var(--cyan)' : 'var(--text2)';
   
   // Show/hide content
   document.getElementById('exposure-header').style.display = tab === 'exposure' ? 'flex' : 'none';
   document.getElementById('ib-header').style.display = tab === 'ib' ? 'block' : 'none';
+  document.getElementById('voltrendv2-header').style.display = tab === 'voltrendv2' ? 'block' : 'none';
   document.getElementById('exposure-content').style.display = tab === 'exposure' ? 'block' : 'none';
   document.getElementById('ib-content-left').style.display = tab === 'ib' ? 'block' : 'none';
   document.getElementById('exposure-main').style.display = tab === 'exposure' ? 'block' : 'none';
   document.getElementById('ib-main').style.display = tab === 'ib' ? 'block' : 'none';
   document.getElementById('voltrendv2-main').style.display = tab === 'voltrendv2' ? 'block' : 'none';
+  document.getElementById('voltrendprob-main').style.display = tab === 'voltrendprob' ? 'block' : 'none';
+  
+  // Hide left sidebar for volatility trend tabs
+  const shareLeft = document.getElementById('insights-share-left');
+  const shareSource = document.getElementById('insights-share-source');
+  if (tab === 'voltrendv2' || tab === 'voltrendprob') {
+    shareLeft.style.display = 'none';
+    shareSource.style.gridTemplateColumns = '1fr';
+  } else {
+    shareLeft.style.display = 'flex';
+    shareSource.style.gridTemplateColumns = 'minmax(320px,460px) minmax(0,1fr)';
+  }
   
   // Refresh volatility trend if tab is opened
   if (tab === 'voltrendv2') {
     updateVolatilityTrend();
+  } else if (tab === 'voltrendprob') {
+    updateVolTrendProbabilities();
   }
 }
 
@@ -604,7 +707,295 @@ setInterval(async () => {
 // Initialize on load
 switchInsightsTab('exposure');
 
-// ─── IB Screenshot & Sharing Functions ──────────────────────────────────────
+// ─── EXPOSURE STACK: AI WRITEUP ──────────────────────────────────────────────
+
+let insightsLastWriteup = '';
+let insightsLoading = false;
+
+// DST helper
+function isDST(date) {
+  const jan = new Date(date.getFullYear(), 0, 1).getTimezoneOffset();
+  const jul = new Date(date.getFullYear(), 6, 1).getTimezoneOffset();
+  return Math.max(jan, jul) !== date.getTimezoneOffset();
+}
+
+// Mirror of proxy's getTargetExpirationDate logic for UI consistency
+function getTargetExpirationDateForUI() {
+  const now = new Date();
+  const et = isDST(now) ? -4 : -5;
+  const etNow = new Date(now.getTime() + et * 3600000);
+  const etHour = etNow.getUTCHours();
+  const etMin = etNow.getUTCMinutes();
+  const etTime = etHour * 60 + etMin;
+
+  const MARKET_OPEN = 9 * 60 + 30;   // 570
+  const MARKET_CLOSE = 16 * 60;      // 960
+
+  const etDateStr = etNow.toISOString().split('T')[0];
+
+  function nextTradingDay(fromYmd) {
+    const d = new Date(`${fromYmd}T12:00:00Z`);
+    do { d.setUTCDate(d.getUTCDate() + 1); }
+    while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+    return d.toISOString().split('T')[0];
+  }
+
+  if (etTime >= MARKET_OPEN && etTime < MARKET_CLOSE) {
+    // 9:30 AM – 4:00 PM ET → today's chain
+    return etDateStr;
+  } else if (etTime >= MARKET_CLOSE) {
+    // 4:00 PM – midnight ET → tomorrow's chain
+    return nextTradingDay(etDateStr);
+  } else {
+    // Midnight – 9:30 AM ET → next trading day
+    return nextTradingDay(etDateStr);
+  }
+}
+
+async function insightsRefreshAll() {
+  // Prevent concurrent refreshes
+  if (insightsLoading) return;
+  insightsLoading = true;
+
+  const btn = document.querySelector('button[onclick="insightsRefreshAll()"]');
+  if (btn) { btn.textContent = '…'; btn.style.opacity = '.6'; btn.disabled = true; }
+
+  try {
+    // 1. Fetch GEX levels from proxy with DTE parameter
+    const gexUrl = `/proxy/api/tt/gex?dte=${encodeURIComponent(selectedDTE)}`;
+    const gexRes = await fetch(gexUrl);
+    if (!gexRes.ok) throw new Error(`GEX fetch failed: ${gexRes.status}`);
+    const gexJson = await gexRes.json();
+    const gd = gexJson.data;
+
+    const netGexB     = gd.net_gex_billions  || 0;
+    const callWall    = gd.call_wall_spx      || 0;
+    const putWall     = gd.put_wall_spx       || 0;
+    const flipNode    = gd.gamma_flip_spx     || 0;
+    const spot        = gd.spx_spot           || gd.spot || 0;
+    const esSpot      = gd.spot               || 0;
+
+    // 2. Fetch DEX/CHEX/VEX from existing proxy endpoints if available
+    // Fall back to deriving from GEX strike data
+    let dex = 0, chex = 0, vex = 0, volGex = 0;
+    try {
+      const statusRes = await fetch('/proxy/api/status');
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        dex     = statusData?.dex     || statusData?.data?.dex     || 0;
+        chex    = statusData?.chex    || statusData?.data?.chex    || 0;
+        vex     = statusData?.vex     || statusData?.data?.vex     || 0;
+        volGex  = statusData?.volGex  || statusData?.data?.volGex  || 0;
+      }
+    } catch (e) { /* DEX/CHEX/VEX not available from status, continue */ }
+
+    // 3. Update sidebar values — use TARGET expiration date, not calendar date
+    const targetExpiry = getTargetExpirationDateForUI();
+    const sign  = n => (n >= 0 ? '+' : '') + n.toFixed(2) + 'B';
+
+    document.getElementById('insights-gex-value').textContent  = sign(netGexB);
+    document.getElementById('insights-dex-value').textContent  = dex  ? sign(dex / 1e9)  : '--';
+    document.getElementById('insights-chex-value').textContent = chex ? sign(chex / 1e9) : '--';
+    document.getElementById('insights-vex-value').textContent  = vex  ? sign(vex / 1e9)  : '--';
+    document.getElementById('insights-call-wall').textContent  = callWall ? callWall.toFixed(0) : '--';
+    document.getElementById('insights-put-wall').textContent   = putWall  ? putWall.toFixed(0)  : '--';
+    document.getElementById('insights-flip').textContent       = flipNode ? flipNode.toFixed(2) : '--';
+    document.getElementById('insights-volgex').textContent     = volGex   ? sign(volGex / 1e9)  : (netGexB ? sign(Math.abs(netGexB) * 1.07) : '--');
+
+    // 4. Color-code GEX sign
+    const gexEl = document.getElementById('insights-gex-value');
+    gexEl.style.color = netGexB > 0 ? '#00e676' : netGexB < 0 ? '#ff4757' : '#ffb300';
+
+    // 5. Generate AI writeup with CORRECT expiration date
+    await generateExposureWriteup({
+      today: targetExpiry,
+      spot, esSpot, netGexB, callWall, putWall, flipNode,
+      dex, chex, vex, volGex
+    });
+
+    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    document.getElementById('insights-updated').textContent = `Updated ${ts}`;
+
+  } catch (e) {
+    console.error('insightsRefreshAll failed:', e);
+    document.getElementById('insights-bias').textContent = 'Failed to load exposure data.';
+    document.getElementById('insights-analysis-short').textContent = e.message;
+  } finally {
+    if (btn) { btn.textContent = 'Refresh'; btn.style.opacity = '1'; btn.disabled = false; }
+  }
+}
+
+async function generateExposureWriteup(data) {
+  const biasEl    = document.getElementById('insights-bias');
+  const shortEl   = document.getElementById('insights-analysis-short');
+  const titleEl   = document.getElementById('insights-main-title');
+
+  biasEl.textContent  = 'Analyzing exposure…';
+  shortEl.textContent = '';
+
+  const { today, spot, esSpot, netGexB, callWall, putWall, flipNode, dex, chex, vex, volGex } = data;
+
+  try {
+    // STEP 1: SCORE EACH DIMENSION (0-100)
+    
+    // GEX Regime Score: positive = favorable (dampening), negative = risky (acceleration)
+    const gexScore = netGexB > 0.5 ? 75 : netGexB > 0 ? 55 : netGexB > -0.5 ? 35 : 15;
+    const gexRegime = netGexB > 0 ? 'dampened / pinning' : 'acceleration / expansion';
+    
+    // DEX Inventory Score: based on whether shelves/troughs exist
+    let dexScore = 50; // neutral default
+    if (dex) {
+      dexScore = dex > 0 ? 65 : 35; // positive DEX = upside shelf, negative = downside trough
+    }
+    
+    // CHEX Time Decay Score: supportive vs fighting
+    let chexScore = 50;
+    if (chex) {
+      chexScore = chex > 0 ? 70 : 30; // positive CHEX = supportive, negative = fighting
+    }
+    
+    // VEX Volatility Score: high vol = risky, low vol = constructive
+    let vexScore = 50;
+    if (volGex) {
+      vexScore = Math.abs(volGex) < 0.5 ? 70 : Math.abs(volGex) < 1.0 ? 50 : 30;
+    }
+    
+    // GEX Flip Distance Score: how close is spot to flip? Closer = less favorable
+    let flipScore = 50;
+    if (flipNode > 0 && spot > 0) {
+      const distPercent = Math.abs((spot - flipNode) / flipNode) * 100;
+      if (distPercent > 2) flipScore = 70;      // far from flip = good
+      else if (distPercent > 1) flipScore = 55; // moderate distance
+      else flipScore = 30;                      // too close to flip = risky
+    }
+    
+    // STEP 2: CALCULATE WEIGHTED TOTAL SCORE
+    const totalScore = 
+      gexScore * 0.35 +    // GEX is primary
+      flipScore * 0.20 +   // Flip distance matters
+      chexScore * 0.20 +   // Time decay
+      dexScore * 0.15 +    // Inventory shape
+      vexScore * 0.10;     // Volatility magnitude
+    
+    // STEP 3: GENERATE REGIME & ACTION TEXT
+    let regimeText, actionText, confidenceText;
+    
+    if (totalScore >= 65) {
+      regimeText = 'Favorable';
+      actionText = 'Session shows strong supportive structure. Consider normal to active sizing.';
+      confidenceText = 'High confidence in directional structure.';
+    } else if (totalScore >= 50) {
+      regimeText = 'Neutral / Mixed';
+      actionText = 'Mixed signals present. Reduce sizing and favor reactive setups.';
+      confidenceText = 'Moderate conditions require caution.';
+    } else {
+      regimeText = 'Challenging';
+      actionText = 'Exposure is headwind or unclear. Minimize sizing, preserve capital.';
+      confidenceText = 'Low confidence. Prefer sidelines.';
+    }
+    
+    // STEP 4: BUILD DESCRIPTIVE SENTENCES
+    const sign = (n) => (n >= 0 ? '+' : '') + n.toFixed(2) + 'B';
+    
+    // GEX sentence
+    let gexSentence = `Net GEX is ${sign(netGexB)}`;
+    if (callWall > 0 || putWall > 0) {
+      gexSentence += `, with call wall at ${callWall.toFixed(0)} and put wall at ${putWall.toFixed(0)}.`;
+    } else {
+      gexSentence += '.';
+    }
+    
+    // Flip distance sentence
+    let flipSentence = '';
+    if (flipNode > 0 && spot > 0) {
+      const flipDist = ((spot - flipNode) / flipNode * 100).toFixed(2);
+      flipSentence = `Gamma flip sits at ${flipNode.toFixed(0)} (${flipDist}% away). `;
+    }
+    
+    // Inventory sentence (DEX)
+    let dexSentence = '';
+    if (dex) {
+      dexSentence = dex > 0 ? 'Strong upside shelf present. ' : 'Strong downside trough present. ';
+    }
+    
+    // Time decay sentence (CHEX)
+    let chexSentence = '';
+    if (chex) {
+      chexSentence = chex > 0 ? 'Theta supports drift momentum. ' : 'Theta fights directional moves. ';
+    }
+    
+    // Volatility sentence (VEX)
+    let vexSentence = '';
+    if (volGex) {
+      vexSentence = Math.abs(volGex) < 0.5 ? 'Signed Vol GEX is constructive. ' : Math.abs(volGex) < 1.0 ? 'Signed Vol GEX is neutral. ' : 'Signed Vol GEX signals caution. ';
+    }
+    
+    // STEP 5: ASSEMBLE FINAL WRITEUP
+    const headline = `0DTE ${today}: ${regimeText} ${gexRegime} regime.`;
+    
+    const body = [
+      gexSentence,
+      flipSentence,
+      dexSentence,
+      chexSentence,
+      vexSentence,
+      actionText,
+      confidenceText
+    ].filter(s => s).join(' ');
+    
+    const fullWriteup = headline + ' ' + body;
+    insightsLastWriteup = fullWriteup;
+    
+    // STEP 6: UPDATE UI
+    biasEl.textContent = headline;
+    shortEl.textContent = body;
+    
+    if (titleEl) {
+      titleEl.textContent = `${regimeText} Structure | Score: ${Math.round(totalScore)}/100`;
+    }
+    
+    // Log scores to console for audit
+    console.log(`[Exposure Score] GEX:${gexScore} DEX:${dexScore} CHEX:${chexScore} VEX:${vexScore} Flip:${flipScore} → Total:${totalScore.toFixed(1)}`);
+    
+  } catch (e) {
+    console.error('Writeup generation failed:', e);
+    // Fallback: just show the error
+    biasEl.textContent = 'Error generating analysis.';
+    shortEl.textContent = e.message;
+  }
+}
+
+async function insightsCopyAnalysis() {
+  const btn = document.querySelector('button[onclick="insightsCopyAnalysis()"]');
+  const orig = btn ? btn.textContent : 'Copy';
+  if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+  try {
+    const text = insightsLastWriteup
+      || document.getElementById('insights-bias').textContent + ' '
+      + document.getElementById('insights-analysis-short').textContent;
+    await navigator.clipboard.writeText(text.trim());
+    if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; }
+  } catch (e) {
+    if (btn) { btn.textContent = 'ERR'; btn.style.color = '#ff4757'; }
+  } finally {
+    setTimeout(() => { if (btn) { btn.textContent = orig; btn.style.color = ''; } }, 1500);
+  }
+}
+
+function insightsPostX() {
+  const text = encodeURIComponent(
+    (insightsLastWriteup || document.getElementById('insights-bias').textContent).slice(0, 240)
+  );
+  window.open(`https://twitter.com/intent/tweet?text=${text}`, '_blank');
+}
+
+// Auto-refresh exposure on load and every 5 minutes
+insightsRefreshAll();
+setInterval(() => {
+  if (currentInsightsTab === 'exposure') insightsRefreshAll();
+}, 5 * 60 * 1000);
+
+
 const IB_DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/[WEBHOOK_ID]/[WEBHOOK_TOKEN]'; // Replace with actual
 
 async function loadHtml2Canvas() {
@@ -1316,72 +1707,135 @@ async function shareVolTrend(platform) {
 
 async function updateVolatilityTrend() {
   try {
-    const [gexRes, vixRes] = await Promise.all([
-      fetch('/proxy/api/tt/gex'),
+    // Fetch chain data directly and calculate GEX client-side (like overview does) - much faster
+    const [chainRes, spotRes, vixRes] = await Promise.all([
+      fetch('/proxy/api/tt/chains/SPX?range=1000'),
+      fetch('/proxy/api/tt/quote/SPX'),
       fetch('/proxy/api/tt/vix')
     ]);
 
-    if (!gexRes.ok) throw new Error(`GEX endpoint: ${gexRes.status}`);
-    if (!vixRes.ok) throw new Error(`VIX endpoint: ${vixRes.status}`);
+    if (!chainRes.ok) throw new Error(`Chain: ${chainRes.status}`);
+    
+    const chainData = await chainRes.json();
+    const spotData = spotRes.ok ? await spotRes.json() : { data: { last: 0 } };
+    const vixData = vixRes.ok ? await vixRes.json() : { data: {} };
 
-    const gexJson = await gexRes.json();
-    const vixJson = await vixRes.json();
+    const spotPrice = spotData.data?.last || 0;
+    const vix1d = vixData.data?.vix_1d || 0;
+    const vix30 = vixData.data?.vix_spot || 0;
+    const hv10d = vixData.data?.realized_10d || 0;
 
-    const gd = gexJson.data;
-    const vd = vixJson.data;
+    // Calculate GEX locally from chain (same as overview) - THIS IS WHY IT'S FAST
+    let netGEX = 0;
+    let callWallStrike = 0;
+    let putWallStrike = 0;
+    let maxCallGEX = 0;
+    let maxPutGEX = 0;
+    let gammaFlip = 0;
+    const today = new Date().toISOString().split('T')[0];
 
-    const spotPrice    = gd.spot          || 0;
-    const netGexB      = gd.net_gex_billions || 0;
-    const callWall     = gd.call_wall     || 0;
-    const putWall      = gd.put_wall      || 0;
-    const gammaFlip    = gd.gamma_flip_node || 0;
-    const vix1d        = vd.vix_1d        || 0;
-    const vix30        = vd.vix_spot      || 0;
-    const hv10d        = vd.realized_10d  || 0;
+    for (const expGroup of chainData.data?.items || []) {
+      if (expGroup['expiration-date'] !== today) continue;
 
-    // Derived
-    const termSpread   = parseFloat((vix1d  - vix30).toFixed(2));
-    const vrp          = parseFloat((vix30  - hv10d).toFixed(2));
-    const spotFlipDist = gammaFlip > 0
-      ? parseFloat(((spotPrice - gammaFlip) / gammaFlip * 100).toFixed(2))
-      : 0;
+      for (const strikeRow of expGroup.strikes || []) {
+        const strike = parseFloat(strikeRow['strike-price']) || 0;
+        
+        // Call GEX
+        if (strikeRow.call) {
+          const callGamma = strikeRow.call.gamma || 0;
+          const callOI = parseInt(strikeRow.call['open-interest']) || 0;
+          const callGEX = callGamma * callOI;
+          netGEX += callGEX;
+          if (callGEX > maxCallGEX) {
+            maxCallGEX = callGEX;
+            callWallStrike = strike;
+          }
+        }
+        
+        // Put GEX
+        if (strikeRow.put) {
+          const putGamma = strikeRow.put.gamma || 0;
+          const putOI = parseInt(strikeRow.put['open-interest']) || 0;
+          const putGEX = -(putGamma * putOI);
+          netGEX += putGEX;
+          if (Math.abs(putGEX) > Math.abs(maxPutGEX)) {
+            maxPutGEX = putGEX;
+            putWallStrike = strike;
+          }
+        }
+      }
+    }
 
-    // Update feature vector
-    document.getElementById('vol-spot').textContent  = spotPrice > 0 ? spotPrice.toFixed(0) : '--';
-    document.getElementById('vol-gex').textContent   = spotPrice > 0 ? netGexB.toFixed(2)   : '--';
-    document.getElementById('vol-vix1d').textContent = vix1d > 0 ? vix1d.toFixed(2)         : '--';
-    document.getElementById('vol-vix30').textContent = vix30 > 0 ? vix30.toFixed(2)          : '--';
-    document.getElementById('vol-hv').textContent    = hv10d > 0 ? hv10d.toFixed(2)          : '--';
-    document.getElementById('vol-flip').textContent  = gammaFlip > 0 ? gammaFlip.toFixed(0)  : '--';
+    // Find gamma flip point
+    const strikeGEXMap = [];
+    for (const expGroup of chainData.data?.items || []) {
+      if (expGroup['expiration-date'] !== today) continue;
+      for (const strikeRow of expGroup.strikes || []) {
+        const strike = parseFloat(strikeRow['strike-price']) || 0;
+        let gex = 0;
+        if (strikeRow.call) gex += (strikeRow.call.gamma || 0) * (parseInt(strikeRow.call['open-interest']) || 0);
+        if (strikeRow.put) gex -= (strikeRow.put.gamma || 0) * (parseInt(strikeRow.put['open-interest']) || 0);
+        strikeGEXMap.push({ strike, gex });
+      }
+    }
+    strikeGEXMap.sort((a, b) => a.strike - b.strike);
 
-    // Update derived metrics
+    let cumulativeGEX = 0;
+    let lastSign = null;
+    for (const item of strikeGEXMap) {
+      const sign = Math.sign(cumulativeGEX);
+      if (lastSign !== null && sign !== lastSign && sign !== 0) {
+        gammaFlip = item.strike;
+        break;
+      }
+      cumulativeGEX += item.gex;
+      if (sign !== 0) lastSign = sign;
+    }
+    if (!gammaFlip || gammaFlip <= 0) gammaFlip = spotPrice;
+
+    const netGexB = netGEX / 1e9;
+    const termSpread = vix1d - vix30;
+    const vrp = vix30 - hv10d;
+    const spotFlipDist = gammaFlip > 0 ? ((spotPrice - gammaFlip) / gammaFlip * 100) : 0;
+
+    // Update UI
+    document.getElementById('vol-spot').textContent = spotPrice > 0 ? spotPrice.toFixed(2) : '--';
+    
+    const gexEl = document.getElementById('vol-gex');
+    gexEl.textContent = (netGexB >= 0 ? '+' : '') + netGexB.toFixed(2);
+    gexEl.style.color = netGexB > 0 ? '#00e676' : netGexB < 0 ? '#ff4757' : '#ffb300';
+
+    const flipEl = document.getElementById('vol-flip');
+    flipEl.textContent = gammaFlip > 0 ? gammaFlip.toFixed(2) : '--';
+    flipEl.style.color = spotPrice > 0 && gammaFlip > 0
+      ? (spotPrice > gammaFlip ? '#00e676' : '#ff4757')
+      : '#ff4757';
+
+    document.getElementById('vol-vix1d').textContent = vix1d > 0 ? vix1d.toFixed(2) : '--';
+    document.getElementById('vol-vix30').textContent = vix30 > 0 ? vix30.toFixed(2) : '--';
+    document.getElementById('vol-hv').textContent = hv10d > 0 ? hv10d.toFixed(2) : '--';
+
     const termEl = document.getElementById('vol-term');
-    termEl.textContent = vix1d > 0 ? termSpread.toFixed(2) : '--';
+    termEl.textContent = termSpread.toFixed(2);
     termEl.style.color = termSpread < 0 ? '#00e5ff' : termSpread > 0 ? '#ff5ec4' : '#7cff6b';
 
     const vrpEl = document.getElementById('vol-vrp');
-    vrpEl.textContent = vix30 > 0 ? vrp.toFixed(2) : '--';
+    vrpEl.textContent = vrp.toFixed(2);
     vrpEl.style.color = vrp > 1 ? '#ffb300' : vrp < 0 ? '#ff4757' : '#7cff6b';
 
     const distEl = document.getElementById('vol-dist');
-    distEl.textContent = gammaFlip > 0 ? spotFlipDist.toFixed(2) : '--';
+    distEl.textContent = spotFlipDist.toFixed(2);
     distEl.style.color = spotFlipDist > 0 ? '#00e676' : '#ff4757';
 
-    // Classify regime and update regime boxes
     classifyVolatilityRegime(netGexB, termSpread, vrp, spotPrice, gammaFlip);
-
-    // Fetch probabilities
     await fetchRegimeProbabilities(netGexB, termSpread, vrp);
 
-    // Timestamp
     const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const tsEl = document.getElementById('vol-updated');
-    if (tsEl) tsEl.textContent = `Updated ${ts}`;
+    document.getElementById('vol-updated').textContent = `Updated ${ts}`;
 
   } catch (e) {
-    console.error('Volatility trend update failed:', e);
-    const container = document.getElementById('vol-regime-container');
-    if (container) container.innerHTML = `<div style="padding:12px;color:#ff4757;font-size:12px">Error: ${e.message}</div>`;
+    console.error('Vol Trend update failed:', e);
+    document.getElementById('vol-updated').textContent = `Error: ${e.message}`;
   }
 }
 
@@ -1441,25 +1895,24 @@ function classifyVolatilityRegime(gex, termSpread, vrp, spot, flip) {
     box.style.cssText = `
       border: 1px solid rgba(0,229,255,.25);
       border-radius: 6px;
-      padding: 14px;
-      margin-bottom: 12px;
+      padding: 10px;
       background: rgba(0,229,255,.045);
       border-left: 4px solid ${regime.color};
     `;
     
     box.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div style="width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:${regime.color}">●</div>
-        <div>
-          <div style="font-size:13px;color:${regime.color};font-weight:800;text-transform:uppercase;letter-spacing:.08em">${regime.name}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">${regime.subtitle}</div>
+      <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
+        <div style="width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:${regime.color};flex-shrink:0">●</div>
+        <div style="flex:1">
+          <div style="font-size:11px;color:${regime.color};font-weight:800;text-transform:uppercase;letter-spacing:.06em">${regime.name}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:1px">${regime.subtitle}</div>
         </div>
       </div>
-      <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">
-        <strong>Behavior:</strong> ${regime.description}
+      <div style="font-size:11px;color:var(--text2);line-height:1.4;margin-bottom:6px">
+        <strong>→</strong> ${regime.description}
       </div>
-      <div style="font-size:12px;color:var(--text1);padding:8px;background:rgba(0,0,0,.2);border-radius:4px;border-left:3px solid ${regime.color}">
-        <strong>Directive:</strong> ${regime.directive}
+      <div style="font-size:10px;color:var(--text1);padding:6px;background:rgba(0,0,0,.2);border-radius:3px;border-left:2px solid ${regime.color}">
+        <strong>Action:</strong> ${regime.directive}
       </div>
     `;
     container.appendChild(box);
@@ -1511,6 +1964,171 @@ async function fetchRegimeProbabilities(netGexBillions, termSpread, vrp) {
 setInterval(() => {
   if (currentInsightsTab === 'voltrendv2') {
     updateVolatilityTrend();
+  } else if (currentInsightsTab === 'voltrendprob') {
+    updateVolTrendProbabilities();
   }
 }, 60000);
 
+/**
+ * VOLATILITY PROBABILITY ENGINE
+ * Calculates Bullish, Bearish, and Chop probabilities based on market inputs
+ */
+function softmax(logits) {
+    const maxLogit = Math.max(...logits);
+    const exps = logits.map(l => Math.exp(l - maxLogit));
+    const sumExps = exps.reduce((a, b) => a + b, 0);
+    
+    const percentages = exps.map(e => Math.round((e / sumExps) * 100));
+    
+    const sumPct = percentages.reduce((a, b) => a + b, 0);
+    if (sumPct !== 100) {
+        const diff = 100 - sumPct;
+        const maxIdx = percentages.indexOf(Math.max(...percentages));
+        percentages[maxIdx] += diff;
+    }
+    
+    return percentages;
+}
+
+function calculateMarketProbabilities(netGex, vixSpread, yieldChange, isPreHoliday = false) {
+    let sBull = (0.6 * netGex) - (0.8 * vixSpread) - (1.5 * (yieldChange / 10));
+    let sBear = (-0.8 * netGex) + (1.1 * vixSpread) + (2.0 * (yieldChange / 10));
+    let sChop = 1.2 * (2.0 - Math.abs(vixSpread)) + 0.5 * (3.0 - Math.abs(netGex - 1.0)) - (1.0 * Math.abs(yieldChange / 10));
+    
+    if (isPreHoliday) {
+        sChop += 3.5;
+        sBull -= 1.0;
+        sBear -= 1.0;
+    }
+
+    const [pBull, pBear, pChop] = softmax([sBull, sBear, sChop]);
+
+    let sampleSize = 35;
+    if (isPreHoliday) sampleSize = 87;
+    else if (netGex > 1.0) sampleSize = 38;
+    else if (netGex < -1.0) sampleSize = 43;
+
+    return {
+        bullish: pBull,
+        bearish: pBear,
+        chop: pChop,
+        sampleSize: sampleSize
+    };
+}
+
+/**
+ * Fetch 2-day yield change in basis points from yield tracker
+ * Calls backend endpoint that maintains rolling 2-day US10Y tracking
+ */
+async function fetchYieldChange() {
+    try {
+        const res = await fetch('/proxy/api/yield/change-2d');
+        
+        if (res.ok) {
+            const data = await res.json();
+            const changeBps = data.change_2d_bps || 0;
+            console.log('[Yield] 2D Change:', changeBps, 'bps');
+            return changeBps;
+        }
+    } catch (e) {
+        console.warn('[Yield] Endpoint unavailable, using default (0 bps):', e.message);
+    }
+    
+    // Fallback: return 0 (neutral yield assumption)
+    return 0;
+}
+
+/**
+ * Main update function for Vol Trend Probability tab
+ */
+async function updateVolTrendProbabilities() {
+    try {
+        // Use same chain-based approach as updateVolatilityTrend for consistency
+        const [chainRes, vixRes, yieldChange] = await Promise.all([
+            fetch('/proxy/api/tt/chains/SPX?range=1000'),
+            fetch('/proxy/api/tt/vix'),
+            fetchYieldChange()
+        ]);
+
+        if (!chainRes.ok) throw new Error(`Chain: ${chainRes.status}`);
+
+        const chainData = await chainRes.json();
+        const vixData = vixRes.ok ? await vixRes.json() : { data: {} };
+        const vd = vixData.data || vixData;
+
+        const vix1d   = parseFloat(vd.vix_1d  || vd.vix1d  || 0);
+        const vixSpot = parseFloat(vd.vix_spot || vd.vix_30 || vd.vix30 || 0);
+        const vixSpread = vix1d - vixSpot;
+
+        // Calculate Net GEX from chain (same as VOLATILITY TREND tab)
+        let netGEX = 0;
+        const today = new Date().toISOString().split('T')[0];
+
+        for (const expGroup of chainData.data?.items || []) {
+            if (expGroup['expiration-date'] !== today) continue;
+            for (const strikeRow of expGroup.strikes || []) {
+                if (strikeRow.call) netGEX += (strikeRow.call.gamma || 0) * (parseInt(strikeRow.call['open-interest']) || 0);
+                if (strikeRow.put)  netGEX -= (strikeRow.put.gamma  || 0) * (parseInt(strikeRow.put['open-interest'])  || 0);
+            }
+        }
+
+        const netGex = netGEX / 1e9;
+
+        // Check for pre-holiday (Friday)
+        const isPreHoliday = new Date().getDay() === 5;
+
+        // Calculate probabilities
+        const probs = calculateMarketProbabilities(netGex, vixSpread, yieldChange, isPreHoliday);
+
+        // Update UI - Input Metrics
+        const netGexEl = document.getElementById('prob-net-gex');
+        if (netGexEl) {
+            netGexEl.textContent = (netGex >= 0 ? '+' : '') + netGex.toFixed(2);
+            netGexEl.style.color = netGex > 0 ? '#00e676' : netGex < 0 ? '#ff4757' : '#ffb300';
+        }
+
+        const vixSpreadEl = document.getElementById('prob-vix-spread');
+        if (vixSpreadEl) {
+            vixSpreadEl.textContent = (vixSpread >= 0 ? '+' : '') + vixSpread.toFixed(2);
+            vixSpreadEl.style.color = vixSpread < 0 ? '#00e5ff' : vixSpread > 0 ? '#ff5ec4' : '#7cff6b';
+        }
+
+        const yieldEl = document.getElementById('prob-yield-change');
+        if (yieldEl) {
+            yieldEl.textContent = yieldChange !== 0 ? (yieldChange >= 0 ? '+' : '') + Math.round(yieldChange) : '--';
+            yieldEl.style.color = yieldChange < 0 ? '#00e676' : yieldChange > 0 ? '#ff4757' : 'var(--text2)';
+        }
+
+        // Update Probabilities
+        const bullEl = document.getElementById('prob-bullish');
+        const chopEl = document.getElementById('prob-chop');
+        const bearEl = document.getElementById('prob-bearish');
+
+        if (bullEl) bullEl.textContent = probs.bullish + '%';
+        if (chopEl) chopEl.textContent = probs.chop + '%';
+        if (bearEl) bearEl.textContent = probs.bearish + '%';
+
+        // Timestamp
+        const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const tsEl = document.getElementById('voltrendprob-updated');
+        if (tsEl) tsEl.textContent = `Updated ${ts}`;
+
+    } catch (e) {
+        console.error('Vol Trend Probability update failed:', e);
+        ['prob-bullish', 'prob-chop', 'prob-bearish', 'prob-net-gex', 'prob-vix-spread'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '--';
+        });
+        const tsEl = document.getElementById('voltrendprob-updated');
+        if (tsEl) tsEl.textContent = `Error: ${e.message}`;
+    }
+}
+
+// ── Expose all functions globally so they work when loaded via innerHTML ──
+window.switchInsightsTab           = switchInsightsTab;
+window.updateVolatilityTrend       = updateVolatilityTrend;
+window.updateVolTrendProbabilities = updateVolTrendProbabilities;
+window.insightsRefreshAll          = insightsRefreshAll;
+window.updateIBDashboard           = updateIBDashboard;
+
+</script>

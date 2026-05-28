@@ -201,7 +201,7 @@ function forceShowTopbar(){
 
 function switchPage(page, el){
   // Hide all pages with !important
-  ['overview','gex','database','trading','stats','insights'].forEach(p=>{
+  ['overview','gex','bzila','database','trading','stats','insights'].forEach(p=>{
     const div = document.getElementById('page-'+p);
     if(div){ 
       div.style.setProperty('display', 'none', 'important');
@@ -949,7 +949,8 @@ async function fetchGEX(){
     // Fetch near-term SPX chains; DTE clicks select the expiry used for both charts.
     // On initial load, only fetch 0DTE. Clicking 1/2/3DTE triggers lazy fetch.
     const buildAllowedExpiries = (allExpDates) => {
-      const todayStr = getNYDateString();
+      const todayDate = new Date();
+      const todayStr = todayDate.toISOString().slice(0, 10);
       const sorted = (allExpDates || []).filter(Boolean).sort();
       const findClosest = (target) => {
         if (!sorted.length) return null;
@@ -958,7 +959,7 @@ async function fetchGEX(){
       };
       const allowed = new Set();
       // 0DTE only on initial load — other DTEs loaded lazily on click
-      const zero = findClosest(getInsightsTargetExpirationDate());
+      const zero = findClosest(todayStr);
       if (zero) allowed.add(zero);
       // Also pre-build the expiry map entries for 1-3DTE so pills know their dates,
       // but we won't actually fetch their chain data until clicked.
@@ -992,7 +993,7 @@ async function fetchGEX(){
     // Build chain data from TastyTrade options chain
     const callExpDateMap = {};
     const putExpDateMap = {};
-    const _todayStr0dte = getInsightsTargetExpirationDate();
+    const _todayStr0dte = new Date().toISOString().slice(0, 10);
     
     if(chainData.data?.items) {
       chainData.data.items.forEach(expGroup => {
@@ -1169,22 +1170,8 @@ function updateSPXDisplay(quote) {
   const quoteLast = num(quote.lastPrice, quote.last, quote.mark, quote.price, quote.mid);
   const quotePrev = num(quote.closePrice, quote.previousClose, quote.prevClose, quote.close, quote.priorClose);
   if (quotePrev > 0) spxPrevClose = quotePrev;
-  // After 4pm, use today's actual closes if available (stored at market close)
-  let esCloseForConv = esPrevClose;
-  let spxCloseForConv = spxPrevClose;
-  if (!spxOpen) {
-    try {
-      const stored = JSON.parse(localStorage.getItem('todayCloses'));
-      const nowET2 = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-      const todayStr = nowET2.replace(/(\d+)\/(\d+)\/(\d+)/, '$3-$1-$2');
-      if (stored?.es > 0 && stored?.spx > 0 && stored?.date === todayStr) {
-        esCloseForConv = stored.es;
-        spxCloseForConv = stored.spx;
-      }
-    } catch (_) {}
-  }
-  const canConvertFromES = esPrice > 0 && esCloseForConv > 0 && spxCloseForConv > 0;
-  const impliedSPX = canConvertFromES ? esPrice - (esCloseForConv - spxCloseForConv) : 0;
+  const canConvertFromES = esPrice > 0 && esPrevClose > 0 && spxPrevClose > 0;
+  const impliedSPX = canConvertFromES ? esPrice - (esPrevClose - spxPrevClose) : 0;
   if (quoteLast > 0 && (spxOpen || !canConvertFromES)) spotPrice = quoteLast;
   const displayPrice = !spxOpen && impliedSPX > 0 ? impliedSPX : (spotPrice || quoteLast);
   if (displayPrice > 0 && !spxOpen && canConvertFromES) spotPrice = displayPrice;
@@ -1196,12 +1183,11 @@ function updateSPXDisplay(quote) {
     pxEl.title=!spxOpen&&canConvertFromES?'ES-implied SPX: SPX 4pm close + ES move from its 4pm close':'';
   }
   const chEl=document.getElementById('spx-change');
-  const chgBase = (!spxOpen && spxCloseForConv > 0) ? spxCloseForConv : spxPrevClose;
-  const chg = (!spxOpen && displayPrice > 0 && chgBase > 0)
-    ? displayPrice - chgBase
+  const chg = (!spxOpen && displayPrice > 0 && spxPrevClose > 0)
+    ? displayPrice - spxPrevClose
     : num(quote.change, quote.netChange);
-  const pct = (!spxOpen && chgBase > 0)
-    ? (chg / chgBase) * 100
+  const pct = (!spxOpen && spxPrevClose > 0)
+    ? (chg / spxPrevClose) * 100
     : num(quote.changePercent, quote.netPercentChange, quote.netPercentChangeInDouble);
   const chgSign = chg>=0?'+':'';
   chEl.textContent=chgSign+chg.toFixed(2)+' ('+chgSign+pct.toFixed(2)+'%)';
@@ -1302,27 +1288,6 @@ function getNYDateString(date=new Date()){
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);
   const get=t=>parts.find(p=>p.type===t)?.value;
   return `${get('year')}-${get('month')}-${get('day')}`;
-}
-function getNYTimeParts(date=new Date()){
-  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit'}).formatToParts(date);
-  const get=t=>parts.find(p=>p.type===t)?.value;
-  return { hour:Number(get('hour') || 0), minute:Number(get('minute') || 0) };
-}
-function addDaysToDateStr(dateStr, days){
-  const dt=new Date(dateStr+'T12:00:00');
-  dt.setDate(dt.getDate()+days);
-  return dt.toISOString().slice(0,10);
-}
-function getNextTradingDateStr(dateStr){
-  let next=addDaysToDateStr(dateStr,1);
-  while(!isGexTradingDay(next)) next=addDaysToDateStr(next,1);
-  return next;
-}
-function getInsightsTargetExpirationDate(date=new Date()){
-  const today=getNYDateString(date);
-  const {hour,minute}=getNYTimeParts(date);
-  const mins=hour*60+minute;
-  return mins >= 16*60 ? getNextTradingDateStr(today) : today;
 }
 
 window.processChain = function processChain(chainData){
@@ -1711,17 +1676,6 @@ function finishGEXCompute(dateKey){
     const _hmBody = document.getElementById('heatmap-body');
     if(_hmBody) delete _hmBody.dataset.hmInitialized;
     renderOptionsLadder(rawChain);renderGEXTable();if(ladderViewMode==='grid') renderGEXLadderGrid();else renderHeatmap();
-    console.log('[DEBUG] finishGEXCompute render block - maxCallStrike:', maxCallStrike, 'maxPutStrike:', maxPutStrike, 'flipPoint:', flipPoint);
-    
-    // Push GEX levels to MotiveWave (only when rawChain has data)
-    if (window.EventBus && maxCallStrike && maxPutStrike && flipPoint && maxCallStrike.strike && maxPutStrike.strike) {
-      window.EventBus.emit('gex-levels-updated', { 
-        callWall: maxCallStrike.strike, 
-        putWall: maxPutStrike.strike, 
-        zeroGamma: flipPoint 
-      });
-      console.log('✓ GEX levels emitted:', { callWall: maxCallStrike.strike, putWall: maxPutStrike.strike, zeroGamma: flipPoint });
-    }
   }
   if (typeof renderGEXLadder === 'function' && document.getElementById('page-gex')) renderGEXLadder();
     // Take history snapshot (throttled to ~5 min internally)
@@ -2472,7 +2426,6 @@ const ECON_EVENTS = [
   // ── Tuesday, May 26 ──
   { date:"2026-05-26", time:"09:00", name:"S&P Case-Shiller home price index (20 cities)", period:"March", forecast:"—", prev:"—" },
   { date:"2026-05-26", time:"10:00", name:"Consumer confidence",                            period:"May",   forecast:"—", prev:"—" },
-  { date:"2026-05-26", time:"20:20", name:"Minneapolis Fed President Neel Kashkari speech in Japan", period:"", forecast:"???", prev:"???" },
   // ── Wednesday, May 27 ──
   { date:"2026-05-27", time:"04:00", name:"Dallas Fed President Lorie Logan speech in Japan", period:"", forecast:"???", prev:"???" },
   { date:"2026-05-27", time:"15:55", name:"Federal Reserve Governor Lisa Cook speech", period:"", forecast:"???", prev:"???" },
@@ -2502,6 +2455,7 @@ const ECON_EVENTS = [
   { date:"2026-05-29", time:"09:15", name:"Philadelphia Fed President Anna Paulson speech", period:"", forecast:"???", prev:"???" },
   { date:"2026-05-29", time:"09:45", name:"Chicago Business Barometer (PMI)",               period:"May",   forecast:"—", prev:"—" },
   { date:"2026-05-29", time:"12:40", name:"San Francisco Fed President Mary Daly speech", period:"", forecast:"???", prev:"???" },
+  { date:"2026-05-26", time:"20:20", name:"Minneapolis Fed President Neel Kashkari speech in Japan", period:"", forecast:"???", prev:"???" },
 ];
 
 // Determines event urgency class for the countdown badge
@@ -5687,17 +5641,7 @@ async function renderBuySellHistoryChart() {
   ctx.fillStyle = '#0a0f16';
   ctx.fillRect(0, 0, W, H);
 
-  let rows = (await getBuySellHistoryRows()).slice().sort((a, b) => a.timestamp - b.timestamp);
-  
-  // Filter to 9:00 AM - 3:30 PM ET
-  rows = rows.filter(r => {
-    const timeStr = r.time || '';
-    const [hh, mm] = timeStr.split(':').map(Number);
-    if (isNaN(hh) || isNaN(mm)) return true; // Keep malformed times
-    const mins = hh * 60 + mm;
-    return mins >= 540 && mins <= 930; // 9:00 AM = 540 mins, 3:30 PM = 930 mins
-  });
-  
+  const rows = (await getBuySellHistoryRows()).slice().sort((a, b) => a.timestamp - b.timestamp);
   const PAD = { l: 48, r: 42, t: 22, b: 42 };
   const cW = W - PAD.l - PAD.r;
   const cH = H - PAD.t - PAD.b;
@@ -5763,15 +5707,15 @@ async function renderBuySellHistoryChart() {
     ctx.arc(xAt(rows.length - 1), yFn(Number(last[key])), 4, 0, Math.PI * 2);
     ctx.fill();
   };
-  drawLine('spxPrice', yPrice, '#ffffff');
+  drawLine('spxPrice', yPrice, '#00c8ff');
   drawLine('buyPct', yBuy, '#00e676');
 
-  ctx.fillStyle = '#ffffff'; ctx.font = '10px Arial'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#00c8ff'; ctx.font = '10px Arial'; ctx.textAlign = 'left';
   ctx.fillRect(PAD.l + 6, PAD.t + 5, 18, 2); ctx.fillText('SPXW Price', PAD.l + 30, PAD.t + 8);
   ctx.fillStyle = '#00e676';
   ctx.fillRect(PAD.l + 6, PAD.t + 18, 18, 2); ctx.fillText('Buy %', PAD.l + 30, PAD.t + 21);
   ctx.save(); ctx.translate(12, PAD.t + cH / 2); ctx.rotate(-Math.PI / 2);
-  ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.fillText('SPXW Price', 0, 0); ctx.restore();
+  ctx.fillStyle = '#00c8ff'; ctx.textAlign = 'center'; ctx.fillText('SPXW Price', 0, 0); ctx.restore();
   ctx.save(); ctx.translate(W - 10, PAD.t + cH / 2); ctx.rotate(Math.PI / 2);
   ctx.fillStyle = '#00e676'; ctx.textAlign = 'center'; ctx.fillText('Buy %', 0, 0); ctx.restore();
 }
@@ -5817,23 +5761,66 @@ function setChartTicker(ticker){} // stub, handled by setOVTab
 function setOVTab(tab){
   ovTab = tab;
   const chartView  = document.getElementById('ov-chart-view');
+  const spyView    = document.getElementById('ov-spy-view');
+  const bzilaView  = document.getElementById('ov-bzila-view');
   const spxBtn     = document.getElementById('ovtab-spx');
+  const spyBtn     = document.getElementById('ovtab-spy');
+  const bzilaBtn   = document.getElementById('ovtab-bzila');
   const chartControls    = document.getElementById('chart-mode-controls');
   const gexControls      = document.getElementById('gex-mode-controls');
   const chartGexControls = document.getElementById('chart-gex-mode-controls');
 
   const isChart = tab === 'chart';
+  const isSpy   = tab === 'spy';
+  const isBzila = tab === 'bzila';
 
   if(chartView)  chartView.style.display  = isChart ? 'flex' : 'none';
+  if(spyView)    spyView.style.display    = isSpy   ? 'flex' : 'none';
+  if(bzilaView)  bzilaView.style.display  = isBzila ? 'flex' : 'none';
 
-  if(chartControls)    chartControls.style.display    = isChart ? 'flex' : 'none';
-  if(gexControls)      gexControls.style.display      = isChart ? 'flex' : 'none';
-  if(chartGexControls) chartGexControls.style.display = isChart ? 'flex' : 'none';
+  if(chartControls)    chartControls.style.display    = (isChart||isSpy) ? 'flex' : 'none';
+  if(gexControls)      gexControls.style.display      = (isChart||isSpy) ? 'flex' : 'none';
+  if(chartGexControls) chartGexControls.style.display = (isChart||isSpy) ? 'flex' : 'none';
 
   const activeStyle = (btn, active) => { if(btn){ btn.style.background=active?'#1a2a3a':'transparent'; btn.style.color=active?'#00e5ff':'#3a5570'; }};
   activeStyle(spxBtn,   isChart);
+  activeStyle(spyBtn,   isSpy);
+  activeStyle(bzilaBtn, isBzila);
 
   if(isChart) { setTimeout(()=>{ initOvEvents(); drawOverviewChart(); }, 30); }
+  if(isSpy)   { setTimeout(()=>{ initOvEvents(); drawOverviewChart(); }, 30); }
+  if(isBzila) { loadOverviewBzilaFlow(); }
+}
+
+async function loadOverviewBzilaFlow(){
+  const bzilaView = document.getElementById('ov-bzila-view');
+  if(!bzilaView) return;
+  if(bzilaView.dataset.loaded === '1'){
+    if(typeof window.init_bzila === 'function') setTimeout(()=>window.init_bzila(), 30);
+    return;
+  }
+  bzilaView.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#3a5570;font-size:12px;letter-spacing:.1em">Loading Bzila Flow...</div>';
+  try {
+    const response = await fetch('pages/bzila.html');
+    if(!response.ok) throw new Error(response.statusText || 'Failed to load Bzila Flow');
+    const html = await response.text();
+    bzilaView.innerHTML = html;
+    bzilaView.querySelectorAll('script').forEach(oldScript => {
+      const newScript = document.createElement('script');
+      [...oldScript.attributes].forEach(a => newScript.setAttribute(a.name, a.value));
+      newScript.textContent = oldScript.textContent;
+      oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
+    const page = bzilaView.querySelector('#page-bzila');
+    if(page){
+      page.style.width = '100%';
+      page.style.height = '100%';
+    }
+    bzilaView.dataset.loaded = '1';
+    if(typeof window.init_bzila === 'function') setTimeout(()=>window.init_bzila(), 30);
+  } catch (error) {
+    bzilaView.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:8px;color:#ff4757;font-size:12px"><strong>Failed to load Bzila Flow</strong><span style="color:#3a5570">${error.message}</span></div>`;
+  }
 }
 
 window.setGEXMode = function(mode, btn){
@@ -8043,17 +8030,7 @@ if (false) {}
     return window.html2canvas;
   }
   async function getInsightsShareBlob() {
-    const pageInsights = document.getElementById('page-insights');
-    const activeTab = pageInsights?.getAttribute('data-active-tab') || 'exposure';
-    
-    // For Volatility Trend, capture only main content. For others, capture the full page
-    let target;
-    if (activeTab === 'voltrendv2') {
-      target = document.getElementById('voltrendv2-main');
-    } else {
-      target = document.getElementById('insights-share-card') || pageInsights;
-    }
-    
+    const target = document.getElementById('insights-share-card') || document.getElementById('page-insights');
     if (!target) throw new Error('Insights share card not found');
     const buttons = target.querySelectorAll('button');
     buttons.forEach(btn => btn.dataset.prevVisibility = btn.style.visibility || '');
@@ -8256,16 +8233,9 @@ if (false) {}
   }
   function getInsights0DTERows() {
     const expiries = Object.keys(expiryMap || {}).sort();
-    const targetExp = typeof getInsightsTargetExpirationDate === 'function' ? getInsightsTargetExpirationDate() : getNYDateString();
-    const exp = expiries.find(d => d === targetExp) || expiries.find(d => typeof getDTE === 'function' && getDTE(d) === 0) || expiries[0];
+    const exp = expiries.find(d => typeof getDTE === 'function' && getDTE(d) === 0) || expiries[0];
     if (!exp || !expiryMap[exp]) return { exp: null, rows: [] };
     const src = expiryMap[exp];
-    if ((!Object.keys(src.calls || {}).length || !Object.keys(src.puts || {}).length) && exp === targetExp && typeof fetchLazyDTEChain === 'function') {
-      fetchLazyDTEChain(exp).then(() => {
-        if (typeof renderInsights0DTE === 'function') renderInsights0DTE();
-      }).catch(err => console.warn('[Insights] Target expiration fetch failed:', err));
-      return { exp, rows: [] };
-    }
     const strikes = new Set([...Object.keys(src.calls || {}), ...Object.keys(src.puts || {})]);
     const s = spotPrice || esPrice || 0;
     const rows = [];
@@ -8680,72 +8650,3 @@ document.addEventListener('click', (e) => {
     dropdown.style.display = 'none';
   }
 });
-
-// Auto-push GEX levels to MotiveWave on page load
-console.log('[DEBUG] overview.js loaded');
-window.addEventListener('load', () => {
-  console.log('[DEBUG] load event fired');
-  setTimeout(() => {
-    console.log('[DEBUG] 1s timeout - checking window._levels:', window._levels);
-    console.log('[DEBUG] EventBus exists?', !!window.EventBus);
-    if (window._levels && window._levels.callWall && window._levels.putWall && window._levels.flip) {
-      window.EventBus?.emit('gex-levels-updated', { 
-        callWall: window._levels.callWall, 
-        putWall: window._levels.putWall, 
-        zeroGamma: window._levels.flip 
-      });
-      console.log('✓ Page load GEX emit:', window._levels);
-    } else {
-      console.log('[DEBUG] window._levels not ready:', window._levels);
-    }
-  }, 1000);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// INSIGHTS PAGE LOADER - Inject insights.html dynamically
-// ═══════════════════════════════════════════════════════════════════════════
-
-(async function loadInsightsPage() {
-  console.log('[Insights] Loading insights.html...');
-  
-  try {
-    // Fetch insights.html
-    const response = await fetch('insights.html');
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    
-    const insightsHTML = await response.text();
-    console.log('[Insights] Fetched', insightsHTML.length, 'bytes');
-    
-    // Create page-insights container
-    let pageInsights = document.getElementById('page-insights');
-    if (!pageInsights) {
-      pageInsights = document.createElement('div');
-      pageInsights.id = 'page-insights';
-      pageInsights.style.display = 'none';
-      pageInsights.style.flexDirection = 'column';
-      pageInsights.style.flex = '1';
-      pageInsights.style.minHeight = '0';
-      pageInsights.style.overflow = 'hidden';
-      pageInsights.style.background = 'var(--bg0)';
-      document.body.appendChild(pageInsights);
-    }
-    
-    // Extract and execute script
-    const scriptMatch = insightsHTML.match(/<script>([\s\S]*?)<\/script>/);
-    const scriptContent = scriptMatch ? scriptMatch[1] : '';
-    
-    if (!scriptContent) throw new Error('No script in insights.html');
-    
-    // Inject HTML
-    const htmlOnly = insightsHTML.replace(/<script>[\s\S]*?<\/script>/g, '');
-    pageInsights.innerHTML = htmlOnly;
-    
-    // Execute script globally
-    (new Function(scriptContent))();
-    
-    console.log('[Insights] ✓ Loaded - switchInsightsTab:', typeof switchInsightsTab);
-    
-  } catch (e) {
-    console.error('[Insights] Load failed:', e.message);
-  }
-})();

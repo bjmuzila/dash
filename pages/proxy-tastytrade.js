@@ -343,22 +343,10 @@ function estimateOptionGreekFallback(opt, underlyingPrice, side) {
   return { delta, gamma };
 }
 
-function filterStrikesWithinPercentRange(items, spotPrice, percentRange = 10) {
-  if (!spotPrice || spotPrice <= 0) return items;
-  const lowerBound = spotPrice * (1 - percentRange / 100);
-  const upperBound = spotPrice * (1 + percentRange / 100);
-  return items.filter(o => {
-    const strike = parseFloat(o['strike-price'] || o.strike || 0);
-    return strike > 0 && strike >= lowerBound && strike <= upperBound;
-  });
-}
-
 function pickNearestOptionStreamerSymbols(options, underlyingPrice, maxSymbols = MAX_DXLINK_AUTO_SYMBOLS) {
   const price = firstFiniteNumber(underlyingPrice, 0);
   if (!(price > 0)) return (options || []).map(o => o['streamer-symbol']).filter(Boolean).slice(0, maxSymbols);
-  // Filter to 10% range first (non-0DTE), then sort by distance
-  const filtered = filterStrikesWithinPercentRange(options, price);
-  return filtered
+  return options
     .slice()
     .sort((a, b) => optionDistance(a, price) - optionDistance(b, price))
     .map(o => o['streamer-symbol'])
@@ -1093,102 +1081,6 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  // ── YIELD TRACKING ENDPOINTS (TNX via TastyTrade market-metrics) ──────
-  // Self-contained — no external yield-tracker.js needed
-  // Stores daily TNX closes in data/yield_history.json, calculates 2-day change
-
-  function yieldHistoryPath() {
-    return path.join(BACKUP_DIR, 'yield_history.json');
-  }
-
-  function loadYieldHistoryLocal() {
-    ensureBackupDir();
-    try {
-      if (fs.existsSync(yieldHistoryPath())) {
-        return JSON.parse(fs.readFileSync(yieldHistoryPath(), 'utf8'));
-      }
-    } catch(e) { log('yield history load error:', e.message); }
-    return {};
-  }
-
-  function saveYieldHistoryLocal(history) {
-    ensureBackupDir();
-    fs.writeFileSync(yieldHistoryPath(), JSON.stringify(history, null, 2));
-  }
-
-  function calcYield2DChange() {
-    const history = loadYieldHistoryLocal();
-    const keys = Object.keys(history).sort();
-    if (keys.length < 2) return { change_2d_bps: 0, today_yield: null, prev_yield: null };
-
-    const todayKey = keys[keys.length - 1];
-    // Find a trading day 2 days back (skip weekends)
-    const todayDate = new Date(todayKey + 'T12:00:00Z');
-    let daysBack = 0, prevKey = null;
-    for (let i = keys.length - 2; i >= 0; i--) {
-      prevKey = keys[i];
-      daysBack++;
-      if (daysBack >= 2) break;
-    }
-
-    const todayYield = history[todayKey]?.yield || 0;
-    const prevYield  = prevKey ? (history[prevKey]?.yield || 0) : 0;
-    const change2d   = prevYield > 0 ? Math.round((todayYield - prevYield) * 100) : 0;
-
-    return { change_2d_bps: change2d, today_yield: todayYield, prev_yield: prevYield, prev_date: prevKey };
-  }
-
-  if (req.method === 'GET' && p === '/proxy/api/yield/change-2d') {
-    try {
-      let tnxRaw = firstFiniteNumber(dxTradeCache['TNX']?.price, dxTradeCache['$TNX']?.price, dxTradeCache['$TNX.X']?.price, 0);
-      if (!(tnxRaw > 0)) tnxRaw = await fetchUnderlyingLast('$TNX').catch(() => 0);
-      if (!(tnxRaw > 0)) tnxRaw = await fetchUnderlyingLast('TNX').catch(() => 0);
-      const liveYield = tnxRaw > 20 ? parseFloat((tnxRaw / 10).toFixed(3)) : parseFloat(tnxRaw.toFixed(3));
-      log(`[Yield] TNX raw=${tnxRaw} normalized=${liveYield}`);
-
-      if (liveYield > 0) {
-        const history = loadYieldHistoryLocal();
-        const todayKey = new Date().toISOString().split('T')[0];
-        history[todayKey] = { yield: liveYield, ts: Date.now() };
-        saveYieldHistoryLocal(history);
-      }
-
-      const result = calcYield2DChange();
-      return sendJSON(res, 200, { ...result, live_yield: liveYield, timestamp: new Date().toISOString() });
-    } catch(e) {
-      return sendJSON(res, 500, { error: e.message, change_2d_bps: 0 });
-    }
-  }
-
-  if (req.method === 'POST' && p === '/proxy/api/yield/record') {
-    try {
-      const body = await readRequestJson(req);
-      const { yield_value } = body;
-      if (typeof yield_value !== 'number' || yield_value < 0 || yield_value > 20) {
-        return sendJSON(res, 400, { error: 'Invalid yield value' });
-      }
-      const history = loadYieldHistoryLocal();
-      const todayKey = new Date().toISOString().split('T')[0];
-      history[todayKey] = { yield: yield_value, ts: Date.now() };
-      saveYieldHistoryLocal(history);
-      const result = calcYield2DChange();
-      return sendJSON(res, 200, { success: true, ...result, timestamp: new Date().toISOString() });
-    } catch(e) {
-      return sendJSON(res, 500, { error: e.message });
-    }
-  }
-
-  if (req.method === 'GET' && p === '/proxy/api/yield/history') {
-    try {
-      const history = loadYieldHistoryLocal();
-      const limit = parseInt(u.searchParams.get('limit')) || 20;
-      const entries = Object.entries(history).sort((a, b) => b[0].localeCompare(a[0])).slice(0, limit);
-      return sendJSON(res, 200, { history: Object.fromEntries(entries), count: entries.length, timestamp: new Date().toISOString() });
-    } catch(e) {
-      return sendJSON(res, 500, { error: e.message });
-    }
-  }
-
   if (req.method === 'GET' && p === '/proxy/api/backup/buy-sell-scores') {
     const date = u.searchParams.get('date');
     const records = readBuySellBackup()
@@ -1238,20 +1130,9 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, status, data);
   }
 
-  if (req.method === 'GET' && p === '/proxy/api/tt/esm6') {
-    const price = firstFiniteNumber(
-      dxTradeCache['/ESM26']?.price, dxTradeCache['/ESM6']?.price,
-      dxTradeCache['/ES:XCME']?.price, dxTradeCache['/ES']?.price,
-      gexLevelCache.esSpot, 0
-    );
-    return sendJSON(res, 200, { data: { price, symbol: '/ESM26', ts: Date.now() } });
-  }
-
   // ── GET /proxy/api/tt/gex  ────────────────────────────────────────────────────
   // Live GEX levels + total net GEX using same formula as computeAndCacheGexLevels
-  // Query params: ?dte=0DTE (optional, defaults to current target expiry)
   if (req.method === 'GET' && p === '/proxy/api/tt/gex') {
-    const dteParam = u.searchParams.get('dte') || null;
     let esSpot = firstFiniteNumber(dxTradeCache['/ESM6']?.price, dxTradeCache['/ES:XCME']?.price, dxTradeCache['/ES']?.price, gexLevelCache.esSpot, 0);
     if (!(esSpot > 0)) esSpot = await fetchUnderlyingLast('/ESM6').catch(() => 0);
 
@@ -1263,24 +1144,6 @@ const server = http.createServer(async (req, res) => {
     const strikeMap = {};
     for (const [sym, greeks] of Object.entries(dxGreeksCache)) {
       if (!isSpxwSymbol(sym)) continue;
-      
-      // Filter by DTE if requested
-      if (dteParam) {
-        const symExpiry = optionExpirationCompact(sym);
-        const etDateStr = new Date().toISOString().split('T')[0];
-        const etDateCompact = etDateStr.replace(/-/g, '').slice(2);
-        
-        if (dteParam === '0DTE' && symExpiry !== etDateCompact) continue;
-        if (dteParam === '1DTE') {
-          // Next trading day
-          const tomorrow = new Date();
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          const tomorrowCompact = tomorrow.toISOString().split('T')[0].replace(/-/g, '').slice(2);
-          if (symExpiry !== tomorrowCompact) continue;
-        }
-        // Add more DTE filters as needed
-      }
-      
       const m = String(sym).match(/[CP](\d{4,6})$/);
       if (!m) continue;
       const strike = parseInt(m[1], 10);
@@ -1318,7 +1181,6 @@ const server = http.createServer(async (req, res) => {
         spot:             esSpot,
         spx_spot:         spxSpot,
         strikes_cached:   strikeCount,
-        dte:              dteParam || 'auto',
         ts: Date.now()
       }
     });
@@ -1342,36 +1204,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (!(realized10d > 0) && vix30 > 0) realized10d = parseFloat((vix30 * 0.85).toFixed(2));
 
-    // TNX (10Y Yield) — same pattern as VIX using fetchUnderlyingLast
-    let tnxRaw = firstFiniteNumber(
-      dxTradeCache['TNX']?.price, dxTradeCache['$TNX']?.price,
-      dxTradeCache['$TNX.X']?.price, 0
-    );
-    if (!(tnxRaw > 0)) tnxRaw = await fetchUnderlyingLast('$TNX').catch(() => 0);
-    if (!(tnxRaw > 0)) tnxRaw = await fetchUnderlyingLast('TNX').catch(() => 0);
-    // TNX sometimes quoted *10 (e.g. 45.7 = 4.57%)
-    const tnx = tnxRaw > 20 ? parseFloat((tnxRaw / 10).toFixed(3)) : parseFloat(tnxRaw.toFixed(3));
-    log(`[TNX] raw=${tnxRaw} normalized=${tnx}`);
-
-    // Auto-store TNX in yield history whenever we get a valid value
-    if (tnx > 0) {
-      const history = loadYieldHistoryLocal();
-      const todayKey = new Date().toISOString().split('T')[0];
-      history[todayKey] = { yield: tnx, ts: Date.now() };
-      saveYieldHistoryLocal(history);
-    }
-
     return sendJSON(res, 200, {
-      data: { vix_spot: vix30, vix_1d: vix1d, realized_10d: realized10d, tnx, ts: Date.now() }
+      data: { vix_spot: vix30, vix_1d: vix1d, realized_10d: realized10d, ts: Date.now() }
     });
-  }
-
-  // ── GET /proxy/api/tt/debug-cache — show what's in dxLink trade cache ─────────
-  if (req.method === 'GET' && p === '/proxy/api/tt/debug-cache') {
-    const keys = Object.keys(dxTradeCache).slice(0, 50);
-    const sample = {};
-    keys.forEach(k => { sample[k] = dxTradeCache[k]; });
-    return sendJSON(res, 200, { keys: Object.keys(dxTradeCache).length, sample, ts: Date.now() });
   }
 
   // ── POST /proxy/api/volatility/probabilities  ─────────────────────────────────
@@ -1550,13 +1385,11 @@ const server = http.createServer(async (req, res) => {
     const streamerSyms = pickNearestOptionStreamerSymbols(filteredOptions, underlyingPrice);
     if (streamerSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
       // GEX needs Greeks, open interest, and same-day volume.
-      // Quote added so multi-stock premium flow has live bid/ask (mid pricing).
       streamerSyms.forEach(sym => {
-        addAutoSubscription(sym, ['Greeks','Summary','Trade','Quote']);
+        addAutoSubscription(sym, ['Greeks','Summary','Trade']);
         queueAutoSubscription({ type: 'Greeks',  symbol: sym });
         queueAutoSubscription({ type: 'Summary', symbol: sym });
         queueAutoSubscription({ type: 'Trade', symbol: sym });
-        queueAutoSubscription({ type: 'Quote', symbol: sym });
       });
       sendSubscriptionsRateLimited();
       log('Subscribed', streamerSyms.length, 'nearest option symbols to dxLink (fire-and-forget)');
@@ -2098,35 +1931,6 @@ function isDST(date) {
 
 async function prewarmCache() {
   log('Pre-warming dxLink cache for SPX options...');
-
-  // Subscribe core market symbols: ES, VIX, VIX1D, TNX
-  const waitForChannel = () => new Promise(resolve => {
-    const check = () => {
-      if (dxSocket?.readyState === WebSocket.OPEN && dxChannelOpen) return resolve();
-      setTimeout(check, 500);
-    };
-    check();
-  });
-
-  waitForChannel().then(() => {
-    const coreSymbols = [
-      { type: 'Trade', symbol: '/ESM26' },
-      { type: 'Trade', symbol: '/ESM6' },
-      { type: 'Trade', symbol: 'VIX' },
-      { type: 'Trade', symbol: 'VIX1D' },
-      { type: 'Trade', symbol: 'VIXST' },
-      { type: 'Trade', symbol: 'TNX' },
-      { type: 'Quote', symbol: '/ESM26' },
-      { type: 'Quote', symbol: 'VIX' },
-      { type: 'Quote', symbol: 'TNX' },
-    ];
-    coreSymbols.forEach(item => {
-      addAutoSubscription(item.symbol, [item.type]);
-      queueAutoSubscription(item);
-    });
-    sendSubscriptionsRateLimited();
-    log('Core symbols subscribed: ES, VIX, VIX1D, TNX');
-  });
   try {
     // Get nested chain to find root symbol
     const { status: s1, data: d1 } = await ttGet('/option-chains/SPX/nested');
@@ -2203,14 +2007,14 @@ server.listen(PORT, async () => {
   // ─── Auto-refresh GEX levels every 5 minutes ─────────────────────────────
   setInterval(async () => {
     try {
-      // Run during pre-market + regular market hours (Mon–Fri, 8:00 AM–4:15 PM ET)
+      // Only run during market hours (Mon–Fri, 9:30–16:15 ET)
       const now = new Date();
       const day = now.getUTCDay(); // 0=Sun, 6=Sat
       const etHour = (now.getUTCHours() - 5 + 24) % 24; // rough ET offset (no DST adjustment)
       const etMin  = now.getUTCMinutes();
       const etTime = etHour * 60 + etMin;
       if (day === 0 || day === 6) return;
-      if (etTime < 8 * 60 || etTime > 16 * 60 + 15) return;  // 8:00 AM – 4:15 PM ET
+      if (etTime < 9 * 60 + 30 || etTime > 16 * 60 + 15) return;
 
       const ok = await ensureToken();
       if (!ok) return;

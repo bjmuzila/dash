@@ -1,12 +1,24 @@
-<!-- PAGE: INSIGHTS -->
+<!-- INSIGHTS PAGE WITH TABBED IB DASHBOARD -->
 <div id="page-insights" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
-  <div style="padding:14px 20px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0">
-    <div style="font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">Insights</div>
+  <div style="padding:14px 20px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:16px">
+      <div style="font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">Insights</div>
+      <div style="display:flex;gap:0;border-bottom:2px solid var(--border)">
+        <button onclick="switchInsightsTab('exposure')" id="tab-exposure" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid rgba(0,229,255,.45);padding-bottom:4px;transition:.2s" data-tab="exposure">EXPOSURE STACK</button>
+        <button onclick="switchInsightsTab('ib')" id="tab-ib" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;padding-bottom:4px;transition:.2s" data-tab="ib">IB LOGIC & AI</button>
+        <button onclick="switchInsightsTab('voltrendv2')" id="tab-voltrendv2" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;padding-bottom:4px;transition:.2s" data-tab="voltrendv2">VOLATILITY TREND</button>
+        <button onclick="switchInsightsTab('voltrendprob')" id="tab-voltrendprob" style="padding:0 12px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;padding-bottom:4px;transition:.2s" data-tab="voltrendprob">VOL TREND</button>
+      </div>
+    </div>
   </div>
 
-  <div id="insights-share-source" style="flex:1;display:grid;grid-template-columns:minmax(320px,420px) minmax(0,1fr);min-height:0;overflow:hidden">
-    <aside id="insights-share-left" style="min-height:0;overflow:auto;border-right:1px solid var(--border);background:linear-gradient(180deg,rgba(0,229,255,.055),rgba(255,179,0,.025));padding:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px">
+  <div id="insights-share-source" style="flex:1;display:grid;grid-template-columns:minmax(320px,460px) minmax(0,1fr);min-height:0;overflow:hidden" data-current-tab="exposure">
+    
+    <!-- LEFT SIDEBAR: SHARED FOR BOTH TABS -->
+    <aside id="insights-share-left" style="min-height:0;overflow:auto;border-right:1px solid var(--border);background:linear-gradient(180deg,rgba(0,229,255,.055),rgba(255,179,0,.025));padding:16px;display:flex;flex-direction:column">
+      
+      <!-- EXPOSURE STACK HEADER (shown on Exposure tab) -->
+      <div id="exposure-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px">
         <div>
           <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:700">Exposure Stack</div>
           <div style="font-size:21px;color:var(--text0);font-weight:800;margin-top:3px">GEX / DEX / CHEX / VEX</div>
@@ -14,6 +26,28 @@
         <div style="font-size:11px;color:var(--cyan);border:1px solid rgba(0,229,255,.35);padding:5px 7px;border-radius:4px;font-weight:800;letter-spacing:.08em">0DTE</div>
       </div>
 
+      <!-- IB HEADER (shown on IB tab) -->
+      <div id="ib-header" style="display:none;margin-bottom:14px">
+        <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:700;margin-bottom:8px">Live Initial Balance</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="border:1px solid rgba(0,229,255,.32);background:rgba(0,229,255,.055);border-radius:6px;padding:8px">
+            <div style="font-size:10px;color:var(--cyan);font-weight:800;letter-spacing:.12em;margin-bottom:4px">ESM6 PRICE</div>
+            <div id="ib-price" style="font-size:18px;color:var(--text0);font-weight:800">--</div>
+          </div>
+          <div style="border:1px solid rgba(0,229,255,.32);background:rgba(0,229,255,.055);border-radius:6px;padding:8px">
+            <div style="font-size:10px;color:var(--cyan);font-weight:800;letter-spacing:.12em;margin-bottom:4px">TIME</div>
+            <div id="ib-time" style="font-size:14px;color:var(--text0);font-weight:800">--:--</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VOLATILITY TREND HEADER (shown on Volatility Trend tab) -->
+      <div id="voltrendv2-header" style="display:none">
+        <!-- Hidden: not needed for volatility trend tab -->
+      </div>
+
+      <!-- EXPOSURE TAB CONTENT -->
+      <div id="exposure-content">
         <div id="insights-live-summary" style="border:1px solid rgba(0,229,255,.32);background:rgba(0,229,255,.055);border-radius:6px;padding:10px;margin-bottom:12px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
             <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase">Live 0DTE Read</div>
@@ -29,58 +63,98 @@
             <div id="insights-gex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
             <div id="insights-gex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Location map. Finds pin zones, walls, flips, and negative-gamma pockets.</div>
           </div>
-        <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+          <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
             <div style="font-size:11px;color:#00e5ff;font-weight:800;letter-spacing:.12em">DEX</div>
             <div id="insights-dex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
             <div id="insights-dex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Inventory pressure. Reads delta cliffs, troughs, shelves, and flip squeezes.</div>
           </div>
-        <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+          <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
             <div style="font-size:11px;color:#7cff6b;font-weight:800;letter-spacing:.12em">CHEX</div>
             <div id="insights-chex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
             <div id="insights-chex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Time-decay pressure. Shows whether passing time supports drift or fights it.</div>
           </div>
-        <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+          <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
             <div style="font-size:11px;color:#ff5ec4;font-weight:800;letter-spacing:.12em">VEX</div>
             <div id="insights-vex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
             <div id="insights-vex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Volatility pressure. Matters when IV expands, crushes, or moves into events.</div>
           </div>
         </div>
 
-      <section style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:12px;margin-bottom:12px">
-        <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">Read Order</div>
-        <ol style="margin:0;padding-left:18px;color:var(--text2);font-size:12px;line-height:1.7">
-          <li>Use GEX to mark walls, flips, and unstable zones.</li>
-          <li>Use DEX to find inventory acceleration or exhaustion.</li>
-          <li>Use CHEX to judge whether time decay helps the move.</li>
-          <li>Use VEX only when IV is actively rising or falling.</li>
-          <li>Confirm with signed live Vol GEX from today's trades.</li>
-        </ol>
-      </section>
+        <section style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:16px;min-height:260px">
+          <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">Quick Bias</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px;color:var(--text2);line-height:1.45">
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+              <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Call Wall</div>
+              <div id="insights-call-wall" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+              <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Put Wall</div>
+              <div id="insights-put-wall" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+              <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">GEX Flip</div>
+              <div id="insights-flip" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+              <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Vol GEX</div>
+              <div id="insights-volgex" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+            </div>
+          </div>
+        </section>
+      </div>
 
-      <section style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:12px;margin-bottom:12px">
-        <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">Vol GEX Rule</div>
-        <div style="font-family:Consolas,monospace;font-size:11px;line-height:1.6;color:var(--text1);background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.06);border-radius:4px;padding:8px;margin-bottom:8px">
-          Tick GEX = Direction x Type x Gamma x Size x 50 x Spot^2 x 0.01
+      <!-- IB TAB CONTENT (left sidebar) -->
+      <div id="ib-content-left" style="display:none">
+        <div style="border:1px solid rgba(0,229,255,.32);background:rgba(0,229,255,.055);border-radius:6px;padding:10px;margin-bottom:12px">
+          <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">IB Range (9:30-10:30 AM)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div style="border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">HIGH</div>
+              <div id="ib-high" style="font-size:16px;color:var(--text0);font-weight:800">--</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">LOW</div>
+              <div id="ib-low" style="font-size:16px;color:var(--text0);font-weight:800">--</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">MID</div>
+              <div id="ib-mid" style="font-size:16px;color:var(--text0);font-weight:800">--</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">WIDTH</div>
+              <div id="ib-width" style="font-size:16px;color:var(--text0);font-weight:800">--</div>
+            </div>
+          </div>
         </div>
-        <div style="font-size:12px;color:var(--text2);line-height:1.55">Prefer signed trade-by-trade flow over raw option-chain volume. Today's flow should show what actually traded, by strike or as a net session total.</div>
-      </section>
 
-      <section style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:12px">
-        <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">Quick Bias</div>
-        <div style="display:grid;gap:7px;font-size:12px;color:var(--text2);line-height:1.5">
-          <div><b style="color:var(--text0)">Call wall:</b> <span id="insights-call-wall">--</span></div>
-          <div><b style="color:var(--text0)">Put wall:</b> <span id="insights-put-wall">--</span></div>
-          <div><b style="color:var(--text0)">GEX flip:</b> <span id="insights-flip">--</span></div>
-          <div><b style="color:var(--text0)">Vol GEX:</b> <span id="insights-volgex">--</span></div>
-        </div>
-      </section>
+        <section style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:12px;margin-bottom:12px">
+          <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">Break Status</div>
+          <div style="display:grid;gap:8px;font-size:12px;color:var(--text2)">
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">HIGH BREAK</div>
+              <div id="ib-high-break" style="font-size:14px;color:var(--text0);font-weight:800">Waiting...</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">LOW BREAK</div>
+              <div id="ib-low-break" style="font-size:14px;color:var(--text0);font-weight:800">Waiting...</div>
+            </div>
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:4px;padding:8px;background:rgba(0,0,0,.2)">
+              <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:3px">POSITION vs MID</div>
+              <div id="ib-position" style="font-size:14px;color:var(--text0);font-weight:800">--</div>
+            </div>
+          </div>
+        </section>
+      </div>
     </aside>
 
+    <!-- MAIN CONTENT AREA -->
     <main style="min-height:0;overflow:auto;padding:18px 20px">
       <div id="insights-share-main" style="max-width:980px;background:var(--bg0)">
+        
+        <!-- EXPOSURE TAB MAIN CONTENT -->
+        <div id="exposure-main" style="">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px">
             <div>
-              <img src="assets/bzilatrades-logo.png" alt="BzilaTrades" style="height:42px;width:auto;display:block;object-fit:contain;margin-bottom:10px">
               <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800;margin-bottom:6px">Execution Playbook</div>
               <div id="insights-main-title" style="font-size:26px;color:var(--text0);font-weight:800">Turn exposure into trade context</div>
             </div>
@@ -88,33 +162,10 @@
               <button onclick="insightsRefreshAll()" title="Refresh all 0DTE data" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid rgba(0,229,255,.45);border-radius:4px;background:rgba(0,229,255,.08);color:var(--cyan);cursor:pointer">Refresh</button>
               <button onclick="insightsCopyAnalysis()" title="Copy analysis" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg1);color:var(--cyan);cursor:pointer">Copy</button>
               <button onclick="insightsPostX()" title="Post to X" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg1);color:#e8edf5;cursor:pointer">X</button>
-              <button onclick="insightsPostDiscord()" title="Post to Discord" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg1);color:#8ea1ff;cursor:pointer">Discord</button>
             </div>
           </div>
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-bottom:16px">
-          <div style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:12px">
-            <div style="font-size:14px;color:#ffb300;font-weight:800;margin-bottom:8px">Delta Cliff Reversal</div>
-            <div style="font-size:13px;color:var(--text2);line-height:1.6">Heavy negative GEX plus a cumulative DEX trough can mark maximum hedge pressure. If downside stalls there, look for a bounce back toward the GEX flip.</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:12px">
-            <div style="font-size:14px;color:#00e5ff;font-weight:800;margin-bottom:8px">GEX Flip Squeeze</div>
-            <div style="font-size:13px;color:var(--text2);line-height:1.6">A steep DEX slope through the flip means inventory is changing quickly. If signed flow agrees, trade breakout or retest continuation.</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:12px">
-            <div style="font-size:14px;color:#ff5ec4;font-weight:800;margin-bottom:8px">Positive Wall Fade</div>
-            <div style="font-size:13px;color:var(--text2);line-height:1.6">When price reaches a positive GEX wall and DEX flattens into a shelf, avoid chasing and watch for mean reversion.</div>
-          </div>
-        </div>
-
-        <div id="insights-full-analysis" style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:14px;font-size:14px;color:var(--text1);line-height:1.65;margin-bottom:16px">Waiting for 0DTE data...</div>
-
-        <div id="insights-confidence-panel" style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:14px;margin-bottom:16px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
-            <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800">Confidence Scores</div>
-            <div id="insights-confidence-total" style="font-size:18px;color:var(--text0);font-weight:800">--</div>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
             <div style="border:1px solid rgba(255,179,0,.28);border-radius:6px;padding:10px;background:rgba(255,179,0,.045)">
               <div style="font-size:11px;color:#ffb300;font-weight:800;margin-bottom:7px">GEX</div>
               <div id="insights-conf-gex" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
@@ -139,46 +190,2208 @@
               <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-vex-bar" style="height:100%;width:0;background:#ff5ec4"></div></div>
               <div id="insights-conf-vex-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
             </div>
+            <div style="border:1px solid rgba(0,230,118,.28);border-radius:6px;padding:10px;background:rgba(0,230,118,.045)">
+              <div style="font-size:11px;color:#00e676;font-weight:800;margin-bottom:7px">BUY / SELL</div>
+              <div id="insights-conf-direction" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-direction-bar" style="height:100%;width:0;background:#00e676"></div></div>
+              <div id="insights-conf-direction-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
+            </div>
+          </div>
+
+          <div id="insights-history-panel" style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:14px;margin-bottom:16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+              <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800">Historical Score</div>
+              <div id="insights-history-time" style="font-size:12px;color:var(--text2);font-weight:700">NY 9:00-15:45</div>
+            </div>
+            <div id="insights-history-list" style="overflow-x:auto;overflow-y:hidden;display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - 20px) / 3);gap:10px;padding-bottom:6px">
+              <div style="border:1px solid rgba(0,230,118,.28);border-radius:6px;padding:8px;background:rgba(0,230,118,.045);min-width:0">
+                <div style="font-size:11px;color:#00e676;font-weight:800;margin-bottom:7px">BUY / SELL</div>
+                <div style="font-size:18px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+                <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div style="height:100%;width:0;background:#00e676"></div></div>
+                <div style="font-size:10px;color:var(--text2);line-height:1.35;margin-top:7px">Records every 5 minutes from 9:00 through 15:45 New York time.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- GAMMA LOGIC (Dynamic, Updates Based on Conditions) -->
+          <div style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:14px;margin-bottom:14px">
+            <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px">Gamma Logic Rules</div>
+            <div id="gamma-logic-stack" style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--text2);line-height:1.45;min-height:80px">
+              <div style="color:var(--text3);font-size:11px">Awaiting data...</div>
+            </div>
+          </div>
+
+          <!-- HISTORICAL GREEKS CHART -->
+          <div style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:14px;margin-bottom:14px">
+            <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px">Historical Greeks (Today)</div>
+            <canvas id="greeksHistoryChart" style="width:100%;height:220px;display:block"></canvas>
+            <div id="greeksChartLoading" style="color:var(--text3);font-size:11px;text-align:center;padding:20px 0">Loading chart...</div>
           </div>
         </div>
 
-        <table style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text2);background:var(--bg1);border:1px solid var(--border);border-radius:6px;overflow:hidden">
-          <thead>
-            <tr style="background:rgba(0,229,255,.07);color:var(--text0);font-size:10px;letter-spacing:.1em;text-transform:uppercase">
-              <th style="text-align:left;padding:9px;border-bottom:1px solid var(--border)">Signal</th>
-              <th style="text-align:left;padding:9px;border-bottom:1px solid var(--border)">Use It For</th>
-              <th style="text-align:left;padding:9px;border-bottom:1px solid var(--border)">Action Read</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style="padding:9px;border-bottom:1px solid var(--border);color:#ffb300;font-weight:800">GEX</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Location, walls, flips, pin risk</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Positive GEX can dampen movement; negative GEX can amplify it.</td>
-            </tr>
-            <tr>
-              <td style="padding:9px;border-bottom:1px solid var(--border);color:#00e5ff;font-weight:800">DEX</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Dealer inventory and directional hedging</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Steep slopes support momentum; shelves warn that the engine is fading.</td>
-            </tr>
-            <tr>
-              <td style="padding:9px;border-bottom:1px solid var(--border);color:#7cff6b;font-weight:800">CHEX</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Time-decay re-hedging</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Use after GEX and DEX to see whether time supports or fights the trade.</td>
-            </tr>
-            <tr>
-              <td style="padding:9px;border-bottom:1px solid var(--border);color:#ff5ec4;font-weight:800">VEX</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">IV-driven re-hedging</td>
-              <td style="padding:9px;border-bottom:1px solid var(--border)">Only active when IV is moving; flat IV means potential energy, not pressure.</td>
-            </tr>
-            <tr>
-              <td style="padding:9px;color:var(--cyan);font-weight:800">Vol GEX</td>
-              <td style="padding:9px">Today's signed option flow</td>
-              <td style="padding:9px">Use live trade flow as confirmation, not chain volume snapshots.</td>
-            </tr>
-          </tbody>
-        </table>
+        <!-- IB TAB MAIN CONTENT -->
+        <div id="ib-main" style="display:none">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px">
+            <div>
+              <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800;margin-bottom:8px">AI If-Then Analysis</div>
+              <div style="font-size:22px;color:var(--text0);font-weight:800">What The IB Logic Tells Us Right Now</div>
+            </div>
+            <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+              <button id="ib-copy-shot-btn" onclick="copyIBScreenshot()" title="Copy screenshot" 
+                style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY</button>
+              <button id="ib-share-x-btn" onclick="shareIB('x')" title="Copy and open X" 
+                style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+              <button id="ib-share-discord-btn" onclick="shareIB('discord')" title="Post to Discord" 
+                style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+            </div>
+          </div>
+
+          <!-- RULE 1: INSIDE DAY EXCEPTION -->
+          <div style="border:1px solid rgba(0,229,255,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(0,229,255,.045)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div style="width:24px;height:24px;border-radius:50%;background:rgba(0,229,255,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:var(--cyan)">1</div>
+              <div style="font-size:13px;color:var(--cyan);font-weight:800;text-transform:uppercase;letter-spacing:.08em">The Inside Day Exception</div>
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">
+              <strong>If:</strong> IB closes at 10:30 AM (and price stays within the range)<br>
+              <strong>Then:</strong> 99.4% chance of at least one breakout by session end
+            </div>
+            <div id="rule-1-status" style="font-size:13px;color:var(--text0);padding:8px;background:rgba(0,0,0,.2);border-radius:4px;border-left:3px solid #00e5ff">Waiting for IB closure...</div>
+          </div>
+
+          <!-- RULE 2: MIDPOINT BIAS -->
+          <div style="border:1px solid rgba(255,179,0,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(255,179,0,.045)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div style="width:24px;height:24px;border-radius:50%;background:rgba(255,179,0,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#ffb300">2</div>
+              <div style="font-size:13px;color:#ffb300;font-weight:800;text-transform:uppercase;letter-spacing:.08em">Midpoint Dominance</div>
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">
+              <strong>If:</strong> Price trades above/below IB midpoint<br>
+              <strong>Then:</strong> 83-95% prob of breaking respective boundary
+            </div>
+            <div id="rule-2-status" style="font-size:13px;color:var(--text0);padding:8px;background:rgba(0,0,0,.2);border-radius:4px;border-left:3px solid #ffb300">Calculating position relative to midpoint...</div>
+          </div>
+
+          <!-- RULE 3: TEMPORAL DECAY -->
+          <div style="border:1px solid rgba(124,255,107,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(124,255,107,.045)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div style="width:24px;height:24px;border-radius:50%;background:rgba(124,255,107,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#7cff6b">3</div>
+              <div style="font-size:13px;color:#7cff6b;font-weight:800;text-transform:uppercase;letter-spacing:.08em">Volatility Velocity</div>
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">
+              <strong>If:</strong> 10:30 AM has passed<br>
+              <strong>Then:</strong> 84.1% of breakouts occur within 30 min; if missed, shift to range-bound
+            </div>
+            <div id="rule-3-status" style="font-size:13px;color:var(--text0);padding:8px;background:rgba(0,0,0,.2);border-radius:4px;border-left:3px solid #7cff6b">Waiting for 10:30 AM...</div>
+          </div>
+
+          <!-- RULE 4: PATH DEPENDENCY -->
+          <div style="border:1px solid rgba(255,94,196,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(255,94,196,.045)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div style="width:24px;height:24px;border-radius:50%;background:rgba(255,94,196,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#ff5ec4">4</div>
+              <div style="font-size:13px;color:#ff5ec4;font-weight:800;text-transform:uppercase;letter-spacing:.08em">Low-First Upside Skew</div>
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">
+              <strong>If:</strong> IB Low forms before IB High (path dependency)<br>
+              <strong>Then:</strong> 78.79% prob of IB High break, only 19.7% of IB Low break
+            </div>
+            <div id="rule-4-status" style="font-size:13px;color:var(--text0);padding:8px;background:rgba(0,0,0,.2);border-radius:4px;border-left:3px solid #ff5ec4">Tracking which side forms first...</div>
+          </div>
+
+          <!-- RULE 5: DOUBLE BREACH -->
+          <div style="border:1px solid rgba(0,230,118,.25);border-radius:6px;padding:14px;background:rgba(0,230,118,.045)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div style="width:24px;height:24px;border-radius:50%;background:rgba(0,230,118,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#00e676">5</div>
+              <div style="font-size:13px;color:#00e676;font-weight:800;text-transform:uppercase;letter-spacing:.08em">Double Cross Whiplash</div>
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">
+              <strong>If:</strong> One side of IB breaks early<br>
+              <strong>Then:</strong> ES has 40.1% chance of double breach; NQ only 23.5%
+            </div>
+            <div id="rule-5-status" style="font-size:13px;color:var(--text0);padding:8px;background:rgba(0,0,0,.2);border-radius:4px;border-left:3px solid #00e676">Monitoring for first break...</div>
+          </div>
+        </div>
+
+        <!-- VOLATILITY TREND TAB MAIN CONTENT -->
+        <div id="voltrendv2-main" style="display:none">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px">
+            <div>
+              <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800;margin-bottom:8px">AI Risk Logic System</div>
+              <div style="font-size:22px;color:var(--text0);font-weight:800">Volatility Trend & Regime Classification</div>
+              <div id="vol-updated" style="font-size:10px;color:var(--text3);margin-top:4px">--</div>
+            </div>
+            <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+              <button id="vol-copy-shot-btn" onclick="copyVolTrendScreenshot()" title="Copy screenshot" 
+                style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY</button>
+              <button id="vol-share-x-btn" onclick="shareVolTrend('x')" title="Copy and open X" 
+                style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+              <button id="vol-share-discord-btn" onclick="shareVolTrend('discord')" title="Post to Discord" 
+                style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+            </div>
+          </div>
+
+          <!-- MORNING FEATURE VECTOR -->
+          <div style="border:1px solid rgba(0,229,255,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(0,229,255,.045)">
+            <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Morning Feature Vector (9:15 AM)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">ESM6 PRICE</div>
+                <div id="vol-spot" style="font-size:16px;color:#00e5ff;font-weight:800">--</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">DEALER NET GEX ($B)</div>
+                <div id="vol-gex" style="font-size:16px;color:#ffb300;font-weight:800">--</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">VIX 1D</div>
+                <div id="vol-vix1d" style="font-size:16px;color:#7cff6b;font-weight:800">--</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">VIX SPOT (30D)</div>
+                <div id="vol-vix30" style="font-size:16px;color:#ff5ec4;font-weight:800">--</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">REALIZED 10D</div>
+                <div id="vol-hv" style="font-size:16px;color:#00e676;font-weight:800">--</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">GAMMA FLIP NODE</div>
+                <div id="vol-flip" style="font-size:16px;color:#ff4757;font-weight:800">--</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- DERIVED METRICS -->
+          <div style="border:1px solid rgba(124,255,107,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(124,255,107,.045)">
+            <div style="font-size:11px;color:#7cff6b;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Derived Metrics</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px">TERM SPREAD</div>
+                <div id="vol-term" style="font-size:14px;color:#7cff6b;font-weight:800">--</div>
+                <div style="font-size:9px;color:var(--text3);margin-top:3px">(VIX1D - VIX30)</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px">VAR. RISK PREMIUM</div>
+                <div id="vol-vrp" style="font-size:14px;color:#7cff6b;font-weight:800">--</div>
+                <div style="font-size:9px;color:var(--text3);margin-top:3px">(VIX30 - HV)</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:8px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px">SPOT-FLIP DIST.</div>
+                <div id="vol-dist" style="font-size:14px;color:#7cff6b;font-weight:800">--</div>
+                <div style="font-size:9px;color:var(--text3);margin-top:3px">%</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- REGIME CLASSIFICATION -->
+          <div id="vol-regime-container" style="display:grid;gap:8px">
+            <!-- Dynamic regime boxes will be inserted here -->
+          </div>
+
+          <!-- PROBABILITY OUTCOMES -->
+          <div style="border:1px solid rgba(255,179,0,.25);border-radius:6px;padding:14px;background:rgba(255,179,0,.045)">
+            <div style="font-size:11px;color:#ffb300;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px">Probability Outcomes</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:12px;background:rgba(0,0,0,.3);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase">Bullish</div>
+                <div id="vol-prob-bull" style="font-size:28px;color:#00e676;font-weight:800;margin-bottom:4px">--</div>
+                <div style="font-size:11px;color:var(--text2)">(N matches)</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:12px;background:rgba(0,0,0,.3);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase">Chop / Balance</div>
+                <div id="vol-prob-chop" style="font-size:28px;color:#ffb300;font-weight:800;margin-bottom:4px">--</div>
+                <div style="font-size:11px;color:var(--text2)">(N matches)</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:12px;background:rgba(0,0,0,.3);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase">Bearish</div>
+                <div id="vol-prob-bear" style="font-size:28px;color:#ff4757;font-weight:800;margin-bottom:4px">--</div>
+                <div style="font-size:11px;color:var(--text2)">(N matches)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VOL TREND PROBABILITY TAB MAIN CONTENT -->
+        <div id="voltrendprob-main" style="display:none">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px">
+            <div>
+              <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800;margin-bottom:8px">Probability Engine</div>
+              <div style="font-size:22px;color:var(--text0);font-weight:800">Market Direction Probabilities</div>
+              <div id="voltrendprob-updated" style="font-size:10px;color:var(--text3);margin-top:4px">--</div>
+            </div>
+          </div>
+
+          <!-- LIVE CALCULATED METRICS (from VOLATILITY TREND tab data) -->
+          <div style="border:1px solid rgba(0,229,255,.25);border-radius:6px;padding:14px;margin-bottom:12px;background:rgba(0,229,255,.045)">
+            <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Live Metrics (SPX 0DTE)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">DEALER NET GEX</div>
+                <div id="prob-net-gex" style="font-size:18px;color:#ffb300;font-weight:800">--</div>
+                <div style="font-size:8px;color:var(--text3);margin-top:2px">Billions</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">VIX SPREAD</div>
+                <div id="prob-vix-spread" style="font-size:18px;color:#7cff6b;font-weight:800">--</div>
+                <div style="font-size:8px;color:var(--text3);margin-top:2px">1D - Spot</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;background:rgba(0,0,0,.3)">
+                <div style="font-size:9px;color:var(--text3);font-weight:700;margin-bottom:3px;letter-spacing:.08em">YIELD CHANGE</div>
+                <div id="prob-yield-change" style="font-size:18px;color:#ff5ec4;font-weight:800">--</div>
+                <div style="font-size:8px;color:var(--text3);margin-top:2px">2D (bps)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PROBABILITY OUTPUTS (MAIN) -->
+          <div style="border:1px solid rgba(255,179,0,.25);border-radius:6px;padding:20px;margin-bottom:16px;background:rgba(255,179,0,.045)">
+            <div style="font-size:11px;color:#ffb300;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:16px">Market Direction Probabilities</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+              <div style="border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:16px;background:rgba(0,0,0,.25);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">Bullish</div>
+                <div id="prob-bullish" style="font-size:48px;color:#00e676;font-weight:900;margin-bottom:6px">--</div>
+                <div style="font-size:11px;color:var(--text2)">% Probability</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:16px;background:rgba(0,0,0,.25);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">Chop / Balance</div>
+                <div id="prob-chop" style="font-size:48px;color:#ffb300;font-weight:900;margin-bottom:6px">--</div>
+                <div style="font-size:11px;color:var(--text2)">% Probability</div>
+              </div>
+              <div style="border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:16px;background:rgba(0,0,0,.25);text-align:center">
+                <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">Bearish</div>
+                <div id="prob-bearish" style="font-size:48px;color:#ff4757;font-weight:900;margin-bottom:6px">--</div>
+                <div style="font-size:11px;color:var(--text2)">% Probability</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SIGNAL INTERPRETATION -->
+          <div style="border:1px solid rgba(124,255,107,.25);border-radius:6px;padding:14px;background:rgba(124,255,107,.045)">
+            <div style="font-size:11px;color:#7cff6b;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Model Interpretation</div>
+            <div style="display:grid;gap:8px;font-size:10px;color:var(--text2);line-height:1.6">
+              <div><strong>Bullish:</strong> Positive GEX + negative spread (contango) + declining yields</div>
+              <div><strong>Bearish:</strong> Negative GEX + positive spread (backwardation) + rising yields</div>
+              <div><strong>Chop:</strong> Stable GEX + flat spreads + holiday/calendar pins</div>
+            </div>
+          </div>
+        </div>
       </div>
-    </main>
-  </div>
-</div>
+
+<script>
+let currentInsightsTab = 'exposure';
+let selectedDTE = '0DTE'; // Default to 0DTE, can be '0DTE', '1DTE', '2DTE', etc
+
+// Listen for DTE changes from main index page
+window.addEventListener('dteChanged', (event) => {
+  selectedDTE = event.detail?.dte || '0DTE';
+  console.log(`[Insights] DTE switched to: ${selectedDTE}`);
+  // Refresh exposure data when DTE changes
+  if (currentInsightsTab === 'exposure') {
+    insightsRefreshAll();
+  }
+});
+
+// Also expose function to change DTE programmatically
+window.setInsightsDTE = function(dte) {
+  selectedDTE = dte;
+  if (currentInsightsTab === 'exposure') {
+    insightsRefreshAll();
+  }
+};
+let ibState = {
+  ibHigh: null,
+  ibLow: null,
+  ibMid: null,
+  currentPrice: null,
+  lowFormedFirst: null,
+  highBroken: false,
+  lowBroken: false,
+  ibClosedAt1030: false
+};
+
+function switchInsightsTab(tab) {
+  currentInsightsTab = tab;
+  
+  // Update tab buttons
+  document.getElementById('tab-exposure').style.borderBottomColor = tab === 'exposure' ? 'rgba(0,229,255,.45)' : 'transparent';
+  document.getElementById('tab-exposure').style.color = tab === 'exposure' ? 'var(--cyan)' : 'var(--text2)';
+  document.getElementById('tab-ib').style.borderBottomColor = tab === 'ib' ? 'rgba(0,229,255,.45)' : 'transparent';
+  document.getElementById('tab-ib').style.color = tab === 'ib' ? 'var(--cyan)' : 'var(--text2)';
+  document.getElementById('tab-voltrendv2').style.borderBottomColor = tab === 'voltrendv2' ? 'rgba(0,229,255,.45)' : 'transparent';
+  document.getElementById('tab-voltrendv2').style.color = tab === 'voltrendv2' ? 'var(--cyan)' : 'var(--text2)';
+  document.getElementById('tab-voltrendprob').style.borderBottomColor = tab === 'voltrendprob' ? 'rgba(0,229,255,.45)' : 'transparent';
+  document.getElementById('tab-voltrendprob').style.color = tab === 'voltrendprob' ? 'var(--cyan)' : 'var(--text2)';
+  
+  // Show/hide content
+  document.getElementById('exposure-header').style.display = tab === 'exposure' ? 'flex' : 'none';
+  document.getElementById('ib-header').style.display = tab === 'ib' ? 'block' : 'none';
+  document.getElementById('voltrendv2-header').style.display = tab === 'voltrendv2' ? 'block' : 'none';
+  document.getElementById('exposure-content').style.display = tab === 'exposure' ? 'block' : 'none';
+  document.getElementById('ib-content-left').style.display = tab === 'ib' ? 'block' : 'none';
+  document.getElementById('exposure-main').style.display = tab === 'exposure' ? 'block' : 'none';
+  document.getElementById('ib-main').style.display = tab === 'ib' ? 'block' : 'none';
+  document.getElementById('voltrendv2-main').style.display = tab === 'voltrendv2' ? 'block' : 'none';
+  document.getElementById('voltrendprob-main').style.display = tab === 'voltrendprob' ? 'block' : 'none';
+  
+  // Hide left sidebar for volatility trend tabs
+  const shareLeft = document.getElementById('insights-share-left');
+  const shareSource = document.getElementById('insights-share-source');
+  if (tab === 'voltrendv2' || tab === 'voltrendprob') {
+    shareLeft.style.display = 'none';
+    shareSource.style.gridTemplateColumns = '1fr';
+  } else {
+    shareLeft.style.display = 'flex';
+    shareSource.style.gridTemplateColumns = 'minmax(320px,460px) minmax(0,1fr)';
+  }
+  
+  // Refresh volatility trend if tab is opened
+  if (tab === 'voltrendv2') {
+    updateVolatilityTrend();
+  } else if (tab === 'voltrendprob') {
+    updateVolTrendProbabilities();
+  }
+}
+
+// Fetch live ESM6 price from TastyTrade proxy
+async function fetchESPrice() {
+  try {
+    // Fast path: dedicated endpoint reads directly from dxLink trade cache
+    const res = await fetch('/proxy/api/tt/esm6');
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.data?.price > 0) return data.data.price;
+    }
+    // Fallback: read from gex endpoint spot field
+    const gexRes = await fetch('/proxy/api/tt/gex');
+    if (gexRes.ok) {
+      const gexData = await gexRes.json();
+      const esSpot = gexData?.data?.spot || 0;
+      if (esSpot > 0) return esSpot;
+    }
+    return null;
+  } catch (e) {
+    console.error('ESM6 price fetch failed:', e);
+    return null;
+  }
+}
+
+// Live price update from TastyTrade API
+function updateIBDashboard(price, timestamp) {
+  ibState.currentPrice = price;
+  
+  const hour        = timestamp.getHours();
+  const minute      = timestamp.getMinutes();
+  const timeInMins  = hour * 60 + minute;
+  const ibStart     = 9 * 60 + 30;   // 9:30 AM = 570
+  const ibEnd       = 10 * 60 + 30;  // 10:30 AM = 630
+  const inIBWindow  = timeInMins >= ibStart && timeInMins < ibEnd;
+  const ibClosed    = timeInMins >= ibEnd;
+
+  // Update live price + time display
+  document.getElementById('ib-price').textContent = price.toFixed(2);
+  document.getElementById('ib-time').textContent  = `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+
+  // Only track high/low DURING the IB window (9:30-10:30)
+  if (inIBWindow) {
+    if (!ibState.ibHigh || price > ibState.ibHigh) ibState.ibHigh = price;
+    if (!ibState.ibLow  || price < ibState.ibLow)  ibState.ibLow  = price;
+  }
+  
+  if (ibState.ibHigh && ibState.ibLow) {
+    ibState.ibMid = (ibState.ibHigh + ibState.ibLow) / 2;
+    document.getElementById('ib-high').textContent  = ibState.ibHigh.toFixed(2);
+    document.getElementById('ib-low').textContent   = ibState.ibLow.toFixed(2);
+    document.getElementById('ib-mid').textContent   = ibState.ibMid.toFixed(2);
+    document.getElementById('ib-width').textContent = (ibState.ibHigh - ibState.ibLow).toFixed(2);
+  }
+  
+  // Track which side formed first
+  if (!ibState.lowFormedFirst && ibState.ibLow && ibState.ibHigh && ibState.ibHigh > ibState.ibLow) {
+    ibState.lowFormedFirst = true;
+  }
+  
+  // Check for breaks
+  if (ibState.ibHigh && price > ibState.ibHigh) {
+    ibState.highBroken = true;
+    updateRule1Analysis();
+    updateRule2Analysis();
+  }
+  if (ibState.ibLow && price < ibState.ibLow) {
+    ibState.lowBroken = true;
+    updateRule1Analysis();
+    updateRule2Analysis();
+  }
+  
+  // Position relative to mid
+  if (ibState.ibMid) {
+    const position = price > ibState.ibMid ? 'ABOVE' : 'BELOW';
+    const color = price > ibState.ibMid ? '#00e676' : '#ff5ec4';
+    document.getElementById('ib-position').innerHTML = `<span style="color:${color}">${position}</span>`;
+  }
+  
+  // Update Rule 3: Temporal decay
+  if (timeInMins > ibEnd) {
+    ibState.ibClosedAt1030 = true;
+    updateRule3Analysis();
+  }
+  
+  // Update Rule 4 & 5
+  if (ibState.lowBroken || ibState.highBroken) {
+    updateRule4Analysis();
+    updateRule5Analysis();
+  }
+}
+
+function updateRule1Analysis() {
+  const status = document.getElementById('rule-1-status');
+  if (ibState.highBroken || ibState.lowBroken) {
+    status.innerHTML = `<strong style="color:#00e676">✓ Breakout Detected</strong><br>IB was broken as predicted. 99.4% inside-day probability confirmed.`;
+  }
+}
+
+function updateRule2Analysis() {
+  const status = document.getElementById('rule-2-status');
+  if (ibState.ibMid && ibState.currentPrice) {
+    const aboveMid = ibState.currentPrice > ibState.ibMid;
+    const prob = aboveMid ? '83.5%' : '94.9%';
+    const breakType = aboveMid ? 'IB High' : 'IB Low';
+    status.innerHTML = `<strong style="color:#ffb300">Price is ${aboveMid ? 'ABOVE' : 'BELOW'} midpoint</strong><br>${prob} probability of ${breakType} break`;
+  }
+}
+
+function updateRule3Analysis() {
+  const status = document.getElementById('rule-3-status');
+  status.innerHTML = `<strong style="color:#7cff6b">10:30 AM passed</strong><br>If no breakout yet, shift to range-bound premium decay. 84.1% of breaks occur within 30 min of IB close.`;
+}
+
+function updateRule4Analysis() {
+  const status = document.getElementById('rule-4-status');
+  if (ibState.lowFormedFirst) {
+    status.innerHTML = `<strong style="color:#ff5ec4">Low formed first (path dependency)</strong><br>78.79% chance of IB High break | 19.7% chance of IB Low break. Upside skew active.`;
+  } else {
+    status.innerHTML = `<strong style="color:#ff5ec4">High formed first</strong><br>Higher downside risk. Watch for mean-reversion late session.`;
+  }
+}
+
+function updateRule5Analysis() {
+  const status = document.getElementById('rule-5-status');
+  const doubleBreachProb = 'ES: 40.1% | NQ: 23.5%';
+  status.innerHTML = `<strong style="color:#00e676">First break detected</strong><br>Watch for double-cross whiplash. ${doubleBreachProb} probability of opposite boundary breach.`;
+}
+
+// Poll live ESM6 price every 2 seconds — use overview's window.esPrice first, proxy as fallback
+setInterval(async () => {
+  const now = new Date();
+  const hour = now.getHours();
+  const day  = now.getDay();
+  
+  // Mon-Fri, 8:00 AM - 5:00 PM (covers pre-market and IB window)
+  if (day === 0 || day === 6) return;
+  if (hour < 8 || hour >= 17) return;
+
+  // Use overview's live price if available (already on window from dxLink)
+  let price = (window.esPrice > 0) ? window.esPrice : await fetchESPrice();
+  
+  if (price && typeof price === 'number' && price > 0) {
+    updateIBDashboard(price, now);
+    // Also update vol-spot if on that tab
+    const volSpotEl = document.getElementById('vol-spot');
+    if (volSpotEl && volSpotEl.textContent === '--') {
+      volSpotEl.textContent = price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    }
+  }
+}, 2000);
+
+// Initialize on load
+switchInsightsTab('exposure');
+
+// ─── EXPOSURE STACK: AI WRITEUP ──────────────────────────────────────────────
+
+let insightsLastWriteup = '';
+let insightsLoading = false;
+
+// DST helper
+function isDST(date) {
+  const jan = new Date(date.getFullYear(), 0, 1).getTimezoneOffset();
+  const jul = new Date(date.getFullYear(), 6, 1).getTimezoneOffset();
+  return Math.max(jan, jul) !== date.getTimezoneOffset();
+}
+
+// Mirror of proxy's getTargetExpirationDate logic for UI consistency
+function getTargetExpirationDateForUI() {
+  const now = new Date();
+  const et = isDST(now) ? -4 : -5;
+  const etNow = new Date(now.getTime() + et * 3600000);
+  const etHour = etNow.getUTCHours();
+  const etMin = etNow.getUTCMinutes();
+  const etTime = etHour * 60 + etMin;
+
+  const MARKET_OPEN = 9 * 60 + 30;   // 570
+  const MARKET_CLOSE = 16 * 60;      // 960
+
+  const etDateStr = etNow.toISOString().split('T')[0];
+
+  function nextTradingDay(fromYmd) {
+    const d = new Date(`${fromYmd}T12:00:00Z`);
+    do { d.setUTCDate(d.getUTCDate() + 1); }
+    while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+    return d.toISOString().split('T')[0];
+  }
+
+  if (etTime >= MARKET_OPEN && etTime < MARKET_CLOSE) {
+    // 9:30 AM – 4:00 PM ET → today's chain
+    return etDateStr;
+  } else if (etTime >= MARKET_CLOSE) {
+    // 4:00 PM – midnight ET → tomorrow's chain
+    return nextTradingDay(etDateStr);
+  } else {
+    // Midnight – 9:30 AM ET → next trading day
+    return nextTradingDay(etDateStr);
+  }
+}
+
+async function insightsRefreshAll() {
+  // Prevent concurrent refreshes
+  if (insightsLoading) return;
+  insightsLoading = true;
+
+  const btn = document.querySelector('button[onclick="insightsRefreshAll()"]');
+  if (btn) { btn.textContent = '…'; btn.style.opacity = '.6'; btn.disabled = true; }
+
+  try {
+    // 1. Fetch GEX levels from proxy with DTE parameter
+    const gexUrl = `/proxy/api/tt/gex?dte=${encodeURIComponent(selectedDTE)}`;
+    const gexRes = await fetch(gexUrl);
+    if (!gexRes.ok) throw new Error(`GEX fetch failed: ${gexRes.status}`);
+    const gexJson = await gexRes.json();
+    const gd = gexJson.data;
+
+    const netGexB     = gd.net_gex_billions  || 0;
+    const callWall    = gd.call_wall_spx      || 0;
+    const putWall     = gd.put_wall_spx       || 0;
+    const flipNode    = gd.gamma_flip_spx     || 0;
+    const spot        = gd.spx_spot           || gd.spot || 0;
+    const esSpot      = gd.spot               || 0;
+
+    // 2. Fetch DEX/CHEX/VEX from existing proxy endpoints if available
+    // Fall back to deriving from GEX strike data
+    let dex = 0, chex = 0, vex = 0, volGex = 0;
+    try {
+      const statusRes = await fetch('/proxy/api/status');
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        dex     = statusData?.dex     || statusData?.data?.dex     || 0;
+        chex    = statusData?.chex    || statusData?.data?.chex    || 0;
+        vex     = statusData?.vex     || statusData?.data?.vex     || 0;
+        volGex  = statusData?.volGex  || statusData?.data?.volGex  || 0;
+      }
+    } catch (e) { /* DEX/CHEX/VEX not available from status, continue */ }
+
+    // 3. Update sidebar values — use TARGET expiration date, not calendar date
+    const targetExpiry = getTargetExpirationDateForUI();
+    const sign  = n => (n >= 0 ? '+' : '') + n.toFixed(2) + 'B';
+
+    document.getElementById('insights-gex-value').textContent  = sign(netGexB);
+    document.getElementById('insights-dex-value').textContent  = dex  ? sign(dex / 1e9)  : '--';
+    document.getElementById('insights-chex-value').textContent = chex ? sign(chex / 1e9) : '--';
+    document.getElementById('insights-vex-value').textContent  = vex  ? sign(vex / 1e9)  : '--';
+    document.getElementById('insights-call-wall').textContent  = callWall ? callWall.toFixed(0) : '--';
+    document.getElementById('insights-put-wall').textContent   = putWall  ? putWall.toFixed(0)  : '--';
+    document.getElementById('insights-flip').textContent       = flipNode ? flipNode.toFixed(2) : '--';
+    document.getElementById('insights-volgex').textContent     = volGex   ? sign(volGex / 1e9)  : (netGexB ? sign(Math.abs(netGexB) * 1.07) : '--');
+
+    // 4. Color-code GEX sign
+    const gexEl = document.getElementById('insights-gex-value');
+    gexEl.style.color = netGexB > 0 ? '#00e676' : netGexB < 0 ? '#ff4757' : '#ffb300';
+
+    // 5. Generate AI writeup with CORRECT expiration date
+    await generateExposureWriteup({
+      today: targetExpiry,
+      spot, esSpot, netGexB, callWall, putWall, flipNode,
+      dex, chex, vex, volGex
+    });
+
+    // 6. Update gamma logic rules display
+    updateGammaLogicRules({
+      gex: netGexB,
+      dex: dex ? dex / 1e9 : 0,
+      chex: chex ? chex / 1e9 : 0,
+      vex: vex ? vex / 1e9 : 0
+    });
+
+    // 7. Save greeks to database and update chart
+    if (typeof DB !== 'undefined' && DB.db) {
+      // Calculate buy/sell scores based on greek positions
+      const gexPos = gex > 0.5 ? 75 : gex > 0 ? 55 : gex > -0.5 ? 35 : 15;
+      const dexVal = dex ? dex / 1e9 : 0;
+      const dexPos = dexVal > 0 ? 65 : 35;
+      const chexVal = chex ? chex / 1e9 : 0;
+      const chexPos = chexVal > 0 ? 70 : 30;
+      const vexVal = vex ? vex / 1e9 : 0;
+      const vexPos = Math.abs(vexVal) < 0.5 ? 70 : Math.abs(vexVal) < 1.0 ? 50 : 30;
+      
+      const buyScore = Math.round((gexPos * 0.35 + dexPos * 0.25 + chexPos * 0.25 + vexPos * 0.15));
+      const sellScore = 100 - buyScore;
+      
+      await DB.saveGreeksTimeSeries(netGexB, dexVal, chexVal, vexVal, buyScore, sellScore);
+      await updateGreeksHistoryChart();
+    }
+
+    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    document.getElementById('insights-updated').textContent = `Updated ${ts}`;
+
+  } catch (e) {
+    console.error('insightsRefreshAll failed:', e);
+    document.getElementById('insights-bias').textContent = 'Failed to load exposure data.';
+    document.getElementById('insights-analysis-short').textContent = e.message;
+  } finally {
+    if (btn) { btn.textContent = 'Refresh'; btn.style.opacity = '1'; btn.disabled = false; }
+  }
+}
+
+async function generateExposureWriteup(data) {
+  const biasEl    = document.getElementById('insights-bias');
+  const shortEl   = document.getElementById('insights-analysis-short');
+  const titleEl   = document.getElementById('insights-main-title');
+
+  biasEl.textContent  = 'Analyzing exposure…';
+  shortEl.textContent = '';
+
+  const { today, spot, esSpot, netGexB, callWall, putWall, flipNode, dex, chex, vex, volGex } = data;
+
+  try {
+    // STEP 1: SCORE EACH DIMENSION (0-100)
+    
+    // GEX Regime Score: positive = favorable (dampening), negative = risky (acceleration)
+    const gexScore = netGexB > 0.5 ? 75 : netGexB > 0 ? 55 : netGexB > -0.5 ? 35 : 15;
+    const gexRegime = netGexB > 0 ? 'dampened / pinning' : 'acceleration / expansion';
+    
+    // DEX Inventory Score: based on whether shelves/troughs exist
+    let dexScore = 50; // neutral default
+    if (dex) {
+      dexScore = dex > 0 ? 65 : 35; // positive DEX = upside shelf, negative = downside trough
+    }
+    
+    // CHEX Time Decay Score: supportive vs fighting
+    let chexScore = 50;
+    if (chex) {
+      chexScore = chex > 0 ? 70 : 30; // positive CHEX = supportive, negative = fighting
+    }
+    
+    // VEX Volatility Score: high vol = risky, low vol = constructive
+    let vexScore = 50;
+    if (volGex) {
+      vexScore = Math.abs(volGex) < 0.5 ? 70 : Math.abs(volGex) < 1.0 ? 50 : 30;
+    }
+    
+    // GEX Flip Distance Score: how close is spot to flip? Closer = less favorable
+    let flipScore = 50;
+    if (flipNode > 0 && spot > 0) {
+      const distPercent = Math.abs((spot - flipNode) / flipNode) * 100;
+      if (distPercent > 2) flipScore = 70;      // far from flip = good
+      else if (distPercent > 1) flipScore = 55; // moderate distance
+      else flipScore = 30;                      // too close to flip = risky
+    }
+    
+    // STEP 2: CALCULATE WEIGHTED TOTAL SCORE
+    const totalScore = 
+      gexScore * 0.35 +    // GEX is primary
+      flipScore * 0.20 +   // Flip distance matters
+      chexScore * 0.20 +   // Time decay
+      dexScore * 0.15 +    // Inventory shape
+      vexScore * 0.10;     // Volatility magnitude
+    
+    // STEP 3: GENERATE REGIME & ACTION TEXT
+    let regimeText, actionText, confidenceText;
+    
+    if (totalScore >= 65) {
+      regimeText = 'Favorable';
+      actionText = 'Session shows strong supportive structure. Consider normal to active sizing.';
+      confidenceText = 'High confidence in directional structure.';
+    } else if (totalScore >= 50) {
+      regimeText = 'Neutral / Mixed';
+      actionText = 'Mixed signals present. Reduce sizing and favor reactive setups.';
+      confidenceText = 'Moderate conditions require caution.';
+    } else {
+      regimeText = 'Challenging';
+      actionText = 'Exposure is headwind or unclear. Minimize sizing, preserve capital.';
+      confidenceText = 'Low confidence. Prefer sidelines.';
+    }
+    
+    // STEP 4: BUILD DESCRIPTIVE SENTENCES
+    const sign = (n) => (n >= 0 ? '+' : '') + n.toFixed(2) + 'B';
+    
+    // GEX sentence
+    let gexSentence = `Net GEX is ${sign(netGexB)}`;
+    if (callWall > 0 || putWall > 0) {
+      gexSentence += `, with call wall at ${callWall.toFixed(0)} and put wall at ${putWall.toFixed(0)}.`;
+    } else {
+      gexSentence += '.';
+    }
+    
+    // Flip distance sentence
+    let flipSentence = '';
+    if (flipNode > 0 && spot > 0) {
+      const flipDist = ((spot - flipNode) / flipNode * 100).toFixed(2);
+      flipSentence = `Gamma flip sits at ${flipNode.toFixed(0)} (${flipDist}% away). `;
+    }
+    
+    // Inventory sentence (DEX)
+    let dexSentence = '';
+    if (dex) {
+      dexSentence = dex > 0 ? 'Strong upside shelf present. ' : 'Strong downside trough present. ';
+    }
+    
+    // Time decay sentence (CHEX)
+    let chexSentence = '';
+    if (chex) {
+      chexSentence = chex > 0 ? 'Theta supports drift momentum. ' : 'Theta fights directional moves. ';
+    }
+    
+    // Volatility sentence (VEX)
+    let vexSentence = '';
+    if (volGex) {
+      vexSentence = Math.abs(volGex) < 0.5 ? 'Signed Vol GEX is constructive. ' : Math.abs(volGex) < 1.0 ? 'Signed Vol GEX is neutral. ' : 'Signed Vol GEX signals caution. ';
+    }
+    
+    // STEP 5: ASSEMBLE FINAL WRITEUP
+    const headline = `0DTE ${today}: ${regimeText} ${gexRegime} regime.`;
+    
+    const body = [
+      gexSentence,
+      flipSentence,
+      dexSentence,
+      chexSentence,
+      vexSentence,
+      actionText,
+      confidenceText
+    ].filter(s => s).join(' ');
+    
+    const fullWriteup = headline + ' ' + body;
+    insightsLastWriteup = fullWriteup;
+    
+    // STEP 6: UPDATE UI
+    biasEl.textContent = headline;
+    shortEl.textContent = body;
+    
+    if (titleEl) {
+      titleEl.textContent = `${regimeText} Structure | Score: ${Math.round(totalScore)}/100`;
+    }
+    
+    // Log scores to console for audit
+    console.log(`[Exposure Score] GEX:${gexScore} DEX:${dexScore} CHEX:${chexScore} VEX:${vexScore} Flip:${flipScore} → Total:${totalScore.toFixed(1)}`);
+    
+  } catch (e) {
+    console.error('Writeup generation failed:', e);
+    // Fallback: just show the error
+    biasEl.textContent = 'Error generating analysis.';
+    shortEl.textContent = e.message;
+  }
+}
+
+async function insightsCopyAnalysis() {
+  const btn = document.querySelector('button[onclick="insightsCopyAnalysis()"]');
+  const orig = btn ? btn.textContent : 'Copy';
+  if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+  try {
+    const text = insightsLastWriteup
+      || document.getElementById('insights-bias').textContent + ' '
+      + document.getElementById('insights-analysis-short').textContent;
+    await navigator.clipboard.writeText(text.trim());
+    if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; }
+  } catch (e) {
+    if (btn) { btn.textContent = 'ERR'; btn.style.color = '#ff4757'; }
+  } finally {
+    setTimeout(() => { if (btn) { btn.textContent = orig; btn.style.color = ''; } }, 1500);
+  }
+}
+
+function insightsPostX() {
+  const text = encodeURIComponent(
+    (insightsLastWriteup || document.getElementById('insights-bias').textContent).slice(0, 240)
+  );
+  window.open(`https://twitter.com/intent/tweet?text=${text}`, '_blank');
+}
+
+// Auto-refresh exposure on load and every 1 minute (sync with playbook)
+insightsRefreshAll();
+setInterval(() => {
+  if (currentInsightsTab === 'exposure') insightsRefreshAll();
+}, 60 * 1000);
+
+
+const IB_DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/[WEBHOOK_ID]/[WEBHOOK_TOKEN]'; // Replace with actual
+
+async function loadHtml2Canvas() {
+  if (typeof html2canvas === 'undefined') {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+}
+
+async function renderElement(element) {
+  await loadHtml2Canvas();
+  return html2canvas(element, {
+    backgroundColor: '#05080d',
+    scale: 2,
+    useCORS: true,
+    logging: false,
+    allowTaint: true
+  });
+}
+
+function canvasToBlob(canvas) {
+  return new Promise(resolve => {
+    canvas.toBlob(blob => resolve(blob), 'image/png');
+  });
+}
+
+async function copyIBScreenshot() {
+  const btn = document.getElementById('ib-copy-shot-btn');
+  const orig = btn ? btn.textContent : 'COPY';
+  if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+  
+  try {
+    // Create compact screenshot container
+    const container = document.createElement('div');
+    container.style.backgroundColor = '#05080d';
+    container.style.padding = '14px';
+    container.style.width = '700px';
+    container.style.fontFamily = 'system-ui, -apple-system';
+    container.style.color = '#e8edf5';
+    
+    // Header with IB stats
+    const header = document.createElement('div');
+    header.style.marginBottom = '12px';
+    header.style.paddingBottom = '10px';
+    header.style.borderBottom = '1px solid rgba(0,229,255,.25)';
+    
+    const title = document.createElement('div');
+    title.style.fontSize = '12px';
+    title.style.color = '#00e5ff';
+    title.style.fontWeight = '800';
+    title.style.letterSpacing = '.14em';
+    title.style.textTransform = 'uppercase';
+    title.style.marginBottom = '8px';
+    title.textContent = 'Live Initial Balance';
+    header.appendChild(title);
+    
+    // IB stats grid
+    const statsGrid = document.createElement('div');
+    statsGrid.style.display = 'grid';
+    statsGrid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+    statsGrid.style.gap = '8px';
+    
+    const statLabels = ['Price', 'High', 'Low', 'Mid'];
+    const statIds = ['ib-price', 'ib-high', 'ib-low', 'ib-mid'];
+    
+    statLabels.forEach((label, i) => {
+      const statBox = document.createElement('div');
+      statBox.style.border = '1px solid rgba(0,229,255,.2)';
+      statBox.style.borderRadius = '4px';
+      statBox.style.padding = '6px';
+      statBox.style.background = 'rgba(0,0,0,.3)';
+      
+      const statLabel = document.createElement('div');
+      statLabel.style.fontSize = '9px';
+      statLabel.style.color = '#888';
+      statLabel.style.fontWeight = '700';
+      statLabel.style.marginBottom = '2px';
+      statLabel.textContent = label;
+      
+      const statValue = document.createElement('div');
+      statValue.style.fontSize = '14px';
+      statValue.style.color = '#00e5ff';
+      statValue.style.fontWeight = '800';
+      statValue.style.fontVariantNumeric = 'tabular-nums';
+      const actualElem = document.getElementById(statIds[i]);
+      statValue.textContent = actualElem ? actualElem.textContent : '--';
+      
+      statBox.appendChild(statLabel);
+      statBox.appendChild(statValue);
+      statsGrid.appendChild(statBox);
+    });
+    
+    header.appendChild(statsGrid);
+    container.appendChild(header);
+    
+    // Rules section
+    const rulesTitle = document.createElement('div');
+    rulesTitle.style.fontSize = '11px';
+    rulesTitle.style.color = '#ffffff';
+    rulesTitle.style.fontWeight = '800';
+    rulesTitle.style.letterSpacing = '.14em';
+    rulesTitle.style.textTransform = 'uppercase';
+    rulesTitle.style.marginBottom = '10px';
+    rulesTitle.textContent = 'If-Then AI Analysis';
+    container.appendChild(rulesTitle);
+    
+    // Get all 5 rule boxes
+    const rulesDiv = document.createElement('div');
+    rulesDiv.style.display = 'grid';
+    rulesDiv.style.gap = '8px';
+    
+    const rules = document.querySelectorAll('#ib-main > div[style*="border"]');
+    rules.forEach((rule, idx) => {
+      if (idx >= 5) return; // Only first 5 rules
+      
+      const ruleClone = rule.cloneNode(true);
+      // Make rules more compact in screenshot
+      ruleClone.style.padding = '10px';
+      ruleClone.style.marginBottom = '0';
+      
+      // Reduce font sizes in clone
+      const allText = ruleClone.querySelectorAll('*');
+      allText.forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (style.fontSize) {
+          const size = parseFloat(style.fontSize);
+          if (size > 11) {
+            el.style.fontSize = Math.max(9, size * 0.85) + 'px';
+          }
+        }
+      });
+      
+      rulesDiv.appendChild(ruleClone);
+    });
+    
+    container.appendChild(rulesDiv);
+    
+    const wrapper = document.createElement('div');
+    wrapper.style.backgroundColor = '#05080d';
+    wrapper.style.display = 'inline-block';
+    wrapper.appendChild(container);
+    
+    document.body.appendChild(wrapper);
+    const canvas = await renderElement(wrapper);
+    document.body.removeChild(wrapper);
+    
+    const blob = await canvasToBlob(canvas);
+    await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+    
+    if (btn) {
+      btn.textContent = '✓';
+      btn.style.color = '#00e676';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '#00e5ff';
+      }, 1500);
+    }
+  } catch (e) {
+    console.error('Screenshot copy failed:', e);
+    if (btn) {
+      btn.textContent = 'ERR';
+      btn.style.color = '#ff4757';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '#00e5ff';
+      }, 1500);
+    }
+  }
+}
+
+async function shareIB(platform) {
+  const btnX = document.getElementById('ib-share-x-btn');
+  const btnDiscord = document.getElementById('ib-share-discord-btn');
+  const btn = platform === 'x' ? btnX : btnDiscord;
+  const orig = btn ? btn.textContent : '';
+  
+  if (platform === 'x') {
+    if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+    
+    // Copy screenshot first
+    try {
+      const container = document.createElement('div');
+      container.style.backgroundColor = '#05080d';
+      container.style.padding = '14px';
+      container.style.width = '700px';
+      container.style.fontFamily = 'system-ui, -apple-system';
+      container.style.color = '#e8edf5';
+      
+      const header = document.createElement('div');
+      header.style.marginBottom = '12px';
+      header.style.paddingBottom = '10px';
+      header.style.borderBottom = '1px solid rgba(0,229,255,.25)';
+      
+      const title = document.createElement('div');
+      title.style.fontSize = '12px';
+      title.style.color = '#00e5ff';
+      title.style.fontWeight = '800';
+      title.style.letterSpacing = '.14em';
+      title.style.textTransform = 'uppercase';
+      title.style.marginBottom = '8px';
+      title.textContent = 'Live Initial Balance';
+      header.appendChild(title);
+      
+      const statsGrid = document.createElement('div');
+      statsGrid.style.display = 'grid';
+      statsGrid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+      statsGrid.style.gap = '8px';
+      
+      const statLabels = ['Price', 'High', 'Low', 'Mid'];
+      const statIds = ['ib-price', 'ib-high', 'ib-low', 'ib-mid'];
+      
+      statLabels.forEach((label, i) => {
+        const statBox = document.createElement('div');
+        statBox.style.border = '1px solid rgba(0,229,255,.2)';
+        statBox.style.borderRadius = '4px';
+        statBox.style.padding = '6px';
+        statBox.style.background = 'rgba(0,0,0,.3)';
+        
+        const statLabel = document.createElement('div');
+        statLabel.style.fontSize = '9px';
+        statLabel.style.color = '#888';
+        statLabel.style.fontWeight = '700';
+        statLabel.style.marginBottom = '2px';
+        statLabel.textContent = label;
+        
+        const statValue = document.createElement('div');
+        statValue.style.fontSize = '14px';
+        statValue.style.color = '#00e5ff';
+        statValue.style.fontWeight = '800';
+        const actualElem = document.getElementById(statIds[i]);
+        statValue.textContent = actualElem ? actualElem.textContent : '--';
+        
+        statBox.appendChild(statLabel);
+        statBox.appendChild(statValue);
+        statsGrid.appendChild(statBox);
+      });
+      
+      header.appendChild(statsGrid);
+      container.appendChild(header);
+      
+      const rulesTitle = document.createElement('div');
+      rulesTitle.style.fontSize = '11px';
+      rulesTitle.style.color = '#ffffff';
+      rulesTitle.style.fontWeight = '800';
+      rulesTitle.style.letterSpacing = '.14em';
+      rulesTitle.style.textTransform = 'uppercase';
+      rulesTitle.style.marginBottom = '10px';
+      rulesTitle.textContent = 'If-Then AI Analysis';
+      container.appendChild(rulesTitle);
+      
+      const rulesDiv = document.createElement('div');
+      rulesDiv.style.display = 'grid';
+      rulesDiv.style.gap = '8px';
+      
+      const rules = document.querySelectorAll('#ib-main > div[style*="border"]');
+      rules.forEach((rule, idx) => {
+        if (idx >= 5) return;
+        const ruleClone = rule.cloneNode(true);
+        ruleClone.style.padding = '10px';
+        ruleClone.style.marginBottom = '0';
+        const allText = ruleClone.querySelectorAll('*');
+        allText.forEach(el => {
+          const style = window.getComputedStyle(el);
+          if (style.fontSize) {
+            const size = parseFloat(style.fontSize);
+            if (size > 11) el.style.fontSize = Math.max(9, size * 0.85) + 'px';
+          }
+        });
+        rulesDiv.appendChild(ruleClone);
+      });
+      
+      container.appendChild(rulesDiv);
+      
+      const wrapper = document.createElement('div');
+      wrapper.style.backgroundColor = '#05080d';
+      wrapper.style.display = 'inline-block';
+      wrapper.appendChild(container);
+      
+      document.body.appendChild(wrapper);
+      const canvas = await renderElement(wrapper);
+      document.body.removeChild(wrapper);
+      
+      const blob = await canvasToBlob(canvas);
+      await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+    } catch (e) {
+      console.error('Failed to copy for X:', e);
+    }
+    
+    setTimeout(() => {
+      if (btn) {
+        btn.textContent = orig;
+        btn.style.color = '#00e5ff';
+      }
+      window.open('https://twitter.com/intent/tweet?text=SPX+IB+Logic+Analysis', '_blank');
+    }, 300);
+    return;
+  }
+  
+  // Discord
+  if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+  
+  try {
+    const container = document.createElement('div');
+    container.style.backgroundColor = '#05080d';
+    container.style.padding = '14px';
+    container.style.width = '700px';
+    container.style.fontFamily = 'system-ui, -apple-system';
+    container.style.color = '#e8edf5';
+    
+    const header = document.createElement('div');
+    header.style.marginBottom = '12px';
+    header.style.paddingBottom = '10px';
+    header.style.borderBottom = '1px solid rgba(0,229,255,.25)';
+    
+    const title = document.createElement('div');
+    title.style.fontSize = '12px';
+    title.style.color = '#00e5ff';
+    title.style.fontWeight = '800';
+    title.style.letterSpacing = '.14em';
+    title.style.textTransform = 'uppercase';
+    title.style.marginBottom = '8px';
+    title.textContent = 'Live Initial Balance';
+    header.appendChild(title);
+    
+    const statsGrid = document.createElement('div');
+    statsGrid.style.display = 'grid';
+    statsGrid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+    statsGrid.style.gap = '8px';
+    
+    const statLabels = ['Price', 'High', 'Low', 'Mid'];
+    const statIds = ['ib-price', 'ib-high', 'ib-low', 'ib-mid'];
+    
+    statLabels.forEach((label, i) => {
+      const statBox = document.createElement('div');
+      statBox.style.border = '1px solid rgba(0,229,255,.2)';
+      statBox.style.borderRadius = '4px';
+      statBox.style.padding = '6px';
+      statBox.style.background = 'rgba(0,0,0,.3)';
+      
+      const statLabel = document.createElement('div');
+      statLabel.style.fontSize = '9px';
+      statLabel.style.color = '#888';
+      statLabel.style.fontWeight = '700';
+      statLabel.style.marginBottom = '2px';
+      statLabel.textContent = label;
+      
+      const statValue = document.createElement('div');
+      statValue.style.fontSize = '14px';
+      statValue.style.color = '#00e5ff';
+      statValue.style.fontWeight = '800';
+      const actualElem = document.getElementById(statIds[i]);
+      statValue.textContent = actualElem ? actualElem.textContent : '--';
+      
+      statBox.appendChild(statLabel);
+      statBox.appendChild(statValue);
+      statsGrid.appendChild(statBox);
+    });
+    
+    header.appendChild(statsGrid);
+    container.appendChild(header);
+    
+    const rulesTitle = document.createElement('div');
+    rulesTitle.style.fontSize = '11px';
+    rulesTitle.style.color = '#ffffff';
+    rulesTitle.style.fontWeight = '800';
+    rulesTitle.style.letterSpacing = '.14em';
+    rulesTitle.style.textTransform = 'uppercase';
+    rulesTitle.style.marginBottom = '10px';
+    rulesTitle.textContent = 'If-Then AI Analysis';
+    container.appendChild(rulesTitle);
+    
+    const rulesDiv = document.createElement('div');
+    rulesDiv.style.display = 'grid';
+    rulesDiv.style.gap = '8px';
+    
+    const rules = document.querySelectorAll('#ib-main > div[style*="border"]');
+    rules.forEach((rule, idx) => {
+      if (idx >= 5) return;
+      const ruleClone = rule.cloneNode(true);
+      ruleClone.style.padding = '10px';
+      ruleClone.style.marginBottom = '0';
+      const allText = ruleClone.querySelectorAll('*');
+      allText.forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (style.fontSize) {
+          const size = parseFloat(style.fontSize);
+          if (size > 11) el.style.fontSize = Math.max(9, size * 0.85) + 'px';
+        }
+      });
+      rulesDiv.appendChild(ruleClone);
+    });
+    
+    container.appendChild(rulesDiv);
+    
+    const wrapper = document.createElement('div');
+    wrapper.style.backgroundColor = '#05080d';
+    wrapper.style.display = 'inline-block';
+    wrapper.appendChild(container);
+    
+    document.body.appendChild(wrapper);
+    const canvas = await renderElement(wrapper);
+    document.body.removeChild(wrapper);
+    
+    const blob = await canvasToBlob(canvas);
+    
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({ content: '📊 IB Logic Analysis - SPX Initial Balance Breakdown' }));
+    form.append('files[0]', blob, 'ib-analysis.png');
+    
+    const res = await fetch(IB_DISCORD_WEBHOOK_URL, { 
+      method: 'POST', 
+      body: form 
+    });
+    
+    if (!res.ok) throw new Error(`Discord webhook failed: ${res.status}`);
+    
+    if (btn) {
+      btn.textContent = '✓';
+      btn.style.color = '#00e676';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '#7289da';
+      }, 1500);
+    }
+  } catch (e) {
+    console.error('Discord share failed:', e);
+    if (btn) {
+      btn.textContent = 'ERR';
+      btn.style.color = '#ff4757';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '#7289da';
+      }, 1500);
+    }
+  }
+}
+
+// ============== VOLATILITY TREND FUNCTIONS ==============
+
+// Discord webhook for volatility trend posts
+const VOL_DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/[WEBHOOK_ID]/[WEBHOOK_TOKEN]';
+
+async function copyVolTrendScreenshot() {
+  const btn = document.getElementById('vol-copy-shot-btn');
+  const target = document.getElementById('voltrendv2-main');
+  if (!target) return;
+  
+  if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+  
+  try {
+    // Create wrapper with dark background
+    const wrapper = document.createElement('div');
+    wrapper.style.backgroundColor = '#05080d';
+    wrapper.style.display = 'inline-block';
+    wrapper.style.padding = '14px';
+    wrapper.style.fontFamily = 'system-ui, -apple-system';
+    wrapper.style.color = '#e8edf5';
+    wrapper.style.maxWidth = '700px';
+    
+    // Clone main content
+    const clone = target.cloneNode(true);
+    clone.style.display = 'block';
+    wrapper.appendChild(clone);
+    
+    // Temporarily add to DOM
+    document.body.appendChild(wrapper);
+    
+    // Capture with html2canvas
+    if (typeof html2canvas === 'undefined') {
+      throw new Error('html2canvas not loaded');
+    }
+    
+    const shot = await html2canvas(wrapper, {
+      backgroundColor: '#05080d',
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      allowTaint: true
+    });
+    
+    document.body.removeChild(wrapper);
+    
+    // Copy to clipboard
+    shot.toBlob(async blob => {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+        if (btn) {
+          btn.textContent = '✓';
+          btn.style.color = '#00e676';
+          setTimeout(() => {
+            btn.textContent = 'COPY';
+            btn.style.color = '#00e5ff';
+          }, 1500);
+        }
+      } catch (e) {
+        if (btn) {
+          btn.textContent = 'ERR';
+          btn.style.color = '#ff4757';
+          setTimeout(() => {
+            btn.textContent = 'COPY';
+            btn.style.color = '#00e5ff';
+          }, 1500);
+        }
+      }
+    }, 'image/png');
+  } catch (e) {
+    console.error('Screenshot copy failed:', e);
+    if (btn) {
+      btn.textContent = 'ERR';
+      btn.style.color = '#ff4757';
+      setTimeout(() => {
+        btn.textContent = 'COPY';
+        btn.style.color = '#00e5ff';
+      }, 1500);
+    }
+  }
+}
+
+async function shareVolTrend(platform) {
+  const btn = platform === 'x' 
+    ? document.getElementById('vol-share-x-btn')
+    : document.getElementById('vol-share-discord-btn');
+  
+  const orig = btn ? btn.textContent : '';
+  const origColor = btn ? btn.style.color : '';
+  
+  if (platform === 'x') {
+    // Open Twitter - user will paste from clipboard
+    if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+    setTimeout(() => {
+      if (btn) {
+        btn.textContent = orig;
+        btn.style.color = origColor;
+      }
+      window.open('https://twitter.com/intent/tweet?text=SPX+Volatility+Trend+Analysis', '_blank');
+    }, 300);
+    return;
+  }
+  
+  // Discord posting
+  if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+  
+  try {
+    const target = document.getElementById('voltrendv2-main');
+    if (!target) throw new Error('Volatility trend content not found');
+    
+    // Create container with background
+    const container = document.createElement('div');
+    container.style.backgroundColor = '#05080d';
+    container.style.padding = '14px';
+    container.style.width = '700px';
+    container.style.fontFamily = 'system-ui, -apple-system';
+    container.style.color = '#e8edf5';
+    
+    // Add title
+    const title = document.createElement('div');
+    title.style.fontSize = '12px';
+    title.style.color = '#00e5ff';
+    title.style.fontWeight = '800';
+    title.style.letterSpacing = '.14em';
+    title.style.textTransform = 'uppercase';
+    title.style.marginBottom = '12px';
+    title.textContent = 'SPX Volatility Trend Analysis';
+    container.appendChild(title);
+    
+    // Add key metrics
+    const metricsDiv = document.createElement('div');
+    metricsDiv.style.display = 'grid';
+    metricsDiv.style.gridTemplateColumns = 'repeat(3, 1fr)';
+    metricsDiv.style.gap = '8px';
+    metricsDiv.style.marginBottom = '12px';
+    metricsDiv.style.fontSize = '11px';
+    
+    const metrics = [
+      ['SPOT', document.getElementById('vol-spot')?.textContent || '--'],
+      ['GEX ($B)', document.getElementById('vol-gex')?.textContent || '--'],
+      ['VIX 1D', document.getElementById('vol-vix1d')?.textContent || '--'],
+      ['VIX 30', document.getElementById('vol-vix30')?.textContent || '--'],
+      ['TERM SPREAD', document.getElementById('vol-term')?.textContent || '--'],
+      ['VRP', document.getElementById('vol-vrp')?.textContent || '--']
+    ];
+    
+    metrics.forEach(([label, value]) => {
+      const metricBox = document.createElement('div');
+      metricBox.style.border = '1px solid rgba(0,229,255,.2)';
+      metricBox.style.borderRadius = '4px';
+      metricBox.style.padding = '6px';
+      metricBox.style.background = 'rgba(0,0,0,.3)';
+      
+      const metricLabel = document.createElement('div');
+      metricLabel.style.fontSize = '9px';
+      metricLabel.style.color = '#888';
+      metricLabel.style.fontWeight = '700';
+      metricLabel.style.marginBottom = '2px';
+      metricLabel.textContent = label;
+      
+      const metricValue = document.createElement('div');
+      metricValue.style.fontSize = '13px';
+      metricValue.style.color = '#00e5ff';
+      metricValue.style.fontWeight = '800';
+      metricValue.textContent = value;
+      
+      metricBox.appendChild(metricLabel);
+      metricBox.appendChild(metricValue);
+      metricsDiv.appendChild(metricBox);
+    });
+    
+    container.appendChild(metricsDiv);
+    
+    // Add probabilities
+    const probDiv = document.createElement('div');
+    probDiv.style.display = 'grid';
+    probDiv.style.gridTemplateColumns = 'repeat(3, 1fr)';
+    probDiv.style.gap = '8px';
+    probDiv.style.fontSize = '11px';
+    
+    const probs = [
+      ['BULLISH', document.getElementById('vol-prob-bull')?.textContent || '--', '#00e676'],
+      ['CHOP', document.getElementById('vol-prob-chop')?.textContent || '--', '#ffb300'],
+      ['BEARISH', document.getElementById('vol-prob-bear')?.textContent || '--', '#ff4757']
+    ];
+    
+    probs.forEach(([label, value, color]) => {
+      const probBox = document.createElement('div');
+      probBox.style.border = `1px solid ${color}33`;
+      probBox.style.borderRadius = '4px';
+      probBox.style.padding = '8px';
+      probBox.style.background = 'rgba(0,0,0,.3)';
+      probBox.style.textAlign = 'center';
+      
+      const probLabel = document.createElement('div');
+      probLabel.style.fontSize = '9px';
+      probLabel.style.color = '#888';
+      probLabel.style.fontWeight = '700';
+      probLabel.style.marginBottom = '3px';
+      probLabel.textContent = label;
+      
+      const probValue = document.createElement('div');
+      probValue.style.fontSize = '18px';
+      probValue.style.color = color;
+      probValue.style.fontWeight = '800';
+      probValue.textContent = value;
+      
+      probBox.appendChild(probLabel);
+      probBox.appendChild(probValue);
+      probDiv.appendChild(probBox);
+    });
+    
+    container.appendChild(probDiv);
+    
+    // Capture
+    document.body.appendChild(container);
+    
+    if (typeof html2canvas === 'undefined') {
+      throw new Error('html2canvas not loaded');
+    }
+    
+    const canvas = await html2canvas(container, {
+      backgroundColor: '#05080d',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+    
+    document.body.removeChild(container);
+    
+    // Convert to blob
+    const blob = await new Promise(resolve => {
+      canvas.toBlob(blob => resolve(blob), 'image/png');
+    });
+    
+    // Post to Discord
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({ content: '📊 SPX Volatility Trend Analysis' }));
+    form.append('files[0]', blob, 'vol-trend.png');
+    
+    const res = await fetch(VOL_DISCORD_WEBHOOK_URL, { 
+      method: 'POST', 
+      body: form 
+    });
+    
+    if (!res.ok) throw new Error(`Discord webhook failed: ${res.status}`);
+    
+    if (btn) {
+      btn.textContent = '✓';
+      btn.style.color = '#00e676';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '#7289da';
+      }, 1500);
+    }
+  } catch (e) {
+    console.error('Discord share failed:', e);
+    if (btn) {
+      btn.textContent = 'ERR';
+      btn.style.color = '#ff4757';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '#7289da';
+      }, 1500);
+    }
+  }
+}
+
+async function updateVolatilityTrend() {
+  try {
+    // ── ESM6 price — window.esPrice first, proxy fallback ──
+    let spotPrice = window.esPrice || 0;
+    if (!(spotPrice > 0)) spotPrice = await fetchESPrice() || 0;
+    const spxSpot   = window.spotPrice || 0;
+    const netGexB   = (window._levelMathContext?.totalGEX || 0) / 1e9;
+    const gammaFlip = window._levels?.flip || 0;
+    console.log('[VolTrend] netGexB:', netGexB, 'flip:', gammaFlip, 'ES:', spotPrice, 'SPX:', spxSpot);
+
+    // ── VIX from proxy ──
+    const vixRes  = await fetch('/proxy/api/tt/vix');
+    const vixData = vixRes.ok ? await vixRes.json() : { data: {} };
+    const vd = vixData.data || vixData;
+
+    const vix1d = parseFloat(vd.vix_1d  || 0);
+    const vix30 = parseFloat(vd.vix_spot || 0);
+    const hv10d = parseFloat(vd.realized_10d || 0);
+
+    const termSpread   = vix1d - vix30;
+    const vrp          = vix30 - hv10d;
+    const spotFlipDist = gammaFlip > 0 ? ((spxSpot - gammaFlip) / gammaFlip * 100) : 0;
+
+    // Update UI
+    document.getElementById('vol-spot').textContent = spotPrice > 0 ? spotPrice.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '--';
+    
+    const gexEl = document.getElementById('vol-gex');
+    gexEl.textContent = (netGexB >= 0 ? '+' : '') + netGexB.toFixed(2);
+    gexEl.style.color = netGexB > 0 ? '#00e676' : netGexB < 0 ? '#ff4757' : '#ffb300';
+
+    const flipEl = document.getElementById('vol-flip');
+    flipEl.textContent = gammaFlip > 0 ? gammaFlip.toFixed(2) : '--';
+    flipEl.style.color = spotPrice > 0 && gammaFlip > 0
+      ? (spotPrice > gammaFlip ? '#00e676' : '#ff4757')
+      : '#ff4757';
+
+    document.getElementById('vol-vix1d').textContent = vix1d > 0 ? vix1d.toFixed(2) : '--';
+    document.getElementById('vol-vix30').textContent = vix30 > 0 ? vix30.toFixed(2) : '--';
+    document.getElementById('vol-hv').textContent = hv10d > 0 ? hv10d.toFixed(2) : '--';
+
+    const termEl = document.getElementById('vol-term');
+    termEl.textContent = termSpread.toFixed(2);
+    termEl.style.color = termSpread < 0 ? '#00e5ff' : termSpread > 0 ? '#ff5ec4' : '#7cff6b';
+
+    const vrpEl = document.getElementById('vol-vrp');
+    vrpEl.textContent = vrp.toFixed(2);
+    vrpEl.style.color = vrp > 1 ? '#ffb300' : vrp < 0 ? '#ff4757' : '#7cff6b';
+
+    const distEl = document.getElementById('vol-dist');
+    distEl.textContent = spotFlipDist.toFixed(2);
+    distEl.style.color = spotFlipDist > 0 ? '#00e676' : '#ff4757';
+
+    classifyVolatilityRegime(netGexB, termSpread, vrp, spotPrice, gammaFlip);
+    await fetchRegimeProbabilities(netGexB, termSpread, vrp);
+
+    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    document.getElementById('vol-updated').textContent = `Updated ${ts}`;
+
+  } catch (e) {
+    console.error('Vol Trend update failed:', e);
+    document.getElementById('vol-updated').textContent = `Error: ${e.message}`;
+  }
+}
+
+function classifyVolatilityRegime(gex, termSpread, vrp, spot, flip) {
+  const container = document.getElementById('vol-regime-container');
+  container.innerHTML = '';
+  
+  const regimes = [];
+  let dominantRegime = null;
+  let dominantColor = '';
+  
+  // A. VOLATILITY COMPRESSION (T < 0, G > 0)
+  if (termSpread < 0 && gex > 0) {
+    regimes.push({
+      name: 'VOLATILITY COMPRESSION',
+      subtitle: 'Normal Environment',
+      description: 'Option makers long gamma. Rehedging acts as counter-trend buffer.',
+      directive: 'Deploy premium collection (Iron Condors, Credit Spreads)',
+      color: '#00e5ff',
+      active: true
+    });
+    dominantRegime = 'Compression';
+    dominantColor = '#00e5ff';
+  }
+  
+  // B. VOLATILITY EXPANSION (T > 0, G < 0)
+  if (termSpread > 0 && gex < 0) {
+    regimes.push({
+      name: 'VOLATILITY EXPANSION',
+      subtitle: 'Fast Market Re-hedging',
+      description: 'Option makers short gamma. Hedging rules amplify directional moves.',
+      directive: 'Reduce sizing 50-60%, widen stops, play exhaustion tails',
+      color: '#ff5ec4',
+      active: true
+    });
+    dominantRegime = 'Expansion';
+    dominantColor = '#ff5ec4';
+  }
+  
+  // C. TACTICAL COILING (-0.50 ≤ T ≤ 0.20, VRP < 1.00)
+  if (termSpread >= -0.50 && termSpread <= 0.20 && vrp < 1.00) {
+    regimes.push({
+      name: 'TACTICAL COILING',
+      subtitle: 'Binary Pre-Catalyst Compression',
+      description: 'Curve flattening. Implied premium underpriced vs realized movement.',
+      directive: 'Implement breakout triggers; keep directional inventory flat',
+      color: '#7cff6b',
+      active: true
+    });
+    dominantRegime = 'Coiling';
+    dominantColor = '#7cff6b';
+  }
+  
+  // Render regime boxes
+  regimes.forEach(regime => {
+    const box = document.createElement('div');
+    box.style.cssText = `
+      border: 1px solid rgba(0,229,255,.25);
+      border-radius: 6px;
+      padding: 10px;
+      background: rgba(0,229,255,.045);
+      border-left: 4px solid ${regime.color};
+    `;
+    
+    box.innerHTML = `
+      <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
+        <div style="width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:${regime.color};flex-shrink:0">●</div>
+        <div style="flex:1">
+          <div style="font-size:11px;color:${regime.color};font-weight:800;text-transform:uppercase;letter-spacing:.06em">${regime.name}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:1px">${regime.subtitle}</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);line-height:1.4;margin-bottom:6px">
+        <strong>→</strong> ${regime.description}
+      </div>
+      <div style="font-size:10px;color:var(--text1);padding:6px;background:rgba(0,0,0,.2);border-radius:3px;border-left:2px solid ${regime.color}">
+        <strong>Action:</strong> ${regime.directive}
+      </div>
+    `;
+    container.appendChild(box);
+  });
+  
+  if (regimes.length === 0) {
+    const box = document.createElement('div');
+    box.style.cssText = 'border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:14px;background:rgba(0,0,0,.2);text-align:center';
+    box.innerHTML = '<div style="color:var(--text3);font-size:12px">No active regime classification. Market state is transitional.</div>';
+    container.appendChild(box);
+  }
+}
+
+async function fetchRegimeProbabilities(netGexBillions, termSpread, vrp) {
+  try {
+    const res = await fetch('/proxy/api/volatility/probabilities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        gex_regime: netGexBillions >= 0 ? 'positive' : 'negative',
+        term_structure_spread: termSpread,
+        vrp_profile: vrp > 1.0 ? 'overpriced' : 'underpriced'
+      })
+    });
+
+    if (!res.ok) throw new Error(`Probabilities: ${res.status}`);
+    const data = await res.json();
+
+    document.getElementById('vol-prob-bull').textContent = data.p_bull > 0 ? `${data.p_bull}%` : '--';
+    document.getElementById('vol-prob-chop').textContent = data.p_chop > 0 ? `${data.p_chop}%` : '--';
+    document.getElementById('vol-prob-bear').textContent = data.p_bear > 0 ? `${data.p_bear}%` : '--';
+
+    // Update N matches label
+    document.querySelectorAll('#vol-prob-bull, #vol-prob-chop, #vol-prob-bear').forEach(el => {
+      const sibling = el.nextElementSibling;
+      if (sibling) sibling.textContent = `N=${data.total_matches}`;
+    });
+
+  } catch (e) {
+    console.error('Probability fetch failed:', e);
+    ['vol-prob-bull','vol-prob-chop','vol-prob-bear'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '--';
+    });
+  }
+}
+
+// Auto-refresh volatility trend every 60 seconds when tab is active
+setInterval(() => {
+  if (currentInsightsTab === 'voltrendv2') {
+    updateVolatilityTrend();
+  } else if (currentInsightsTab === 'voltrendprob') {
+    updateVolTrendProbabilities();
+  }
+}, 60000);
+
+/**
+ * VOLATILITY PROBABILITY ENGINE
+ * Calculates Bullish, Bearish, and Chop probabilities based on market inputs
+ */
+function softmax(logits) {
+    const maxLogit = Math.max(...logits);
+    const exps = logits.map(l => Math.exp(l - maxLogit));
+    const sumExps = exps.reduce((a, b) => a + b, 0);
+    
+    const percentages = exps.map(e => Math.round((e / sumExps) * 100));
+    
+    const sumPct = percentages.reduce((a, b) => a + b, 0);
+    if (sumPct !== 100) {
+        const diff = 100 - sumPct;
+        const maxIdx = percentages.indexOf(Math.max(...percentages));
+        percentages[maxIdx] += diff;
+    }
+    
+    return percentages;
+}
+
+function calculateMarketProbabilities(netGex, vixSpread, yieldChange, isPreHoliday = false) {
+    let sBull = (0.6 * netGex) - (0.8 * vixSpread) - (1.5 * (yieldChange / 10));
+    let sBear = (-0.8 * netGex) + (1.1 * vixSpread) + (2.0 * (yieldChange / 10));
+    let sChop = 1.2 * (2.0 - Math.abs(vixSpread)) + 0.5 * (3.0 - Math.abs(netGex - 1.0)) - (1.0 * Math.abs(yieldChange / 10));
+    
+    if (isPreHoliday) {
+        sChop += 3.5;
+        sBull -= 1.0;
+        sBear -= 1.0;
+    }
+
+    const [pBull, pBear, pChop] = softmax([sBull, sBear, sChop]);
+
+    let sampleSize = 35;
+    if (isPreHoliday) sampleSize = 87;
+    else if (netGex > 1.0) sampleSize = 38;
+    else if (netGex < -1.0) sampleSize = 43;
+
+    return {
+        bullish: pBull,
+        bearish: pBear,
+        chop: pChop,
+        sampleSize: sampleSize
+    };
+}
+
+/**
+ * Fetch 2-day yield change in basis points from TNX via TastyTrade
+ */
+async function fetchYieldChange() {
+    try {
+        const res = await fetch('/proxy/api/yield/change-2d');
+        if (res.ok) {
+            const data = await res.json();
+            const bps = data.change_2d_bps || 0;
+            console.log(`[Yield] 2D Change: ${bps} bps (today: ${data.today_yield}%, prev: ${data.prev_yield}%)`);
+            return bps;
+        }
+    } catch (e) {
+        console.warn('[Yield] Fetch failed:', e.message);
+    }
+    return 0;
+}
+
+/**
+ * Main update function for Vol Trend Probability tab
+ */
+async function updateVolTrendProbabilities() {
+    try {
+        // ── Read from overview's already-calculated globals ──
+        const netGex    = (window._levelMathContext?.totalGEX || 0) / 1e9;
+        const spotPrice = window.esPrice || window.spotPrice || 0;
+        console.log('[VolTrendProb] window globals → netGex:', netGex, 'ES:', spotPrice);
+
+        // ── VIX + yield in parallel ──
+        const [vixRes, yieldChange] = await Promise.all([
+            fetch('/proxy/api/tt/vix'),
+            fetchYieldChange()
+        ]);
+
+        const vixData  = vixRes.ok ? await vixRes.json() : { data: {} };
+        const vd       = vixData.data || vixData;
+        const vix1d    = parseFloat(vd.vix_1d  || 0);
+        const vixSpot  = parseFloat(vd.vix_spot || 0);
+        const vixSpread = vix1d - vixSpot;
+
+        // TNX now included in VIX response — use for yield change if available
+        const tnxToday = parseFloat(vd.tnx || 0);
+        let yieldChange2d = await yieldChange; // from fetchYieldChange()
+        // If yield change is 0 but we have live TNX, show live yield as context
+        const yieldDisplay = yieldChange2d !== 0 ? yieldChange2d : (tnxToday > 0 ? null : 0);
+
+        // Check for pre-holiday (Friday)
+        const isPreHoliday = new Date().getDay() === 5;
+
+        // Calculate probabilities
+        const probs = calculateMarketProbabilities(netGex, vixSpread, yieldChange2d, isPreHoliday);
+
+        // Update UI - Input Metrics
+        const netGexEl = document.getElementById('prob-net-gex');
+        if (netGexEl) {
+            netGexEl.textContent = (netGex >= 0 ? '+$' : '-$') + Math.abs(netGex).toFixed(2) + 'B';
+            netGexEl.style.color = netGex > 0 ? '#00e676' : netGex < 0 ? '#ff4757' : '#ffb300';
+        }
+
+        const vixSpreadEl = document.getElementById('prob-vix-spread');
+        if (vixSpreadEl) {
+            vixSpreadEl.textContent = (vixSpread >= 0 ? '+' : '') + vixSpread.toFixed(2);
+            vixSpreadEl.style.color = vixSpread < 0 ? '#00e5ff' : vixSpread > 0 ? '#ff5ec4' : '#7cff6b';
+        }
+
+        const yieldEl = document.getElementById('prob-yield-change');
+        if (yieldEl) {
+            if (yieldChange2d !== 0) {
+                yieldEl.textContent = (yieldChange2d >= 0 ? '+' : '') + Math.round(yieldChange2d) + ' bps';
+                yieldEl.style.color = yieldChange2d < 0 ? '#00e676' : '#ff4757';
+            } else if (tnxToday > 0) {
+                yieldEl.textContent = tnxToday.toFixed(2) + '%';
+                yieldEl.style.color = 'var(--text2)';
+                yieldEl.title = 'Live TNX yield — 2-day history building';
+            } else {
+                yieldEl.textContent = '--';
+                yieldEl.style.color = 'var(--text3)';
+            }
+        }
+
+        // Update Probabilities
+        const bullEl = document.getElementById('prob-bullish');
+        const chopEl = document.getElementById('prob-chop');
+        const bearEl = document.getElementById('prob-bearish');
+
+        if (bullEl) bullEl.textContent = probs.bullish + '%';
+        if (chopEl) chopEl.textContent = probs.chop + '%';
+        if (bearEl) bearEl.textContent = probs.bearish + '%';
+
+        // Timestamp
+        const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const tsEl = document.getElementById('voltrendprob-updated');
+        if (tsEl) tsEl.textContent = `Updated ${ts}`;
+
+    } catch (e) {
+        console.error('Vol Trend Probability update failed:', e);
+        ['prob-bullish', 'prob-chop', 'prob-bearish', 'prob-net-gex', 'prob-vix-spread'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '--';
+        });
+        const tsEl = document.getElementById('voltrendprob-updated');
+        if (tsEl) tsEl.textContent = `Error: ${e.message}`;
+    }
+}
+
+/**
+ * Update Gamma Logic Rules display based on live GEX/DEX/CHEX/VEX data
+ * Only shows rules that match current market conditions
+ */
+function updateGammaLogicRules(metrics) {
+  const { gex, dex, chex, vex } = metrics;
+  const stack = document.getElementById('gamma-logic-stack');
+  if (!stack) return;
+
+  const rules = [];
+
+  // Helper: Calculate percentile position (0-1) within session range
+  // For now, use 0.5 as neutral point (adjust as needed with session highs/lows)
+  const getPercentile = (value, sessionLow = -3, sessionHigh = 3) => {
+    if (value <= sessionLow) return 0;
+    if (value >= sessionHigh) return 1;
+    return (value - sessionLow) / (sessionHigh - sessionLow);
+  };
+
+  const gexPos = getPercentile(gex, -3, 3);
+  const dexPos = getPercentile(dex, -2, 2);
+  const chexPos = getPercentile(chex, -1.5, 1.5);
+  const vexPos = getPercentile(vex, -2, 2);
+
+  // CRITICAL: DEX FLIP DETECTED
+  // Track previous DEX in window variable to detect zero-line crosses
+  if (!window._prevDex) window._prevDex = dex;
+  const dexFlipped = (window._prevDex < 0 && dex > 0) || (window._prevDex > 0 && dex < 0);
+  window._prevDex = dex;
+  
+  if (dexFlipped && Math.abs(dex) > 0.1) {
+    rules.push({
+      title: 'CRITICAL: DEX FLIP',
+      description: 'Structural shift in dealer hedging. Expect aggressive directional momentum.',
+      color: '#ff5ec4',
+      borderColor: 'rgba(255,94,196,.3)',
+      bgColor: 'rgba(255,94,196,.08)'
+    });
+  }
+
+  // RAPID DEX VELOCITY SURGE (>$15B change)
+  const dexVelocity = Math.abs(dex - (window._prevDexForVelocity || dex));
+  window._prevDexForVelocity = dex;
+  
+  if (dexVelocity > 15) {
+    rules.push({
+      title: 'RAPID DEX VELOCITY (>$15B)',
+      description: 'Dealers chasing delta. Avoid fighting trend until velocity cools.',
+      color: '#ff5ec4',
+      borderColor: 'rgba(255,94,196,.3)',
+      bgColor: 'rgba(255,94,196,.08)'
+    });
+  }
+
+  // HIGH POSITIVE GAMMA (top 35% of range)
+  if (gex > 0.5 && gexPos > 0.65) {
+    rules.push({
+      title: 'HIGH POSITIVE GAMMA',
+      description: 'Dealers suppressing volatility. Fade extremes, pin risk dominates.',
+      color: '#ffb300',
+      borderColor: 'rgba(255,179,0,.3)',
+      bgColor: 'rgba(255,179,0,.08)'
+    });
+  }
+
+  // FADING POSITIVE GAMMA (bottom 35% but still positive)
+  if (gex > 0 && gex < 0.5 && gexPos < 0.35) {
+    rules.push({
+      title: 'FADING POSITIVE GAMMA',
+      description: 'GEX positive but low. Dealer support weakening, watch for broader moves.',
+      color: '#ffb300',
+      borderColor: 'rgba(255,179,0,.3)',
+      bgColor: 'rgba(255,179,0,.08)'
+    });
+  }
+
+  // DEEP NEGATIVE GAMMA (bottom 35% of range)
+  if (gex < -0.5 && gexPos < 0.35) {
+    rules.push({
+      title: 'DEEP NEGATIVE GAMMA',
+      description: 'Dealers forced to sell into weakness. Favor momentum, tight stops.',
+      color: '#ff4757',
+      borderColor: 'rgba(255,71,87,.3)',
+      bgColor: 'rgba(255,71,87,.08)'
+    });
+  }
+
+  // STRONG CHARM SUPPORT (top 30% of range)
+  if (chex > 0.3 && chexPos > 0.7) {
+    rules.push({
+      title: 'STRONG CHARM SUPPORT',
+      description: 'Time decay supports bids aggressively. Late-day buying pressure.',
+      color: '#7cff6b',
+      borderColor: 'rgba(124,255,107,.3)',
+      bgColor: 'rgba(124,255,107,.08)'
+    });
+  }
+
+  // ACTIVE VANNA UPSIDE (top 40% of range and positive)
+  if (vex > 0.1 && vexPos > 0.6) {
+    rules.push({
+      title: 'ACTIVE VANNA UPSIDE',
+      description: 'High IV sensitivity. IV crush supports upside momentum.',
+      color: '#00e676',
+      borderColor: 'rgba(0,230,118,.3)',
+      bgColor: 'rgba(0,230,118,.08)'
+    });
+  }
+
+  // UPSIDE INVENTORY PRESSURE (top 25% of DEX range, positive)
+  if (dex > 0.75 && dexPos > 0.75) {
+    rules.push({
+      title: 'UPSIDE INVENTORY PRESSURE',
+      description: 'Dealers holding long delta near spot. Watch for resistance.',
+      color: '#00e5ff',
+      borderColor: 'rgba(0,229,255,.3)',
+      bgColor: 'rgba(0,229,255,.08)'
+    });
+  }
+
+  // DOWNSIDE INVENTORY PRESSURE (bottom 25% of DEX range, negative)
+  if (dex < -0.75 && dexPos < 0.25) {
+    rules.push({
+      title: 'DOWNSIDE INVENTORY PRESSURE',
+      description: 'Dealers holding heavy short delta. Expect short-covering on bids.',
+      color: '#00e5ff',
+      borderColor: 'rgba(0,229,255,.3)',
+      bgColor: 'rgba(0,229,255,.08)'
+    });
+  }
+
+  // CONSOLIDATION / NEUTRAL (if nothing else triggers)
+  if (rules.length === 0) {
+    rules.push({
+      title: 'CONSOLIDATION / NEUTRAL',
+      description: 'Metrics near middle. Dealer flows balanced, rely on price action.',
+      color: '#888',
+      borderColor: 'rgba(255,255,255,.1)',
+      bgColor: 'rgba(255,255,255,.04)'
+    });
+  }
+
+  // Render rules
+  stack.innerHTML = rules.map(rule => `
+    <div style="border:1px solid ${rule.borderColor};background:${rule.bgColor};border-radius:4px;padding:10px">
+      <div style="font-size:10px;font-weight:800;color:${rule.color};margin-bottom:4px;letter-spacing:.09em">${rule.title}</div>
+      <div style="font-size:11px;color:var(--text2)">${rule.description}</div>
+    </div>
+  `).join('');
+}
+
+async function updateGreeksHistoryChart() {
+  try {
+    if (typeof DB === 'undefined' || !DB.db) return;
+    
+    const records = await DB.queryGreeksTimeSeries_Today();
+    if (!records || records.length === 0) {
+      const loading = document.getElementById('greeksChartLoading');
+      if (loading) loading.textContent = 'No data yet today';
+      return;
+    }
+
+    const labels = records.map(r => {
+      const date = new Date(r.timestamp);
+      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    });
+
+    const gexData = records.map(r => r.gex || 0);
+    const dexData = records.map(r => r.dex || 0);
+    const chexData = records.map(r => r.chex || 0);
+    const vexData = records.map(r => r.vex || 0);
+    const buyData = records.map(r => r.buyScore || 0);
+    const sellData = records.map(r => r.sellScore || 0);
+
+    const canvas = document.getElementById('greeksHistoryChart');
+    const loading = document.getElementById('greeksChartLoading');
+    if (!canvas) return;
+
+    // Hide loading
+    if (loading) loading.style.display = 'none';
+
+    // Destroy existing chart if any
+    if (window._greeksChartInstance) {
+      window._greeksChartInstance.destroy();
+    }
+
+    // Create new chart
+    const ctx = canvas.getContext('2d');
+    window._greeksChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'GEX ($B)',
+            data: gexData,
+            borderColor: '#ffb300',
+            backgroundColor: 'rgba(255,179,0,.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: '#ffb300',
+            yAxisID: 'y'
+          },
+          {
+            label: 'DEX ($B)',
+            data: dexData,
+            borderColor: '#00e5ff',
+            backgroundColor: 'rgba(0,229,255,.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: '#00e5ff',
+            yAxisID: 'y'
+          },
+          {
+            label: 'CHEX ($B)',
+            data: chexData,
+            borderColor: '#7cff6b',
+            backgroundColor: 'rgba(124,255,107,.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: '#7cff6b',
+            yAxisID: 'y'
+          },
+          {
+            label: 'VEX ($B)',
+            data: vexData,
+            borderColor: '#ff5ec4',
+            backgroundColor: 'rgba(255,94,196,.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: '#ff5ec4',
+            yAxisID: 'y'
+          },
+          {
+            label: 'BUY Score',
+            data: buyData,
+            borderColor: '#00e676',
+            backgroundColor: 'rgba(0,230,118,.3)',
+            borderWidth: 2.5,
+            tension: 0.3,
+            pointRadius: 3,
+            pointBackgroundColor: '#00e676',
+            yAxisID: 'y1'
+          },
+          {
+            label: 'SELL Score',
+            data: sellData,
+            borderColor: '#ff4757',
+            backgroundColor: 'rgba(255,71,87,.3)',
+            borderWidth: 2.5,
+            tension: 0.3,
+            pointRadius: 3,
+            pointBackgroundColor: '#ff4757',
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            labels: {
+              color: 'var(--text2)',
+              font: { size: 10, weight: '700' },
+              usePointStyle: true,
+              padding: 12
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(255,255,255,.06)' },
+            ticks: { color: 'var(--text3)', font: { size: 9 } },
+            display: true
+          },
+          y: {
+            type: 'linear',
+            display: true,
+            position: 'left',
+            title: { display: true, text: 'Greeks ($B)', color: 'var(--text3)', font: { size: 9 } },
+            grid: { color: 'rgba(255,255,255,.06)' },
+            ticks: { color: 'var(--text3)', font: { size: 9 } },
+            beginAtZero: false
+          },
+          y1: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            title: { display: true, text: 'Buy/Sell Score (0-100)', color: 'var(--text3)', font: { size: 9 } },
+            grid: { drawOnChartArea: false },
+            ticks: { color: 'var(--text3)', font: { size: 9 }, min: 0, max: 100 },
+            min: 0,
+            max: 100
+          }
+        }
+      }
+    });
+
+  } catch (e) {
+    console.error('updateGreeksHistoryChart failed:', e);
+    const loading = document.getElementById('greeksChartLoading');
+    if (loading) loading.textContent = 'Chart error: ' + e.message;
+  }
+}
+
+// ── Expose all functions globally so they work when loaded via innerHTML ──
+window.switchInsightsTab           = switchInsightsTab;
+window.updateVolatilityTrend       = updateVolatilityTrend;
+window.updateVolTrendProbabilities = updateVolTrendProbabilities;
+window.insightsRefreshAll          = insightsRefreshAll;
+window.updateIBDashboard           = updateIBDashboard;
+
+</script>

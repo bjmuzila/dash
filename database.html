@@ -14,7 +14,7 @@
         <span id="db-record-count" style="font-size:9px;color:var(--text3)">—</span>
       </div>
       <div style="display:flex;gap:8px">
-        <button onclick="dbRefreshCounts(); dbLoadMVC();" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Refresh</button>
+        <button onclick="window.dbRefreshAll && window.dbRefreshAll()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Refresh</button>
         <button onclick="exportDatabaseToExcel()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--orange);cursor:pointer;border-radius:3px">Export Excel</button>
         <button onclick="exportDatabaseToJSON()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--green);cursor:pointer;border-radius:3px">Export JSON</button>
       </div>
@@ -25,7 +25,7 @@
       <div style="display:flex;gap:1px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 8px">
         <button onclick="dbShowTab('mvc')" class="db-tab active" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan)">MVC</button>
         <button onclick="dbShowTab('premium')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Premium Flow</button>
-        <button onclick="dbShowTab('delta')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Cumulative Delta</button>
+        <button onclick="dbShowTab('buy-sell')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Buy/Sell Score</button>
       </div>
       
       <!-- Tab Content -->
@@ -66,15 +66,18 @@
             </tr>
           </table>
         </div>
-        
-        <!-- Cumulative Delta Tab -->
-        <div id="db-tab-delta" style="display:none">
-          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Latest Cumulative Delta Snapshot</div>
-          <table id="delta-table" style="width:100%;font-size:9px;border-collapse:collapse">
+
+        <!-- Buy/Sell Score Tab -->
+        <div id="db-tab-buy-sell" style="display:none">
+          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Buy/Sell Scores (Today)</div>
+          <table id="buy-sell-table" style="width:100%;font-size:8px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
               <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">ES Price</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">CVD</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">SPXW Price</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Side</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Score</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Buy %</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Sell %</th>
             </tr>
           </table>
         </div>
@@ -175,10 +178,19 @@
   }
 
   // ========== DATA TAB FUNCTIONS ==========
+  async function dbEnsureReady() {
+    if (typeof DB === 'undefined') return false;
+    if (DB.db) return true;
+    if (typeof DB.init === 'function') {
+      try { await DB.init(); } catch (err) { console.warn('DB init failed:', err); }
+    }
+    return !!DB.db;
+  }
+
   function dbShowTab(tab) {
     document.getElementById('db-tab-mvc').style.display = 'none';
     document.getElementById('db-tab-premium').style.display = 'none';
-    document.getElementById('db-tab-delta').style.display = 'none';
+    document.getElementById('db-tab-buy-sell').style.display = 'none';
     
     document.querySelectorAll('.db-tab').forEach(b => {
       b.style.borderBottomColor = 'transparent';
@@ -191,28 +203,27 @@
     
     if (tab === 'mvc') dbLoadMVC();
     else if (tab === 'premium') dbLoadPremium();
-    else if (tab === 'delta') dbLoadDelta();
+    else if (tab === 'buy-sell') dbLoadBuySell();
   }
   
   async function dbRefreshCounts() {
-    if (!DB || !DB.db) {
-      await new Promise(resolve => window.addEventListener('db-ready', resolve, { once: true }));
-    }
-    if (!DB || !DB.db) return;
-    const mvc = await DB._getAllRecords('mvc');
-    const pf = await DB._getAllRecords('premiumFlow');
-    const cd = await DB._getAllRecords('cumulativeDelta');
-    const total = mvc.length + pf.length + cd.length;
+    if (!(await dbEnsureReady())) return;
+    const getAll = async (store) => typeof DB._getAllRecords === 'function' ? DB._getAllRecords(store) : [];
+    const mvc = await getAll('mvc');
+    const pf = await getAll('premiumFlow');
+    const bs = DB.db.objectStoreNames.contains('buySellScores') ? await getAll('buySellScores') : [];
+    const total = mvc.length + pf.length + bs.length;
     document.getElementById('db-record-count').textContent = `${total} records`;
   }
   
   async function dbLoadMVC() {
     // Wait for DB if not ready yet
-    if (!DB || !DB.db) {
-      await new Promise(resolve => window.addEventListener('db-ready', resolve, { once: true }));
-    }
-    if (!DB || !DB.db) { console.warn('dbLoadMVC: DB still not ready'); return; }
-    const records = await queryMVC_Recent(24);
+    if (!(await dbEnsureReady())) { console.warn('dbLoadMVC: DB still not ready'); return; }
+    const records = typeof DB.queryMVC_Recent === 'function'
+      ? await DB.queryMVC_Recent(24)
+      : typeof queryMVC_Recent === 'function'
+        ? await queryMVC_Recent(24)
+        : [];
     console.log('📋 dbLoadMVC: got', records.length, 'records');
     const tbody = document.getElementById('mvc-table');
     if (!tbody) { console.warn('dbLoadMVC: mvc-table not found'); return; }
@@ -270,7 +281,7 @@
   }
 
   async function dbDeleteMVC(id, btn) {
-    if (!DB || !DB.db) return;
+    if (!(await dbEnsureReady())) return;
     await new Promise((resolve, reject) => {
       const tx  = DB.db.transaction(['mvc'], 'readwrite');
       const req = tx.objectStore('mvc').delete(id);
@@ -283,7 +294,11 @@
 
   async function dbLoadPremium() {
     if (!DB || !DB.db) return;
-    const records = await queryPremiumFlow_TopTrades(1);
+    const records = typeof DB.queryPremiumFlow_TopTrades === 'function'
+      ? await DB.queryPremiumFlow_TopTrades(1)
+      : typeof queryPremiumFlow_TopTrades === 'function'
+        ? await queryPremiumFlow_TopTrades(1)
+        : [];
     const tbody = document.getElementById('premium-table');
     const rows = tbody.querySelectorAll('tr:not(:first-child)');
     rows.forEach(r => r.remove());
@@ -302,21 +317,41 @@
       tbody.appendChild(tr);
     });
   }
-  
-  async function dbLoadDelta() {
-    if (!DB || !DB.db) return;
-    const records = await queryCumulativeDelta_Chart(1);
-    const tbody = document.getElementById('delta-table');
+  async function dbLoadBuySell() {
+    if (!(await dbEnsureReady()) || !DB.db.objectStoreNames.contains('buySellScores')) return;
+    try {
+      if (typeof DB.saveBuySellScore === 'function') {
+        const today = new Date().toISOString().split('T')[0];
+        const res = await fetch(`/proxy/api/backup/buy-sell-scores?date=${today}`);
+        if (res.ok) {
+          const data = await res.json();
+          for (const record of (Array.isArray(data.records) ? data.records : [])) {
+            await DB.saveBuySellScore(record);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Buy/Sell backup restore failed:', err);
+    }
+    const records = typeof DB.queryBuySellScores_Today === 'function'
+      ? await DB.queryBuySellScores_Today()
+      : await DB._getAllRecords('buySellScores');
+    const tbody = document.getElementById('buy-sell-table');
     const rows = tbody.querySelectorAll('tr:not(:first-child)');
     rows.forEach(r => r.remove());
-    
-    records.filter((_, i) => i % 2 === 0).forEach(r => {
+
+    records.slice().sort((a, b) => b.timestamp - a.timestamp).forEach(r => {
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
+      const side = r.side || (Number(r.buyPct) >= Number(r.sellPct) ? 'Buy' : 'Sell');
+      const sideColor = side === 'Buy' ? 'var(--green)' : 'var(--red)';
       tr.innerHTML = `
         <td style="padding:6px;color:var(--text2)">${r.time || '?'}</td>
-        <td style="padding:6px;text-align:right;color:var(--orange)">${Number.isFinite(Number(r.esPrice)) ? Number(r.esPrice).toFixed(2) : '?'}</td>
-        <td style="padding:6px;text-align:right;color:var(--cyan)">${Number.isFinite(Number(r.cvd)) ? Number(r.cvd).toLocaleString() : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${Number.isFinite(Number(r.spxPrice)) ? Number(r.spxPrice).toFixed(2) : '?'}</td>
+        <td style="padding:6px;text-align:right;color:${sideColor};font-weight:700">${side}</td>
+        <td style="padding:6px;text-align:right;color:${sideColor}">${Number.isFinite(Number(r.score)) ? Number(r.score).toFixed(0) + '%' : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${Number.isFinite(Number(r.buyPct)) ? Number(r.buyPct).toFixed(0) + '%' : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${Number.isFinite(Number(r.sellPct)) ? Number(r.sellPct).toFixed(0) + '%' : '?'}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -364,12 +399,138 @@
     }
   }
 
+  function exportDateET() {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
+  }
+
+  function normalizeMVCExportRows(records) {
+    return records.map(r => ({
+      'Day': r.day || '—',
+      'Date': r.date || '—',
+      'Time': r.time || '—',
+      'Strike': r.strikeOIVol || r.strikeVolOnly || '—',
+      'Net GEX': r.mvcValueOIVol != null ? (Number(r.mvcValueOIVol) / 1e9).toFixed(2) : '—',
+      'ES Price': r.currentPrice != null ? Number(r.currentPrice).toFixed(2) : '—',
+      'SPX Price': r.spxPrice != null ? Number(r.spxPrice).toFixed(2) : '—',
+      'Net DEX': r.totalNetDEX_OI != null ? (Number(r.totalNetDEX_OI) / 1e6).toFixed(2) : '—',
+      'Trigger': r.triggerType || 'manual',
+      'Expiration': r.expiration || '—'
+    }));
+  }
+
+  async function loadXLSXLibrary() {
+    if (window.XLSX) return window.XLSX;
+
+    const sources = [
+      '/node_modules/xlsx/dist/xlsx.full.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js'
+    ];
+
+    for (const src of sources) {
+      try {
+        await new Promise((resolve, reject) => {
+          const existing = document.querySelector(`script[data-xlsx-src="${src}"]`);
+          if (existing) {
+            if (window.XLSX) {
+              resolve();
+              return;
+            }
+            existing.addEventListener('load', resolve, { once: true });
+            existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
+            return;
+          }
+
+          const script = document.createElement('script');
+          script.src = src;
+          script.dataset.xlsxLoader = 'true';
+          script.dataset.xlsxSrc = src;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Failed to load ${src}`));
+          document.head.appendChild(script);
+        });
+
+        if (window.XLSX) return window.XLSX;
+      } catch (_err) {}
+    }
+
+    throw new Error('Could not load Excel export library.');
+  }
+
+  async function exportDatabaseToExcel() {
+    if (!DB || !DB.db) { console.warn('Database not ready'); return; }
+
+    try {
+      const mvcRecords = await DB._getAllRecords('mvc');
+      if (mvcRecords.length === 0) {
+        alert('No MVC records to export');
+        return;
+      }
+
+      const rows = normalizeMVCExportRows(mvcRecords);
+      const filename = `MVC_Database_${exportDateET()}.xlsx`;
+
+      try {
+        const resp = await fetch('http://localhost:3002/export-mvc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: rows, filename })
+        });
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || 'Export service failed');
+        console.log(`Excel exported via service: ${result.message}`);
+        alert(`Excel saved to MVC folder as ${filename}`);
+        return;
+      } catch (serviceErr) {
+        console.warn('Export service unavailable, falling back to browser download:', serviceErr);
+      }
+
+      const XLSX = await loadXLSXLibrary();
+      const wb = XLSX.utils.book_new();
+      const mvcWs = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, mvcWs, 'MVC');
+      XLSX.writeFile(wb, filename);
+      console.log(`Excel downloaded: ${filename}`);
+      alert(`Excel downloaded as ${filename}`);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Export failed: ' + err.message);
+    }
+  }
+
   window.showDatabaseTab  = showDatabaseTab;
   window.dbShowTab        = dbShowTab;
+  window.dbEnsureReady    = dbEnsureReady;
   window.dbRefreshCounts  = dbRefreshCounts;
   window.dbLoadMVC        = dbLoadMVC;
+  window.dbLoadPremium    = dbLoadPremium;
+  window.dbLoadBuySell    = dbLoadBuySell;
   window.dbDeleteMVC      = dbDeleteMVC;
   window.exportDatabaseToExcel = exportDatabaseToExcel;
 
+  window.dbRefreshAll = async function() {
+    await dbRefreshCounts();
+    const mvc     = document.getElementById('db-tab-mvc');
+    const premium = document.getElementById('db-tab-premium');
+    const buySell = document.getElementById('db-tab-buy-sell');
+    if (mvc     && mvc.style.display     !== 'none') await dbLoadMVC();
+    if (premium && premium.style.display !== 'none') await dbLoadPremium();
+    if (buySell && buySell.style.display !== 'none') await dbLoadBuySell();
+  };
+
+  window.init_database = function init_database() {
+    setTimeout(() => {
+      if (typeof window.dbRefreshAll === 'function') window.dbRefreshAll();
+    }, 50);
+  };
+
+  window.init_database();
+
 })();
 </script>
+
+

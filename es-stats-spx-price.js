@@ -1,8 +1,8 @@
 ;(function(){
   const ES_SYMBOLS = ['/ES', '/ESM6', 'ESM'];
   const SPX_SYMBOLS = ['$SPX', 'SPX'];
-  const PRICE_KEYS = ['last','lastPrice','mark','mid','close','price','bid'];
-  const PREV_KEYS = ['previousClose','prevClose','previous_close','prev_close','priorClose','prior_close','close'];
+  const PRICE_KEYS = ['mark','mid','last','lastPrice','close','price','bid'];
+  const PREV_KEYS = ['prev-close', 'previousClose','prevClose','previous_close','prev_close','priorClose','prior_close','close'];
 
   const num = (value) => {
     if (value == null) return NaN;
@@ -27,22 +27,25 @@
 
   const quoteMap = async (symbols) => {
     const urls = [
-      `/proxy/api/tt/quotes-batch?index[]=SPX&future[]=${encodeURIComponent('/ESM6')}`,
+      `/proxy/api/tt/quotes-batch?index[]=SPX&index[]=SPXW&future[]=${encodeURIComponent('/ESM6')}`,
     ];
     for (const url of urls) {
       try {
         const r = await fetch(url, { cache:'no-store' });
         if (!r.ok) continue;
         const json = await r.json();
-        const raw = json?.data?.items || json?.quotes || json?.items || json?.data || json;
         const out = {};
-        if (Array.isArray(raw)) raw.forEach(q => {
-          const sym = String(q.symbol || q.eventSymbol || q.instrument || '').toUpperCase();
-          out[sym] = q;
-          if (sym === 'SPX') out['$SPX'] = q;
-          if (sym.startsWith('/ES')) out['/ES'] = q;
-        });
-        else if (raw && typeof raw === 'object') Object.entries(raw).forEach(([k,v]) => out[String(k).toUpperCase()] = v);
+        // TT returns: { data: { items: [...] } }
+        const items = json?.data?.items || [];
+        if (Array.isArray(items)) {
+          items.forEach(q => {
+            const sym = String(q.symbol || q.eventSymbol || '').toUpperCase();
+            out[sym] = q;
+            // Map SPX/SPXW to $SPX key for consistent lookup
+            if (sym === 'SPX' || sym === 'SPXW' || sym === '$SPX' || sym === '$SPXW') out['$SPX'] = q;
+            if (sym.includes('ESM') || sym.startsWith('/ES')) out['/ES'] = q;
+          });
+        }
         if (Object.keys(out).length) return out;
       } catch (_) {}
     }
@@ -80,14 +83,15 @@
     return pill;
   };
 
+  let todayCloses = { es: 7539.25, spx: 7518.80 }; // Today's actual closes — auto-captured at 4pm ET
+
   const update = async () => {
     const now = Date.now();
     if (updateInFlight || now - lastFetchAt < 4500) return;
     updateInFlight = true;
     lastFetchAt = now;
     const root = sectionForEsStats();
-    const pill = ensurePill(root);
-    if (!pill) { updateInFlight = false; return; }
+    const pill = ensurePill(root); // may be null — topbar updates regardless
     try {
       const quotes = await quoteMap([...ES_SYMBOLS, ...SPX_SYMBOLS]);
       const es = pickQuote(quotes, ES_SYMBOLS);
@@ -96,10 +100,48 @@
       const esPrev = firstNumber(es, PREV_KEYS);
       const spxPrev = firstNumber(spx, PREV_KEYS);
       const spxNow = firstNumber(spx, PRICE_KEYS);
-      const implied = Number.isFinite(esNow) && Number.isFinite(esPrev) && Number.isFinite(spxPrev) ? esNow - (esPrev - spxPrev) : spxNow;
-      const diff = Number.isFinite(implied) && Number.isFinite(spxPrev) ? implied - spxPrev : NaN;
-      pill.textContent = `SPX ${format(implied)} ${Number.isFinite(diff) ? (diff >= 0 ? '+' : '') + format(diff) : ''}`;
-      pill.style.color = Number.isFinite(diff) && diff < 0 ? '#ff3355' : '#00ff8a';
+      
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const etMins = nowET.getHours() * 60 + nowET.getMinutes();
+      const marketOpen = etMins >= 9 * 60 + 30 && etMins < 16 * 60;
+      
+      // Capture closes at 4pm ET for after-hours use
+      if (etMins >= 16 * 60 - 2 && etMins < 16 * 60 + 2 && Number.isFinite(esNow) && Number.isFinite(spxNow)) {
+        todayCloses = { es: esNow, spx: spxNow };
+        localStorage.setItem('todayCloses', JSON.stringify({...todayCloses, date: nowET.toISOString().split('T')[0]}));
+      }
+      
+      // After hours: use stored closes from today; fallback to prev-close if not available
+      const esClose = marketOpen ? esPrev : (todayCloses.es || esPrev);
+      const spxClose = marketOpen ? spxPrev : (todayCloses.spx || spxPrev);
+      const esImplied = Number.isFinite(esNow) && Number.isFinite(esClose) && Number.isFinite(spxClose)
+        ? esNow - (esClose - spxClose) : NaN;
+      const displaySpx = marketOpen && Number.isFinite(spxNow) ? spxNow : esImplied;
+      const diff = Number.isFinite(displaySpx) && Number.isFinite(spxPrev) ? displaySpx - spxPrev : NaN;
+      const diffPct = Number.isFinite(diff) && Number.isFinite(spxPrev) && spxPrev !== 0 ? diff / spxPrev * 100 : NaN;
+      const color = Number.isFinite(diff) && diff < 0 ? '#ff3355' : '#00ff8a';
+
+      // Update ES stats pill (if present)
+      if (pill) {
+        pill.textContent = `SPX ${format(displaySpx)} ${Number.isFinite(diff) ? (diff >= 0 ? '+' : '') + format(diff) : ''}`;
+        pill.style.color = color;
+      }
+
+      // Update topbar #spx-price / #spx-change
+      const topbarPrice = document.getElementById('spx-price');
+      const topbarChange = document.getElementById('spx-change');
+      if (topbarPrice && Number.isFinite(displaySpx)) {
+        topbarPrice.textContent = format(displaySpx);
+      }
+      if (topbarChange && Number.isFinite(diff)) {
+        const sign = diff >= 0 ? '+' : '';
+        const pctStr = Number.isFinite(diffPct) ? ` (${sign}${diffPct.toFixed(2)}%)` : '';
+        topbarChange.textContent = `${sign}${format(diff)}${pctStr}`;
+        topbarChange.style.color = color;
+      }
+
+      // Sync to AppState for snapshots
+      if (window.AppState && Number.isFinite(displaySpx)) window.AppState.spxPrice = displaySpx;
     } finally {
       updateInFlight = false;
     }
@@ -111,6 +153,15 @@
   };
 
   const boot = () => {
+    // Load today's closes from localStorage if from today
+    try {
+      const stored = JSON.parse(localStorage.getItem('todayCloses'));
+      const todayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).toISOString().split('T')[0];
+      if (stored?.es && stored?.spx && stored?.date === todayET) {
+        todayCloses = { es: stored.es, spx: stored.spx };
+      }
+    } catch (_) {}
+    
     const style = document.createElement('style');
     style.textContent = '.spx-implied-pill{white-space:nowrap}.spx-implied-pill::before{content:"CURRENT";color:#8bb9e8}';
     document.head.appendChild(style);

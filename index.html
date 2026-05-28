@@ -2,6 +2,25 @@
 <html lang="en">
 <head>
 <script>
+console.log('[GEX-SYNC] First script block executing');
+
+// Auto-push GEX levels to MotiveWave using already-converted ES levels
+window._lastGexEmit = '';
+window.pushGexLevels = function() {
+  const lv = window._esLevels;
+  if (!lv || !lv.callWall || !lv.putWall) { console.log('[GEX] _esLevels not ready yet'); return; }
+  const cw = lv.callWall;
+  const pw = lv.putWall;
+  const key = cw + ',' + pw;
+  if (key === window._lastGexEmit) return;
+  window._lastGexEmit = key;
+  fetch('http://localhost:3001/proxy/api/gex-levels?callWall=' + cw + '&putWall=' + pw)
+    .then(() => console.log('✓ GEX pushed to MotiveWave:', { cw, pw }))
+    .catch(e => console.warn('GEX push failed:', e.message));
+};
+// Start after 10 seconds to allow page to fully load, then every 5 seconds
+setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 5000); }, 10000);
+
 (() => {
   const originalFetch = window.fetch.bind(window);
   const failures = [];
@@ -495,6 +514,10 @@
       <span class="nav-icon">⊞</span>Overview
     </div>
 
+    <div class="nav-item" id="nav-bzila" onclick="loadPage('bzila')" data-page="bzila">
+      <span class="nav-icon">⚡</span>Bzila Flow
+    </div>
+
     <div class="nav-divider"></div>
     <div class="nav-item" id="nav-database" onclick="loadPage('database')" data-page="database">
       <span class="nav-icon">🗄</span>Database
@@ -524,7 +547,7 @@
         <span class="nav-pill" id="dte-gex-pill-combined" onclick="setDTEGEXView('combined',this)" style="width:100%;text-align:center;display:block;font-size:10px;padding:3px 6px">1-7DTE Combined</span>
       </div>
     </div>
-    
+     
   </div>
 
   <!-- QUOTES PANEL -->
@@ -579,7 +602,26 @@
 <script src="shared/database.js"></script> 
 <script src="shared/flow-recorder.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="pages/overview.js?v=20260526-gex-pan-cache-v1"></script>
+<script src="pages/overview.js?v=20260526-insights-expiry-v35"></script>
+
+<!-- GEX Level Auto-Sync to MotiveWave -->
+<script>
+console.log('[GEX-SYNC] Polling script loaded - NOW');
+console.log('window._levels:', window._levels);
+console.log('window.EventBus:', window.EventBus);
+setInterval(() => {
+  if (window._levels && window._levels.callWall && window._levels.putWall && window._levels.flip) {
+    if (window.EventBus) {
+      window.EventBus.emit('gex-levels-updated', { 
+        callWall: window._levels.callWall, 
+        putWall: window._levels.putWall, 
+        zeroGamma: window._levels.flip 
+      });
+      console.log('✓ GEX:', { cw: window._levels.callWall, pw: window._levels.putWall, zg: window._levels.flip });
+    }
+  }
+}, 5000);
+</script>
 
 <script>
 // ===========================
@@ -687,15 +729,17 @@ async function loadPage(pageName) {
   }
 }
 
-// DTE filter functions (placeholders - implement in pages)
-function setDTEGEXView(dte, element) {
-  console.log('DTE View changed:', dte);
-  document.querySelectorAll('#dte-gex-pills .nav-pill').forEach(el => {
-    el.classList.remove('active');
-  });
-  if (element) element.classList.add('active');
-  window.AppState.selectedDTE = dte;
-  window.EventBus.emit('dte-changed', dte);
+// DTE filter fallback only. pages/overview.js owns the real chart-updating handler.
+if (typeof window.setDTEGEXView !== 'function') {
+  window.setDTEGEXView = function(dte, element) {
+    console.log('DTE View changed:', dte);
+    document.querySelectorAll('#dte-gex-pills .nav-pill').forEach(el => {
+      el.classList.remove('active');
+    });
+    if (element) element.classList.add('active');
+    window.AppState.selectedDTE = dte;
+    window.EventBus.emit('dte-changed', dte);
+  };
 }
 
 function updateStrikeCount() {
@@ -708,9 +752,464 @@ function updateStrikeCount() {
   }
 }
 
-function gexTakeSnapshot() {
-  console.log('GEX snapshot taken');
-  window.EventBus.emit('gex-snapshot');
+// Inline minimal DB for GEX snapshots
+window.DB = {
+  db: null,
+  _autoSnapScheduled: false,
+  async init() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('OptionsMarketDB', 4);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        this.db = request.result;
+        console.log('✓ Snapshot database initialized');
+        updateSnapshotCount();
+        loadGexPeaks();
+        resolve(true);
+      };
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (db.objectStoreNames.contains('cumulativeDelta')) {
+          db.deleteObjectStore('cumulativeDelta');
+        }
+        // MVC store
+        if (!db.objectStoreNames.contains('mvc')) {
+          const mvcStore = db.createObjectStore('mvc', { keyPath: 'id', autoIncrement: true });
+          mvcStore.createIndex('timestamp', 'timestamp', { unique: false });
+          mvcStore.createIndex('date', 'date', { unique: false });
+          mvcStore.createIndex('triggerType', 'triggerType', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('premiumFlow')) {
+          const pfStore = db.createObjectStore('premiumFlow', { keyPath: 'id', autoIncrement: true });
+          pfStore.createIndex('timestamp', 'timestamp', { unique: false });
+          pfStore.createIndex('date', 'date', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('buySellScores')) {
+          const bsStore = db.createObjectStore('buySellScores', { keyPath: 'id', autoIncrement: true });
+          bsStore.createIndex('timestamp', 'timestamp', { unique: false });
+          bsStore.createIndex('date', 'date', { unique: false });
+          bsStore.createIndex('slotKey', 'slotKey', { unique: true });
+        }
+      };
+    });
+  },
+  startAutoSnapScheduler() {
+    if (this._autoSnapScheduled) return;
+    this._autoSnapScheduled = true;
+
+    const AUTO_SNAP_TIMES = ['9:45', '10:30', '12:00'];
+    const EXPORT_TIME = '16:30'; // 4:30pm ET
+
+    const scheduleNext = () => {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const hh = nowET.getHours();
+      const mm = nowET.getMinutes();
+      const totalNowMins = hh * 60 + mm;
+
+      let msUntilNext = null;
+      let nextLabel = null;
+
+      // Check for trading snaps
+      for (const t of AUTO_SNAP_TIMES) {
+        const [sh, sm] = t.split(':').map(Number);
+        const snapMins = sh * 60 + sm;
+        if (snapMins > totalNowMins) {
+          const diffMins = snapMins - totalNowMins;
+          const diffMs = (diffMins * 60 - nowET.getSeconds()) * 1000 - nowET.getMilliseconds();
+          if (msUntilNext === null || diffMs < msUntilNext) {
+            msUntilNext = diffMs;
+            nextLabel = `auto-${t}`;
+          }
+        }
+      }
+
+      // Check for daily export at 4:30pm
+      const [eh, em] = EXPORT_TIME.split(':').map(Number);
+      const exportMins = eh * 60 + em;
+      if (exportMins > totalNowMins) {
+        const diffMins = exportMins - totalNowMins;
+        const diffMs = (diffMins * 60 - nowET.getSeconds()) * 1000 - nowET.getMilliseconds();
+        if (msUntilNext === null || diffMs < msUntilNext) {
+          msUntilNext = diffMs;
+          nextLabel = 'export-excel';
+        }
+      }
+
+      if (msUntilNext !== null && msUntilNext > 0) {
+        console.log(`⏰ Next event: ${nextLabel} in ${Math.round(msUntilNext / 1000)}s`);
+        setTimeout(async () => {
+          console.log(`📸 Event firing: ${nextLabel}`);
+          try {
+            if (nextLabel === 'export-excel') {
+              await this.exportDailySnapshotsToExcel();
+            } else {
+              await gexTakeSnapshot(nextLabel);
+            }
+          } catch (e) {
+            console.error('Event error:', e);
+          }
+          scheduleNext();
+        }, msUntilNext);
+      } else {
+        const midnight = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        midnight.setHours(24, 0, 5, 0);
+        const msUntilMidnight = midnight - new Date();
+        console.log(`⏰ All events done. Rescheduling at midnight (${Math.round(msUntilMidnight / 1000 / 60)}min)`);
+        setTimeout(scheduleNext, msUntilMidnight);
+      }
+    };
+
+    scheduleNext();
+  },
+  async exportDailySnapshotsToExcel() {
+    if (!this.db) return;
+    
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const records = await this._queryByIndex('mvc', 'date', today);
+      
+      if (records.length === 0) {
+        console.log('No snapshots to export for today');
+        return;
+      }
+
+      // Prepare data
+      const wsData = records.map(r => ({
+        'Day': r.day || '—',
+        'Date': r.date || '—',
+        'Time': r.time || '—',
+        'Strike': r.strikeOIVol || r.strikeVolOnly || '—',
+        'Net GEX': r.mvcValueOIVol != null ? (r.mvcValueOIVol / 1e9).toFixed(2) : '—',
+        'ES Price': r.currentPrice != null ? r.currentPrice.toFixed(2) : '—',
+        'SPX Price': r.spxPrice != null ? r.spxPrice.toFixed(2) : '—',
+        'Net DEX': r.totalNetDEX_OI != null ? (r.totalNetDEX_OI / 1e6).toFixed(2) : '—',
+        'Trigger': r.triggerType || 'manual',
+        'Expiration': r.expiration || '—'
+      }));
+
+      const filename = `MVC_Snapshots_${today}.xlsx`;
+
+      // POST to proxy endpoint
+      const resp = await fetch('http://localhost:3002/export-mvc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: wsData, filename })
+      });
+
+      const result = await resp.json();
+      if (resp.ok) {
+        console.log(`✓ Excel exported: ${result.message}`);
+      } else {
+        console.error(`✗ Export failed: ${result.error}`);
+      }
+    } catch (err) {
+      console.error('Excel export failed:', err);
+    }
+  },
+  async _queryByIndex(storeName, indexName, value) {
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction([storeName], 'readonly');
+      const store = tx.objectStore(storeName);
+      const index = store.index(indexName);
+      const request = index.getAll(value);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+  },
+  async saveMVCSnapshot(mvcOIVol, mvcVolOnly, currentPrice, expiration, triggerType = 'manual', totalNetGEX = 0, netDexStrike = null, totalNetDEX_OI = 0, spxPrice = 0) {
+    if (!this.db) await this.init();
+    const now = new Date();
+    const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()];
+    const pctOIVol = totalNetGEX !== 0 ? parseFloat((Math.abs(mvcOIVol.value) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
+    const pctVolOnly = totalNetGEX !== 0 ? parseFloat((Math.abs(mvcVolOnly.value) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
+    
+    const record = {
+      timestamp: now.getTime(),
+      date: now.toISOString().split('T')[0],
+      day: dayName,
+      time: now.toTimeString().split(' ')[0],
+      triggerType: triggerType,
+      expiration: expiration || '—',
+      strikeOIVol: mvcOIVol.strike,
+      mvcValueOIVol: mvcOIVol.value,
+      pctNetGEXOIVol: pctOIVol,
+      volumeOIVol: mvcOIVol.volume,
+      strikeVolOnly: mvcVolOnly.strike,
+      mvcValueVolOnly: mvcVolOnly.value,
+      pctNetGEXVolOnly: pctVolOnly,
+      volumeVolOnly: mvcVolOnly.volume,
+      currentPrice: currentPrice,
+      spxPrice: spxPrice,
+      totalNetGEX: totalNetGEX,
+      netDexStrike: netDexStrike || 0,
+      totalNetDEX_OI: totalNetDEX_OI || 0
+    };
+    
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['mvc'], 'readwrite');
+      const store = tx.objectStore('mvc');
+      const request = store.add(record);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        updateSnapshotCount();
+        loadGexPeaks();
+        resolve(request.result);
+      };
+    });
+  },
+  async getMVCCount() {
+    if (!this.db) return 0;
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['mvc'], 'readonly');
+      const store = tx.objectStore('mvc');
+      const request = store.count();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+  },
+  async getRecentMVC(limit = 5) {
+    if (!this.db) return [];
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['mvc'], 'readonly');
+      const store = tx.objectStore('mvc');
+      const request = store.getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const all = request.result;
+        resolve(all.slice(-limit).reverse());
+      };
+    });
+  },
+  async _getAllRecords(storeName) {
+    if (!this.db) await this.init();
+    if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction([storeName], 'readonly');
+      const store = tx.objectStore(storeName);
+      const request = store.getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result || []);
+    });
+  },
+  async _queryByIndex(storeName, indexName, value) {
+    if (!this.db) await this.init();
+    if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction([storeName], 'readonly');
+      const store = tx.objectStore(storeName);
+      if (!store.indexNames.contains(indexName)) {
+        resolve([]);
+        return;
+      }
+      const request = store.index(indexName).getAll(value);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result || []);
+    });
+  },
+  async _queryByRange(storeName, indexName, minValue, maxValue = Date.now()) {
+    if (!this.db) await this.init();
+    if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction([storeName], 'readonly');
+      const store = tx.objectStore(storeName);
+      if (!store.indexNames.contains(indexName)) {
+        resolve([]);
+        return;
+      }
+      const range = IDBKeyRange.bound(minValue, maxValue);
+      const request = store.index(indexName).getAll(range);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result || []);
+    });
+  },
+  async queryMVC_Recent(hoursBack = 24) {
+    const cutoff = Date.now() - (hoursBack * 60 * 60 * 1000);
+    return this._queryByRange('mvc', 'timestamp', cutoff);
+  },
+  async queryPremiumFlow_TimeSeries(hoursBack = 6) {
+    const cutoff = Date.now() - (hoursBack * 60 * 60 * 1000);
+    const records = await this._queryByRange('premiumFlow', 'timestamp', cutoff);
+    return records.sort((a, b) => a.timestamp - b.timestamp);
+  },
+  async queryPremiumFlow_TopTrades(hoursBack = 1) {
+    const records = await this.queryPremiumFlow_TimeSeries(hoursBack);
+    return records
+      .map(r => ({
+        time: r.time,
+        timestamp: r.timestamp,
+        callFlow: r.callFlow ?? r.netCallPremium ?? 0,
+        putFlow: r.putFlow ?? r.netPutPremium ?? 0,
+        netFlow: r.netFlow ?? r.totalPremium ?? ((r.netCallPremium || 0) + (r.netPutPremium || 0)),
+        esPrice: r.esPrice ?? r.spxPrice ?? 0
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp);
+  },
+  async queryBuySellScores_Today() {
+    const today = new Date().toISOString().split('T')[0];
+    const records = await this._queryByIndex('buySellScores', 'date', today);
+    return records.sort((a, b) => b.timestamp - a.timestamp);
+  },
+  async _getAllRecords(storeName) {
+    if (!this.db) await this.init();
+    if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction([storeName], 'readonly');
+      const store = tx.objectStore(storeName);
+      const request = store.getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result || []);
+    });
+  },
+  async saveBuySellScore(score) {
+    if (!this.db) await this.init();
+    const now = new Date();
+    const record = {
+      timestamp: score.timestamp || now.getTime(),
+      date: score.date || now.toISOString().split('T')[0],
+      time: score.time || now.toTimeString().split(' ')[0],
+      slotKey: score.slotKey || `${now.toISOString().split('T')[0]}-${now.getHours()}:${now.getMinutes()}`,
+      spxPrice: Number(score.spxPrice || 0),
+      side: score.side || 'Buy',
+      score: Number(score.score || 0),
+      buyPct: Number(score.buyPct || 0),
+      sellPct: Number(score.sellPct || 0)
+    };
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['buySellScores'], 'readwrite');
+      const store = tx.objectStore('buySellScores');
+      const getReq = store.index('slotKey').get(record.slotKey);
+      getReq.onerror = () => reject(getReq.error);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        const req = existing ? store.put({ ...existing, ...record, id: existing.id }) : store.add(record);
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result);
+      };
+    });
+  },
+  async queryBuySellScores_Today() {
+    if (!this.db) await this.init();
+    if (!this.db || !this.db.objectStoreNames.contains('buySellScores')) return [];
+    const today = new Date().toISOString().split('T')[0];
+    const records = typeof this._queryByIndex === 'function'
+      ? await this._queryByIndex('buySellScores', 'date', today)
+      : await this._getAllRecords('buySellScores');
+    return records.filter(r => r.date === today).sort((a, b) => b.timestamp - a.timestamp);
+  }
+};
+
+async function updateSnapshotCount() {
+  if (!window.DB || !window.DB.db) return;
+  try {
+    const count = await window.DB.getMVCCount();
+    const el = document.getElementById('snapshot-count');
+    if (el) el.textContent = `${count} saved`;
+  } catch (err) {
+    console.error('Failed to update snapshot count:', err);
+  }
+}
+
+async function loadGexPeaks() {
+  if (!window.DB || !window.DB.db) return;
+  try {
+    const snapshots = await window.DB.getRecentMVC(3);
+    const container = document.getElementById('gex-peak-list');
+    if (!container) return;
+    
+    if (snapshots.length === 0) {
+      container.innerHTML = '<span style="font-size:9px;color:#555;font-style:italic">no snapshots yet</span>';
+      return;
+    }
+    
+    // Deduplicate by strike
+    const seen = new Set();
+    const unique = snapshots.filter(s => {
+      const key = s.strikeOIVol || s.strikeVolOnly;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    
+    container.innerHTML = unique.map(s => {
+      const strike = s.strikeOIVol || s.strikeVolOnly || '?';
+      const time = s.time ? s.time.substring(0, 5) : '?';
+      return `<span style="font-size:9px;color:#fff;padding:2px 6px;background:#0a1628;border:1px solid #1e3050;border-radius:2px;display:flex;align-items:center;gap:4px">${strike} @ ${time}</span>`;
+    }).join('');
+  } catch (err) {
+    console.error('Failed to load GEX peaks:', err);
+  }
+}
+
+function hideGexSnapshot(btn) {
+  btn.closest('span').style.display = 'none';
+}
+window.hideGexSnapshot = hideGexSnapshot;
+
+// Initialize DB on page load
+window.addEventListener('DOMContentLoaded', () => {
+  window.DB.init()
+    .then(() => {
+      window.DB.startAutoSnapScheduler();
+      console.log('✓ Auto-snap scheduler started');
+    })
+    .catch(err => console.error('DB init failed:', err));
+});
+
+let lastSnapshotTime = 0;
+
+async function gexTakeSnapshot(triggerType = 'manual') {
+  const now = Date.now();
+  // Prevent rapid-fire calls within 100ms
+  if (now - lastSnapshotTime < 100) {
+    console.log('GEX snapshot throttled');
+    return;
+  }
+  
+  lastSnapshotTime = now;
+  console.log(`GEX snapshot taken [${triggerType}]`);
+  
+  // Capture current MVC data from AppState or overview page
+  const esPrice = window.AppState?.spotPrice || 0;
+  const spxPrice = window.AppState?.spxPrice || 0; // From TastyTrade proxy
+  const totalNetGEX = window.AppState?.totalNetGEX || 0;
+  const selectedDTE = window.AppState?.selectedDTE || 0;
+  const netDexStrike = window.AppState?.netDexStrike || 0;
+  const totalNetDEX_OI = window.AppState?.totalNetDEX_OI || 0;
+  
+  // Get MVC values - these should be calculated by overview.js
+  const mvcOIVol = window.mvcOIVol || { strike: 0, value: 0, volume: 0 };
+  const mvcVolOnly = window.mvcVolOnly || { strike: 0, value: 0, volume: 0 };
+  const expiration = window.AppState?.expiryMap?.[selectedDTE] || '—';
+  
+  // Initialize DB if needed
+  if (!window.DB.db) {
+    console.log('Initializing database...');
+    try {
+      await window.DB.init();
+      console.log('✓ Database initialized');
+    } catch (err) {
+      console.error('✗ Database init failed:', err);
+      return;
+    }
+  }
+  
+  try {
+    await window.DB.saveMVCSnapshot(mvcOIVol, mvcVolOnly, esPrice, expiration, triggerType, totalNetGEX, netDexStrike, totalNetDEX_OI, spxPrice);
+    console.log(`✓ MVC snapshot saved [${triggerType}]`);
+    
+    // Show toast only for manual snaps
+    if (triggerType === 'manual') {
+      const toast = document.createElement('div');
+      toast.textContent = '✓ Snapshot saved!';
+      toast.style.cssText = 'position:fixed;top:80px;right:20px;background:#003a1a;border:1px solid #00e676;color:#00e676;padding:12px 20px;border-radius:4px;z-index:9999;font:12px Consolas,monospace';
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 2000);
+    }
+  } catch (err) {
+    console.error('✗ Failed to save MVC snapshot:', err);
+  }
+  
+  window.EventBus.emit('gex-snapshot', { esPrice, spxPrice, totalNetGEX, selectedDTE });
 }
 
 // Load overview page on startup - defined here, called at end of script
@@ -885,6 +1384,20 @@ style.textContent = `
   }
 `;
 document.head.appendChild(style);
+
+function stretchGexPanelBelow() {
+  const gexPanel = document.querySelector('.panel-box.collapsible');
+  if (!gexPanel) return;
+  
+  const currentHeight = gexPanel.offsetHeight;
+  const viewportHeight = window.innerHeight;
+  const gexTop = gexPanel.getBoundingClientRect().top;
+  const availableSpace = viewportHeight - gexTop - 40;
+  
+  if (currentHeight < availableSpace) {
+    gexPanel.style.height = availableSpace + 'px';
+  }
+}
 </script>
 
 <script>
@@ -902,7 +1415,10 @@ document.addEventListener('click', function(e) {
 
 <!-- Database modules -->
 <script src="es-stats-spx-price.js?v=20260525-spx-conversion"></script>
-<script src="estimated-moves.js?v=20260525-estimated-moves-restored"></script>
+<script src="estimated-moves.js?v=20260527-em-page-snapshots"></script>
+
+<!-- SPX 0DTE Premium Flow (Bzila) -->
+<script src="pages/bzila.js?v=20260528-v8"></script>
 
 <script>
 // Initialize dashboard - must be at end after all functions defined
@@ -941,3 +1457,4 @@ initDashboard();
   </script>
 </body>
 </html>
+

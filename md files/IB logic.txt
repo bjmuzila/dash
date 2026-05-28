@@ -1,0 +1,287 @@
+# 📋 Futures Initial Balance (IB) Master Logic Reference
+
+This master document lays out the structural **"IF THIS ➡️ THEN THAT"** logic for every Initial Balance (IB) statistic discovered across your 10-year baseline studies, 6-month rolling regimes, path dependencies, day-of-the-week anomalies, and volatility compression curves.
+
+---
+
+## 🏛️ Logic Block 1: Baseline Range Violations (10-Year Study)
+
+*Asset Context: ES & NQ Group • Sample Size: 2,577 Trading Days*
+
+### **Rule 1.1: The Inside Day Exception**
+
+* **IF:** A regular trading hour (RTH) session completes its 60-minute Initial Balance window (`09:30 - 10:30 AM EST`):
+* **THEN:** There is only a **$0.6\%$** probability that the remainder of the session stays completely contained within that range.
+* *Operational Play:* In $99.4\%$ of all trading days, you must plan for at least one breakout. **Never execute a strategy that relies on an inside day holding.**
+
+### **Rule 1.2: ES Structural Asymmetry**
+
+* **IF:** You are trading the ES contract over a macro timeline:
+* **THEN:** The IB Low is broken more frequently than the IB High.
+* $\text{P}(\text{IB High Break}) = 67.1\%$
+* $\text{P}(\text{IB Low Break}) = 72.4\%$
+
+
+
+### **Rule 1.3: Cross-Asset Whiplash (Double Breach Risk)**
+
+* **IF:** A session breaks one side of the IB range early in the day:
+* **THEN:** The statistical risk of reversing and breaking the *opposite* side is highly dependent on the asset class:
+* **ES Futures:** **$40.1\%$** probability of a double breach.
+* **NQ Futures:** **$23.5\%$** probability of a double breach.
+
+
+* *Operational Play:* NQ exhibits significantly higher trend-continuation characteristics. ES is prone to a "Double Cross" whiplash profile nearly half the time.
+
+---
+
+## 🧭 Logic Block 2: Positional Closes & Midpoint Bias (10-Year Study)
+
+*Asset Context: ES & NQ Group • Threshold: Position Relative to IB Midpoint*
+
+### **Rule 2.1: ES Above-Mid Dominance**
+
+* **IF:** Price targets or closes the IB hour **above** the absolute IB Midpoint:
+* **THEN:** There is an **$83.5\%$** probability of an eventual IB High breakout, showcasing a **$+29.5\%$** bullish directional bias over the baseline.
+
+### **Rule 2.2: ES Below-Mid Dominance**
+
+* **IF:** Price targets or closes the IB hour **below** the absolute IB Midpoint:
+* **THEN:** There is a massive **$94.9\%$** probability of an eventual IB Low breakdown, showcasing a **$+47.8\%$** bearish directional bias over the baseline.
+* *Operational Play:* Fading a market trading under the IB Midpoint on ES carries an ultra-low $5.1\%$ structural survival rate.
+
+### **Rule 2.3: NQ Midpoint Metrics**
+
+* **IF:** Price transitions relative to the IB Midpoint on NQ:
+* **THEN:** The expansion probabilities scale as follows:
+* **Price Above Midpoint:** **$83.3\%$** probability of an eventual IB High breakout.
+* **Price Below Midpoint:** **$78.2\%$** probability of an eventual IB Low breakdown.
+
+
+
+---
+
+## ⏱️ Logic Block 3: Temporal Decay (The Timing Curve)
+
+*Asset Context: ES & NQ Group • Scope: Post-IB Session Window*
+
+### **Rule 3.1: Volatility Velocity Clumping**
+
+* **IF:** The 60-minute Initial Balance window closes at 10:30 AM EST:
+* **THEN:** **$84.1\%$** of all session breakouts will manifest within the first 30 minutes (`10:30 - 11:00 AM EST`).
+
+### **Rule 3.2: The Execution Window Threshold**
+
+* **IF:** You are monitoring the session for an opening breakout expansion:
+* **THEN:** The average time to the first breakout is **18 minutes**, with a median velocity of just **2 minutes**.
+* *Operational Play:* If the clock passes 11:00 AM EST and neither boundary has been violated, the probability of an explosive breakout drops off aggressively. **Transition your playbook from a breakout approach to a range-bound premium decay profile.**
+
+---
+
+## 🔄 Logic Block 4: Boundary Formation Sequence & Path Dependency
+
+*Asset Context: NQ Group • Sample: Rolling Study Window*
+
+### **Rule 4.1: The Low Formed First Baseline**
+
+* **IF:** During the 60-minute IB window, the session **Low** is established *before* the session High is formed:
+* **THEN:** The market exhibits a heavy path-dependent upward skew for the remainder of the day:
+* **Probability of breaking the IB High:** **$78.79\%$** ($52$ out of $66$ days).
+* **Probability of reversing to break the IB Low:** Only **$19.7\%$** ($13$ out of $66$ days).
+
+
+* *Operational Play:* When the low locks early, buying pullbacks carries an $80.3\%$ macro survival rate if your protective stop is anchored just below that initial IB Low.
+
+---
+
+## 📅 Logic Block 5: Day-of-the-Week Behavior Variations (Tuesdays)
+
+*Asset Context: NQ Group • Filter: Tuesday Sessions Only*
+
+### **Rule 5.1: Tuesday High Formed First**
+
+* **IF:** The calendar day is a **Tuesday** AND the NQ IB **High** is established before the Low:
+* **THEN:** The first breakout sequence skews heavily to the downside:
+* Probability that the market breaks the **IB Low first:** **$58.33\%$**.
+* Probability that the market breaks the **IB High first:** **$41.67\%$**.
+
+
+
+### **Rule 5.2: Tuesday Low Formed First**
+
+* **IF:** The calendar day is a **Tuesday** AND the NQ IB **Low** is established before the High:
+* **THEN:** The first breakout sequence skews aggressively to the upside:
+* Probability that the market breaks the **IB High first:** **$64.29\%$**.
+* Probability that the market breaks the **IB Low first:** **$35.71\%$**.
+
+
+
+---
+
+## 📉 Logic Block 6: Volatility Compression & Z-Score Levels
+
+*Asset Context: NQ Group • Scope: 3-Year Compressed Study • Condition: IB Size $\le 1\%$*
+
+### **Rule 6.1: The -0.1 Z-Score Breakdown Trigger**
+
+* **IF:** The overall IB range size is highly compressed (**$0\%$ to $1\%$**) AND a 5-minute candle closes below the IB Low (**-0.1 level**):
+* **THEN:** There is a staggering **$98.01\%$** probability of continued downward extension throughout the session. **Fading this breakout carries a near $0\%$ mathematical edge.**
+
+### **Rule 6.2: Scaling Downside Extension Probabilities**
+
+* **IF:** NQ prints a 5-minute close below subsequent standard deviation expansion thresholds on a compressed breakdown day:
+* **THEN:** The probability of further range extension remains highly dominant, scaling as follows:
+* $\text{P}(\text{Sustained Breakdown} \mid \text{Close} \le -0.2) = 87.56\%$
+* $\text{P}(\text{Sustained Breakdown} \mid \text{Close} \le -0.3) = 81.59\%$
+* $\text{P}(\text{Sustained Breakdown} \mid \text{Close} \le -0.4) = 74.63\%$
+* $\text{P}(\text{Sustained Breakdown} \mid \text{Close} \le -0.5) = 67.66\%$
+* $\text{P}(\text{Sustained Breakdown} \mid \text{Close} \le -0.8) = 50.75\%$
+
+
+
+### **Rule 6.3: The Positive Counter-Trend Trap**
+
+* **IF:** A session is verified as a compressed breakdown day:
+* **THEN:** The probability of price completely reversing to register a 5-minute close above the opposite **+0.1 level** is an ultra-rare **$0.5\%$**.
+* *Operational Play:* If you go short on a compressed breakout, your structural stop-loss is absolute. Any accepted price action above $+0.1$ has a $99.5\%$ statistical failure rate for this profile, indicating an immediate structural trend shift.
+
+---
+
+## 📊 Logic Block 7: Modern Market Regimes (Recent 6-Month Rolling Data)
+
+*Asset Scope: ES & NQ Group • Environmental Sample Window*
+
+### **Rule 7.1: Modern NQ Trend Insulation**
+
+* **IF:** You execute breakouts in NQ under the current market regime:
+* **THEN:** The asset exhibits immense trend-holding insulation:
+* **Single Breakout Trend Day:** **$80.95\%$** of sessions ($102$ out of $126$ days).
+* **Double Breach Whiplash Risk:** Slashing down to just **$14.29\%$** ($18$ out of $126$ days).
+
+
+
+### **Rule 7.2: Modern ES Breakout Compression**
+
+* **IF:** You execute breakouts in ES under the current market regime:
+* **THEN:** The market structure shows a massive departure from its 10-year historical baseline ($40.1\%$ double-breach):
+* **Single Breakout Trend Day:** **$75.59\%$** of sessions ($96$ out of $127$ days).
+* **Double Breach Risk:** Compressed down to **$22.05\%$** ($28$ out of $127$ days).
+
+
+* *Operational Play:* Both indices are currently presenting clean, sticky, unidirectional trend extensions. Do not over-rely on historical macro fading strategies when a boundary cracks in this current regime.
+
+---
+
+## ⚡ Logic Block 8: Multi-Variable Confluence (The Liquidity Sweep)
+
+*Asset Context: ES Group / SPY • Variable Integration*
+
+### **Rule 8.1: The Failed Expansion Setup**
+
+* **IF:** Price extends outside the prior session to **touch the Previous Day's High** early in the morning,
+* **AND:** It immediately locks a fixed **IB High First** path sequence,
+* **AND:** The opening 60-minute RTH candle prints a **large Red close** (e.g., range $\ge 0.50\%$):
+* **THEN:** The market has executed an institutional **Liquidity Grab / Trap**. The raw bullishness of the previous high touch is completely overwritten.
+* *Operational Play:* Pivot to a heavy **Bearish Bias**. Your execution setup is to short pullbacks below the opening hour distribution, targeting a complete range rotation to test and break the **IB Low**. Protect capital with stops anchored just above the opening price print.
+
+
+
+**@PatternProfits (Ben) is a futures/options trader focused on $NQ (Nasdaq-100 E-mini) and $ES (S&P 500 E-mini), plus selling premium (especially 0DTE).** His bio highlights a probabilistic, poker-like approach: he bets when probabilities are favorable using time-based liquidity concepts like ORB (Opening Range Breakout, e.g., 15/30-min), IB (Initial Balance/first-hour range), FVG (Fair Value Gaps), VWAP, and 0DTE gamma/zone analysis.
+
+Over at least the past 3+ months (late February to late May 2026), his public X posts are consistent in style and content. They blend real-time intraday commentary, visual aids (charts, screenshots), and—most relevant to your request—**detailed statistical/probability data** on the patterns and strategies he trades. He does **not** appear to post personal trade-by-trade journals, account P&L summaries, or overall performance metrics (e.g., no “my last 100 trades: X% win rate, Y profit factor”). The “statistics of many trades and strategies” refer primarily to **historical pattern probabilities, hit rates, and behavioral data** from tools like Edgeful and NQStats, which quantify edges in the setups he uses.
+
+### Core Themes in Posts
+- **Live Intraday Commentary & Setups**: Frequent morning/afternoon updates on $NQ and $ES price action. Common observations include:
+  - Which prints first (IB high/low, 1st FVG green/red).
+  - IB breaks (upside, downside, or double breaks), relative strength between $NQ/$ES, choppy vs. trending conditions, London/Asia sweeps, and VWAP interactions.
+  - Examples from sampled days: notes on “IB downside break,” “1st FVG after 10am prints red,” “mixed” setups when $ES and $NQ disagree, or “choppy path” action. He often waits for confluence before trading and shares quick thoughts like “price first” or ideal scenarios (e.g., IB low first + upper-half close + green FVG).
+
+- **0DTE Zone Maps & Gamma Analysis**: Regular shares of TradingView snapshots showing “zone maps” for 0DTE options. These highlight chop/pinning zones defined by call walls/gamma levels, potential dampening effects (especially on headline-heavy days), and boundaries for both $NQ and $ES. He notes when positive gamma may suppress volatility or when a “chop zone” returns.
+
+- **Statistical & Probability Data (The Main “Stats” Content)**: This is the standout element matching your query. He frequently posts screenshots, references, or links to quantitative reports on pattern behavior. Key sources and examples include:
+  - **Edgeful reports** (he mentions having access to multiple time frames for comparison—1m/3m/6m/YTD/1yr/2yr/etc.):
+    - IB breakout stats (often referenced for QQQ but applied to similar index futures): Single-side breaks ~72% of the time, double breaks ~25%, no breaks ~2%. Average extensions: +0.14% upside above IB high / –0.21% downside below IB low (with max observed moves up to +1.41% / –1.94%). EOD close back inside the IB range ~41% of the time (closes above high ~33%, below low ~25%). Strong directional bias after the first break, with mean-reversion tendencies by close.
+    - Custom NQ-specific views (e.g., May 2025–May 2026 period): IB high formed/breaks first only ~26%, while IB low first ~69.57% (showing recent shifts vs. longer-term averages).
+    - He discusses how probabilities can change meaningfully over shorter windows (e.g., something near 70% over a year dropping to a “statistically significant” 50% over the last 3 months) and uses these for comparison.
+
+  - **Session/Time-Based Liquidity Hit Rates** (screenshots from probability tools): Based on large samples (e.g., 1,775+ days). Examples include:
+    - London high first: ~76.68% hit rate.
+    - London low first: ~22.48%.
+    - Sequential targets (e.g., next London low after high-first): ~47.98%.
+    - Intraday levels (NY session): Very high hit rates like 7–8 AM mid (~94%), midnight open (~86%), 2–3 AM mid (~90%).
+    - Asia levels in NY session (with/without London overlap).
+
+  - **RTH (Regular Trading Hours) Breaks Stats** (links to nqstats.com/rth_breaks.html, covering ~2,488 days from 2016–March 2026 for $NQ):
+    - Opens inside prior-day RTH (pRTH) range: ~59%.
+    - Opens above pRTH high (gap up): ~26%.
+    - Opens below pRTH low (gap down): ~15%.
+    - Gap-up behavior: Closes above high ~70%, does not breach low ~88%.
+    - Gap-down behavior: Closes below low ~60%, does not breach high ~90%.
+    - Inside opens: No breach either side ~18%, one side only ~74%, both sides ~8%.
+    - He notes these as “high probability we don’t stay inside” when opening inside pRTH.
+
+- **Strategy Comparison & Educational Notes**: He explains differences between ORB and IB (distinct ranges, targets, and risk profiles—do not automatically mix without data/confluence). Recommends backtesting (e.g., links to TradingView ORB scripts or Edgeful data) and treating each as its own idea. Occasional macro context (e.g., Fed balance sheet trends resembling QE-era bids) and light-hearted notes on price action (“absolute crime” when price misses a level by ticks). Emphasizes stress-free, data-driven trading and taking wins in volatile markets.
+
+### Overall Tone and Purpose
+Posts are practical, real-time, and data-oriented rather than promotional of personal results. The statistical elements (hit rates, extensions, break frequencies, time-period comparisons) provide the quantifiable “edge” for his ORB/IB/FVG/0DTE framework—exactly the “statistics of many trades and strategies” you mentioned. He treats these probabilities like poker odds: favorable setups get the bet.
+
+Activity is highest around market open and key levels, with screenshots of reports, charts, and quick commentary. He occasionally replies with more detail or links (YouTube explanations, Edgeful/NQStats).
+
+This summary draws from dozens of posts sampled across Feb–May 2026 (latest in each period + targeted stats-focused ones). The core information is stable: probabilistic futures trading backed by historical pattern stats rather than discretionary guesses or personal performance bragging. If you want deeper dives into specific posts, images, or a particular strategy’s stats, provide more details!
+
+
+
+**Edgeful IB Breakout Data Analysis (based on @PatternProfits’ public posts, primarily from May 2026)**
+
+Edgeful is a data platform that quantifies historical probabilities for patterns like **Initial Balance (IB)** — the first 60-minute range (typically 9:30–10:30 AM ET) in instruments like **$NQ** (and $ES). It offers customizable views by time frame (1m, 3m, 6m, YTD, 1yr, 2yr, etc.), breakout measure (wick vs. body), candle timeframe, etc.
+
+@PatternProfits regularly references and screenshots Edgeful reports to support his probabilistic trading style. He emphasizes comparing shorter vs. longer lookback periods because edges can shift meaningfully. Below is a synthesis and analysis of the IB-specific data he has shared publicly (focusing on the last ~3–12 months, as requested).
+
+### Key Posted IB Statistics for $NQ (60min IB)
+
+**1. Which side forms/breaks first (by rejection, ~May 30, 2025 – May 22, 2026 period, ~1 year):**
+- IB **low** forms/breaks first: **69.57%**
+- IB **high** forms/breaks first: **26.09%**
+
+(This data comes directly from his May 24, 2026 Edgeful screenshot.)
+
+**Recent regime shift (last 3 months vs. longer-term):**
+- He explicitly notes that the dominant “IB low first” probability was **nearly 70% over the last year** but has **dropped to a statistically significant ~50% level over the last 3 months**.
+- This is a clear edge decay / market regime change. The bias toward early lows (often associated with selling pressure or mean-reversion setups) has normalized recently, making the pattern less predictable on a standalone basis.
+
+**2. Broader IB Breakout Behavior (recurring references across posts):**
+- Single-side break (only high **or** only low broken): ~**72%**
+- Double break (both sides of the IB range broken): ~**25%** (one older post referenced ~19% for double breaks)
+- No break / stays entirely inside IB: ~**2–3%**
+- EOD close behavior: Closes back inside the IB range a meaningful percentage of the time (~**41%** in some referenced views), with the remainder split between closing above the high or below the low.
+
+These numbers align with classic IB behavior in index futures: strong directional follow-through once the first break occurs, but with notable mean-reversion risk by the close of the regular trading session (RTH).
+
+### Analysis & Trading Implications
+
+**Strengths of the Edge (Probabilistic Edge)**
+- High hit rate for single-side breaks (~72%) supports breakout trading strategies (e.g., fade the first opposite extreme or ride the break with tight risk).
+- The historical ~70% “low first” bias in NQ gave a clear intraday downside tilt for many months — useful for bias, position sizing, and filtering long vs. short setups.
+- Confluence is key in his approach: He layers IB stats with:
+  - Where the IB closes (upper half vs. lower half)
+  - Color of the 1st Fair Value Gap (FVG) after IB close
+  - Price action at the first FVG (his “price first” rule)
+  - Comparison between $NQ and $ES (he checks both separately when they disagree)
+- This multi-factor filter turns raw probabilities into higher-conviction trades, much like poker pot odds + hand strength.
+
+**Weaknesses / Risks Highlighted by Recent Data**
+- **Regime shifts matter**: The drop from ~70% → ~50% “low first” in just the last 3 months shows why larger sample sizes aren’t always better. Shorter windows (3m/6m) can reveal when an edge is weakening or flipping. Blindly trading the 1-year stat in the recent period would have reduced reliability.
+- Double breaks (~19–25%) and inside closes (~41%) create false-breakout risk and mean-reversion setups. Extending too far after an IB break carries tail risk.
+- NQ and ES can diverge (he frequently posts “mixed” mornings where one has low-first + upper-half close while the other has high-first + lower-half close).
+
+**Practical Takeaways for Strategy**
+- **Dynamic monitoring** → Check Edgeful every morning (or use multiple time frames) rather than relying on static historical numbers. He does this routinely.
+- **Best setups** → Ideal long: IB low first + IB closes upper half + green 1st FVG. Ideal short: opposite. When factors conflict, defer or use the 1st FVG price action as the tiebreaker.
+- **Risk management** → Because double breaks and inside closes are non-negligible, tight stops or scaling out on extensions make sense. The stats favor continuation after the first clean break but warn against holding too long into the close.
+- **Time-frame flexibility** → Edgeful’s custom periods let you detect when the market is in a “high edge” vs. “low edge” environment (e.g., the recent normalization reduced the low-first edge).
+- **Broader context** → He pairs this with ORB (Opening Range Breakout), London/Asia liquidity levels, RTH gap stats, and 0DTE gamma/zone maps. IB is one high-probability piece, not the entire system.
+
+**Bottom line**: The Edgeful IB data @PatternProfits shares publicly validates a data-driven, non-discretionary approach to futures trading. The standout recent insight is the **clear erosion of the long-term “IB low first” bias in NQ** — from ~70% (1yr) to ~50% (3m). This underscores the need to treat probabilities as living data rather than fixed rules. Traders who adapt to these shifts (as he does) maintain an edge; those who don’t see their win rate decay.
+
+If you have a specific screenshot, time period, or additional Edgeful metric (e.g., average extension size, EOD close distribution, or $ES-specific data) you’d like me to analyze further, share the details or link and I’ll dig in!
+

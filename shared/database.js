@@ -1,11 +1,11 @@
 // ============================================================================
 // TIME-SERIES DATABASE FOR OPTIONS MARKET DATA
-// Stores: MVC snapshots, Premium Flow (1-min), Cumulative Delta (1-min ES), Greeks
+// Stores: MVC snapshots, Premium Flow (1-min), Greeks
 // ============================================================================
 
 const DB = {
   name: 'OptionsMarketDB',
-  version: 2,
+  version: 4,
   db: null,
   _autoSnapScheduled: false,
 
@@ -27,6 +27,10 @@ const DB = {
         const db = event.target.result;
         console.log('Creating/upgrading database schema...');
 
+        if (db.objectStoreNames.contains('cumulativeDelta')) {
+          db.deleteObjectStore('cumulativeDelta');
+        }
+
         // Store 1: MVC snapshots
         if (!db.objectStoreNames.contains('mvc')) {
           const mvcStore = db.createObjectStore('mvc', { keyPath: 'id', autoIncrement: true });
@@ -42,13 +46,6 @@ const DB = {
           pfStore.createIndex('date', 'date', { unique: false });
         }
 
-        // Store 3: Cumulative delta — 1-minute ES scalar
-        if (!db.objectStoreNames.contains('cumulativeDelta')) {
-          const cdStore = db.createObjectStore('cumulativeDelta', { keyPath: 'id', autoIncrement: true });
-          cdStore.createIndex('timestamp', 'timestamp', { unique: false });
-          cdStore.createIndex('date', 'date', { unique: false });
-        }
-
         // Store 4: Full chain snapshots
         if (!db.objectStoreNames.contains('chainSnapshots')) {
           const snapStore = db.createObjectStore('chainSnapshots', { keyPath: 'id', autoIncrement: true });
@@ -61,6 +58,13 @@ const DB = {
           const greekStore = db.createObjectStore('greeksHistory', { keyPath: 'id', autoIncrement: true });
           greekStore.createIndex('timestamp', 'timestamp', { unique: false });
           greekStore.createIndex('strike_exp', ['strike', 'expiration'], { unique: false });
+        }
+
+        if (!db.objectStoreNames.contains('buySellScores')) {
+          const bsStore = db.createObjectStore('buySellScores', { keyPath: 'id', autoIncrement: true });
+          bsStore.createIndex('timestamp', 'timestamp', { unique: false });
+          bsStore.createIndex('date', 'date', { unique: false });
+          bsStore.createIndex('slotKey', 'slotKey', { unique: true });
         }
       };
     });
@@ -215,40 +219,39 @@ const DB = {
 
   // ========================================================================
   // CUMULATIVE DELTA — 1-MINUTE ES SCALAR
-  // cvd: running cumulative volume delta for the session
-  // ========================================================================
-  async saveMinuteCumulativeDelta(cvd, esPrice) {
+
+  async saveBuySellScore(score) {
     const now = new Date();
     const record = {
-      timestamp: now.getTime(),
-      date: now.toISOString().split('T')[0],
-      time: now.toTimeString().split(' ')[0],
-      cvd: cvd,
-      esPrice: esPrice
+      timestamp: score.timestamp || now.getTime(),
+      date: score.date || now.toISOString().split('T')[0],
+      time: score.time || now.toTimeString().split(' ')[0],
+      slotKey: score.slotKey || `${now.toISOString().split('T')[0]}-${now.getHours()}:${now.getMinutes()}`,
+      spxPrice: Number(score.spxPrice || 0),
+      side: score.side || 'Buy',
+      score: Number(score.score || 0),
+      buyPct: Number(score.buyPct || 0),
+      sellPct: Number(score.sellPct || 0)
     };
-    return this._insert('cumulativeDelta', record);
+
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['buySellScores'], 'readwrite');
+      const store = tx.objectStore('buySellScores');
+      const getReq = store.index('slotKey').get(record.slotKey);
+      getReq.onerror = () => reject(getReq.error);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        const req = existing ? store.put({ ...existing, ...record, id: existing.id }) : store.add(record);
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result);
+      };
+    });
   },
 
-  // Get 1-min time series for charting in bzila.html
-  async queryCumulativeDelta_TimeSeries(hoursBack = 8) {
-    const cutoff = Date.now() - (hoursBack * 60 * 60 * 1000);
-    const records = await this._queryByRange('cumulativeDelta', 'timestamp', cutoff);
-    return records.sort((a, b) => a.timestamp - b.timestamp);
-  },
-
-  // Get today's cumulative delta series
-  async queryCumulativeDelta_Today() {
+  async queryBuySellScores_Today() {
     const today = new Date().toISOString().split('T')[0];
-    return this._queryByIndex('cumulativeDelta', 'date', today);
-  },
-
-  // Get latest cumulative delta value (single scalar)
-  async getCumulativeDeltaLatest() {
-    const records = await this._getAllRecords('cumulativeDelta');
-    if (!records.length) return null;
-    const today = new Date().toISOString().split('T')[0];
-    const todayRecords = records.filter(r => r.date === today);
-    return todayRecords.length ? todayRecords[todayRecords.length - 1] : null;
+    const records = await this._queryByIndex('buySellScores', 'date', today);
+    return records.sort((a, b) => b.timestamp - a.timestamp);
   },
 
   // ========================================================================
@@ -343,10 +346,6 @@ const DB = {
       .sort((a, b) => b.timestamp - a.timestamp);
   },
 
-  async queryCumulativeDelta_Chart(hoursBack = 1) {
-    return this.queryCumulativeDelta_TimeSeries(hoursBack);
-  },
-
   // ========================================================================
   // UTILITIES
   // ========================================================================
@@ -364,10 +363,13 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction([storeName], 'readonly');
       const store = tx.objectStore(storeName);
-      const index = store.index(indexName);
-      const request = index.getAll(value);
+      if (!store.indexNames.contains(indexName)) {
+        resolve([]);
+        return;
+      }
+      const request = store.index(indexName).getAll(value);
       request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => resolve(request.result || []);
     });
   },
 
@@ -375,11 +377,14 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction([storeName], 'readonly');
       const store = tx.objectStore(storeName);
-      const index = store.index(indexName);
+      if (!store.indexNames.contains(indexName)) {
+        resolve([]);
+        return;
+      }
       const range = IDBKeyRange.bound(minValue, maxValue);
-      const request = index.getAll(range);
+      const request = store.index(indexName).getAll(range);
       request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => resolve(request.result || []);
     });
   },
 
@@ -389,7 +394,7 @@ const DB = {
       const store = tx.objectStore(storeName);
       const request = store.getAll();
       request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => resolve(request.result || []);
     });
   },
 
@@ -398,22 +403,16 @@ const DB = {
     return records.length > 0 ? records[records.length - 1] : null;
   },
 
-  async clear(storeName) {
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([storeName], 'readwrite');
-      const store = tx.objectStore(storeName);
-      const request = store.clear();
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(true);
-    });
-  },
-
   async export() {
-    const stores = ['mvc', 'premiumFlow', 'cumulativeDelta', 'chainSnapshots', 'greeksHistory'];
+    const stores = ['mvc', 'premiumFlow', 'chainSnapshots', 'greeksHistory', 'buySellScores'];
     const exported = {};
+
     for (const store of stores) {
-      exported[store] = await this._getAllRecords(store);
+      if (this.db.objectStoreNames.contains(store)) {
+        exported[store] = await this._getAllRecords(store);
+      }
     }
+
     return exported;
   },
 
@@ -437,9 +436,6 @@ async function queryPremiumFlow_TopTrades(hoursBack = 1) {
   return DB.queryPremiumFlow_TopTrades(hoursBack);
 }
 
-async function queryCumulativeDelta_Chart(hoursBack = 1) {
-  return DB.queryCumulativeDelta_Chart(hoursBack);
-}
 
 // ============================================================================
 // AUTO-INIT
@@ -469,9 +465,9 @@ window.addEventListener('DOMContentLoaded', () => {
 // 3. PREMIUM FLOW — call every 1 minute from your polling loop:
 //    await DB.saveMinutePremiumFlow(callFlow, putFlow, esPrice);
 //
-// 4. CUMULATIVE DELTA — call every 1 minute from your polling loop:
-//    await DB.saveMinuteCumulativeDelta(cvd, esPrice);
 //
 // 5. BZILA CHART QUERIES:
 //    const pfSeries = await DB.queryPremiumFlow_TimeSeries(6);   // last 6h
-//    const cdSeries = await DB.queryCumulativeDelta_TimeSeries(8); // last 8h
+
+
+

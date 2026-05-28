@@ -1,185 +1,3 @@
-  <!-- ═══ PAGE: BZILA FLOW ═══ -->
-  <div id="page-bzila" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:#0a0f16">
-    
-    <!-- Header Controls -->
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0d1520;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-      <div style="display:flex;align-items:center;gap:12px">
-        <svg style="width:24px;height:24px;color:#10b981" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
-        </svg>
-        <h1 style="font-size:18px;font-weight:700;color:#fff;margin:0">Futures Order Flow</h1>
-        <div id="bzila-status" style="font-size:11px;padding:4px 8px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">● CONNECTING</div>
-      </div>
-    </div>
-
-    <!-- Tabs -->
-    <div style="display:flex;gap:2px;padding:0 16px;background:#0a0f16;border-bottom:1px solid #1a2a3a;flex-shrink:0;overflow-x:auto">
-      <button id="tab-spx" onclick="switchBzilaTab('spx')" style="padding:12px 16px;font-size:12px;font-weight:600;color:#cbd5e1;background:transparent;border:none;border-bottom:2px solid #10b981;cursor:pointer;white-space:nowrap;transition:all 0.2s">
-        SPX 0DTE
-      </button>
-      <button id="tab-multi-stock" onclick="switchBzilaTab('multi-stock')" style="padding:12px 16px;font-size:12px;font-weight:600;color:#64748b;background:transparent;border:none;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;transition:all 0.2s;hover:color:#cbd5e1">
-        Multi Stock
-      </button>
-    </div>
-
-    <!-- Main Content -->
-    <div style="flex:1;display:flex;padding:12px;overflow:hidden;min-height:0">
-      
-      <!-- TAB: SPX Premium Flow -->
-      <div id="bzila-tab-spx" style="display:flex;flex:1;min-height:0;overflow:hidden">
-        <div style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0;flex:1">
-          <div style="padding:12px;border-bottom:1px solid #1a2a3a;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
-            <h2 style="font-size:13px;font-weight:700;color:#10b981;margin:0;display:flex;align-items:center;gap:8px">
-              <svg style="width:18px;height:18px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
-              </svg>
-              SPX 0DTE Premium Flow
-            </h2>
-            <div style="display:flex;gap:12px;font-size:11px;font-family:monospace">
-              <div><span style="color:#10b981">●</span> <span id="bzila-call-flow" style="color:#cbd5e1">$0</span></div>
-              <div><span style="color:#ef4444">●</span> <span id="bzila-put-flow" style="color:#cbd5e1">$0</span></div>
-              <div><span style="color:#fbbf24">●</span> NET: <span id="bzila-net-flow" style="color:#fbbf24;font-weight:700">$0</span></div>
-            </div>
-          </div>
-          <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-            <canvas id="bzila-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB: Multi Stock Premium Flow -->
-      <div id="bzila-tab-multi-stock" style="display:none;flex:1;min-height:0;overflow:hidden;flex-direction:column;gap:12px">
-        <!-- Top row: QQQ, SPY, AAPL, AMZN -->
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1;min-height:0">
-          <div class="multi-stock-card" data-symbol="QQQ" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">QQQ 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="SPY" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">SPY 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="AAPL" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">AAPL 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="AMZN" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">AMZN 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-        </div>
-
-        <!-- Middle row: GOOGL, META, MSFT, NVDA -->
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1;min-height:0">
-          <div class="multi-stock-card" data-symbol="GOOGL" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">GOOGL 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="META" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">META 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="MSFT" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">MSFT 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="NVDA" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">NVDA 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-        </div>
-
-        <!-- Bottom row: TSLA -->
-        <div style="display:grid;grid-template-columns:1fr;gap:12px;flex:1;min-height:0;max-width:25%">
-          <div class="multi-stock-card" data-symbol="TSLA" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">TSLA 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-  </div><!-- /page-bzila -->
-
-  <script>
   (function() {
     'use strict';
 
@@ -215,6 +33,11 @@
       // Pan/zoom state
       chartPan: 0,           // Offset in data points (left/right drag)
       chartZoom: 1,          // Scale factor (1 = all data, >1 = zoomed in)
+      // Multi-stock flow history (0DTE OTM)
+      multiStockFlowHistory: {
+        QQQ: [], SPY: [], AAPL: [], AMZN: [],
+        GOOGL: [], META: [], MSFT: [], NVDA: [], TSLA: []
+      }
     };
     const state = window.__bzilaFlowState || defaultState;
     window.__bzilaFlowState = state;
@@ -299,41 +122,41 @@
     let chartDragging = false;
     let dragStartX = 0;
     
-    elements.premiumCanvas?.addEventListener('mousedown', e => {
-      chartDragging = true;
-      dragStartX = e.clientX;
-    });
-    
-    elements.premiumCanvas?.addEventListener('mousemove', e => {
-      if (chartDragging) {
-        const delta = e.clientX - dragStartX;
-        const hist = state.flowHistory;
-        if (hist.length > 1) {
-          // ~5px per data point
-          const pointsDelta = -Math.round(delta / 5);
-          state.chartPan = Math.max(0, Math.min(hist.length - 1, state.chartPan + pointsDelta));
-          dragStartX = e.clientX;
-        }
-      }
-    });
-    
-    elements.premiumCanvas?.addEventListener('mouseup', () => {
-      chartDragging = false;
-    });
-    
-    elements.premiumCanvas?.addEventListener('mouseleave', () => {
-      chartDragging = false;
-      hideTooltip();
-    });
-    
-    elements.premiumCanvas?.addEventListener('wheel', e => {
-      e.preventDefault();
-      const hist = state.flowHistory;
-      if (hist.length < 2) return;
-      // Scroll down = zoom in, scroll up = zoom out
-      const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
-      state.chartZoom = Math.max(1, Math.min(20, state.chartZoom * zoomFactor));
-    }, { passive: false });
+//     elements.premiumCanvas?.addEventListener('mousedown', e => {
+//       chartDragging = true;
+//       dragStartX = e.clientX;
+//     });
+//     
+//     elements.premiumCanvas?.addEventListener('mousemove', e => {
+//       if (chartDragging) {
+//         const delta = e.clientX - dragStartX;
+//         const hist = state.flowHistory;
+//         if (hist.length > 1) {
+//           // ~5px per data point
+//           const pointsDelta = -Math.round(delta / 5);
+//           state.chartPan = Math.max(0, Math.min(hist.length - 1, state.chartPan + pointsDelta));
+//           dragStartX = e.clientX;
+//         }
+//       }
+//     });
+//     
+//     elements.premiumCanvas?.addEventListener('mouseup', () => {
+//       chartDragging = false;
+//     });
+//     
+//     elements.premiumCanvas?.addEventListener('mouseleave', () => {
+//       chartDragging = false;
+//       hideTooltip();
+//     });
+//     
+//     elements.premiumCanvas?.addEventListener('wheel', e => {
+//       e.preventDefault();
+//       const hist = state.flowHistory;
+//       if (hist.length < 2) return;
+//       // Scroll down = zoom in, scroll up = zoom out
+//       const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
+//       state.chartZoom = Math.max(1, Math.min(20, state.chartZoom * zoomFactor));
+//     }, { passive: false });
 
     // Setup canvas
     function setupCanvas(canvas) {
@@ -557,6 +380,100 @@
       }
     }
 
+    // Snapshot multi-stock flow from option chain data
+    function snapshotMultiStockFlow(optionData) {
+      // optionData = { SPY: {0dte: {call: x, put: y}, 1dte: {...}}, ... }
+      const ts = Date.now();
+      const fourPM = new Date();
+      fourPM.setHours(16, 0, 0, 0);
+      if (new Date() >= fourPM) return;
+
+      const sessionOpen = getSessionOpenTs();
+      
+      for (const [stock, expirationData] of Object.entries(optionData)) {
+        if (!state.multiStockFlowHistory[stock]) state.multiStockFlowHistory[stock] = [];
+        
+        const snapshot = { ts };
+        // Store flow for each expiration (0dte, 1dte, 7dte, etc.)
+        for (const [dte, flowData] of Object.entries(expirationData)) {
+          snapshot[dte] = flowData;
+        }
+        
+        state.multiStockFlowHistory[stock].push(snapshot);
+        // Keep only session data
+        state.multiStockFlowHistory[stock] = state.multiStockFlowHistory[stock].filter(p => p.ts >= sessionOpen);
+      }
+    }
+
+    const MULTI_STOCK_SYMBOLS = ['QQQ','SPY','AAPL','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+
+    // Is this expiration 0DTE (expires today)?
+    function isExp0DTE(expDateStr) {
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, '0');
+      const d = String(today.getDate()).padStart(2, '0');
+      return expDateStr === `${y}-${m}-${d}`;
+    }
+
+    // Fetch one stock's chain, compute 0DTE OTM call/put premium
+    async function fetchStockChainFlow(symbol) {
+      try {
+        const resp = await fetch(`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(symbol)}?range=all`);
+        if (!resp.ok) return null;
+        const json = await resp.json();
+        const items = json?.data?.items || [];
+        const spot  = json?.data?.underlyingPrice || 0;
+        if (!items.length || !spot) return null;
+
+        let callFlow = 0, putFlow = 0;
+
+        for (const expGroup of items) {
+          if (!isExp0DTE(expGroup['expiration-date'])) continue; // 0DTE only
+
+          for (const strikeObj of (expGroup.strikes || [])) {
+            const strike = parseFloat(strikeObj['strike-price'] || 0);
+            if (!strike) continue;
+
+            // OTM calls: strike above spot
+            const c = strikeObj.call;
+            if (c && strike > spot) {
+              const mid = ((c.bid || 0) + (c.ask || 0)) / 2;
+              callFlow += mid * (c.volume || 0) * 100;
+            }
+            // OTM puts: strike below spot
+            const p = strikeObj.put;
+            if (p && strike < spot) {
+              const mid = ((p.bid || 0) + (p.ask || 0)) / 2;
+              putFlow += mid * (p.volume || 0) * 100;
+            }
+          }
+        }
+
+        if (!callFlow && !putFlow) return null;
+        return { '0dte': { call: callFlow, put: putFlow } };
+      } catch (e) {
+        console.error(`fetchStockChainFlow ${symbol}:`, e.message);
+        return null;
+      }
+    }
+
+    // Poll all stocks, staggered to respect proxy rate limits
+    async function pollMultiStockFlow() {
+      const now = new Date();
+      const open = new Date(); open.setHours(9, 30, 0, 0);
+      const close = new Date(); close.setHours(16, 0, 0, 0);
+      if (now < open || now >= close) return;
+
+      const result = {};
+      for (const sym of MULTI_STOCK_SYMBOLS) {
+        const flow = await fetchStockChainFlow(sym);
+        if (flow) result[sym] = flow;
+        await new Promise(r => setTimeout(r, 600));
+      }
+      if (Object.keys(result).length) snapshotMultiStockFlow(result);
+    }
+
     async function saveMinuteFlowToDatabase() {
       if (typeof DB === 'undefined' || !DB?.db) return;
       const baseline = state.dbMinuteBaseline || {
@@ -575,6 +492,33 @@
         };
       } catch (err) {
         console.error('Bzila DB minute save failed:', err);
+      }
+    }
+
+    async function saveMultiStockFlowToDatabase() {
+      if (typeof DB === 'undefined' || !DB?.db) return;
+      try {
+        for (const [stock, history] of Object.entries(state.multiStockFlowHistory)) {
+          const lastSnapshot = history[history.length - 1];
+          if (!lastSnapshot) continue;
+
+          // Save each expiration's call/put flow
+          for (const [dte, flowData] of Object.entries(lastSnapshot)) {
+            if (dte === 'ts') continue; // Skip timestamp field
+            if (!flowData.call && !flowData.put) continue;
+
+            await DB.saveMultiStockFlow({
+              stock,
+              dte: parseInt(dte),
+              timestamp: lastSnapshot.ts,
+              callFlow: flowData.call || 0,
+              putFlow: flowData.put || 0,
+              netFlow: (flowData.call || 0) + (flowData.put || 0)
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Multi-stock DB save failed:', err);
       }
     }
 
@@ -621,6 +565,56 @@
       }
     }
 
+    async function hydrateMultiStockFlowFromDatabase() {
+      if (typeof DB === 'undefined' || !DB?.db) return;
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        // Query multi-stock flow records (assumes DB.queryMultiStockFlow exists)
+        let records = [];
+        try {
+          records = typeof DB.queryMultiStockFlow_Today === 'function'
+            ? await DB.queryMultiStockFlow_Today()
+            : typeof DB._getAllRecords === 'function'
+            ? (await DB._getAllRecords('multiStockFlow')).filter(r => r.date === today)
+            : [];
+        } catch (err) {
+          console.warn('Multi-stock flow history not available:', err.message);
+          return;
+        }
+
+        if (!records.length) return;
+
+        // Group by stock and rebuild snapshots
+        const byStock = {};
+        for (const stock of Object.keys(state.multiStockFlowHistory)) {
+          byStock[stock] = [];
+        }
+
+        const sorted = (records || []).slice().sort((a, b) => a.timestamp - b.timestamp);
+        for (const r of sorted) {
+          const stock = r.stock || '';
+          if (!byStock[stock]) continue;
+
+          let snapshot = byStock[stock][byStock[stock].length - 1];
+          if (!snapshot || snapshot.ts !== r.timestamp) {
+            snapshot = { ts: Number(r.timestamp || Date.now()) };
+            byStock[stock].push(snapshot);
+          }
+
+          const dte = String(r.dte || 0);
+          snapshot[dte] = {
+            call: Number(r.callFlow || 0),
+            put: Number(r.putFlow || 0),
+            net: Number(r.netFlow || 0)
+          };
+        }
+
+        Object.assign(state.multiStockFlowHistory, byStock);
+      } catch (err) {
+        console.error('Multi-stock history hydration failed:', err);
+      }
+    }
+
     function hydratePremiumFlowWhenDatabaseReady() {
       if (typeof DB !== 'undefined' && DB?.db) {
         hydratePremiumFlowFromDatabase();
@@ -630,7 +624,6 @@
         hydratePremiumFlowFromDatabase();
       }, { once: true });
     }
-
 
     function processFutureQuote(item) {
       const symbol = item.eventSymbol || '';
@@ -677,11 +670,6 @@
 
       let hist = state.flowHistory;
       
-      // Filter to only data before 4 PM ET
-      const fourPM = new Date();
-      fourPM.setHours(16, 0, 0, 0);
-      hist = hist.filter(p => p.ts < fourPM.getTime());
-      
       if (hist.length < 2) {
         ctx.fillStyle = '#64748b';
         ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
@@ -690,26 +678,33 @@
         return;
       }
 
-      // Apply zoom: slice the visible window based on chartZoom
-      const visibleCount = Math.max(2, Math.ceil(hist.length / state.chartZoom));
-      const startIdx = Math.min(state.chartPan, Math.max(0, hist.length - visibleCount));
-      const endIdx = Math.min(startIdx + visibleCount, hist.length);
-      hist = hist.slice(startIdx, endIdx);
+      // Market hours: 9:30 AM - 4 PM ET (fixed, no zoom/pan)
+      const marketStart = new Date();
+      marketStart.setHours(9, 30, 0, 0);
+      const marketEnd = new Date();
+      marketEnd.setHours(16, 0, 0, 0);
+      const totalMs = marketEnd - marketStart;
 
-      // Auto-range premium flow from calls and inverted puts.
+      const xAtTime = (ts) => {
+        const entryTime = ts instanceof Date ? ts : new Date(ts);
+        const offsetMs = Math.max(0, entryTime - marketStart);
+        const progress = Math.min(1, offsetMs / totalMs);
+        return padding.l + progress * cw;
+      };
+
+      // Auto-range
       let min = Infinity, max = -Infinity;
       hist.forEach(p => {
-        min = Math.min(min, p.call, -p.put, 0);  // Puts inverted
+        min = Math.min(min, p.call, -p.put, 0);
         max = Math.max(max, p.call, -p.put, 0);
       });
       if (min === max) { min -= 1; max += 1; }
       const pad = (max - min) * 0.1;
       min -= pad; max += pad;
 
-      const xAt = i => padding.l + (i / Math.max(1, hist.length - 1)) * cw;
       const yAt = v => padding.t + ch - ((v - min) / (max - min)) * ch;
 
-      // Grid + zero line
+      // Grid
       ctx.strokeStyle = '#1a2a3a';
       ctx.lineWidth = 1;
       for (let g = 0; g <= 4; g++) {
@@ -725,12 +720,10 @@
         const zy = yAt(0);
         ctx.strokeStyle = '#e2e8f0';
         ctx.lineWidth = 1.5;
-        ctx.setLineDash([]);
         ctx.beginPath();
         ctx.moveTo(padding.l, zy);
         ctx.lineTo(W - padding.r, zy);
         ctx.stroke();
-        // Label zero line
         ctx.fillStyle = '#e2e8f0';
         ctx.font = 'bold 10px ui-sans-serif, monospace';
         ctx.textAlign = 'right';
@@ -753,7 +746,7 @@
         ctx.lineWidth = lw;
         ctx.beginPath();
         hist.forEach((p, i) => {
-          const x = xAt(i);
+          const x = xAtTime(p.ts);
           const val = invert ? -p[key] : p[key];
           const y = yAt(val);
           if (i === 0) ctx.moveTo(x, y);
@@ -763,15 +756,9 @@
       };
 
       drawLine('call', '#22c55e', 2, false);
-      drawLine('put', '#ef4444', 2, true);  // Invert puts
+      drawLine('put', '#ef4444', 2, true);
 
-      // X-axis time labels (9 AM to 4 PM) - using actual market time
-      const marketStart = new Date();
-      marketStart.setHours(9, 30, 0, 0);
-      const marketEnd = new Date();
-      marketEnd.setHours(16, 0, 0, 0);
-      const totalMs = marketEnd - marketStart;
-      
+      // X-axis time labels (9 AM to 4 PM)
       ctx.fillStyle = '#64748b';
       ctx.font = '10px monospace';
       ctx.textAlign = 'center';
@@ -781,22 +768,164 @@
       hours.forEach(hour => {
         const timeLabel = new Date();
         timeLabel.setHours(hour, 0, 0, 0);
-        const offsetMs = Math.max(0, timeLabel - marketStart);
-        const progress = Math.min(1, offsetMs / totalMs);
-        const xPos = padding.l + progress * cw;
-        if (xPos >= padding.l && xPos <= padding.l + cw) {
+        const xPos = xAtTime(timeLabel);
+        if (xPos >= padding.l && xPos <= W - padding.r) {
           const ampm = hour >= 12 ? (hour === 12 ? '12 PM' : `${hour - 12} PM`) : `${hour} AM`;
           ctx.fillText(ampm, xPos, H - padding.b + 5);
         }
       });
 
-      // Store chart config for hover detection
-      state.premiumChartConfig = { hist, padding, xAt, yAt, min, max, cw, ch, W, H };
+      // Draw axes
+      ctx.strokeStyle = '#374151';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(padding.l, padding.t);
+      ctx.lineTo(padding.l, H - padding.b);
+      ctx.lineTo(W - padding.r, H - padding.b);
+      ctx.stroke();
     }
 
+    function renderMultiStockCharts() {
+      const dpr = window.devicePixelRatio || 1;
 
-    // Render events feed
-    // Fetch initial prices
+      document.querySelectorAll('.multi-stock-card').forEach(card => {
+        const symbol = card.getAttribute('data-symbol');
+        const canvas = card.querySelector('.stock-premium-canvas');
+        if (!canvas || !symbol) return;
+
+        // Size canvas from its wrapper; only resize when dimensions change
+        const parent = canvas.parentElement;
+        const rect = parent.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const W = rect.width, H = rect.height;
+        if (canvas._bzW !== W || canvas._bzH !== H) {
+          canvas.width = W * dpr;
+          canvas.height = H * dpr;
+          canvas.style.width = W + 'px';
+          canvas.style.height = H + 'px';
+          canvas._bzW = W;
+          canvas._bzH = H;
+        }
+
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = '#0d1520';
+        ctx.fillRect(0, 0, W, H);
+
+        const hist = state.multiStockFlowHistory[symbol] || [];
+
+        // Update the per-card call/put labels
+        const callEl = card.querySelector('.stock-call-flow');
+        const putEl  = card.querySelector('.stock-put-flow');
+        if (hist.length) {
+          const last = hist[hist.length - 1];
+          let c = 0, p = 0;
+          for (const k in last) {
+            if (k === 'ts' || typeof last[k] !== 'object' || !last[k]) continue;
+            c += last[k].call || 0;
+            p += last[k].put || 0;
+          }
+          if (callEl) callEl.textContent = fmtMoney(c);
+          if (putEl)  putEl.textContent  = fmtMoney(p);
+        }
+
+        if (hist.length < 2) {
+          ctx.fillStyle = '#475569';
+          ctx.font = '11px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('Waiting for data...', W / 2, H / 2);
+          return;
+        }
+
+        const pad = { l: 44, r: 8, t: 8, b: 18 };
+        const cw = W - pad.l - pad.r;
+        const ch = H - pad.t - pad.b;
+
+        // Fixed market-hours X axis (9:30–16:00)
+        const mStart = new Date(); mStart.setHours(9, 30, 0, 0);
+        const mEnd   = new Date(); mEnd.setHours(16, 0, 0, 0);
+        const mTotal = mEnd - mStart;
+        const xAt = ts => pad.l + Math.min(1, Math.max(0, (ts - mStart) / mTotal)) * cw;
+
+        // Sum all DTE buckets into call/put/net per snapshot
+        const pts = hist.map(p => {
+          let call = 0, put = 0;
+          for (const k in p) {
+            if (k === 'ts' || typeof p[k] !== 'object' || !p[k]) continue;
+            call += p[k].call || 0;
+            put  += p[k].put  || 0;
+          }
+          return { ts: p.ts, call, put, net: call - put };
+        });
+
+        // Y range over call, -put (display), net
+        let yMin = 0, yMax = 0;
+        pts.forEach(p => {
+          yMin = Math.min(yMin, p.call, -p.put, p.net);
+          yMax = Math.max(yMax, p.call, -p.put, p.net);
+        });
+        if (yMin === yMax) { yMin -= 1; yMax += 1; }
+        const yPad = (yMax - yMin) * 0.08;
+        yMin -= yPad; yMax += yPad;
+        const yAt = v => pad.t + ch - ((v - yMin) / (yMax - yMin)) * ch;
+
+        // Grid
+        ctx.strokeStyle = '#1a2a3a';
+        ctx.lineWidth = 0.5;
+        for (let g = 0; g <= 4; g++) {
+          const y = pad.t + (g / 4) * ch;
+          ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+        }
+
+        // Zero line
+        if (yMin < 0 && yMax > 0) {
+          const zy = yAt(0);
+          ctx.strokeStyle = '#334155';
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(W - pad.r, zy); ctx.stroke();
+        }
+
+        // Y labels
+        ctx.fillStyle = '#475569';
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        for (let g = 0; g <= 4; g++) {
+          const v = yMax - (g / 4) * (yMax - yMin);
+          ctx.fillText(fmtMoney(v), pad.l - 3, pad.t + (g / 4) * ch);
+        }
+
+        // Draw a line from pts
+        const drawLine = (getVal, color, lw) => {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = lw;
+          ctx.beginPath();
+          pts.forEach((p, i) => {
+            const x = xAt(p.ts);
+            const y = yAt(getVal(p));
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        };
+
+        drawLine(p => p.call, '#22c55e', 1.5);  // calls green
+        drawLine(p => -p.put, '#ef4444', 1.5);  // puts red (inverted)
+        drawLine(p => p.net,  '#fbbf24', 2);     // net gold
+
+        // Axes
+        ctx.strokeStyle = '#1e3a4a';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, pad.t);
+        ctx.lineTo(pad.l, H - pad.b);
+        ctx.lineTo(W - pad.r, H - pad.b);
+        ctx.stroke();
+      });
+    }
+
+    // Fetch initial prices (futures)
     async function fetchInitialPrices() {
       try {
         const resp = await fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?future[]=${encodeURIComponent(ES_REST_SYMBOL)}&future[]=${encodeURIComponent(NQ_REST_SYMBOL)}`);
@@ -814,6 +943,61 @@
       } catch (e) {
         console.error('Failed to fetch initial prices:', e);
       }
+    }
+
+
+    // Batch market data requests to respect 2 req/sec limit (100 symbols per request)
+    async function batchFetchOptionChains(stocks, expirations) {
+      // stocks: ['SPY', 'QQQ', 'IWM', 'AAPL']
+      // expirations: [0, 1, 7, 14, 21, 30] (DTE)
+      // Build symbol list: SPY250606C, SPY250606P, etc.
+      const symbols = [];
+      for (const stock of stocks) {
+        for (const dte of expirations) {
+          const expDate = getExpirationDate(dte);
+          symbols.push(`${stock}${expDate}C`); // call
+          symbols.push(`${stock}${expDate}P`); // put
+        }
+      }
+      
+      const results = {};
+      const batchSize = 100; // API limit per request
+      
+      // Batch into groups of 100, with delays to stay under 2 req/sec
+      for (let i = 0; i < symbols.length; i += batchSize) {
+        const batch = symbols.slice(i, i + batchSize);
+        const query = batch.map(s => `symbols[]=${encodeURIComponent(s)}`).join('&');
+        
+        try {
+          const resp = await fetch(`http://localhost:3001/proxy/api/tt/option-chains?${query}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            const items = data?.data?.items || [];
+            items.forEach(item => {
+              results[item.symbol] = item;
+            });
+          }
+        } catch (e) {
+          console.error('Batch fetch failed:', e);
+        }
+        
+        // Wait 600ms between batches to stay under 2 req/sec (margin of safety)
+        if (i + batchSize < symbols.length) {
+          await new Promise(r => setTimeout(r, 600));
+        }
+      }
+      
+      return results;
+    }
+    
+    function getExpirationDate(dte) {
+      // dte = days to expiration, return YYMMDD format
+      const d = new Date();
+      d.setDate(d.getDate() + dte);
+      const yy = String(d.getFullYear()).slice(2);
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yy}${mm}${dd}`;
     }
 
     // WebSocket connection
@@ -925,10 +1109,12 @@
     let animFrame = null;
     let snapshotInterval = null;
     let dbMinuteInterval = null;
+    let multiStockInterval = null;
     let dailyResetTimeout = null;
     let reconnectTimeout = null;
     function animate() {
       renderPremiumChart();
+      renderMultiStockCharts();
       animFrame = requestAnimationFrame(animate);
     }
 
@@ -979,19 +1165,13 @@
         spxBtn.style.borderBottomColor = 'transparent';
         multiStockBtn.style.color = '#cbd5e1';
         multiStockBtn.style.borderBottomColor = '#10b981';
-        // Setup canvases for multi-stock cards
-        setTimeout(() => {
-          document.querySelectorAll('.multi-stock-card .stock-premium-canvas').forEach(canvas => {
-            const parent = canvas.parentElement;
-            if (parent && parent.offsetHeight > 0) {
-              const dpr = window.devicePixelRatio || 1;
-              const rect = parent.getBoundingClientRect();
-              canvas.width = rect.width * dpr;
-              canvas.height = rect.height * dpr;
-              canvas.getContext('2d').scale(dpr, dpr);
-            }
+        
+        // Render after layout settles; renderMultiStockCharts sizes canvases itself
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            renderMultiStockCharts();
           });
-        }, 0);
+        });
       }
     };
 
@@ -1000,17 +1180,23 @@
       if (state.ws || animFrame || snapshotInterval) window.cleanupBzilaFlow();
       console.log('Initializing Bzila Flow...');
       setupCanvas(elements.premiumCanvas);
+      
       fetchInitialPrices();
       connectWebSocket();
       hydratePremiumFlowWhenDatabaseReady();
 
       snapshotFlow();
+      renderMultiStockCharts();
       snapshotInterval = setInterval(snapshotFlow, 5000);
       state.dbMinuteBaseline = {
         callPremiumFlow: state.callPremiumFlow || 0,
         putPremiumFlow: state.putPremiumFlow || 0
       };
       dbMinuteInterval = setInterval(saveMinuteFlowToDatabase, 60 * 1000);
+
+      // Poll multi-stock 0DTE OTM chains every 60s
+      pollMultiStockFlow();
+      multiStockInterval = setInterval(pollMultiStockFlow, 60 * 1000);
 
       // Start animation loop
       animate();
@@ -1027,6 +1213,8 @@
       snapshotInterval = null;
       if (dbMinuteInterval) clearInterval(dbMinuteInterval);
       dbMinuteInterval = null;
+      if (multiStockInterval) clearInterval(multiStockInterval);
+      multiStockInterval = null;
       if (dailyResetTimeout) clearTimeout(dailyResetTimeout);
       dailyResetTimeout = null;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -1036,7 +1224,4 @@
     };
     window.init_bzila = window.initBzilaFlow;
   })();
-  </script>
-
-
 

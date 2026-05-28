@@ -209,6 +209,9 @@ EM.populateExpDropdown = function(id, expirations){
     opt.textContent=EM.labelForDate(exp)+' ('+EM.daysTo(exp)+'d)';
     sel.appendChild(opt);
   });
+  const override=period === 'weekly' ? EM.weeklyExpOverride : (period === 'monthly' ? EM.monthlyExpOverride : '');
+  const target=override || EM.chooseExpiration(expirations, period);
+  if(target && filtered.includes(target)) sel.value=target;
 };
 
 EM.setKnownExpirations = function(items){
@@ -228,6 +231,8 @@ EM.setKnownExpirations = function(items){
   EM.populateExpDropdown('em-weekly-exp-select', EM.knownExpirations);
   EM.populateExpDropdown('em-monthly-exp-select', EM.knownExpirations);
   EM.updateExpPickerVisibility();
+  const exp=EM.getTargetExpiration();
+  EM.updatePeriodChrome(exp ? EM.labelForDate(exp) : '');
 };
 
 EM.updateExpPickerVisibility = function(){
@@ -235,8 +240,10 @@ EM.updateExpPickerVisibility = function(){
   const monthlyWrap=document.getElementById('em-monthly-exp-wrap');
   const weeklySelect=document.getElementById('em-weekly-exp-select');
   const monthlySelect=document.getElementById('em-monthly-exp-select');
-  const showWeekly=(EM.activePeriod==='weekly' && EM.knownExpirations.length) ? 'inline-block' : 'none';
-  const showMonthly=(EM.activePeriod==='monthly' && EM.knownExpirations.length) ? 'inline-block' : 'none';
+  const hasWeekly=EM.expirationsForPeriod('weekly', EM.knownExpirations).length > 0;
+  const hasMonthly=EM.expirationsForPeriod('monthly', EM.knownExpirations).length > 0;
+  const showWeekly=(EM.activePeriod==='weekly' && hasWeekly) ? 'inline-block' : 'none';
+  const showMonthly=(EM.activePeriod==='monthly' && hasMonthly) ? 'inline-block' : 'none';
   if(weeklyWrap) weeklyWrap.style.display=showWeekly === 'none' ? 'none' : 'flex';
   if(monthlyWrap) monthlyWrap.style.display=showMonthly === 'none' ? 'none' : 'flex';
   if(weeklySelect) weeklySelect.style.display=showWeekly;
@@ -378,11 +385,107 @@ window.setEstimatedMovePeriod = function(period){
 
 window.onWeeklyExpChange = function(val){ 
   EM.weeklyExpOverride=val; 
-  if(EM.activePeriod==='weekly') EM.updatePeriodChrome(val ? EM.labelForDate(val) : '');
+  if(EM.activePeriod==='weekly'){
+    const exp=val || EM.getTargetExpiration();
+    EM.updatePeriodChrome(exp ? EM.labelForDate(exp) : '');
+  }
 };
 window.onMonthlyExpChange = function(val){ 
   EM.monthlyExpOverride=val; 
-  if(EM.activePeriod==='monthly') EM.updatePeriodChrome(val ? EM.labelForDate(val) : '');
+  if(EM.activePeriod==='monthly'){
+    const exp=val || EM.getTargetExpiration();
+    EM.updatePeriodChrome(exp ? EM.labelForDate(exp) : '');
+  }
+};
+
+EM.snapshotStorageKey = 'em-snapshots-v1';
+
+EM.readSnapshots = function(){
+  try{ return JSON.parse(localStorage.getItem(EM.snapshotStorageKey) || '[]'); }
+  catch(e){ return []; }
+};
+
+EM.writeSnapshots = function(snapshots){
+  try{ localStorage.setItem(EM.snapshotStorageKey, JSON.stringify(snapshots.slice(0, 8))); }
+  catch(e){}
+};
+
+EM.restoreSnapshot = function(id){
+  const snapshot=EM.readSnapshots().find(item=>item.id===id);
+  if(!snapshot) return;
+  EM.activePeriod=snapshot.periodKey || String(snapshot.period || 'daily').toLowerCase();
+  if(EM.activePeriod==='weekly') EM.weeklyExpOverride=snapshot.expirationValue || EM.weeklyExpOverride;
+  if(EM.activePeriod==='monthly') EM.monthlyExpOverride=snapshot.expirationValue || EM.monthlyExpOverride;
+  EM.updatePeriodChrome(snapshot.expirationLabel || '');
+  EM.updateExpPickerVisibility();
+
+  const selectId=EM.activePeriod==='weekly' ? 'em-weekly-exp-select' : EM.activePeriod==='monthly' ? 'em-monthly-exp-select' : '';
+  const select=selectId ? document.getElementById(selectId) : null;
+  if(select && snapshot.expirationValue) select.value=snapshot.expirationValue;
+
+  const body=document.getElementById('em-table-body');
+  if(body){
+    body.innerHTML=(snapshot.rows || []).map(row=>`<tr style="text-align:center;border-bottom:1px solid #121b2a">
+      <td style="padding:8px;border-right:1px solid #1a2a3a;font-weight:700;color:#e8edf5">${row[0] || ''}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#cbd5e1">${row[1] || ''}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#7ab8ff">${row[2] || ''}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#e8c060">${row[3] || ''}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#00e676">${row[4] || ''}</td>
+      <td style="padding:8px;color:#ff4757">${row[5] || ''}</td>
+    </tr>`).join('');
+  }
+  const sync=document.getElementById('em-last-sync');
+  if(sync) sync.textContent=snapshot.savedAtLabel || '';
+  EM.setStatus('Restored','#00e5ff');
+};
+
+window.restoreEstimatedMoveSnapshot = async function(id){
+  const onDatabasePage=!!document.getElementById('page-database');
+  if(!onDatabasePage && typeof window.loadPage === 'function'){
+    await window.loadPage('database');
+  }
+  if(typeof window.showDatabaseTab === 'function') window.showDatabaseTab('moves');
+  setTimeout(()=>EM.restoreSnapshot(id), 80);
+};
+
+EM.renderSnapshotPanel = function(){
+  const list=document.getElementById('em-snapshot-list');
+  if(!list) return;
+  const snapshots=EM.readSnapshots();
+  if(!snapshots.length){
+    list.innerHTML='<div style="font-size:9px;color:var(--text3);line-height:1.4">Copy an EM table to save it here.</div>';
+    return;
+  }
+  list.innerHTML=snapshots.map(snapshot=>`
+    <button type="button" onclick="window.restoreEstimatedMoveSnapshot && window.restoreEstimatedMoveSnapshot('${snapshot.id}')" title="${snapshot.title}"
+      style="width:100%;text-align:left;background:var(--bg2);border:1px solid var(--border);color:var(--text1);border-radius:3px;padding:7px 8px;cursor:pointer;font-family:Consolas,monospace">
+      <div style="font-size:10px;color:var(--cyan);font-weight:800;text-transform:uppercase">${snapshot.period || 'EM'} ${snapshot.expirationLabel || ''}</div>
+      <div style="font-size:9px;color:var(--text3);margin-top:2px">${snapshot.rowCount || 0} rows · ${snapshot.savedAtLabel || ''}</div>
+    </button>
+  `).join('');
+};
+
+EM.saveSnapshot = function(rows){
+  const period=document.getElementById('em-period-title')?.textContent || 'Estimated';
+  const periodKey=String(period || '').toLowerCase();
+  const expirationLabel=document.getElementById('em-exp-label')?.textContent || rows[0]?.[2] || '';
+  const expirationValue=EM.getTargetExpiration();
+  const savedAt=new Date();
+  const snapshot={
+    id:`em-${Date.now()}`,
+    period,
+    periodKey,
+    title:`${period} Estimated Move For ${expirationLabel}`.trim(),
+    expirationLabel,
+    expirationValue,
+    rows,
+    rowCount:rows.length,
+    savedAt:savedAt.toISOString(),
+    savedAtLabel:savedAt.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})
+  };
+  EM.writeSnapshots([snapshot, ...EM.readSnapshots().filter(item=>item.title!==snapshot.title)]);
+  EM.renderSnapshotPanel();
+  return snapshot;
 };
 
 window.copyEstimatedMovesTable = async function(){
@@ -397,6 +500,7 @@ window.copyEstimatedMovesTable = async function(){
   const exp=document.getElementById('em-exp-label')?.textContent || '';
   const title=`${period} Estimated Move For ${exp}`.trim();
   const original=btn?.textContent || 'Copy';
+  EM.saveSnapshot(rows);
 
   try{
     if(!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Image clipboard unavailable');
@@ -536,16 +640,21 @@ window.refreshEstimatedMoves = async function(){
   }finally{ EM.refreshBusy=false; }
 };
 
-window.init_database = async function(){
+window.init_estimated_moves = async function(){
   const list=document.getElementById('em-symbol-list');
   if(list) list.innerHTML=EM.SYMBOLS.map(s=>`<span style="font-size:13px;color:#7ab8ff;background:#07111d;border:1px solid #13253a;padding:4px 7px;border-radius:2px">${s}</span>`).join('');
-  const label=EM.nextFridayLabel();
-  EM.updatePeriodChrome(label);
+  EM.renderSnapshotPanel();
+  const exp=EM.getTargetExpiration();
+  EM.updatePeriodChrome(exp ? EM.labelForDate(exp) : '');
   EM.setStatus('Ready','#5a7a99');
   const body=document.getElementById('em-table-body');
   if(body) body.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#3a5570">Click Start to load estimated moves</td></tr>';
   await EM.prefetchExpirations();
 };
+
+window.init_database = window.init_database || window.init_estimated_moves;
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', EM.renderSnapshotPanel);
+else EM.renderSnapshotPanel();
 
 ;(function(){
   const installEstimatedMoveCopyShot = () => {

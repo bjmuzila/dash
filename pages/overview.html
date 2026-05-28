@@ -1,68 +1,82 @@
   <!-- ═══ PAGE: OVERVIEW ═══ -->
   <div id="page-overview" style="display:flex;flex-direction:row;flex:1;min-height:0;overflow:hidden">
 
-  <!-- ── CENTER: tab bar + content + bottom panels ── -->
-  <div style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+    <!-- ── LEFT: TOP Chart + BOTTOM Calendar/Stats/MVC (50%) ── -->
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
 
-    <!-- TAB BAR -->
-    <div id="gex-level-bar" style="display:flex;align-items:center;gap:6px;padding:4px 10px;background:#0a0f16;border-bottom:1px solid #1a2a3a;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto">
+      <!-- TOP: Chart section (50%) -->
+      <div style="display:flex;flex-direction:column;flex:0 0 50%;min-height:0;overflow:hidden">
+        <!-- ── Toolbar ── -->
+        <div id="gex-level-bar" style="display:flex;align-items:center;gap:6px;padding:4px 10px;background:#0a0f16;border-bottom:1px solid #1a2a3a;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto">
 
-      <!-- GEX Chart / Flow toggle -->
-      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
-        <button id="ovtab-chart" onclick="setOVTab('chart')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-weight:700;font-family:Arial">GEX Chart</button>
-        <button id="ovtab-bzila" onclick="setOVTab('bzila')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-weight:700;font-family:Arial">Bzila Flow</button>
+        <!-- Ticker toggle: SPX -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="ovtab-spx" onclick="setOVTab('chart')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-weight:700;font-family:Arial">SPX GEX</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- GEX Mode -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="gex-btn-net" onclick="setGEXMode('net',this)" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">Net GEX</button>
+          <button id="gex-btn-call-put" onclick="setGEXMode('call-put',this)" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Call - Put</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- Data Mode -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="gex-data-btn-oivol" onclick="setGEXChartDataMode('oi-vol')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">OI + Vol</button>
+          <button id="gex-data-btn-vol" onclick="setGEXChartDataMode('vol-only')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Vol Only</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- OI Overlay -->
+        <button id="oi-overlay-btn" onclick="toggleOIOverlay()" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ OI Overlay</button>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- DEX overlay toggle + mode switcher -->
+        <button id="ov-dex-toggle" onclick="toggleOverviewDEX(this)" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ Net DEX</button>
+        <div id="ov-dex-mode-pills" style="display:none;flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="ov-dex-btn-net" onclick="setOvDEXMode('net')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#1a2a3a;color:#a0d4ff;cursor:pointer;font-family:Arial;font-weight:700">Net DEX</button>
+          <button id="ov-dex-btn-cum" onclick="setOvDEXMode('cum')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Cum DEX</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- GEX Levels inline -->
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:2px">
+          <span style="color:#3a5570;font-size:9px;white-space:nowrap">Call Wall <b id="ov-callwall" style="color:#00e676">&#x2014;</b></span>
+          <span style="color:#3a5570;font-size:9px;white-space:nowrap">Put Wall <b id="ov-putwall" style="color:#ff4757">&#x2014;</b></span>
+          <span style="color:#3a5570;font-size:9px;white-space:nowrap">GEX Flip <b id="ov-flip" style="color:#ffb300">&#x2014;</b></span>
+          <span style="color:#3a5570;font-size:9px;white-space:nowrap">Net GEX <b id="ov-netgex" style="color:#fff">&#x2014;</b></span>
+        </div>
+
+        <!-- Share -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0;margin-left:auto">
+          <button id="gex-copy-shot-btn" onclick="copyActiveGexChartScreenshot()" title="Copy active GEX chart screenshot" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#0d1825;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY SHOT</button>
+          <button id="gex-share-x-btn" onclick="shareActiveGexChart('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#0d1825;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+          <button id="gex-share-discord-btn" onclick="shareActiveGexChart('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#0d1825;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+        </div>
+
       </div>
 
-      <span style="color:#1a2a3a;flex-shrink:0">|</span>
-
-      <!-- GEX Mode -->
-      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
-        <button id="gex-btn-net" onclick="setGEXMode('net',this)" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">Net GEX</button>
-        <button id="gex-btn-call-put" onclick="setGEXMode('call-put',this)" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Call - Put</button>
+      <!-- Chart view -->
+      <div style="display:flex;flex:1;min-height:0;overflow:hidden">
+        <!-- SPX GEX -->
+        <div id="ov-chart-view" style="display:flex;flex:1;min-height:0;overflow:hidden;position:relative">
+          <div id="overview-scroll" style="position:absolute;inset:0;overflow:hidden;cursor:default">
+            <canvas id="overview-canvas" style="display:block;width:100%;height:100%"></canvas>
+            <div style="position:absolute;bottom:5px;right:8px;font-size:9px;color:#1e3050;pointer-events:none">scroll=zoom · drag Y-axis to scale · drag chart to pan</div>
+          </div>
+        </div>
       </div>
-
-      <span style="color:#1a2a3a;flex-shrink:0">|</span>
-
-      <!-- Data Mode -->
-      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
-        <button id="gex-data-btn-oivol" onclick="setGEXChartDataMode('oi-vol')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">OI + Vol</button>
-        <button id="gex-data-btn-vol" onclick="setGEXChartDataMode('vol-only')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Vol Only</button>
-      </div>
-
-      <span style="color:#1a2a3a;flex-shrink:0">|</span>
-
-      <!-- OI Overlay -->
-      <button id="oi-overlay-btn" onclick="toggleOIOverlay()" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ OI Overlay</button>
-
-      <span style="color:#1a2a3a;flex-shrink:0">|</span>
-
-      <!-- DEX overlay toggle + mode switcher -->
-      <button id="ov-dex-toggle" onclick="toggleOverviewDEX(this)" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ Net DEX</button>
-      <div id="ov-dex-mode-pills" style="display:none;flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
-        <button id="ov-dex-btn-net" onclick="setOvDEXMode('net')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#1a2a3a;color:#a0d4ff;cursor:pointer;font-family:Arial;font-weight:700">Net DEX</button>
-        <button id="ov-dex-btn-cum" onclick="setOvDEXMode('cum')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#3a5570;cursor:pointer;font-family:Arial;font-weight:700">Cum DEX</button>
-      </div>
-
-      <span style="color:#1a2a3a;flex-shrink:0">|</span>
-
-      <!-- GEX Levels inline -->
-      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:2px">
-        <span style="color:#3a5570;font-size:9px;white-space:nowrap">Call Wall <b id="ov-callwall" style="color:#00e676">&#x2014;</b></span>
-        <span style="color:#3a5570;font-size:9px;white-space:nowrap">Put Wall <b id="ov-putwall" style="color:#ff4757">&#x2014;</b></span>
-        <span style="color:#3a5570;font-size:9px;white-space:nowrap">GEX Flip <b id="ov-flip" style="color:#ffb300">&#x2014;</b></span>
-        <span style="color:#3a5570;font-size:9px;white-space:nowrap">Net GEX <b id="ov-netgex" style="color:#fff">&#x2014;</b></span>
-      </div>
-
-      <!-- Share -->
-      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0;margin-left:auto">
-        <button id="gex-copy-shot-btn" onclick="copyActiveGexChartScreenshot()" title="Copy active GEX chart screenshot" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY SHOT</button>
-        <button id="gex-share-x-btn" onclick="shareActiveGexChart('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
-        <button id="gex-share-discord-btn" onclick="shareActiveGexChart('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
-      </div>
-
     </div>
-      
-    
+
+    <!-- ── CENTER BOTTOM (50%): Calendar + Stats + MVC ── -->
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
     <style>
       @keyframes pulse {
         0%, 100% { opacity: 1; }
@@ -71,18 +85,19 @@
       /* Hide 1-7DTE Combined pill */
       #dte-gex-pill-combined { display: none !important; }
 
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
       /* Compact heatmap and table rows */
       .hm-row {
         display: grid;
         min-height: 0 !important;
-        font-family: 'Courier New', Courier, monospace !important;
+        font-family: 'Inter', sans-serif !important;
         font-size: 10px !important;
       }
       .hm-strike, .hm-cell {
         padding-top: 2px !important;
         padding-bottom: 2px !important;
         font-size: 10px !important;
-        font-family: 'Courier New', Courier, monospace !important;
+        font-family: 'Inter', sans-serif !important;
         line-height: 1.3 !important;
       }
       .hm-strike {
@@ -101,11 +116,11 @@
       }
       .hm-bar-cell {
         height: 18px !important;
-        font-family: 'Courier New', Courier, monospace !important;
+        font-family: 'Inter', sans-serif !important;
         font-size: 10px !important;
       }
       .hm-bar-cell span[style*="z-index:2"] {
-        font-family: 'Courier New', Courier, monospace !important;
+        font-family: 'Inter', sans-serif !important;
         font-size: 10px !important;
       }
       .atm-badge {
@@ -115,28 +130,12 @@
       }
       /* Heatmap toolbar headers same font */
       #heatmap-toolbar div {
-        font-family: 'Courier New', Courier, monospace !important;
+        font-family: 'Inter', sans-serif !important;
       }
     </style>
 
-    <!-- MAIN CONTENT AREA (switches between chart/table/history) -->
-    <div style="display:flex;flex:1;min-height:0;overflow:hidden">
-
-      <!-- GEX Chart view -->
-      <div id="ov-chart-view" style="display:flex;flex:1;min-height:0;overflow:hidden;position:relative">
-        <div id="overview-scroll" style="position:absolute;inset:0;overflow:hidden;cursor:default">
-          <canvas id="overview-canvas" style="display:block;width:100%;height:100%"></canvas>
-          <div style="position:absolute;bottom:5px;right:8px;font-size:9px;color:#1e3050;pointer-events:none">scroll=zoom · drag Y-axis to scale · drag chart to pan</div>
-        </div>
-      </div>
-
-<!-- Bzila Flow view -->
-      <div id="ov-bzila-view" style="display:none;flex:1;min-height:0;overflow:hidden;background:#0a0f16"></div>
-
-    </div><!-- /main content -->
-
     <!-- BOTTOM PANELS: Calendar + ES Stats + Chart -->
-    <div id="bottom-panels" style="display:flex;flex-direction:row;flex:0 0 40%;min-height:180px;border-top:2px solid #1a2a3a;overflow:hidden">
+    <div id="bottom-panels" style="display:flex;flex-direction:row;flex:1;min-height:0;border-top:2px solid #1a2a3a;overflow:hidden">
 
       <!-- ECONOMIC CALENDAR -->
       <div id="panel-calendar" style="flex:1;display:flex;flex-direction:column;border-right:1px solid #1a2a3a;overflow:hidden">
@@ -426,16 +425,21 @@
 
       </div><!-- /ES stats -->
 
-      <!-- MVC SNAPSHOT DASHBOARD -->
+      <!-- BUY/SELL SCORE HISTORY -->
       <div id="panel-mvc" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid #1a2a3a">
         <div style="padding:5px 10px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:8px;flex-shrink:0;position:relative">
-          <span style="font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#3a5570;font-weight:700">MVC SNAPSHOTS</span>
+          <span style="font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#3a5570;font-weight:700">BUY/SELL SCORE HISTORY</span>
           <span style="position:absolute;left:50%;transform:translateX(-50%);font-size:9px;font-weight:700;color:#1e3a52;letter-spacing:.1em">@bzilatrades</span>
-          <div style="margin-left:auto;display:flex;gap:4px">
-            <button onclick="captureMVCPanel()" style="font-size:9px;padding:2px 8px;background:#0d3a5c;border:1px solid #00b4d8;color:#00e5ff;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700">COPY STATS</button>
+          <div style="margin-left:auto;display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px">
+            <button onclick="renderBuySellHistoryChart()" title="Refresh Buy/Sell score plot" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">REFRESH</button>
+            <button id="bs-copy-shot-btn" onclick="copyBuySellHistoryScreenshot()" title="Copy Buy/Sell score plot screenshot" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY</button>
+            <button id="bs-share-x-btn" onclick="shareBuySellHistory('x')" title="Open X for posting" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+            <button id="bs-share-discord-btn" onclick="shareBuySellHistory('discord')" title="Post Buy/Sell score plot to Discord" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
           </div>
         </div>
-        <div id="mvc-body" style="flex:1;overflow:hidden;padding:8px;display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:1fr 1fr;gap:8px">
+        <div id="mvc-body" style="flex:1;min-height:0;overflow:hidden;padding:6px;display:block;background:#0a0f16;position:relative">
+          <style>#mvc-body .mvc-card{display:none!important}</style>
+          <canvas id="buy-sell-history-canvas" style="display:block;width:100%;height:100%"></canvas>
           
           <!-- CURRENT MVC Card -->
           <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
@@ -499,8 +503,9 @@
 
 
     </div><!-- /bottom-panels -->
+    </div><!-- /left column: chart + bottom panels -->
 
-  </div><!-- /center -->
+  </div><!-- /page-overview -->
 
   <!-- ── RIGHT: Heatmap full height ── -->
   <div id="ladder-resize-handle" style="width:4px;flex-shrink:0;background:#1a2a3a;cursor:ew-resize;z-index:20" onmouseenter="this.style.background='#29b6f6'" onmouseleave="this.style.background='#1a2a3a'"></div>
@@ -544,3 +549,19 @@
   </div>
 
 </div><!-- /page-overview -->
+
+<!-- MotiveWave GEX Level Auto-Sync -->
+<script>
+setInterval(() => {
+  if (window._levels && window._levels.callWall && window._levels.putWall && window._levels.flip) {
+    if (window.EventBus) {
+      window.EventBus.emit('gex-levels-updated', { 
+        callWall: window._levels.callWall, 
+        putWall: window._levels.putWall, 
+        zeroGamma: window._levels.flip 
+      });
+      console.log('✓ GEX levels pushed:', { callWall: window._levels.callWall, putWall: window._levels.putWall, zeroGamma: window._levels.flip });
+    }
+  }
+}, 5000); // Check every 5 seconds
+</script>

@@ -14,7 +14,7 @@
         <span id="db-record-count" style="font-size:9px;color:var(--text3)">—</span>
       </div>
       <div style="display:flex;gap:8px">
-        <button onclick="dbRefreshAll()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">↻ Refresh</button>
+        <button onclick="window.dbRefreshAll && window.dbRefreshAll()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">↻ Refresh</button>
         <button onclick="exportDatabaseToExcel()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--orange);cursor:pointer;border-radius:3px">Export Excel</button>
         <button onclick="exportDatabaseToJSON()" style="padding:4px 8px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--green);cursor:pointer;border-radius:3px">Export JSON</button>
       </div>
@@ -25,7 +25,7 @@
       <div style="display:flex;gap:1px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 8px">
         <button onclick="dbShowTab('mvc')" class="db-tab active" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan)">MVC</button>
         <button onclick="dbShowTab('premium')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Premium Flow</button>
-        <button onclick="dbShowTab('delta')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Cumulative Delta</button>
+        <button onclick="dbShowTab('buy-sell')" class="db-tab" style="padding:8px 12px;font-size:10px;background:transparent;border:none;color:var(--text2);cursor:pointer">Buy/Sell Score</button>
       </div>
       
       <!-- Tab Content -->
@@ -33,17 +33,16 @@
         <!-- MVC Tab -->
         <div id="db-tab-mvc" style="display:block">
           <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Max Volume Concentration (Last 24h)</div>
-          <table id="mvc-table" style="width:100%;font-size:12px;border-collapse:collapse">
+          <table id="mvc-table" style="width:100%;font-size:11px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
               <th style="text-align:left;padding:6px;color:#fff">Day</th>
               <th style="text-align:left;padding:6px;color:#fff">Date</th>
               <th style="text-align:left;padding:6px;color:#fff">Time</th>
-              <th style="text-align:right;padding:6px;color:#fff">OI+Vol Strike</th>
-              <th style="text-align:right;padding:6px;color:#fff">Value</th>
-              <th style="text-align:right;padding:6px;color:#fff">Vol Strike</th>
-              <th style="text-align:right;padding:6px;color:#fff">Price</th>
-              <th style="text-align:right;padding:6px;color:#fff">Net DEX Strike</th>
-              <th style="text-align:right;padding:6px;color:#fff">Net DEX Total (M)</th>
+              <th style="text-align:right;padding:6px;color:#fff">Strike</th>
+              <th style="text-align:right;padding:6px;color:#fff">Net GEX</th>
+              <th style="text-align:right;padding:6px;color:#fff">ES Price</th>
+              <th style="text-align:right;padding:6px;color:#fff">SPX Price</th>
+              <th style="text-align:right;padding:6px;color:#fff">Net DEX</th>
               <th style="text-align:left;padding:6px;color:#fff">Trigger</th>
               <th style="text-align:left;padding:6px;color:#fff">Expiration</th>
               <th style="padding:6px"></th>
@@ -56,6 +55,7 @@
           <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Largest Premium Flows (Last 1h)</div>
           <table id="premium-table" style="width:100%;font-size:9px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:var(--cyan)">Ticker</th>
               <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
               <th style="text-align:right;padding:6px;color:var(--cyan)">Call Flow</th>
               <th style="text-align:right;padding:6px;color:var(--cyan)">Put Flow</th>
@@ -64,15 +64,18 @@
             </tr>
           </table>
         </div>
-        
-        <!-- Cumulative Delta Tab -->
-        <div id="db-tab-delta" style="display:none">
-          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Latest Cumulative Delta Snapshot</div>
-          <table id="delta-table" style="width:100%;font-size:9px;border-collapse:collapse">
+
+        <!-- Buy/Sell Score Tab -->
+        <div id="db-tab-buy-sell" style="display:none">
+          <div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Buy/Sell Scores (Today)</div>
+          <table id="buy-sell-table" style="width:100%;font-size:8px;border-collapse:collapse">
             <tr style="border-bottom:1px solid var(--border)">
               <th style="text-align:left;padding:6px;color:var(--cyan)">Time</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">ES Price</th>
-              <th style="text-align:right;padding:6px;color:var(--cyan)">CVD</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">SPXW Price</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Side</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Score</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Buy %</th>
+              <th style="text-align:right;padding:6px;color:var(--cyan)">Sell %</th>
             </tr>
           </table>
         </div>
@@ -109,15 +112,12 @@
     </div>
     
     <div style="flex:1;display:flex;min-height:0;overflow:hidden;background:var(--bg0)">
-      <div style="width:180px;min-width:180px;flex-shrink:0;background:var(--bg0);border-right:1px solid var(--border);padding:12px;box-sizing:border-box;overflow-y:auto">
-        <div style="font-size:9px;color:var(--text3);letter-spacing:.1em;text-transform:uppercase;font-weight:700;margin-bottom:8px">Symbols</div>
-        <div id="em-symbol-list" style="display:flex;flex-wrap:wrap;gap:4px"></div>
-        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-          <div style="font-size:9px;color:var(--text3);letter-spacing:.1em;text-transform:uppercase;font-weight:700;margin-bottom:4px">Last Sync</div>
-          <div id="em-last-sync" style="font-size:10px;color:var(--text2);font-variant-numeric:tabular-nums">—</div>
+      <div id="em-snapshot-panel" style="width:180px;min-width:180px;flex-shrink:0;background:var(--bg0);border-right:1px solid var(--border);padding:12px;box-sizing:border-box;overflow-y:auto">
+        <div style="font-size:9px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase;font-weight:700;margin-bottom:8px">EM Snapshots</div>
+        <div id="em-snapshot-list" style="display:flex;flex-direction:column;gap:6px">
+          <div style="font-size:10px;color:var(--text3);line-height:1.45">Copy an EM table to save it here.</div>
         </div>
       </div>
-      
       <div style="flex:1;min-width:0;overflow-y:auto;padding:12px">
         <div style="background:var(--bg1);border:1px solid var(--border);border-radius:4px">
           <div style="border-bottom:1px solid var(--border);background:var(--bg1);padding:10px;text-align:center">
@@ -171,15 +171,24 @@
       buttons[0].style.borderBottomColor = 'transparent';
       buttons[1].style.color = 'var(--cyan)';
       buttons[1].style.borderBottomColor = 'var(--cyan)';
-      window.init_database && window.init_database();
+      window.init_estimated_moves && window.init_estimated_moves();
     }
   }
 
   // ========== DATA TAB FUNCTIONS ==========
+  async function dbEnsureReady() {
+    if (typeof DB === 'undefined') return false;
+    if (DB.db) return true;
+    if (typeof DB.init === 'function') {
+      try { await DB.init(); } catch (err) { console.warn('DB init failed:', err); }
+    }
+    return !!DB.db;
+  }
+
   function dbShowTab(tab) {
     document.getElementById('db-tab-mvc').style.display = 'none';
     document.getElementById('db-tab-premium').style.display = 'none';
-    document.getElementById('db-tab-delta').style.display = 'none';
+    document.getElementById('db-tab-buy-sell').style.display = 'none';
     
     document.querySelectorAll('.db-tab').forEach(b => {
       b.style.borderBottomColor = 'transparent';
@@ -192,89 +201,66 @@
     
     if (tab === 'mvc') dbLoadMVC();
     else if (tab === 'premium') dbLoadPremium();
-    else if (tab === 'delta') dbLoadDelta();
+    else if (tab === 'buy-sell') dbLoadBuySell();
   }
   
   async function dbRefreshCounts() {
-    if (!DB || !DB.db) {
-      await new Promise(resolve => window.addEventListener('db-ready', resolve, { once: true }));
-    }
-    if (!DB || !DB.db) return;
-    const mvc = await DB._getAllRecords('mvc');
-    const pf = await DB._getAllRecords('premiumFlow');
-    const cd = await DB._getAllRecords('cumulativeDelta');
-    const total = mvc.length + pf.length + cd.length;
+    if (!(await dbEnsureReady())) return;
+    const getAll = async (store) => typeof DB._getAllRecords === 'function' ? DB._getAllRecords(store) : [];
+    const mvc = await getAll('mvc');
+    const pf = await getAll('premiumFlow');
+    const bs = DB.db.objectStoreNames.contains('buySellScores') ? await getAll('buySellScores') : [];
+    const total = mvc.length + pf.length + bs.length;
     document.getElementById('db-record-count').textContent = `${total} records`;
   }
   
   async function dbLoadMVC() {
     // Wait for DB if not ready yet
-    if (!DB || !DB.db) {
-      await new Promise(resolve => window.addEventListener('db-ready', resolve, { once: true }));
-    }
-    if (!DB || !DB.db) { console.warn('dbLoadMVC: DB still not ready'); return; }
-    const records = await queryMVC_Recent(24);
+    if (!(await dbEnsureReady())) { console.warn('dbLoadMVC: DB still not ready'); return; }
+    const records = typeof DB.queryMVC_Recent === 'function'
+      ? await DB.queryMVC_Recent(24)
+      : typeof queryMVC_Recent === 'function'
+        ? await queryMVC_Recent(24)
+        : [];
     console.log('📋 dbLoadMVC: got', records.length, 'records');
     const tbody = document.getElementById('mvc-table');
     if (!tbody) { console.warn('dbLoadMVC: mvc-table not found'); return; }
     tbody.querySelectorAll('tr:not(:first-child)').forEach(r => r.remove());
 
-    const dayNames   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
     records.slice().sort((a,b) => b.timestamp - a.timestamp).slice(0,50).forEach(r => {
-      const d    = new Date(r.timestamp || Date.now());
-      const day  = r.day  || dayNames[d.getDay()];
-      const date = r.date || (monthNames[d.getMonth()] + ' ' + d.getDate());
+      const day  = r.day || '—';
+      const date = r.date || '—';
       const time = r.time || '—';
-
-      // Value in billions
-      const valB = r.mvcValueOIVol != null
-        ? (Math.abs(r.mvcValueOIVol) / 1_000_000_000).toFixed(2) + 'B'
-        : '—';
-
-      // % of Net GEX
-      let pctGEX = '—';
-      if (r.pctNetGEXOIVol != null) {
-        pctGEX = r.pctNetGEXOIVol.toFixed(2) + '%';
-      } else if (r.totalNetGEX && r.mvcValueOIVol) {
-        pctGEX = (Math.abs(r.mvcValueOIVol) / Math.abs(r.totalNetGEX) * 100).toFixed(2) + '%';
-      }
-
-      // Trigger — old records stored expiration in triggerType; new records have explicit fields
-      const isDateStr = /^\d{4}-\d{2}-\d{2}$/.test(r.triggerType || '');
-      const trigger    = isDateStr ? 'Manual' : (r.triggerType || 'manual').startsWith('auto') ? 'Auto' : 'Manual';
-      const expiration = r.expiration && r.expiration !== '—'
-        ? r.expiration
-        : (isDateStr ? r.triggerType : '—');
-
+      const strike = r.strikeOIVol || r.strikeVolOnly || '—';
+      const netGEX = r.mvcValueOIVol != null ? (r.mvcValueOIVol / 1e9).toFixed(2) + 'B' : '—';
+      const esPrice = r.currentPrice != null ? r.currentPrice.toFixed(2) : '—';
+      const spxPrice = r.spxPrice != null && r.spxPrice > 0 ? r.spxPrice.toFixed(2) : '—';
+      const netDEX = r.totalNetDEX_OI != null ? (r.totalNetDEX_OI / 1e6).toFixed(2) + 'M' : '—';
+      const trigger = r.triggerType || 'manual';
+      const expiration = r.expiration || '—';
+      
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
-      
-      // Determine strike colors based on GEX sign
-      const oiVolColor = r.mvcValueOIVol >= 0 ? '#00e676' : '#ff4757';
-      const volOnlyColor = r.mvcValueVolOnly >= 0 ? '#00e676' : '#ff4757';
+      const strikeColor = r.mvcValueOIVol >= 0 ? '#00e676' : '#ff4757';
       
       tr.innerHTML = `
         <td style="padding:6px;color:#fff">${day}</td>
         <td style="padding:6px;color:#fff">${date}</td>
         <td style="padding:6px;color:#fff">${time}</td>
-        <td style="padding:6px;text-align:right;color:${oiVolColor}">${r.strikeOIVol?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:#fff">${valB}</td>
-        <td style="padding:6px;text-align:right;color:${volOnlyColor}">${r.strikeVolOnly?.toFixed(0) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:#fff">${r.currentPrice?.toFixed(2) || '—'}</td>
-        <td style="padding:6px;text-align:right;color:#fff">${Number.isFinite(Number(r.netDexStrike)) ? Number(r.netDexStrike).toFixed(0) : '-'}</td>
-        <td style="padding:6px;text-align:right;color:#fff">${(r.totalNetDEX_OI ?? r.totalNetDEX) != null ? ((r.totalNetDEX_OI ?? r.totalNetDEX) / 1e6).toFixed(2) + 'M' : '-'}</td>
+        <td style="padding:6px;text-align:right;color:${strikeColor};font-weight:700">${strike}</td>
+        <td style="padding:6px;text-align:right;color:#fff">${netGEX}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${esPrice}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${spxPrice}</td>
+        <td style="padding:6px;text-align:right;color:var(--cyan)">${netDEX}</td>
         <td style="padding:6px;color:#fff">${trigger}</td>
         <td style="padding:6px;color:#fff">${expiration}</td>
-        <td style="padding:4px 6px"><button onclick="dbDeleteMVC(${r.id},this)" style="padding:2px 7px;font-size:9px;background:#1a0a0a;border:1px solid #3a1515;color:#ff4757;cursor:pointer;border-radius:10px">✕</button></td>
       `;
       tbody.appendChild(tr);
     });
   }
 
   async function dbDeleteMVC(id, btn) {
-    if (!DB || !DB.db) return;
+    if (!(await dbEnsureReady())) return;
     await new Promise((resolve, reject) => {
       const tx  = DB.db.transaction(['mvc'], 'readwrite');
       const req = tx.objectStore('mvc').delete(id);
@@ -287,7 +273,11 @@
 
   async function dbLoadPremium() {
     if (!DB || !DB.db) return;
-    const records = await queryPremiumFlow_TopTrades(1);
+    const records = typeof DB.queryPremiumFlow_TopTrades === 'function'
+      ? await DB.queryPremiumFlow_TopTrades(1)
+      : typeof queryPremiumFlow_TopTrades === 'function'
+        ? await queryPremiumFlow_TopTrades(1)
+        : [];
     const tbody = document.getElementById('premium-table');
     const rows = tbody.querySelectorAll('tr:not(:first-child)');
     rows.forEach(r => r.remove());
@@ -306,21 +296,41 @@
       tbody.appendChild(tr);
     });
   }
-  
-  async function dbLoadDelta() {
-    if (!DB || !DB.db) return;
-    const records = await queryCumulativeDelta_Chart(1);
-    const tbody = document.getElementById('delta-table');
+  async function dbLoadBuySell() {
+    if (!(await dbEnsureReady()) || !DB.db.objectStoreNames.contains('buySellScores')) return;
+    try {
+      if (typeof DB.saveBuySellScore === 'function') {
+        const today = new Date().toISOString().split('T')[0];
+        const res = await fetch(`/proxy/api/backup/buy-sell-scores?date=${today}`);
+        if (res.ok) {
+          const data = await res.json();
+          for (const record of (Array.isArray(data.records) ? data.records : [])) {
+            await DB.saveBuySellScore(record);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Buy/Sell backup restore failed:', err);
+    }
+    const records = typeof DB.queryBuySellScores_Today === 'function'
+      ? await DB.queryBuySellScores_Today()
+      : await DB._getAllRecords('buySellScores');
+    const tbody = document.getElementById('buy-sell-table');
     const rows = tbody.querySelectorAll('tr:not(:first-child)');
     rows.forEach(r => r.remove());
-    
-    records.filter((_, i) => i % 2 === 0).forEach(r => {
+
+    records.slice().sort((a, b) => b.timestamp - a.timestamp).forEach(r => {
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
+      const side = r.side || (Number(r.buyPct) >= Number(r.sellPct) ? 'Buy' : 'Sell');
+      const sideColor = side === 'Buy' ? 'var(--green)' : 'var(--red)';
       tr.innerHTML = `
         <td style="padding:6px;color:var(--text2)">${r.time || '?'}</td>
-        <td style="padding:6px;text-align:right;color:var(--orange)">${Number.isFinite(Number(r.esPrice)) ? Number(r.esPrice).toFixed(2) : '?'}</td>
-        <td style="padding:6px;text-align:right;color:var(--cyan)">${Number.isFinite(Number(r.cvd)) ? Number(r.cvd).toLocaleString() : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--orange)">${Number.isFinite(Number(r.spxPrice)) ? Number(r.spxPrice).toFixed(2) : '?'}</td>
+        <td style="padding:6px;text-align:right;color:${sideColor};font-weight:700">${side}</td>
+        <td style="padding:6px;text-align:right;color:${sideColor}">${Number.isFinite(Number(r.score)) ? Number(r.score).toFixed(0) + '%' : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--green)">${Number.isFinite(Number(r.buyPct)) ? Number(r.buyPct).toFixed(0) + '%' : '?'}</td>
+        <td style="padding:6px;text-align:right;color:var(--red)">${Number.isFinite(Number(r.sellPct)) ? Number(r.sellPct).toFixed(0) + '%' : '?'}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -368,25 +378,140 @@
     }
   }
 
+  function exportDateET() {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
+  }
+
+  function normalizeMVCExportRows(records) {
+    return records.map(r => ({
+      'Day': r.day || '—',
+      'Date': r.date || '—',
+      'Time': r.time || '—',
+      'Strike': r.strikeOIVol || r.strikeVolOnly || '—',
+      'Net GEX': r.mvcValueOIVol != null ? (Number(r.mvcValueOIVol) / 1e9).toFixed(2) : '—',
+      'ES Price': r.currentPrice != null ? Number(r.currentPrice).toFixed(2) : '—',
+      'SPX Price': r.spxPrice != null ? Number(r.spxPrice).toFixed(2) : '—',
+      'Net DEX': r.totalNetDEX_OI != null ? (Number(r.totalNetDEX_OI) / 1e6).toFixed(2) : '—',
+      'Trigger': r.triggerType || 'manual',
+      'Expiration': r.expiration || '—'
+    }));
+  }
+
+  async function loadXLSXLibrary() {
+    if (window.XLSX) return window.XLSX;
+
+    const sources = [
+      '/node_modules/xlsx/dist/xlsx.full.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js'
+    ];
+
+    for (const src of sources) {
+      try {
+        await new Promise((resolve, reject) => {
+          const existing = document.querySelector(`script[data-xlsx-src="${src}"]`);
+          if (existing) {
+            if (window.XLSX) {
+              resolve();
+              return;
+            }
+            existing.addEventListener('load', resolve, { once: true });
+            existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
+            return;
+          }
+
+          const script = document.createElement('script');
+          script.src = src;
+          script.dataset.xlsxLoader = 'true';
+          script.dataset.xlsxSrc = src;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Failed to load ${src}`));
+          document.head.appendChild(script);
+        });
+
+        if (window.XLSX) return window.XLSX;
+      } catch (_err) {}
+    }
+
+    throw new Error('Could not load Excel export library.');
+  }
+
+  async function exportDatabaseToExcel() {
+    if (!DB || !DB.db) { console.warn('Database not ready'); return; }
+
+    try {
+      const mvcRecords = await DB._getAllRecords('mvc');
+      if (mvcRecords.length === 0) {
+        alert('No MVC records to export');
+        return;
+      }
+
+      const rows = normalizeMVCExportRows(mvcRecords);
+      const filename = `MVC_Database_${exportDateET()}.xlsx`;
+
+      try {
+        const resp = await fetch('http://localhost:3002/export-mvc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: rows, filename })
+        });
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || 'Export service failed');
+        console.log(`Excel exported via service: ${result.message}`);
+        alert(`Excel saved to MVC folder as ${filename}`);
+        return;
+      } catch (serviceErr) {
+        console.warn('Export service unavailable, falling back to browser download:', serviceErr);
+      }
+
+      const XLSX = await loadXLSXLibrary();
+      const wb = XLSX.utils.book_new();
+      const mvcWs = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, mvcWs, 'MVC');
+      XLSX.writeFile(wb, filename);
+      console.log(`Excel downloaded: ${filename}`);
+      alert(`Excel downloaded as ${filename}`);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Export failed: ' + err.message);
+    }
+  }
+
   window.showDatabaseTab  = showDatabaseTab;
   window.dbShowTab        = dbShowTab;
+  window.dbEnsureReady    = dbEnsureReady;
   window.dbRefreshCounts  = dbRefreshCounts;
   window.dbLoadMVC        = dbLoadMVC;
   window.dbLoadPremium    = dbLoadPremium;
-  window.dbLoadDelta      = dbLoadDelta;
+  window.dbLoadBuySell    = dbLoadBuySell;
   window.dbDeleteMVC      = dbDeleteMVC;
   window.exportDatabaseToExcel = exportDatabaseToExcel;
 
-  window.dbRefreshAll = function() {
-    dbRefreshCounts();
+  window.dbRefreshAll = async function() {
+    await dbRefreshCounts();
     // Reload whichever sub-tab is currently visible
     const mvc     = document.getElementById('db-tab-mvc');
     const premium = document.getElementById('db-tab-premium');
-    const delta   = document.getElementById('db-tab-delta');
-    if (mvc     && mvc.style.display     !== 'none') dbLoadMVC();
-    if (premium && premium.style.display !== 'none') dbLoadPremium();
-    if (delta   && delta.style.display   !== 'none') dbLoadDelta();
+    const buySell = document.getElementById('db-tab-buy-sell');
+    if (mvc     && mvc.style.display     !== 'none') await dbLoadMVC();
+    if (premium && premium.style.display !== 'none') await dbLoadPremium();
+    if (buySell && buySell.style.display !== 'none') await dbLoadBuySell();
   };
+
+  window.init_database = function init_database() {
+    setTimeout(() => {
+      if (typeof window.dbRefreshAll === 'function') window.dbRefreshAll();
+      if (typeof window.init_estimated_moves === 'function') window.init_estimated_moves();
+    }, 50);
+  };
+
+  window.init_database();
 
 })();
 </script>
+
+

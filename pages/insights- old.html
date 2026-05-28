@@ -1,0 +1,201 @@
+<!-- PAGE: INSIGHTS -->
+<div id="page-insights" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+  <div style="padding:14px 20px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0">
+    <div style="font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">Insights</div>
+  </div>
+
+  <div id="insights-share-source" style="flex:1;display:grid;grid-template-columns:minmax(320px,460px) minmax(0,1fr);min-height:0;overflow:hidden">
+    <aside id="insights-share-left" style="min-height:0;overflow:auto;border-right:1px solid var(--border);background:linear-gradient(180deg,rgba(0,229,255,.055),rgba(255,179,0,.025));padding:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px">
+        <div>
+          <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:700">Exposure Stack</div>
+          <div style="font-size:21px;color:var(--text0);font-weight:800;margin-top:3px">GEX / DEX / CHEX / VEX</div>
+        </div>
+        <div style="font-size:11px;color:var(--cyan);border:1px solid rgba(0,229,255,.35);padding:5px 7px;border-radius:4px;font-weight:800;letter-spacing:.08em">0DTE</div>
+      </div>
+
+        <div id="insights-live-summary" style="border:1px solid rgba(0,229,255,.32);background:rgba(0,229,255,.055);border-radius:6px;padding:10px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase">Live 0DTE Read</div>
+            <div id="insights-updated" style="font-size:10px;color:var(--text3);font-variant-numeric:tabular-nums">waiting</div>
+          </div>
+          <div id="insights-bias" style="font-size:17px;color:var(--text0);font-weight:800;margin-bottom:5px">Loading 0DTE exposure...</div>
+          <div id="insights-analysis-short" style="font-size:13px;color:var(--text2);line-height:1.5">Waiting for the SPX chain to populate.</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+            <div style="font-size:11px;color:#ffb300;font-weight:800;letter-spacing:.12em">GEX</div>
+            <div id="insights-gex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
+            <div id="insights-gex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Location map. Finds pin zones, walls, flips, and negative-gamma pockets.</div>
+          </div>
+        <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+            <div style="font-size:11px;color:#00e5ff;font-weight:800;letter-spacing:.12em">DEX</div>
+            <div id="insights-dex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
+            <div id="insights-dex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Inventory pressure. Reads delta cliffs, troughs, shelves, and flip squeezes.</div>
+          </div>
+        <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+            <div style="font-size:11px;color:#7cff6b;font-weight:800;letter-spacing:.12em">CHEX</div>
+            <div id="insights-chex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
+            <div id="insights-chex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Time-decay pressure. Shows whether passing time supports drift or fights it.</div>
+          </div>
+        <div style="border:1px solid var(--border);background:rgba(2,8,18,.55);border-radius:6px;padding:10px">
+            <div style="font-size:11px;color:#ff5ec4;font-weight:800;letter-spacing:.12em">VEX</div>
+            <div id="insights-vex-value" style="font-size:17px;color:var(--text0);font-weight:800;margin-top:5px">--</div>
+            <div id="insights-vex-note" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px">Volatility pressure. Matters when IV expands, crushes, or moves into events.</div>
+          </div>
+        </div>
+
+      <section style="border:1px solid var(--border);background:rgba(2,8,18,.72);border-radius:6px;padding:16px;min-height:260px">
+        <div style="font-size:11px;color:var(--cyan);font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px">Quick Bias</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px;color:var(--text2);line-height:1.45">
+          <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+            <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Call Wall</div>
+            <div id="insights-call-wall" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+          </div>
+          <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+            <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Put Wall</div>
+            <div id="insights-put-wall" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+          </div>
+          <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+            <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">GEX Flip</div>
+            <div id="insights-flip" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+          </div>
+          <div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:12px;background:rgba(0,0,0,.16)">
+            <div style="font-size:10px;color:var(--text3);font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Vol GEX</div>
+            <div id="insights-volgex" style="font-size:24px;color:var(--text0);font-weight:800">--</div>
+          </div>
+        </div>
+      </section>
+
+      <div style="margin-top:18px;display:flex;justify-content:flex-start">
+        <img src="assets/bzilatrades-logo.png" alt="BzilaTrades" style="height:42px;width:auto;display:block;object-fit:contain">
+      </div>
+    </aside>
+
+    <main style="min-height:0;overflow:auto;padding:18px 20px">
+      <div id="insights-share-main" style="max-width:980px;background:var(--bg0)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px">
+            <div>
+              <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800;margin-bottom:6px">Execution Playbook</div>
+              <div id="insights-main-title" style="font-size:26px;color:var(--text0);font-weight:800">Turn exposure into trade context</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+              <button onclick="insightsRefreshAll()" title="Refresh all 0DTE data" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid rgba(0,229,255,.45);border-radius:4px;background:rgba(0,229,255,.08);color:var(--cyan);cursor:pointer">Refresh</button>
+              <button onclick="insightsCopyAnalysis()" title="Copy analysis" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg1);color:var(--cyan);cursor:pointer">Copy</button>
+              <button onclick="insightsPostX()" title="Post to X" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg1);color:#e8edf5;cursor:pointer">X</button>
+              <button onclick="insightsPostDiscord()" title="Post to Discord" style="font-size:11px;font-weight:800;padding:7px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg1);color:#8ea1ff;cursor:pointer">Discord</button>
+            </div>
+          </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-bottom:16px">
+          <div style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:12px">
+            <div style="font-size:14px;color:#ffb300;font-weight:800;margin-bottom:8px">Delta Cliff Reversal</div>
+            <div style="font-size:13px;color:var(--text2);line-height:1.6">Heavy negative GEX plus a cumulative DEX trough can mark maximum hedge pressure. If downside stalls there, look for a bounce back toward the GEX flip.</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:12px">
+            <div style="font-size:14px;color:#00e5ff;font-weight:800;margin-bottom:8px">GEX Flip Squeeze</div>
+            <div style="font-size:13px;color:var(--text2);line-height:1.6">A steep DEX slope through the flip means inventory is changing quickly. If signed flow agrees, trade breakout or retest continuation.</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:12px">
+            <div style="font-size:14px;color:#ff5ec4;font-weight:800;margin-bottom:8px">Positive Wall Fade</div>
+            <div style="font-size:13px;color:var(--text2);line-height:1.6">When price reaches a positive GEX wall and DEX flattens into a shelf, avoid chasing and watch for mean reversion.</div>
+          </div>
+        </div>
+
+        <div id="insights-full-analysis" style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:14px;font-size:14px;color:var(--text1);line-height:1.65;margin-bottom:16px">Waiting for 0DTE data...</div>
+
+        <div id="insights-confidence-panel" style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:14px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+            <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800">Confidence Scores</div>
+            <div id="insights-confidence-total" style="font-size:18px;color:var(--text0);font-weight:800">--</div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px">
+            <div style="border:1px solid rgba(255,179,0,.28);border-radius:6px;padding:10px;background:rgba(255,179,0,.045)">
+              <div style="font-size:11px;color:#ffb300;font-weight:800;margin-bottom:7px">GEX</div>
+              <div id="insights-conf-gex" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-gex-bar" style="height:100%;width:0;background:#ffb300"></div></div>
+              <div id="insights-conf-gex-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
+            </div>
+            <div style="border:1px solid rgba(0,229,255,.28);border-radius:6px;padding:10px;background:rgba(0,229,255,.045)">
+              <div style="font-size:11px;color:#00e5ff;font-weight:800;margin-bottom:7px">DEX</div>
+              <div id="insights-conf-dex" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-dex-bar" style="height:100%;width:0;background:#00e5ff"></div></div>
+              <div id="insights-conf-dex-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
+            </div>
+            <div style="border:1px solid rgba(124,255,107,.28);border-radius:6px;padding:10px;background:rgba(124,255,107,.045)">
+              <div style="font-size:11px;color:#7cff6b;font-weight:800;margin-bottom:7px">CHEX</div>
+              <div id="insights-conf-chex" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-chex-bar" style="height:100%;width:0;background:#7cff6b"></div></div>
+              <div id="insights-conf-chex-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
+            </div>
+            <div style="border:1px solid rgba(255,94,196,.28);border-radius:6px;padding:10px;background:rgba(255,94,196,.045)">
+              <div style="font-size:11px;color:#ff5ec4;font-weight:800;margin-bottom:7px">VEX</div>
+              <div id="insights-conf-vex" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-vex-bar" style="height:100%;width:0;background:#ff5ec4"></div></div>
+              <div id="insights-conf-vex-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
+            </div>
+            <div style="border:1px solid rgba(0,230,118,.28);border-radius:6px;padding:10px;background:rgba(0,230,118,.045)">
+              <div style="font-size:11px;color:#00e676;font-weight:800;margin-bottom:7px">BUY / SELL</div>
+              <div id="insights-conf-direction" style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div id="insights-conf-direction-bar" style="height:100%;width:0;background:#00e676"></div></div>
+              <div id="insights-conf-direction-note" style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Waiting</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="insights-history-panel" style="border:1px solid var(--border);border-radius:6px;background:var(--bg1);padding:14px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+            <div style="font-size:11px;color:var(--text3);letter-spacing:.16em;text-transform:uppercase;font-weight:800">Historical Score</div>
+            <div id="insights-history-time" style="font-size:12px;color:var(--text2);font-weight:700">NY 9:00-15:45</div>
+          </div>
+          <div id="insights-history-list" style="overflow-x:auto;overflow-y:hidden;display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - 20px) / 3);gap:10px;padding-bottom:6px">
+            <div style="border:1px solid rgba(0,230,118,.28);border-radius:6px;padding:8px;background:rgba(0,230,118,.045);min-width:0">
+              <div style="font-size:11px;color:#00e676;font-weight:800;margin-bottom:7px">BUY / SELL</div>
+              <div style="font-size:18px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div style="height:100%;width:0;background:#00e676"></div></div>
+              <div style="font-size:10px;color:var(--text2);line-height:1.35;margin-top:7px">Records every 5 minutes from 9:00 through 15:45 New York time.</div>
+            </div>
+          </div>
+        </div>
+
+        <table style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text2);background:var(--bg1);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+          <thead>
+            <tr style="background:rgba(0,229,255,.07);color:var(--text0);font-size:10px;letter-spacing:.1em;text-transform:uppercase">
+              <th style="text-align:left;padding:9px;border-bottom:1px solid var(--border)">Signal</th>
+              <th style="text-align:left;padding:9px;border-bottom:1px solid var(--border)">Use It For</th>
+              <th style="text-align:left;padding:9px;border-bottom:1px solid var(--border)">Action Read</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="padding:9px;border-bottom:1px solid var(--border);color:#ffb300;font-weight:800">GEX</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Location, walls, flips, pin risk</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Positive GEX can dampen movement; negative GEX can amplify it.</td>
+            </tr>
+            <tr>
+              <td style="padding:9px;border-bottom:1px solid var(--border);color:#00e5ff;font-weight:800">DEX</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Dealer inventory and directional hedging</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Steep slopes support momentum; shelves warn that the engine is fading.</td>
+            </tr>
+            <tr>
+              <td style="padding:9px;border-bottom:1px solid var(--border);color:#7cff6b;font-weight:800">CHEX</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Time-decay re-hedging</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Use after GEX and DEX to see whether time supports or fights the trade.</td>
+            </tr>
+            <tr>
+              <td style="padding:9px;border-bottom:1px solid var(--border);color:#ff5ec4;font-weight:800">VEX</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">IV-driven re-hedging</td>
+              <td style="padding:9px;border-bottom:1px solid var(--border)">Only active when IV is moving; flat IV means potential energy, not pressure.</td>
+            </tr>
+            <tr>
+              <td style="padding:9px;color:var(--cyan);font-weight:800">Vol GEX</td>
+              <td style="padding:9px">Today's signed option flow</td>
+              <td style="padding:9px">Use live trade flow as confirmation, not chain volume snapshots.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</div>
