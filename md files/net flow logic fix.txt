@@ -1,0 +1,127 @@
+The logic for your **SPX 0DTE Premium Flow** calculation has a major architectural bottleneck that is likely causing your net call tracking to completely stall out or flatline as the trading session progresses.
+
+Here is exactly why your net calls "barely moved" and how to fix the code:
+
+---
+
+## 1. The Core Bug: `state.spxPrice` is Frozen
+
+In your WebSocket handler, look at how you assign the reference price for futures:
+
+```javascript
+// ── ES Futures Trade ──
+if (symbol.startsWith('/ES')) {
+  state.esPrice = price;
+  if (!state.spxPrice) state.spxPrice = price; // ❌ BUG: Only sets it on the very first tick!
+
+```
+
+### Why this kills your flow data:
+
+Because of the `if (!state.spxPrice)` condition, `state.spxPrice` gets locked into the price of the **very first tick of the day** and never updates again.
+
+Later on, your code uses this reference price to determine if a contract is Out-of-the-Money (OTM):
+
+```javascript
+function isOtmOption(symbol, optType) {
+  const strike = getOptionStrike(symbol);
+  const refPrice = state.spxPrice || state.esPrice || 0; // ❌ Uses the frozen state.spxPrice
+  if (!strike || !refPrice) return false;
+  if (optType === 'C') return strike > refPrice;
+  if (optType === 'P') return strike < refPrice;
+  return false;
+}
+
+```
+
+If the market rallies hard away from your morning opening price, any new upside call volume is compared against that frozen morning price. Contracts that are actually deeply OTM in real-time will be misclassified as In-the-Money (ITM) by your code and completely ignored (`if (!isOtmOption(...)) return;`), causing your live call flow calculation to effectively freeze.
+
+### The Fix:
+
+Keep `state.spxPrice` dynamic so your OTM calculations trail the live market:
+
+```javascript
+// ── ES Futures Trade ──
+if (symbol.startsWith('/ES')) {
+  state.esPrice = price;
+  state.spxPrice = price; // 🟢 Keep this updating dynamically with every trade
+
+```
+
+---
+
+## 2. Aggressor Side Fallback Vulnerability
+
+Look at your direction logic for option trades:
+
+```javascript
+function getAggressorDirection(item, quote) {
+  const tradePrice = parseFloat(item.price || 0);
+  if (quote && quote.bid > 0 && quote.ask > 0) {
+    if (tradePrice >= quote.ask) return 1;
+    if (tradePrice <= quote.bid) return -1;
+    return 0;
+  }
+  const ag = item.aggressorSide || ''; // ⚠️ Potential failure point
+  if (ag === 'BUY') return 1;
+  if (ag === 'SELL') return -1;
+  return 0;
+}
+
+```
+
+If `state.spxQuotes[symbol]` isn't actively populated (due to connection drops, rate-limiting on the option chain, or a lack of streamed quote updates for that specific strike), the function falls back to `item.aggressorSide`.
+
+Standard dxLink trade events frequently omit an explicit `aggressorSide` field unless your backend proxy is specifically calculating and injecting it into the JSON message structure. If that field is missing or named differently (e.g., `isBuy`), `direction` returns `0`, and the trade is entirely discarded by `processSpxTrade`:
+
+```javascript
+const direction = getAggressorDirection(item, quote);
+if (direction === 0) return; // ❌ Drop the trade
+
+```
+
+### The Fix:
+
+Implement a **tick-direction method** (comparing the current trade price to the last traded price for that specific contract) as a robust secondary safety net when BBO quotes are missing:
+
+```javascript
+function getAggressorDirection(item, quote) {
+  const tradePrice = parseFloat(item.price || 0);
+  const symbol = item.eventSymbol || '';
+  
+  if (quote && quote.bid > 0 && quote.ask > 0) {
+    if (tradePrice >= quote.ask) return 1;
+    if (tradePrice <= quote.bid) return -1;
+  }
+  
+  const ag = item.aggressorSide || '';
+  if (ag === 'BUY') return 1;
+  if (ag === 'SELL') return -1;
+  
+  // 🟢 Tick-direction fallback
+  const prevPrice = state.lastTradeBySymbol[symbol];
+  state.lastTradeBySymbol[symbol] = tradePrice; // Cache current price
+  
+  if (prevPrice && tradePrice !== prevPrice) {
+    return tradePrice > prevPrice ? 1 : -1;
+  }
+  
+  return 0;
+}
+
+```
+
+---
+
+## 3. Discrepancy in Multi-Stock Premium Flows (Source 2)
+
+If you were looking at the **Multi Stock** tab to evaluate your call flow, note that `fetchStockChainFlow` does not track live trade aggressors (buys vs. sells). Instead, it takes a raw snapshot of cumulative volume:
+
+```javascript
+callFlow += mid * (c.volume || 0) * 100;
+
+```
+
+Because this multiplies raw `volume` by the `mid` price, both `callFlow` and `putFlow` are forced to be positive numbers that strictly increase throughout the session. If your call flow curve flatlined here, it simply means no new volume was printing on OTM strikes across those specific underlyings.
+
+Updating the `state.spxPrice` logic in your main feed handler will restore proper real-time tracking to your primary dashboard view.

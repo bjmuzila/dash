@@ -37,7 +37,11 @@
       multiStockFlowHistory: {
         QQQ: [], SPY: [], AAPL: [], AMZN: [],
         GOOGL: [], META: [], MSFT: [], NVDA: [], TSLA: []
-      }
+      },
+      // Flow feed (from proxy aggregator)
+      flowOrders: [],        // All orders from proxy
+      minPremiumFilter: 50000,
+      sweepOnlyFilter: false
     };
     const state = window.__bzilaFlowState || defaultState;
     window.__bzilaFlowState = state;
@@ -56,6 +60,13 @@
       callFlow: document.getElementById('bzila-call-flow'),
       putFlow: document.getElementById('bzila-put-flow'),
       netFlow: document.getElementById('bzila-net-flow'),
+      // Multi-Stock Flow Feed
+      flowFeed: document.getElementById('bzila-flow-feed'),
+      minPremiumSlider: document.getElementById('bzila-min-premium'),
+      minPremiumVal: document.getElementById('bzila-min-premium-val'),
+      sweepOnlyCheckbox: document.getElementById('bzila-sweep-only'),
+      flowCount: document.getElementById('bzila-flow-count'),
+      flowTotal: document.getElementById('bzila-flow-total'),
     };
 
     // Handle premium chart hover
@@ -380,6 +391,82 @@
       }
     }
 
+    // Handle aggregated flow order from proxy
+    function onFlowOrder(orderData) {
+      // orderData = { symbol, type, strike, size, premium, price, timestamp, isSweep, underlyingPrice }
+      state.flowOrders.push({
+        ...orderData,
+        ts: orderData.timestamp
+      });
+      
+      // Keep only last 100 orders
+      if (state.flowOrders.length > 100) {
+        state.flowOrders.shift();
+      }
+      
+      renderFlowFeed();
+      updateFlowStats();
+    }
+
+    // Render filtered flow feed
+    function renderFlowFeed() {
+      const minPrem = state.minPremiumFilter || 50000;
+      const sweepOnly = state.sweepOnlyFilter || false;
+      
+      let filtered = state.flowOrders.filter(o => o.premium >= minPrem);
+      if (sweepOnly) {
+        filtered = filtered.filter(o => o.isSweep);
+      }
+      
+      const feed = elements.flowFeed;
+      if (!feed) return;
+      
+      if (!filtered.length) {
+        feed.innerHTML = '<div style="padding:8px;color:#475569;text-align:center">No orders matching filters</div>';
+        return;
+      }
+      
+      // Render in reverse order (newest first)
+      feed.innerHTML = filtered.slice().reverse().map(o => {
+        const time = new Date(o.ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const color = o.type === 'C' ? '#22c55e' : '#ef4444';
+        const sweep = o.isSweep ? ' <span style="color:#fbbf24;font-weight:700">[SWEEP]</span>' : '';
+        return `<div style="padding:6px 8px;border-bottom:1px solid #1a2a3a;color:#cbd5e1;line-height:1.4">
+          <div style="display:flex;justify-content:space-between;font-size:8px;margin-bottom:2px">
+            <span style="color:#94a3b8">${time}</span>
+            <span style="color:#64748b">${o.symbol}</span>
+          </div>
+          <div style="font-size:9px">
+            <span style="color:${color};font-weight:700">${o.type}</span> ${o.strike} 
+            <span style="color:#cbd5e1">${o.size}c @ $${o.price}</span>
+          </div>
+          <div style="font-size:8px;color:#10b981;margin-top:2px">
+            <span style="font-weight:700">$${(o.premium/1000).toFixed(1)}k</span>${sweep}
+          </div>
+        </div>`;
+      }).join('');
+      
+      // Auto-scroll to bottom
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    // Update feed stats
+    function updateFlowStats() {
+      const minPrem = state.minPremiumFilter || 50000;
+      const sweepOnly = state.sweepOnlyFilter || false;
+      
+      let filtered = state.flowOrders.filter(o => o.premium >= minPrem);
+      if (sweepOnly) {
+        filtered = filtered.filter(o => o.isSweep);
+      }
+      
+      const count = filtered.length;
+      const total = filtered.reduce((sum, o) => sum + o.premium, 0);
+      
+      if (elements.flowCount) elements.flowCount.textContent = count;
+      if (elements.flowTotal) elements.flowTotal.textContent = fmtMoney(total);
+    }
+
     // Snapshot multi-stock flow from option chain data
     function snapshotMultiStockFlow(optionData) {
       // optionData = { SPY: {0dte: {call: x, put: y}, 1dte: {...}}, ... }
@@ -416,7 +503,20 @@
       return expDateStr === `${y}-${m}-${d}`;
     }
 
-    // Fetch one stock's chain, compute 0DTE OTM call/put premium
+    // Get nearest expiration from list of expiration dates
+    function getNearestExpiration(expirations) {
+      if (!expirations.length) return null;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      return expirations.sort((a, b) => {
+        const aDays = Math.round((new Date(a + 'T00:00:00') - today) / 86400000);
+        const bDays = Math.round((new Date(b + 'T00:00:00') - today) / 86400000);
+        return Math.abs(aDays) - Math.abs(bDays);
+      })[0];
+    }
+
+    // Fetch one stock's chain, compute nearest-expiration OTM call/put premium
     async function fetchStockChainFlow(symbol) {
       try {
         const resp = await fetch(`http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(symbol)}?range=all`);
@@ -426,10 +526,15 @@
         const spot  = json?.data?.underlyingPrice || 0;
         if (!items.length || !spot) return null;
 
+        // Get all expirations and pick the nearest
+        const expirations = items.map(eg => eg['expiration-date']).filter(Boolean);
+        const nearestExp = getNearestExpiration(expirations);
+        if (!nearestExp) return null;
+
         let callFlow = 0, putFlow = 0;
 
         for (const expGroup of items) {
-          if (!isExp0DTE(expGroup['expiration-date'])) continue; // 0DTE only
+          if (expGroup['expiration-date'] !== nearestExp) continue; // Use nearest expiration only
 
           for (const strikeObj of (expGroup.strikes || [])) {
             const strike = parseFloat(strikeObj['strike-price'] || 0);
@@ -451,7 +556,7 @@
         }
 
         if (!callFlow && !putFlow) return null;
-        return { '0dte': { call: callFlow, put: putFlow } };
+        return { [nearestExp.replace(/-/g, '')]: { call: callFlow, put: putFlow } };
       } catch (e) {
         console.error(`fetchStockChainFlow ${symbol}:`, e.message);
         return null;
@@ -786,164 +891,149 @@
     }
 
     function renderMultiStockCharts() {
-      const dpr = window.devicePixelRatio || 1;
-
       document.querySelectorAll('.multi-stock-card').forEach(card => {
         const symbol = card.getAttribute('data-symbol');
         const canvas = card.querySelector('.stock-premium-canvas');
         if (!canvas || !symbol) return;
 
-        // Size canvas from its wrapper; only resize when dimensions change
+        const ctx = canvas.getContext('2d');
         const parent = canvas.parentElement;
         const rect = parent.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
-        const W = rect.width, H = rect.height;
-        if (canvas._bzW !== W || canvas._bzH !== H) {
-          canvas.width = W * dpr;
-          canvas.height = H * dpr;
-          canvas.style.width = W + 'px';
-          canvas.style.height = H + 'px';
-          canvas._bzW = W;
-          canvas._bzH = H;
+        const W = rect.width;
+        const H = rect.height;
+
+        if (!W || !H) return;
+
+        // Only resize if dimensions changed
+        if (canvas._w !== W || canvas._h !== H) {
+          canvas.width = W;
+          canvas.height = H;
+          canvas._w = W;
+          canvas._h = H;
         }
 
-        const ctx = canvas.getContext('2d');
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, W, H);
-        ctx.fillStyle = '#0d1520';
-        ctx.fillRect(0, 0, W, H);
+
+        const padding = { l: 35, r: 6, t: 6, b: 14 };
+        const cw = W - padding.l - padding.r;
+        const ch = H - padding.t - padding.b;
 
         const hist = state.multiStockFlowHistory[symbol] || [];
 
-        // Update the per-card call/put labels
-        const callEl = card.querySelector('.stock-call-flow');
-        const putEl  = card.querySelector('.stock-put-flow');
-        if (hist.length) {
-          const last = hist[hist.length - 1];
-          let c = 0, p = 0;
-          for (const k in last) {
-            if (k === 'ts' || typeof last[k] !== 'object' || !last[k]) continue;
-            c += last[k].call || 0;
-            p += last[k].put || 0;
-          }
-          if (callEl) callEl.textContent = fmtMoney(c);
-          if (putEl)  putEl.textContent  = fmtMoney(p);
-        }
-
         if (hist.length < 2) {
           ctx.fillStyle = '#475569';
-          ctx.font = '11px monospace';
+          ctx.font = '10px monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText('Waiting for data...', W / 2, H / 2);
+          ctx.fillText('Waiting...', W / 2, H / 2);
           return;
         }
 
-        const pad = { l: 44, r: 8, t: 8, b: 18 };
-        const cw = W - pad.l - pad.r;
-        const ch = H - pad.t - pad.b;
+        // Market hours: 9:30 AM - 4 PM ET (fixed)
+        const marketStart = new Date();
+        marketStart.setHours(9, 30, 0, 0);
+        const marketEnd = new Date();
+        marketEnd.setHours(16, 0, 0, 0);
+        const totalMs = marketEnd - marketStart;
 
-        // Fixed market-hours X axis (9:30–16:00)
-        const mStart = new Date(); mStart.setHours(9, 30, 0, 0);
-        const mEnd   = new Date(); mEnd.setHours(16, 0, 0, 0);
-        const mTotal = mEnd - mStart;
-        const xAt = ts => pad.l + Math.min(1, Math.max(0, (ts - mStart) / mTotal)) * cw;
+        const xAtTime = (ts) => {
+          const entryTime = ts instanceof Date ? ts : new Date(ts);
+          const offsetMs = Math.max(0, entryTime - marketStart);
+          const progress = Math.min(1, offsetMs / totalMs);
+          return padding.l + progress * cw;
+        };
 
-        // Sum all DTE buckets into call/put/net per snapshot
+        // Sum all DTE buckets per snapshot
         const pts = hist.map(p => {
           let call = 0, put = 0;
           for (const k in p) {
             if (k === 'ts' || typeof p[k] !== 'object' || !p[k]) continue;
             call += p[k].call || 0;
-            put  += p[k].put  || 0;
+            put += p[k].put || 0;
           }
           return { ts: p.ts, call, put, net: call - put };
         });
 
-        // Y range over call, -put (display), net
-        let yMin = 0, yMax = 0;
+        // Auto-range
+        let min = Infinity, max = -Infinity;
         pts.forEach(p => {
-          yMin = Math.min(yMin, p.call, -p.put, p.net);
-          yMax = Math.max(yMax, p.call, -p.put, p.net);
+          min = Math.min(min, p.call, -p.put, p.net, 0);
+          max = Math.max(max, p.call, -p.put, p.net, 0);
         });
-        if (yMin === yMax) { yMin -= 1; yMax += 1; }
-        const yPad = (yMax - yMin) * 0.08;
-        yMin -= yPad; yMax += yPad;
-        const yAt = v => pad.t + ch - ((v - yMin) / (yMax - yMin)) * ch;
+        if (min === max) { min -= 1; max += 1; }
+        const padY = (max - min) * 0.08;
+        min -= padY; max += padY;
+
+        const yAt = v => padding.t + ch - ((v - min) / (max - min)) * ch;
 
         // Grid
         ctx.strokeStyle = '#1a2a3a';
         ctx.lineWidth = 0.5;
-        for (let g = 0; g <= 4; g++) {
-          const y = pad.t + (g / 4) * ch;
-          ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+        for (let g = 0; g <= 3; g++) {
+          const y = padding.t + (g / 3) * ch;
+          ctx.beginPath();
+          ctx.moveTo(padding.l, y);
+          ctx.lineTo(W - padding.r, y);
+          ctx.stroke();
         }
 
         // Zero line
-        if (yMin < 0 && yMax > 0) {
+        if (min < 0 && max > 0) {
           const zy = yAt(0);
           ctx.strokeStyle = '#334155';
           ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(W - pad.r, zy); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(padding.l, zy);
+          ctx.lineTo(W - padding.r, zy);
+          ctx.stroke();
         }
 
-        // Y labels
-        ctx.fillStyle = '#475569';
+        // Y-axis labels
+        ctx.fillStyle = '#64748b';
         ctx.font = '8px monospace';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
-        for (let g = 0; g <= 4; g++) {
-          const v = yMax - (g / 4) * (yMax - yMin);
-          ctx.fillText(fmtMoney(v), pad.l - 3, pad.t + (g / 4) * ch);
+        for (let g = 0; g <= 3; g++) {
+          const v = max - (g / 3) * (max - min);
+          const y = padding.t + (g / 3) * ch;
+          ctx.fillText(fmtMoney(v), padding.l - 3, y);
         }
 
-        // Draw a line from pts
+        // Draw lines
         const drawLine = (getVal, color, lw) => {
           ctx.strokeStyle = color;
           ctx.lineWidth = lw;
           ctx.beginPath();
           pts.forEach((p, i) => {
-            const x = xAt(p.ts);
+            const x = xAtTime(p.ts);
             const y = yAt(getVal(p));
             i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
           });
           ctx.stroke();
         };
 
-        drawLine(p => p.call, '#22c55e', 1.5);  // calls green
-        drawLine(p => -p.put, '#ef4444', 1.5);  // puts red (inverted)
-        drawLine(p => p.net,  '#fbbf24', 2);     // net gold
+        drawLine(p => p.call, '#22c55e', 1.2);   // Calls: green
+        drawLine(p => -p.put, '#ef4444', 1.2);   // Puts: red (inverted)
+        drawLine(p => p.net, '#fbbf24', 1.5);    // NET: gold
 
         // Axes
         ctx.strokeStyle = '#1e3a4a';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 0.8;
         ctx.beginPath();
-        ctx.moveTo(pad.l, pad.t);
-        ctx.lineTo(pad.l, H - pad.b);
-        ctx.lineTo(W - pad.r, H - pad.b);
+        ctx.moveTo(padding.l, padding.t);
+        ctx.lineTo(padding.l, H - padding.b);
+        ctx.lineTo(W - padding.r, H - padding.b);
         ctx.stroke();
+
+        // Stock label
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(symbol, padding.l + 3, padding.t + 2);
       });
     }
 
-    // Fetch initial prices (futures)
-    async function fetchInitialPrices() {
-      try {
-        const resp = await fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?future[]=${encodeURIComponent(ES_REST_SYMBOL)}&future[]=${encodeURIComponent(NQ_REST_SYMBOL)}`);
-        if (resp.ok) {
-          const data = await resp.json();
-          const items = data?.data?.items || [];
-          items.forEach(q => {
-            const sym = q.symbol || '';
-            const price = parseFloat(q.last || q.mark || q.mid || 0);
-            if (sym.startsWith('/ES') && price > 0) state.esPrice = price;
-            if (sym.startsWith('/NQ') && price > 0) state.nqPrice = price;
-          });
-          updateFlowLabels();
-        }
-      } catch (e) {
-        console.error('Failed to fetch initial prices:', e);
-      }
-    }
 
 
     // Batch market data requests to respect 2 req/sec limit (100 symbols per request)
@@ -1025,6 +1115,12 @@
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          
+          // Handle aggregated flow orders from proxy
+          if (msg.type === 'FLOW_ORDER' && msg.data) {
+            onFlowOrder(msg.data);
+            return;
+          }
           
           if (msg.type === 'FEED_DATA' && Array.isArray(msg.data)) {
             normalizeFeedData(msg.data).forEach(item => {
@@ -1197,6 +1293,25 @@
       // Poll multi-stock 0DTE OTM chains every 60s
       pollMultiStockFlow();
       multiStockInterval = setInterval(pollMultiStockFlow, 60 * 1000);
+
+      // Setup flow feed filters
+      if (elements.minPremiumSlider) {
+        elements.minPremiumSlider.addEventListener('input', (e) => {
+          state.minPremiumFilter = parseInt(e.target.value);
+          if (elements.minPremiumVal) {
+            elements.minPremiumVal.textContent = (state.minPremiumFilter).toLocaleString();
+          }
+          renderFlowFeed();
+          updateFlowStats();
+        });
+      }
+      if (elements.sweepOnlyCheckbox) {
+        elements.sweepOnlyCheckbox.addEventListener('change', (e) => {
+          state.sweepOnlyFilter = e.target.checked;
+          renderFlowFeed();
+          updateFlowStats();
+        });
+      }
 
       // Start animation loop
       animate();

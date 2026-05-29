@@ -1,0 +1,93 @@
+Here is the corrected architectural specification and workflow for building the options flow engine under the Bzila branding.
+
+---
+
+# Bzila Flow Engine: Architecture & Logic Flow
+
+## 1. The Technology Stack
+
+* **Backend Data Engine:** Python (using `asyncio` and the `tastytrade` SDK).
+* **Real-time Middleware:** Firebase Firestore (acts as the WebSocket proxy).
+* **Front End:** React + Tailwind CSS.
+
+## 2. Backend Initialization (The Setup)
+
+Before opening the dxLink WebSocket, the Python engine must establish the baseline environment.
+
+1. **Authenticate:** Establish the Tastytrade session.
+2. **Fetch Option Chain:** Request the chain for the target underlying, such as S&P 500 E-mini futures (`/ES`).
+3. **Filter for 0DTE:** Parse the expiration dates from the options chain and select index `[0]` to isolate today's expiring contracts (or the closest available expiration).
+4. **Extract Symbols:** Generate an array of the specific dxLink streamer symbols for those 0DTE contracts to pass into the subscription.
+
+## 3. Data Ingestion & State Management (dxLink WebSocket)
+
+To determine if an option trade is Out-of-the-Money (OTM) *at the exact millisecond* it executes, you cannot just listen to the option trade stream. You must subscribe to the underlying asset's price simultaneously.
+
+1. **Subscribe to Underlying Quote:** Listen to the `Quote` stream for the underlying asset (e.g., `/ES`) to maintain a constantly updating `current_underlying_price` variable in memory.
+2. **Subscribe to Options Trades:** Listen to the `Trade` stream for all the 0DTE option symbols you extracted.
+
+## 4. The 500-Millisecond Aggregator Engine
+
+Because large institutional orders are broken up and routed across multiple exchanges (sweeps), a single trade tick won't reflect the true size. The Python backend must act as a catch-and-hold buffer.
+
+Here is the exact logical loop for incoming `Trade` events:
+
+1. **Receive Tick:** An option trade tick arrives.
+2. **Check for Active Window:** The engine checks if a 500ms aggregation window is already open for that specific contract (Call/Put + Strike).
+* *If NO:* It opens a new temporary dictionary object for that contract, logs the size and premium, and starts an asynchronous 500ms timer (`asyncio.create_task`).
+* *If YES:* It appends the new trade's size and premium to the existing dictionary object for that contract.
+
+
+3. **Close Window & Evaluate:** After exactly 500ms, the timer fires, closing the window for that contract. The engine evaluates the aggregated totals against your conditions.
+
+## 5. The Filtering Logic
+
+Once a 500ms window closes, the aggregated object must pass three strict tests before it is sent to the database:
+
+1. **Size Filter:** Is the aggregated `total_size` >= 100 contracts? If no, drop it.
+2. **OTM Filter:**
+* *For Calls:* Is the `strike_price` > `current_underlying_price`?
+* *For Puts:* Is the `strike_price` < `current_underlying_price`?
+* If it is In-the-Money (ITM) or At-the-Money (ATM), drop it.
+
+
+3. **Backend Premium Adjuster:** Multiply the `total_size` * `execution_price` * `multiplier` (e.g., 50 for `/ES`). Compare this against a base threshold (e.g., $10,000) to keep absolute noise out of the database.
+
+## 6. The Middleware Proxy (Firebase)
+
+If the aggregated order passes all filters, the Python engine packages it into a clean JSON payload.
+
+```json
+{
+  "symbol": "./ESZ6 4500C",
+  "type": "CALL",
+  "strike": 4500,
+  "size": 150,
+  "premium": 45000,
+  "timestamp": 1716922800000,
+  "isSweep": true
+}
+
+```
+
+Python pushes this document to a `live_flow` collection in Firestore. Because Firebase is real-time, it immediately broadcasts this new document to any connected React clients without the UI ever touching dxLink directly.
+
+## 7. The Front End Dashboard (React & Tailwind)
+
+The React application maintains an active `onSnapshot` listener to the Firebase `live_flow` collection, mapping the data into state (`const [flowData, setFlowData] = useState([])`).
+
+### Component 1: Net Premium Flow
+
+This component gives you the macro view of the day's aggressive positioning.
+
+* **Logic:** Use a `useEffect` hook that runs whenever `flowData` updates. It maps through the array, summing the `premium` for all objects where `type === "CALL"` and doing the same for `"PUT"`.
+* **UI:** A simple Tailwind flexbox displaying the Call Premium vs. Put Premium. You can easily visualize this with a dynamic bar chart where the width of the green (Calls) and red (Puts) sections is calculated via percentage `(callPremium / totalPremium) * 100`.
+
+### Component 2: Customizable Big Order Feed
+
+This is the micro view—the scrolling tape of massive blocks and sweeps.
+
+* **State Management:** Introduce a new state variable: `const [minPremiumThreshold, setMinPremiumThreshold] = useState(50000)`.
+* **UI Controls:** Render a Tailwind slider (range input) bound to `minPremiumThreshold`.
+* **Rendering:** Create a derived array: `const displayedFlow = flowData.filter(order => order.premium >= minPremiumThreshold)`.
+* **The Feed:** Map `displayedFlow` into a table or list of cards. As the slider is dragged, React instantly recalculates `displayedFlow` and re-renders the DOM, isolating the massive prints or widening the view to include smaller 100-lot sweeps without needing to query the database again.

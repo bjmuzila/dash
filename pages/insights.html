@@ -477,6 +477,7 @@
         </div>
       </div>
 
+<script src="database.js"></script>
 <script>
 let currentInsightsTab = 'exposure';
 let selectedDTE = '0DTE'; // Default to 0DTE, can be '0DTE', '1DTE', '2DTE', etc
@@ -693,12 +694,15 @@ setInterval(async () => {
   let price = (window.esPrice > 0) ? window.esPrice : await fetchESPrice();
   
   if (price && typeof price === 'number' && price > 0) {
+    console.log(`[IB] ${now.toLocaleTimeString()}: price=${price.toFixed(2)}, esPrice=${window.esPrice}, ibHigh=${ibState.ibHigh?.toFixed(2)}, ibLow=${ibState.ibLow?.toFixed(2)}`);
     updateIBDashboard(price, now);
     // Also update vol-spot if on that tab
     const volSpotEl = document.getElementById('vol-spot');
     if (volSpotEl && volSpotEl.textContent === '--') {
       volSpotEl.textContent = price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
     }
+  } else {
+    console.warn(`[IB] Failed to get price at ${now.toLocaleTimeString()}`);
   }
 }, 2000);
 
@@ -784,8 +788,13 @@ async function insightsRefreshAll() {
         chex    = statusData?.chex    || statusData?.data?.chex    || 0;
         vex     = statusData?.vex     || statusData?.data?.vex     || 0;
         volGex  = statusData?.volGex  || statusData?.data?.volGex  || 0;
+        console.log('[Insights] Got DEX/CHEX/VEX from status:', { dex, chex, vex });
+      } else {
+        console.warn('[Insights] status endpoint returned', statusRes.status);
       }
-    } catch (e) { /* DEX/CHEX/VEX not available from status, continue */ }
+    } catch (e) { 
+      console.warn('[Insights] DEX/CHEX/VEX fetch failed:', e.message);
+    }
 
     // 3. Update sidebar values — use TARGET expiration date, not calendar date
     const targetExpiry = getTargetExpirationDateForUI();
@@ -819,22 +828,34 @@ async function insightsRefreshAll() {
       vex: vex ? vex / 1e9 : 0
     });
 
-    // 7. Save greeks to database and update chart
-    if (typeof DB !== 'undefined' && DB.db) {
-      // Calculate buy/sell scores based on greek positions
-      const gexPos = gex > 0.5 ? 75 : gex > 0 ? 55 : gex > -0.5 ? 35 : 15;
-      const dexVal = dex ? dex / 1e9 : 0;
-      const dexPos = dexVal > 0 ? 65 : 35;
-      const chexVal = chex ? chex / 1e9 : 0;
-      const chexPos = chexVal > 0 ? 70 : 30;
-      const vexVal = vex ? vex / 1e9 : 0;
-      const vexPos = Math.abs(vexVal) < 0.5 ? 70 : Math.abs(vexVal) < 1.0 ? 50 : 30;
+    // 7. Save greeks to database and update chart (only during market hours)
+    const now = new Date();
+    const hour = now.getHours();
+    const isMarketHours = hour >= 9 && hour < 16;
+    
+    if (isMarketHours && typeof DB !== 'undefined' && DB.db && typeof DB.saveGreeksTimeSeries === 'function') {
+      console.log('Saving greeks to DB:', { netGexB, dex, chex, vex });
       
-      const buyScore = Math.round((gexPos * 0.35 + dexPos * 0.25 + chexPos * 0.25 + vexPos * 0.15));
-      const sellScore = 100 - buyScore;
-      
-      await DB.saveGreeksTimeSeries(netGexB, dexVal, chexVal, vexVal, buyScore, sellScore);
-      await updateGreeksHistoryChart();
+      try {
+        // Calculate buy/sell scores based on greek positions
+        const gexPos = netGexB > 0.5 ? 75 : netGexB > 0 ? 55 : netGexB > -0.5 ? 35 : 15;
+        const dexVal = dex ? dex / 1e9 : 0;
+        const dexPos = dexVal > 0 ? 65 : 35;
+        const chexVal = chex ? chex / 1e9 : 0;
+        const chexPos = chexVal > 0 ? 70 : 30;
+        const vexVal = vex ? vex / 1e9 : 0;
+        const vexPos = Math.abs(vexVal) < 0.5 ? 70 : Math.abs(vexVal) < 1.0 ? 50 : 30;
+        
+        const buyScore = Math.round((gexPos * 0.35 + dexPos * 0.25 + chexPos * 0.25 + vexPos * 0.15));
+        const sellScore = 100 - buyScore;
+        
+        await DB.saveGreeksTimeSeries(netGexB, dexVal, chexVal, vexVal, buyScore, sellScore);
+        await updateGreeksHistoryChart();
+      } catch (dbErr) {
+        console.error('Failed to save to DB:', dbErr);
+      }
+    } else if (!isMarketHours) {
+      console.log('[Insights] Skipping DB save (outside market hours)');
     }
 
     const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -2228,9 +2249,14 @@ function updateGammaLogicRules(metrics) {
 
 async function updateGreeksHistoryChart() {
   try {
-    if (typeof DB === 'undefined' || !DB.db) return;
+    if (typeof DB === 'undefined' || !DB.db) {
+      console.warn('DB not available for chart');
+      return;
+    }
     
     const records = await DB.queryGreeksTimeSeries_Today();
+    console.log('Chart data records:', records ? records.length : 0, records);
+    
     if (!records || records.length === 0) {
       const loading = document.getElementById('greeksChartLoading');
       if (loading) loading.textContent = 'No data yet today';
@@ -2242,10 +2268,19 @@ async function updateGreeksHistoryChart() {
       return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     });
 
+    // Raw greek values
     const gexData = records.map(r => r.gex || 0);
     const dexData = records.map(r => r.dex || 0);
     const chexData = records.map(r => r.chex || 0);
     const vexData = records.map(r => r.vex || 0);
+    
+    // Greek levels (0-1)
+    const gexLevelData = records.map(r => (r.gexLevel || 0) * 100);
+    const dexLevelData = records.map(r => (r.dexLevel || 0) * 100);
+    const chexLevelData = records.map(r => (r.chexLevel || 0) * 100);
+    const vexLevelData = records.map(r => (r.vexLevel || 0) * 100);
+    
+    // Buy/Sell scores
     const buyData = records.map(r => r.buyScore || 0);
     const sellData = records.map(r => r.sellScore || 0);
 
@@ -2269,70 +2304,128 @@ async function updateGreeksHistoryChart() {
         labels: labels,
         datasets: [
           {
-            label: 'GEX ($B)',
+            label: 'GEX Value ($B)',
             data: gexData,
             borderColor: '#ffb300',
-            backgroundColor: 'rgba(255,179,0,.1)',
+            backgroundColor: 'rgba(255,179,0,.05)',
             borderWidth: 2,
             tension: 0.3,
-            pointRadius: 2,
+            pointRadius: 1.5,
             pointBackgroundColor: '#ffb300',
-            yAxisID: 'y'
+            yAxisID: 'y',
+            order: 2
           },
           {
-            label: 'DEX ($B)',
+            label: 'GEX Level %',
+            data: gexLevelData,
+            borderColor: '#ffb300',
+            backgroundColor: 'rgba(255,179,0,.15)',
+            borderWidth: 1.5,
+            borderDash: [5, 5],
+            tension: 0.3,
+            pointRadius: 1,
+            pointBackgroundColor: '#ffb300',
+            yAxisID: 'y1',
+            order: 3
+          },
+          {
+            label: 'DEX Value ($B)',
             data: dexData,
             borderColor: '#00e5ff',
-            backgroundColor: 'rgba(0,229,255,.1)',
+            backgroundColor: 'rgba(0,229,255,.05)',
             borderWidth: 2,
             tension: 0.3,
-            pointRadius: 2,
+            pointRadius: 1.5,
             pointBackgroundColor: '#00e5ff',
-            yAxisID: 'y'
+            yAxisID: 'y',
+            order: 2
           },
           {
-            label: 'CHEX ($B)',
+            label: 'DEX Level %',
+            data: dexLevelData,
+            borderColor: '#00e5ff',
+            backgroundColor: 'rgba(0,229,255,.15)',
+            borderWidth: 1.5,
+            borderDash: [5, 5],
+            tension: 0.3,
+            pointRadius: 1,
+            pointBackgroundColor: '#00e5ff',
+            yAxisID: 'y1',
+            order: 3
+          },
+          {
+            label: 'CHEX Value ($B)',
             data: chexData,
             borderColor: '#7cff6b',
-            backgroundColor: 'rgba(124,255,107,.1)',
+            backgroundColor: 'rgba(124,255,107,.05)',
             borderWidth: 2,
             tension: 0.3,
-            pointRadius: 2,
+            pointRadius: 1.5,
             pointBackgroundColor: '#7cff6b',
-            yAxisID: 'y'
+            yAxisID: 'y',
+            order: 2
           },
           {
-            label: 'VEX ($B)',
+            label: 'CHEX Level %',
+            data: chexLevelData,
+            borderColor: '#7cff6b',
+            backgroundColor: 'rgba(124,255,107,.15)',
+            borderWidth: 1.5,
+            borderDash: [5, 5],
+            tension: 0.3,
+            pointRadius: 1,
+            pointBackgroundColor: '#7cff6b',
+            yAxisID: 'y1',
+            order: 3
+          },
+          {
+            label: 'VEX Value ($B)',
             data: vexData,
             borderColor: '#ff5ec4',
-            backgroundColor: 'rgba(255,94,196,.1)',
+            backgroundColor: 'rgba(255,94,196,.05)',
             borderWidth: 2,
             tension: 0.3,
-            pointRadius: 2,
+            pointRadius: 1.5,
             pointBackgroundColor: '#ff5ec4',
-            yAxisID: 'y'
+            yAxisID: 'y',
+            order: 2
+          },
+          {
+            label: 'VEX Level %',
+            data: vexLevelData,
+            borderColor: '#ff5ec4',
+            backgroundColor: 'rgba(255,94,196,.15)',
+            borderWidth: 1.5,
+            borderDash: [5, 5],
+            tension: 0.3,
+            pointRadius: 1,
+            pointBackgroundColor: '#ff5ec4',
+            yAxisID: 'y1',
+            order: 3
           },
           {
             label: 'BUY Score',
             data: buyData,
             borderColor: '#00e676',
-            backgroundColor: 'rgba(0,230,118,.3)',
+            backgroundColor: 'rgba(0,230,118,.2)',
             borderWidth: 2.5,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 2,
             pointBackgroundColor: '#00e676',
-            yAxisID: 'y1'
+            yAxisID: 'y2',
+            order: 1
           },
           {
             label: 'SELL Score',
             data: sellData,
             borderColor: '#ff4757',
-            backgroundColor: 'rgba(255,71,87,.3)',
+            backgroundColor: 'rgba(255,71,87,.2)',
             borderWidth: 2.5,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 2,
             pointBackgroundColor: '#ff4757',
-            yAxisID: 'y1'
+            yAxisID: 'y2',
+            order: 1
           }
         ]
       },
@@ -2345,34 +2438,46 @@ async function updateGreeksHistoryChart() {
             display: true,
             labels: {
               color: 'var(--text2)',
-              font: { size: 10, weight: '700' },
+              font: { size: 9, weight: '700' },
               usePointStyle: true,
-              padding: 12
+              padding: 10,
+              boxWidth: 6
             }
           }
         },
         scales: {
           x: {
-            grid: { color: 'rgba(255,255,255,.06)' },
-            ticks: { color: 'var(--text3)', font: { size: 9 } },
+            grid: { color: 'rgba(255,255,255,.05)' },
+            ticks: { color: 'var(--text3)', font: { size: 8 } },
             display: true
           },
           y: {
             type: 'linear',
             display: true,
             position: 'left',
-            title: { display: true, text: 'Greeks ($B)', color: 'var(--text3)', font: { size: 9 } },
+            title: { display: true, text: 'Greeks ($B)', color: 'var(--text3)', font: { size: 8, weight: 'bold' } },
             grid: { color: 'rgba(255,255,255,.06)' },
-            ticks: { color: 'var(--text3)', font: { size: 9 } },
+            ticks: { color: 'var(--text3)', font: { size: 8 } },
             beginAtZero: false
           },
           y1: {
             type: 'linear',
             display: true,
-            position: 'right',
-            title: { display: true, text: 'Buy/Sell Score (0-100)', color: 'var(--text3)', font: { size: 9 } },
+            position: 'center',
+            title: { display: true, text: 'Greek Levels (0-100%)', color: 'var(--text3)', font: { size: 8, weight: 'bold' } },
             grid: { drawOnChartArea: false },
-            ticks: { color: 'var(--text3)', font: { size: 9 }, min: 0, max: 100 },
+            ticks: { color: 'var(--text3)', font: { size: 8 }, min: 0, max: 100 },
+            min: 0,
+            max: 100,
+            offset: true
+          },
+          y2: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            title: { display: true, text: 'Buy/Sell Score (0-100)', color: 'var(--text3)', font: { size: 8, weight: 'bold' } },
+            grid: { drawOnChartArea: false },
+            ticks: { color: 'var(--text3)', font: { size: 8 }, min: 0, max: 100 },
             min: 0,
             max: 100
           }

@@ -48,132 +48,128 @@
       </div>
 
       <!-- TAB: Multi Stock Premium Flow -->
-      <div id="bzila-tab-multi-stock" style="display:none;flex:1;min-height:0;overflow:hidden;flex-direction:column;gap:12px">
-        <!-- Top row: QQQ, SPY, AAPL, AMZN -->
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1;min-height:0">
-          <div class="multi-stock-card" data-symbol="QQQ" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">QQQ 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
+      <div id="bzila-tab-multi-stock" style="display:none;flex:1;min-height:0;overflow:hidden;flex-direction:row;gap:12px">
+        
+        <!-- LEFT: Charts Grid (9 stocks) -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:12px;min-height:0;overflow:hidden">
+          <!-- Row 1: QQQ, SPY, AAPL -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;flex:1;min-height:0">
+            <div class="multi-stock-card" data-symbol="QQQ" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">QQQ</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
               </div>
             </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+            <div class="multi-stock-card" data-symbol="SPY" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">SPY</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+              </div>
+            </div>
+            <div class="multi-stock-card" data-symbol="AAPL" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">AAPL</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+              </div>
             </div>
           </div>
 
-          <div class="multi-stock-card" data-symbol="SPY" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">SPY 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
+          <!-- Row 2: AMZN, GOOGL, META -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;flex:1;min-height:0">
+            <div class="multi-stock-card" data-symbol="AMZN" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">AMZN</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
               </div>
             </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+            <div class="multi-stock-card" data-symbol="GOOGL" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">GOOGL</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+              </div>
+            </div>
+            <div class="multi-stock-card" data-symbol="META" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">META</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+              </div>
             </div>
           </div>
 
-          <div class="multi-stock-card" data-symbol="AAPL" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">AAPL 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
+          <!-- Row 3: MSFT, NVDA, TSLA -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;flex:1;min-height:0">
+            <div class="multi-stock-card" data-symbol="MSFT" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">MSFT</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
               </div>
             </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="AMZN" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">AMZN 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
+            <div class="multi-stock-card" data-symbol="NVDA" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">NVDA</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
               </div>
             </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+            <div class="multi-stock-card" data-symbol="TSLA" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+              <div style="padding:8px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
+                <h3 style="font-size:11px;font-weight:700;color:#10b981;margin:0">TSLA</h3>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden;min-height:0">
+                <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- Middle row: GOOGL, META, MSFT, NVDA -->
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1;min-height:0">
-          <div class="multi-stock-card" data-symbol="GOOGL" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">GOOGL 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
+        <!-- RIGHT: Sweep Feed + Filters -->
+        <div style="width:320px;background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+          <!-- Filters -->
+          <div style="padding:12px;border-bottom:1px solid #1a2a3a;flex-shrink:0;background:#0a0e14">
+            <h3 style="font-size:11px;font-weight:700;color:#7dd3fc;margin:0 0 10px 0">Sweep Feed</h3>
+            
+            <!-- Min Premium Slider -->
+            <div style="margin-bottom:12px">
+              <label style="font-size:9px;color:#94a3b8;display:block;margin-bottom:4px">Min Premium</label>
+              <input type="range" id="bzila-min-premium" min="10000" max="500000" step="10000" value="50000" 
+                     style="width:100%;cursor:pointer;accent-color:#10b981;height:4px">
+              <div style="font-size:8px;color:#64748b;margin-top:2px">$<span id="bzila-min-premium-val">50,000</span></div>
             </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
+
+            <!-- Sweep Only Toggle -->
+            <label style="display:flex;align-items:center;gap:6px;font-size:9px;color:#cbd5e1;cursor:pointer;user-select:none">
+              <input type="checkbox" id="bzila-sweep-only" style="cursor:pointer;width:14px;height:14px;accent-color:#10b981">
+              <span>Sweeps only</span>
+            </label>
           </div>
 
-          <div class="multi-stock-card" data-symbol="META" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">META 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
+          <!-- Feed (scrollable) -->
+          <div id="bzila-flow-feed" style="flex:1;overflow-y:auto;overflow-x:hidden;font-family:monospace;font-size:9px;scrollbar-width:thin;scrollbar-color:#334155 #0a0e14">
+            <div style="padding:8px;color:#475569;text-align:center">Waiting for flow...</div>
           </div>
 
-          <div class="multi-stock-card" data-symbol="MSFT" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">MSFT 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-
-          <div class="multi-stock-card" data-symbol="NVDA" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">NVDA 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
+          <!-- Feed Stats -->
+          <div style="padding:8px;border-top:1px solid #1a2a3a;flex-shrink:0;font-size:8px;color:#64748b;display:flex;justify-content:space-between">
+            <div>Orders: <span id="bzila-flow-count" style="color:#10b981">0</span></div>
+            <div>Total: <span id="bzila-flow-total" style="color:#fbbf24">$0</span></div>
           </div>
         </div>
 
-        <!-- Bottom row: TSLA -->
-        <div style="display:grid;grid-template-columns:1fr;gap:12px;flex:1;min-height:0;max-width:25%">
-          <div class="multi-stock-card" data-symbol="TSLA" style="background:#0d1520;border-radius:8px;border:1px solid #1a2a3a;display:flex;flex-direction:column;overflow:hidden;min-height:0">
-            <div style="padding:10px;border-bottom:1px solid #1a2a3a;flex-shrink:0">
-              <h3 style="font-size:12px;font-weight:700;color:#10b981;margin:0;margin-bottom:6px">TSLA 0DTE–30DTE</h3>
-              <div style="display:flex;gap:8px;font-size:10px;font-family:monospace">
-                <div><span style="color:#22c55e">●</span> <span class="stock-call-flow" style="color:#cbd5e1">$0</span></div>
-                <div><span style="color:#ef4444">●</span> <span class="stock-put-flow" style="color:#cbd5e1">$0</span></div>
-              </div>
-            </div>
-            <div style="flex:1;position:relative;overflow:hidden;min-height:0">
-              <canvas class="stock-premium-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-            </div>
-          </div>
-        </div>
       </div>
 
     </div>

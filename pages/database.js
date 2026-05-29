@@ -5,7 +5,7 @@
 
 const DB = {
   name: 'OptionsMarketDB',
-  version: 3,
+  version: 4,
   db: null,
   _autoSnapScheduled: false,
 
@@ -358,14 +358,47 @@ const DB = {
     nineAM.setHours(9, 0, 0, 0);
     if (now < nineAM || now >= fourPM) return;
     
+    // Calculate greek position/level for tracking
+    const getPercentile = (value, sessionLow = -3, sessionHigh = 3) => {
+      if (value <= sessionLow) return 0;
+      if (value >= sessionHigh) return 1;
+      return (value - sessionLow) / (sessionHigh - sessionLow);
+    };
+    
+    const gexLevel = getPercentile(gex, -3, 3);
+    const dexLevel = getPercentile(dex ? dex / 1e9 : 0, -2, 2);
+    const chexLevel = getPercentile(chex ? chex / 1e9 : 0, -1.5, 1.5);
+    const vexLevel = getPercentile(vex ? vex / 1e9 : 0, -2, 2);
+    
+    // Determine greek state/position
+    const gexState = gex > 0.5 ? 'HIGH_POS' : gex > 0 ? 'POS' : gex > -0.5 ? 'NEG' : 'HIGH_NEG';
+    const dexVal = dex ? dex / 1e9 : 0;
+    const dexState = dexVal > 0.75 ? 'UPSIDE_PRESSURE' : dexVal > 0 ? 'UPSIDE' : dexVal < -0.75 ? 'DOWNSIDE_PRESSURE' : 'DOWNSIDE';
+    const chexVal = chex ? chex / 1e9 : 0;
+    const chexState = chexVal > 0.3 ? 'SUPPORT' : 'WEAK';
+    const vexVal = vex ? vex / 1e9 : 0;
+    const vexState = Math.abs(vexVal) > 1.5 ? 'HIGH_ACTIVE' : Math.abs(vexVal) > 0.5 ? 'ACTIVE' : 'FLAT';
+    
     const record = {
       timestamp: now.getTime(),
       date: now.toISOString().split('T')[0],
       time: now.toTimeString().split(' ')[0],
+      // Raw greek values ($B)
       gex: gex || 0,
-      dex: dex || 0,
-      chex: chex || 0,
-      vex: vex || 0,
+      dex: dexVal || 0,
+      chex: chexVal || 0,
+      vex: vexVal || 0,
+      // Greek levels (0-1 percentile)
+      gexLevel: parseFloat(gexLevel.toFixed(2)),
+      dexLevel: parseFloat(dexLevel.toFixed(2)),
+      chexLevel: parseFloat(chexLevel.toFixed(2)),
+      vexLevel: parseFloat(vexLevel.toFixed(2)),
+      // Greek states (descriptive)
+      gexState: gexState,
+      dexState: dexState,
+      chexState: chexState,
+      vexState: vexState,
+      // Buy/Sell scores
       buyScore: buyScore || 0,
       sellScore: sellScore || 0
     };
@@ -444,6 +477,8 @@ async function queryPremiumFlow_TopTrades(hoursBack = 1) {
 // ============================================================================
 // AUTO-INIT
 // ============================================================================
+window.DB = DB;  // Export DB to window
+
 window.addEventListener('DOMContentLoaded', () => {
   DB.init().then(() => {
     console.log('✓ Market data database ready');
