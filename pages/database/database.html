@@ -1,0 +1,1070 @@
+<!-- ═══ PAGE: DATABASE ═══ -->
+<div id="page-database" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+  <!-- Tab Bar -->
+  <div style="display:flex;gap:0;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;padding:0">
+    <button class="db-main-tab active" onclick="window.showDatabaseTab && window.showDatabaseTab('data')" style="flex:0 0 auto;padding:8px 16px;font-size:13px;background:var(--bg1);border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.08em">📊 Data</button>
+    <button class="db-main-tab" onclick="window.loadPage && window.loadPage('estimated-moves')" style="flex:0 0 auto;padding:8px 16px;font-size:13px;background:var(--bg1);border:none;color:#e8edf5;cursor:pointer;border-bottom:2px solid transparent;font-weight:700;text-transform:uppercase;letter-spacing:.08em">📈 Est. Moves</button>
+  </div>
+
+  <!-- DATA TAB -->
+  <div id="db-data-section" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden">
+    <div style="padding:7px 16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:14px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">🗄 Database</span>
+        <span id="db-record-count" style="font-size:12px;color:var(--text3)">—</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="db-refresh-main" onclick="window.dbRefreshCurrentTab && window.dbRefreshCurrentTab()" style="padding:4px 8px;font-size:13px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px;transition:all .18s ease">Refresh</button>
+        <button onclick="window.dbClearAllMVC && window.dbClearAllMVC()" style="padding:4px 8px;font-size:13px;background:var(--bg2);border:1px solid var(--border);color:var(--red);cursor:pointer;border-radius:3px">Clear All</button>
+        <button onclick="window.exportDatabaseToExcel && window.exportDatabaseToExcel()" style="padding:4px 8px;font-size:13px;background:var(--bg2);border:1px solid var(--border);color:var(--orange);cursor:pointer;border-radius:3px">Export Excel</button>
+        <button onclick="window.exportDatabaseToJSON && window.exportDatabaseToJSON()" style="padding:4px 8px;font-size:13px;background:var(--bg2);border:1px solid var(--border);color:var(--green);cursor:pointer;border-radius:3px">Export JSON</button>
+      </div>
+    </div>
+    
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <!-- Tabs -->
+      <div style="display:flex;gap:1px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 8px">
+        <button onclick="window.dbShowTab && window.dbShowTab('mvc')" class="db-tab active" style="padding:8px 12px;font-size:13px;background:transparent;border:none;color:var(--cyan);cursor:pointer;border-bottom:2px solid var(--cyan)">MVC</button>
+        <button onclick="window.dbShowTab && window.dbShowTab('gex-top-3')" class="db-tab" style="padding:8px 12px;font-size:13px;background:transparent;border:none;color:#e8edf5;cursor:pointer">GEX Top 3</button>
+        <button onclick="window.dbShowTab && window.dbShowTab('buy-sell')" class="db-tab" style="padding:8px 12px;font-size:13px;background:transparent;border:none;color:#e8edf5;cursor:pointer">Buy/Sell Score</button>
+        <button onclick="window.dbShowTab && window.dbShowTab('es-15m')" class="db-tab" style="padding:8px 12px;font-size:13px;background:transparent;border:none;color:#e8edf5;cursor:pointer">ES 15m</button>
+      </div>
+      
+      <!-- Tab Content -->
+      <div style="flex:1;overflow-y:auto;padding:12px">
+        <!-- MVC Tab -->
+        <div id="db-tab-mvc" style="display:block">
+          <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Max Volume Concentration (Last 24h)</div>
+          <table id="mvc-table" style="width:100%;font-size:14px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:#e8edf5">Day</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Date</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Time</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Strike OI+Vol</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">MVC Value OI+Vol ($B)</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">% Net GEX OI+Vol</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Volume OI+Vol</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Strike Vol Only</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">MVC Value Vol Only ($B)</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">% Net GEX Vol Only</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Volume Vol Only</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Net DEX Strike</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Total Net DEX ($B)</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Total Net GEX ($B)</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">GEX Flip</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Trigger</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5" id="mvc-exp-header" style="display:none">Expiration</th>
+              <th style="padding:6px"></th>
+            </tr>
+          </table>
+        </div>
+
+        <div id="db-tab-gex-top-3" style="display:none">
+          <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:10px">SPX GEX Top 3 Snapshots (Today)</div>
+          <table id="gex-top-3-table" style="width:100%;font-size:14px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:#e8edf5">Time</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Spot</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Top 3 Rows</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Abs Net GEX</th>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- Buy/Sell Score Tab -->
+        <div id="db-tab-buy-sell" style="display:none">
+          <div style="font-size:12px;font-weight:700;color:#ffffff;text-transform:uppercase;margin-bottom:10px">Buy/Sell Scores (Today)</div>
+          <div style="font-size:14px;color:#ffffff;margin-bottom:8px;display:flex;gap:16px">
+            <span id="bs-gex-label">GEX: —</span>
+            <span id="bs-dex-label">DEX: —</span>
+            <span id="bs-chex-label">CHEX: —</span>
+            <span id="bs-vex-label">VEX: —</span>
+            <span id="bs-net-label">NET: —</span>
+          </div>
+          <table id="buy-sell-table" style="width:100%;font-size:14px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:#e8edf5">Time</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Ticker</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Price</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Buy Score</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Sell Score</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">GEX</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">DEX</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">CHEX</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">VEX</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Exposure Label</th>
+            </tr>
+          </table>
+        </div>
+
+        <div id="db-tab-es-15m" style="display:none">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+            <div>
+              <div style="font-size:12px;font-weight:700;color:#ffffff;text-transform:uppercase">ES 15 Minute Candles</div>
+              <div style="font-size:13px;color:var(--text3)">RTH candles for the last 10 trading days, pulled from DXLink.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span id="es-15m-count" style="font-size:12px;color:var(--text3)">—</span>
+              <button id="db-refresh-es15m" onclick="window.dbRefreshES15mCandles && window.dbRefreshES15mCandles()" style="padding:4px 8px;font-size:13px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px;transition:all .18s ease">Refresh</button>
+              <button onclick="window.dbClearES15mCandles && window.dbClearES15mCandles()" style="padding:4px 8px;font-size:13px;background:var(--bg2);border:1px solid var(--border);color:var(--red);cursor:pointer;border-radius:3px">Clear</button>
+            </div>
+          </div>
+          <div id="es-15m-pager-top" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:0 0 10px 0;flex-wrap:wrap"></div>
+          <table id="es-15m-table" style="width:100%;font-size:13px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:6px;color:#e8edf5">Date</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Time</th>
+              <th style="text-align:left;padding:6px;color:#e8edf5">Slot</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Open</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">High</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Low</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Close</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">Volume</th>
+              <th style="text-align:right;padding:6px;color:#e8edf5">RVOL vs Slot</th>
+            </tr>
+          </table>
+          <div id="es-15m-pager-bottom" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:10px 0 0 0;flex-wrap:wrap"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ESTIMATED MOVES TAB (Placeholder - link to separate page) -->
+  <div id="db-moves-section" style="display:none;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+    <div style="padding:16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0">
+      <span style="font-size:12px;color:var(--text3)">📈 Estimated Moves</span>
+      <p style="margin:8px 0;color:var(--text2);font-size:14px">The Estimated Moves dashboard is in a separate page. Click the button below to open it.</p>
+      <button onclick="window.open('pages/estimated-moves/estimated-moves.html', '_blank', 'noopener,noreferrer')" style="padding:6px 12px;font-size:14px;background:var(--bg2);border:1px solid var(--border);color:var(--cyan);cursor:pointer;border-radius:3px">Open Estimated Moves →</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+
+  // ============================================================================
+  // DATABASE DISPLAY FUNCTIONS
+  // ============================================================================
+
+  async function dbEnsureReady() {
+    return new Promise(resolve => {
+      if (typeof window.DB !== 'undefined' && window.DB.db) {
+        resolve();
+        return;
+      }
+      window.addEventListener('db-ready', resolve, { once: true });
+      setTimeout(() => resolve(), 2000);
+    });
+  }
+
+  let dbActiveTab = 'mvc';
+
+  async function dbRefreshCounts() {
+    if (!DB || !DB.db) return;
+    try {
+      const mvc = await DB._getAllRecords('mvc');
+      const es = DB.db.objectStoreNames.contains('es15mCandles') ? await DB._getAllRecords('es15mCandles') : [];
+      const el = document.getElementById('db-record-count');
+      if (el) el.textContent = `${mvc.length} MVC records · ${es.length} ES 15m candles`;
+    } catch(e) {
+      console.warn('Record count failed:', e);
+    }
+  }
+
+  function showDatabaseTab(tab) {
+    const dataSec = document.getElementById('db-data-section');
+    const movesSec = document.getElementById('db-moves-section');
+    if (dataSec) dataSec.style.display = tab === 'data' ? 'flex' : 'none';
+    if (movesSec) movesSec.style.display = tab === 'moves' ? 'flex' : 'none';
+  }
+
+  function dbShowTab(tabName) {
+    dbActiveTab = tabName;
+    document.querySelectorAll('[id^="db-tab-"]').forEach(el => el.style.display = 'none');
+    const tab = document.getElementById(`db-tab-${tabName}`);
+    if (tab) tab.style.display = 'block';
+    
+    // Update button styling based on tab name
+    document.querySelectorAll('.db-tab').forEach(btn => {
+      const isActive = btn.dataset.period === tabName || 
+                       (tabName === 'mvc' && btn.textContent.includes('MVC')) ||
+                       (tabName === 'premium' && btn.textContent.includes('Premium')) ||
+                       (tabName === 'gex-top-3' && btn.textContent.includes('GEX')) ||
+                       (tabName === 'buy-sell' && btn.textContent.includes('Buy')) ||
+                       (tabName === 'big-trades' && btn.textContent.includes('Big'));
+      
+      if (isActive) {
+        btn.style.color = 'var(--cyan)';
+        btn.style.borderBottomColor = 'var(--cyan)';
+      } else {
+        btn.style.color = '#e8edf5';
+        btn.style.borderBottomColor = 'transparent';
+      }
+    });
+    
+    // Load data for the selected tab
+    if (tabName === 'mvc') { dbLoadMVC().catch(e => console.warn('MVC load failed:', e)); }
+    else if (tabName === 'premium') { dbLoadPremium().catch(e => console.warn('Premium load failed:', e)); }
+    else if (tabName === 'gex-top-3') { dbLoadGexTop3().catch(e => console.warn('GEX Top 3 load failed:', e)); }
+    else if (tabName === 'buy-sell') { dbLoadBuySell().catch(e => console.warn('Buy/Sell load failed:', e)); }
+    else if (tabName === 'big-trades') { dbLoadBigTrades().catch(e => console.warn('Big Trades load failed:', e)); }
+    else if (tabName === 'es-15m') { dbLoadES15mCandles().catch(e => console.warn('ES 15m load failed:', e)); }
+  }
+
+  function dbGetActiveTab() {
+    return dbActiveTab || 'mvc';
+  }
+
+  async function dbRefreshCurrentTab() {
+    const tab = dbGetActiveTab();
+    if (tab === 'es-15m') return dbRefreshES15mCandles();
+    return runWithRefreshFeedback(async () => {
+      if (tab === 'mvc') return dbLoadMVC();
+      if (tab === 'gex-top-3') return dbLoadGexTop3();
+      if (tab === 'buy-sell') return dbLoadBuySell();
+      if (tab === 'premium') return dbLoadPremium();
+      if (tab === 'big-trades') return dbLoadBigTrades();
+    }, 'db-refresh-main');
+  }
+
+  async function runWithRefreshFeedback(action, buttonId) {
+    const btn = document.getElementById(buttonId);
+    if (btn) {
+      btn.dataset.originalText = btn.dataset.originalText || btn.textContent;
+      btn.dataset.originalBg = btn.dataset.originalBg || btn.style.backgroundColor;
+      btn.dataset.originalColor = btn.dataset.originalColor || btn.style.color;
+      btn.dataset.originalBorder = btn.dataset.originalBorder || btn.style.borderColor;
+      btn.dataset.originalShadow = btn.dataset.originalShadow || btn.style.boxShadow;
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+      btn.style.opacity = '0.75';
+      btn.style.cursor = 'wait';
+    }
+    try {
+      const result = await action();
+      if (btn) {
+        btn.textContent = 'Refreshed';
+        btn.style.background = 'rgba(16, 185, 129, 0.16)';
+        btn.style.color = 'var(--green)';
+        btn.style.borderColor = 'rgba(16, 185, 129, 0.85)';
+        btn.style.boxShadow = '0 0 0 1px rgba(16, 185, 129, 0.35), 0 0 14px rgba(16, 185, 129, 0.22)';
+      }
+      setTimeout(() => {
+        if (!btn) return;
+        btn.textContent = btn.dataset.originalText || 'Refresh';
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.style.cursor = 'pointer';
+        btn.style.background = btn.dataset.originalBg || 'var(--bg2)';
+        btn.style.color = btn.dataset.originalColor || 'var(--cyan)';
+        btn.style.borderColor = btn.dataset.originalBorder || 'var(--border)';
+        btn.style.boxShadow = btn.dataset.originalShadow || '';
+      }, 1800);
+      return result;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function dbLoadMVC() {
+    await dbEnsureReady();
+    if (!DB || !DB.db) { console.warn('DB not ready'); return; }
+    
+    try {
+      const normalizeBillions = (value) => {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return null;
+        return Math.abs(num) >= 1e6 ? num / 1e9 : num;
+      };
+      const fmtBillions = (value) => value == null ? '-' : Number(value).toLocaleString('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4,
+        useGrouping: false
+      });
+      const isDateLike = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value);
+      const records = await DB.queryMVC_Recent(24);
+      const table = document.getElementById('mvc-table');
+      const tbody = table.querySelectorAll('tr').length > 1 ? Array.from(table.querySelectorAll('tr')).slice(1) : [];
+      tbody.forEach(tr => tr.remove());
+
+      let hasNonZeroDTE = false;
+      records.reverse().forEach(r => {
+        const dte = r.dte || 0;
+        if (dte > 0) hasNonZeroDTE = true;
+        let trigger = (typeof r.triggerType === 'string' && /^(manual|auto(?:-\d{1,2}:\d{2})?)$/.test(r.triggerType)) ? r.triggerType : 'manual';
+        let expiration = r.expiration || '-';
+        if (isDateLike(trigger) && !isDateLike(expiration)) {
+          const tmp = trigger;
+          trigger = expiration;
+          expiration = tmp;
+        }
+
+        const row = table.insertRow();
+        row.innerHTML = `
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.day || '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.date || '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.time || '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.strikeOIVol != null ? Number(r.strikeOIVol).toLocaleString() : '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${fmtBillions(normalizeBillions(r.mvcValueOIVol))}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.pctOI_Vol != null ? r.pctOI_Vol.toFixed(2) : '-'}%</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.volumeOIVol != null ? Number(r.volumeOIVol).toLocaleString(undefined, {maximumFractionDigits: 0}) : '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.strikeVolOnly != null ? Number(r.strikeVolOnly).toLocaleString() : '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${fmtBillions(normalizeBillions(r.mvcValueVolOnly))}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.pctVol_Only != null ? r.pctVol_Only.toFixed(2) : '-'}%</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.volumeVolOnly != null ? Number(r.volumeVolOnly).toLocaleString(undefined, {maximumFractionDigits: 0}) : '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${(r.netDEXStrike ?? r.netDexStrike) != null ? Number(r.netDEXStrike ?? r.netDexStrike).toFixed(2) : '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${fmtBillions(normalizeBillions(r.totalNetDEX_OI ?? r.totalNetDEX_Vol ?? r.totalNetDEX ?? 0))}</td>
+          <td style="text-align:right;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-weight:600">${fmtBillions(normalizeBillions(Math.abs(r.totalAbsNetGEX ?? r.totalNetGEX_OI ?? r.totalNetGEX ?? 0)))}</td>
+          <td style="text-align:right;padding:6px;color:#ffb300;border-bottom:1px solid var(--border);font-weight:600">${r.gexFlip != null && Number(r.gexFlip) > 500 ? Number(r.gexFlip).toLocaleString(undefined, {maximumFractionDigits: 0}) : (r.strikeOIVol != null ? Number(r.strikeOIVol).toLocaleString(undefined, {maximumFractionDigits: 0}) : '-')}</td>
+          <td style="text-align:left;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-size:12px">${trigger}</td>
+          <td style="text-align:left;padding:6px;color:var(--text3);border-bottom:1px solid var(--border);font-size:12px;${dte === 0 ? 'display:none' : ''}">${expiration}</td>
+          <td style="text-align:right;padding:6px;border-bottom:1px solid var(--border)">
+            <button onclick="window.dbDeleteMVC && window.dbDeleteMVC(${r.id})" style="font-size:14px;padding:2px 6px;background:#4b1212;border:1px solid #7f3b3b;color:#f87171;cursor:pointer;border-radius:2px">×</button>
+          </td>
+        `;
+      });
+      
+      const expHeader = document.getElementById('mvc-exp-header');
+      if (expHeader) expHeader.style.display = hasNonZeroDTE ? 'table-cell' : 'none';
+    } catch(e) {
+      console.error('MVC load failed:', e);
+    }
+  }
+
+  async function dbLoadPremium() {
+    await dbEnsureReady();
+    if (!DB || !DB.db) { console.warn('DB not ready'); return; }
+    
+    try {
+      const records = await DB.queryPremiumFlow_TopTrades(1);
+      const table = document.getElementById('premium-table');
+      const tbody = Array.from(table.querySelectorAll('tr')).slice(1);
+      tbody.forEach(tr => tr.remove());
+
+      records.reverse().forEach(r => {
+        const row = table.insertRow();
+        row.innerHTML = `
+          <td style="text-align:left;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-weight:600">${r.ticker || 'SPX'}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.time || '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--green);border-bottom:1px solid var(--border)">${r.callFlow ? (r.callFlow / 1e6).toFixed(1) : '0'}M</td>
+          <td style="text-align:right;padding:6px;color:var(--red);border-bottom:1px solid var(--border)">${r.putFlow ? (r.putFlow / 1e6).toFixed(1) : '0'}M</td>
+          <td style="text-align:right;padding:6px;color:${r.netFlow >= 0 ? 'var(--green)' : 'var(--red)'};border-bottom:1px solid var(--border);font-weight:600">${r.netFlow ? (r.netFlow / 1e6).toFixed(1) : '0'}M</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.esPrice ? r.esPrice.toFixed(1) : '-'}</td>
+        `;
+      });
+    } catch(e) {
+      console.error('Premium load failed:', e);
+    }
+  }
+
+  async function dbLoadGexTop3() {
+    await dbEnsureReady();
+    if (!DB || !DB.db) { console.warn('DB not ready'); return; }
+
+    try {
+      const records = typeof DB.queryGexTop3_Today === 'function'
+        ? await DB.queryGexTop3_Today()
+        : [];
+      const table = document.getElementById('gex-top-3-table');
+      const tbody = Array.from(table.querySelectorAll('tr')).slice(1);
+      tbody.forEach(tr => tr.remove());
+
+      if (!records.length) {
+        const row = table.insertRow();
+        row.innerHTML = `<td colspan="4" style="padding:24px;text-align:center;color:var(--text3);border-bottom:1px solid var(--border)">No GEX Top 3 snapshots yet</td>`;
+        return;
+      }
+
+      records.reverse().forEach(r => {
+        const row = table.insertRow();
+        const rows = Array.isArray(r.rows) ? r.rows : [];
+        row.innerHTML = `
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.time || '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.spot ? Number(r.spot).toLocaleString() : '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border);font-family:monospace">${rows.map(x => `${Number(x.strike).toLocaleString()}:${Number(x.netGEX).toFixed(2)}`).join(' | ')}</td>
+          <td style="text-align:right;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-weight:600">${Number(r.totalAbsNetGEX || 0).toFixed(2)}</td>
+        `;
+      });
+    } catch(e) {
+      console.error('GEX Top 3 load failed:', e);
+    }
+  }
+
+  async function dbLoadBuySell() {
+    await dbEnsureReady();
+    if (!DB || !DB.db) { console.warn('DB not ready'); return; }
+    
+    try {
+      const formatBillions = (value) => {
+        const num = Number(value || 0);
+        if (!Number.isFinite(num)) return '0.000B';
+        const normalized = Math.abs(num) >= 1e6 ? num / 1e9 : num;
+        return `${normalized.toFixed(3)}B`;
+      };
+      const records = await DB.queryGreeksTimeSeries_Today('');
+      const table = document.getElementById('buy-sell-table');
+      const tbody = Array.from(table.querySelectorAll('tr')).slice(1);
+      tbody.forEach(tr => tr.remove());
+
+      // Filter for 0DTE and aggregate greek totals
+      const ztdRecords = records;
+      
+      if (ztdRecords.length > 0) {
+        const latestGex = ztdRecords[ztdRecords.length - 1].gex || 0;
+        const latestDex = ztdRecords[ztdRecords.length - 1].dex || 0;
+        const latestChex = ztdRecords[ztdRecords.length - 1].chex || 0;
+        const latestVex = ztdRecords[ztdRecords.length - 1].vex || 0;
+        const netTotal = latestGex + latestDex + latestChex + latestVex;
+        
+        const bsGex = document.getElementById('bs-gex-label'); if(bsGex) bsGex.textContent = `GEX: ${formatBillions(latestGex)}`;
+        const bsDex = document.getElementById('bs-dex-label'); if(bsDex) bsDex.textContent = `DEX: ${formatBillions(latestDex)}`;
+        const bsChex = document.getElementById('bs-chex-label'); if(bsChex) bsChex.textContent = `CHEX: ${formatBillions(latestChex)}`;
+        const bsVex = document.getElementById('bs-vex-label'); if(bsVex) bsVex.textContent = `VEX: ${formatBillions(latestVex)}`;
+        const bsNet = document.getElementById('bs-net-label'); if(bsNet) bsNet.textContent = `NET: ${formatBillions(netTotal)}`;
+      }
+
+      ztdRecords.reverse().forEach(r => {
+        const row = table.insertRow();
+        row.innerHTML = `
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border);font-size:14px">${r.time || '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-weight:600">${r.ticker || 'SPXW'}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.price ? r.price.toFixed(1) : '-'}</td>
+          <td style="text-align:right;padding:6px;color:var(--green);border-bottom:1px solid var(--border);font-weight:600">${r.buyScore ? r.buyScore.toFixed(1) : '0'}</td>
+          <td style="text-align:right;padding:6px;color:var(--red);border-bottom:1px solid var(--border);font-weight:600">${r.sellScore ? r.sellScore.toFixed(1) : '0'}</td>
+          <td style="text-align:right;padding:6px;color:${r.gex >= 0 ? 'var(--green)' : 'var(--red)'};border-bottom:1px solid var(--border)">${formatBillions(r.gex)}</td>
+          <td style="text-align:right;padding:6px;color:${r.dex >= 0 ? 'var(--green)' : 'var(--red)'};border-bottom:1px solid var(--border)">${formatBillions(r.dex)}</td>
+          <td style="text-align:right;padding:6px;color:${r.chex >= 0 ? 'var(--green)' : 'var(--red)'};border-bottom:1px solid var(--border)">${formatBillions(r.chex)}</td>
+          <td style="text-align:right;padding:6px;color:${r.vex >= 0 ? 'var(--green)' : 'var(--red)'};border-bottom:1px solid var(--border)">${formatBillions(r.vex)}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border);font-family:monospace">${r.exposureLabel || `NET ${formatBillions(r.netExposure || 0)}`}</td>
+        `;
+      });
+    } catch(e) {
+      console.error('Buy/Sell load failed:', e);
+    }
+  }
+
+  async function dbLoadBigTrades() {
+    await dbEnsureReady();
+    if (!DB || !DB.db) { console.warn('DB not ready'); return; }
+    
+    try {
+      const records = await DB.queryBigTrades_Today();
+      const table = document.getElementById('big-trades-table');
+      const tbody = Array.from(table.querySelectorAll('tr')).slice(1);
+      tbody.forEach(tr => tr.remove());
+
+      const btCount = document.getElementById('big-trades-count'); if(btCount) btCount.textContent = `${records.length} trades`;
+
+      records.reverse().forEach(r => {
+        const row = table.insertRow();
+        row.innerHTML = `
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.day || '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.date || '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.time || '-'}</td>
+          <td style="text-align:left;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-weight:600">${r.ticker}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">${r.price.toFixed(1)}</td>
+          <td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:600">${r.size.toLocaleString()}</td>
+          <td style="text-align:left;padding:6px;color:${r.side === 'ASK' ? 'var(--green)' : 'var(--red)'};border-bottom:1px solid var(--border);font-weight:600">${r.side}</td>
+        `;
+      });
+    } catch(e) {
+      console.error('Big trades load failed:', e);
+    }
+  }
+
+  function etParts(date) {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+  }
+
+  function fetchEs15mCandlesFromDxLink() {
+    const start = Date.now() - (14 * 24 * 60 * 60 * 1000);
+    const url = `/proxy/api/dxlink/candles?symbol=${encodeURIComponent('/ES{=15m}')}&start=${start}&count=288`;
+    return fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`DXLink candle fetch failed (${res.status})`);
+        return res.json();
+      })
+      .then(payload => {
+        const candles = Array.isArray(payload?.candles) ? payload.candles : [];
+        const out = [];
+        for (const candle of candles) {
+          const ts = Number(candle?.datetime ?? candle?.time ?? candle?.timestamp);
+          if (!Number.isFinite(ts)) continue;
+          const d = new Date(ts);
+          const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+          const minutes = et.getHours() * 60 + et.getMinutes();
+          if (et.getDay() < 1 || et.getDay() > 5 || minutes < 570 || minutes > 960) continue;
+          const parts = etParts(d);
+          out.push({
+            timestamp: ts,
+            symbol: payload?.symbol || '/ES{=15m}',
+            slotKey: `${parts.year}-${parts.month}-${parts.day}-${parts.hour}:${parts.minute}`,
+            open: Number(candle?.open || 0),
+            high: Number(candle?.high || 0),
+            low: Number(candle?.low || 0),
+            close: Number(candle?.close || 0),
+            volume: Number(candle?.volume || 0),
+            candleTime: ts,
+            session: 'RTH',
+            date: `${parts.year}-${parts.month}-${parts.day}`,
+            time: `${parts.hour}:${parts.minute}:00`
+          });
+        }
+        const seen = new Set();
+        const days = [];
+        for (let i = out.length - 1; i >= 0; i--) {
+          const day = out[i].date;
+          if (!seen.has(day)) {
+            seen.add(day);
+            days.unshift(day);
+          }
+          if (days.length >= 10) break;
+        }
+        return out.filter(r => seen.has(r.date)).sort((a, b) => a.timestamp - b.timestamp);
+      });
+  }
+
+  const ES15M_PAGE_SIZE = 50;
+  let es15mAllRecords = [];
+  let es15mPage = 1;
+
+  function renderEs15mPager() {
+    const pagers = [document.getElementById('es-15m-pager-top'), document.getElementById('es-15m-pager-bottom')].filter(Boolean);
+    if (!pagers.length) return;
+    const totalPages = Math.max(1, Math.ceil(es15mAllRecords.length / ES15M_PAGE_SIZE));
+    es15mPage = Math.min(Math.max(1, es15mPage), totalPages);
+    const html = [
+      '<button onclick="window.dbEs15mPrevPage && window.dbEs15mPrevPage()" ' + (es15mPage <= 1 ? 'disabled' : '') + ' style="padding:4px 8px;font-size:12px;background:var(--bg2);border:1px solid var(--border);color:' + (es15mPage <= 1 ? 'var(--text3)' : 'var(--cyan)') + ';cursor:' + (es15mPage <= 1 ? 'not-allowed' : 'pointer') + ';border-radius:3px">Prev</button>',
+      '<span style="font-size:12px;color:var(--text3)">Page ' + es15mPage + ' / ' + totalPages + '</span>',
+      '<button onclick="window.dbEs15mNextPage && window.dbEs15mNextPage()" ' + (es15mPage >= totalPages ? 'disabled' : '') + ' style="padding:4px 8px;font-size:12px;background:var(--bg2);border:1px solid var(--border);color:' + (es15mPage >= totalPages ? 'var(--text3)' : 'var(--cyan)') + ';cursor:' + (es15mPage >= totalPages ? 'not-allowed' : 'pointer') + ';border-radius:3px">Next</button>'
+    ].join('');
+    pagers.forEach(function(pager) { pager.innerHTML = html; });
+  }
+
+  function renderEs15mTable() {
+    const table = document.getElementById('es-15m-table');
+    if (!table) return;
+    const tbody = Array.from(table.querySelectorAll('tr')).slice(1);
+    tbody.forEach(function(tr) { tr.remove(); });
+    const totalPages = Math.max(1, Math.ceil(es15mAllRecords.length / ES15M_PAGE_SIZE));
+    es15mPage = Math.min(Math.max(1, es15mPage), totalPages);
+    const start = (es15mPage - 1) * ES15M_PAGE_SIZE;
+    const pageRecords = es15mAllRecords.slice(start, start + ES15M_PAGE_SIZE);
+    const todayEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).toISOString().slice(0, 10);
+    const slotMap = new Map();
+    for (const r of es15mAllRecords) {
+      if (r.date === todayEt) continue;
+      const slot = r.slotKey?.slice(-5) || r.time?.slice(0, 5);
+      if (!slot) continue;
+      if (!slotMap.has(slot)) slotMap.set(slot, []);
+      slotMap.get(slot).push(Number(r.volume || 0));
+    }
+    const slotAvg = new Map([...slotMap.entries()].map(function(entry) { const k = entry[0], v = entry[1]; return [k, v.reduce(function(a, b) { return a + b; }, 0) / v.length]; }));
+    pageRecords.forEach(function(r) {
+      const slot = r.slotKey?.slice(-5) || r.time?.slice(0, 5);
+      const avg = slotAvg.get(slot) || 0;
+      const rvol = avg > 0 ? Number(r.volume || 0) / avg : null;
+      const row = table.insertRow();
+      row.innerHTML = [
+        '<td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">' + (r.date || '-') + '</td>',
+        '<td style="text-align:left;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">' + (r.time ? r.time.slice(0, 5) : '-') + '</td>',
+        '<td style="text-align:left;padding:6px;color:var(--cyan);border-bottom:1px solid var(--border);font-weight:600">' + (slot || '-') + '</td>',
+        '<td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">' + Number(r.open || 0).toFixed(2) + '</td>',
+        '<td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">' + Number(r.high || 0).toFixed(2) + '</td>',
+        '<td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">' + Number(r.low || 0).toFixed(2) + '</td>',
+        '<td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:600">' + Number(r.close || 0).toFixed(2) + '</td>',
+        '<td style="text-align:right;padding:6px;color:var(--text2);border-bottom:1px solid var(--border)">' + Number(r.volume || 0).toLocaleString() + '</td>',
+        '<td style="text-align:right;padding:6px;color:' + (rvol && rvol >= 1 ? 'var(--green)' : 'var(--orange)') + ';border-bottom:1px solid var(--border);font-weight:600">' + (rvol ? rvol.toFixed(2) + 'x' : '-') + '</td>'
+      ].join('');
+    });
+    const countEl = document.getElementById('es-15m-count');
+    if (countEl) countEl.textContent = es15mAllRecords.length + ' candles';
+    renderEs15mPager();
+  }
+
+  function dbEs15mPrevPage() { if (es15mPage > 1) { es15mPage -= 1; renderEs15mTable(); } }
+  function dbEs15mNextPage() { const totalPages = Math.max(1, Math.ceil(es15mAllRecords.length / ES15M_PAGE_SIZE)); if (es15mPage < totalPages) { es15mPage += 1; renderEs15mTable(); } }
+
+  async function dbLoadES15mCandles() {
+    await dbEnsureReady();
+    if (!DB || !DB.db) { console.warn('DB not ready'); return; }
+
+    try {
+      // Show DB records immediately so the table isn't blank while DXLink fetches
+      if (DB?.queryES15mCandles) {
+        const cached = await DB.queryES15mCandles(30);
+        if (Array.isArray(cached) && cached.length) {
+          es15mAllRecords = [...cached].sort((a, b) => b.timestamp - a.timestamp);
+          es15mPage = 1;
+          renderEs15mTable();
+        }
+      }
+
+      // Then fetch fresh candles from DXLink and merge into DB + re-render
+      try {
+        const fresh = await fetchEs15mCandlesFromDxLink();
+        if (Array.isArray(fresh) && fresh.length) {
+          if (DB?.saveES15mCandle) {
+            for (const candle of fresh) await DB.saveES15mCandle(candle);
+          }
+          // Re-query so merged DB records (historical + fresh) are shown
+          const merged = DB?.queryES15mCandles ? await DB.queryES15mCandles(30) : fresh;
+          es15mAllRecords = Array.isArray(merged) ? [...merged].sort((a, b) => b.timestamp - a.timestamp) : [];
+          es15mPage = 1;
+          renderEs15mTable();
+        }
+      } catch (err) {
+        console.warn('DXLink 15m fetch failed (DB data shown):', err);
+      }
+    } catch(e) {
+      console.error('ES 15m load failed:', e);
+    }
+  }
+  async function dbRefreshES15mCandles() {
+    return runWithRefreshFeedback(async () => {
+      await dbLoadES15mCandles();
+      await dbRefreshCounts();
+    }, 'db-refresh-es15m');
+  }
+
+  async function dbClearES15mCandles() {
+    if (!DB?.db) { alert('Database not ready'); return; }
+    if (!confirm('Clear all ES 15m candles? This can be reloaded from DXLink.')) return;
+    try {
+      const count = DB.clearES15mCandles ? await DB.clearES15mCandles() : 0;
+      await dbLoadES15mCandles();
+      await dbRefreshCounts();
+      if (!count) alert('No ES 15m candles to clear.');
+    } catch(e) {
+      alert('Clear failed: ' + e.message);
+    }
+  }
+
+  async function dbDeleteMVC(id) {
+    if (!confirm('Delete this MVC snapshot?')) return;
+    try {
+      await new Promise((res, rej) => {
+        const tx = DB.db.transaction('mvc', 'readwrite');
+        tx.objectStore('mvc').delete(id);
+        tx.oncomplete = res;
+        tx.onerror = rej;
+      });
+      await dbLoadMVC();
+      await dbRefreshCounts();
+    } catch(e) {
+      alert('Delete failed: ' + e.message);
+    }
+  }
+
+  async function dbClearAllMVC() {
+    if (!DB?.db) { alert('Database not ready'); return; }
+    const count = typeof DB._getAllRecords === 'function' ? (await DB._getAllRecords('mvc')).length : 0;
+    if (!count) return alert('No MVC records to clear.');
+    if (!confirm(`Clear all ${count} MVC record${count === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    try {
+      await new Promise((res, rej) => {
+        const tx = DB.db.transaction('mvc', 'readwrite');
+        tx.objectStore('mvc').clear();
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error || new Error('Failed to clear MVC records'));
+      });
+      await dbLoadMVC();
+      await dbRefreshCounts();
+    } catch(e) {
+      alert('Clear all failed: ' + e.message);
+    }
+  }
+
+  // ============================================================================
+  // AUTO-CLEAR PREMIUM FLOW AT 9:30 ET
+  // ============================================================================
+  function initPremiumFlowAutoCleanup() {
+    function checkAndClear() {
+      const now = new Date();
+      const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const hours = etTime.getHours();
+      const minutes = etTime.getMinutes();
+
+      if (hours === 9 && minutes === 30) {
+        if (!window.__premiumFlowCleared930) {
+          clearPremiumFlowDB_Auto();
+          window.__premiumFlowCleared930 = true;
+        }
+      } else if (hours > 9 || (hours === 9 && minutes > 31)) {
+        window.__premiumFlowCleared930 = false;
+      }
+    }
+
+    setInterval(checkAndClear, 60000); // Check every minute
+    checkAndClear(); // Check once at init
+  }
+
+  async function clearPremiumFlowDB_Auto() {
+    if (!DB?.db) return;
+    try {
+      const count = await DB.clearPremiumFlowToday();
+      if (count > 0) {
+        console.log(`✓ Auto-cleared ${count} premium flow records at 9:30 ET`);
+        if (typeof dbLoadPremium === 'function') await dbLoadPremium();
+      }
+    } catch(e) {
+      console.warn('Auto-clear premium flow failed:', e);
+    }
+  }
+
+  // ============================================================================
+  // AUTO-RESET BIG TRADES AT MIDNIGHT ET
+  // ============================================================================
+  function initBigTradesAutoReset() {
+    function checkAndReset() {
+      const now = new Date();
+      const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const hours = etTime.getHours();
+      const minutes = etTime.getMinutes();
+
+      if (hours === 0 && minutes === 0) {
+        if (!window.__bigTradesResetMidnight) {
+          resetBigTrades_Auto();
+          window.__bigTradesResetMidnight = true;
+        }
+      } else if (hours > 0 || minutes > 1) {
+        window.__bigTradesResetMidnight = false;
+      }
+    }
+
+    setInterval(checkAndReset, 60000); // Check every minute
+    checkAndReset(); // Check once at init
+  }
+
+  async function resetBigTrades_Auto() {
+    if (!DB?.db) return;
+    try {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const all = await DB._getAllRecords('bigTrades');
+      const toDelete = all.filter(r => r.date < yesterday);
+      
+      for (const r of toDelete) {
+        await new Promise((res, rej) => {
+          const tx = DB.db.transaction('bigTrades', 'readwrite');
+          tx.objectStore('bigTrades').delete(r.id);
+          tx.oncomplete = res;
+          tx.onerror = rej;
+        });
+      }
+      
+      if (toDelete.length > 0) {
+        console.log(`✓ Auto-reset: cleared ${toDelete.length} old big trades at midnight ET`);
+        if (typeof dbLoadBigTrades === 'function') await dbLoadBigTrades();
+      }
+    } catch(e) {
+      console.warn('Auto-reset big trades failed:', e);
+    }
+  }
+
+  // ============================================================================
+  // EXPORT FUNCTIONS
+  // ============================================================================
+  function exportDateET() {
+    const etDate = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+    return etDate.replace(/\//g, '-');
+  }
+
+  function normalizeMVCExportRows(records) {
+    const normalizeBillions = (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return null;
+      return Math.abs(num) >= 1e6 ? num / 1e9 : num;
+    };
+    const fmtBillions = (value) => value == null ? '-' : Number(value).toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 4,
+      useGrouping: false
+    });
+    return records.map(r => ({
+      'Day': r.day || '-',
+      'Date': r.date || '-',
+      'Time': r.time || '-',
+      'Strike OI+Vol': r.strikeOIVol || '-',
+      'MVC Value OI+Vol ($B)': fmtBillions(normalizeBillions(r.mvcValueOIVol)),
+      '% Net GEX OI+Vol': r.pctOI_Vol != null ? r.pctOI_Vol.toFixed(2) : '-',
+      'Volume OI+Vol': r.volumeOIVol != null ? Number(r.volumeOIVol).toLocaleString(undefined, {maximumFractionDigits: 0}) : '-',
+      'Strike Vol Only': r.strikeVolOnly || '-',
+      'MVC Value Vol Only ($B)': fmtBillions(normalizeBillions(r.mvcValueVolOnly)),
+      '% Net GEX Vol Only': r.pctVol_Only != null ? r.pctVol_Only.toFixed(2) : '-',
+      'Volume Vol Only': r.volumeVolOnly != null ? Number(r.volumeVolOnly).toLocaleString(undefined, {maximumFractionDigits: 0}) : '-',
+      'SPX Price': r.spxPrice ? r.spxPrice.toFixed(2) : '-',
+      'Net DEX Strike': r.netDEXStrike != null ? Number(r.netDEXStrike).toFixed(2) : '-',
+      'Total Net DEX ($B)': fmtBillions(normalizeBillions(r.totalNetDEX_OI ?? r.totalNetDEX_Vol ?? r.totalNetDEX ?? 0)),
+      'Total Net GEX ($B)': fmtBillions(normalizeBillions(r.totalNetGEX_OI ?? r.totalNetGEX)),
+      'Trigger': r.triggerType || '-',
+      'Expiration': r.expiration || '-'
+    }));
+  }
+
+  async function loadXLSXLibrary() {
+    if (typeof window.XLSX !== 'undefined') {
+      return window.XLSX;
+    }
+    
+    return new Promise((resolve, reject) => {
+      // Try to load from popular CDNs with multiple fallbacks
+      const sources = [
+        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+        'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+      ];
+      
+      const attemptLoad = (srcIndex = 0) => {
+        if (srcIndex >= sources.length) {
+          // All CDN attempts failed, use fallback export
+          console.warn('All CDN sources failed, using CSV fallback');
+          resolve(null);
+          return;
+        }
+        
+        const src = sources[srcIndex];
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => {
+          if (window.XLSX) {
+            resolve(window.XLSX);
+          } else {
+            attemptLoad(srcIndex + 1);
+          }
+        };
+        script.onerror = () => {
+          console.warn(`Failed to load ${src}, trying next...`);
+          attemptLoad(srcIndex + 1);
+        };
+        document.head.appendChild(script);
+      };
+      
+      attemptLoad();
+    });
+  }
+
+  function exportAsCSV(data, filename) {
+    const headers = Object.keys(data[0]);
+    const csv = [
+      headers.join(','),
+      ...data.map(row => 
+        headers.map(h => {
+          const val = row[h];
+          if (val === null || val === undefined) return '';
+          const str = String(val);
+          return str.includes(',') || str.includes('"') || str.includes('\n') 
+            ? `"${str.replace(/"/g, '""')}"` 
+            : str;
+        }).join(',')
+      )
+    ].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename.replace('.xlsx', '.csv'));
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  async function exportDatabaseToExcel() {
+    if (!DB || !DB.db) { console.warn('Database not ready'); return; }
+
+    try {
+      const mvcRecords = await DB._getAllRecords('mvc');
+      if (mvcRecords.length === 0) {
+        alert('No MVC records to export');
+        return;
+      }
+
+      const rows = normalizeMVCExportRows(mvcRecords);
+      const filename = `MVC_Database_${exportDateET()}`;
+
+      try {
+        const resp = await fetch('http://localhost:3002/export-mvc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: rows, filename: filename + '.xlsx' })
+        });
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || 'Export service failed');
+        console.log(`Excel exported via service: ${result.message}`);
+        alert(`Excel saved to MVC folder as ${filename}.xlsx`);
+        return;
+      } catch (serviceErr) {
+        console.warn('Export service unavailable, falling back to browser download:', serviceErr);
+      }
+
+      const XLSX = await loadXLSXLibrary();
+      if (XLSX) {
+        // XLSX library loaded successfully
+        const wb = XLSX.utils.book_new();
+        const mvcWs = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, mvcWs, 'MVC');
+        XLSX.writeFile(wb, filename + '.xlsx');
+        console.log(`Excel downloaded: ${filename}.xlsx`);
+        alert(`Excel downloaded as ${filename}.xlsx`);
+      } else {
+        // XLSX failed, use CSV fallback
+        exportAsCSV(rows, filename + '.csv');
+        console.log(`CSV exported (XLSX unavailable): ${filename}.csv`);
+        alert(`Exported as CSV instead: ${filename}.csv\n(Unable to load Excel library)`);
+      }
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert(`Export failed: ${err.message}`);
+    }
+  }
+
+  async function exportDatabaseToJSON() {
+    if (!DB || !DB.db) { console.warn('Database not ready'); return; }
+    try {
+      const exported = await DB.export();
+      const json = JSON.stringify(exported, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Database_${exportDateET()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      alert('JSON export failed: ' + e.message);
+    }
+  }
+
+  // ============================================================================
+  // RECORDING STATUS
+  // ============================================================================
+  function updateRecordingStatus() {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const dayOfWeek = now.getDay();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    
+    const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
+    const afterOpen = hour > 9 || (hour === 9 && minute >= 30);
+    const beforeClose = hour < 16;
+    const isRecording = isWeekday && afterOpen && beforeClose;
+    
+    const btn = document.getElementById('recording-status-btn');
+    if (btn) {
+      if (isRecording) {
+        btn.textContent = '● Recording';
+        btn.style.color = 'var(--green)';
+        btn.style.borderColor = 'var(--green)';
+      } else {
+        btn.textContent = '● Not Recording';
+        btn.style.color = 'var(--text3)';
+        btn.style.borderColor = 'var(--border)';
+      }
+    }
+  }
+
+  window.toggleRecordingStatus = function() {
+    updateRecordingStatus();
+  };
+
+  // Update status every minute
+  setInterval(updateRecordingStatus, 60000);
+  updateRecordingStatus();
+
+  // ============================================================================
+  // WINDOW EXPORTS
+  // ============================================================================
+  window.showDatabaseTab  = showDatabaseTab;
+  window.dbShowTab        = dbShowTab;
+  window.dbEnsureReady    = dbEnsureReady;
+  window.dbRefreshCounts  = dbRefreshCounts;
+  window.dbLoadMVC        = dbLoadMVC;
+  window.dbLoadPremium    = dbLoadPremium;
+  window.dbLoadBuySell    = dbLoadBuySell;
+  window.dbLoadBigTrades  = dbLoadBigTrades;
+  window.dbLoadES15mCandles = dbLoadES15mCandles;
+  window.dbEs15mPrevPage = dbEs15mPrevPage;
+  window.dbEs15mNextPage = dbEs15mNextPage;
+  window.dbRefreshES15mCandles = dbRefreshES15mCandles;
+  window.dbRefreshCurrentTab = dbRefreshCurrentTab;
+  window.dbClearES15mCandles = dbClearES15mCandles;
+  window.dbDeleteMVC      = dbDeleteMVC;
+  window.dbClearAllMVC    = dbClearAllMVC;
+  window.exportDatabaseToExcel = exportDatabaseToExcel;
+  window.exportDatabaseToJSON = exportDatabaseToJSON;
+
+  window.clearPremiumFlowDB = async function() {
+    if (!DB?.db) { alert('Database not ready'); return; }
+    if (!confirm('Clear all premium flow records for today?')) return;
+    try {
+      let count = 0;
+      if (typeof DB.clearPremiumFlowToday === 'function') {
+        count = await DB.clearPremiumFlowToday();
+      } else {
+        // Inline fallback
+        const etDate = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const todayISO = new Date(etDate).toISOString().split('T')[0];
+        const all = await DB._getAllRecords('premiumFlow');
+        const toDelete = all.filter(r => r.date === todayISO);
+        for (const r of toDelete) {
+          await new Promise((res, rej) => {
+            const tx = DB.db.transaction('premiumFlow', 'readwrite');
+            tx.objectStore('premiumFlow').delete(r.id);
+            tx.oncomplete = res; tx.onerror = rej;
+          });
+        }
+        count = toDelete.length;
+      }
+      alert(`Cleared ${count} records.`);
+      await dbLoadPremium();
+    } catch(e) {
+      alert('Clear failed: ' + e.message);
+    }
+  };
+
+  window.init_database = function init_database() {
+    setTimeout(() => {
+      dbRefreshCounts().catch(() => {});
+      dbLoadMVC().catch(() => {});
+    }, 50);
+  };
+
+  window.addEventListener('db-mvc-updated', () => {
+    dbRefreshCounts().catch(() => {});
+    if (typeof dbRefreshCurrentTab === 'function') {
+      dbRefreshCurrentTab().catch(() => {});
+    } else {
+      dbLoadMVC().catch(() => {});
+    }
+  });
+
+  // Initialize auto-cleanup routines
+  dbEnsureReady().then(() => {
+    initPremiumFlowAutoCleanup();
+    initBigTradesAutoReset();
+  });
+
+  window.init_database();
+  if (window.PageRuntime?.register) {
+    window.PageRuntime.register('database', () => {
+      if (DB?.db && typeof DB.db.close === 'function') {
+        try { DB.db.close(); } catch (err) {}
+      }
+    });
+  }
+
+})();
+</script>

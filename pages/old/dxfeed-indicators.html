@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dxFeed Market Indicators</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #09090b;
+      color: #e4e4e7;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #27272a;
+    }
+
+    .header-left h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: #fafafa;
+    }
+
+    .header-left p {
+      font-size: 12px;
+      color: #a1a1a6;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .header-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .btn {
+      padding: 8px 12px;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      background: #18181b;
+      color: #71717a;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      border-color: #52525b;
+      color: #e4e4e7;
+      background: #27272a;
+    }
+
+    .btn.active {
+      border-color: #06b6d4;
+      color: #06b6d4;
+      background: rgba(6, 182, 212, 0.1);
+    }
+
+    .grid-main {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .index-card {
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px;
+      background: rgba(24, 24, 27, 0.6);
+      transition: all 0.3s;
+    }
+
+    .index-card:hover {
+      border-color: #52525b;
+      background: rgba(39, 39, 42, 0.6);
+    }
+
+    .index-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #27272a;
+    }
+
+    .index-name {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .index-value {
+      font-size: 24px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      font-family: 'Monaco', monospace;
+    }
+
+    .index-description {
+      font-size: 11px;
+      color: #a1a1a6;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      border: 1px solid;
+    }
+
+    .ticker-selector {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #27272a;
+    }
+
+    .ticker-select {
+      width: 100%;
+      padding: 6px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 4px;
+      color: #e4e4e7;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .ticker-select:hover {
+      border-color: #52525b;
+    }
+
+    .ticker-select:focus {
+      outline: none;
+      border-color: #06b6d4;
+    }
+
+    .charts-section {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .chart-card {
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px;
+      background: rgba(24, 24, 27, 0.6);
+    }
+
+    .chart-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+      color: #e4e4e7;
+    }
+
+    .chart-container {
+      position: relative;
+      height: 280px;
+      margin-bottom: 8px;
+    }
+
+    .controls-panel {
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px;
+      background: rgba(24, 24, 27, 0.6);
+      margin-bottom: 24px;
+    }
+
+    .controls-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .control-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .control-label {
+      font-size: 10px;
+      color: #a1a1a6;
+      text-transform: uppercase;
+      font-weight: 700;
+      min-width: 80px;
+    }
+
+    .control-value {
+      font-size: 13px;
+      font-weight: 700;
+      color: #06b6d4;
+      font-family: 'Monaco', monospace;
+    }
+
+    .slider {
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: #27272a;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #06b6d4;
+      cursor: pointer;
+    }
+
+    .slider::-moz-range-thumb {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #06b6d4;
+      cursor: pointer;
+      border: none;
+    }
+
+    .alerts-section {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .alerts-panel {
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px;
+      background: rgba(24, 24, 27, 0.6);
+    }
+
+    .alerts-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+      color: #e4e4e7;
+    }
+
+    .threshold-inputs {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .threshold-input {
+      background: #18181b;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #27272a;
+    }
+
+    .threshold-label {
+      font-size: 9px;
+      color: #a1a1a6;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 4px;
+      display: block;
+      font-family: 'Monaco', monospace;
+    }
+
+    .threshold-input input {
+      width: 100%;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 4px;
+      padding: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #e4e4e7;
+      font-family: 'Monaco', monospace;
+    }
+
+    .threshold-input input:focus {
+      outline: none;
+      border-color: #06b6d4;
+    }
+
+    .alerts-log {
+      max-height: 240px;
+      overflow-y: auto;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      padding: 12px;
+      background: #18181b;
+      margin-bottom: 12px;
+    }
+
+    .alert-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #27272a;
+      font-size: 11px;
+      transition: background 0.2s;
+    }
+
+    .alert-item:hover {
+      background: rgba(39, 39, 42, 0.6);
+    }
+
+    .alert-item:last-child {
+      border-bottom: none;
+    }
+
+    .alert-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .alert-ticker {
+      font-weight: 700;
+      font-family: 'Monaco', monospace;
+      min-width: 80px;
+    }
+
+    .alert-timestamp {
+      font-size: 9px;
+      color: #71717a;
+      font-family: 'Monaco', monospace;
+    }
+
+    .alert-empty {
+      text-align: center;
+      color: #71717a;
+      padding: 40px 20px;
+      font-size: 12px;
+    }
+
+    .clear-btn {
+      align-self: flex-end;
+      font-size: 9px;
+      color: #71717a;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .clear-btn:hover {
+      color: #a1a1a6;
+    }
+
+    .reference-panel {
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px;
+      background: rgba(24, 24, 27, 0.6);
+      margin-bottom: 24px;
+    }
+
+    .reference-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+      color: #e4e4e7;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .reference-description {
+      font-size: 11px;
+      color: #a1a1a6;
+      margin-bottom: 12px;
+    }
+
+    .reference-items {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .reference-item {
+      background: #18181b;
+      padding: 12px;
+      border-radius: 4px;
+      border: 1px solid #27272a;
+      font-size: 11px;
+    }
+
+    .reference-ticker {
+      font-family: 'Monaco', monospace;
+      color: #6366f1;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .reference-text {
+      color: #71717a;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    footer {
+      border-top: 1px solid #27272a;
+      padding: 16px;
+      text-align: center;
+      font-size: 11px;
+      color: #71717a;
+      margin-top: 40px;
+    }
+
+    .footer-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .footer-status {
+      display: flex;
+      gap: 16px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .no-data {
+      text-align: center;
+      color: #71717a;
+      padding: 20px;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #18181b;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+
+    /* Color classes for indices */
+    .nyse { --color: #3b82f6; }
+    .nasdaq { --color: #10b981; }
+    .sp500 { --color: #f59e0b; }
+    .nasdaq100 { --color: #ec4899; }
+    .dowjones { --color: #06b6d4; }
+    .russell { --color: #8b5cf6; }
+
+    .index-card.nyse .index-name { color: #3b82f6; }
+    .index-card.nasdaq .index-name { color: #10b981; }
+    .index-card.sp500 .index-name { color: #f59e0b; }
+    .index-card.nasdaq100 .index-name { color: #ec4899; }
+    .index-card.dowjones .index-name { color: #06b6d4; }
+    .index-card.russell .index-name { color: #8b5cf6; }
+
+    .status-bullish {
+      border-color: #10b981;
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.1);
+    }
+
+    .status-bearish {
+      border-color: #ef4444;
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .status-warning {
+      border-color: #f59e0b;
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.1);
+    }
+
+    .status-neutral {
+      border-color: #71717a;
+      color: #71717a;
+      background: rgba(113, 113, 122, 0.1);
+    }
+
+    .alert-bullish { color: #10b981; }
+    .alert-bearish { color: #ef4444; }
+    .alert-warning { color: #f59e0b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="header-left">
+        <h1>dxFeed Market Indicators</h1>
+        <p>Real-Time Institutional Derivative Exposure Terminal</p>
+      </div>
+      <div class="header-controls">
+        <button class="btn active" onclick="toggleStreaming()">
+          <span id="playPauseText">Streaming</span>
+        </button>
+        <button class="btn" onclick="refreshData()">Refresh</button>
+      </div>
+    </header>
+
+    <!-- Index Cards Grid -->
+    <div class="grid-main" id="indicesGrid"></div>
+
+    <!-- Controls Panel -->
+    <div class="controls-panel">
+      <h3 style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px">Stream Controls</h3>
+      <div class="controls-grid">
+        <div class="control-item">
+          <label class="control-label">Stream Speed</label>
+          <input type="range" class="slider" id="speedSlider" min="500" max="3000" value="1500" step="100" onchange="updateStreamSpeed(this.value)">
+          <span class="control-value" id="speedValue">1500ms</span>
+        </div>
+        <div class="control-item">
+          <label class="control-label">Status</label>
+          <span class="control-value" id="streamStatus">LIVE</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts Section -->
+    <div class="charts-section" id="chartsSection"></div>
+
+    <!-- Alerts Section -->
+    <div class="alerts-section">
+      <div class="alerts-panel">
+        <h3 class="alerts-title">Alert Thresholds & Log</h3>
+        <div class="threshold-inputs">
+          <div class="threshold-input">
+            <label class="threshold-label">TICK High</label>
+            <input type="number" id="tickUpper" value="800" onchange="updateThreshold('TICK_upper', this.value)">
+          </div>
+          <div class="threshold-input">
+            <label class="threshold-label">TICK Low</label>
+            <input type="number" id="tickLower" value="-800" onchange="updateThreshold('TICK_lower', this.value)">
+          </div>
+          <div class="threshold-input">
+            <label class="threshold-label">TRIN High</label>
+            <input type="number" id="trinUpper" value="1.4" step="0.1" onchange="updateThreshold('TRIN_upper', this.value)">
+          </div>
+          <div class="threshold-input">
+            <label class="threshold-label">TRIN Low</label>
+            <input type="number" id="trinLower" value="0.6" step="0.1" onchange="updateThreshold('TRIN_lower', this.value)">
+          </div>
+        </div>
+
+        <div class="alerts-log" id="alertsLog">
+          <div class="alert-empty">No alerts triggered. Markets within normal thresholds.</div>
+        </div>
+
+        <button class="clear-btn" onclick="clearAlerts()" style="display:none" id="clearAlertsBtn">Clear Alert Log</button>
+      </div>
+    </div>
+
+    <!-- Reference Panel -->
+    <div class="reference-panel">
+      <h3 class="reference-title">
+        <span>ℹ️</span> Symbology Cheat Sheet
+      </h3>
+      <p class="reference-description">Deciphering dxFeed indicator formulas & indices</p>
+      <div class="reference-items">
+        <div class="reference-item">
+          <div class="reference-ticker">$TICK / $TICK/Q</div>
+          <p class="reference-text">Compares shares currently ticking up vs ticking down. Readings > +1000 signal major buying programs; < -1000 indicate panic selling.</p>
+        </div>
+        <div class="reference-item">
+          <div class="reference-ticker">$TRIN / $TRIN/Q</div>
+          <p class="reference-text">Arms Index (Adv/Dec volume divided by Adv/Dec issues). A reading <strong>below 1.0</strong> is bullish; a reading <strong>above 1.0</strong> is bearish.</p>
+        </div>
+        <div class="reference-item">
+          <div class="reference-ticker">$ADVN / $DECLN</div>
+          <p class="reference-text">Straightforward counts of issues trading above or below the prior day's close. Perfect for checking real index participation.</p>
+        </div>
+        <div class="reference-item">
+          <div class="reference-ticker">$ADDRL / $ADDRL/Q</div>
+          <p class="reference-text">Cumulative Advance/Decline Difference. Net cumulative total of advancers minus decliners since market open.</p>
+        </div>
+        <div class="reference-item">
+          <div class="reference-ticker">$AVOL / $DVOL / $TVOL</div>
+          <p class="reference-text">Volume Analysis. Advancing volume, declining volume, and total volume combined. Shows capital intensity directionally.</p>
+        </div>
+        <div class="reference-item">
+          <div class="reference-ticker">$HI / $LO</div>
+          <p class="reference-text">New 52-Week Highs and Lows. Extremes in breakout strength (highs) or capitulation exhaustion (lows).</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+      <div class="footer-content">
+        <span>dxFeed Market Indicators Interactive Workspace © 2026. Built with high-fidelity telemetry simulations.</span>
+        <div class="footer-status">
+          <div class="status-indicator">
+            <div class="status-dot"></div>
+            Live Telemetry Feed
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // Configuration
+    const INDICES_CONFIG = {
+      nyse: {
+        name: "NYSE",
+        fullName: "New York Stock Exchange",
+        class: "nyse",
+        tickers: [
+          { ticker: "$TICK", name: "NYSE TICK", desc: "Uptick vs Downtick Net Diff", category: "TICK", unit: "Issues", defaultVal: 150 },
+          { ticker: "$TRIN", name: "NYSE TRIN", desc: "Arms Index (Volume & Breadth Ratio)", category: "TRIN", unit: "Ratio", defaultVal: 0.95 },
+          { ticker: "$ADVN", name: "NYSE Advancing Issues", desc: "Count of stocks trading higher", category: "Breadth", unit: "Stocks", defaultVal: 1650 },
+          { ticker: "$DECLN", name: "NYSE Declining Issues", desc: "Count of stocks trading lower", category: "Breadth", unit: "Stocks", defaultVal: 1100 }
+        ]
+      },
+      nasdaq: {
+        name: "NASDAQ",
+        fullName: "Nasdaq Exchange",
+        class: "nasdaq",
+        tickers: [
+          { ticker: "$TICK/Q", name: "NASDAQ TICK", desc: "Uptick vs Downtick Net Diff", category: "TICK", unit: "Issues", defaultVal: -80 },
+          { ticker: "$TRIN/Q", name: "NASDAQ TRIN", desc: "Arms Index for NASDAQ", category: "TRIN", unit: "Ratio", defaultVal: 1.15 },
+          { ticker: "$ADV/Q", name: "NASDAQ Advancing Issues", desc: "Advancing Nasdaq stock count", category: "Breadth", unit: "Stocks", defaultVal: 1450 },
+          { ticker: "$DECL/Q", name: "NASDAQ Declining Issues", desc: "Declining Nasdaq stock count", category: "Breadth", unit: "Stocks", defaultVal: 1800 }
+        ]
+      },
+      sp500: {
+        name: "S&P 500",
+        fullName: "Standard & Poor's 500",
+        class: "sp500",
+        tickers: [
+          { ticker: "$TIKSP", name: "S&P 500 TICK", desc: "Uptick vs Downtick inside the S&P 500", category: "TICK", unit: "Issues", defaultVal: 45 },
+          { ticker: "$TRINSP", name: "S&P 500 TRIN", desc: "Arms Index for the S&P 500 constituents", category: "TRIN", unit: "Ratio", defaultVal: 0.92 },
+          { ticker: "$ADVSP", name: "S&P 500 Advancing", desc: "Advancing S&P 500 stock count", category: "Breadth", unit: "Stocks", defaultVal: 310 },
+          { ticker: "$DECLSP", name: "S&P 500 Declining", desc: "Declining S&P 500 stock count", category: "Breadth", unit: "Stocks", defaultVal: 180 }
+        ]
+      },
+      nasdaq100: {
+        name: "NDX 100",
+        fullName: "NASDAQ 100 Index",
+        class: "nasdaq100",
+        tickers: [
+          { ticker: "$TIKND", name: "Nasdaq 100 TICK", desc: "Uptick vs Downtick in NDX components", category: "TICK", unit: "Issues", defaultVal: 15 },
+          { ticker: "$TRINND", name: "Nasdaq 100 TRIN", desc: "Arms Index for Nasdaq 100 components", category: "TRIN", unit: "Ratio", defaultVal: 1.05 },
+          { ticker: "$ADVND", name: "Nasdaq 100 Advancing", desc: "Advancers in NDX", category: "Breadth", unit: "Stocks", defaultVal: 62 },
+          { ticker: "$DECLND", name: "Nasdaq 100 Declining", desc: "Decliners in NDX", category: "Breadth", unit: "Stocks", defaultVal: 35 }
+        ]
+      },
+      dowjones: {
+        name: "DJIA",
+        fullName: "Dow Jones Industrials",
+        class: "dowjones",
+        tickers: [
+          { ticker: "$TIKI", name: "Dow 30 TICK", desc: "Uptick vs Downtick on DJIA components", category: "TICK", unit: "Issues", defaultVal: 4 },
+          { ticker: "$TRINI", name: "Dow 30 TRIN", desc: "Arms Index for Dow 30 components", category: "TRIN", unit: "Ratio", defaultVal: 0.98 },
+          { ticker: "$ADVI", name: "Dow 30 Advancers", desc: "Advancing components in DJIA", category: "Breadth", unit: "Stocks", defaultVal: 19 },
+          { ticker: "$DECLI", name: "Dow 30 Decliners", desc: "Declining components in DJIA", category: "Breadth", unit: "Stocks", defaultVal: 10 }
+        ]
+      },
+      russell: {
+        name: "RUT 2000",
+        fullName: "Russell 2000 Index",
+        class: "russell",
+        tickers: [
+          { ticker: "$TRINRL", name: "Russell 2000 TRIN", desc: "Arms Index for the Russell 2000 Index", category: "TRIN", unit: "Ratio", defaultVal: 1.02 },
+          { ticker: "$ADVRL", name: "Russell 2000 Advancing", desc: "Advancing small cap stock count", category: "Breadth", unit: "Stocks", defaultVal: 1080 },
+          { ticker: "$DECLRL", name: "Russell 2000 Declining", desc: "Declining small cap stock count", category: "Breadth", unit: "Stocks", defaultVal: 850 },
+          { ticker: "$UNCHRL", name: "Russell 2000 Unchanged", desc: "Unchanged small cap stocks count", category: "Breadth", unit: "Stocks", defaultVal: 70 }
+        ]
+      }
+    };
+
+    // Global state
+    let activeSelections = {
+      nyse: INDICES_CONFIG.nyse.tickers[0],
+      nasdaq: INDICES_CONFIG.nasdaq.tickers[0],
+      sp500: INDICES_CONFIG.sp500.tickers[1],
+      nasdaq100: INDICES_CONFIG.nasdaq100.tickers[2],
+      dowjones: INDICES_CONFIG.dowjones.tickers[0],
+      russell: INDICES_CONFIG.russell.tickers[1]
+    };
+
+    let isPlaying = true;
+    let streamSpeed = 1500;
+    let alerts = [];
+    let customThresholds = {
+      TICK_upper: 800,
+      TICK_lower: -800,
+      TRIN_upper: 1.4,
+      TRIN_lower: 0.6
+    };
+
+    let history = [];
+    let charts = {};
+
+    // Initialize
+    function init() {
+      buildIndexCards();
+      buildCharts();
+      initializeHistory();
+      startStreamLoop();
+    }
+
+    // Build index cards
+    function buildIndexCards() {
+      const grid = document.getElementById('indicesGrid');
+      grid.innerHTML = '';
+
+      Object.entries(INDICES_CONFIG).forEach(([key, index]) => {
+        const card = document.createElement('div');
+        card.className = `index-card ${index.class}`;
+        
+        const ticker = activeSelections[key];
+        const currentValue = ticker.defaultVal;
+
+        card.innerHTML = `
+          <div class="index-header">
+            <div class="index-name">${index.name}</div>
+            <span class="status-badge status-neutral">0DTE</span>
+          </div>
+          <div class="index-value" id="value-${key}">${formatValue(currentValue, ticker.category)}</div>
+          <div class="index-description">${ticker.desc}</div>
+          <div class="ticker-selector">
+            <select class="ticker-select" onchange="selectTicker('${key}', this.value)">
+              ${index.tickers.map((t, idx) => `
+                <option value="${idx}" ${idx === 0 ? 'selected' : ''}>${t.ticker} - ${t.name}</option>
+              `).join('')}
+            </select>
+          </div>
+        `;
+
+        grid.appendChild(card);
+      });
+    }
+
+    // Build charts
+    function buildCharts() {
+      const section = document.getElementById('chartsSection');
+      section.innerHTML = '';
+
+      Object.entries(activeSelections).forEach(([key, ticker]) => {
+        const card = document.createElement('div');
+        card.className = 'chart-card';
+        card.innerHTML = `
+          <h3 class="chart-title">${ticker.ticker} - ${ticker.name}</h3>
+          <div class="chart-container">
+            <canvas id="chart-${key}"></canvas>
+          </div>
+        `;
+        section.appendChild(card);
+
+        // Initialize chart
+        const ctx = document.getElementById(`chart-${key}`).getContext('2d');
+        charts[key] = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: [],
+            datasets: [{
+              label: ticker.ticker,
+              data: [],
+              borderColor: getChartColor(INDICES_CONFIG[key].class),
+              backgroundColor: getChartColor(INDICES_CONFIG[key].class) + '20',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.4,
+              pointRadius: 2,
+              pointHoverRadius: 4,
+              pointBackgroundColor: getChartColor(INDICES_CONFIG[key].class)
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false
+              },
+              tooltip: {
+                backgroundColor: '#18181b',
+                borderColor: '#27272a',
+                borderWidth: 1,
+                titleColor: '#e4e4e7',
+                bodyColor: '#a1a1a6',
+                padding: 8,
+                titleFont: { size: 11, weight: 'bold' },
+                bodyFont: { size: 10, family: "'Monaco', monospace" }
+              }
+            },
+            scales: {
+              x: {
+                display: true,
+                grid: { color: '#27272a', drawBorder: false },
+                ticks: { color: '#71717a', font: { size: 10 } }
+              },
+              y: {
+                display: true,
+                grid: { color: '#27272a', drawBorder: false },
+                ticks: { color: '#71717a', font: { size: 10 } }
+              }
+            }
+          }
+        });
+      });
+    }
+
+    function getChartColor(className) {
+      const colors = {
+        nyse: '#3b82f6',
+        nasdaq: '#10b981',
+        sp500: '#f59e0b',
+        nasdaq100: '#ec4899',
+        dowjones: '#06b6d4',
+        russell: '#8b5cf6'
+      };
+      return colors[className] || '#06b6d4';
+    }
+
+    // Initialize history
+    function initializeHistory() {
+      history = [];
+      const now = new Date();
+      for (let i = 25; i >= 0; i--) {
+        const pointTime = new Date(now.getTime() - i * 5000);
+        const dataPoint = {
+          time: pointTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        };
+
+        Object.entries(activeSelections).forEach(([key, ticker]) => {
+          dataPoint[ticker.ticker] = ticker.defaultVal + (Math.random() * 20 - 10);
+        });
+
+        history.push(dataPoint);
+      }
+    }
+
+    // Stream loop
+    function startStreamLoop() {
+      if (streamInterval) clearInterval(streamInterval);
+      
+      streamInterval = setInterval(() => {
+        if (!isPlaying) return;
+
+        const newPoint = {
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        };
+
+        Object.entries(activeSelections).forEach(([key, ticker]) => {
+          const lastVal = history[history.length - 1][ticker.ticker] || ticker.defaultVal;
+          let newVal;
+
+          if (ticker.category === 'TRIN') {
+            newVal = Math.max(0.4, Math.min(2.5, lastVal + (Math.random() * 0.12 - 0.06)));
+            if (newVal > customThresholds.TRIN_upper) {
+              triggerAlert(ticker.ticker, `TRIN high breach: ${newVal.toFixed(2)}`, 'warning');
+            } else if (newVal < customThresholds.TRIN_lower) {
+              triggerAlert(ticker.ticker, `TRIN low breach: ${newVal.toFixed(2)}`, 'bullish');
+            }
+          } else if (ticker.category === 'TICK') {
+            newVal = Math.max(-1400, Math.min(1400, lastVal + Math.round(Math.random() * 160 - 80)));
+            if (newVal > customThresholds.TICK_upper) {
+              triggerAlert(ticker.ticker, `Extreme TICK High: +${newVal}`, 'bullish');
+            } else if (newVal < customThresholds.TICK_lower) {
+              triggerAlert(ticker.ticker, `Extreme TICK Low: ${newVal}`, 'bearish');
+            }
+          } else {
+            newVal = Math.max(0, lastVal + (Math.random() * 40 - 20));
+          }
+
+          newPoint[ticker.ticker] = newVal;
+          
+          // Update card value
+          document.getElementById(`value-${key}`).textContent = formatValue(newVal, ticker.category);
+        });
+
+        history.push(newPoint);
+        if (history.length > 40) history.shift();
+
+        updateCharts();
+      }, streamSpeed);
+    }
+
+    let streamInterval;
+
+    // Update charts
+    function updateCharts() {
+      Object.entries(charts).forEach(([key, chart]) => {
+        const ticker = activeSelections[key];
+        chart.data.labels = history.map(h => h.time);
+        chart.data.datasets[0].data = history.map(h => h[ticker.ticker]);
+        chart.update('none');
+      });
+    }
+
+    // Trigger alert
+    function triggerAlert(ticker, message, type) {
+      const id = Date.now() + Math.random().toString(36).substr(2, 5);
+      const newAlert = { id, ticker, message, type, timestamp: new Date().toLocaleTimeString() };
+      alerts.unshift(newAlert);
+      if (alerts.length > 30) alerts.pop();
+      
+      updateAlertsLog();
+    }
+
+    // Update alerts log
+    function updateAlertsLog() {
+      const log = document.getElementById('alertsLog');
+      const clearBtn = document.getElementById('clearAlertsBtn');
+
+      if (alerts.length === 0) {
+        log.innerHTML = '<div class="alert-empty">No alerts triggered. Markets within normal thresholds.</div>';
+        clearBtn.style.display = 'none';
+      } else {
+        clearBtn.style.display = 'block';
+        log.innerHTML = alerts.map(a => `
+          <div class="alert-item">
+            <div class="alert-content">
+              <span class="alert-ticker alert-${a.type}">${a.ticker}</span>
+              <span>${a.message}</span>
+            </div>
+            <span class="alert-timestamp">${a.timestamp}</span>
+          </div>
+        `).join('');
+      }
+    }
+
+    // Format value
+    function formatValue(val, category) {
+      if (category === 'TRIN' || category === 'Options') {
+        return parseFloat(val).toFixed(2);
+      }
+      return Math.round(val);
+    }
+
+    // Select ticker
+    function selectTicker(indexKey, tickerIndex) {
+      activeSelections[indexKey] = INDICES_CONFIG[indexKey].tickers[parseInt(tickerIndex)];
+      buildCharts();
+      updateCharts();
+    }
+
+    // Toggle streaming
+    function toggleStreaming() {
+      isPlaying = !isPlaying;
+      document.getElementById('playPauseText').textContent = isPlaying ? 'Streaming' : 'Paused';
+      document.getElementById('streamStatus').textContent = isPlaying ? 'LIVE' : 'PAUSED';
+    }
+
+    // Update stream speed
+    function updateStreamSpeed(val) {
+      streamSpeed = parseInt(val);
+      document.getElementById('speedValue').textContent = val + 'ms';
+      startStreamLoop();
+    }
+
+    // Update threshold
+    function updateThreshold(key, value) {
+      if (key.includes('TICK')) {
+        customThresholds[key] = parseInt(value);
+      } else {
+        customThresholds[key] = parseFloat(value);
+      }
+    }
+
+    // Clear alerts
+    function clearAlerts() {
+      alerts = [];
+      updateAlertsLog();
+    }
+
+    // Refresh data
+    function refreshData() {
+      initializeHistory();
+      updateCharts();
+    }
+
+    // Start
+    init();
+  </script>
+</body>
+</html>

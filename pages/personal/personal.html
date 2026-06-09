@@ -1,0 +1,246 @@
+<style>
+  /* Force the injected page to fill the content panel */
+  #content-panel { overflow: hidden; }
+
+  .p-fullscreen {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* PIN Screen */
+  .pin-screen {
+    position: absolute; inset: 0;
+    background: var(--bg0);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 100; opacity: 1; transition: opacity .3s;
+  }
+  .pin-screen.hidden { opacity: 0; pointer-events: none; }
+
+  .pin-container { display: flex; flex-direction: column; gap: 28px; align-items: center; max-width: 300px; width: 100%; }
+
+  .pin-title { font-size: 12px; font-weight: 700; color: var(--text0); letter-spacing: .12em; text-transform: uppercase; }
+
+  .pin-input-group { display: flex; gap: 12px; }
+  .pin-digit {
+    width: 48px; height: 48px; background: var(--bg2);
+    border: 1px solid var(--border2); border-radius: 2px;
+    font-size: 22px; font-weight: 700; color: var(--cyan);
+    display: flex; align-items: center; justify-content: center;
+    font-family: monospace; transition: border-color .2s, box-shadow .2s;
+  }
+  .pin-digit.filled { border-color: var(--cyan); box-shadow: 0 0 8px rgba(0,229,255,.2); }
+
+  .pin-keyboard { display: grid; grid-template-columns: repeat(3, 58px); gap: 6px; }
+  .pin-key {
+    width: 58px; height: 58px; background: var(--bg2);
+    border: 1px solid var(--border2); border-radius: 2px;
+    color: var(--text1); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-family: Arial; transition: background .12s, color .12s;
+  }
+  .pin-key:hover { background: var(--bg3); color: var(--cyan); }
+
+  .pin-error { color: var(--red); font-size: 11px; height: 16px; opacity: 0; transition: opacity .3s; letter-spacing: .05em; }
+  .pin-error.show { opacity: 1; }
+
+  /* Personal content */
+  .p-content-area {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+  }
+  .p-content-area.unlocked { display: flex; }
+
+  .p-top-bar {
+    flex-shrink: 0;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .p-top-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .12em; color: var(--text0);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .p-top-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); }
+
+  .p-lock-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 10px; font-family: Arial; font-size: 10px;
+    font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    border-radius: 2px; cursor: pointer; transition: all .12s;
+    background: transparent; color: var(--text2); border: 1px solid var(--border2);
+  }
+  .p-lock-btn:hover { background: var(--red2); color: var(--red); border-color: var(--red); }
+
+  .p-scroll-area {
+    flex: 1; overflow-y: auto; padding: 24px;
+  }
+  .p-scroll-area::-webkit-scrollbar { width: 4px; }
+  .p-scroll-area::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .p-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+  }
+
+  .p-card {
+    background: var(--bg1); border: 1px solid var(--border); border-radius: 2px;
+    padding: 20px; cursor: pointer; transition: all .18s;
+    display: flex; flex-direction: column; gap: 10px; min-height: 150px;
+  }
+  .p-card:hover {
+    background: var(--bg2); border-color: var(--border2);
+    transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .p-card-icon { font-size: 24px; line-height: 1; }
+  .p-card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--text0); }
+  .p-card-desc { font-size: 11px; color: var(--text2); flex-grow: 1; line-height: 1.5; }
+  .p-card-footer { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .08em; }
+</style>
+
+<!-- PIN Screen -->
+<div class="p-fullscreen">
+  <div class="pin-screen" id="p-pin-screen">
+    <div class="pin-container">
+      <div class="pin-title">Enter PIN</div>
+      <div class="pin-input-group" id="p-pin-display">
+        <div class="pin-digit"></div>
+        <div class="pin-digit"></div>
+        <div class="pin-digit"></div>
+        <div class="pin-digit"></div>
+      </div>
+      <div class="pin-keyboard" id="p-pin-keyboard"></div>
+      <div class="pin-error" id="p-pin-error">Incorrect PIN</div>
+    </div>
+  </div>
+
+  <!-- Unlocked Content -->
+  <div class="p-content-area" id="p-content-area">
+    <div class="p-top-bar">
+      <div class="p-top-title">
+        <div class="p-top-dot"></div>
+        Personal
+      </div>
+      <button class="p-lock-btn" id="p-lock-btn">⏻ Lock</button>
+    </div>
+    <div class="p-scroll-area">
+      <div class="p-grid">
+        <div class="p-card" data-section="budget">
+          <div class="p-card-icon">💰</div>
+          <div class="p-card-title">Budget</div>
+          <div class="p-card-desc">Track expenses and manage financial goals</div>
+          <div class="p-card-footer">Coming soon</div>
+        </div>
+        <div class="p-card" data-section="todo">
+          <div class="p-card-icon">✓</div>
+          <div class="p-card-title">Todo</div>
+          <div class="p-card-desc">Organize tasks and stay on top of priorities</div>
+          <div class="p-card-footer">Click to open →</div>
+        </div>
+        <div class="p-card" data-section="trading">
+          <div class="p-card-icon">📈</div>
+          <div class="p-card-title">Trading</div>
+          <div class="p-card-desc">Review trading performance and metrics</div>
+          <div class="p-card-footer">Coming soon</div>
+        </div>
+        <div class="p-card" data-section="personal-notes">
+          <div class="p-card-icon">👤</div>
+          <div class="p-card-title">Personal</div>
+          <div class="p-card-desc">Personal notes and information</div>
+          <div class="p-card-footer">Coming soon</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const VALID_PINS = ['0312', '9365'];
+  let pinAttempt = '';
+
+  const pinScreen   = document.getElementById('p-pin-screen');
+  const contentArea = document.getElementById('p-content-area');
+  const pinError    = document.getElementById('p-pin-error');
+
+  function initKeyboard() {
+    const kb = document.getElementById('p-pin-keyboard');
+    kb.innerHTML = '';
+    for (let i = 1; i <= 9; i++) {
+      const k = document.createElement('div');
+      k.className = 'pin-key';
+      k.textContent = i;
+      k.onclick = () => addPin(String(i));
+      kb.appendChild(k);
+    }
+    const z = document.createElement('div');
+    z.className = 'pin-key'; z.textContent = '0';
+    z.onclick = () => addPin('0');
+    kb.appendChild(z);
+
+    const d = document.createElement('div');
+    d.className = 'pin-key'; d.textContent = '← Del';
+    d.onclick = delPin;
+    kb.appendChild(d);
+  }
+
+  function addPin(digit) {
+    if (pinAttempt.length >= 4) return;
+    pinAttempt += digit;
+    updateDisplay();
+    if (pinAttempt.length === 4) setTimeout(checkPin, 280);
+  }
+
+  function delPin() {
+    pinAttempt = pinAttempt.slice(0, -1);
+    updateDisplay();
+    pinError.classList.remove('show');
+  }
+
+  function updateDisplay() {
+    document.querySelectorAll('#p-pin-display .pin-digit').forEach((d, i) => {
+      d.textContent = i < pinAttempt.length ? '●' : '';
+      d.classList.toggle('filled', i < pinAttempt.length);
+    });
+  }
+
+  function checkPin() {
+    if (VALID_PINS.includes(pinAttempt)) {
+      pinScreen.classList.add('hidden');
+      contentArea.classList.add('unlocked');
+    } else {
+      pinError.classList.add('show');
+      setTimeout(() => pinError.classList.remove('show'), 1500);
+      pinAttempt = '';
+      updateDisplay();
+    }
+  }
+
+  document.getElementById('p-lock-btn').onclick = function() {
+    pinAttempt = '';
+    updateDisplay();
+    contentArea.classList.remove('unlocked');
+    pinScreen.classList.remove('hidden');
+  };
+
+  document.querySelectorAll('.p-card').forEach(card => {
+    card.addEventListener('click', function() {
+      const section = this.dataset.section;
+      if (section === 'todo' && typeof loadPage === 'function') {
+        loadPage('todo');
+      }
+    });
+  });
+
+  initKeyboard();
+})();
+</script>

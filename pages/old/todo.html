@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Todo</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    :root {
+      --bg0:#080c10;--bg1:#0d1117;--bg2:#111822;--bg3:#1a2233;--bg4:#1f2d42;
+      --border:#1e3050;--border2:#2a4060;
+      --text0:#e8edf5;--text1:#a8b8cc;--text2:#5a7a99;--text3:#3a5570;
+      --green:#00e676;--green2:#1fae5e;--red:#ff4757;--red2:#cc2233;
+      --amber:#ffb300;--blue:#29b6f6;--cyan:#00e5ff;--purple:#7c4dff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg0);
+      color: var(--text0);
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    .shell { display: flex; height: 100%; min-height: 0; width: 100%; flex-direction: column; }
+    .todo-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+
+    /* HEADER */
+    .view-tabs {
+      background: var(--bg1);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+      flex-shrink: 0;
+      height: 52px;
+    }
+
+    .logo-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--text0);
+    }
+
+    .logo-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+    .tab-group { display: flex; gap: 0; height: 100%; align-items: center; }
+    .section-tabs { display: flex; gap: 4px; height: 100%; align-items: center; }
+
+    .vtab {
+      padding: 0 14px;
+      height: 100%;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      color: var(--text2);
+      border-bottom: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      transition: color .12s, border-color .12s;
+    }
+    .vtab:hover { color: var(--text1); }
+    .vtab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+    .section-tab {
+      height: 30px;
+      padding: 0 12px;
+      border: 1px solid var(--border2);
+      background: transparent;
+      color: var(--text2);
+      font-family: Arial, sans-serif;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .section-tab:hover { background: var(--bg3); color: var(--text1); }
+    .section-tab.active { background: var(--bg4); border-color: #00e5ff66; color: var(--cyan); }
+
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      font-family: Arial, sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-primary { background: #0d6fa0; color: #fff; }
+    .btn-primary:hover { opacity: .85; }
+    .btn-ghost { background: transparent; color: var(--text1); border: 1px solid var(--border2); }
+    .btn-ghost:hover { background: var(--bg3); }
+    .btn-danger { background: var(--red2); color: var(--red); border: 1px solid #ff475744; }
+    .btn-danger:hover { opacity: .85; }
+
+    /* CONTENT */
+    .todo-content { flex: 1; overflow-y: auto; padding: 20px 24px; min-height: 0; }
+    .todo-content::-webkit-scrollbar { width: 4px; }
+    .todo-content::-webkit-scrollbar-track { background: var(--bg1); }
+    .todo-content::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+    .view-panel { display: none; max-width: 1600px; margin: 0 auto; }
+    .view-panel.active { display: block; }
+    .personal-section-panel { display: none; height: 100%; min-height: 0; flex-direction: column; }
+    .personal-section-panel.active { display: flex; }
+    .placeholder-panel {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text3);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    /* METRICS */
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    .metric-card {
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 12px 16px;
+    }
+    .metric-label { font-size: 10px; color: var(--text3); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em; }
+    .metric-value { font-size: 22px; font-weight: 700; color: var(--text0); line-height: 1; }
+    .metric-sub { font-size: 10px; color: var(--text3); margin-top: 4px; }
+
+    /* TODO GRID */
+    .todo-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+
+    .todo-box {
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      transition: border-color .12s;
+    }
+    .todo-box:hover { border-color: var(--border2); }
+
+    .todo-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--text0);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .todo-title-text {
+      cursor: pointer;
+      outline: none;
+      border-bottom: 1px dashed transparent;
+    }
+    .todo-title-text:hover { border-bottom-color: var(--text3); }
+    .todo-title-text:focus { border-bottom-color: var(--cyan); color: var(--cyan); }
+
+    .todo-list { list-style: none; margin-bottom: 12px; flex-grow: 1; }
+
+    .todo-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--text1);
+      line-height: 1.4;
+      justify-content: space-between;
+    }
+    .todo-item-content { display: flex; align-items: flex-start; gap: 8px; flex-grow: 1; }
+
+    .todo-check {
+      margin-top: 2px;
+      flex-shrink: 0;
+      width: 13px;
+      height: 13px;
+      cursor: pointer;
+      accent-color: var(--cyan);
+    }
+
+    .todo-item-text {
+      outline: none;
+      border-bottom: 1px dashed transparent;
+      cursor: pointer;
+      flex-grow: 1;
+    }
+    .todo-item-text:hover { border-bottom-color: var(--text3); }
+    .todo-item-text:focus { border-bottom-color: var(--cyan); background: var(--bg2); }
+    .todo-item.checked .todo-item-text { text-decoration: line-through; color: var(--text3); }
+
+    .todo-item-delete {
+      background: none;
+      border: none;
+      color: var(--text3);
+      cursor: pointer;
+      font-size: 14px;
+      display: none;
+      line-height: 1;
+      padding: 0 2px;
+    }
+    .todo-item:hover .todo-item-delete { display: inline-block; }
+    .todo-item-delete:hover { color: var(--red); }
+
+    .todo-inline-add {
+      display: flex;
+      gap: 6px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+      margin-top: auto;
+    }
+
+    .todo-inline-input {
+      flex: 1;
+      background: var(--bg0);
+      border: 1px solid var(--border2);
+      border-radius: 2px;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: var(--text0);
+      font-family: Arial, sans-serif;
+      outline: none;
+    }
+    .todo-inline-input:focus { border-color: var(--cyan); }
+    .todo-inline-input::placeholder { color: var(--text3); }
+
+    /* SECTION LABEL */
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      color: var(--text3);
+      margin-bottom: 12px;
+    }
+
+    /* KANBAN */
+    .board { display: flex; gap: 16px; min-height: 400px; padding-bottom: 20px; }
+    .column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      min-width: 260px;
+    }
+    .col-header {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .col-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .col-title {
+      font-size: 10px;
+      font-weight: 700;
+      flex: 1;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--text1);
+    }
+    .col-count {
+      font-size: 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      padding: 1px 7px;
+      border-radius: 2px;
+      font-weight: 600;
+      color: var(--text2);
+    }
+    .col-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+
+    /* KANBAN CARDS */
+    .kcard {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 12px;
+      cursor: pointer;
+      transition: border-color .1s, background .1s;
+    }
+    .kcard:hover { background: var(--bg3); border-color: var(--border2); }
+
+    .tid {
+      font-size: 10px;
+      color: var(--text3);
+      font-weight: 700;
+      letter-spacing: .05em;
+      font-family: monospace;
+    }
+
+    .pbadge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 2px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .pbadge.high { background: #2a0a0a; color: var(--red); border: 1px solid #ff475744; }
+    .pbadge.med  { background: #2a1a00; color: var(--amber); border: 1px solid #ffb30044; }
+    .pbadge.low  { background: var(--bg3); color: var(--text2); border: 1px solid var(--border2); }
+
+    .ctitle { font-size: 12px; color: var(--text0); font-weight: 600; line-height: 1.4; margin: 6px 0 10px; }
+    .card-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+    }
+    .cemail { font-size: 10px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+    .cbadge {
+      font-size: 10px;
+      color: var(--text2);
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: 2px;
+      padding: 1px 7px;
+      font-weight: 600;
+      letter-spacing: .05em;
+    }
+
+    /* LIST TABLE */
+    .gex-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .gex-table thead tr { background: var(--bg2); border-bottom: 2px solid var(--border2); }
+    .gex-table th {
+      padding: 8px 12px;
+      text-align: left;
+      font-size: 10px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--text3);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .gex-table th:last-child { text-align: right; }
+    .gex-table tbody tr { border-bottom: 1px solid var(--border); transition: background .08s; cursor: pointer; }
+    .gex-table tbody tr:hover { background: var(--bg2); }
+    .gex-table td { padding: 8px 12px; color: var(--text1); white-space: nowrap; }
+    .gex-table td:last-child { text-align: right; }
+
+    /* MODALS */
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,.7);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(4px);
+    }
+    .modal {
+      background: var(--bg1);
+      width: 100%;
+      max-width: 480px;
+      border-radius: 2px;
+      padding: 24px;
+      border: 1px solid var(--border2);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-header h2 {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--text0);
+    }
+    .close-btn {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: var(--text3);
+      line-height: 1;
+    }
+    .close-btn:hover { color: var(--text0); }
+
+    /* FORMS */
+    .form-group { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
+    .form-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+    .form-input, .form-select {
+      background: var(--bg0);
+      border: 1px solid var(--border2);
+      padding: 8px 10px;
+      border-radius: 2px;
+      color: var(--text0);
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      outline: none;
+      width: 100%;
+      color-scheme: dark;
+    }
+    .form-input:focus, .form-select:focus { border-color: var(--cyan); }
+
+    /* CHART AREA */
+    .chart-panel {
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 20px;
+    }
+    .chart-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--text1);
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- HEADER -->
+  <div class="view-tabs">
+    <div class="logo-section">
+      <div class="logo-dot" style="background:var(--cyan)"></div>
+      Personal · Todo
+    </div>
+
+    <div class="section-tabs">
+      <button class="section-tab" data-section-tab="budget" onclick="switchPersonalSection('budget')">Budget</button>
+      <button class="section-tab active" data-section-tab="todo" onclick="switchPersonalSection('todo')">Todo</button>
+      <button class="section-tab" data-section-tab="trading" onclick="switchPersonalSection('trading')">Trading</button>
+      <button class="section-tab" data-section-tab="personal" onclick="switchPersonalSection('personal')">Personal</button>
+    </div>
+
+    <div class="tab-group" id="todo-view-tabs">
+      <div class="vtab active" data-view="overview" onclick="switchView('overview')">Overview</div>
+      <div class="vtab" data-view="kanban" onclick="switchView('kanban')">Board</div>
+      <div class="vtab" data-view="list" onclick="switchView('list')">All Tasks</div>
+      <div class="vtab" data-view="reports" onclick="switchView('reports')">Analytics</div>
+    </div>
+
+    <div class="header-actions" id="todo-actions">
+      <button class="btn btn-primary" onclick="openCreateModal()">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Item
+      </button>
+    </div>
+  </div>
+
+  <div class="todo-main">
+    <div class="todo-content">
+      <div id="personal-section-budget" class="personal-section-panel">
+        <div class="placeholder-panel">Budget</div>
+      </div>
+
+      <div id="personal-section-todo" class="personal-section-panel active">
+
+      <!-- OVERVIEW -->
+      <div id="view-overview" class="view-panel active">
+        <div class="metrics" id="metrics-container"></div>
+        <div class="section-label">Checklists</div>
+        <div class="todo-grid" id="category-todo-grid"></div>
+        <div class="section-label" style="margin-top:8px;">Active Goals Board</div>
+        <div class="board" id="overview-mini-board"></div>
+      </div>
+
+      <!-- KANBAN -->
+      <div id="view-kanban" class="view-panel">
+        <div class="board" id="kanban-board"></div>
+      </div>
+
+      <!-- LIST -->
+      <div id="view-list" class="view-panel">
+        <table class="gex-table">
+          <thead>
+            <tr>
+              <th>Task / Idea</th>
+              <th>Category</th>
+              <th>Priority</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="list-body"></tbody>
+        </table>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div id="view-reports" class="view-panel">
+        <div class="chart-panel">
+          <div class="chart-title">Completed Tasks — Weekly Trend</div>
+          <div style="height:360px;"><canvas id="volumeChart"></canvas></div>
+        </div>
+      </div>
+
+      </div>
+
+      <div id="personal-section-trading" class="personal-section-panel">
+        <div class="placeholder-panel">Trading</div>
+      </div>
+
+      <div id="personal-section-personal" class="personal-section-panel">
+        <div class="placeholder-panel">Personal</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-overlay" id="ticketModal" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Edit Task</h2>
+      <button class="close-btn" onclick="closeModal()">×</button>
+    </div>
+    <form id="edit-goal-form" onsubmit="handleEditGoalSave(event)">
+      <div class="form-group">
+        <label class="form-label">Title</label>
+        <input type="text" id="edit-goal-title" class="form-input" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Details</label>
+        <input type="text" id="edit-goal-details" class="form-input" placeholder="Subtitle or notes...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select id="edit-goal-category" class="form-select">
+          <option>Personal</option><option>Career</option><option>Health</option><option>Learning</option><option>Finances</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Priority</label>
+        <select id="edit-goal-priority" class="form-select">
+          <option value="LOW">Low</option><option value="MED">Medium</option><option value="HIGH">High</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Status</label>
+        <select id="edit-goal-status" class="form-select">
+          <option>Ideas</option><option>In Progress</option><option>Completed</option>
+        </select>
+      </div>
+      <div style="margin-top:20px;display:flex;justify-content:space-between;align-items:center;">
+        <button type="button" class="btn btn-danger" onclick="deleteCurrentTask()">Delete</button>
+        <div style="display:flex;gap:8px;">
+          <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- CREATE MODAL -->
+<div class="modal-overlay" id="createModal" onclick="closeCreateModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Add New Item</h2>
+      <button class="close-btn" onclick="closeCreateModal()">×</button>
+    </div>
+    <form id="create-task-form" onsubmit="handleCreateTask(event)">
+      <div class="form-group">
+        <label class="form-label">Title</label>
+        <input type="text" id="task-title" class="form-input" placeholder="e.g. Review portfolio" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Type</label>
+        <select id="item-type" class="form-select" onchange="toggleFormFields()">
+          <option value="checklist">Checklist Item</option>
+          <option value="board">Board Task</option>
+        </select>
+      </div>
+      <div id="checklist-fields-group">
+        <div class="form-group">
+          <label class="form-label">Target List</label>
+          <select id="target-box" class="form-select"></select>
+        </div>
+      </div>
+      <div id="board-fields-group" style="display:none;">
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <select id="task-category" class="form-select">
+            <option>Personal</option><option>Career</option><option>Health</option><option>Learning</option><option>Finances</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Priority</label>
+          <select id="task-priority" class="form-select">
+            <option value="LOW">Low</option><option value="MED">Medium</option><option value="HIGH">High</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="task-status" class="form-select">
+            <option>Ideas</option><option>In Progress</option><option>Completed</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:20px;display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" class="btn btn-ghost" onclick="closeCreateModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const defaultChecklists = {
+    scott:   [{ id:'c1',text:'Drink 8 glasses of water',checked:true},{ id:'c2',text:'10-minute morning stretch',checked:false},{ id:'c3',text:'Write down daily goals',checked:false}],
+    shrills: [{ id:'c4',text:'Review weekly workspace plan',checked:false},{ id:'c5',text:'Draft resume updates',checked:true},{ id:'c6',text:'Clear desktop inbox files',checked:false}],
+    roman:   [{ id:'c7',text:'30-minute cardio session',checked:false},{ id:'c8',text:'Log daily calorie intake',checked:true},{ id:'c9',text:"Prepare tomorrow's meal plan",checked:false}],
+    jeremy:  [{ id:'c10',text:'Read 15 pages of non-fiction',checked:false},{ id:'c11',text:'Practice new coding framework',checked:true},{ id:'c12',text:'Watch CSS Grid tutorial',checked:false}],
+    brandon: [{ id:'c13',text:'Pay electric & water bills',checked:true},{ id:'c14',text:'Review investment portfolio',checked:false},{ id:'c15',text:'Organize tax deductible files',checked:false}]
+  };
+
+  const defaultPillarTitles = {
+    scott:'Daily Habits', shrills:'Career & Work', roman:'Health & Wellness', jeremy:'Learning & Growth', brandon:'Life Admin & Finance'
+  };
+
+  const defaultTasks = [
+    { id:'IDEA-001', subject:'Design backyard deck extension', email:'Home Project', category:'Personal', priority:'HIGH', status:'Ideas' },
+    { id:'IDEA-002', subject:'Research itinerary for summer trip', email:'Travel Spec', category:'Learning', priority:'LOW', status:'Ideas' },
+    { id:'TASK-101', subject:'Organize and tidy garage workbench', email:'Home Improvement', category:'Personal', priority:'HIGH', status:'In Progress' },
+    { id:'TASK-102', subject:'Track monthly budget expenditures', email:'Life Audit', category:'Finances', priority:'MED', status:'In Progress' },
+    { id:'DONE-501', subject:'Book dental checkup appointment', email:'Health Task', category:'Health', priority:'HIGH', status:'Completed' },
+    { id:'DONE-502', subject:'File Q1 utility receipts', email:'Tax Preparation', category:'Finances', priority:'MED', status:'Completed' }
+  ];
+
+  let checklists   = JSON.parse(localStorage.getItem('hub_checklists'))    || defaultChecklists;
+  let pillarTitles = JSON.parse(localStorage.getItem('hub_pillar_titles')) || defaultPillarTitles;
+  let tickets      = JSON.parse(localStorage.getItem('hub_tasks'))         || defaultTasks;
+  let currentViewingTaskId = null;
+
+  const statusColors = { 'Ideas':'var(--purple)', 'In Progress':'var(--amber)', 'Completed':'var(--green)' };
+  const boxes = [
+    { key:'scott',   color:'var(--purple)' },
+    { key:'shrills', color:'var(--amber)'  },
+    { key:'roman',   color:'var(--green)'  },
+    { key:'jeremy',  color:'var(--blue)'   },
+    { key:'brandon', color:'var(--red)'    }
+  ];
+
+  function initTodoPage() {
+    initCharts();
+    renderAll();
+    const content = document.querySelector('.todo-content');
+    if (content) content.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTodoPage);
+  } else {
+    initTodoPage();
+  }
+
+  function save() {
+    localStorage.setItem('hub_checklists',    JSON.stringify(checklists));
+    localStorage.setItem('hub_pillar_titles', JSON.stringify(pillarTitles));
+    localStorage.setItem('hub_tasks',         JSON.stringify(tickets));
+  }
+
+  function renderAll() { renderMetrics(); renderChecklists(); renderKanban(tickets); renderList(tickets); }
+
+  function renderMetrics() {
+    const ideas = tickets.filter(t=>t.status==='Ideas').length;
+    const prog  = tickets.filter(t=>t.status==='In Progress').length;
+    const done  = tickets.filter(t=>t.status==='Completed').length;
+    let total=0, checked=0;
+    Object.values(checklists).forEach(l => l.forEach(i => { total++; if(i.checked) checked++; }));
+    const pct = total > 0 ? Math.round((checked/total)*100) : 100;
+
+    document.getElementById('metrics-container').innerHTML = `
+      <div class="metric-card">
+        <div class="metric-label">Ideas</div>
+        <div class="metric-value" style="color:var(--purple)">${ideas}</div>
+        <div class="metric-sub">Pending review</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">In Progress</div>
+        <div class="metric-value" style="color:var(--amber)">${prog}</div>
+        <div class="metric-sub">Active tasks</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Completed</div>
+        <div class="metric-value" style="color:var(--green)">${done}</div>
+        <div class="metric-sub">Shipped</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Daily Progress</div>
+        <div class="metric-value">${pct}<span style="font-size:14px;color:var(--text2)">%</span></div>
+        <div class="metric-sub" style="color:var(--green2)">${checked} / ${total} habits</div>
+      </div>`;
+  }
+
+  function renderChecklists() {
+    const sel = document.getElementById('target-box');
+    if (sel) sel.innerHTML = boxes.map(b=>`<option value="${b.key}">${pillarTitles[b.key]}</option>`).join('');
+
+    document.getElementById('category-todo-grid').innerHTML = boxes.map(box => {
+      const title = pillarTitles[box.key];
+      const items = checklists[box.key] || [];
+      const listHtml = items.map(item => `
+        <li class="todo-item ${item.checked?'checked':''}">
+          <div class="todo-item-content">
+            <input type="checkbox" class="todo-check" ${item.checked?'checked':''} onchange="toggleCheck('${box.key}','${item.id}')">
+            <span class="todo-item-text" contenteditable="true"
+                  onblur="renameItem('${box.key}','${item.id}',this)"
+                  onkeydown="noEnter(event)">${item.text}</span>
+          </div>
+          <button class="todo-item-delete" onclick="deleteItem('${box.key}','${item.id}')">×</button>
+        </li>`).join('');
+
+      return `
+        <div class="todo-box">
+          <div class="todo-title">
+            <div class="logo-dot" style="background:${box.color}"></div>
+            <span class="todo-title-text" contenteditable="true"
+                  onblur="renamePillar('${box.key}',this)"
+                  onkeydown="noEnter(event)">${title}</span>
+          </div>
+          <ul class="todo-list">
+            ${listHtml || `<li class="todo-item" style="color:var(--text3);font-style:italic;font-size:11px;">No items yet</li>`}
+          </ul>
+          <div class="todo-inline-add">
+            <input type="text" placeholder="Add item..." class="todo-inline-input"
+                   onkeydown="inlineAdd(event,'${box.key}')">
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function noEnter(e) { if(e.key==='Enter'){e.preventDefault();e.target.blur();} }
+
+  function renamePillar(key, el) {
+    const v = el.innerText.trim();
+    if(v) { pillarTitles[key]=v; save(); } else { el.innerText=pillarTitles[key]; }
+  }
+
+  function renameItem(key, id, el) {
+    const v = el.innerText.trim();
+    const item = checklists[key].find(x=>x.id===id);
+    if(item && v) { item.text=v; save(); } else if(item) { el.innerText=item.text; }
+  }
+
+  function toggleCheck(key, id) {
+    const item = (checklists[key]||[]).find(x=>x.id===id);
+    if(item) { item.checked=!item.checked; save(); renderAll(); }
+  }
+
+  function inlineAdd(e, key) {
+    if(e.key!=='Enter') return;
+    const text = e.target.value.trim();
+    if(!text) return;
+    checklists[key].push({ id:'c_'+Date.now(), text, checked:false });
+    save(); renderAll();
+    e.target.value='';
+  }
+
+  function deleteItem(key, id) {
+    checklists[key] = checklists[key].filter(x=>x.id!==id);
+    save(); renderAll();
+  }
+
+  function renderKanban(data) {
+    const statuses = ['Ideas','In Progress','Completed'];
+    const html = statuses.map(status => {
+      const cols = data.filter(t=>t.status===status);
+      return `
+        <div class="column">
+          <div class="col-header">
+            <div class="col-dot" style="background:${statusColors[status]}"></div>
+            <span class="col-title">${status}</span>
+            <span class="col-count">${cols.length}</span>
+          </div>
+          <div class="col-body">
+            ${cols.map(t=>`
+              <div class="kcard" onclick="openTicket('${t.id}')">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span class="tid">${t.id}</span>
+                  <span class="pbadge ${t.priority.toLowerCase()}">${t.priority}</span>
+                </div>
+                <div class="ctitle">${t.subject}</div>
+                <div class="card-foot">
+                  <span class="cemail">${t.email}</span>
+                  <span class="cbadge">${t.category}</span>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+
+    const k = document.getElementById('kanban-board');
+    const o = document.getElementById('overview-mini-board');
+    if(k) k.innerHTML = html;
+    if(o) o.innerHTML = html;
+  }
+
+  function renderList(data) {
+    document.getElementById('list-body').innerHTML = data.map(t=>`
+      <tr onclick="openTicket('${t.id}')">
+        <td style="color:var(--text0);font-weight:600;">${t.subject}</td>
+        <td><span class="cbadge">${t.category}</span></td>
+        <td><span class="pbadge ${t.priority.toLowerCase()}">${t.priority}</span></td>
+        <td>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div class="col-dot" style="background:${statusColors[t.status]}"></div>
+            <span style="color:var(--text1);font-size:12px;">${t.status}</span>
+          </div>
+        </td>
+        <td>
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 8px;"
+            onclick="event.stopPropagation();deleteSpecificTask('${t.id}')">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  function switchView(view) {
+    document.querySelectorAll('.view-panel').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
+    document.getElementById('view-'+view).classList.add('active');
+    document.querySelector(`[data-view="${view}"]`).classList.add('active');
+  }
+
+  function switchPersonalSection(section) {
+    document.querySelectorAll('.personal-section-panel').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.section-tab').forEach(t=>t.classList.remove('active'));
+    document.getElementById('personal-section-'+section).classList.add('active');
+    document.querySelector(`[data-section-tab="${section}"]`).classList.add('active');
+
+    const isTodo = section === 'todo';
+    document.getElementById('todo-view-tabs').style.visibility = isTodo ? 'visible' : 'hidden';
+    document.getElementById('todo-actions').style.visibility = isTodo ? 'visible' : 'hidden';
+  }
+
+  function openTicket(id) {
+    const t = tickets.find(x=>x.id===id);
+    currentViewingTaskId = id;
+    document.getElementById('edit-goal-title').value    = t.subject;
+    document.getElementById('edit-goal-details').value  = t.email || '';
+    document.getElementById('edit-goal-category').value = t.category;
+    document.getElementById('edit-goal-priority').value = t.priority;
+    document.getElementById('edit-goal-status').value   = t.status;
+    document.getElementById('ticketModal').style.display = 'flex';
+  }
+
+  function handleEditGoalSave(e) {
+    e.preventDefault();
+    const t = tickets.find(x=>x.id===currentViewingTaskId);
+    if(t) {
+      t.subject   = document.getElementById('edit-goal-title').value.trim();
+      t.email     = document.getElementById('edit-goal-details').value.trim();
+      t.category  = document.getElementById('edit-goal-category').value;
+      t.priority  = document.getElementById('edit-goal-priority').value;
+      t.status    = document.getElementById('edit-goal-status').value;
+      save(); renderAll(); closeModal();
+    }
+  }
+
+  function closeModal(e) {
+    if(e && e.target !== document.getElementById('ticketModal')) return;
+    document.getElementById('ticketModal').style.display='none';
+    currentViewingTaskId=null;
+  }
+  function closeModal() { document.getElementById('ticketModal').style.display='none'; currentViewingTaskId=null; }
+
+  function deleteCurrentTask() { if(currentViewingTaskId){ deleteSpecificTask(currentViewingTaskId); closeModal(); } }
+
+  function deleteSpecificTask(id) {
+    tickets = tickets.filter(x=>x.id!==id);
+    save(); renderAll();
+  }
+
+  function openCreateModal() { document.getElementById('createModal').style.display='flex'; }
+
+  function closeCreateModal(e) {
+    if(e && e.target!==document.getElementById('createModal')) return;
+    document.getElementById('createModal').style.display='none';
+    document.getElementById('create-task-form').reset();
+    toggleFormFields();
+  }
+  function closeCreateModal() {
+    document.getElementById('createModal').style.display='none';
+    document.getElementById('create-task-form').reset();
+    toggleFormFields();
+  }
+
+  function toggleFormFields() {
+    const type = document.getElementById('item-type').value;
+    document.getElementById('checklist-fields-group').style.display = type==='checklist'?'block':'none';
+    document.getElementById('board-fields-group').style.display     = type==='board'?'block':'none';
+  }
+
+  function handleCreateTask(e) {
+    e.preventDefault();
+    const title = document.getElementById('task-title').value.trim();
+    const type  = document.getElementById('item-type').value;
+
+    if(type==='checklist') {
+      const key = document.getElementById('target-box').value;
+      checklists[key].push({ id:'c_'+Date.now(), text:title, checked:false });
+    } else {
+      const status   = document.getElementById('task-status').value;
+      const prefix   = status==='Completed'?'DONE':status==='In Progress'?'TASK':'IDEA';
+      const rand     = Math.floor(100+Math.random()*900);
+      tickets.push({
+        id: `${prefix}-${rand}`,
+        subject: title,
+        email: 'Personal Goal',
+        category: document.getElementById('task-category').value,
+        priority: document.getElementById('task-priority').value,
+        status
+      });
+    }
+    save(); renderAll(); closeCreateModal();
+  }
+
+  function initCharts() {
+    new Chart(document.getElementById('volumeChart'), {
+      type: 'line',
+      data: {
+        labels: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+        datasets: [{
+          label: 'Completed Tasks',
+          data: [1,2,0,3,2,4,3],
+          borderColor: 'var(--cyan)',
+          backgroundColor: 'rgba(0,229,255,0.06)',
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: 'var(--cyan)',
+          pointRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'rgba(30,48,80,0.6)' }, ticks: { color: '#3a5570', font: { family: 'Arial', size: 11 } } },
+          y: { grid: { color: 'rgba(30,48,80,0.6)' }, ticks: { color: '#3a5570', font: { family: 'Arial', size: 11 } } }
+        }
+      }
+    });
+  }
+</script>
+</body>
+</html>

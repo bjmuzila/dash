@@ -1,0 +1,901 @@
+(() => {
+  if (window.__optionsChainModuleLoaded) {
+    if (typeof window.chainInit === 'function') window.chainInit();
+    return;
+  }
+  window.__optionsChainModuleLoaded = true;
+
+  // ── OPTIONS CHAIN · /proxy/api/tt/chains/<TICKER> ──────────────────────────
+  (function() {
+    'use strict';
+
+    // ── ticker list ────────────────────────────────────────────────────────────
+    var TICKER_LIST = [
+      'SPX','SPY','QQQ','NDX','IWM','RSP',
+      'AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA',
+      'ABNB','AFRM','ARM','BA','BABA','CCJ','CHWY','COIN','COST','CRCL','CRM','CRWD','CRWV',
+      'DJT','FDX','GME','GS','HIMS','HOOD','IBIT','INTC','IREN',
+      'LAC','LLY','MA','MARA','MCD','MRK','MRNA','MU',
+      'NIO','NKE','NNE','NOK','NXE','OKLO','OPEN','OXY',
+      'PDD','PFE','PLTR','PTON','RBLX','RIOT','RKLB','ROKU',
+      'SE','SMH','SMCI','SNDK','SNOW','SOFI','SOUN','SOXL',
+      'TGT','TQQQ','TSM','TTD','TSLL',
+      'U','UNH','UPS','UPST','V','XPEV','XYZ',
+      'ASTS','AVGO','BYND','CMG','CWVX','ETHA','FBL','FIG','HIMZ',
+      'LLYX','MSFU','NFLX','NVDX','OSCR','PONY','QBTS','QUBT','RGTI','RIVN','SLV','UUUU'
+    ].sort();
+
+    // ── state ──────────────────────────────────────────────────────────────────
+    var _expirations  = [];
+    var _expiryCache  = {};
+    var _activeExpiry = null;
+    var _activeTicker = 'SPX';
+    var _strikes      = [];
+    var _liveData     = {};
+    var _spot         = 0;
+    var _ws           = null;
+    var _kaTimer      = null;
+    var _subSymbols   = [];
+    var _renderTimer  = null;
+    var _priceMode    = 'mid';
+    var _chainIntensity = 1.4;
+    var _wsDataStartTime = null;
+    var _minWaitForWsMs = 10000; // min ms to wait after first WS quote before rendering (10 seconds)
+
+    // ── column config ──────────────────────────────────────────────────────────
+    var CALL_COLS = ['symbol','oi','vol','bid','ask','last','mid','iv','delta'];
+    var PUT_COLS  = ['delta','iv','mid','last','bid','ask','vol','oi','symbol'];
+    var NET_COLS  = ['gex','dex','chex','vex'];
+    var COL_W = { symbol:'96px', oi:'70px', vol:'88px', bid:'62px', ask:'62px', last:'62px', mid:'62px', iv:'62px', delta:'60px', gex:'88px', dex:'88px', chex:'88px', vex:'88px' };
+    var COL_LABELS = { symbol:'Symbol', oi:'OI', vol:'Vol', bid:'Bid', ask:'Ask', last:'Last', mid:'Mid', iv:'IV', delta:'Δ', gex:'NET GEX', dex:'NET DEX', chex:'NET CHEX', vex:'NET VEX' };
+
+    function colsCSS() {
+      var p = CALL_COLS.map(function(c) { return COL_W[c]; });
+      NET_COLS.forEach(function(c) { p.push(COL_W[c]); });
+      p.push('72px'); // strike
+      PUT_COLS.forEach(function(c) { p.push(COL_W[c]); });
+      return p.join(' ');
+    }
+
+    // ── helpers ────────────────────────────────────────────────────────────────
+    function el(id) { return document.getElementById(id); }
+    function fp(v, d) { var n = parseFloat(v); return isFinite(n) ? n.toFixed(d==null?2:d) : '--'; }
+    function fpPct(v) { var n = parseFloat(v); return isFinite(n) ? (n*100).toFixed(1)+'%' : '--'; }
+    function fmtDelta(v) { var n = parseFloat(v); return isFinite(n) ? (n>=0?'+':'')+n.toFixed(3) : '--'; }
+    function fmtWhole(v) { var n = parseFloat(v); return isFinite(n) ? Math.round(n).toLocaleString('en-US') : '--'; }
+    function fmtMoney(v) {
+      var n = parseFloat(v);
+      if (!isFinite(n)) return '--';
+      var s = n >= 0 ? '+' : '-';
+      var a = Math.abs(n);
+      return s + '$' + (a/1e6).toFixed(2) + 'M';
+    }
+
+    function setStatus(state, msg) {
+      var dot = el('chain-status-dot'), txt = el('chain-status-txt');
+      var colors = { live:'#00e676', loading:'#ffb300', err:'#ff4757', idle:'#1e293b' };
+      if (dot) dot.style.background = colors[state] || '#1e293b';
+      if (txt) { txt.textContent = msg || state.toUpperCase(); txt.style.color = colors[state] || '#e4e4e7'; }
+    }
+
+    function todayETStr() {
+      var parts = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+      var m = {}; parts.forEach(function(p){m[p.type]=p.value;});
+      return m.year+'-'+m.month+'-'+m.day;
+    }
+
+    function daysTo(dateStr) {
+      return Math.round((new Date(dateStr) - new Date(todayETStr())) / 86400000);
+    }
+
+    function setPriceMode(mode) {
+      _priceMode = mode === 'last' ? 'last' : 'mid';
+      var lastBtn = el('chain-price-last');
+      var midBtn = el('chain-price-mid');
+      if (lastBtn) {
+        lastBtn.style.background = _priceMode === 'last' ? '#00e5ff22' : 'transparent';
+        lastBtn.style.borderColor = _priceMode === 'last' ? '#00e5ff' : 'rgba(255,255,255,.12)';
+        lastBtn.style.color = _priceMode === 'last' ? '#00e5ff' : '#64748b';
+      }
+      if (midBtn) {
+        midBtn.style.background = _priceMode === 'mid' ? '#00e5ff22' : 'transparent';
+        midBtn.style.borderColor = _priceMode === 'mid' ? '#00e5ff' : 'rgba(255,255,255,.12)';
+        midBtn.style.color = _priceMode === 'mid' ? '#00e5ff' : '#64748b';
+      }
+      renderTable();
+    }
+
+    function setChainIntensity(val) {
+      var next = Math.max(0.2, Math.min(3, parseFloat(val) || 1.4));
+      _chainIntensity = next;
+      var slider = el('chain-intensity');
+      var label = el('chain-intensity-val');
+      if (slider && slider.value !== String(next)) slider.value = String(next);
+      if (label) label.textContent = next.toFixed(2) + 'x';
+      renderTable();
+    }
+
+    // ── build ticker datalist + input ──────────────────────────────────────────
+    function buildTickerDropdown() {
+      var input = el('chain-ticker-select');
+      var dl    = el('chain-ticker-list');
+      if (!dl || dl.children.length > 0) return;
+      TICKER_LIST.forEach(function(t) {
+        var opt = document.createElement('option');
+        opt.value = t;
+        dl.appendChild(opt);
+      });
+      if (input && !input._bound) {
+        input._bound = true;
+        input.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+        function onTickerConfirm() {
+          var v = input.value.trim().toUpperCase();
+          if (!v) return;
+          if (v === _activeTicker && _expirations.length) return;
+          _activeTicker = v;
+          var lbl = el('chain-ticker-label');
+          if (lbl) lbl.textContent = v;
+          _expirations = []; _activeExpiry = null;
+          fetchExpirations();
+        }
+        input.addEventListener('change', onTickerConfirm);
+        input.addEventListener('blur', onTickerConfirm);
+      }
+    }
+
+    // ── fetch expirations and populate expiry dropdown ─────────────────────────
+    function fetchExpirations(cb) {
+      if (_expiryCache[_activeTicker] && _expiryCache[_activeTicker].length) {
+        _expirations = _expiryCache[_activeTicker].slice();
+        var expSelCached = el('chain-expiry-select');
+        if (expSelCached) {
+          expSelCached.innerHTML = '<option value="" style="background:#0a0e14;color:#e4e4e7">-- Expiry --</option>';
+          _expirations.forEach(function(exp) {
+            var opt = document.createElement('option');
+            opt.value = exp.date;
+            opt.textContent = exp.label;
+            opt.style.background = '#0a0e14';
+            opt.style.color = '#e4e4e7';
+            expSelCached.appendChild(opt);
+          });
+          var dte0 = _expirations.filter(function(e){ return e.daysTo===0; })[0];
+          var autoSelect = dte0 || _expirations[0];
+          if (autoSelect) { expSelCached.value = autoSelect.date; _activeExpiry = autoSelect.date; }
+        }
+        setStatus('idle', 'READY');
+        if (cb) cb(_expirations, { data: { items: _expirations } });
+        return;
+      }
+      setStatus('loading', 'LOADING...');
+      var expSel = el('chain-expiry-select');
+      if (expSel) expSel.innerHTML = '<option value="">Loading...</option>';
+
+      fetch('/proxy/api/tt/expirations/' + encodeURIComponent(_activeTicker))
+        .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP '+r.status); })
+        .then(function(json) {
+          var items = (json.data && json.data.items) ? json.data.items : [];
+
+          var seen = {};
+          _expirations = [];
+          items.forEach(function(item) {
+            var d = item['expiration-date'] || '';
+            if (!d || seen[d]) return;
+            seen[d] = true;
+            var dt = daysTo(d);
+            var mmdd = d.slice(5);
+            var dte  = dt + 'DTE';
+            var label = dte + '  ' + mmdd;
+            _expirations.push({ date:d, daysTo:dt, label:label, type: item['expiration-type'] || '' });
+          });
+          _expirations.sort(function(a,b){ return a.daysTo - b.daysTo; });
+
+          var filtered = _expirations.filter(function(e) {
+            if (e.daysTo <= 7) return true;
+            var expType = (e.type || '').toLowerCase();
+            if (expType === 'weekly' || expType === 'monthly') return true;
+            var parts = e.date.split('-');
+            var d = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]));
+            return d.getDay() === 5; // include all Friday expirations
+          });
+
+          if (expSel) {
+            expSel.innerHTML = '<option value="" style="background:#0a0e14;color:#e4e4e7">-- Expiry --</option>';
+            filtered.forEach(function(exp) {
+              var opt = document.createElement('option');
+              opt.value = exp.date;
+              opt.textContent = exp.label;
+              opt.style.background = '#0a0e14';
+              opt.style.color = '#e4e4e7';
+              expSel.appendChild(opt);
+            });
+            var dte0 = filtered.filter(function(e){ return e.daysTo===0; })[0];
+            var autoSelect = dte0 || filtered[0];
+            if (autoSelect) { expSel.value = autoSelect.date; _activeExpiry = autoSelect.date; }
+          }
+
+          setStatus('idle', 'READY');
+          _expiryCache[_activeTicker] = _expirations.slice();
+          if (cb) cb(items, json);
+        })
+        .catch(function(e) {
+          setStatus('err', 'ERR: '+e);
+          if (expSel) expSel.innerHTML = '<option value="">Error loading</option>';
+        });
+    }
+
+    // ── fetch strikes for a specific expiry ────────────────────────────────────
+    function loadExpiry(expDate) {
+      _wsDataStartTime = null;
+      setStatus('loading', 'LOADING...');
+      var bodyEl = el('chain-body');
+      if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Subscribing quotes...</div>';
+
+      var baseUrl = '/proxy/api/tt/chains/' + encodeURIComponent(_activeTicker) + '?expiration=' + expDate;
+      var isSPY = /^SPY$/i.test(_activeTicker);
+
+      fetch(baseUrl + '&noSubscribe=1&range=all')
+        .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP '+r.status); })
+        .then(function(json) {
+          var items = (json.data && json.data.items) ? json.data.items : [];
+          var targetItems = items.filter(function(i){
+            return i['expiration-date'] === expDate ||
+                   i.expirationDate === expDate ||
+                   i['expirationDate'] === expDate;
+          });
+          if (!targetItems.length) {
+            targetItems = items.filter(function(i) {
+              var d = i['expiration-date'] || i.expirationDate || i['expirationDate'] || '';
+              return d && String(d).slice(0, 10) === String(expDate).slice(0, 10);
+            });
+          }
+          var rawSpot = json.data && json.data.underlyingPrice ? parseFloat(json.data.underlyingPrice) : 0;
+          var spotPrice = (rawSpot > 10) ? rawSpot : 0;
+          var preStrikes = buildStrikes(targetItems.length ? targetItems : items, spotPrice);
+          updateSpot(json.data && json.data.underlyingPrice);
+
+          var allSyms = [];
+          preStrikes.forEach(function(r) {
+            if (r.callSym) allSyms.push(r.callSym);
+            if (r.putSym)  allSyms.push(r.putSym);
+          });
+
+          if (!allSyms.length || isSPY) {
+            window._chainStrikesReady = preStrikes;
+            if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Loading quotes...</div>';
+            connectDxLink();
+            setStatus('loading', 'SUBSCRIBING...');
+            _wsDataStartTime = null;
+            var waitUntil = Date.now() + _minWaitForWsMs;
+            var checkReady = function() {
+              var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
+              if (_wsDataStartTime && elapsed >= _minWaitForWsMs) {
+                _strikes = window._chainStrikesReady || preStrikes;
+                renderHeader();
+                renderTable();
+                setStatus('live', 'LIVE');
+              } else if (!_wsDataStartTime && elapsed >= _minWaitForWsMs) {
+                console.log('[Chain] timeout waiting for WS, rendering with static data');
+                _strikes = window._chainStrikesReady || preStrikes;
+                renderHeader();
+                renderTable();
+                setStatus('live', 'LIVE (Static)');
+              } else {
+                setTimeout(checkReady, 50);
+              }
+            };
+            setTimeout(checkReady, 50);
+            return;
+          }
+
+          // Subscribe via REST — WS path blocks non-SPXW symbols
+          window._chainSymbolsToSubscribe = allSyms;
+          sendSubscriptions();
+          if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Loading quotes...</div>';
+          window._chainStrikesReady = preStrikes;
+          connectDxLink();
+          setStatus('loading', 'SUBSCRIBING...');
+          _wsDataStartTime = null;
+          var waitUntil = Date.now() + _minWaitForWsMs;
+          var checkReady = function() {
+            var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
+            if (_wsDataStartTime && elapsed >= _minWaitForWsMs) {
+              _strikes = window._chainStrikesReady || preStrikes;
+              renderHeader();
+              renderTable();
+              setStatus('live', 'LIVE');
+            } else if (!_wsDataStartTime && elapsed >= _minWaitForWsMs) {
+              console.log('[Chain] timeout waiting for WS, rendering with static data');
+              _strikes = window._chainStrikesReady || preStrikes;
+              renderHeader();
+              renderTable();
+              setStatus('live', 'LIVE (Static)');
+            } else {
+              setTimeout(checkReady, 50);
+            }
+          };
+          setTimeout(checkReady, 50);
+        })
+        .catch(function(e) { setStatus('err', 'ERR: '+e); });
+    }
+
+    // ── parse response items into strike rows ──────────────────────────────────
+    function buildStrikes(expGroups, spotPrice) {
+      var map = {};
+      expGroups.forEach(function(expGroup) {
+        var strikeRows = expGroup.strikes || [];
+        strikeRows.forEach(function(item) {
+          var strike = parseFloat(item['strike-price'] || 0);
+          if (!strike) return;
+          var key = strike.toFixed(2);
+          if (!map[key]) map[key] = { strike:strike, callSym:null, putSym:null, callTT:null, putTT:null };
+        });
+      });
+
+      var allStrikes = Object.values(map).sort(function(a,b){ return a.strike - b.strike; });
+
+      expGroups.forEach(function(expGroup) {
+        var strikeRows = expGroup.strikes || [];
+        strikeRows.forEach(function(item) {
+          var strike = parseFloat(item['strike-price'] || 0);
+          if (!strike) return;
+          var key = strike.toFixed(2);
+          if (!map[key]) return;
+
+          var r = map[key];
+          function safeFloat(v) { var n = parseFloat(v); return isFinite(n) ? n : null; }
+          function safeInt(v)   { var n = parseInt(v,10); return isFinite(n) ? n : null; }
+          if (item.call) {
+            r.callTT  = item.call;
+            r.callSym = item.call['streamer-symbol'] || item.call.symbol || '';
+            if (r.callSym) _liveData[r.callSym] = {
+              bid:   safeFloat(item.call.bid),
+              ask:   safeFloat(item.call.ask),
+              last:  safeFloat(item.call.last),
+              iv:    safeFloat(item.call['implied-volatility']),
+              delta: safeFloat(item.call.delta),
+              gamma: safeFloat(item.call.gamma),
+              theta: safeFloat(item.call.theta),
+              vega:  safeFloat(item.call.vega),
+              oi:    safeInt(item.call['open-interest']) ?? 0,
+              vol:   safeInt(item.call.volume) ?? 0,
+              size:  null
+            };
+          }
+          if (item.put) {
+            r.putTT  = item.put;
+            r.putSym = item.put['streamer-symbol'] || item.put.symbol || '';
+            if (r.putSym) _liveData[r.putSym] = {
+              bid:   safeFloat(item.put.bid),
+              ask:   safeFloat(item.put.ask),
+              last:  safeFloat(item.put.last),
+              iv:    safeFloat(item.put['implied-volatility']),
+              delta: safeFloat(item.put.delta),
+              gamma: safeFloat(item.put.gamma),
+              theta: safeFloat(item.put.theta),
+              vega:  safeFloat(item.put.vega),
+              oi:    safeInt(item.put['open-interest']) ?? 0,
+              vol:   safeInt(item.put.volume) ?? 0,
+              size:  null
+            };
+          }
+        });
+      });
+      return Object.values(map).sort(function(a,b){ return a.strike - b.strike; });
+    }
+
+    function updateSpot(price) {
+      var p = parseFloat(price);
+      if (isFinite(p) && p > 0) {
+        _spot = p;
+        var spotEl = el('chain-spot');
+        if (spotEl) spotEl.textContent = p.toFixed(2);
+      } else if (window.esPrice > 1000) {
+        _spot = window.esPrice;
+      }
+    }
+
+    // ── expiry dropdown handler ────────────────────────────────────────────────
+    function bindExpirySelect() {
+      var expSel = el('chain-expiry-select');
+      if (!expSel || expSel._bound) return;
+      expSel._bound = true;
+      expSel.addEventListener('change', function() {
+        _activeExpiry = this.value || null;
+        if (_activeExpiry) loadExpiry(_activeExpiry);
+      });
+    }
+
+    window._chainSelectExpiry = function(date) {
+      _activeExpiry = date;
+      var expSel = el('chain-expiry-select');
+      if (expSel) expSel.value = date;
+    };
+    window.setChainIntensity = setChainIntensity;
+    window.setPriceMode = setPriceMode;
+
+    // ── render column header ───────────────────────────────────────────────────
+    function renderHeader() {
+      var hdr = el('chain-header');
+      if (!hdr) return;
+      var cols = colsCSS();
+      hdr.setAttribute('style', 'display:grid;grid-template-columns:'+cols+';background:var(--bg2);border-bottom:2px solid var(--border2);flex-shrink:0;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase');
+
+      var callH = CALL_COLS.map(function(c) {
+        return '<div style="padding:5px 6px;text-align:'+(c==='symbol'?'left':'right')+';color:#2298cf;font-family:Arial">'+(COL_LABELS[c]||c)+'</div>';
+      });
+      var netH = NET_COLS.map(function(c) {
+        return '<div style="padding:5px 6px;text-align:center;color:#a78bfa;font-family:Arial">'+(COL_LABELS[c]||c)+'</div>';
+      });
+      var strikeH = '<div style="padding:5px 6px;text-align:center;color:#e4e4e7;font-family:Arial">Strike</div>';
+      var putH = PUT_COLS.map(function(c) {
+        return '<div style="padding:5px 6px;text-align:right;color:#ff7c88;font-family:Arial">'+(COL_LABELS[c]||c)+'</div>';
+      });
+      hdr.innerHTML = callH.join('') + netH.join('') + strikeH + putH.join('');
+    }
+
+    // ── render rows ────────────────────────────────────────────────────────────
+    function renderTable() {
+      var bodyEl = el('chain-body');
+      if (!bodyEl) return;
+      if (!_strikes.length) {
+        bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#ff4757;font-family:Arial">No strikes returned</div>';
+        return;
+      }
+      if (!_spot && window.esPrice > 1000) _spot = window.esPrice;
+      var cols = colsCSS();
+      var spot = _spot;
+      var atmStrike = spot > 0 ? _strikes.reduce(function(best, r) {
+        return Math.abs(r.strike-spot) < Math.abs(best.strike-spot) ? r : best;
+      }, _strikes[0]).strike : 0;
+      var maxAbs = { gex: 1, dex: 1, chex: 1, vex: 1 };
+      var baseSpot = _spot > 0 ? _spot : (window.esPrice > 1000 ? window.esPrice : 0);
+      _strikes.forEach(function(row) {
+        var cd = _liveData[row.callSym] || {};
+        var pd = _liveData[row.putSym] || {};
+        if ((!cd.bid && !cd.ask && !cd.last && !cd.vol && !cd.oi) && row.callTT) {
+          cd = Object.assign({}, cd, row.callTT);
+        }
+        if ((!pd.bid && !pd.ask && !pd.last && !pd.vol && !pd.oi) && row.putTT) {
+          pd = Object.assign({}, pd, row.putTT);
+        }
+        var cc = (parseFloat(cd.oi)||0) + (parseFloat(cd.vol)||0);
+        var pc = (parseFloat(pd.oi)||0) + (parseFloat(pd.vol)||0);
+        var gex  = Math.abs(((parseFloat(cd.gamma)||0)*cc - (parseFloat(pd.gamma)||0)*pc) * baseSpot * baseSpot * 0.01 * 100);
+        var dex  = Math.abs((Math.abs(parseFloat(cd.delta)||0)*cc - Math.abs(parseFloat(pd.delta)||0)*pc) * baseSpot * 100);
+        var chex = Math.abs((-(parseFloat(cd.theta)||0)*cc + (parseFloat(pd.theta)||0)*pc) * baseSpot * 100);
+        var vex  = Math.abs(((parseFloat(cd.vega)||0)*cc - (parseFloat(pd.vega)||0)*pc) * baseSpot * 100);
+        if (gex > maxAbs.gex) maxAbs.gex = gex;
+        if (dex > maxAbs.dex) maxAbs.dex = dex;
+        if (chex > maxAbs.chex) maxAbs.chex = chex;
+        if (vex > maxAbs.vex) maxAbs.vex = vex;
+      });
+
+      function metricBg(value, maxValue) {
+        var n = parseFloat(value) || 0;
+        if (!n) return 'transparent';
+        var ratio = Math.min(Math.abs(n) / Math.max(maxValue, 1) * (0.35 + _chainIntensity * 0.65), 1);
+        var alpha = 0.08 + Math.pow(ratio, 1.45) * 0.82;
+        return n >= 0 ? 'rgba(0,229,255,' + alpha.toFixed(2) + ')' : 'rgba(255,71,87,' + alpha.toFixed(2) + ')';
+      }
+
+      var sortedStrikes = _strikes.slice().sort(function(a,b){ return b.strike - a.strike; });
+
+      // Filter to 10% above and below spot price
+      var spot = _spot > 0 ? _spot : (window.esPrice > 1000 ? window.esPrice : 0);
+      console.log('[Chain] renderTable before filter: spot=' + spot + ', _strikes.length=' + _strikes.length + ', sortedStrikes.length=' + sortedStrikes.length);
+      if (spot > 0) {
+        var lowerBound = spot * 0.9;
+        var upperBound = spot * 1.1;
+        console.log('[Chain] filtering to ' + lowerBound.toFixed(2) + ' - ' + upperBound.toFixed(2));
+        var filtered = sortedStrikes.filter(function(r) {
+          return r.strike >= lowerBound && r.strike <= upperBound;
+        });
+        if (filtered.length > 0) {
+          sortedStrikes = filtered;
+        } else {
+          console.log('[Chain] no strikes in range, showing all');
+        }
+      }
+      console.log('[Chain] renderTable after filter: ' + sortedStrikes.length + ' strikes, liveData=' + Object.keys(_liveData).length);
+
+      var html = sortedStrikes.map(function(row) {
+        var isATM = row.strike === atmStrike;
+        var cd = _liveData[row.callSym] || {};
+        var pd = _liveData[row.putSym]  || {};
+        if ((!cd.bid && !cd.ask && !cd.last && !cd.vol && !cd.oi) && row.callTT) {
+          cd = Object.assign({}, cd, row.callTT);
+        }
+        if ((!pd.bid && !pd.ask && !pd.last && !pd.vol && !pd.oi) && row.putTT) {
+          pd = Object.assign({}, pd, row.putTT);
+        }
+        var rowBg = isATM ? 'background:rgba(255,179,0,.07);border-top:1px solid rgba(255,179,0,.25);border-bottom:1px solid rgba(255,179,0,.25)' : 'border-bottom:1px solid rgba(30,48,80,.35)';
+        var spot = _spot > 0 ? _spot : (window.esPrice > 1000 ? window.esPrice : 0);
+
+        var callContracts = (parseFloat(cd.oi) || 0) + (parseFloat(cd.vol) || 0);
+        var putContracts  = (parseFloat(pd.oi) || 0) + (parseFloat(pd.vol) || 0);
+        var netGex  = ((parseFloat(cd.gamma)||0) * callContracts - (parseFloat(pd.gamma)||0) * putContracts) * spot * spot * 0.01 * 100;
+        var netDex  = (Math.abs(parseFloat(cd.delta)||0) * callContracts - Math.abs(parseFloat(pd.delta)||0) * putContracts) * spot * 100;
+        var netChex = (-(parseFloat(cd.theta)||0) * callContracts + (parseFloat(pd.theta)||0) * putContracts) * spot * 100;
+        var netVex  = ((parseFloat(cd.vega)||0) * callContracts - (parseFloat(pd.vega)||0) * putContracts) * spot * 100;
+
+        function cell(col, d, side) {
+          var v='--', color='#a8b8cc', align='right';
+          var mid = (d.bid != null && d.ask != null && isFinite(d.bid) && isFinite(d.ask)) ? ((d.bid + d.ask) / 2) : null;
+          if (col==='symbol') {
+            v = (row.strike%1===0 ? row.strike.toFixed(0) : row.strike.toFixed(2)) + ' ' + (side==='call'?'C':'P');
+            color = side==='call' ? '#4db8ff' : '#ff7c88'; align = side==='call' ? 'left' : 'right';
+          }
+          else if (col==='last')  { v=fp(d.last,2);       color='#e4e4e7'; }
+          else if (col==='mid')   { v=_priceMode==='mid'?fp(mid,2):fp(d.last,2); color='#e4e4e7'; }
+          else if (col==='bid')   { v=fp(d.bid,2);         color='#f87171'; }
+          else if (col==='ask')   { v=fp(d.ask,2);         color='#4ade80'; }
+          else if (col==='iv')    { v=fpPct(d.iv);         color='#7278ca'; }
+          else if (col==='delta') { v=fmtDelta(d.delta);   color=parseFloat(d.delta)>=0?'#00e676':'#ff4757'; }
+          else if (col==='oi')    { v=fmtWhole(d.oi);      color='#94a3b8'; }
+          else if (col==='vol')   { v=fmtWhole(d.vol);     color='#e4e4e7'; }
+          var extra = col==='symbol' ? 'min-width:0;' : '';
+          return '<div style="padding:5px 8px;font-size:13px;font-family:Arial,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'+extra+'text-align:'+align+';color:'+color+'">'+v+'</div>';
+        }
+
+        function netCell(val, maxVal) {
+          var v = val ? fmtMoney(val) : '--';
+          var bg = metricBg(val, maxVal);
+          return '<div style="padding:5px 8px;font-size:12px;font-family:Arial,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;color:#ffffff;background:'+bg+';font-weight:700">'+v+'</div>';
+        }
+
+        var strikeColor = isATM ? '#ffb300' : '#94a3b8';
+        var strikeCell = '<div style="padding:4px 6px;font-size:13px;font-weight:800;font-family:Arial,monospace;text-align:center;color:'+strikeColor+';border-left:1px solid rgba(255,255,255,.06);border-right:1px solid rgba(255,255,255,.06)'+(isATM?';background:rgba(255,179,0,.12)':'')+'">'
+          + row.strike.toFixed(row.strike%1===0?0:2)
+          + '</div>';
+
+        var callCells = CALL_COLS.map(function(c){ return cell(c, cd, 'call'); }).join('');
+        var putCells  = PUT_COLS.map(function(c){  return cell(c, pd, 'put');  }).join('');
+        var netCells  = netCell(netGex, maxAbs.gex) + netCell(netDex, maxAbs.dex) + netCell(netChex, maxAbs.chex) + netCell(netVex, maxAbs.vex);
+
+        return '<div style="display:grid;grid-template-columns:'+cols+';'+rowBg+'" data-strike="'+row.strike+'">'+callCells+netCells+strikeCell+putCells+'</div>';
+      }).join('');
+
+      bodyEl.innerHTML = html;
+
+      if (atmStrike > 0 && !window.__chainAutoCenterBlocked) {
+        setTimeout(function() {
+          var rows = bodyEl.querySelectorAll('[data-strike]');
+          var closest = null, minDist = Infinity;
+          rows.forEach(function(r) {
+            var d = Math.abs(parseFloat(r.dataset.strike) - atmStrike);
+            if (d < minDist) { minDist=d; closest=r; }
+          });
+          if (closest) closest.scrollIntoView({ block:'center' });
+        }, 60);
+      }
+
+      var tsEl = el('chain-last-update');
+      if (tsEl) tsEl.textContent = new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+    }
+
+    // ── dxLink live updates (via proxy WS bridge) ──────────────────────────────
+    function connectDxLink() {
+      if (_ws && _ws.readyState === 1) return;
+      if (_ws) { try { _ws.close(); } catch(e) {} _ws = null; }
+
+      _ws = new WebSocket('ws://localhost:3001/ws/dxlink');
+      _ws.onopen = function() {
+        setStatus('live', 'LIVE');
+      };
+      _ws.onmessage = function(e) { handleMsg(e.data); };
+      _ws.onclose   = function() { setStatus('idle', 'DISCONNECTED'); _ws = null; };
+      _ws.onerror   = function() { setStatus('err', 'WS ERR'); };
+    }
+
+    function sendSubscriptions() {
+      var symbols = window._chainSymbolsToSubscribe || [];
+      if (!symbols.length) {
+        _subSymbols = [];
+        _strikes.forEach(function(r) {
+          if (r.callSym) _subSymbols.push(r.callSym);
+          if (r.putSym)  _subSymbols.push(r.putSym);
+        });
+        symbols = _subSymbols;
+      }
+      if (!symbols.length) return;
+      window._chainSymbolsToSubscribe = null;
+
+      // Use REST POST — the WS path is gated by shouldAcceptBrowserSubscription
+      // which blocks non-SPXW option symbols. The POST endpoint has no such filter.
+      var feedTypesBySymbol = {};
+      symbols.forEach(function(s) { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
+      fetch('/proxy/dxlink/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: symbols, feedTypesBySymbol: feedTypesBySymbol })
+      }).catch(function(e) { console.warn('[Chain] subscribe POST failed:', e); });
+    }
+
+    function handleMsg(raw) {
+      var msg; try { msg = JSON.parse(raw); } catch(e) { return; }
+      if (msg.type !== 'FEED_DATA') return;
+      var data = msg.data;
+      if (!Array.isArray(data)) return;
+      if (!_wsDataStartTime) _wsDataStartTime = Date.now();
+      var changed = false;
+      data.forEach(function(ev) {
+        if (!ev || !ev.eventSymbol) return;
+        var t = ev.eventType;
+        if (t === 'Quote')   { applyQuote(ev);   changed = true; }
+        if (t === 'Greeks')  { applyGreeks(ev);  changed = true; }
+        if (t === 'Summary') { applySummary(ev); changed = true; }
+        if (t === 'Trade')   { applyTrade(ev);   changed = true; }
+      });
+      if (changed) scheduleRender();
+    }
+
+    function applyQuote(ev) {
+      var sym=ev.eventSymbol;
+      if (!_liveData[sym]) _liveData[sym]={};
+      var d=_liveData[sym];
+      if (ev.bidPrice  != null) d.bid  = ev.bidPrice;
+      if (ev.askPrice  != null) d.ask  = ev.askPrice;
+      if (ev.lastPrice != null) d.last = ev.lastPrice;
+      if (ev.lastSize  != null) d.size = ev.lastSize;
+    }
+
+    function applyGreeks(ev) {
+      var sym = ev.eventSymbol;
+      if (!_liveData[sym]) _liveData[sym] = {};
+      var d = _liveData[sym];
+      if (ev.volatility != null) d.iv    = ev.volatility;
+      if (ev.delta      != null) d.delta = ev.delta;
+      if (ev.gamma      != null) d.gamma = ev.gamma;
+      if (ev.theta      != null) d.theta = ev.theta;
+      if (ev.vega       != null) d.vega  = ev.vega;
+    }
+
+    function applySummary(ev) {
+      var sym = ev.eventSymbol;
+      if (!_liveData[sym]) _liveData[sym] = {};
+      var d = _liveData[sym];
+      if (ev.openInterest != null) d.oi  = ev.openInterest;
+      if (ev.dayVolume    != null) d.vol = ev.dayVolume;
+    }
+
+    function applyTrade(ev) {
+      var sym = ev.eventSymbol;
+      if (!_liveData[sym]) _liveData[sym] = {};
+      var d = _liveData[sym];
+      if (ev.dayVolume != null && ev.dayVolume > 0) d.vol  = ev.dayVolume;
+      if (ev.price     != null && ev.price     > 0) d.last = ev.price;
+      if (ev.size      != null)                     d.size = ev.size;
+    }
+
+    function scheduleRender() {
+      if (_renderTimer) return;
+      _renderTimer = setTimeout(function() {
+        _renderTimer = null;
+        if (window.esPrice > 1000) _spot = window.esPrice;
+        renderTable();
+      }, 120);
+    }
+
+    // ── public API ─────────────────────────────────────────────────────────────
+    window.chainInit = function() {
+      buildTickerDropdown();
+      bindExpirySelect();
+      setPriceMode(_priceMode);
+      var input = el('chain-ticker-select');
+      if (input) input.value = _activeTicker;
+      var label = el('chain-ticker-label');
+      if (label) label.textContent = _activeTicker;
+      if (!_expirations.length) fetchExpirations();
+      var bodyEl = el('chain-body');
+      if (bodyEl && !bodyEl._userScrollBound) {
+        bodyEl._userScrollBound = true;
+        ['wheel', 'touchstart', 'pointerdown', 'mousedown', 'scroll'].forEach(function(type) {
+          bodyEl.addEventListener(type, function() {
+            window.__chainAutoCenterBlocked = true;
+          }, { passive: true });
+        });
+      }
+    };
+
+    window.chainGo = function() {
+      var tickerInput = el('chain-ticker-select');
+      var expSel      = el('chain-expiry-select');
+      var ticker = tickerInput ? tickerInput.value.trim().toUpperCase() : 'SPX';
+      var expiry = expSel ? expSel.value : null;
+      var lbl = el('chain-ticker-label');
+      if (lbl) lbl.textContent = ticker || 'SPX';
+
+      if (ticker !== _activeTicker || !_expirations.length) {
+        _activeTicker = ticker || 'SPX';
+        _expirations = []; _activeExpiry = null;
+        fetchExpirations(function() {
+          var expSel2 = el('chain-expiry-select');
+          var e = expSel2 ? expSel2.value : null;
+          if (e) { _activeExpiry = e; loadExpiry(e); }
+          else setStatus('idle', 'PICK EXPIRY');
+        });
+      } else {
+        if (!expiry) { setStatus('err', 'SELECT EXPIRY'); return; }
+        _activeExpiry = expiry;
+        loadExpiry(expiry);
+      }
+    };
+
+    window.chainLoad = window.chainGo;
+
+    // ── screenshot / share ─────────────────────────────────────────────────────
+    var CHAIN_DISCORD_WEBHOOK = '/proxy/api/discord-webhook';
+    var html2canvasPromise = null;
+
+    function loadHtml2Canvas() {
+      if (typeof window.html2canvas === 'function') return Promise.resolve(window.html2canvas);
+      if (html2canvasPromise) return html2canvasPromise;
+      html2canvasPromise = new Promise(function(resolve, reject) {
+        var s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        s.onload = function() { resolve(window.html2canvas); };
+        s.onerror = function() { reject(new Error('html2canvas failed to load')); };
+        document.head.appendChild(s);
+      });
+      return html2canvasPromise;
+    }
+
+    function chainBtnState(btn, text, color) {
+      if (!btn) return;
+      btn.textContent = text;
+      btn.style.color = color;
+    }
+
+    function chainBtnRestore(btn, orig, color) {
+      setTimeout(function() { chainBtnState(btn, orig, color); }, 1500);
+    }
+
+    function captureChain(cb) {
+      var chainMain = document.getElementById('chain-main');
+      var target = document.getElementById('chain-capture-zone');
+      if (!target) { cb(new Error('no target'), null); return; }
+      var headerRow = document.getElementById('chain-header');
+
+      var hdr    = document.getElementById('chain-shot-header');
+      var ticker = document.getElementById('chain-shot-ticker');
+      var expiry = document.getElementById('chain-shot-expiry');
+      var time   = document.getElementById('chain-shot-time');
+      if (ticker) ticker.textContent = _activeTicker || 'SPX';
+      if (expiry) expiry.textContent = _activeExpiry  || '--';
+      if (time)   time.textContent   = new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}) + ' ET';
+      if (hdr)    hdr.style.display  = 'flex';
+
+      loadHtml2Canvas().then(function(html2canvasFn) {
+        var prev = {};
+        function stash(el, prop) { if (!el) return; prev[prop] = el.style.cssText; }
+        stash(chainMain, 'main');
+        stash(target, 'target');
+        stash(headerRow, 'header');
+        stash(hdr, 'shot');
+        try {
+          if (chainMain) {
+            chainMain.style.overflow = 'visible';
+            chainMain.style.position = 'relative';
+            chainMain.style.height = 'auto';
+            chainMain.style.minHeight = '0';
+          }
+          if (target) {
+            target.style.overflow = 'visible';
+            target.style.maxHeight = 'none';
+            target.style.minHeight = '0';
+          }
+          if (headerRow) {
+            headerRow.style.position = 'sticky';
+            headerRow.style.top = '0';
+            headerRow.style.zIndex = '20';
+          }
+
+          html2canvasFn(chainMain || target, {
+            backgroundColor: '#05080d',
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            allowTaint: true
+          }).then(function(canvas) {
+            if (chainMain && prev.main !== undefined) chainMain.style.cssText = prev.main;
+            if (target && prev.target !== undefined) target.style.cssText = prev.target;
+            if (headerRow && prev.header !== undefined) headerRow.style.cssText = prev.header;
+            if (hdr && prev.shot !== undefined) hdr.style.cssText = prev.shot;
+            canvas.toBlob(function(blob) { cb(null, blob); }, 'image/png');
+          }).catch(function(e) {
+            if (chainMain && prev.main !== undefined) chainMain.style.cssText = prev.main;
+            if (target && prev.target !== undefined) target.style.cssText = prev.target;
+            if (headerRow && prev.header !== undefined) headerRow.style.cssText = prev.header;
+            if (hdr && prev.shot !== undefined) hdr.style.cssText = prev.shot;
+            cb(e, null);
+          });
+        } catch (err) {
+          if (chainMain && prev.main !== undefined) chainMain.style.cssText = prev.main;
+          if (target && prev.target !== undefined) target.style.cssText = prev.target;
+          if (headerRow && prev.header !== undefined) headerRow.style.cssText = prev.header;
+          if (hdr && prev.shot !== undefined) hdr.style.cssText = prev.shot;
+          cb(err, null);
+        }
+      }).catch(function(err) {
+        if (hdr) hdr.style.display = 'none';
+        cb(err || new Error('html2canvas unavailable'), null);
+      });
+    }
+
+    window.chainCopyScreenshot = function() {
+      var btn = document.getElementById('chain-copy-btn');
+      var origText = btn ? btn.textContent : 'COPY';
+      var origColor = '#00e5ff';
+      if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+      captureChain(function(err, blob) {
+        if (err || !blob) {
+          console.error('[Chain] copy capture failed:', err);
+          if (btn) { btn.textContent = 'ERR'; btn.style.color = '#ff4757'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+          return;
+        }
+        if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+          navigator.clipboard.write([new ClipboardItem({'image/png': blob})]).then(function() {
+            if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+          }).catch(function(err2) {
+            var url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
+            setTimeout(function() { URL.revokeObjectURL(url); }, 30000);
+            if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+          });
+        } else {
+          var url = URL.createObjectURL(blob);
+          window.open(url, '_blank');
+          setTimeout(function() { URL.revokeObjectURL(url); }, 30000);
+          if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+        }
+      });
+    };
+
+    window.chainShare = function(platform) {
+      var btn = platform === 'x' ? document.getElementById('chain-share-x-btn') : document.getElementById('chain-share-discord-btn');
+      var origColor = platform === 'x' ? '#00e5ff' : '#7289da';
+      var origText = btn ? btn.textContent : (platform === 'x' ? 'X' : 'DISCORD');
+      if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
+
+      if (platform === 'x') {
+        var ticker = _activeTicker || 'SPX';
+        var expiry = _activeExpiry || '';
+        setTimeout(function() {
+          if (btn) { btn.textContent = origText; btn.style.color = origColor; }
+          window.open('https://twitter.com/intent/tweet?text=' + encodeURIComponent(ticker + ' Options Chain ' + expiry), '_blank');
+        }, 200);
+        return;
+      }
+
+      captureChain(function(err, blob) {
+        if (err || !blob) {
+          console.error('[Chain] discord capture failed:', err);
+          if (btn) { btn.textContent = 'ERR'; btn.style.color = '#ff4757'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+          return;
+        }
+        var form = new FormData();
+        var ticker = _activeTicker || 'SPX';
+        var expiry = _activeExpiry || '';
+        form.append('payload_json', JSON.stringify({ content: ticker + ' Options Chain ' + expiry }));
+        form.append('files[0]', blob, 'chain-' + ticker + '-' + expiry + '.png');
+        fetch(CHAIN_DISCORD_WEBHOOK, { method: 'POST', body: form }).then(function(res) {
+          if (!res.ok) throw new Error('webhook ' + res.status);
+          if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+        }).catch(function(err2) {
+          console.error('[Chain] discord webhook failed:', err2);
+          if (btn) { btn.textContent = 'ERR'; btn.style.color = '#ff4757'; setTimeout(function(){ btn.textContent = origText; btn.style.color = origColor; }, 1500); }
+        });
+      });
+    };
+
+  })();
+  // ── END OPTIONS CHAIN ────────────────────────────────────────────────────────
+
+  window.init_insights_options_chain = function() {
+    if (typeof window.chainInit === 'function') window.chainInit();
+  };
+
+  if (window.PageRuntime?.register) {
+    window.PageRuntime.register('options-chain', () => {});
+  }
+})();
