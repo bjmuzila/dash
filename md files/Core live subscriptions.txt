@@ -1,0 +1,78 @@
+Core live subscriptions
+
+Ticker	Live subscription	What we use it for
+SPX	Quote, Trade, TradeETH, Summary	Current price, prev day close, live index updates
+VIX	Quote, Trade, TradeETH, Summary	Current price, prev day close
+NDX	Quote, Trade, TradeETH, Summary	Current price, prev day close
+/ES:XCME	Quote, Trade, TradeETH, Summary	ES current price, prev close
+/NQ:XCME	Quote, Trade, TradeETH, Summary	NQ current price, prev close
+QQQ	Quote, Trade, TradeETH, Summary	Current price, prev day close
+SMH	Quote, Trade, TradeETH, Summary	Current price, prev day close
+AAPL	Quote, Trade, TradeETH, Summary	Current price, prev day close
+AMD	Quote, Trade, TradeETH, Summary	Current price, prev day close
+AMZN	Quote, Trade, TradeETH, Summary	Current price, prev day close
+GOOGL	Quote, Trade, TradeETH, Summary	Current price, prev day close
+META	Quote, Trade, TradeETH, Summary	Current price, prev day close
+MSFT	Quote, Trade, TradeETH, Summary	Current price, prev day close
+NVDA	Quote, Trade, TradeETH, Summary	Current price, prev day close
+TSLA	Quote, Trade, TradeETH, Summary	Current price, prev day close
+SPX option chain, live
+
+Ticker	Live subscription	What we use it for
+SPX weekly/0DTE option contracts	Quote, Trade, TradeETH, Greeks, Summary	Option chain pricing and Greeks
+On-demand only
+
+Ticker / data	Trigger	What it returns
+Option chain	REST on demand	Chain data for a ticker, used when the user opens that ticker or needs the chain
+Candle data like /ES{=5m}	REST / history request	Historical candles
+optstat symbols	special metadata subscription	Configuration / message data
+TOP10 symbols	special test subscription	Indicator-style feed data
+If you want the proxy to think in “main data buckets,” I’d reduce it to this:
+
+AMD and the other equities: Quote + Summary
+SPX and NDX family: Quote + Summary + Trade
+futures: Quote + Summary + Trade
+SPX options: Quote + Summary + Greeks
+on-demand: option chain REST only when needed
+For your example:
+
+Ticker	Subscription	Data
+AMD	Quote, Summary	current price, previous day close
+AMD option chain	on demand	option chain only when requested
+If you want, I can turn this into a tighter “proxy subscription spec” you can hand straight to the codebase, with one row per ticker and exact fields to keep.
+
+9:15 PM
+yes
+9:16 PM
+Here’s a tighter proxy subscription spec you can use as the working list.
+
+Proxy Subscription Spec
+
+Ticker	Live subscription	Keep fields	On demand
+SPX	Quote, Summary, Trade	current price, previous day close, day volume	option chain, SPXW 0DTE chain, Greeks
+VIX	Quote, Summary, Trade	current price, previous day close	none
+NDX	Quote, Summary, Trade	current price, previous day close	option chain if needed
+/ES:XCME	Quote, Summary, Trade, TradeETH	current price, previous day close	candles, contract-specific history
+/NQ:XCME	Quote, Summary, Trade, TradeETH	current price, previous day close	candles, contract-specific history
+QQQ	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain if needed
+SMH	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain if needed
+AAPL	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+AMD	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+AMZN	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+GOOGL	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+META	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+MSFT	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+NVDA	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+TSLA	Quote, Summary, Trade, TradeETH	current price, previous day close	option chain
+Recommended simplification
+
+Quote = live current price
+Summary = previous day close and daily stats
+Trade / TradeETH = live prints when you care about movement quality
+Greeks = only for option contracts
+Option chain = on demand only, not always-on
+If you want the shortest version for implementation
+
+Always live: SPX, VIX, NDX, /ES:XCME, /NQ:XCME, QQQ, SMH, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, TSLA
+Always keep: current price + previous day close
+On demand: option chains, SPXW 0DTE chain, Greeks, candles

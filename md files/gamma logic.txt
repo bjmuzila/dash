@@ -1,0 +1,107 @@
+**Updated Gamma Logic List (Enhanced Version)**
+
+Here’s the fully integrated and polished version based on your newest logic:
+
+---
+
+### 1. Critical DEX Momentum & Reversals (High Priority)
+
+**CRITICAL: DEX Flip Detected**  
+**Trigger:** DEX has crossed the zero-line in the last few intervals (e.g., historical DEX was < 0 and current is > 0, or vice versa).  
+**Visuals:** Blinking/pulsing red background to indicate a severe market structure event.  
+**Description:** "DEX has violently flipped the zero-line from [Negative to Positive / Positive to Negative]."  
+**Actionable Edge:** Immediate structural shift in dealer hedging. Expect sudden, aggressive directional momentum. Treat as a high-conviction regime change.
+
+**Rapid DEX Velocity Surge**  
+**Trigger:** DEX has not crossed zero, but the absolute change in DEX over the last few intervals is greater than $15 Billion (e.g., spiked from +$20B to +$40B instantly).  
+**Visuals:** Fuchsia/Pink highlighting.  
+**Description:** "DEX has shifted aggressively by $X Billion in a short timeframe."  
+**Actionable Edge:** Dealers are chasing delta. Avoid fighting the immediate trend until velocity cools off.
+
+---
+
+### 2. GEX (Gamma) Logic
+
+**High Positive Gamma (Pin Risk)**  
+**Trigger:** GEX is positive AND in the top 35% of today's range (gexPos > 0.65).  
+**Description:** Positive GEX is currently high for the session. Dealers are suppressing volatility.  
+**Actionable Edge:** Positive GEX favors pinning and mean reversion around major strike walls. Fade extreme moves. Stronger near expiration or 0DTE.
+
+**Fading Positive Gamma**  
+**Trigger:** GEX is positive BUT has fallen into the bottom 35% of today's range (gexPos < 0.35).  
+**Description:** GEX remains positive but has drifted to the lower end of today's range.  
+**Actionable Edge:** Mean reversion is still in play, but dealer support is weakening. Watch for broader directional moves.
+
+**Deep Negative Gamma**  
+**Trigger:** GEX is negative AND in the bottom 35% of today's range (gexPos < 0.35).  
+**Description:** GEX is deeply negative relative to the session. Dealers are forced to sell into weakness.  
+**Actionable Edge:** High volatility environment. Favor momentum breakout strategies, Long Straddles, and respect trendlines. Keep tight stops.
+
+---
+
+### 3. CHEX (Charm) Logic
+
+**Strong Charm Support**  
+**Trigger:** CHEX is positive AND in the top 30% of today's range (chexPos > 0.7).  
+**Description:** CHEX is trending at the highs of the session.  
+**Actionable Edge:** Time decay aggressively supports bids. This grows more important later in the session. Look for structural late-day buying pressure.
+
+---
+
+### 4. VEX (Vanna) Logic
+
+**Active Vanna Upside**  
+**Trigger:** VEX is positive AND in the top 40% of today's range (vexPos > 0.6).  
+**Description:** VEX is elevated, making dealers highly sensitive to IV fluctuations.  
+**Actionable Edge:** IV crush can support upside momentum. Treat as highly active only when VIX/IV is actively moving lower.
+
+---
+
+### 5. Static DEX (Delta) Inventory
+
+**Upside Inventory Pressure**  
+**Trigger:** DEX is positive AND in the top 25% of today's range (dexPos > 0.75) and not triggering a velocity surge.  
+**Description:** Dealers hold significant upside inventory pressure near spot.  
+**Actionable Edge:** Watch for resistance at key levels.
+
+**Downside Inventory Pressure**  
+**Trigger:** DEX is negative AND in the bottom 25% of today's range (dexPos < 0.25) and not triggering a velocity surge.  
+**Description:** Dealers hold heavy downside pressure.  
+**Actionable Edge:** Expect aggressive short-covering if the market catches a bid.
+
+---
+
+### 6. Combined Scenarios Quick Reference
+
+| Scenario                          | Typical Behavior              | Recommended Strategy                     |
+|-----------------------------------|-------------------------------|------------------------------------------|
+| High Positive GEX + Low/Neutral DEX | Pinning, low vol             | Short premium, fade extremes            |
+| Negative GEX + Negative DEX       | Downside acceleration        | Trend short, long puts                  |
+| Positive GEX + Positive VEX/CHEX  | Strong support + drift       | Buy dips, hold longs into close         |
+| Vol Spike + High VEX              | Dealer re-hedging flows      | Long gamma or volatility products       |
+| 0DTE Afternoon                    | Charm dominant               | Watch CHEX for reversal setups          |
+
+---
+
+### 7. High-Impact Combined Regimes
+
+**Positive Dealer Alignment (High Positive GEX + Strong Charm + Active Vanna):**  
+**Title:** Dealer-Supported Bullish Regime  
+**Actionable Edge:** Strong tendency for grind higher with low realized vol. Bias long, use dips as entry.
+
+**Negative Dealer Alignment (Deep Negative GEX + Downside DEX Pressure):**  
+**Title:** Dealer-Amplified Bearish Regime  
+**Actionable Edge:** High risk of cascading moves. Reduce long exposure, favor shorts or vol products.
+
+---
+
+### 8. The Fallback
+
+**Consolidation / Neutral**  
+**Trigger:** If none of the above thresholds or velocity spikes are met.  
+**Description:** Metrics are hovering near the middle of today's range.  
+**Actionable Edge:** Dealer flows are currently balanced. Rely primarily on price action and technical levels. Monitor for intraday shifts.
+
+---
+
+This version fully adopts your newest structure and priorities while keeping the useful additions (combined table + high-impact regimes) for completeness. Ready for the next update whenever you have more!

@@ -1,0 +1,162 @@
+=== FUTURES INITIAL BALANCE (IB) MASTER LOGIC REFERENCE ===
+Source: Proprietary 10-Year Study & Rolling Asset Data Regime
+Asset Classes Covered: ES Group (ES/MES) & NQ Group (NQ/MNQ)
+IB Window: 09:30 - 10:30 AM EST (Regular Trading Hours)
+
+================================================================================
+HOURS / TEMPORAL DECAY LAWS
+================================================================================
+IF: The 60-minute Initial Balance window closes at 10:30 AM EST,
+THEN: 84.1% of all session breakouts will manifest within the first 30 minutes 
+      (between 10:30 AM and 11:00 AM EST).
+
+IF: You are monitoring the session for an opening breakout expansion,
+THEN: The average time to the first breakout is 18 minutes, with a median 
+      velocity of just 2 minutes.
+
+OPERATIONAL PLAY: If the clock passes 11:00 AM EST and neither boundary has been 
+violated, the probability of an explosive breakout drops off aggressively. 
+Transition your playbook from a breakout approach to a range-bound premium 
+decay profile.
+
+================================================================================
+LOGIC BLOCK 1: BASELINE RANGE VIOLATIONS (10-YEAR MACRO STUDY)
+================================================================================
+RULE 1.1: The Inside Day Exception
+IF: An RTH session completes its 60-minute Initial Balance window,
+THEN: There is only a 0.6% probability that the remainder of the session stays 
+      completely contained within that range. 
+OPERATIONAL PLAY: In 99.4% of all trading days, you must plan for at least one 
+breakout. Never execute a strategy that relies on an inside day holding.
+
+RULE 1.2: ES Structural Asymmetry
+IF: You are trading the ES contract over a macro timeline,
+THEN: The IB Low is broken more frequently than the IB High.
+      - P(IB High Break) = 67.1%
+      - P(IB Low Break)  = 72.4%
+
+RULE 1.3: Cross-Asset Whiplash (Double Breach Risk)
+IF: A session breaks one side of the IB range early in the day,
+THEN: The statistical risk of reversing and breaking the opposite side is highly 
+      dependent on the asset class:
+      - ES Futures: 40.1% probability of a double breach.
+      - NQ Futures: 23.5% probability of a double breach.
+OPERATIONAL PLAY: NQ exhibits significantly higher trend-continuation 
+characteristics. ES is prone to a "Double Cross" whiplash profile nearly half 
+the time.
+
+================================================================================
+LOGIC BLOCK 2: POSITIONAL CLOSES & MIDPOINT BIAS (10-YEAR MACRO STUDY)
+================================================================================
+RULE 2.1: ES Above-Mid Dominance
+IF: Price targets or closes the IB hour ABOVE the absolute IB Midpoint,
+THEN: There is an 83.5% probability of an eventual IB High breakout, showcasing 
+      a +29.5% bullish directional bias over the baseline.
+
+RULE 2.2: ES Below-Mid Dominance
+IF: Price targets or closes the IB hour BELOW the absolute IB Midpoint,
+THEN: There is a massive 94.9% probability of an eventual IB Low breakdown, 
+      showcasing a +47.8% bearish directional bias over the baseline.
+OPERATIONAL PLAY: Fading a market trading under the IB Midpoint on ES carries an 
+ultra-low 5.1% structural survival rate.
+
+RULE 2.3: NQ Midpoint Metrics
+IF: Price transitions relative to the IB Midpoint on NQ,
+THEN: The expansion probabilities scale as follows:
+      - Price Above Midpoint: 83.3% probability of an eventual IB High breakout.
+      - Price Below Midpoint: 78.2% probability of an eventual IB Low breakdown.
+
+================================================================================
+LOGIC BLOCK 3: BOUNDARY FORMATION SEQUENCE & PATH DEPENDENCY (NQ GROUP)
+================================================================================
+RULE 3.1: The Low Formed First Baseline
+IF: During the 60-minute IB window, the session Low is established BEFORE the 
+    session High is formed,
+THEN: The market exhibits a heavy path-dependent upward skew for the remainder 
+      of the day:
+      - Probability of breaking the IB High later: 78.79%
+      - Probability of reversing to break the IB Low later: 19.7%
+OPERATIONAL PLAY: When the low locks early, buying pullbacks carries an 80.3% 
+macro survival rate if your protective stop is anchored just below that initial 
+IB Low.
+
+================================================================================
+LOGIC BLOCK 4: DAY-OF-THE-WEEK BEHAVIOR VARIATIONS (TUESDAYS - NQ ONLY)
+================================================================================
+RULE 4.1: Tuesday High Formed First
+IF: The calendar day is a Tuesday AND the NQ IB High is established before the Low,
+THEN: The first breakout sequence skews heavily to the downside:
+      - Probability that the market breaks the IB Low first:  58.33%
+      - Probability that the market breaks the IB High first: 41.67%
+
+RULE 4.2: Tuesday Low Formed First
+IF: The calendar day is a Tuesday AND the NQ IB Low is established before the High,
+THEN: The first breakout sequence skews aggressively to the upside:
+      - Probability that the market breaks the IB High first: 64.29%
+      - Probability that the market breaks the IB Low first:  35.71%
+
+================================================================================
+LOGIC BLOCK 5: VOLATILITY COMPRESSION & Z-SCORE LEVELS (NQ ONLY)
+================================================================================
+RULE 5.1: The -0.1 Z-Score Breakdown Trigger
+IF: The overall IB range size is highly compressed (0% to 1%) AND a 5-minute 
+    candle closes below the IB Low (-0.1 level),
+THEN: There is a staggering 98.01% probability of continued downward extension 
+      throughout the session. Fading this breakout carries a near 0% edge.
+
+RULE 5.2: Scaling Downside Extension Probabilities
+IF: NQ prints a 5-minute close below subsequent standard deviation expansion 
+    thresholds on a compressed breakdown day,
+THEN: The probability of further range extension remains highly dominant, scaling 
+      as follows:
+      - P(Sustained Breakdown | Close <= -0.2) = 87.56%
+      - P(Sustained Breakdown | Close <= -0.3) = 81.59%
+      - P(Sustained Breakdown | Close <= -0.4) = 74.63%
+      - P(Sustained Breakdown | Close <= -0.5) = 67.66%
+      - P(Sustained Breakdown | Close <= -0.8) = 50.75%
+
+RULE 5.3: The Positive Counter-Trend Trap
+IF: A session is verified as a compressed breakdown day,
+THEN: The probability of price completely reversing to register a 5-minute close 
+      above the opposite +0.1 level is an ultra-rare 0.5%.
+OPERATIONAL PLAY: If you go short on a compressed breakout, your structural 
+stop-loss is absolute. Any accepted price action above +0.1 has a 99.5% 
+statistical failure rate for this profile, indicating an immediate trend shift.
+
+================================================================================
+LOGIC BLOCK 6: MODERN MARKET REGIMES (RECENT 6-MONTH ROLLING DATA)
+================================================================================
+RULE 6.1: Modern NQ Trend Insulation
+IF: You execute breakouts in NQ under the current market regime,
+THEN: The asset exhibits immense trend-holding insulation:
+      - Single Breakout Trend Day: 80.95% of sessions (102 out of 126 days).
+      - Double Breach Whiplash Risk: Slashing down to just 14.29% (18 of 126 days).
+
+RULE 6.2: Modern ES Breakout Compression
+IF: You execute breakouts in ES under the current market regime,
+THEN: The market structure shows a massive departure from its 10-year historical 
+      baseline (40.1% double-breach):
+      - Single Breakout Trend Day: 75.59% of sessions (96 out of 127 days).
+      - Double Breach Risk: Compressed down to 22.05% (28 out of 127 days).
+
+OPERATIONAL PLAY: In quantitative trading, rolling micro-data dictates current 
+execution parameters, while macro baselines dictate structural risk limits. Both 
+indices are currently presenting clean, sticky, trend extensions. Do not 
+over-rely on historical macro fading strategies when a boundary cracks.
+
+================================================================================
+LOGIC BLOCK 7: MULTI-VARIABLE CONFLUENCE (THE LIQUIDITY SWEEP - ES/SPY)
+================================================================================
+RULE 7.1: The Failed Expansion Setup
+IF: Price extends outside the prior session to touch the Previous Day's High 
+    early in the morning,
+AND: It immediately locks a fixed IB High First path sequence,
+AND: The opening 60-minute RTH candle prints a large Red close (range >= 0.50%),
+THEN: The market has executed an institutional Liquidity Grab / Trap. The raw 
+      bullishness of the previous high touch is completely overwritten. 
+
+OPERATIONAL PLAY: Pivot to a heavy Bearish Bias. Your execution setup is to short 
+pullbacks below the opening hour distribution, targeting a complete range 
+rotation to test and break the IB Low. Protect capital with stops anchored just 
+above the opening price print.
+================================================================================

@@ -1,0 +1,261 @@
+Market Indicator Symbols
+
+tastytrade users can search and monitor from a long list of market indicators by entering the symbols below on any of our platforms.
+
+SYMBOL	Description
+$ADVUS	ALLUSA Advanced issues
+$UVOLUS	ALLUSA Advanced volume
+$ADUSD	ALLUSA Advancing Issues - Declining Issues Difference
+$ADVUSC	ALLUSA Composite Advanced issues
+$UVOLUSC	ALLUSA Composite Advanced volume
+$ADUSDC	ALLUSA Composite Advancing Issues - Declining Issues Difference
+$DECLUSC	ALLUSA Composite Declined issues
+$DVOLUSC	ALLUSA Composite Declined volume
+$TIKUSC	ALLUSA Composite TICK
+$TVOLUSC	ALLUSA Composite Total volume
+$TRINUSC	ALLUSA Composite TRIN
+$UNCHUSC	ALLUSA Composite Unchanged issues
+$VOLUSDC	ALLUSA Composite Up Volume - Down Volume Difference
+$DECLUS	ALLUSA Declined issues
+$DVOLUS	ALLUSA Declined volume
+$USHI1M	ALLUSA New Highs 1M
+$USHI1W	ALLUSA New Highs 1W
+$USHGH	ALLUSA New Highs 1Y
+$USHI2W	ALLUSA New Highs 2W
+$USHI3M	ALLUSA New Highs 3M
+$USHI6M	ALLUSA New Highs 6M
+$USHI9M	ALLUSA New Highs 9M
+$USLO1M	ALLUSA New Lows 1M
+$USLO1W	ALLUSA New Lows 1W
+$USLOW	ALLUSA New Lows 1Y
+$USLO2W	ALLUSA New Lows 2W
+$USLO3M	ALLUSA New Lows 3M
+$USLO6M	ALLUSA New Lows 6M
+$USLO9M	ALLUSA New Lows 9M
+$TIKUS	ALLUSA TICK
+$TOP10GUS	ALLUSA Top 10 gainers by absolute net change
+$TOP10PGUS	ALLUSA Top 10 gainers by relative net change
+$TOP10VUS	ALLUSA Top 10 gainers by volume
+$TOP10LUS	ALLUSA Top 10 losers by absolute net change
+$TOP10PLUS	ALLUSA Top 10 losers by relative net change
+$TVOLUS	ALLUSA Total volume
+$TRINUS	ALLUSA TRIN
+$UNCHUS	ALLUSA Unchanged issues
+$VOLUSD	ALLUSA Up Volume - Down Volume Difference
+$TOP10GI	DJI Top 10 gainers by absolute net change
+$TOP10PGI	DJI Top 10 gainers by relative net change
+$TOP10VI	DJI Top 10 gainers by volume
+$TOP10LI	DJI Top 10 losers by absolute net change
+$TOP10PLI	DJI Top 10 losers by relative net change
+$ADVI	DJIA Advanced issues
+$UVOLI	DJIA Advanced volume
+$ADID	DJIA Advancing Issues - Declining Issues Difference
+$ADVIC	DJIA Composite Advanced issues
+$UVOLIC	DJIA Composite Advanced volume
+$ADIDC	DJIA Composite Advancing Issues - Declining Issues Difference
+$DECLIC	DJIA Composite Declined issues
+$DVOLIC	DJIA Composite Declined volume
+$TIKIC	DJIA Composite TICK
+$TVOLIC	DJIA Composite Total volume
+$TRINIC	DJIA Composite TRIN
+$UNCHIC	DJIA Composite Unchanged issues
+$VOLIDC	DJIA Composite Up Volume - Down Volume Difference
+$DECLI	DJIA Declined issues
+$DVOLI	DJIA Declined volume
+$HII1M	DJIA New Highs 1M
+$HII1W	DJIA New Highs 1W
+$HGHI	DJIA New Highs 1Y
+$HII2W	DJIA New Highs 2W
+$HII3M	DJIA New Highs 3M
+$HII6M	DJIA New Highs 6M
+$HII9M	DJIA New Highs 9M
+$LOI1M	DJIA New Lows 1M
+$LOI1W	DJIA New Lows 1W
+$LOWI	DJIA New Lows 1Y
+$LOI2W	DJIA New Lows 2W
+$LOI3M	DJIA New Lows 3M
+$LOI6M	DJIA New Lows 6M
+$LOI9M	DJIA New Lows 9M
+$TIKI	DJIA TICK
+$TVOLI	DJIA Total volume
+$TRINI	DJIA TRIN
+$UNCHI	DJIA Unchanged issues
+$VOLID	DJIA Up Volume - Down Volume Difference
+$ETFHI1M	ETF New Highs 1M
+$ETFHI1W	ETF New Highs 1W
+$ETFHGH	ETF New Highs 1Y
+$ETFHI2W	ETF New Highs 2W
+$ETFHI3M	ETF New Highs 3M
+$ETFHI6M	ETF New Highs 6M
+$ETFHI9M	ETF New Highs 9M
+$ETFLO1M	ETF New Lows 1M
+$ETFLO1W	ETF New Lows 1W
+$ETFLOW	ETF New Lows 1Y
+$ETFLO2W	ETF New Lows 2W
+$ETFLO3M	ETF New Lows 3M
+$ETFLO6M	ETF New Lows 6M
+$ETFLO9M	ETF New Lows 9M
+$ADVND	NASDAQ 100 Advanced issues
+$UVOLND	NASDAQ 100 Advanced volume
+$ADNDD	NASDAQ 100 Advancing Issues - Declining Issues Difference
+$ADVNDC	NASDAQ 100 Composite Advanced issues
+$UVOLNDC	NASDAQ 100 Composite Advanced volume
+$ADNDDC	NASDAQ 100 Composite Advancing Issues - Declining Issues Difference
+$DECLNDC	NASDAQ 100 Composite Declined issues
+$DVOLNDC	NASDAQ 100 Composite Declined volume
+$TIKNDC	NASDAQ 100 Composite TICK
+$TVOLNDC	NASDAQ 100 Composite Total volume
+$TRINNDC	NASDAQ 100 Composite TRIN
+$UNCHNDC	NASDAQ 100 Composite Unchanged issues
+$VOLNDDC	NASDAQ 100 Composite Up Volume - Down Volume Difference
+$DECLND	NASDAQ 100 Declined issues
+$DVOLND	NASDAQ 100 Declined volume
+$HIND1M	NASDAQ 100 New Highs 1M
+$HIND1W	NASDAQ 100 New Highs 1W
+$HGHND	NASDAQ 100 New Highs 1Y
+$HIND2W	NASDAQ 100 New Highs 2W
+$HIND3M	NASDAQ 100 New Highs 3M
+$HIND6M	NASDAQ 100 New Highs 6M
+$HIND9M	NASDAQ 100 New Highs 9M
+$LOND1M	NASDAQ 100 New Lows 1M
+$LOND1W	NASDAQ 100 New Lows 1W
+$LOWND	NASDAQ 100 New Lows 1Y
+$LOND2W	NASDAQ 100 New Lows 2W
+$LOND3M	NASDAQ 100 New Lows 3M
+$LOND6M	NASDAQ 100 New Lows 6M
+$LOND9M	NASDAQ 100 New Lows 9M
+$TIKND	NASDAQ 100 TICK
+$TVOLND	NASDAQ 100 Total volume
+$TRINND	NASDAQ 100 TRIN
+$UNCHND	NASDAQ 100 Unchanged issues
+$VOLNDD	NASDAQ 100 Up Volume - Down Volume Difference
+$ADVN/Q	NASDAQ Advanced issues
+$UVOL/Q	NASDAQ Advanced volume
+$ADQD	NASDAQ Advancing Issues - Declining Issues Difference
+$ADVNC/Q	NASDAQ Composite Advanced issues
+$UVOLC/Q	NASDAQ Composite Advanced volume
+$ADQDC	NASDAQ Composite Advancing Issues - Declining Issues Difference
+$DECNC/Q	NASDAQ Composite Declined issues
+$DVOLC/Q	NASDAQ Composite Declined volume
+$TICKC/Q	NASDAQ Composite TICK
+$TVOLC/Q	NASDAQ Composite Total volume
+$TRINC/Q	NASDAQ Composite TRIN
+$UNCNC/Q	NASDAQ Composite Unchanged issues
+$VOLQDC	NASDAQ Composite Up Volume - Down Volume Difference
+$DECN/Q	NASDAQ Declined issues
+$DVOL/Q	NASDAQ Declined volume
+$NAHI1M	NASDAQ New Highs 1M
+$NAHI1W	NASDAQ New Highs 1W
+$NAHGH	NASDAQ New Highs 1Y
+$NAHI2W	NASDAQ New Highs 2W
+$NAHI3M	NASDAQ New Highs 3M
+$NAHI6M	NASDAQ New Highs 6M
+$NAHI9M	NASDAQ New Highs 9M
+$NALO1M	NASDAQ New Lows 1M
+$NALO1W	NASDAQ New Lows 1W
+$NALOW	NASDAQ New Lows 1Y
+$NALO2W	NASDAQ New Lows 2W
+$NALO3M	NASDAQ New Lows 3M
+$NALO6M	NASDAQ New Lows 6M
+$NALO9M	NASDAQ New Lows 9M
+$TICK/Q	NASDAQ TICK
+$TOP10G/Q	NASDAQ Top 10 gainers by absolute net change
+$TOP10PG/Q	NASDAQ Top 10 gainers by relative net change
+$TOP10V/Q	NASDAQ Top 10 gainers by volume
+$TOP10L/Q	NASDAQ Top 10 losers by absolute net change
+$TOP10PL/Q	NASDAQ Top 10 losers by relative net change
+$TVOL/Q	NASDAQ Total volume
+$TRIN/Q	NASDAQ TRIN
+$UNCN/Q	NASDAQ Unchanged issues
+$VOLQD	NASDAQ Up Volume - Down Volume Difference
+$ADVN	NYSE Advanced issues
+$UVOL	NYSE Advanced volume
+$ADD	NYSE Advancing Issues - Declining Issues Difference
+$ADVAR	NYSE ARCA Advanced issues
+$UVOAR	NYSE ARCA Advanced volume
+$ADARD	NYSE ARCA Advancing Issues - Declining Issues Difference
+$ADVARC	NYSE ARCA Composite Advanced issues
+$UVOARC	NYSE ARCA Composite Advanced volume
+$ADARDC	NYSE ARCA Composite Advancing Issues - Declining Issues Difference
+$DECARC	NYSE ARCA Composite Declined issues
+$DVOARC	NYSE ARCA Composite Declined volume
+$TICKARC	NYSE ARCA Composite TICK
+$TVOARC	NYSE ARCA Composite Total volume
+$TRINARC	NYSE ARCA Composite TRIN
+$UNCARC	NYSE ARCA Composite Unchanged issues
+$VOLARDC	NYSE ARCA Composite Up Volume - Down Volume Difference
+$DECAR	NYSE ARCA Declined issues
+$DVOAR	NYSE ARCA Declined volume
+$ARHI1M	NYSE ARCA New Highs 1M
+$ARHI1W	NYSE ARCA New Highs 1W
+$ARHGH	NYSE ARCA New Highs 1Y
+$ARHI2W	NYSE ARCA New Highs 2W
+$ARHI3M	NYSE ARCA New Highs 3M
+$ARHI6M	NYSE ARCA New Highs 6M
+$ARHI9M	NYSE ARCA New Highs 9M
+$ARLO1M	NYSE ARCA New Lows 1M
+$ARLO1W	NYSE ARCA New Lows 1W
+$ARLOW	NYSE ARCA New Lows 1Y
+$ARLO2W	NYSE ARCA New Lows 2W
+$ARLO3M	NYSE ARCA New Lows 3M
+$ARLO6M	NYSE ARCA New Lows 6M
+$ARLO9M	NYSE ARCA New Lows 9M
+$TICKAR	NYSE ARCA TICK
+$TVOAR	NYSE ARCA Total volume
+$TRINAR	NYSE ARCA TRIN
+$UNCAR	NYSE ARCA Unchanged issues
+$VOLARD	NYSE ARCA Up Volume - Down Volume Difference
+$ADVNC	NYSE Composite Advanced issues
+$UVOLC	NYSE Composite Advanced volume
+$ADDC	NYSE Composite Advancing Issues - Declining Issues Difference
+$DECNC	NYSE Composite Declined issues
+$DVOLC	NYSE Composite Declined volume
+$TICKC	NYSE Composite TICK
+$TVOLC	NYSE Composite Total volume
+$TRINC	NYSE Composite TRIN
+$UNCNC	NYSE Composite Unchanged issues
+$VOLDC	NYSE Composite Up Volume - Down Volume Difference
+$DECN	NYSE Declined issues
+$DVOL	NYSE Declined volume
+$ADVA	NYSE MKT (AMEX) Advanced issues
+$UVOA	NYSE MKT (AMEX) Advanced volume
+$ADAD	NYSE MKT (AMEX) Advancing Issues - Declining Issues Difference
+$ADVAC	NYSE MKT (AMEX) Composite Advanced issues
+$UVOAC	NYSE MKT (AMEX) Composite Advanced volume
+$ADADC	NYSE MKT (AMEX) Composite Advancing Issues - Declining Issues Difference
+$DECAC	NYSE MKT (AMEX) Composite Declined issues
+$DVOAC	NYSE MKT (AMEX) Composite Declined volume
+$TICKAC	NYSE MKT (AMEX) Composite TICK
+$TVOAC	NYSE MKT (AMEX) Composite Total volume
+$TRINAC	NYSE MKT (AMEX) Composite TRIN
+$UNCAC	NYSE MKT (AMEX) Composite Unchanged issues
+$VOLADC	NYSE MKT (AMEX) Composite Up Volume - Down Volume Difference
+$DECA	NYSE MKT (AMEX) Declined issues
+$DVOA	NYSE MKT (AMEX) Declined volume
+$AMHI1M	NYSE MKT (AMEX) New Highs 1M
+$AMHI1W	NYSE MKT (AMEX) New Highs 1W
+$AMHGH	NYSE MKT (AMEX) New Highs 1Y
+$AMHI2W	NYSE MKT (AMEX) New Highs 2W
+$AMHI3M	NYSE MKT (AMEX) New Highs 3M
+$AMHI6M	NYSE MKT (AMEX) New Highs 6M
+$AMHI9M	NYSE MKT (AMEX) New Highs 9M
+$AMLO1M	NYSE MKT (AMEX) New Lows 1M
+$AMLO1W	NYSE MKT (AMEX) New Lows 1W
+$AMLOW	NYSE MKT (AMEX) New Lows 1Y
+$AMLO2W	NYSE MKT (AMEX) New Lows 2W
+$AMLO3M	NYSE MKT (AMEX) New Lows 3M
+$AMLO6M	NYSE MKT (AMEX) New Lows 6M
+$AMLO9M	NYSE MKT (AMEX) New Lows 9M
+$TICKA	NYSE MKT (AMEX) TICK
+$TVOA	NYSE MKT (AMEX) Total volume
+$TRINA	NYSE MKT (AMEX) TRIN
+$UNCA	NYSE MKT (AMEX) Unchanged issues
+$VOLAD	NYSE MKT (AMEX) Up Volume - Down Volume Difference
+$NYHI1M	NYSE New Highs 1M
+$NYHI1W	NYSE New Highs 1W
+$NYHGH	NYSE New Highs 1Y
+$NYHI2W	NYSE New Highs 2W
+$NYHI3M	NYSE New Highs 3M
+$NYHI6M	NYSE New Highs 6M
+$NYHI9M	NYSE New Highs 9M
+$NYLO1M	NYSE New Lows 1M

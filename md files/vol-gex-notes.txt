@@ -1,0 +1,29 @@
+Volume GEX target for chart and heatmap:
+
+The goal is the overall net SPX Vol GEX for today, based on all SPX option trades that occurred during the current session.
+
+This should not be derived only from the options chain's aggregated volume field.
+
+Instead, Vol GEX should be calculated from live trade-by-trade flow using:
+
+Tick GEX = TradeDirection x OptionType x Gamma x TradeSize x 50 x SpotPrice^2 x 0.01
+
+Where:
+- TradeDirection = +1 for bought at ask, -1 for sold at bid
+- OptionType = +1 for calls, -1 for puts
+- Gamma = raw Black-Scholes gamma at the moment of the trade
+- TradeSize = contracts in that trade
+- 50 = ES multiplier
+- SpotPrice = ES price at the time of the trade
+
+Then sum all signed tick values across the trading day:
+
+Net Vol GEX = Sum of all Tick GEX values for today
+
+For the chart and heatmap:
+- The displayed value should represent today's net signed SPX option flow
+- It can be shown by strike, or as an overall net total
+- It does not need to be shown as a cumulative running line unless requested
+- The important part is that it reflects the net signed flow for today's session
+
+If future edits are made, prefer trade-level signed flow over raw option-chain volume snapshots whenever possible.
