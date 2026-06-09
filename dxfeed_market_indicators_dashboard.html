@@ -1,0 +1,1381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dxFeed Market Indicators Dashboard</title>
+  <style>
+    :root {
+      --bg: #080c10;
+      --panel: #0d1117;
+      --panel-2: #111822;
+      --panel-3: #1a2233;
+      --line: #1e3050;
+      --line-soft: rgba(255,255,255,0.06);
+      --text: #e8edf5;
+      --muted: #a8b8cc;
+      --muted-2: #5a7a99;
+      --teal: #00e5ff;
+      --teal-soft: rgba(0,229,255,0.16);
+      --green: #00e676;
+      --red: #ff4757;
+      --amber: #ffb300;
+      --blue: #29b6f6;
+      --blue-soft: rgba(41,182,246,0.18);
+      --pink: #ff4757;
+      --shadow: 0 18px 50px rgba(0,0,0,0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at top right, rgba(41,211,178,0.08), transparent 22%),
+        radial-gradient(circle at top left, rgba(93,108,255,0.08), transparent 18%),
+        var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+      min-height: 100vh;
+      padding: 18px 20px 28px;
+    }
+
+    .dashboard {
+      max-width: 1320px;
+      margin: 0 auto;
+    }
+
+    .section {
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 18px 18px 16px;
+      margin-bottom: 18px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #d9e1f8;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    .title-mark {
+      color: var(--teal);
+      font-size: 13px;
+    }
+
+    .sentiment-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .sentiment-card,
+    .control-card,
+    .summary-card,
+    .feature-column {
+      background: rgba(14,16,22,0.9);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      height: 100%;
+    }
+
+    .sentiment-card {
+      padding: 15px 16px 13px;
+      min-height: 88px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .card-topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .card-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #f7fbff;
+      letter-spacing: 0.02em;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .value-green { color: var(--green); }
+    .value-red { color: var(--red); }
+    .value-amber { color: var(--amber); }
+    .value-blue { color: #85a2ff; }
+
+    .metric-value {
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .meter {
+      width: 100%;
+      height: 7px;
+      border-radius: 999px;
+      background: #262a32;
+      overflow: hidden;
+      display: flex;
+    }
+
+    .meter-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--amber), #ffbb31);
+      transition: width 220ms ease;
+    }
+
+    .split-meter {
+      background: rgba(255,77,115,0.82);
+      height: 9px;
+    }
+
+    .split-meter .meter-fill {
+      background: linear-gradient(90deg, #1ac79b, var(--teal));
+    }
+
+    .meter-scale {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 8px;
+      color: var(--muted-2);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+
+    .explorer-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .explorer-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 3px;
+    }
+
+    .pill-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(8,9,13,0.8);
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill-tab {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      text-transform: uppercase;
+    }
+
+    .pill-tab.active {
+      background: var(--blue);
+      color: #fff;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .feature-column {
+      padding: 10px 10px 8px;
+      min-height: 420px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .feature-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .feature-title {
+      color: #f5f7fb;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .feature-badge {
+      font-size: 10px;
+      font-weight: 800;
+      border-radius: 4px;
+      padding: 2px 5px;
+      border: 1px solid currentColor;
+    }
+
+    .feature-subhead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 0 8px;
+      margin-bottom: 2px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--muted-2);
+      font-size: 9px;
+      line-height: 1.35;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .feature-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-height: 272px;
+    }
+
+    .ticker-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 4px;
+      border-radius: 6px;
+    }
+
+    .ticker-row:hover {
+      background: rgba(255,255,255,0.025);
+    }
+
+    .ticker-left {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .ticker-symbol {
+      color: #f4f7ff;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+
+    .ticker-name,
+    .ticker-meta {
+      color: var(--muted-2);
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ticker-right {
+      text-align: right;
+      min-width: 82px;
+    }
+
+    .ticker-price {
+      color: #eef4ff;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+
+    .ticker-change {
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .feature-footer,
+    .section-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--muted-2);
+      font-size: 9px;
+      letter-spacing: 0.04em;
+    }
+
+    .paired-grid {
+      display: grid;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .paired-grid {
+      grid-template-columns: repeat(6, minmax(170px, 1fr));
+    }
+
+    .paired-column {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .control-card,
+    .summary-card {
+      padding: 12px 13px;
+      min-height: 160px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .control-head,
+    .summary-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .control-tag,
+    .summary-tag {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 3px 7px;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      background: rgba(255,255,255,0.03);
+      text-transform: uppercase;
+    }
+
+    .control-count,
+    .summary-mini {
+      color: var(--muted-2);
+      font-size: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    select {
+      width: 100%;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+      background: #07090e;
+      color: #fafcff;
+      padding: 7px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      outline: none;
+    }
+
+    .control-name,
+    .summary-name {
+      color: #f7fbff;
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 3px;
+    }
+
+    .control-desc,
+    .summary-desc {
+      color: var(--muted-2);
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    .control-desc:last-child,
+    .summary-desc:last-child {
+      flex: 1;
+    }
+
+    .summary-value-row {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 12px 0 10px;
+    }
+
+    .summary-value {
+      color: #fbfdff;
+      font-size: 40px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+    }
+
+    .summary-unit {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 4px;
+    }
+
+    .summary-delta {
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .status-chip {
+      width: 100%;
+      margin-top: auto;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.02);
+      color: #d7dceb;
+      padding: 6px 9px;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-chip::before {
+      content: "";
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.95;
+      flex: 0 0 auto;
+    }
+
+    .status-chip.bullish {
+      color: #17e28b;
+      border-color: rgba(23,226,139,0.35);
+      background: rgba(23,226,139,0.12);
+    }
+
+    .status-chip.bearish {
+      color: #ff4d73;
+      border-color: rgba(255,77,115,0.35);
+      background: rgba(255,77,115,0.10);
+    }
+
+    .status-chip.neutral {
+      color: #c8d1e4;
+    }
+
+    .status-chip.segment {
+      color: #dff8ef;
+      border-color: rgba(223,248,239,0.7);
+      background: rgba(223,248,239,0.07);
+    }
+
+    .loading-note {
+      color: var(--muted-2);
+      font-size: 9px;
+      padding: 12px 6px;
+      text-align: center;
+      border: 1px dashed rgba(255,255,255,0.08);
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--teal);
+      display: inline-block;
+      box-shadow: 0 0 0 6px rgba(41,211,178,0.08);
+    }
+
+    @media (max-width: 1040px) {
+      .feature-grid,
+      .paired-grid,
+      .sentiment-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      body { padding: 10px; }
+      .explorer-head,
+      .section-header,
+      .feature-footer,
+      .section-footer {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .feature-grid,
+      .paired-grid,
+      .sentiment-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard" id="dxfeed-snapshot-root">
+    <section class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="title-mark">⌁</span> LIVE SENTIMENT HEAT-CHECK</div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div>Broad system internal indicators &amp; safety thresholds</div>
+          <div id="dxfeed-share-toolbar" style="display:flex;gap:2px;background:transparent;border-radius:2px;padding:2px">
+            <button id="dxfeed-copy-shot-btn" onclick="copyDxfeedScreenshot()" title="Copy screenshot" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY</button>
+            <button id="dxfeed-share-x-btn" onclick="shareDxfeed('x')" title="Copy and open X" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+            <button id="dxfeed-share-discord-btn" onclick="shareDxfeed('discord')" title="Post to Discord" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+          </div>
+        </div>
+      </div>
+      <div class="sentiment-grid">
+        <div class="sentiment-card">
+          <div class="card-topline">
+            <div class="card-label">NYSE Arms Index ($TRIN)</div>
+            <div id="sentiment-trin-val" class="metric-value mono value-green">--</div>
+          </div>
+          <div class="meter"><div id="sentiment-trin-bar" class="meter-fill"></div></div>
+          <div class="meter-scale mono">
+            <span>0.4 (Extreme Bullish)</span>
+            <span>1.0 (Fair Value)</span>
+            <span>2.0+ (Extreme Panic)</span>
+          </div>
+        </div>
+        <div class="sentiment-card">
+          <div class="card-topline">
+            <div class="card-label">NYSE Volumetric Flow Split</div>
+            <div class="mono" style="display:flex; gap:10px; font-size:9px; font-weight:800;">
+              <span id="sentiment-avol" class="value-green">Up: --</span>
+              <span id="sentiment-dvol" class="value-red">Down: --</span>
+            </div>
+          </div>
+          <div class="meter split-meter"><div id="sentiment-vol-bar" class="meter-fill"></div></div>
+          <div class="meter-scale mono">
+            <span id="sentiment-vol-up-pct">-- Advancing Vol</span>
+            <span id="sentiment-vol-down-pct">-- Declining Vol</span>
+          </div>
+        </div>
+        <div class="sentiment-card">
+          <div class="card-topline">
+            <div class="card-label">S&amp;P 500 Broad Breadth Rate</div>
+            <div class="mono" style="display:flex; gap:10px; font-size:9px; font-weight:800;">
+              <span id="sentiment-sp-adv" class="value-green">Adv: --</span>
+              <span id="sentiment-sp-dec" class="value-red">Dec: --</span>
+            </div>
+          </div>
+          <div class="meter split-meter"><div id="sentiment-sp-bar" class="meter-fill"></div></div>
+          <div class="meter-scale mono">
+            <span id="sentiment-sp-up-pct">-- Higher</span>
+            <span id="sentiment-sp-down-pct">-- Lower</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="explorer-head">
+        <div>
+          <div class="section-title"><span class="title-mark">✣</span> DXFEED $TOP10 MULTI-FEATURE EXPLORER</div>
+          <div class="explorer-copy">
+            Comparing top market indices across all five calculated stock market indicator features simultaneously.
+            Relay-driven dxLink only. Waiting areas remain neutral until live feed data arrives.
+          </div>
+        </div>
+        <div id="top10-tabs" class="pill-tabs"></div>
+      </div>
+
+      <div id="top10-columns-grid" class="feature-grid"></div>
+
+      <div class="feature-footer mono">
+        <span>* Telemetry intervals update simultaneously based on dxFeed formula streams</span>
+        <span class="value-green"><span class="live-dot"></span> Telemetry Stream Engaged</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="title-mark">⌘</span> INDEX CONTROL DESKS (SELECT INDICATORS)</div>
+        <div>Pick any ticker below to isolate in workspace cards</div>
+      </div>
+      <div id="paired-grid" class="paired-grid"></div>
+    </section>
+  </div>
+
+  <script>
+    const RELAY_PATH = "/ws/dxlink";
+    const DXFEED_DISCORD_WEBHOOK = "/proxy/api/discord-webhook";
+
+    // All constituent stocks from PDF reference (A-Z)
+    const CONSTITUENT_STOCKS = [
+      "AAPL", "ADBE", "AMD", "AMGN", "AMZN", "AMC", "ALGN", "ALB", "ANET", "AVGO",
+      "AXP", "BA", "BABA", "BAC", "BBAI", "BILI", "BRK.B", "BYND", "CAT", "CCJ",
+      "CEG", "CELH", "CHTR", "COIN", "COST", "CRM", "CSCO", "CSIQ", "CVNA", "DHR",
+      "DIS", "DKNG", "ENPH", "F", "FMC", "FSLR", "GD", "GE", "GEHC", "GILD",
+      "GM", "GME", "GS", "HD", "HON", "IBM", "INTC", "INTU", "JNJ", "JPM",
+      "KO", "KSS", "LCID", "LLY", "LMT", "LRCX", "LULU", "MA", "MARA", "MCD",
+      "MDLZ", "META", "MKTX", "MSFT", "MSTR", "MU", "NFLX", "NIO", "NKLA", "NOC",
+      "NOW", "NU", "NVDA", "PANW", "PARA", "PBR", "PFE", "PG", "PHM", "PLTR",
+      "PTON", "PYPL", "QCOM", "RIVN", "RTX", "RUN", "SBUX", "SEDG", "SMCI", "SOFI",
+      "SOUN", "SOXL", "SQQQ", "T", "TEM", "TQQQ", "TRV", "TSLA", "UNH", "UPST",
+      "V", "VALE", "VRT", "VZ", "WBA", "WMT", "WOLF", "WTI", "XOM"
+    ];
+
+    const INDEX_ORDER = ["nyse", "nasdaq", "sp500", "ndx", "djia", "rut"];
+
+    const INDEX_CONFIG = {
+      nyse: {
+        name: "NYSE",
+        badge: "NYSE ACTIVE",
+        accent: "#66a1ff",
+        tickers: [
+          { ticker: "$TICK", name: "NYSE TICK", desc: "Upticks vs Downticks Net Diff", category: "TICK", unit: "Issues" },
+          { ticker: "$TRIN", name: "NYSE TRIN", desc: "Arms Index for NYSE", category: "TRIN", unit: "Ratio" },
+          { ticker: "$ADVN", name: "NYSE Advancing", desc: "Advancing issues on NYSE", category: "Breadth", unit: "Stocks" },
+          { ticker: "$DECLN", name: "NYSE Declining", desc: "Declining issues on NYSE", category: "Breadth", unit: "Stocks" },
+          { ticker: "$UNCHN", name: "NYSE Unchanged", desc: "Unchanged issues on NYSE", category: "Breadth", unit: "Stocks" },
+          { ticker: "$ADDRL", name: "NYSE Net A/D", desc: "Advance decline differential", category: "Breadth", unit: "Issues" },
+          { ticker: "$AVOL", name: "NYSE Up Volume", desc: "Advancing volume", category: "Volume", unit: "M" },
+          { ticker: "$DVOL", name: "NYSE Down Volume", desc: "Declining volume", category: "Volume", unit: "M" },
+          { ticker: "$TVOL", name: "NYSE Total Volume", desc: "Total exchange volume", category: "Volume", unit: "M" },
+          { ticker: "$HI", name: "NYSE New Highs", desc: "52-week highs count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$LO", name: "NYSE New Lows", desc: "52-week lows count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$PCN", name: "NYSE Put/Call", desc: "Put/call ratio", category: "Ratio", unit: "Ratio" }
+        ],
+        status(ticker, value) {
+          if (ticker === "$TICK") return metricStatus(value, 250, -250, "Positive Momentum", "Negative Momentum");
+          if (ticker === "$TRIN") return value == null ? neutralStatus("Awaiting Stream") : value < 1 ? bullishStatus("Strong Bullish") : bearishStatus("Risk-Off Pressure");
+          if (ticker === "$ADVN" || ticker === "$ADDRL") return metricStatus(value, 0, 0, "Advancing Breadth", "Weakening Breadth");
+          return neutralStatus("Sideways/Chop");
+        }
+      },
+      nasdaq: {
+        name: "NASDAQ",
+        badge: "NASDAQ ACTIVE",
+        accent: "#24d7a6",
+        tickers: [
+          { ticker: "$TICK/Q", name: "NASDAQ TICK", desc: "Upticks vs Downticks Net Diff", category: "TICK", unit: "Issues" },
+          { ticker: "$TRIN/Q", name: "NASDAQ TRIN", desc: "Arms Index for NASDAQ", category: "TRIN", unit: "Ratio" },
+          { ticker: "$ADV/Q", name: "NASDAQ Advancing", desc: "Advancing Nasdaq issues", category: "Breadth", unit: "Stocks" },
+          { ticker: "$DECL/Q", name: "NASDAQ Declining", desc: "Declining Nasdaq issues", category: "Breadth", unit: "Stocks" },
+          { ticker: "$UNCH/Q", name: "NASDAQ Unchanged", desc: "Flat Nasdaq issues", category: "Breadth", unit: "Stocks" },
+          { ticker: "$ADDRL/Q", name: "NASDAQ Net A/D", desc: "Advance decline differential", category: "Breadth", unit: "Issues" },
+          { ticker: "$AVOL/Q", name: "NASDAQ Up Volume", desc: "Advancing volume", category: "Volume", unit: "M" },
+          { ticker: "$DVOL/Q", name: "NASDAQ Down Volume", desc: "Declining volume", category: "Volume", unit: "M" },
+          { ticker: "$TVOL/Q", name: "NASDAQ Total Volume", desc: "Total exchange volume", category: "Volume", unit: "M" },
+          { ticker: "$HI/Q", name: "NASDAQ Highs", desc: "52-week highs count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$LO/Q", name: "NASDAQ Lows", desc: "52-week lows count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$PCN/Q", name: "NASDAQ Put/Call", desc: "Put/call ratio", category: "Ratio", unit: "Ratio" }
+        ],
+        status(ticker, value) {
+          if (ticker === "$TICK/Q") return metricStatus(value, 250, -250, "Positive Momentum", "Negative Momentum");
+          if (ticker === "$TRIN/Q") return value == null ? neutralStatus("Awaiting Stream") : value < 1 ? bullishStatus("Strong Bullish") : bearishStatus("Risk-Off Pressure");
+          if (ticker === "$ADV/Q" || ticker === "$ADDRL/Q") return metricStatus(value, 0, 0, "Advancing Breadth", "Weakening Breadth");
+          return neutralStatus("Sideways/Chop");
+        }
+      },
+      sp500: {
+        name: "S&P 500",
+        badge: "S&P 500 ACTIVE",
+        accent: "#f4ba39",
+        tickers: [
+          { ticker: "$TIKSP", name: "S&P 500 TICK", desc: "Upticks vs Downticks in SPX", category: "TICK", unit: "Issues" },
+          { ticker: "$TRINSP", name: "S&P 500 TRIN", desc: "Arms Index for S&P 500", category: "TRIN", unit: "Ratio" },
+          { ticker: "$ADVSP", name: "S&P 500 Advancing", desc: "Advancing SPX constituents", category: "Breadth", unit: "Stocks" },
+          { ticker: "$DECLSP", name: "S&P 500 Declining", desc: "Declining SPX constituents", category: "Breadth", unit: "Stocks" },
+          { ticker: "$UNCHSP", name: "S&P 500 Unchanged", desc: "Unchanged SPX constituents", category: "Breadth", unit: "Stocks" },
+          { ticker: "$ADDRLSP", name: "S&P 500 Net A/D", desc: "Advance decline differential", category: "Breadth", unit: "Issues" },
+          { ticker: "$AVOLSP", name: "S&P 500 Up Volume", desc: "Advancing volume", category: "Volume", unit: "M" },
+          { ticker: "$DVOLSP", name: "S&P 500 Down Volume", desc: "Declining volume", category: "Volume", unit: "M" },
+          { ticker: "$TVOLSP", name: "S&P 500 Total Volume", desc: "Total component volume", category: "Volume", unit: "M" },
+          { ticker: "$HISP", name: "S&P 500 Highs", desc: "52-week highs count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$LOSP", name: "S&P 500 Lows", desc: "52-week lows count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$PCSP", name: "S&P 500 Put/Call", desc: "Put/call ratio", category: "Ratio", unit: "Ratio" }
+        ],
+        status(ticker, value) {
+          if (ticker === "$TRINSP") return value == null ? neutralStatus("Awaiting Stream") : value < 1 ? bullishStatus("Strong Bullish") : bearishStatus("Risk-Off Pressure");
+          if (ticker === "$ADVSP" || ticker === "$ADDRLSP") return metricStatus(value, 0, 0, "Advancing Segment", "Negative Breadth");
+          return neutralStatus("Sideways/Chop");
+        }
+      },
+      ndx: {
+        name: "NDX 100",
+        badge: "NDX 100 ACTIVE",
+        accent: "#ff5ca8",
+        tickers: [
+          { ticker: "$TIKND", name: "Nasdaq 100 TICK", desc: "Upticks vs Downticks in NDX", category: "TICK", unit: "Issues" },
+          { ticker: "$TRINND", name: "Nasdaq 100 TRIN", desc: "Arms Index for NDX", category: "TRIN", unit: "Ratio" },
+          { ticker: "$ADVND", name: "Nasdaq 100 Advancing", desc: "Advancers in NDX", category: "Breadth", unit: "Stocks" },
+          { ticker: "$DECLND", name: "Nasdaq 100 Declining", desc: "Decliners in NDX", category: "Breadth", unit: "Stocks" },
+          { ticker: "$UNCHND", name: "Nasdaq 100 Unchanged", desc: "Unchanged in NDX", category: "Breadth", unit: "Stocks" },
+          { ticker: "$AVOLND", name: "Nasdaq 100 Up Volume", desc: "Advancing volume", category: "Volume", unit: "M" },
+          { ticker: "$DVOLND", name: "Nasdaq 100 Down Volume", desc: "Declining volume", category: "Volume", unit: "M" },
+          { ticker: "$TVOLND", name: "Nasdaq 100 Total Volume", desc: "Total component volume", category: "Volume", unit: "M" },
+          { ticker: "$HIND", name: "Nasdaq 100 Highs", desc: "52-week highs count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$LOND", name: "Nasdaq 100 Lows", desc: "52-week lows count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$PCND", name: "Nasdaq 100 Put/Call", desc: "Put/call ratio", category: "Ratio", unit: "Ratio" }
+        ],
+        status(ticker, value) {
+          if (ticker === "$ADVND") return metricStatus(value, 0, 0, "Advancing Segment", "Negative Breadth");
+          if (ticker === "$TRINND") return value == null ? neutralStatus("Awaiting Stream") : value < 1 ? bullishStatus("Strong Bullish") : bearishStatus("Risk-Off Pressure");
+          return neutralStatus("Awaiting Flow");
+        }
+      },
+      djia: {
+        name: "DJIA",
+        badge: "DJIA ACTIVE",
+        accent: "#63d9ff",
+        tickers: [
+          { ticker: "$TIKI", name: "Dow 30 TICK", desc: "Upticks vs Downticks on DJIA", category: "TICK", unit: "Issues" },
+          { ticker: "$TRINI", name: "Dow 30 TRIN", desc: "Arms Index for DJIA", category: "TRIN", unit: "Ratio" },
+          { ticker: "$ADVI", name: "Dow 30 Advancing", desc: "Advancing DJIA components", category: "Breadth", unit: "Stocks" },
+          { ticker: "$DECLI", name: "Dow 30 Declining", desc: "Declining DJIA components", category: "Breadth", unit: "Stocks" },
+          { ticker: "$UNCHI", name: "Dow 30 Unchanged", desc: "Unchanged DJIA components", category: "Breadth", unit: "Stocks" },
+          { ticker: "$AVOLI", name: "Dow 30 Up Volume", desc: "Advancing volume", category: "Volume", unit: "M" },
+          { ticker: "$DVOLI", name: "Dow 30 Down Volume", desc: "Declining volume", category: "Volume", unit: "M" },
+          { ticker: "$TVOLI", name: "Dow 30 Total Volume", desc: "Total component volume", category: "Volume", unit: "M" },
+          { ticker: "$HII", name: "Dow 30 Highs", desc: "52-week highs count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$LOI", name: "Dow 30 Lows", desc: "52-week lows count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$PCI", name: "Dow 30 Put/Call", desc: "Put/call ratio", category: "Ratio", unit: "Ratio" }
+        ],
+        status(ticker, value) {
+          if (ticker === "$TIKI") return metricStatus(value, 0, 0, "Positive Momentum", "Negative Momentum");
+          if (ticker === "$ADVI") return metricStatus(value, 0, 0, "Advancing Segment", "Negative Breadth");
+          return neutralStatus("Sideways/Chop");
+        }
+      },
+      rut: {
+        name: "RUT 2000",
+        badge: "RUT 2000 ACTIVE",
+        accent: "#8e79ff",
+        tickers: [
+          { ticker: "$TRINRL", name: "Russell 2000 TRIN", desc: "Arms Index for Russell 2000", category: "TRIN", unit: "Ratio" },
+          { ticker: "$ADVRL", name: "Russell 2000 Advancing", desc: "Advancing small cap count", category: "Breadth", unit: "Stocks" },
+          { ticker: "$DECLRL", name: "Russell 2000 Declining", desc: "Declining small cap count", category: "Breadth", unit: "Stocks" },
+          { ticker: "$UNCHRL", name: "Russell 2000 Unchanged", desc: "Unchanged small cap count", category: "Breadth", unit: "Stocks" },
+          { ticker: "$AVOLRL", name: "Russell 2000 Up Volume", desc: "Advancing volume", category: "Volume", unit: "M" },
+          { ticker: "$DVOLRL", name: "Russell 2000 Down Volume", desc: "Declining volume", category: "Volume", unit: "M" },
+          { ticker: "$TVOLRL", name: "Russell 2000 Total Volume", desc: "Total component volume", category: "Volume", unit: "M" },
+          { ticker: "$HIRL", name: "Russell 2000 Highs", desc: "52-week highs count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$LORL", name: "Russell 2000 Lows", desc: "52-week lows count", category: "HighLow", unit: "Stocks" },
+          { ticker: "$PCRL", name: "Russell 2000 Put/Call", desc: "Put/call ratio", category: "Ratio", unit: "Ratio" }
+        ],
+        status(ticker, value) {
+          if (ticker === "$ADVRL") return metricStatus(value, 0, 0, "Advancing Segment", "Negative Breadth");
+          if (ticker === "$TRINRL") return value == null ? neutralStatus("Awaiting Stream") : value < 1 ? bullishStatus("Strong Bullish") : bearishStatus("Risk-Off Pressure");
+          return neutralStatus("Awaiting Flow");
+        }
+      }
+    };
+
+    const TOP10_GROUPS = {
+      nyse: {
+        name: "NYSE",
+        formulas: {
+          abs_gain: { symbol: "$TOP10GN", desc: "Top 10 Gainers by Absolute Net" },
+          rel_gain: { symbol: "$TOP10PGN", desc: "Top 10 Gainers by Relative Net" },
+          abs_lose: { symbol: "$TOP10LN", desc: "Top 10 Losers by Absolute Net" },
+          rel_lose: { symbol: "$TOP10PLN", desc: "Top 10 Losers by Relative Net" },
+          volume: { symbol: "$TOP10VN", desc: "Top 10 Activity by Volume" }
+        }
+      },
+      nasdaq: {
+        name: "NASDAQ",
+        formulas: {
+          abs_gain: { symbol: "$TOP10G/Q", desc: "Top 10 Gainers by Absolute Net" },
+          rel_gain: { symbol: "$TOP10PG/Q", desc: "Top 10 Gainers by Relative Net" },
+          abs_lose: { symbol: "$TOP10L/Q", desc: "Top 10 Losers by Absolute Net" },
+          rel_lose: { symbol: "$TOP10PL/Q", desc: "Top 10 Losers by Relative Net" },
+          volume: { symbol: "$TOP10V/Q", desc: "Top 10 Activity by Volume" }
+        }
+      },
+      sp500: {
+        name: "S&P 500",
+        formulas: {
+          abs_gain: { symbol: "$TOP10GSP", desc: "Top 10 Gainers by Absolute Net" },
+          rel_gain: { symbol: "$TOP10PGSP", desc: "Top 10 Gainers by Relative Net" },
+          abs_lose: { symbol: "$TOP10LSP", desc: "Top 10 Losers by Absolute Net" },
+          rel_lose: { symbol: "$TOP10PLSP", desc: "Top 10 Losers by Relative Net" },
+          volume: { symbol: "$TOP10VSP", desc: "Top 10 Activity by Volume" }
+        }
+      },
+      dow: {
+        name: "Dow Jones",
+        formulas: {
+          abs_gain: { symbol: "$TOP10GI", desc: "Top 10 Gainers by Absolute Net" },
+          rel_gain: { symbol: "$TOP10PGI", desc: "Top 10 Gainers by Relative Net" },
+          abs_lose: { symbol: "$TOP10LI", desc: "Top 10 Losers by Absolute Net" },
+          rel_lose: { symbol: "$TOP10PLI", desc: "Top 10 Losers by Relative Net" },
+          volume: { symbol: "$TOP10VI", desc: "Top 10 Activity by Volume" }
+        }
+      },
+      allusa: {
+        name: "ALL USA",
+        formulas: {
+          abs_gain: { symbol: "$TOP10GUS", desc: "Top 10 Gainers by Absolute Net" },
+          rel_gain: { symbol: "$TOP10PGUS", desc: "Top 10 Gainers by Relative Net" },
+          abs_lose: { symbol: "$TOP10LUS", desc: "Top 10 Losers by Absolute Net" },
+          rel_lose: { symbol: "$TOP10PLUS", desc: "Top 10 Losers by Relative Net" },
+          volume: { symbol: "$TOP10VUS", desc: "Top 10 Activity by Volume" }
+        }
+      }
+    };
+
+    const state = {
+      socket: null,
+      reconnectTimer: null,
+      reconnectDelayMs: 3000,
+      selectedTop10: "sp500",
+      selectedMetrics: {
+        nyse: "$TICK",
+        nasdaq: "$TICK/Q",
+        sp500: "$TRINSP",
+        ndx: "$ADVND",
+        djia: "$TIKI",
+        rut: "$ADVRL"
+      },
+      dataBySymbol: new Map(),
+      top10RowsBySymbol: new Map()
+    };
+
+    function setSnapshotBtnState(btn, text, color, bgColor) {
+      if (!btn) return;
+      btn.textContent = text;
+      btn.style.color = color;
+      btn.style.background = bgColor || "transparent";
+      btn.style.transition = "all 0.15s ease";
+    }
+
+    function resetSnapshotBtn(btn, text, color, delay = 1500) {
+      setTimeout(() => setSnapshotBtnState(btn, text, color, "transparent"), delay);
+    }
+
+    function pulseSnapshotBtn(btn) {
+      if (!btn) return;
+      btn.style.transform = "scale(0.92)";
+      setTimeout(() => { btn.style.transform = "scale(1)"; }, 120);
+    }
+
+    async function loadHtml2Canvas() {
+      if (typeof html2canvas !== "undefined") return;
+      await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+
+    async function captureDxfeedPanel() {
+      await loadHtml2Canvas();
+      const root = document.getElementById("dxfeed-snapshot-root");
+      if (!root) throw new Error("dxFeed snapshot root not found");
+
+      const wrapper = document.createElement("div");
+      wrapper.style.cssText = "position:fixed;left:-9999px;top:0;background:#05080d;padding:12px;display:inline-block";
+      const clone = root.cloneNode(true);
+      clone.querySelectorAll("#dxfeed-copy-shot-btn,#dxfeed-share-x-btn,#dxfeed-share-discord-btn").forEach((btn) => {
+        btn.closest("#dxfeed-share-toolbar")?.remove();
+      });
+      wrapper.appendChild(clone);
+      document.body.appendChild(wrapper);
+
+      try {
+        return await html2canvas(wrapper, {
+          backgroundColor: "#05080d",
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          allowTaint: true
+        });
+      } finally {
+        document.body.removeChild(wrapper);
+      }
+    }
+
+    function canvasToBlob(canvas) {
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error("Blob conversion failed"));
+            return;
+          }
+          resolve(blob);
+        }, "image/png");
+      });
+    }
+
+    async function postDxfeedDiscord(blob, text) {
+      const form = new FormData();
+      form.append("payload_json", JSON.stringify({ content: text }));
+      form.append("files[0]", blob, "dxfeed-indicators.png");
+      const res = await fetch(DXFEED_DISCORD_WEBHOOK, { method: "POST", body: form });
+      if (!res.ok) throw new Error(`Discord ${res.status}`);
+    }
+
+    function allSymbols() {
+      const metricSymbols = INDEX_ORDER.flatMap((key) => INDEX_CONFIG[key].tickers.map((item) => item.ticker));
+      const top10Symbols = Object.values(TOP10_GROUPS).flatMap((group) => Object.values(group.formulas).map((item) => item.symbol));
+      const allStocks = CONSTITUENT_STOCKS;
+      return [...new Set([...metricSymbols, ...top10Symbols, ...allStocks])];
+    }
+
+    function relayUrl() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const hostname = window.location.hostname;
+      const port = window.location.port || (protocol === "wss:" ? "443" : "80");
+      return `${protocol}//${hostname}:${port}/ws/dxlink`;
+    }
+
+    function neutralStatus(label) {
+      return { kind: "neutral", label };
+    }
+
+    function bullishStatus(label) {
+      return { kind: "bullish", label };
+    }
+
+    function bearishStatus(label) {
+      return { kind: "bearish", label };
+    }
+
+    function metricStatus(value, upper, lower, positiveLabel, negativeLabel) {
+      if (value == null) return neutralStatus("Awaiting Stream");
+      if (value > upper) return bullishStatus(positiveLabel);
+      if (value < lower) return bearishStatus(negativeLabel);
+      return neutralStatus("Sideways/Chop");
+    }
+
+    function readNumeric(payload) {
+      const keys = ["price", "last", "value", "mark", "close", "mid", "indexValue"];
+      for (const key of keys) {
+        const value = payload?.[key];
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
+      }
+      return null;
+    }
+
+    function readDelta(payload) {
+      const keys = ["change", "netChange"];
+      for (const key of keys) {
+        const value = payload?.[key];
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
+      }
+      return null;
+    }
+
+    function readPercent(payload) {
+      const keys = ["changePercent", "percentChange", "pctChange"];
+      for (const key of keys) {
+        const value = payload?.[key];
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
+      }
+      return null;
+    }
+
+    function formatMetricValue(ticker, payload, forceInteger = false) {
+      const value = readNumeric(payload);
+      if (value == null) return "--";
+      if (forceInteger || ticker.includes("TICK") || ticker.includes("ADV") || ticker.includes("DECL") || ticker.includes("UNCH") || ticker.includes("ADDRL") || ticker.includes("HI") || ticker.includes("LO")) {
+        return Math.round(value).toLocaleString();
+      }
+      return value.toFixed(2);
+    }
+
+    function formatCompactVolume(payload) {
+      const value = readNumeric(payload);
+      if (value == null) return "--";
+      if (Math.abs(value) >= 1000000000) return `${(value / 1000000000).toFixed(2)}B`;
+      if (Math.abs(value) >= 1000000) return `${(value / 1000000).toFixed(2)}M`;
+      if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(1)}K`;
+      return `${value.toFixed(0)}`;
+    }
+
+    function payloadFor(symbol) {
+      return state.dataBySymbol.get(symbol) || null;
+    }
+
+    function connectRelay() {
+      clearTimeout(state.reconnectTimer);
+      const socket = new WebSocket(relayUrl());
+      state.socket = socket;
+
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify({ type: "subscribe", symbols: allSymbols() }));
+      });
+
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          processRelayMessage(message);
+        } catch (_) {
+          // Keep the page dx-only and quiet; ignore malformed packets.
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        scheduleReconnect();
+      });
+
+      socket.addEventListener("error", () => {
+        socket.close();
+      });
+    }
+
+    function scheduleReconnect() {
+      clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = setTimeout(connectRelay, state.reconnectDelayMs);
+    }
+
+    function processRelayMessage(message) {
+      const packets = [];
+      if (Array.isArray(message)) {
+        packets.push(...message);
+      } else if (message?.type === "FEED_DATA" && Array.isArray(message.data)) {
+        packets.push(...message.data);
+      } else if (message?.type === "FEED_DATA" && message.data && typeof message.data === "object") {
+        packets.push(message.data);
+      } else if (message && typeof message === "object") {
+        packets.push(message);
+      }
+
+      let changed = false;
+      for (const item of packets) {
+        const symbol = item.eventSymbol || item.symbol;
+        if (!symbol) continue;
+        state.dataBySymbol.set(symbol, item);
+        maybeParseTop10Rows(symbol, item);
+        changed = true;
+      }
+
+      if (changed) renderAll();
+    }
+
+    function maybeParseTop10Rows(symbol, payload) {
+      const textFields = [
+        payload.text, payload.description, payload.summary, payload.valueText, payload.raw, payload.note
+      ].filter((value) => typeof value === "string" && value.trim());
+
+      if (!textFields.length) return;
+      for (const text of textFields) {
+        const rows = parseTop10Text(text);
+        if (rows.length) {
+          state.top10RowsBySymbol.set(symbol, rows);
+          return;
+        }
+      }
+    }
+
+    function parseTop10Text(text) {
+      const parts = text
+        .split(/\r?\n|[;|]/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+      const rows = [];
+      for (const part of parts) {
+        const match = part.match(/^([A-Z.\-]{1,8})(?:\s+|-|:|,)+(.*)$/);
+        if (!match) continue;
+        const rest = match[2];
+        const nums = rest.match(/-?\d+(?:\.\d+)?/g) || [];
+        rows.push({
+          symbol: match[1],
+          name: rest.replace(/-?\d+(?:\.\d+)?/g, "").replace(/\s+/g, " ").trim() || "Live constituent",
+          price: nums[0] != null ? Number(nums[0]) : null,
+          change: nums[1] != null ? Number(nums[1]) : null,
+          volume: nums[2] != null ? Number(nums[2]) : null
+        });
+      }
+      return rows.slice(0, 10);
+    }
+
+    function renderTop10Tabs() {
+      const container = document.getElementById("top10-tabs");
+      container.innerHTML = "";
+      Object.entries(TOP10_GROUPS).forEach(([key, group]) => {
+        const btn = document.createElement("button");
+        btn.className = `pill-tab${state.selectedTop10 === key ? " active" : ""}`;
+        btn.textContent = group.name;
+        btn.addEventListener("click", () => {
+          state.selectedTop10 = key;
+          renderTop10Tabs();
+          renderTop10Columns();
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function metricBadge(metricKey) {
+      if (metricKey === "abs_gain") return { label: "Abs +", color: "var(--green)" };
+      if (metricKey === "rel_gain") return { label: "% +", color: "var(--teal)" };
+      if (metricKey === "abs_lose") return { label: "Abs -", color: "var(--red)" };
+      if (metricKey === "rel_lose") return { label: "% -", color: "#ff6d8d" };
+      return { label: "Vol", color: "#8ea5ff" };
+    }
+
+    function renderTop10Columns() {
+      const group = TOP10_GROUPS[state.selectedTop10];
+      const grid = document.getElementById("top10-columns-grid");
+      grid.innerHTML = "";
+
+      const columns = [
+        ["abs_gain", "Absolute Gainers"],
+        ["rel_gain", "Relative % Gainers"],
+        ["abs_lose", "Absolute Losers"],
+        ["rel_lose", "Relative % Losers"],
+        ["volume", "Active Volume Flow"]
+      ];
+
+      for (const [metricKey, title] of columns) {
+        const formula = group.formulas[metricKey];
+        const payload = payloadFor(formula.symbol);
+        const rows = state.top10RowsBySymbol.get(formula.symbol) || [];
+        const badge = metricBadge(metricKey);
+        const div = document.createElement("div");
+        div.className = "feature-column";
+
+        const rowsHtml = rows.length
+          ? rows.map((row) => {
+              const change = row.change == null ? "--" : `${row.change > 0 ? "+" : ""}${row.change.toFixed(2)}${metricKey.includes("rel") ? "%" : ""}`;
+              const changeClass = row.change == null ? "value-blue" : row.change >= 0 ? "value-green" : "value-red";
+              const price = row.price == null ? "--" : `$${row.price.toFixed(2)}`;
+              const volume = row.volume == null ? "Vol: --" : `Vol: ${formatHuman(row.volume)}`;
+              return `
+                <div class="ticker-row">
+                  <div class="ticker-left">
+                    <div class="ticker-symbol mono">${row.symbol}</div>
+                    <div class="ticker-name">${escapeHtml(row.name)}</div>
+                    <div class="ticker-meta mono">${volume}</div>
+                  </div>
+                  <div class="ticker-right">
+                    <div class="ticker-price mono">${price}</div>
+                    <div class="ticker-change mono ${changeClass}">${metricKey === "volume" ? "Active Flow" : change}</div>
+                  </div>
+                </div>
+              `;
+            }).join("")
+          : `<div class="loading-note mono">Awaiting live dxFeed TOP10 constituent stream for ${formula.symbol}</div>`;
+
+        div.innerHTML = `
+          <div class="feature-head">
+            <div class="feature-title">${title}</div>
+            <div class="feature-badge mono" style="color:${badge.color}">${badge.label}</div>
+          </div>
+          <div class="feature-subhead mono">
+            <span>${formula.desc}</span>
+            <span style="color:#88a2ff; font-weight:800;">${formula.symbol}</span>
+          </div>
+          <div class="feature-rows">${rowsHtml}</div>
+        `;
+        grid.appendChild(div);
+      }
+    }
+
+    function renderPairedGrid() {
+      const grid = document.getElementById("paired-grid");
+      grid.innerHTML = "";
+
+      INDEX_ORDER.forEach((key) => {
+        const config = INDEX_CONFIG[key];
+        const ticker = state.selectedMetrics[key];
+        const active = config.tickers.find((item) => item.ticker === ticker) || config.tickers[0];
+        const payload = payloadFor(active.ticker);
+        const value = readNumeric(payload);
+        const pct = readPercent(payload);
+        const status = config.status(active.ticker, value);
+        const deltaText = pct == null ? "--" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}`;
+        const deltaClass = pct == null ? "value-blue" : pct >= 0 ? "value-green" : "value-red";
+        const options = config.tickers.map((item) =>
+          `<option value="${item.ticker}" ${ticker === item.ticker ? "selected" : ""}>${item.ticker}</option>`
+        ).join("");
+
+        const column = document.createElement("div");
+        column.className = "paired-column";
+        column.innerHTML = `
+          <div class="control-card">
+            <div class="control-head">
+              <div class="control-tag mono" style="color:${config.accent}">${config.name}</div>
+              <div class="control-count mono">${config.tickers.length} Available</div>
+            </div>
+            <select class="mono" data-index="${key}">${options}</select>
+            <div class="control-name">${active.name}</div>
+            <div class="control-desc">${active.desc}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-head">
+              <div class="summary-tag mono" style="color:${config.accent}">${config.badge}</div>
+              <div class="summary-mini mono">${active.category}</div>
+            </div>
+            <div class="summary-name">${active.ticker}</div>
+            <div class="summary-desc">${active.name}</div>
+            <div class="summary-desc">${active.desc}</div>
+            <div class="summary-value-row">
+              <div>
+                <span class="summary-value mono">${formatMetricValue(active.ticker, payload)}</span>
+                <span class="summary-unit">${active.unit}</span>
+              </div>
+              <div class="summary-delta mono ${deltaClass}">${deltaText}</div>
+            </div>
+            <div class="status-chip ${status.kind === "bullish" ? "bullish" : status.kind === "bearish" ? "bearish" : status.label.includes("Segment") ? "segment" : "neutral"}">${status.label}</div>
+          </div>
+        `;
+        grid.appendChild(column);
+      });
+
+      grid.querySelectorAll("select").forEach((select) => {
+        select.addEventListener("change", (event) => {
+          const indexKey = event.target.getAttribute("data-index");
+          state.selectedMetrics[indexKey] = event.target.value;
+          renderPairedGrid();
+        });
+      });
+    }
+
+    function renderSentiment() {
+      const trin = payloadFor("$TRIN");
+      const avol = payloadFor("$AVOL");
+      const dvol = payloadFor("$DVOL");
+      const advsp = payloadFor("$ADVSP");
+      const declsp = payloadFor("$DECLSP");
+
+      const trinValue = readNumeric(trin);
+      document.getElementById("sentiment-trin-val").textContent = trinValue == null ? "--" : trinValue.toFixed(2);
+      document.getElementById("sentiment-trin-val").className = `metric-value mono ${trinValue == null ? "value-blue" : trinValue < 1 ? "value-green" : "value-amber"}`;
+      document.getElementById("sentiment-trin-bar").style.width = trinValue == null ? "0%" : `${clamp(((trinValue - 0.4) / 1.8) * 100, 0, 100)}%`;
+
+      const avolVal = readNumeric(avol);
+      const dvolVal = readNumeric(dvol);
+      document.getElementById("sentiment-avol").textContent = `Up: ${formatCompactVolume(avol)}`;
+      document.getElementById("sentiment-dvol").textContent = `Down: ${formatCompactVolume(dvol)}`;
+      const totalVol = (avolVal || 0) + (dvolVal || 0);
+      const volPct = totalVol > 0 ? (avolVal / totalVol) * 100 : 0;
+      document.getElementById("sentiment-vol-bar").style.width = `${clamp(volPct, 0, 100)}%`;
+      document.getElementById("sentiment-vol-up-pct").textContent = totalVol > 0 ? `${volPct.toFixed(0)}% Advancing Vol` : "-- Advancing Vol";
+      document.getElementById("sentiment-vol-down-pct").textContent = totalVol > 0 ? `${(100 - volPct).toFixed(0)}% Declining Vol` : "-- Declining Vol";
+
+      const advVal = readNumeric(advsp);
+      const decVal = readNumeric(declsp);
+      document.getElementById("sentiment-sp-adv").textContent = `Adv: ${advVal == null ? "--" : Math.round(advVal)}`;
+      document.getElementById("sentiment-sp-dec").textContent = `Dec: ${decVal == null ? "--" : Math.round(decVal)}`;
+      const breadthTotal = (advVal || 0) + (decVal || 0);
+      const breadthPct = breadthTotal > 0 ? (advVal / breadthTotal) * 100 : 0;
+      document.getElementById("sentiment-sp-bar").style.width = `${clamp(breadthPct, 0, 100)}%`;
+      document.getElementById("sentiment-sp-up-pct").textContent = breadthTotal > 0 ? `${breadthPct.toFixed(0)}% Higher` : "-- Higher";
+      document.getElementById("sentiment-sp-down-pct").textContent = breadthTotal > 0 ? `${(100 - breadthPct).toFixed(0)}% Lower` : "-- Lower";
+    }
+
+    function renderAll() {
+      renderSentiment();
+      renderTop10Columns();
+      renderPairedGrid();
+    }
+
+    function clamp(num, min, max) {
+      return Math.min(Math.max(num, min), max);
+    }
+
+    function formatHuman(value) {
+      if (value == null || !Number.isFinite(value)) return "--";
+      if (Math.abs(value) >= 1000000000) return `${(value / 1000000000).toFixed(2)}B`;
+      if (Math.abs(value) >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+      if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(1)}K`;
+      return `${value.toFixed(0)}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function init() {
+      renderTop10Tabs();
+      renderAll();
+      connectRelay();
+    }
+
+    window.addEventListener("DOMContentLoaded", init);
+    window.copyDxfeedScreenshot = async function() {
+      const btn = document.getElementById("dxfeed-copy-shot-btn");
+      pulseSnapshotBtn(btn);
+      setSnapshotBtnState(btn, "...", "#ffb300", "rgba(255,179,0,.15)");
+      try {
+        const canvas = await captureDxfeedPanel();
+        const blob = await canvasToBlob(canvas);
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        setSnapshotBtnState(btn, "✓", "#00e676", "rgba(0,230,118,.15)");
+        resetSnapshotBtn(btn, "COPY", "#00e5ff");
+      } catch (_) {
+        setSnapshotBtnState(btn, "ERR", "#ff4757", "rgba(255,71,87,.15)");
+        resetSnapshotBtn(btn, "COPY", "#00e5ff");
+      }
+    };
+
+    window.shareDxfeed = async function(platform) {
+      if (platform === "x") {
+        const btn = document.getElementById("dxfeed-share-x-btn");
+        pulseSnapshotBtn(btn);
+        setSnapshotBtnState(btn, "↗", "#00e5ff", "rgba(0,229,255,.15)");
+        setTimeout(() => {
+          resetSnapshotBtn(btn, "X", "#00e5ff", 0);
+          window.open("https://twitter.com/intent/tweet?text=dxFeed+Market+Indicators", "_blank");
+        }, 300);
+        return;
+      }
+
+      const btn = document.getElementById("dxfeed-share-discord-btn");
+      pulseSnapshotBtn(btn);
+      setSnapshotBtnState(btn, "...", "#ffb300", "rgba(255,179,0,.15)");
+      try {
+        const canvas = await captureDxfeedPanel();
+        const blob = await canvasToBlob(canvas);
+        const trin = document.getElementById("sentiment-trin-val")?.textContent || "--";
+        const spAdv = document.getElementById("sentiment-sp-adv")?.textContent || "Adv: --";
+        await postDxfeedDiscord(blob, `📡 **dxFeed Indicators** | TRIN: ${trin} | ${spAdv}`);
+        setSnapshotBtnState(btn, "✓", "#00e676", "rgba(0,230,118,.15)");
+        resetSnapshotBtn(btn, "DISCORD", "#7289da");
+      } catch (_) {
+        setSnapshotBtnState(btn, "ERR", "#ff4757", "rgba(255,71,87,.15)");
+        resetSnapshotBtn(btn, "DISCORD", "#7289da");
+      }
+    };
+  </script>
+</body>
+</html>

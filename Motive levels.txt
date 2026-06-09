@@ -1,0 +1,96 @@
+To feed GEX levels from your dashboard directly into MotiveWave, you just need to expose an endpoint—either on your Python backend or via a Firebase Cloud Function—that serves your calculated levels as a raw CSV string. MotiveWave will hit that URL and automatically plot your Call Walls, Put Walls, and Zero Gamma nodes on the chart.
+
+## The CSV Structure
+
+MotiveWave's native Cloud Levels study requires a very specific column layout. Your endpoint must output these exact headers:
+
+```csv
+Symbol,Price,Label,Text Color,Line Color,Band Color,Band Offset,Show Label,Show Price
+
+```
+
+* **Symbol:** Must match the instrument ticker exactly as it appears in your MotiveWave workspace (e.g., `ES`, `NQ`, or a specific contract like `ESM6`).
+* **Band Offset:** A value of `0` renders a solid horizontal line. Any value greater than `0` (calculated in ticks) creates a shaded "cloud" area around the price level.
+* **Colors:** You can use standard color names (like `RED`, `WHITE`, `TRANSPARENT`) or hex codes.
+
+### Example Output
+
+If you are plotting major ES and NQ levels, your API response should look exactly like this:
+
+```csv
+Symbol,Price,Label,Text Color,Line Color,Band Color,Band Offset,Show Label,Show Price
+ES,5350.00,Call Wall,WHITE,RED,TRANSPARENT,0,TRUE,TRUE
+ES,5300.00,ZeroG,BLACK,WHITE,GRAY,4,TRUE,TRUE
+NQ,18500.00,Put Wall,WHITE,GREEN,TRANSPARENT,0,TRUE,TRUE
+
+```
+
+## Backend Implementation
+
+Here is a quick example of how to serve this using a standard Python framework like Flask or FastAPI. The key is ensuring the MIME type is set to `text/csv` so MotiveWave parses the endpoint as a file rather than a web page:
+
+```python
+from flask import Flask, Response
+
+app = Flask(__name__)
+
+@app.route('/api/gex-levels')
+def gex_levels():
+    # 1. Fetch your live Gamma Exposure calculations here
+    # 2. Format the nodes into the required CSV structure
+    
+    csv_data = """Symbol,Price,Label,Text Color,Line Color,Band Color,Band Offset,Show Label,Show Price
+ES,5350.00,Call Wall,WHITE,RED,TRANSPARENT,0,TRUE,TRUE
+ES,5300.00,ZeroG,BLACK,WHITE,GRAY,2,TRUE,TRUE"""
+    
+    return Response(csv_data, mimetype='text/csv')
+
+```
+
+## Connecting to MotiveWave
+
+Once your API endpoint is live, route it back into your platform:
+
+1. **Add the Study:**
+Open MotiveWave and add the **Cloud Levels** study to your active chart.
+
+
+2. **Configure the URL:**
+In the study settings, change the **Source Type** to **URL** and paste your new dashboard endpoint (e.g., `[https://api.shrils.com/gex-levels](https://api.shrils.com/gex-levels)`).
+
+
+3. **Set the Format:**
+Set the **Format** to **Investor/RT (CSV)**. MotiveWave will process its native column layout smoothly under this option.
+
+
+Whenever your backend updates the GEX calculations, MotiveWave will automatically pull the fresh levels on its next refresh cycle.
+
+You have two clean options to pull data from your self-hosted setup:
+
+### Option 1: The Local URL Route (API)
+
+If your dashboard backend is running locally on the same machine as MotiveWave (or on a server inside your home network), you can point MotiveWave's URL field straight to your local IP or localhost.
+
+* **URL Example:** `http://localhost:5000/api/gex-levels` or `[http://192.168.1.15:8000/gex](http://192.168.1.15:8000/gex)`
+* **Pros:** Real-time stream without writing files to your hard drive.
+* **Cons:** You need to make sure your local server is up and running whenever you open MotiveWave.
+
+### Option 2: The Local File Route (Easiest & Most Robust)
+
+Since everything is self-hosted, an even simpler approach is to have your dashboard's backend script (Python) write the GEX output straight into a static `.csv` file on your hard drive whenever it recalculates.
+
+Instead of selecting **URL** in MotiveWave, change the **Source Type** to **Local File** and point it to that exact file path.
+
+```python
+# Just have your script overwrite this file on a loop or timer
+csv_path = "/path/to/your/trading_folder/gex_levels.csv"
+
+with open(csv_path, "w") as f:
+    f.write(csv_data)
+
+```
+
+* **MotiveWave Path Example:** `C:\Users\Brandon\Documents\MotiveWave\gex_levels.csv`
+* **Pros:** Incredibly reliable. No network ports to deal with, no local server down-time issues, and MotiveWave automatically monitors local files for updates and refreshes the chart instantly when the file changes.
+
+Which path fits into your current dashboard architecture better—saving a file directly from Python, or hitting a local API endpoint?
