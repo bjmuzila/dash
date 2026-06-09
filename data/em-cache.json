@@ -1,0 +1,39 @@
+{
+  "2026-06-05": {
+    "timestamp": 1780655503018,
+    "time": "6:31:43 AM",
+    "esExp": "2026-06-07",
+    "spx": 30.787,
+    "ndx": 205.24949999999998,
+    "spxStrike": 7585,
+    "ndxStrike": 30410,
+    "spxCall": 16.93,
+    "spxPut": 19.29,
+    "ndxCall": 118.15,
+    "ndxPut": 123.32
+  },
+  "2026-06-09": {
+    "timestamp": 1781026405696,
+    "time": "1:33:25 PM",
+    "spx": 119.19179054640735,
+    "ndx": 137.5,
+    "spxStrike": 7320,
+    "ndxStrike": 28720,
+    "spxCall": 20.6,
+    "spxPut": 17.4,
+    "ndxCall": 0,
+    "ndxPut": 0
+  },
+  "2026-06-08": {
+    "timestamp": 1780960940881,
+    "time": "7:22:20 PM",
+    "spx": 18.105,
+    "ndx": 45.2625,
+    "spxStrike": 7385,
+    "ndxStrike": 28960,
+    "spxCall": 21.25,
+    "spxPut": 0.05,
+    "ndxCall": 0,
+    "ndxPut": 0
+  }
+}
