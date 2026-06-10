@@ -1953,7 +1953,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch('http://'' + window.location.host/proxy/discord-webhook', {
+    fetch(''' + window.location.origin/proxy/discord-webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3454,7 +3454,7 @@ async function fetchQuotes(){
       if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
     });
     if (!Object.keys(data).length) {
-      const fallback = await fetch('http://'' + window.location.host/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const fallback = await fetch(''' + window.location.origin/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
       const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
       items.forEach(item => {
         const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
@@ -3486,7 +3486,7 @@ async function fetchQuotes(){
     const expectedSymbols = ['SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
     const needsFallback = !window.__quoteFallbackLoaded && expectedSymbols.some(sym => !resolveQuoteEntry(sym));
     if (needsFallback || !Object.keys(data).length) {
-      const fallback = await fetch('http://'' + window.location.host/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const fallback = await fetch(''' + window.location.origin/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
       const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
       items.forEach(item => {
         const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
@@ -3661,7 +3661,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = 'http://'' + window.location.host/proxy/twitter';
+const TWITTER_PROXY = ''' + window.location.origin/proxy/twitter';
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -4944,11 +4944,11 @@ async function fetchOverviewCompareGEX() {
   try {
     const selectedCompareExpiration = getCompareExpirationForDTE(window.AppState?.selectedDTE ?? gexSelectedDTE);
     const compareChainUrl = selectedCompareExpiration
-      ? `http://'' + window.location.host/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all&expiration=${encodeURIComponent(selectedCompareExpiration)}`
-      : `http://'' + window.location.host/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all`;
+      ? `'' + window.location.origin/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all&expiration=${encodeURIComponent(selectedCompareExpiration)}`
+      : `'' + window.location.origin/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all`;
     const [chainResp, quoteResp] = await Promise.all([
       fetch(compareChainUrl),
-      fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?equity[]=${encodeURIComponent(ticker)}`)
+      fetch(`'' + window.location.origin/proxy/api/tt/quotes-batch?equity[]=${encodeURIComponent(ticker)}`)
     ]);
     if (!chainResp.ok) throw new Error('Compare chain HTTP ' + chainResp.status);
     const chainRaw = await chainResp.json();
@@ -7213,8 +7213,8 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
         const ttSym = encodeURIComponent(ticker);
         const selectedExpiration = getCompareExpirationForDTE(selectedDTEValue);
         const chainUrl = selectedExpiration
-          ? `http://'' + window.location.host/proxy/api/tt/chains/${ttSym}?expiration=${encodeURIComponent(selectedExpiration)}`
-          : `http://'' + window.location.host/proxy/api/tt/chains/${ttSym}`;
+          ? `'' + window.location.origin/proxy/api/tt/chains/${ttSym}?expiration=${encodeURIComponent(selectedExpiration)}`
+          : `'' + window.location.origin/proxy/api/tt/chains/${ttSym}`;
         const resp = await fetch(chainUrl);
         if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
         const raw = await resp.json();
@@ -7223,7 +7223,7 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
         // Fetch spot price
         let spot = GEX_SPOTS[ticker] || 0;
         try {
-          const qr = await fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?equity[]=${ticker}`);
+          const qr = await fetch(`'' + window.location.origin/proxy/api/tt/quotes-batch?equity[]=${ticker}`);
           const qd = await qr.json();
           const qItems = (qd?.data?.items) || [];
           const q = qItems.find(i => i.symbol === ticker) || qItems[0] || {};
@@ -7285,8 +7285,8 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
     const ttSym4 = encodeURIComponent(ticker);
     const selectedExpiration4 = getCompareExpirationForDTE(selectedDTEValue);
     const chainUrl4 = selectedExpiration4
-      ? `http://'' + window.location.host/proxy/api/tt/chains/${ttSym4}?expiration=${encodeURIComponent(selectedExpiration4)}`
-      : `http://'' + window.location.host/proxy/api/tt/chains/${ttSym4}`;
+      ? `'' + window.location.origin/proxy/api/tt/chains/${ttSym4}?expiration=${encodeURIComponent(selectedExpiration4)}`
+      : `'' + window.location.origin/proxy/api/tt/chains/${ttSym4}`;
     const resp4 = await fetch(chainUrl4);
     if (resp4.ok) {
       const raw4 = await resp4.json();
@@ -7294,7 +7294,7 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
       if (items4.length) {
         let spot4 = GEX_SPOTS[ticker] || 0;
         try {
-          const qr4 = await fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?equity[]=${ttSym4}`);
+          const qr4 = await fetch(`'' + window.location.origin/proxy/api/tt/quotes-batch?equity[]=${ttSym4}`);
           const qd4 = await qr4.json();
           const qItems4 = (qd4?.data?.items) || [];
           const q4 = qItems4.find(i => i.symbol === ticker) || qItems4[0] || {};
@@ -8586,7 +8586,7 @@ if (false) {}
       // noSubscribe=1 for non-SPX to avoid dxLink flooding (chain data is still returned)
       const noSubParam = ticker !== 'SPX' ? '&noSubscribe=1' : '';
       const _t0 = performance.now();
-      const resp = await fetch(`http://'' + window.location.host/proxy/api/tt/chains/${tickerEncoded}?range=all${noSubParam}`);
+      const resp = await fetch(`'' + window.location.origin/proxy/api/tt/chains/${tickerEncoded}?range=all${noSubParam}`);
       if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
       const raw = await resp.json();
       console.log(`[GEX] Chain fetch: ${(performance.now()-_t0).toFixed(0)}ms`);
@@ -8706,7 +8706,7 @@ if (false) {}
           'TSLA': { param: 'equity[]=TSLA',     key: 'TSLA' },
         };
         const qInfo = OV_QUOTE_PARAM[ticker] || { param: `equity[]=${ticker}`, key: ticker };
-        const qr = await fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?${qInfo.param}`);
+        const qr = await fetch(`'' + window.location.origin/proxy/api/tt/quotes-batch?${qInfo.param}`);
         const qd = await qr.json();
         const qItems = (qd?.data?.items) || [];
         const q = qItems.find(i => i.symbol === qInfo.key) || qItems[0] || {};
@@ -8923,7 +8923,7 @@ if (false) {}
         footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
       }]
     };
-    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || 'http://'' + window.location.host/proxy/discord-webhook';
+    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || ''' + window.location.origin/proxy/discord-webhook';
     const blob = await getInsightsShareBlob();
     const form = new FormData();
     form.append('payload_json', JSON.stringify(payload));
@@ -9324,7 +9324,7 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
         if (sym === '/NQM26') { data['/NQM26'] = entry; }
       });
       try {
-        const batchRes = await fetch('http://'' + window.location.host/proxy/api/tt/quotes-batch');
+        const batchRes = await fetch(''' + window.location.origin/proxy/api/tt/quotes-batch');
         const batchJson = await batchRes.json();
         const batchItems = Array.isArray(batchJson?.data?.items) ? batchJson.data.items : [];
         batchItems.forEach(item => {
