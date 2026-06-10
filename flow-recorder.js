@@ -204,7 +204,7 @@
 
   function connect() {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
-    const ws = new WebSocket('(window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host/ws/dxlink');
+    const ws = new WebSocket((window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/ws/dxlink');
     state.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'subscribe', symbols: ['/ESM26', 'SPX'], spxSubscribe: true }));
