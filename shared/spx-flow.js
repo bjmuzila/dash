@@ -16,7 +16,7 @@
   const ES_STREAM_SYMBOL = '/ES:XCME';
   const NQ_STREAM_SYMBOL = '/NQ:XCME';
   const MAX_SEEN_SPX_TRADES = 20000;
-  const WS_URL = 'ws://localhost:3001/ws/dxlink';
+  const WS_URL = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws/dxlink';
   const LS_KEY = 'spxFlow_v1';
 
   // ── localStorage persistence ───────────────────────────────────

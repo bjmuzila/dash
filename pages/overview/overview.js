@@ -174,7 +174,7 @@ function getDXQuoteSocket() {
     return _dxQuoteSocket;
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  _dxQuoteSocket = new WebSocket(`${proto}://localhost:3001/ws/dxlink`);
+  _dxQuoteSocket = new WebSocket(`${proto}://'' + window.location.host/ws/dxlink`);
   _dxQuoteSocket.onopen = () => {
     dxlinkConnected = true;
     const syms = Array.from(_dxQuoteSubSymbols);
@@ -721,7 +721,7 @@ function setMode(mode,el){
 
 
 
-const PROXY = 'http://localhost:3001';
+const PROXY = '';
 
 // Safe stubs - real definitions loaded below
 function updateTopGamma(){ 
@@ -1353,7 +1353,7 @@ function processSignedOptionTrade(item) {
 function connectSignedVolFlow() {
   if (spxFlowSocket && (spxFlowSocket.readyState === WebSocket.OPEN || spxFlowSocket.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  spxFlowSocket = new WebSocket(`${proto}://localhost:3001/ws/dxlink`);
+  spxFlowSocket = new WebSocket(`${proto}://'' + window.location.host/ws/dxlink`);
   spxFlowSocket.onopen = () => {
     spxFlowSocket.send(JSON.stringify({ type: 'subscribe', symbols: ['SPX'], spxSubscribe: true }));
   };
@@ -1788,7 +1788,7 @@ async function buildChainOnce(retryCount = 0){
         if (newSyms.length) {
           const feedTypesBySymbol = {};
           newSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-          fetch('http://localhost:3001/proxy/dxlink/subscribe', {
+          fetch('http://'' + window.location.host/proxy/dxlink/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ symbols: newSyms, feedTypesBySymbol })
@@ -1844,7 +1844,7 @@ async function fetchGEX(){
     if (allSyms.length) {
       const feedTypesBySymbol = {};
       allSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-      fetch('http://localhost:3001/proxy/dxlink/subscribe', {
+      fetch('http://'' + window.location.host/proxy/dxlink/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbols: allSyms, feedTypesBySymbol })
@@ -2523,7 +2523,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch('http://localhost:3001/proxy/discord-webhook', {
+    fetch('http://'' + window.location.host/proxy/discord-webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3473,7 +3473,7 @@ async function fetchQuoteOfDay(){
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
 
-    const res = await fetch('http://localhost:3001/proxy/api/quote-of-day', { signal: controller.signal });
+    const res = await fetch('http://'' + window.location.host/proxy/api/quote-of-day', { signal: controller.signal });
     clearTimeout(timeoutId);
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3764,7 +3764,7 @@ window.refreshTrumpCalendar = function(btn) {
 
   // Try proxy endpoint first, fallback to direct fetch
   const tryProxyRoute = () => {
-    return fetch('http://localhost:3001/proxy/api/trump-calendar-refresh', {
+    return fetch('http://'' + window.location.host/proxy/api/trump-calendar-refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -5090,7 +5090,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = 'http://localhost:3001/proxy/twitter';
+const TWITTER_PROXY = 'http://'' + window.location.host/proxy/twitter';
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -6446,11 +6446,11 @@ async function fetchOverviewCompareGEX() {
   try {
     const selectedCompareExpiration = getCompareExpirationForDTE(window.AppState?.selectedDTE ?? gexSelectedDTE);
     const compareChainUrl = selectedCompareExpiration
-      ? `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all&expiration=${encodeURIComponent(selectedCompareExpiration)}`
-      : `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all`;
+      ? `http://'' + window.location.host/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all&expiration=${encodeURIComponent(selectedCompareExpiration)}`
+      : `http://'' + window.location.host/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all`;
     const [chainResp, quoteResp] = await Promise.all([
       fetch(compareChainUrl),
-      fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?equity[]=${encodeURIComponent(ticker)}`)
+      fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?equity[]=${encodeURIComponent(ticker)}`)
     ]);
     if (!chainResp.ok) throw new Error('Compare chain HTTP ' + chainResp.status);
     const chainRaw = await chainResp.json();
@@ -8825,8 +8825,8 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
         const ttSym = encodeURIComponent(ticker);
         const selectedExpiration = getCompareExpirationForDTE(selectedDTEValue);
         const chainUrl = selectedExpiration
-          ? `http://localhost:3001/proxy/api/tt/chains/${ttSym}?expiration=${encodeURIComponent(selectedExpiration)}`
-          : `http://localhost:3001/proxy/api/tt/chains/${ttSym}`;
+          ? `http://'' + window.location.host/proxy/api/tt/chains/${ttSym}?expiration=${encodeURIComponent(selectedExpiration)}`
+          : `http://'' + window.location.host/proxy/api/tt/chains/${ttSym}`;
         const resp = await fetch(chainUrl);
         if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
         const raw = await resp.json();
@@ -8835,7 +8835,7 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
         // Fetch spot price
         let spot = GEX_SPOTS[ticker] || 0;
         try {
-          const qr = await fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?equity[]=${ticker}`);
+          const qr = await fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?equity[]=${ticker}`);
           const qd = await qr.json();
           const qItems = (qd?.data?.items) || [];
           const q = qItems.find(i => i.symbol === ticker) || qItems[0] || {};
@@ -8897,8 +8897,8 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
     const ttSym4 = encodeURIComponent(ticker);
     const selectedExpiration4 = getCompareExpirationForDTE(selectedDTEValue);
     const chainUrl4 = selectedExpiration4
-      ? `http://localhost:3001/proxy/api/tt/chains/${ttSym4}?expiration=${encodeURIComponent(selectedExpiration4)}`
-      : `http://localhost:3001/proxy/api/tt/chains/${ttSym4}`;
+      ? `http://'' + window.location.host/proxy/api/tt/chains/${ttSym4}?expiration=${encodeURIComponent(selectedExpiration4)}`
+      : `http://'' + window.location.host/proxy/api/tt/chains/${ttSym4}`;
     const resp4 = await fetch(chainUrl4);
     if (resp4.ok) {
       const raw4 = await resp4.json();
@@ -8906,7 +8906,7 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
       if (items4.length) {
         let spot4 = GEX_SPOTS[ticker] || 0;
         try {
-          const qr4 = await fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?equity[]=${ttSym4}`);
+          const qr4 = await fetch(`http://'' + window.location.host/proxy/api/tt/quotes-batch?equity[]=${ttSym4}`);
           const qd4 = await qr4.json();
           const qItems4 = (qd4?.data?.items) || [];
           const q4 = qItems4.find(i => i.symbol === ticker) || qItems4[0] || {};
@@ -10145,7 +10145,7 @@ if (false) {}
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for chain fetch (proxy can be slow)
 
-      const chainUrl = `http://localhost:3001/proxy/api/tt/chains/${tickerEncoded}?range=all`;
+      const chainUrl = `http://'' + window.location.host/proxy/api/tt/chains/${tickerEncoded}?range=all`;
       console.log('[GEX] Fetching chain from:', chainUrl);
       const resp = await fetch(chainUrl, {
         signal: controller.signal
@@ -10280,7 +10280,7 @@ if (false) {}
       // 2. Dedicated quote fetch — TT cash index uses $SPX symbol
       if (!(spotPrice > 0)) {
         try {
-          const qr = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?symbols[]=%24SPX&symbols[]=SPX&symbols[]=%24SPXW');
+          const qr = await fetch('http://'' + window.location.host/proxy/api/tt/quotes-batch?symbols[]=%24SPX&symbols[]=SPX&symbols[]=%24SPXW');
           const qd = await qr.json();
           const qItems = (qd?.data?.items) || [];
           const q = qItems.find(i => ['$SPX','SPX','$SPXW'].includes(i.symbol)) || qItems[0] || {};
@@ -10346,7 +10346,7 @@ if (false) {}
             newSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
             const subController = new AbortController();
             const subTimeoutId = setTimeout(() => subController.abort(), 10000); // 10 second timeout
-            fetch('http://localhost:3001/proxy/dxlink/subscribe', {
+            fetch('http://'' + window.location.host/proxy/dxlink/subscribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ symbols: newSyms, feedTypesBySymbol }),
@@ -10942,7 +10942,7 @@ if (false) {}
 
   window.fetchQuotes = async function fetchQuotes() {
     try {
-      const r = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch');
+      const r = await fetch('http://'' + window.location.host/proxy/api/tt/quotes-batch');
       if (!r.ok) { console.warn('TT quotes-batch HTTP', r.status); return; }
       const raw = await r.json();
       const items = (raw?.data?.items) || [];

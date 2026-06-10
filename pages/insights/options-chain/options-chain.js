@@ -697,7 +697,7 @@
       if (_ws && _ws.readyState === 1) return;
       if (_ws) { try { _ws.close(); } catch(e) {} _ws = null; }
 
-      _ws = new WebSocket('ws://localhost:3001/ws/dxlink');
+      _ws = new WebSocket('(window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host/ws/dxlink');
       _ws.onopen = function() {
         setStatus('live', 'LIVE');
         if (_subSymbols && _subSymbols.length) {
