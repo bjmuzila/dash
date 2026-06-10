@@ -1894,9 +1894,42 @@ function computeGEX(dateKey){
 function finishGEXCompute(dateKey){
   // rawChain already built by computeGEXMulti - just compute levels
   const sorted = [...rawChain].sort((a,b) => a.strike - b.strike);
+<<<<<<< HEAD
   flipPoint = window.CALC && typeof window.CALC.findGEXFlip === 'function'
     ? window.CALC.findGEXFlip(sorted, spotPrice)
     : null;
+=======
+  flipPoint = null;
+  if (sorted.length) {
+    let running = 0;
+    const cumulative = sorted.map(row => {
+      running += Number(row.netGEX || 0);
+      return { strike: row.strike, cumGEX: running };
+    });
+
+    for (let i = 0; i < cumulative.length - 1; i++) {
+      const curr = cumulative[i];
+      const next = cumulative[i + 1];
+      if (curr.cumGEX === 0) {
+        flipPoint = Math.round(curr.strike * 100) / 100;
+        break;
+      }
+      if (Math.sign(curr.cumGEX) === Math.sign(next.cumGEX) || next.cumGEX === 0) continue;
+      const slope = (next.cumGEX - curr.cumGEX) / (next.strike - curr.strike);
+      const flip = curr.strike - curr.cumGEX / slope;
+      flipPoint = Math.round(flip * 100) / 100;
+      break;
+    }
+
+    if (flipPoint === null) {
+      const closest = cumulative.reduce((best, row) =>
+        Math.abs(row.cumGEX) < Math.abs(best.cumGEX) ? row : best,
+        cumulative[0]
+      );
+      flipPoint = closest ? Math.round(closest.strike * 100) / 100 : null;
+    }
+  }
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
   const totalGEX=rawChain.reduce((s,r)=>s+r.netGEX,0);
   const maxCallStrike=rawChain.reduce((a,b)=>b.callGEX>a.callGEX?b:a,rawChain[0]);
   const maxPutStrike=rawChain.reduce((a,b)=>Math.abs(b.putGEX)>Math.abs(a.putGEX)?b:a,rawChain[0]);
@@ -1906,7 +1939,10 @@ function finishGEXCompute(dateKey){
   safeSet('sb-call-wall',maxCallStrike?.strike?.toLocaleString()??'—');
   safeSet('sb-put-wall',maxPutStrike?.strike?.toLocaleString()??'—');
   safeSet('sb-hvl',hvl?.strike?.toLocaleString()??'—');
+<<<<<<< HEAD
   safeSet('topbar-gex-flip',flipPoint?flipPoint.toLocaleString():'—');
+=======
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
   safeSet('sb-strikes',currentStrikeCount>0?Math.min(currentStrikeCount,rawChain.length)+'/'+rawChain.length:rawChain.length);
   safeSet('sb-updated',new Date().toLocaleTimeString('en-US',{hour12:false}));
   safeSet('rs-strikes',currentStrikeCount>0?Math.min(currentStrikeCount,rawChain.length)+'/'+rawChain.length:rawChain.length);
@@ -3223,8 +3259,13 @@ async function shareHeatmapShot(platform){
 
 
 // ── LIVE QUOTES ────────────────────────────────────────────────────
+<<<<<<< HEAD
 const QUOTE_SYMBOLS = ['/ESM26','/NQM26','$SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
 const QUOTE_LABELS  = {'/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','VIX':'VIX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+=======
+const QUOTE_SYMBOLS = ['/ESM26','/NQM26','$SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+const QUOTE_LABELS  = {'/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
 // dedup: // dedup: quotesData/quotesInterval/quotesExpiry already declared above
 
 function populateQuotesExpiryDropdown(){
@@ -9142,6 +9183,7 @@ if (false) {}
       directionBar.style.width = directionPct + '%';
       directionBar.style.background = directionColor;
     }
+<<<<<<< HEAD
     // Publish live buy/sell scores globally so the Exposure Stack tab can read them
     window.__overviewBuyPct  = buyPct;
     window.__overviewSellPct = sellPct;
@@ -9150,6 +9192,8 @@ if (false) {}
       window.__liveExposureSnapshot.buyScore  = buyPct;
       window.__liveExposureSnapshot.sellScore = sellPct;
     }
+=======
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
     insightsRecordHistoryEvent({
       side: directionIsBuy ? 'Buy' : 'Sell',
       score: directionPct,
@@ -9180,8 +9224,13 @@ if (false) {}
   window.setMode = function(){};
 
   // ── Quotes panel — TastyTrade market-metrics per symbol ──────────────
+<<<<<<< HEAD
   window.QUOTE_SYMBOLS = ['/ESM26','/NQM26','$SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
   window.QUOTE_LABELS  = {'/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','VIX':'VIX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+=======
+  window.QUOTE_SYMBOLS = ['/ESM26','/NQM26','$SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+  window.QUOTE_LABELS  = {'/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
 
   function dxPrevCloseForSymbol(sym, q) {
     const summaryKey = sym === '/ESM26' ? '/ES:XCME' : sym === '/NQM26' ? '/NQ:XCME' : sym;
@@ -9225,7 +9274,11 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
   window.fetchQuotes = async function fetchQuotes() {
     try {
       const data = {};
+<<<<<<< HEAD
       const symbols = ['/ESM26','/NQM26','$SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+=======
+      const symbols = ['/ESM26','/NQM26','$SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
       const dxKeyMap = { '/ESM26': '/ES:XCME', '/NQM26': '/NQ:XCME' };
       const num = (...vals) => {
         for (const v of vals) {
@@ -9351,6 +9404,7 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
           closePrice: q.closePrice || q.previousClose || q.prevClose || 0
         });
       }
+<<<<<<< HEAD
 
       // ── Update VIX topbar ─────────────────────────────────────────────
       const vixEntry = data['VIX'] || null;
@@ -9368,6 +9422,8 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
           }
         }
       }
+=======
+>>>>>>> 6a2932f212270705308afb64ce5e54362f8b5591
     } catch (e) {
       console.error('fetchQuotes (TastyTrade) error:', e);
     }
