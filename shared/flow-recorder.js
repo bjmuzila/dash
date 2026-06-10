@@ -167,7 +167,7 @@
 
   async function fetchInitialPrices() {
     try {
-      const resp = await fetch('http://'' + window.location.host/proxy/api/tt/quotes-batch?future[]=%2FESM6&index[]=SPX');
+      const resp = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch?future[]=%2FESM6&index[]=SPX');
       const data = await resp.json();
       const items = data?.data?.items || [];
       items.forEach(q => {
@@ -204,7 +204,7 @@
 
   function connect() {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
-    const ws = new WebSocket('ws://'' + window.location.host/ws/dxlink');
+    const ws = new WebSocket((window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/ws/dxlink');
     state.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'subscribe', symbols: ['/ESM26', 'SPX'], spxSubscribe: true }));
