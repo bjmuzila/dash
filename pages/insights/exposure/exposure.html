@@ -1,0 +1,228 @@
+<div id="page-insights-exposure" style="display:flex;flex:1;min-height:0;overflow:hidden;background:#02070f">
+  <div id="exposure-board" style="flex:1;min-height:0;overflow:auto;padding:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+      <div>
+        <div style="font-size:15px;font-weight:800;color:#eef7ff;letter-spacing:.04em">Exposure Stack</div>
+        <div id="insights-refresh-time" style="font-size:10px;color:#9fb3c8;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Last refresh: --</div>
+      </div>
+      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px">
+        <button id="exp-refresh-btn" title="Refresh exposure stack" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">Refresh</button>
+        <button id="exp-copy-shot-btn" title="Copy screenshot" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY SHOT</button>
+        <button id="exp-share-x-btn" title="Copy and open X" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+        <button id="exp-share-discord-btn" title="Post to Discord" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+      </div>
+    </div>
+    <div id="exposure-data-boxes" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;min-height:100%;align-items:stretch">
+      <section id="gex-card" style="border:1px solid rgba(0,230,118,.28);background:linear-gradient(180deg,rgba(0,230,118,.05),rgba(0,0,0,.25));border-radius:8px;padding:14px;min-height:240px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(0,230,118,.45);display:flex;align-items:center;justify-content:center;color:#00e676;font-weight:800">▮</div>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#eef7ff;letter-spacing:.04em">GEX</div>
+                <div style="font-size:10px;color:#bde7d1;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Gamma Exposure</div>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#00e676;border:1px solid rgba(0,230,118,.35);padding:4px 8px;border-radius:4px;font-weight:800">Vol Control</div>
+        </div>
+        <div style="font-size:10px;color:#c9d7db;margin-bottom:4px">Current Value</div>
+        <div id="gex-value" style="font-size:28px;font-weight:900;color:#00e676;font-family:monospace">+5.080B</div>
+        <div id="gex-desc" style="margin-top:8px;font-size:12px;color:#d7e6e8;line-height:1.5">Dealers are long gamma. Volatility is suppressed as dealers buy corrections and sell peaks.</div>
+        <div style="position:relative;height:62px;background:linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92));border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden;margin-bottom:8px">
+          <canvas id="greeks-gex-sparkline" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+        </div>
+      </section>
+      <section id="dex-card" style="border:1px solid rgba(0,163,255,.28);background:linear-gradient(180deg,rgba(0,163,255,.05),rgba(0,0,0,.25));border-radius:8px;padding:14px;min-height:240px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(0,163,255,.45);display:flex;align-items:center;justify-content:center;color:#00b4ff;font-weight:800">△</div>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#eef7ff;letter-spacing:.04em">DEX</div>
+                <div style="font-size:10px;color:#b6dff8;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Delta Exposure</div>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#00b4ff;border:1px solid rgba(0,180,255,.35);padding:4px 8px;border-radius:4px;font-weight:800">Trend Force</div>
+        </div>
+        <div style="font-size:10px;color:#c9d7db;margin-bottom:4px">Current Value</div>
+        <div id="dex-value" style="font-size:28px;font-weight:900;color:#00b4ff;font-family:monospace">-7.588B</div>
+        <div id="dex-desc" style="margin-top:8px;font-size:12px;color:#d7e6e8;line-height:1.5">Dealers are short delta. Implied protective put positions are heavily active in the options pits.</div>
+        <div style="position:relative;height:62px;background:linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92));border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden;margin-bottom:8px">
+          <canvas id="greeks-dex-sparkline" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+        </div>
+      </section>
+      <section id="chex-card" style="border:1px solid rgba(255,82,202,.28);background:linear-gradient(180deg,rgba(255,82,202,.05),rgba(0,0,0,.25));border-radius:8px;padding:14px;min-height:240px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,82,202,.45);display:flex;align-items:center;justify-content:center;color:#ff5ed0;font-weight:800">⌛</div>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#eef7ff;letter-spacing:.04em">CHEX</div>
+                <div style="font-size:10px;color:#f2b7e4;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Charm Exposure</div>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#ff5ed0;border:1px solid rgba(255,82,202,.35);padding:4px 8px;border-radius:4px;font-weight:800">Theta Decay</div>
+        </div>
+        <div style="font-size:10px;color:#c9d7db;margin-bottom:4px">Current Value</div>
+        <div id="chex-value" style="font-size:28px;font-weight:900;color:#ff5ed0;font-family:monospace">-171.000M</div>
+        <div id="chex-desc" style="margin-top:8px;font-size:12px;color:#d7e6e8;line-height:1.5">Charm decay driving dynamic delta hedging buying flows.</div>
+        <div style="position:relative;height:62px;background:linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92));border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden;margin-bottom:8px">
+          <canvas id="greeks-chex-sparkline" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+        </div>
+      </section>
+      <section id="vex-card" style="border:1px solid rgba(117,123,255,.28);background:linear-gradient(180deg,rgba(117,123,255,.05),rgba(0,0,0,.25));border-radius:8px;padding:14px;min-height:240px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(117,123,255,.45);display:flex;align-items:center;justify-content:center;color:#747cff;font-weight:800">∿</div>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#eef7ff;letter-spacing:.04em">VEX</div>
+                <div style="font-size:10px;color:#cbcfff;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Vanna Exposure</div>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#747cff;border:1px solid rgba(117,123,255,.35);padding:4px 8px;border-radius:4px;font-weight:800">Vol Shift</div>
+        </div>
+        <div style="font-size:10px;color:#c9d7db;margin-bottom:4px">Current Value</div>
+        <div id="vex-value" style="font-size:28px;font-weight:900;color:#747cff;font-family:monospace">-7.796M</div>
+        <div id="vex-desc" style="margin-top:8px;font-size:12px;color:#d7e6e8;line-height:1.5">Short vanna exposure accelerating hedging as IV drops.</div>
+        <div style="position:relative;height:62px;background:linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92));border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden;margin-bottom:8px">
+          <canvas id="greeks-vex-sparkline" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+        </div>
+      </section>
+      <section id="combo-card" style="border:1px solid rgba(255,140,0,.32);background:linear-gradient(180deg,rgba(255,140,0,.07),rgba(0,0,0,.28));border-radius:8px;padding:14px;min-height:240px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,140,0,.45);display:flex;align-items:center;justify-content:center;color:#ff9800;font-weight:800">⚡</div>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#eef7ff;letter-spacing:.04em">GEX + VEX</div>
+                <div style="font-size:10px;color:#ffd7a6;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Gamma + Vanna Exposure</div>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#ff9800;border:1px solid rgba(255,140,0,.35);padding:4px 8px;border-radius:4px;font-weight:800">Regime</div>
+        </div>
+        <div style="font-size:10px;color:#c9d7db;margin-bottom:4px">Current Value</div>
+        <div id="combo-value" style="font-size:28px;font-weight:900;color:#ff9800;font-family:monospace">--</div>
+        <div id="combo-desc" style="margin-top:8px;font-size:12px;color:#d7e6e8;line-height:1.5">Combined gamma and vanna exposure.</div>
+        <div style="position:relative;height:62px;background:linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92));border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden;margin-bottom:8px">
+          <canvas id="greeks-gexvex-sparkline" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+        </div>
+      </section>
+      <section id="rvol-card" style="border:1px solid rgba(255,72,72,.32);background:linear-gradient(180deg,rgba(120,0,0,.10),rgba(0,0,0,.32));border-radius:12px;padding:18px;min-height:240px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px">
+          <div>
+            <div style="font-size:14px;color:#ff5b5b;font-weight:900;letter-spacing:.12em;text-transform:uppercase">Relative Volume</div>
+            <div style="font-size:10px;color:#ffffff;margin-top:2px">Current Value</div>
+            <div id="rvol-value" style="display:flex;align-items:center;gap:10px;font-size:30px;line-height:1;font-weight:900;color:#ff5b5b;font-family:monospace;margin-top:6px">
+              <span>1.42x</span>
+              <span style="font-size:10px;font-family:system-ui,sans-serif;color:#ffd0d0;background:rgba(255,91,91,.14);border:1px solid rgba(255,91,91,.45);padding:3px 8px;border-radius:4px;font-weight:800;letter-spacing:.08em;text-transform:uppercase">ACTIVE</span>
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;font-size:10px;color:#ffffff;margin-bottom:6px">
+              <span style="width:7px;height:7px;border-radius:50%;background:#ff5b5b;display:inline-block"></span>
+              <span id="rvol-live-clock">—</span>
+            </div>
+            <div style="font-size:10px;color:#ff5b5b;border:1px solid rgba(255,91,91,.38);padding:4px 8px;border-radius:4px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">ESM6 Futures</div>
+          </div>
+        </div>
+        <div style="margin:6px 0 12px;border-radius:10px;border:1px solid rgba(255,91,91,.18);background:rgba(8,0,0,.72);padding:16px 16px 12px;flex:1;display:flex;flex-direction:column;gap:12px">
+          <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:0;min-height:0;flex:1">
+            <div style="padding-right:16px;border-right:1px solid rgba(255,91,91,.14);display:flex;flex-direction:column;min-height:0">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="font-size:10px;color:#ffffff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Cumulative Volume Curve</div>
+                <div style="display:flex;align-items:center;gap:12px;font-size:9px;color:#ffffff">
+                  <span>-- Avg</span>
+                  <span style="color:#ff5b5b;font-weight:800">Today</span>
+                </div>
+              </div>
+              <div style="position:relative;flex:1;min-height:108px;max-height:108px;border-radius:8px;background:linear-gradient(180deg,rgba(20,0,0,.86),rgba(10,0,0,.96));border:1px solid rgba(255,91,91,.10);overflow:hidden;padding:8px 6px 6px">
+                <canvas id="greeks-rvol-sparkline" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:9px;color:#ffffff;margin-top:6px;padding:0 4px">
+                <span>09:00 AM</span>
+                <span>12:45 PM</span>
+                <span>04:00 PM</span>
+              </div>
+            </div>
+            <div style="padding-left:16px;display:flex;flex-direction:column;gap:12px;min-height:0">
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                  <div style="font-size:10px;color:#ffffff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Trading Session Pace</div>
+                  <div id="rvol-pace-pct" style="font-size:12px;color:#ff5b5b;font-weight:900">—</div>
+                </div>
+                <div style="height:4px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden">
+                  <div id="rvol-pace-bar" style="width:0%;height:100%;background:linear-gradient(90deg,#ff5b5b,#ff8a8a)"></div>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
+                <div style="background:rgba(20,0,0,.72);border:1px solid rgba(255,91,91,.08);border-radius:6px;padding:12px 10px;min-height:64px">
+                  <div style="font-size:9px;color:#ffffff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Today Vol</div>
+                  <div id="rvol-today-vol" style="font-size:18px;color:#ffffff;font-weight:900;font-family:monospace;margin-top:6px">—</div>
+                </div>
+                <div style="background:rgba(20,0,0,.72);border:1px solid rgba(255,91,91,.08);border-radius:6px;padding:12px 10px;min-height:64px">
+                  <div style="font-size:9px;color:#ffffff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Expected Avg</div>
+                  <div id="rvol-expected-avg" style="font-size:18px;color:#ffffff;font-weight:900;font-family:monospace;margin-top:6px">—</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:9px;color:#ffffff;margin-top:2px;padding:0 2px">
+          <span>• Session pace: <span id="rvol-session-pace">—</span></span>
+          <span>Updated: <span id="rvol-time">—</span></span>
+        </div>
+      </section>
+      <section id="pressure-card" style="border:1px solid rgba(0,230,118,.24);background:linear-gradient(180deg,rgba(0,40,25,.6),rgba(0,0,0,.28));border-radius:8px;padding:14px;min-height:240px;max-height:340px;display:flex;flex-direction:column;overflow:hidden">
+        <div style="font-size:12px;color:#00e676;font-weight:900;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Buy/Sell Pressure</div>
+        <div id="pressure-value" style="font-size:28px;font-weight:900;color:#ff4d57;font-family:monospace">39% Buy / 61% Sell</div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#c9d7db;margin:10px 0 6px">
+          <span>Sell</span><span id="pressure-balance">39%</span><span>Buy</span>
+        </div>
+        <div style="height:4px;background:rgba(255,255,255,.12);border-radius:999px;overflow:hidden">
+          <div id="pressure-bar" style="height:100%;width:39%;background:linear-gradient(90deg,#00e676,#ff4d57,#ff4d57)"></div>
+        </div>
+        <div style="margin-top:10px;border:1px solid rgba(0,230,118,.2);border-radius:6px;padding:10px 10px 6px;background:rgba(0,0,0,.18);flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-shrink:0">
+            <div style="font-size:10px;color:#00e5ff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Playbook Feed</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <span id="signal-feed-dot" style="width:6px;height:6px;border-radius:50%;background:#00e676;display:inline-block;opacity:0;transition:opacity .3s"></span>
+              <span style="font-size:9px;color:#c9d7db;text-transform:uppercase;letter-spacing:.06em">Live</span>
+            </div>
+          </div>
+          <div id="signal-feed" style="overflow:hidden;flex:1;min-height:0;display:flex;flex-direction:column;gap:0;position:relative"></div>
+        </div>
+      </section>
+      <section id="analysis-card" style="border:1px solid rgba(0,180,200,.26);background:linear-gradient(180deg,rgba(0,40,45,.5),rgba(0,0,0,.28));border-radius:8px;padding:12px;min-height:240px;display:flex;flex-direction:column">
+        <div style="font-size:10px;color:#00e5ff;font-weight:900;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Institutional Analysis</div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+          <div style="border:1px solid rgba(0,180,200,.2);border-radius:6px;padding:10px">
+            <div style="font-size:8px;color:#00e5ff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Active Regime</div>
+            <div id="analysis-regime" style="font-size:14px;font-weight:900;color:#eef7ff;margin-top:5px">--</div>
+            <div id="analysis-regime-time" style="font-size:8px;color:#9fb3c8;margin-top:3px">--</div>
+          </div>
+          <div style="border:1px solid rgba(0,180,200,.2);border-radius:6px;padding:10px">
+            <div style="font-size:8px;color:#00e5ff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">DEX Velocity</div>
+            <div id="dex-velocity" style="font-size:14px;font-weight:900;color:#00e5ff;margin-top:5px">? Increasing</div>
+            <div id="analysis-velocity-time" style="font-size:8px;color:#9fb3c8;margin-top:3px">--</div>
+          </div>
+          <div style="border:1px solid rgba(0,180,200,.2);border-radius:6px;padding:10px">
+            <div style="font-size:8px;color:#00e5ff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Gamma Regime</div>
+            <div id="analysis-gamma" style="font-size:14px;font-weight:900;color:#eef7ff;margin-top:5px">--</div>
+            <div id="analysis-gamma-time" style="font-size:8px;color:#9fb3c8;margin-top:3px">--</div>
+          </div>
+          <div style="border:1px solid rgba(0,180,200,.2);border-radius:6px;padding:10px">
+            <div style="font-size:8px;color:#00e5ff;font-weight:800;letter-spacing:.08em;text-transform:uppercase">Delta Regime</div>
+            <div id="analysis-delta" style="font-size:14px;font-weight:900;color:#eef7ff;margin-top:5px">--</div>
+            <div id="analysis-delta-time" style="font-size:8px;color:#9fb3c8;margin-top:3px">--</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>

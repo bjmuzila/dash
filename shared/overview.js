@@ -397,6 +397,70 @@ function calcVolumeGammaExposure(gamma, volume, spot, isCalls) {
   }
 }
 
+function normPdf(x) {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+}
+
+function calcBlackScholesGamma(spot, strike, iv, timeToExpYears, rate = 0, dividendYield = 0) {
+  const S = Number(spot) || 0;
+  const K = Number(strike) || 0;
+  const sigma = Number(iv) || 0;
+  const T = Number(timeToExpYears) || 0;
+  if (!(S > 0) || !(K > 0) || !(sigma > 0) || !(T > 0)) return 0;
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (rate - dividendYield + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
+  return Math.exp(-dividendYield * T) * normPdf(d1) / (S * sigma * sqrtT);
+}
+
+function getTimeToExpiryYears(expiryStr) {
+  if (!expiryStr) return 0;
+  const dt = new Date(expiryStr + 'T16:00:00');
+  const now = new Date();
+  const ms = dt.getTime() - now.getTime();
+  return ms > 0 ? ms / (365 * 24 * 60 * 60 * 1000) : 0;
+}
+
+window.__gexFlipOverlayState = window.__gexFlipOverlayState || null;
+if (typeof Chart !== 'undefined' && !window.__gexFlipOverlayRegistered) {
+  window.__gexFlipOverlayRegistered = true;
+  Chart.register({
+    id: 'gexFlipOverlay',
+    afterDatasetsDraw(chart) {
+      const state = window.__gexFlipOverlayState;
+      if (!state || !state.enabled) return;
+      const { ctx, chartArea } = chart;
+      const rows = state.rows || [];
+      const exp = state.exp || 0;
+      if (!rows.length || !(exp > 0) || !chartArea) return;
+      const meta = chart.getDatasetMeta(0);
+      if (!meta?.data?.length) return;
+      const points = [];
+      const spot = state.spot || 0;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const callGamma = calcBlackScholesGamma(spot, r.strike, r.callIV || r.putIV || 0, exp);
+        const putGamma = calcBlackScholesGamma(spot, r.strike, r.putIV || r.callIV || 0, exp);
+        const v = calcDollarGammaExposure(callGamma, r.callOI || 0, spot) - calcDollarGammaExposure(putGamma, r.putOI || 0, spot);
+        points.push({ x: v, y: meta.data[i]?.y ?? 0 });
+      }
+      const xScale = chart.scales.x;
+      const xFor = v => xScale.getPixelForValue(v);
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = '#00e5ff';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([2, 4]);
+      points.forEach((p, i) => {
+        const x = xFor(p.x);
+        i === 0 ? ctx.moveTo(x, p.y) : ctx.lineTo(x, p.y);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  });
+}
+
 function expandRowsAroundSpot(rows, spot, count = getDisplayStrikeCount()) {
   const source = Array.isArray(rows) ? rows : [];
   return [...source].sort((a, b) => a.strike - b.strike);
@@ -425,15 +489,9 @@ let overviewCompareTicker='SPY';
 // Switch ticker for overview GEX chart/table
 window.setGEXTicker = function(ticker) {
   gexSelectedTicker = ticker;
-  // Update button styles
-  ['SPX', 'SPY', 'QQQ'].forEach(t => {
-    const btn = document.getElementById(`gex-ticker-${t.toLowerCase()}`);
-    if (btn) {
-      const isActive = t === ticker;
-      btn.style.background = isActive ? '#1a2a3a' : 'transparent';
-      btn.style.color = isActive ? '#00e5ff' : '#3a5570';
-    }
-  });
+  // Sync dropdown
+  const sel = document.getElementById('ov-ticker-select');
+  if (sel) sel.value = ticker;
   // Refetch data
   fetchGEX();
 };
@@ -462,6 +520,24 @@ window.toggleOverviewDEX = function(el) {
   }
   if (typeof drawOverviewChart === 'function') drawOverviewChart();
 };
+window.toggleOverviewFlipCurve = function(el) {
+  showOverviewFlipCurve = !showOverviewFlipCurve;
+  const btn = el || document.getElementById('ov-flip-toggle');
+  if (btn) {
+    const label = btn.querySelector('.ov-flip-label');
+    if (label) label.textContent = showOverviewFlipCurve ? '- GEX Flip' : '+ GEX Flip';
+    btn.style.background = showOverviewFlipCurve ? '#1a2a3a' : 'transparent';
+    btn.style.color = showOverviewFlipCurve ? '#a0d4ff' : '#3a5570';
+    btn.style.borderColor = showOverviewFlipCurve ? '#2a5a8a' : '#1e3050';
+    btn.style.boxShadow = showOverviewFlipCurve ? 'inset 0 0 0 1px rgba(0,229,255,0.08)' : 'none';
+  }
+  const state = document.getElementById('ov-flip-state');
+  if (state) {
+    state.textContent = showOverviewFlipCurve ? 'ON' : 'OFF';
+    state.style.color = showOverviewFlipCurve ? '#00e5ff' : '#3a5570';
+  }
+  if (typeof drawOverviewChart === 'function') drawOverviewChart();
+};
 let selectedExpiry=null, expiryMap={};
 let snapshots=[];
 let hmMode='now_only', hmCols={net:true,call:true,put:true,oi:true}, hmThreshold=0;
@@ -471,7 +547,70 @@ let ovDragStartY=0, ovDragStartMin=0, ovDragStartMax=0;
 let _ovDrag=false, _ovStartX=0, _ovStartOffset=0, _ovStartCompareOffset=0, _ovStartCount=0, _ovDragPxPerStrike=10, _ovDragPanel='left';
 let _ovAxisDragging=false, _ovAxisDragPanel=null, _ovAxisDragStartY=0, _ovAxisDragStartScale=1;
 let _ovWindowListenersAdded=false;
-let esPrice=0, esPrevClose=0, spxPrevClose=0, esBasis=null, isFetching=false;
+let esPrice=0, esPrevClose=7400.25, spxPrevClose=7383.73, esBasis=null, isFetching=false;
+function getEtClockParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const read = type => parts.find(p => p.type === type)?.value || '';
+  return {
+    day: read('weekday'),
+    mins: (parseInt(read('hour'), 10) || 0) * 60 + (parseInt(read('minute'), 10) || 0)
+  };
+}
+
+function getEtDateString(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date);
+}
+
+function getPreviousTradingDateString(date = new Date()) {
+  const d = new Date(date);
+  do { d.setDate(d.getDate() - 1); }
+  while ([0, 6].includes(new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay()));
+  return getEtDateString(d);
+}
+
+function getStoredClosePair(date = new Date()) {
+  const todayStr = getEtDateString(date);
+  const prevTradingStr = getPreviousTradingDateString(date);
+  const fallbackPairs = {
+    '2026-05-29': { es: 7595.75, spx: 7581.24 },
+    '2026-06-02': { es: 7614.00, spx: 7599.30 },
+    '2026-06-05': { es: 7400.25, spx: 7383.73 },
+    '2026-06-08': { es: 7400.25, spx: 7383.73 }
+  };
+  try {
+    const stored = JSON.parse(localStorage.getItem('todayCloses'));
+    if (stored?.es > 0 && stored?.spx > 0 && (stored.date === todayStr || stored.date === prevTradingStr)) {
+      return stored;
+    }
+  } catch (_) {}
+  return fallbackPairs[todayStr] || fallbackPairs[prevTradingStr] || null;
+}
+
+function persistTodayClosePair() {
+  const { day, mins } = getEtClockParts();
+  const isWeekday = !['Sat', 'Sun'].includes(day);
+  if (!isWeekday || mins < 945 || mins > 960) return;
+  if (!(esPrice > 0) || !(spotPrice > 0)) return;
+  try {
+    localStorage.setItem('todayCloses', JSON.stringify({
+      date: getEtDateString(),
+      es: Number(esPrice.toFixed(2)),
+      spx: Number(spotPrice.toFixed(2)),
+      capturedAt: new Date().toISOString()
+    }));
+  } catch (_) {}
+}
 let priceCandles=[];
 let autoRefreshInterval=null, countdownTimer=null, countdownSecs=30, autoRefreshPaused=false;
 let mainChartLevels={flip:false,callWall:false,putWall:false,hvl:false,noLong:true,noShort:true,estMoveUp:false,estMoveDn:false};
@@ -481,6 +620,7 @@ let ovYScale=1;
 let ovStrikeOffset=0; // Offset for panning the left chart
 let ovCompareStrikeOffset=0; // Offset for panning the right chart
 let showOverviewDEX=false;
+let showOverviewFlipCurve=false;
 const gexExpiryFetchCache = new Map();
 let lastGexDateKey = '';
 let ovUserInteractionUntil = 0;
@@ -545,6 +685,71 @@ let gexChangeIntervalMin = 'refresh';   // always use previous refresh snapshot
 let gex1MinSnapshots = [];       // [{ts, data: Map}] — per-1-minute snapshots
 let peakGEXSnapshots = {snapAt945: null, snapAt1030: null, snapAtNoon: null}; // Peak GEX auto-snapshots at 9:45, 10:30, 12:00 ET
 let gexChangeWindow = 5;        // 5, 15, or 30 minutes for change column
+const GEX_SNAPSHOT_STORAGE_PREFIX = 'gexSnapshotStore:';
+
+function serializeSnapshotList(list) {
+  return (list || []).map(s => ({
+    ts: s.ts,
+    data: Array.from((s.data instanceof Map ? s.data : new Map()).entries())
+  }));
+}
+
+function deserializeSnapshotList(list) {
+  return Array.isArray(list)
+    ? list
+        .filter(s => s && Number.isFinite(Number(s.ts)) && Array.isArray(s.data))
+        .map(s => ({ ts: Number(s.ts), data: new Map(s.data) }))
+    : [];
+}
+
+function getSnapshotStorageKey() {
+  return `${GEX_SNAPSHOT_STORAGE_PREFIX}${getCurrentEtSessionKey()}`;
+}
+
+function pruneSnapshotState() {
+  const now = Date.now();
+  gexSnapshots = (gexSnapshots || []).filter(s => s.ts >= now - 3 * 60 * 60 * 1000);
+  gex1MinSnapshots = (gex1MinSnapshots || []).filter(s => s.ts >= now - 2 * 60 * 60 * 1000);
+}
+
+function persistSnapshotState() {
+  pruneSnapshotState();
+  try {
+    localStorage.setItem(getSnapshotStorageKey(), JSON.stringify({
+      savedAt: Date.now(),
+      gexSnapshots: serializeSnapshotList(gexSnapshots),
+      gex1MinSnapshots: serializeSnapshotList(gex1MinSnapshots)
+    }));
+  } catch (_) {}
+}
+
+function restoreSnapshotState() {
+  try {
+    const raw = localStorage.getItem(getSnapshotStorageKey());
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    gexSnapshots = deserializeSnapshotList(parsed?.gexSnapshots);
+    gex1MinSnapshots = deserializeSnapshotList(parsed?.gex1MinSnapshots);
+    pruneSnapshotState();
+  } catch (_) {}
+}
+function getRollingNetGexChangeByStrike(windowMinutes = 30) {
+  const cutoff = Date.now() - windowMinutes * 60 * 1000;
+  const snaps = (gexSnapshots || []).filter(s => s?.ts >= cutoff && s?.data instanceof Map).sort((a, b) => a.ts - b.ts);
+  const out = new Map();
+  if (!rawChain.length) return out;
+  if (!snaps.length) {
+    rawChain.forEach(r => out.set(r.strike, 0));
+    return out;
+  }
+  const baseline = snaps[0]?.data || new Map();
+  rawChain.forEach(r => {
+    const current = Number(r.netGEX || 0);
+    const start = Number(baseline.get(r.strike) || 0);
+    out.set(r.strike, current - start);
+  });
+  return out;
+}
 
 function scheduleAutoSnapshots() {
   const et = () => new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -722,18 +927,18 @@ function connectSignedVolFlow() {
 
 function takeGexSnapshot(){
   if(!rawChain.length) return;
+  restoreSnapshotState();
+  const now = Date.now();
   const snap = new Map();
   rawChain.forEach(r=>snap.set(r.strike, r.netGEX||0));
   // Store as previous refresh snapshot
   gexPrevSnapshot = snap;
-  gexPrevSnapshotTime = Date.now();
+  gexPrevSnapshotTime = now;
   // Also push to timed snapshots array
-  gexSnapshots.push({ts: Date.now(), data: snap});
-  const cutoff = Date.now() - 3*60*60*1000;
-  gexSnapshots = gexSnapshots.filter(s=>s.ts >= cutoff);
+  gexSnapshots.push({ts: now, data: snap});
   // Push to 1-min snapshots (keep last 2 hours)
-  gex1MinSnapshots.push({ts: Date.now(), data: snap});
-  gex1MinSnapshots = gex1MinSnapshots.filter(s=>s.ts >= Date.now() - 2*60*60*1000);
+  gex1MinSnapshots.push({ts: now, data: snap});
+  persistSnapshotState();
 }
 
 function getGexChangeSnapshot(){
@@ -766,6 +971,7 @@ function onGexChangeIntervalChange(){
 }
 
 // Keep timed snapshots refreshing
+restoreSnapshotState();
 setInterval(()=>{ if(rawChain.length) takeGexSnapshot(); }, 60000);
 let sessionIV=null;
 let stockGEXCache={};
@@ -978,7 +1184,7 @@ async function fetchGEX(){
     };
     
     const t0 = performance.now();
-    const chainRes = await fetch(PROXY + '/proxy/api/tt/chains/SPX?range=1000');
+    const chainRes = await fetch(PROXY + '/proxy/api/tt/chains/SPX?range=all');
     const chainData = await chainRes.json();
     const t1 = performance.now();
     console.log(`[GEX] Chain fetch: ${(t1-t0).toFixed(0)}ms`);
@@ -1100,7 +1306,7 @@ async function fetchLazyDTEChain(expiryDate) {
   if (gexExpiryFetchCache.has(expiryDate)) return gexExpiryFetchCache.get(expiryDate);
   console.log('[GEX] Lazy-fetching chain for', expiryDate);
   const fetchPromise = (async () => {
-    const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?range=1000&expiration=${encodeURIComponent(expiryDate)}`);
+    const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?range=all&expiration=${encodeURIComponent(expiryDate)}`);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const chainData = await res.json();
     if (!chainData.data?.items) throw new Error('No items in lazy chain response');
@@ -1145,6 +1351,50 @@ async function fetchLazyDTEChain(expiryDate) {
   }
 }
 
+// ── WAIT FOR GREEK DATA — ensures live websocket greeks are loaded before rendering
+async function waitForGreekData(expiryDate, timeout = 3000) {
+  const startTime = Date.now();
+  const checkInterval = 100; // check every 100ms
+
+  return new Promise((resolve, reject) => {
+    const checkReady = () => {
+      const elapsed = Date.now() - startTime;
+
+      // Check if we have Greeks data for this expiry
+      if (expiryMap?.[expiryDate]) {
+        const chain = expiryMap[expiryDate];
+        const hasGreeks = (calls, puts) => {
+          const checkGreeks = (optMap) => {
+            return Object.values(optMap || {}).some(optArr => {
+              const opt = Array.isArray(optArr) ? optArr[0] : optArr;
+              return opt && typeof opt.gamma === 'number' && Math.abs(opt.gamma) > 0;
+            });
+          };
+          return checkGreeks(calls) || checkGreeks(puts);
+        };
+
+        if (hasGreeks(chain.calls, chain.puts)) {
+          console.log(`[GEX] Greeks ready for ${expiryDate} after ${elapsed}ms`);
+          resolve();
+          return;
+        }
+      }
+
+      // Timeout check
+      if (elapsed > timeout) {
+        console.warn(`[GEX] Timeout waiting for Greeks data after ${timeout}ms`);
+        reject(new Error(`Greeks data timeout for ${expiryDate}`));
+        return;
+      }
+
+      // Continue checking
+      setTimeout(checkReady, checkInterval);
+    };
+
+    // Start checking immediately
+    checkReady();
+  });
+}
 
 function updateSPXDisplay(quote) {
   if (!quote) return;
@@ -1155,55 +1405,116 @@ function updateSPXDisplay(quote) {
     }
     return 0;
   };
-  const nyParts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).formatToParts(new Date());
-  const part = type => nyParts.find(p => p.type === type)?.value || '';
-  const day = part('weekday');
-  const mins = (parseInt(part('hour'), 10) || 0) * 60 + (parseInt(part('minute'), 10) || 0);
+  const { day, mins } = getEtClockParts();
   const isWeekday = !['Sat', 'Sun'].includes(day);
   const spxOpen = isWeekday && mins >= 570 && mins < 960;
   const quoteLast = num(quote.lastPrice, quote.last, quote.mark, quote.price, quote.mid);
   const quotePrev = num(quote.closePrice, quote.previousClose, quote.prevClose, quote.close, quote.priorClose);
+  const hasMeaningfulPrice = quoteLast > 0 || quotePrev > 0 || spotPrice > 0;
+  const hasMeaningfulChange = Number.isFinite(parseFloat(quote.change)) || Number.isFinite(parseFloat(quote.changePercent)) || Number.isFinite(parseFloat(quote.netChange)) || Number.isFinite(parseFloat(quote.netPercentChange));
+  if (!hasMeaningfulPrice && !hasMeaningfulChange) return;
   if (quotePrev > 0) spxPrevClose = quotePrev;
-  const canConvertFromES = esPrice > 0 && esPrevClose > 0 && spxPrevClose > 0;
-  const impliedSPX = canConvertFromES ? esPrice - (esPrevClose - spxPrevClose) : 0;
-  if (quoteLast > 0 && (spxOpen || !canConvertFromES)) spotPrice = quoteLast;
-  const displayPrice = !spxOpen && impliedSPX > 0 ? impliedSPX : (spotPrice || quoteLast);
-  if (displayPrice > 0 && !spxOpen && canConvertFromES) spotPrice = displayPrice;
+  persistTodayClosePair();
+  let esCloseForConv = esPrevClose;
+  let spxCloseForConv = spxPrevClose;
+  if (!spxOpen) {
+    const storedPair = getStoredClosePair();
+    if (storedPair?.es > 0 && storedPair?.spx > 0) {
+      esCloseForConv = storedPair.es;
+      spxCloseForConv = storedPair.spx;
+    }
+  }
+
+  const displayPrice = quoteLast > 0 ? quoteLast : (spotPrice > 0 ? spotPrice : 0);
+  if (quoteLast > 0) spotPrice = quoteLast;
   if (spotPrice > 0 && window.GEX_SPOTS) window.GEX_SPOTS.SPX = spotPrice;
   else if (spotPrice > 0 && typeof GEX_SPOTS !== 'undefined') GEX_SPOTS.SPX = spotPrice;
   const pxEl=document.getElementById('spx-price');
   if(pxEl){
-    pxEl.textContent=displayPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-    pxEl.title=!spxOpen&&canConvertFromES?'ES-implied SPX: SPX 4pm close + ES move from its 4pm close':'';
+    if (displayPrice > 0) {
+      pxEl.textContent=displayPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      pxEl.title=spxOpen?'':'SPX quote display';
+    } else {
+      pxEl.textContent='—';
+      pxEl.title='Waiting for quote data...';
+    }
   }
   const chEl=document.getElementById('spx-change');
-  const chg = (!spxOpen && displayPrice > 0 && spxPrevClose > 0)
-    ? displayPrice - spxPrevClose
-    : num(quote.change, quote.netChange);
-  const pct = (!spxOpen && spxPrevClose > 0)
-    ? (chg / spxPrevClose) * 100
+  const chgBase = spxPrevClose;
+  const chg = (displayPrice > 0 && chgBase > 0) ? (displayPrice - chgBase) : num(quote.change, quote.netChange);
+  const pct = (chgBase > 0)
+    ? (chg / chgBase) * 100
     : num(quote.changePercent, quote.netPercentChange, quote.netPercentChangeInDouble);
   const chgSign = chg>=0?'+':'';
-  chEl.textContent=chgSign+chg.toFixed(2)+' ('+chgSign+pct.toFixed(2)+'%)';
-  chEl.style.color = chg>=0?'#00e676':'#ff4757';
+  if (chEl) {
+    chEl.textContent=chgSign+chg.toFixed(2)+' ('+chgSign+pct.toFixed(2)+'%)';
+    chEl.style.color = chg>=0?'#00e676':'#ff4757';
+  }
 }
 
 function handleDXLinkQuote(quote) {
-  if (quote.eventSymbol === 'SPX') {
-    spotPrice = quote.last || spotPrice;
+  if (quote.eventSymbol === 'SPX' || quote.eventSymbol === '/ES' || quote.eventSymbol === '/ESM26' || quote.eventSymbol === '/ES:XCME') {
+    const bid = parseFloat(quote.bidPrice || quote.bid || 0);
+    const ask = parseFloat(quote.askPrice || quote.ask || 0);
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+    const last = parseFloat(mid || quote.last || quote.lastPrice || quote.mark || 0);
+    const close = parseFloat(quote.closePrice || quote.prevClose || quote.previousClose || esPrevClose || 0);
+
+    // Only use SPX quote if market is open (9:30am-4pm ET). After hours: use ES conversion.
+    const { day, mins } = getEtClockParts();
+    const isWeekday = !['Sat', 'Sun'].includes(day);
+    const spxOpen = isWeekday && mins >= 570 && mins < 960;
+
+    if (quote.eventSymbol === 'SPX' && last > 0 && spxOpen) {
+      spotPrice = last; // Only trust SPX quotes during market hours
+    } else if (quote.eventSymbol !== 'SPX' && last > 0) {
+      esPrice = last; // ES futures always update
+    }
+
+    if (close > 0) esPrevClose = close;
+    if (last <= 0 && close <= 0 && !Number.isFinite(parseFloat(quote.change)) && !Number.isFinite(parseFloat(quote.changePercent))) return;
     updateSPXDisplay({
+      lastPrice: last > 0 ? last : spotPrice,
+      closePrice: close > 0 ? close : spxPrevClose,
       change: quote.change,
       changePercent: quote.changePercent
     });
+    updateESPriceDisplay();
     lastDXLinkUpdate = Date.now();
   }
 }
+
+function connectTopbarDxFeed() {
+  if (window._topbarDxSocket && (window._topbarDxSocket.readyState === WebSocket.OPEN || window._topbarDxSocket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const sock = new WebSocket(`${proto}://localhost:3001/ws/dxlink`);
+  window._topbarDxSocket = sock;
+  sock.onopen = () => {
+    sock.send(JSON.stringify({ type: 'subscribe', symbols: ['SPX', '/ES:XCME', '/ES', '/ESM26'] }));
+  };
+  sock.onmessage = event => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type !== 'FEED_DATA' || !Array.isArray(msg.data)) return;
+      normalizeDxFeedData(msg.data).forEach(item => {
+        const sym = normalizeDxAliasSymbol(item.eventSymbol);
+        if (item.eventType !== 'Quote' && item.eventType !== 'Trade' && item.eventType !== 'Summary') return;
+        if (sym === 'SPX' || sym === '/ES' || sym === '/ES:XCME' || sym === '/ESM26') {
+          handleDXLinkQuote({
+            ...item,
+            eventSymbol: sym
+          });
+        }
+      });
+    } catch (_) {}
+  };
+  sock.onclose = () => {
+    setTimeout(connectTopbarDxFeed, 3000);
+  };
+}
+connectTopbarDxFeed();
 
 // === MOCK DATA MODE ===
 let mockDataInterval = null;
@@ -1245,13 +1556,18 @@ async function fetchPrevCloses(){
 }
 
 function updateESPriceDisplay(){
+  persistTodayClosePair();
   const ep=document.getElementById('rs-es-price');
   const sp=document.getElementById('rs-spx-equiv');
   const bl=document.getElementById('rs-basis-label');
   if(ep&&esPrice>0)ep.textContent=esPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   if(sp&&esPrice>0){
     let equiv,bt;
-    if(esBasis!==null){equiv=esPrice-esBasis;bt='basis: '+(esBasis>=0?'+':'')+esBasis.toFixed(2);}
+    const storedPair = getStoredClosePair();
+    const effectiveBasis = storedPair?.es > 0 && storedPair?.spx > 0
+      ? (storedPair.es - storedPair.spx)
+      : esBasis;
+    if(effectiveBasis!==null&&Number.isFinite(effectiveBasis)){equiv=esPrice-effectiveBasis;bt='basis: '+(effectiveBasis>=0?'+':'')+effectiveBasis.toFixed(2);}
     else{equiv=spotPrice>0?spotPrice:esPrice;bt='basis: waiting for 4pm closes';}
     sp.textContent=equiv>0?equiv.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
     if(bl)bl.textContent=bt;
@@ -1325,12 +1641,14 @@ window.processChain = function processChain(chainData){
     const cp = document.getElementById('dte-gex-pill-combined');
     if(cp) setDTEGEXView('combined', cp);
   } else {
-    const savedNum = savedDteGex !== null ? parseInt(savedDteGex) : 0;
-    const savedPill = document.querySelector('#dte-gex-pills .nav-pill[data-dte="'+savedNum+'"]');
-    if(savedPill) setDTEGEXView(savedNum, savedPill);
+    const savedIsDate = typeof savedDteGex === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(savedDteGex);
+    const savedPill = savedIsDate
+      ? document.querySelector('#dte-gex-pills .nav-pill[data-expiry="'+savedDteGex+'"]')
+      : document.querySelector('#dte-gex-pills .nav-pill[data-dte="'+(savedDteGex !== null ? parseInt(savedDteGex, 10) : 0)+'"]');
+    if(savedPill) setDTEGEXView(savedIsDate ? savedDteGex : (parseInt(savedDteGex, 10) || 0), savedPill);
     else {
       const firstPill = document.querySelector('#dte-gex-pills .nav-pill');
-      if(firstPill) setDTEGEXView(parseInt(firstPill.dataset.dte)||0, firstPill);
+      if(firstPill) setDTEGEXView(firstPill.dataset.expiry || (parseInt(firstPill.dataset.dte, 10) || 0), firstPill);
     }
   }
 }
@@ -1552,27 +1870,6 @@ function computeGEXMulti(dateKeys){
     r.volNetDEX=(r.callVolDEX||0)-(r.putVolDEX||0);
     return r;
   }).sort((a,b)=>a.strike-b.strike);
-  const fallbackDte = typeof getDTE === 'function' ? getDTE(normalizedDateKeys[0]) : null;
-  const fallbackRows = (typeof GEX_DATA !== 'undefined' && GEX_DATA?.SPX?.[String(fallbackDte)]) || [];
-  if(fallbackRows.length){
-    const fallbackByStrike = new Map(fallbackRows.map(r => [Number(r.strike), r]));
-    rawChain.forEach(row => {
-      const hasLiveExposure =
-        Math.abs(row.callGEX||0) > 0 ||
-        Math.abs(row.putGEX||0) > 0 ||
-        (row.callOI||0) > 0 ||
-        (row.putOI||0) > 0 ||
-        (row.callVolume||0) > 0 ||
-        (row.putVolume||0) > 0;
-      const fb = fallbackByStrike.get(Number(row.strike));
-      if(!hasLiveExposure && fb && (Math.abs(fb.callGEX||0) > 0 || Math.abs(fb.putGEX||0) > 0 || Math.abs(fb.netGEX||0) > 0)){
-        row.callGEX = Math.abs(fb.callGEX||0);
-        row.putGEX = -Math.abs(fb.putGEX||0);
-        row.netGEX = row.callGEX + row.putGEX;
-        row.netOIGEX = row.netGEX;
-      }
-    });
-  }
   // Only reset strike count on first load; preserve user zoom on subsequent refreshes
   if(currentStrikeCount === 0 || !window._gexFirstLoadDone) {
     // Auto-fit: count only strikes with actual GEX exposure so bars fill the chart
@@ -1596,46 +1893,10 @@ function computeGEX(dateKey){
 
 function finishGEXCompute(dateKey){
   // rawChain already built by computeGEXMulti - just compute levels
-  flipPoint = null;
   const sorted = [...rawChain].sort((a,b) => a.strike - b.strike);
-
-  // Find the average absolute GEX to set a noise threshold
-  const avgAbsGEX = sorted.reduce((s,r)=>s+Math.abs(r.netGEX),0) / sorted.length;
-  const threshold = avgAbsGEX * 0.15; // ignore crossings where both sides are tiny
-
-  const crossings = [];
-  for(let i=0; i<sorted.length-1; i++){
-    const curr = sorted[i], next = sorted[i+1];
-    if(Math.sign(curr.netGEX) !== Math.sign(next.netGEX) && curr.netGEX !== 0 && next.netGEX !== 0){
-      // Filter out noise: at least one side must be significant
-      if(Math.abs(curr.netGEX) < threshold && Math.abs(next.netGEX) < threshold) continue;
-      const s0 = curr.strike, s1 = next.strike;
-      const g0 = curr.netGEX, g1 = next.netGEX;
-      const cross = s0 - g0 * (s1 - s0) / (g1 - g0);
-      // Weight by the magnitude of GEX on both sides (stronger crossings preferred)
-      const weight = Math.abs(curr.netGEX) + Math.abs(next.netGEX);
-      crossings.push({ cross: Math.round(cross * 100) / 100, weight });
-    }
-  }
-  if(crossings.length > 0){
-    const ref = spotPrice > 0 ? spotPrice : sorted[Math.floor(sorted.length/2)].strike;
-    // Score = proximity to spot + weight. Pick crossing that is close AND has strong GEX magnitude
-    const maxWeight = Math.max(...crossings.map(c=>c.weight));
-    flipPoint = crossings.reduce((best, c) => {
-      const distA = Math.abs(c.cross - ref) / (sorted[sorted.length-1].strike - sorted[0].strike);
-      const distB = Math.abs(best.cross - ref) / (sorted[sorted.length-1].strike - sorted[0].strike);
-      const scoreA = distA - (c.weight / maxWeight) * 0.3;
-      const scoreB = distB - (best.weight / maxWeight) * 0.3;
-      return scoreA < scoreB ? c : best;
-    }).cross;
-  }
-  // Fallback: strike with netGEX closest to zero among significant strikes
-  if(flipPoint === null){
-    const significant = sorted.filter(r=>Math.abs(r.netGEX)>=threshold);
-    const pool = significant.length ? significant : sorted;
-    const closest = pool.reduce((a,b) => Math.abs(b.netGEX) < Math.abs(a.netGEX) ? b : a, pool[0]);
-    flipPoint = closest ? closest.strike : null;
-  }
+  flipPoint = window.CALC && typeof window.CALC.findGEXFlip === 'function'
+    ? window.CALC.findGEXFlip(sorted, spotPrice)
+    : null;
   const totalGEX=rawChain.reduce((s,r)=>s+r.netGEX,0);
   const maxCallStrike=rawChain.reduce((a,b)=>b.callGEX>a.callGEX?b:a,rawChain[0]);
   const maxPutStrike=rawChain.reduce((a,b)=>Math.abs(b.putGEX)>Math.abs(a.putGEX)?b:a,rawChain[0]);
@@ -1645,6 +1906,7 @@ function finishGEXCompute(dateKey){
   safeSet('sb-call-wall',maxCallStrike?.strike?.toLocaleString()??'—');
   safeSet('sb-put-wall',maxPutStrike?.strike?.toLocaleString()??'—');
   safeSet('sb-hvl',hvl?.strike?.toLocaleString()??'—');
+  safeSet('topbar-gex-flip',flipPoint?flipPoint.toLocaleString():'—');
   safeSet('sb-strikes',currentStrikeCount>0?Math.min(currentStrikeCount,rawChain.length)+'/'+rawChain.length:rawChain.length);
   safeSet('sb-updated',new Date().toLocaleTimeString('en-US',{hour12:false}));
   safeSet('rs-strikes',currentStrikeCount>0?Math.min(currentStrikeCount,rawChain.length)+'/'+rawChain.length:rawChain.length);
@@ -1790,7 +2052,12 @@ function setDTEGEXView(dte, el){
   document.querySelectorAll('#dte-gex-pills .nav-pill').forEach(p => p.classList.remove('active'));
   const combinedPill = document.getElementById('dte-gex-pill-combined');
   if(combinedPill) combinedPill.classList.remove('active');
-  if(el) el.classList.add('active');
+
+  // Force active state with a slight delay to ensure DOM is updated
+  if(el) {
+    el.classList.add('active');
+    el.setAttribute('aria-selected', 'true');
+  }
 
   // Persist selection
   try{ localStorage.setItem('dteGexView', dte === 'combined' ? 'combined' : String(dte)); }catch(e){} // dte is now expiry date string
@@ -1802,6 +2069,13 @@ function setDTEGEXView(dte, el){
     // dte is now an expiry date string; convert to integer DTE for GEX ladder rendering
     gexSelectedDTE = (typeof dte === 'string' && dte.includes('-')) ? getDTE(dte) : (parseInt(dte) || null);
   }
+
+  // Force a very tiny visual confirmation that the click registered
+  if(el && el.style) {
+    el.style.transform = 'scale(0.98)';
+    setTimeout(() => { if(el && el.style) el.style.transform = ''; }, 150);
+  }
+
   // If GEX page is currently visible, re-render it
   if(document.getElementById('page-gex')) {
     renderGEXLadder();
@@ -1829,7 +2103,11 @@ function setDTEGEXView(dte, el){
   const _dteGexDisplay = document.getElementById('dte-gex-display');
   if (_dteGexDisplay) _dteGexDisplay.style.display = 'block';
   const label = document.getElementById('dte-gex-label');
-  if(label){ const _d=new Date((typeof dte==='string'&&dte.includes('-')?dte:date)+'T12:00:00'); label.textContent=_d.toLocaleDateString('en-US',{weekday:'short',month:'numeric',day:'numeric'}); }
+  const labelDate = (typeof dte === 'string' && dte.includes('-')) ? dte : (el?.dataset?.expiry || null);
+  if(labelDate && label){
+    const _d = new Date(labelDate + 'T12:00:00');
+    label.textContent = _d.toLocaleDateString('en-US',{weekday:'short',month:'numeric',day:'numeric'});
+  }
   
   // dte is now an expiry date string — use directly
   let matchingExpiry = (typeof dte === 'string' && dte.includes('-')) ? dte : (el?.dataset?.expiry || null);
@@ -1863,26 +2141,48 @@ function setDTEGEXView(dte, el){
     if(el){ const orig = el.innerHTML; el.innerHTML = el.innerHTML + ' <span style="font-size:8px;opacity:0.6">…</span>'; }
     fetchLazyDTEChain(matchingExpiry).then(() => {
       if(el) buildDTEGEXPills(); // rebuild pills to clear loading indicator
-      if(expiryMap && expiryMap[matchingExpiry]) computeGEXMulti([matchingExpiry]);
-      drawOverviewChart();
-      renderHeatmap();
+      if(expiryMap && expiryMap[matchingExpiry]) {
+        // Wait for live greeks to arrive before rendering
+        waitForGreekData(matchingExpiry).then(() => {
+          computeGEXMulti([matchingExpiry]);
+          drawOverviewChart();
+          renderHeatmap();
+        }).catch(e => {
+          // Timeout or error - render anyway
+          console.warn('[GEX] Timeout waiting for greeks, rendering with partial data:', e);
+          computeGEXMulti([matchingExpiry]);
+          drawOverviewChart();
+          renderHeatmap();
+        });
+      }
     }).catch(e => console.warn('[GEX] Lazy DTE fetch failed:', e));
     return;
   }
 
   if(expiryMap && matchingExpiry && expiryMap[matchingExpiry]){
-    computeGEXMulti([matchingExpiry]);
+    // Wait for live greeks before rendering
+    waitForGreekData(matchingExpiry).then(() => {
+      computeGEXMulti([matchingExpiry]);
+      drawOverviewChart();
+      renderHeatmap();
+    }).catch(e => {
+      // Timeout - render anyway
+      console.warn('[GEX] Timeout waiting for greeks:', e);
+      computeGEXMulti([matchingExpiry]);
+    });
   }
   
   // Calculate GEX for specific DTE
   if(!expiryMap) return;
   let dteGEX = 0;
   const allExpiries = Object.keys(expiryMap).sort();
-  
+
+  // Convert dte to matching expiry date string
+  let targetExpiry = matchingExpiry;
+
   allExpiries.forEach(expiry => {
     if(!isGexTradingDay(expiry)) return;
-    const expDTE = getDTE(expiry);
-    if(expDTE !== dte) return;
+    if(expiry !== targetExpiry) return;
     
     const {calls, puts} = expiryMap[expiry];
     Object.entries(calls || {}).forEach(([strikeStr, optArr]) => {
@@ -1952,17 +2252,10 @@ function setChartView(view, el){
   const barCanvas     = document.getElementById('gex-chart');
   const profileCanvas = document.getElementById('gex-profile-canvas');
   const cw            = document.querySelector('.chart-canvas-wrap');
-  if(view === 'profile'){
-    if(barCanvas)barCanvas.style.display='none';
-    if(cw)cw.style.display='none';
-    if(profileCanvas)profileCanvas.style.display='block';
-    if(rawChain.length)renderGEXProfile();
-  } else {
-    if(barCanvas)barCanvas.style.display='';
-    if(cw)cw.style.display='';
-    if(profileCanvas)profileCanvas.style.display='none';
-    if(rawChain.length)renderChart();
-  }
+  if(barCanvas)barCanvas.style.display='';
+  if(cw)cw.style.display='';
+  if(profileCanvas)profileCanvas.style.display='none';
+  if(rawChain.length)renderChart();
 }
 
 // GEX profile zoom/pan state
@@ -1977,7 +2270,7 @@ function scheduleGEXRender(){
   if(gexRenderRAF) return;
   gexRenderRAF = requestAnimationFrame(()=>{
     gexRenderRAF = null;
-    renderGEXProfile();
+    renderChart();
   });
 }
 
@@ -1988,6 +2281,7 @@ function resetGEXProfileView(){
 }
 
 function renderGEXProfile(){
+  return;
   const canvas = document.getElementById('gex-profile-canvas');
   if(!canvas || !rawChain.length) return;
 
@@ -2171,7 +2465,40 @@ function renderGEXProfile(){
   ctx.strokeStyle='#e8edf5'; ctx.lineWidth=2.5;
   drawData.forEach((d,i)=>{const x=xFor(d.strike),y=yFor(d.netGEX);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
   ctx.stroke();
-  
+
+  if(showOverviewFlipCurve){
+    const profileExp = getTimeToExpiryYears(selectedExpiry || data[0]?.expirationDate || data[0]?.expiration_date || data[0]?.expiryDate);
+    const profileSamples = Math.max(36, Math.min(90, drawData.length * 2));
+    const profilePoints = [];
+    let profileMin = Infinity;
+    let profileMax = -Infinity;
+    for(let i=0;i<profileSamples;i++){
+      const s = viewMin + (viewMax - viewMin) * (profileSamples === 1 ? 0 : i / (profileSamples - 1));
+      let total = 0;
+      for(let j=0;j<data.length;j++){
+        const r = data[j];
+        const callGamma = calcBlackScholesGamma(s, r.strike, r.callIV || r.putIV || 0, profileExp);
+        const putGamma = calcBlackScholesGamma(s, r.strike, r.putIV || r.callIV || 0, profileExp);
+        total += calcDollarGammaExposure(callGamma, r.callOI || 0, s);
+        total -= calcDollarGammaExposure(putGamma, r.putOI || 0, s);
+      }
+      profilePoints.push({ x: xFor(s), y: total });
+      if(total < profileMin) profileMin = total;
+      if(total > profileMax) profileMax = total;
+    }
+    const profileRange = (profileMax - profileMin) || 1;
+    const yProfile = v => PAD.t + cH - ((v - profileMin) / profileRange) * cH;
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = '#00e5ff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([2,4]);
+    profilePoints.forEach((p,i)=>{ const y = yProfile(p.y); i===0 ? ctx.moveTo(p.x,y) : ctx.lineTo(p.x,y); });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   ctx.restore();
 
   const peakRow = drawData.reduce((best, row) => (
@@ -2216,7 +2543,7 @@ function renderGEXProfile(){
   }
 
   // ── Flip/zero gamma vertical line ──
-  if(flipPoint){
+  if(flipPoint && showOverviewFlipCurve){
     const xFlip=xFor(flipPoint);
     ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
     ctx.beginPath(); ctx.moveTo(xFlip,PAD.t); ctx.lineTo(xFlip,PAD.t+cH); ctx.stroke();
@@ -2250,6 +2577,7 @@ function renderGEXProfile(){
 
 // GEX profile mouse handlers - setup once
 function setupGEXProfileHandlers(){
+  return;
   const canvas = document.getElementById('gex-profile-canvas');
   if(!canvas || canvas.dataset.gexProfileHandlers === '1') return;
   canvas.dataset.gexProfileHandlers = '1';
@@ -2772,14 +3100,31 @@ async function shareHeatmapShot(platform){
   }
 
   async function renderElement(element) {
-    if (element instanceof HTMLCanvasElement) return element;
     const html2canvasFn = await loadHtml2CanvasSafe();
+    if (element instanceof HTMLCanvasElement) return element;
+    const hideShareButtonsInClone = root => {
+      if (!root?.querySelectorAll) return;
+      [
+        '#hm-copy-shot-btn', '#hm-share-x-btn', '#hm-share-discord-btn',
+        '#gex-copy-shot-btn', '#gex-share-x-btn', '#gex-share-discord-btn'
+      ].forEach(selector => {
+        root.querySelectorAll(selector).forEach(btn => {
+          btn.style.visibility = 'hidden';
+          btn.style.color = 'transparent';
+          btn.style.borderColor = 'transparent';
+          btn.style.pointerEvents = 'none';
+        });
+      });
+    };
     return html2canvasFn(element, {
       backgroundColor: '#05080d',
       scale: Math.min(2, window.devicePixelRatio || 1),
       useCORS: true,
       logging: false,
-      ignoreElements: el => el.id === 'ov-tooltip' || el.id === 'gex-math-tooltip'
+      ignoreElements: el => el.id === 'ov-tooltip' || el.id === 'gex-math-tooltip',
+      onclone: clonedDoc => {
+        hideShareButtonsInClone(clonedDoc);
+      }
     });
   }
 
@@ -2792,7 +3137,7 @@ async function shareHeatmapShot(platform){
   }
 
   function buySellHistoryTarget() {
-    return document.getElementById('mvc-body') || document.getElementById('buy-sell-history-canvas');
+    return document.getElementById('buy-sell-history-panel') || document.getElementById('mvc-body') || document.getElementById('buy-sell-history-canvas');
   }
 
   async function copyTarget(target, btn, restoreText, restoreColor) {
@@ -2878,8 +3223,8 @@ async function shareHeatmapShot(platform){
 
 
 // ── LIVE QUOTES ────────────────────────────────────────────────────
-const QUOTE_SYMBOLS = ['$VIX.X','/ESM26','/NQM26','$SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
-const QUOTE_LABELS  = {'$VIX.X':'VIX','/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+const QUOTE_SYMBOLS = ['/ESM26','/NQM26','$SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+const QUOTE_LABELS  = {'/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','VIX':'VIX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
 // dedup: // dedup: quotesData/quotesInterval/quotesExpiry already declared above
 
 function populateQuotesExpiryDropdown(){
@@ -2928,26 +3273,208 @@ function getActiveQuotesExpiry(){
   return sorted.find(d=>{ const dow=new Date(d+'T12:00:00').getDay(); return dow!==0&&dow!==6; }) || sorted[0];
 }
 
+function quoteNum(...vals) {
+  for (const v of vals) {
+    const n = parseFloat(v);
+    if (Number.isFinite(n) && n !== 0) return n;
+  }
+  return 0;
+}
+
+function resolveQuoteEntry(sym) {
+  if (quotesData?.[sym]) return quotesData[sym];
+  const aliases = {
+    SPX: ['$SPX', 'SPX'],
+    ES: ['/ESM26', '/ES:XCME', '/ES'],
+    NQ: ['/NQM26', '/NQ:XCME', '/NQ'],
+    SPY: ['SPY'],
+    QQQ: ['QQQ'],
+    SMH: ['SMH']
+  };
+  const keys = aliases[sym] || [sym];
+  for (const key of keys) {
+    if (quotesData?.[key]) return quotesData[key];
+  }
+  return null;
+}
+
+function normalizeQuoteSessionKey(symbol) {
+  const raw = String(symbol || '').replace(/^\$/, '');
+  if (raw === '/ESM26' || raw === '/ES:XCME' || raw === '/ES') return '/ES';
+  if (raw === '/NQM26' || raw === '/NQ:XCME' || raw === '/NQ') return '/NQ';
+  return raw.split(':')[0];
+}
+
+const quotePrevCloseCache = {};
+let quotePrevCloseLoadPromise = null;
+
+async function preloadQuotePrevCloses() {
+  if (quotePrevCloseLoadPromise) return quotePrevCloseLoadPromise;
+  quotePrevCloseLoadPromise = (async () => {
+    try {
+      const res = await proxyGet('/proxy/api/tt/quotes-batch');
+      const json = await res.json();
+      const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+      items.forEach(item => {
+        const symbol = String(item.symbol || item.ticker || '').trim();
+        const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
+        if (symbol && prev > 0) {
+          quotePrevCloseCache[normalizeQuoteSessionKey(symbol)] = prev;
+        }
+      });
+    } catch (_) {}
+  })();
+  return quotePrevCloseLoadPromise;
+}
+
+function getStoredQuoteSessionClose(symbol) {
+  try {
+    const stored = JSON.parse(localStorage.getItem('quoteSessionCloses') || '{}');
+    const value = parseFloat(stored[normalizeQuoteSessionKey(symbol)]);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function dxPrevCloseForSymbol(sym, q) {
+  const summaryKey = sym === '/ESM26' ? '/ES:XCME' : sym === '/NQM26' ? '/NQ:XCME' : sym;
+  const s = dxSummaryCache[summaryKey] || dxSummaryCache[sym] || {};
+  return quoteNum(
+    quotePrevCloseCache[normalizeQuoteSessionKey(sym)],
+    q?.['prev-close'],
+    q?.prevClose,
+    q?.previousClose,
+    q?.prevDayClosePrice,
+    q?.['prev-day-close-price'],
+    q?.dayClosePrice,
+    q?.['day-close-price'],
+    s?.['prev-close'],
+    s?.prevClose,
+    s?.previousClose,
+    s?.prevDayClosePrice,
+    s?.['prev-day-close-price'],
+    s?.dayClosePrice,
+    s?.['day-close-price'],
+    q?.closePrice,
+    q?.settlementPrice
+  );
+}
+
+function dxPrevCloseForSymbol(sym, q) {
+  const summaryKey = sym === '/ESM26' ? '/ES:XCME' : sym === '/NQM26' ? '/NQ:XCME' : sym;
+  const s = dxSummaryCache[summaryKey] || dxSummaryCache[sym] || {};
+  return quoteNum(
+    q?.['prev-close'],
+    q?.prevClose,
+    q?.previousClose,
+    q?.prevDayClosePrice,
+    q?.['prev-day-close-price'],
+    q?.dayClosePrice,
+    q?.['day-close-price'],
+    s?.['prev-close'],
+    s?.prevClose,
+    s?.previousClose,
+    s?.prevDayClosePrice,
+    s?.['prev-day-close-price'],
+    s?.dayClosePrice,
+    s?.['day-close-price'],
+    q?.closePrice,
+    q?.settlementPrice
+  );
+}
+
 async function fetchQuotes(){
   if(!accessToken) return;
   if(Object.keys(expiryMap).length) populateQuotesExpiryDropdown();
   try{
-    // Fetch mock quotes instead of Schwab
-    const res = await fetch(PROXY + '/mock-quotes');
-    const data = await res.json();
+    await preloadQuotePrevCloses();
+    const dxSymList = ['SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
+    dxSubscribe(dxSymList.map(sym => sym === '/ESM26' ? '/ES:XCME' : sym === '/NQM26' ? '/NQ:XCME' : sym));
+    if (!dxlinkConnected) await new Promise(r => setTimeout(r, 300));
+    const data = {};
+    dxSymList.forEach(sym => {
+      const q = dxQuoteCache[sym] || {};
+      const s = dxSummaryCache[sym] || {};
+      const bid = parseFloat(q.bidPrice || q.bid || 0);
+      const ask = parseFloat(q.askPrice || q.ask || 0);
+      const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+      const price = parseFloat(mid || q.mark || q.mid || q.lastPrice || q.last || q.price || q['last-price'] || q['mark-price'] || q['mid-price'] || q['last-trade-price'] || s.lastPrice || s.last || 0);
+      if (!price) return;
+      const rawChange = parseFloat(q.change || q.netChange || 0);
+      const prev = parseFloat(q['prev-close'] || q.prevClose || q.previousClose || q.prevDayClosePrice || q['prev-day-close-price'] || q.dayClosePrice || q['day-close-price'] || s.prevDayClosePrice || s['prev-close'] || s.prevClose || s.previousClose || s.prevDayClosePrice || q.closePrice || q.settlementPrice || 0) || (price > 0 && rawChange !== 0 ? price - rawChange : 0);
+      const change = rawChange || (prev > 0 ? price - prev : 0);
+      const changePct = parseFloat(q.changePercent || q.netPercentChange || q.netPercentChangeInDouble || q['percent-change'] || 0) || (prev > 0 ? ((change) / prev) * 100 : 0);
+      const entry = { quote: { symbol: sym, lastPrice: price, netChange: change, netPercentChange: changePct, netPercentChangeInDouble: changePct, closePrice: prev, prevClose: prev, previousClose: prev, totalVolume: parseInt(q.dayVolume || q.totalVolume || s.dayVolume || s.totalVolume || 0), bidPrice: bid, askPrice: ask } };
+      data[sym] = entry;
+      const rootSym = sym.split(':')[0];
+      if (rootSym === 'SPX' || rootSym === '$SPX') { data['$SPX'] = entry; data['SPX'] = entry; if (prev > 0) spxPrevClose = prev; }
+      if (rootSym.startsWith('/ES')) { data['/ESM26'] = entry; esPrice = price; if (prev > 0) esPrevClose = prev; if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose; updateESPriceDisplay(); }
+      if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
+    });
+    if (!Object.keys(data).length) {
+      const fallback = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
+      items.forEach(item => {
+        const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
+        if (!sym) return;
+        const price = quoteNum(item.last, item.mark, item.mid, item.price, item.lastPrice, item['last-price']);
+        const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
+        if (!price) return;
+        const chg = quoteNum(item.change, item.netChange, price - prev);
+        const pct = quoteNum(item['percent-change'], item.changePercent, item.netPercentChange, item.netPercentChangeInDouble, prev > 0 ? (chg / prev) * 100 : 0);
+        data[sym] = {
+          quote: {
+            symbol: sym,
+            lastPrice: price,
+            netChange: chg,
+            netPercentChange: pct,
+            netPercentChangeInDouble: pct,
+            closePrice: prev,
+            prevClose: prev,
+            previousClose: prev,
+            totalVolume: parseInt(item.volume || item.dayVolume || 0),
+            bidPrice: quoteNum(item.bid),
+            askPrice: quoteNum(item.ask),
+          }
+        };
+      });
+    }
     quotesData = data;
-    
-    // Always update VIX topbar regardless of active tab
-    const vixD = data['$VIX.X'] || data['VIX'];
-    if(vixD){
-      const vp = vixD.quote?.lastPrice||vixD.lastPrice||0;
-      const vc = vixD.quote?.netPercentChange||vixD.netPercentChange||0;
-      const vcColor = vc>=0?'#60cc80':'#ff6060';
-      const vcArrow = vc>=0?'▲':'▼';
-      const vEl=document.getElementById('topbar-vix');
-      const vcEl=document.getElementById('topbar-vix-chg');
-      if(vEl && vp) vEl.textContent=vp.toFixed(2);
-      if(vcEl){vcEl.textContent=vcArrow+Math.abs(vc).toFixed(2)+'%';vcEl.style.color=vcColor;}
+    window.quotesReady = true;
+    const expectedSymbols = ['SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
+    const needsFallback = !window.__quoteFallbackLoaded && expectedSymbols.some(sym => !resolveQuoteEntry(sym));
+    if (needsFallback || !Object.keys(data).length) {
+      const fallback = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
+      items.forEach(item => {
+        const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
+        if (!sym) return;
+        const price = quoteNum(item.last, item.mark, item.mid, item.price, item.lastPrice, item['last-price']);
+        const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
+        if (!price) return;
+        const chg = quoteNum(item.change, item.netChange, price - prev);
+        const pct = quoteNum(item['percent-change'], item.changePercent, item.netPercentChange, item.netPercentChangeInDouble, prev > 0 ? (chg / prev) * 100 : 0);
+        const entry = {
+          quote: {
+            symbol: sym,
+            lastPrice: price,
+            netChange: chg,
+            netPercentChange: pct,
+            netPercentChangeInDouble: pct,
+            closePrice: prev,
+            prevClose: prev,
+            previousClose: prev,
+            totalVolume: parseInt(item.volume || item.dayVolume || 0),
+            bidPrice: quoteNum(item.bid),
+            askPrice: quoteNum(item.ask),
+          }
+        };
+        data[sym] = entry;
+        if (sym === 'SPX' || sym === '$SPX') { data['$SPX'] = entry; data['SPX'] = entry; }
+        if (sym === '/ESM26' || sym === '/ES') { data['/ESM26'] = entry; }
+      });
+      window.__quoteFallbackLoaded = true;
     }
     renderQuotes();
   }catch(e){ console.error('fetchQuotes error:', e.message, e); }
@@ -2957,7 +3484,7 @@ async function fetchQuotes(){
 async function testQuotes(){
   if(!accessToken){ console.log('No token'); return; }
   try{
-    const res = await proxyGet('/marketdata/v1/quotes?symbols=%24SPX,%24VIX.X,SPY');
+    const res = await proxyGet('/marketdata/v1/quotes?symbols=%24SPX,SPY');
     const data = await res.json();
     console.log('Quote test response keys:', Object.keys(data));
     console.log('Quote test sample:', JSON.stringify(Object.values(data)[0]).slice(0,200));
@@ -2974,23 +3501,6 @@ function renderQuotes(){
   const ts = document.getElementById('quotes-ts');
   if(!el) return;
   if(ts) ts.textContent = new Date().toLocaleTimeString('en-US',{hour12:false});
-  // Push VIX to topbar
-  const vixD = quotesData['$VIX.X'] || quotesData['VIX'];
-  if(vixD){
-    const vp = vixD.quote?.lastPrice||vixD.lastPrice||0;
-    let vc = vixD.quote?.netPercentChangeInDouble||vixD.netPercentChangeInDouble||null;
-    if(vc === null || vc === undefined || isNaN(vc)){
-      const vnc = vixD.quote?.netChange||vixD.netChange||0;
-      const vcp = vixD.quote?.closePrice||vixD.closePrice||0;
-      vc = (vcp > 0) ? (vnc / vcp) * 100 : 0;
-    }
-    const vcColor = vc>=0?'#60cc80':'#ff6060';
-    const vcArrow = vc>=0?'▲':'▼';
-    const vEl=document.getElementById('topbar-vix');
-    const vcEl=document.getElementById('topbar-vix-chg');
-    if(vEl) vEl.textContent=vp.toFixed(2);
-    if(vcEl){vcEl.textContent=vcArrow+Math.abs(vc).toFixed(2)+'%';vcEl.style.color=vcColor;}
-  }
   // Also update esPrevClose from ES quote if available
   const esQuote = quotesData['/ESM26'];
   if(esQuote){
@@ -3004,37 +3514,48 @@ function renderQuotes(){
   
   const entries = [];
   QUOTE_SYMBOLS.forEach(sym=>{
-    const d = quotesData[sym] || null;
+    const d = resolveQuoteEntry(sym) || null;
     if(!d) return;
     const q      = d.quote || d;
-    const price  = q.lastPrice ?? q.last ?? q.mark ?? 0;
-    // Futures: netPercentChangeInDouble; equities: netPercentChange
-    // Fallback: compute from netChange / (closePrice or regularMarketLastPrice)
-    let chgPct = q.netPercentChangeInDouble ?? q.netPercentChange ?? q.percentChange ?? null;
-    if(chgPct === null || chgPct === undefined || isNaN(chgPct)){
-      const netChg = q.netChange ?? q.regularMarketNetChange ?? 0;
-      const closeP = q.closePrice ?? q.regularMarketLastPrice ?? q.regularMarketPreviousClose ?? 0;
-      chgPct = (closeP > 0) ? (netChg / closeP) * 100 : 0;
-    }
+    const bid = quoteNum(q.bidPrice, q.bid);
+    const ask = quoteNum(q.askPrice, q.ask);
+    const price  = q.lastPrice ?? q.last ?? q.mark ?? q.mid ?? q.price ?? ((bid > 0 && ask > 0) ? ((bid + ask) / 2) : 0);
+    const prev = dxPrevCloseForSymbol(sym, q) || q.prevClose || q.previousClose || q.closePrice || q['prev-close'] || 0;
+    const rawChange = quoteNum(q.netChange, q.change, (prev > 0 && price > 0) ? (price - prev) : 0);
+    const chgPct = dxPrevCloseForSymbol(sym, q) > 0 ? ((price - dxPrevCloseForSymbol(sym, q)) / dxPrevCloseForSymbol(sym, q)) * 100 : quoteDisplayPercent(sym, q, price, rawChange);
     const label  = QUOTE_LABELS[sym] || sym;
     entries.push({label, price, chgPct});
   });
+  if (!entries.length) {
+    Object.entries(quotesData || {}).forEach(([sym, d]) => {
+      const q = d?.quote || d || {};
+      const bid = quoteNum(q.bidPrice, q.bid);
+      const ask = quoteNum(q.askPrice, q.ask);
+      const price = q.lastPrice ?? q.last ?? q.mark ?? q.mid ?? q.price ?? ((bid > 0 && ask > 0) ? ((bid + ask) / 2) : 0);
+      if (!(price > 0)) return;
+      const rawChange = quoteNum(q.netChange, q.change);
+      const chgPct = dxPrevCloseForSymbol(sym, q) > 0 ? ((price - dxPrevCloseForSymbol(sym, q)) / dxPrevCloseForSymbol(sym, q)) * 100 : quoteDisplayPercent(sym, q, price, rawChange);
+      entries.push({ label: QUOTE_LABELS[sym] || sym, price, chgPct });
+    });
+  }
   // Debug: log any entries where % is 0 to console
   entries.forEach(e=>{ if(e.chgPct===0) console.log('Quote 0% for',e.label,'raw:',JSON.stringify(quotesData[QUOTE_SYMBOLS.find(s=>QUOTE_LABELS[s]===e.label)]||{}).slice(0,200)); });
   entries.sort((a,b) => b.chgPct - a.chgPct);
   let html = '';
   entries.forEach(({label, price, chgPct})=>{
-    const pos    = chgPct >= 0;
+    const pctVal = Number.isFinite(chgPct) ? chgPct : 0;
+    const pos    = pctVal >= 0;
     const color  = pos ? '#00e676' : '#ff4757';
     const arrow  = pos ? '▲' : '▼';
+    const pctTxt = `${pos ? '+' : ''}${pctVal.toFixed(2)}%`;
     html += `<div class="q-entry">
       <div class="quote-row">
         <span class="q-sym">${label}</span>
-        <span class="q-chg" style="color:${color}">${arrow} ${Math.abs(chgPct).toFixed(2)}%</span>
+        <span class="q-chg" style="color:${color}">${arrow} ${pctTxt}</span>
       </div>
     </div>`;
   });
-  el.innerHTML = html || '<div style="color:var(--text3);font-size:10px;padding:8px">No data</div>';
+  el.innerHTML = html || '<div style="color:var(--text3);font-size:10px;padding:8px">Loading quotes…</div>';
 }
 
 function buildSPXGexLabel(){
@@ -3060,9 +3581,10 @@ function buildStockGexLabel(d){
   return html||'<span style="color:#2a4060">—</span>';
 }
 
-let quotesCountdownTimer = null;
-let quotesCountdownSecs = 15;
-const QUOTES_REFRESH_SECS = 15;
+var quotesCountdownTimer = window.quotesCountdownTimer || null;
+var quotesCountdownSecs = window.quotesCountdownSecs || 15;
+var QUOTES_REFRESH_SECS = window.QUOTES_REFRESH_SECS || 15;
+window.QUOTES_REFRESH_SECS = QUOTES_REFRESH_SECS;
 
 function updateQuotesCountdownUI(){
   const el = document.getElementById('quotes-countdown');
@@ -3076,7 +3598,9 @@ function updateQuotesCountdownUI(){
 function startQuotesFeed(){
   if(quotesInterval) clearInterval(quotesInterval);
   if(quotesCountdownTimer) clearInterval(quotesCountdownTimer);
+  window.quotesReady = true;
   (window.fetchQuotes || fetchQuotes)();
+  setTimeout(() => { try { (window.fetchQuotes || fetchQuotes)(); } catch(_) {} }, 1200);
   quotesCountdownSecs = QUOTES_REFRESH_SECS;
   updateQuotesCountdownUI();
   quotesInterval = setInterval(()=>{ (window.fetchQuotes || fetchQuotes)(); quotesCountdownSecs=QUOTES_REFRESH_SECS; updateQuotesCountdownUI(); }, QUOTES_REFRESH_SECS*1000);
@@ -3262,7 +3786,75 @@ function toggleAutoRefresh(){
     resetCountdown();
   }
 }
-function manualRefresh(){ fetchGEX(); resetCountdown(); }
+async function manualRefresh(){
+  const btn = document.querySelector('button[onclick="manualRefresh()"]');
+  if (!btn) {
+    fetchGEX();
+    resetCountdown();
+    return;
+  }
+
+  // Prevent multiple simultaneous refreshes
+  if (btn.disabled) return;
+
+  // Store original state
+  const originalText = btn.textContent;
+  const originalClass = btn.className;
+  let refreshSuccess = false;
+
+  try {
+    // Step 1: Show "Refreshing..." and disable
+    btn.textContent = '↻ Refreshing...';
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+    btn.style.transition = 'all 0.3s ease';
+
+    // Step 2: Execute refresh
+    try {
+      await fetchGEX();
+      refreshSuccess = true;
+    } catch (fetchError) {
+      console.error('[Refresh] Error:', fetchError);
+      refreshSuccess = false;
+    }
+
+    // Step 3a: Show success or error state
+    if (refreshSuccess) {
+      // Success: "Refreshed" with green glow
+      btn.textContent = '✓ Refreshed';
+      btn.style.color = 'var(--green)';
+      btn.style.textShadow = '0 0 12px rgba(0,230,118,0.5)';
+      btn.style.borderColor = 'var(--green)';
+      btn.style.background = 'rgba(0,230,118,0.1)';
+    } else {
+      // Error: "Refresh Failed" with red indicator
+      btn.textContent = '✗ Failed';
+      btn.style.color = 'var(--red)';
+      btn.style.textShadow = '0 0 12px rgba(255,71,87,0.5)';
+      btn.style.borderColor = 'var(--red)';
+      btn.style.background = 'rgba(255,71,87,0.1)';
+    }
+
+    // Step 4: Keep feedback state for 1.8 seconds
+    await new Promise(r => setTimeout(r, 1800));
+
+  } finally {
+    // Step 5: Return to normal state with smooth transition
+    btn.textContent = originalText;
+    btn.disabled = false;
+    btn.style.opacity = '';
+    btn.style.cursor = '';
+    btn.style.color = '';
+    btn.style.textShadow = '';
+    btn.style.borderColor = '';
+    btn.style.background = '';
+    btn.className = originalClass;
+
+    // Reset countdown
+    resetCountdown();
+  }
+}
 function setTableLoading(){ document.getElementById('table-wrap').innerHTML='<div class="empty-state"><div class="spinner"></div><h3>Loading…</h3></div>'; }
 function setTableError(msg){ document.getElementById('table-wrap').innerHTML=`<div class="empty-state"><h3 style="color:var(--red)">Error</h3><p style="font-size:12px;color:var(--text2)">${msg}</p><button class="btn btn-ghost" onclick="fetchGEX()" style="margin-top:12px">↻ Retry</button></div>`; }
 // dedup: const REFRESH_SECS=30;
@@ -3291,7 +3883,6 @@ const _rs0=document.getElementById('right-stats'); if(_rs0) _rs0.style.display='
       
 
       setTimeout(()=>{ try{ if(typeof startQuotesFeed==='function') startQuotesFeed(); }catch(e){} }, 1000);
-      setTimeout(()=>testQuotes(), 2000);
     }
     // else: auth panel stays visible (CSS default)
   }catch(e){
@@ -3510,13 +4101,13 @@ function renderTable(){
   const atm=data.reduce((p,c)=>Math.abs(c.strike-spotPrice)<Math.abs(p.strike-spotPrice)?c:p,data[0]||{strike:0});
   const fmtG=v=>{const abs=Math.abs(v);const sign=v>=0?'':'-';if(abs>=1e9)return sign+'$'+(abs/1e9).toFixed(2)+'B';if(abs>=1e6)return sign+'$'+(abs/1e6).toFixed(2)+'M';if(abs>=1e3)return sign+'$'+(abs/1e3).toFixed(2)+'K';return sign+'$'+abs.toFixed(2);};
   const fmtN=(v,d=4)=>v==null||isNaN(v)?'—':v.toFixed(d);
-  const fmtK=v=>v==null?'—':v>=1000?(v/1000).toFixed(1)+'K':v.toString();
+  const fmtK=v=>v==null?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:0});
   const sw=currentView;
   let html=`<table class="gex-table"><thead><tr>
     <th class="strike-col">Strike</th>
-    <th class="call-col">Call IV</th><th class="call-col">Call Δ</th><th class="call-col">Call OI</th><th class="call-col">Call GEX</th>
-    <th style="min-width:150px">Net GEX</th>
-    <th class="put-col">Put GEX</th><th class="put-col">Put OI</th><th class="put-col">Put Δ</th><th class="put-col">Put IV</th>
+    <th class="call-col">CALLS<br><span style="font-size:9px;color:#3a5570">IV</span></th><th class="call-col">CALLS<br><span style="font-size:9px;color:#3a5570">Δ</span></th><th class="call-col">CALLS<br><span style="font-size:9px;color:#3a5570">OI</span></th><th class="call-col">CALLS<br><span style="font-size:9px;color:#3a5570">GEX</span></th>
+    <th style="min-width:190px">Net GEX</th>
+    <th class="put-col">PUTS<br><span style="font-size:9px;color:#3a5570">GEX</span></th><th class="put-col">PUTS<br><span style="font-size:9px;color:#3a5570">OI</span></th><th class="put-col">PUTS<br><span style="font-size:9px;color:#3a5570">Δ</span></th><th class="put-col">PUTS<br><span style="font-size:9px;color:#3a5570">IV</span></th>
   </tr></thead><tbody>`;
   data.forEach(r=>{
     const isATM=r.strike===atm?.strike;
@@ -3604,38 +4195,29 @@ function renderChart(){
         const fmtSignedPos = v => `${v>0?'+':v<0?'âˆ’':''}${fmtPos(Math.abs(v||0))}`;
         // Verify: callGEX - putGEX should equal netGEX
         const calcNet = r.callGEX - r.putGEX;
-        tooltip.innerHTML=`<div class="tt-strike" style="font-size:14px;border-bottom:1px solid #2a3a50;padding-bottom:4px;margin-bottom:4px">${r.strike.toLocaleString()}</div>
-
-          <div style="font-size:9px;color:#3a5570;letter-spacing:.08em;margin-bottom:3px">GEX SUMMARY</div>
-          <div class="tt-row"><span style="color:#29b6f6;font-weight:700">Call GEX</span><span class="v" style="color:#29b6f6">+${fmtG(r.callGEX)}</span></div>
-          <div class="tt-row"><span style="color:#ff4757;font-weight:700">Put GEX</span><span class="v" style="color:#ff4757">−${fmtG(r.putGEX)}</span></div>
-          <div style="border-top:1px dashed #2a3a50;margin:3px 0"></div>
-          <div class="tt-row"><span style="font-weight:700">Net GEX</span><span class="v" style="color:${r.netGEX>=0?'#00e676':'#ff4757'};font-weight:700">${fmtG(r.netGEX)}</span></div>
-          <div style="font-size:9px;color:#2a4060;text-align:right;margin-top:1px">= ${fmtG(r.callGEX)} − ${fmtG(r.putGEX)}</div>
-
-          <div style="border-top:1px solid #2a3a50;margin:5px 0 3px"></div>
-          <div style="font-size:9px;color:#3a5570;letter-spacing:.08em;margin-bottom:3px">CALL BREAKDOWN</div>
-          <div class="tt-row"><span style="color:#5a7a99">γ (gamma)</span><span class="v" style="color:#a8b8cc">${fmtGamma(r.callGamma)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">OI</span><span class="v" style="color:#a8b8cc">${fmtPos(r.callOI)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Vol (today)</span><span class="v" style="color:#a8b8cc">${fmtPos(r.callVolume)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Pos (OI+Vol)</span><span class="v" style="color:#29b6f6">${fmtPos(callPos)}</span></div>
-          <div style="font-size:9px;color:#2a4060;text-align:right">γ × ${fmtPos(callPos)} × 100 × spot = ${fmtG(r.callGEX)}</div>
-
-          <div style="border-top:1px solid #2a3a50;margin:5px 0 3px"></div>
-          <div style="font-size:9px;color:#3a5570;letter-spacing:.08em;margin-bottom:3px">PUT BREAKDOWN</div>
-          <div class="tt-row"><span style="color:#5a7a99">γ (gamma)</span><span class="v" style="color:#a8b8cc">${fmtGamma(r.putGamma)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">OI</span><span class="v" style="color:#a8b8cc">${fmtPos(r.putOI)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Vol (today)</span><span class="v" style="color:#a8b8cc">${fmtPos(r.putVolume)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Pos (OI+Vol)</span><span class="v" style="color:#ff4757">${fmtPos(putPos)}</span></div>
-          <div style="font-size:9px;color:#2a4060;text-align:right">γ × ${fmtPos(putPos)} × 100 × spot = ${fmtG(r.putGEX)}</div>
-
-          <div style="border-top:1px solid #2a3a50;margin:5px 0 3px"></div>
-          <div style="font-size:9px;color:#3a5570;letter-spacing:.08em;margin-bottom:3px">VOL GEX (CHAIN VOLUME ONLY)</div>
-          <div class="tt-row"><span style="color:#5a7a99">Net Vol GEX</span><span class="v" style="color:${(r.netVolGEX||0)>=0?'#00e676':'#ff4757'}">${fmtG(r.netVolGEX||0)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Call Volume</span><span class="v" style="color:#29b6f6">${fmtPos(r.callVolume||0)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Put Volume</span><span class="v" style="color:#ff4757">${fmtPos(r.putVolume||0)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Call IV</span><span class="v" style="color:#a8b8cc">${fmtIV(r.callIV)}</span></div>
-          <div class="tt-row"><span style="color:#5a7a99">Put IV</span><span class="v" style="color:#a8b8cc">${fmtIV(r.putIV)}</span></div>`;
+        const fromSpotPct = spotPrice ? ((r.strike - spotPrice) / spotPrice * 100) : 0;
+        const fromSpotStr = fromSpotPct >= 0 ? '+' : '';
+        tooltip.innerHTML=`<div style="font-weight:700;color:#f4fbff;font-size:12px;margin-bottom:6px">NET GEX</div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-bottom:10px;color:#90a9c4;font-size:10px">
+            <div style="color:#a9bdd2">(strike)</div><div style="color:#fff;font-weight:700">${r.strike.toLocaleString()}</div>
+            <div style="color:#a9bdd2">from spot</div><div style="color:#fff;font-weight:700">${fromSpotStr}${fromSpotPct.toFixed(2)}%</div>
+            <div style="color:#a9bdd2">contract price (otm)</div><div style="color:#fff;font-weight:700">—</div>
+          </div>
+          <div style="border-top:1px solid #1a3a50;padding-top:8px;margin-top:8px">
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 8px;color:#a9bdd2;font-size:10px;margin-bottom:8px">
+              <div>net gex</div><div style="color:#${r.netGEX>=0?'90ffc8':'ffaaaa'};font-weight:700">${fmtG(r.netGEX)}</div>
+              <div>call gex</div><div style="color:#90ffc8;font-weight:700">${fmtG(r.callGEX)}</div>
+              <div>put gex</div><div style="color:#ffaaaa;font-weight:700">${fmtG(r.putGEX)}</div>
+            </div>
+            <div style="border-top:1px solid #1a3a50;padding-top:8px;display:grid;grid-template-columns:auto 1fr;gap:3px 8px;color:#a9bdd2;font-size:10px;margin-bottom:8px">
+              <div>volume (call)</div><div style="color:#fff;font-weight:700">${fmtPos(r.callVolume||0)}</div>
+              <div>volume (put)</div><div style="color:#fff;font-weight:700">${fmtPos(r.putVolume||0)}</div>
+            </div>
+            <div style="border-top:1px solid #1a3a50;padding-top:8px;display:grid;grid-template-columns:auto 1fr;gap:3px 8px;color:#a9bdd2;font-size:10px">
+              <div>open interest (call)</div><div style="color:#fff;font-weight:700">${fmtPos(r.callOI)}</div>
+              <div>open interest (put)</div><div style="color:#fff;font-weight:700">${fmtPos(r.putOI)}</div>
+            </div>
+          </div>`;
         const wr=canvas.parentElement.getBoundingClientRect(),bar=els[0].element;
         let left=bar.x-wr.left+14;if(left+190>wr.width-10)left=bar.x-wr.left-200;
         tooltip.style.left=left+'px';tooltip.style.top=Math.max(8,bar.y-wr.top-20)+'px';tooltip.style.display='block';
@@ -3652,18 +4234,11 @@ function renderHeatmap(){
     .filter(r => Math.abs(r.netGEX||0) > 0 || Math.abs(r.netVolGEX||0) > 0 || Math.abs(r.netDEX||0) > 0)
     .filter(r => _hmSpot <= 0 || (r.strike >= _hmSpot - 100 && r.strike <= _hmSpot + 100))
     .sort((a,b)=>b.strike-a.strike);
-  const changeMinutes = [5, 15, 30].includes(parseInt(gexChangeWindow, 10)) ? parseInt(gexChangeWindow, 10) : 30;
-  const targetTs = Date.now() - changeMinutes * 60 * 1000;
-  let changeSnap = null;
-  for(const s of gexSnapshots){
-    if(s.ts <= targetTs + 90000){
-      if(!changeSnap || s.ts > changeSnap.ts) changeSnap = s;
-    }
-  }
+  const changeMinutes = 30;
+  const rollingNetChangeByStrike = getRollingNetGexChangeByStrike(changeMinutes);
   const rows=data.map(r=>{
-    const prev = changeSnap?.data?.get(r.strike);
-    const changeNet = prev == null ? 0 : (r.netGEX || 0) - prev;
-    return {...r,dispNet:r.netGEX,dispCall:r.callGEX,dispPut:-Math.abs(r.putGEX),dispVolGEX:r.netVolGEX,dispDEX:r.netDEX,changeNet};
+    const rolling30NetGex = rollingNetChangeByStrike.get(r.strike) || 0;
+    return {...r,dispNet:r.netGEX,dispCall:r.callGEX,dispPut:-Math.abs(r.putGEX),dispVolGEX:r.netVolGEX,dispDEX:r.netDEX,changeNet:rolling30NetGex,rolling30NetGex};
   });
   // Single shared max so gradient/color is comparable across all GEX columns (except DEX which has its own scale)
   const mShared = Math.max(
@@ -3681,19 +4256,19 @@ function renderHeatmap(){
   const fmtOI=v=>v>=1000?(v/1000).toFixed(1)+'K':(v||0).toString();
   const atm=data.length?data.reduce((p,c)=>Math.abs(c.strike-spotPrice)<Math.abs(p.strike-spotPrice)?c:p,data[0]):null;
 
-  // Rank by absolute net GEX - top 5 each side
-  const aboveATM=rows.filter(r=>r.strike>(atm?.strike||0));
-  const belowATM=rows.filter(r=>r.strike<=(atm?.strike||0));
-  const rankSide=arr=>{const m=new Map();[...arr].sort((a,b)=>Math.abs(b.netGEX)-Math.abs(a.netGEX)).slice(0,5).forEach((r,i)=>m.set(r.strike,i+1));return m;};
-  const rankAbove=rankSide(aboveATM), rankBelow=rankSide(belowATM);
-  const rankColors={1:'#ffd700',2:'#c0c0c0',3:'#cd7f32',4:'#4a7a99',5:'#3a5570'};
-  const rankBg={1:'rgba(255,215,0,0.15)',2:'rgba(192,192,192,0.1)',3:'rgba(205,127,50,0.1)',4:'rgba(74,122,153,0.08)',5:'rgba(58,85,112,0.06)'};
+  const rankMap = new Map(
+    [...rows]
+      .sort((a,b)=>Math.abs(b.dispNet||0)-Math.abs(a.dispNet||0))
+      .slice(0,3)
+      .map((r,i)=>[r.strike,i+1])
+  );
+  const rankColors={1:'#ffd700',2:'#c0c0c0',3:'#cd7f32'};
 
   const visCols=[
     {key:'net',label:'Net GEX',cls:''},
     {key:'vol',label:'Vol Only GEX',cls:''},
     {key:'dex',label:'DEX',cls:''},
-    {key:'change',label:'Change of Net GEX',cls:''},
+    {key:'change',label:'Rolling 30 Min Net GEX',cls:''},
   ];
 
   // Find strike with highest absolute value per column for gold highlight
@@ -3701,7 +4276,7 @@ function renderHeatmap(){
     net:  rows.length ? rows.reduce((a,b)=>Math.abs(b.dispNet)>Math.abs(a.dispNet)?b:a, rows[0])?.strike : null,
     vol:  rows.length ? rows.reduce((a,b)=>Math.abs(b.dispVolGEX||0)>Math.abs(a.dispVolGEX||0)?b:a, rows[0])?.strike : null,
     dex:  rows.length ? rows.reduce((a,b)=>Math.abs(b.dispDEX||0)>Math.abs(a.dispDEX||0)?b:a, rows[0])?.strike : null,
-    change: rows.length ? rows.reduce((a,b)=>Math.abs(b.changeNet||0)>Math.abs(a.changeNet||0)?b:a, rows[0])?.strike : null,
+    change: rows.length ? rows.reduce((a,b)=>Math.abs(b.rolling30NetGex||0)>Math.abs(a.rolling30NetGex||0)?b:a, rows[0])?.strike : null,
   };
 
   const gc=`80px repeat(${visCols.length},1fr)`;
@@ -3713,9 +4288,9 @@ function renderHeatmap(){
   rows.forEach(r=>{
     const isATM=atm&&r.strike===atm.strike;
     const cutoff=Math.max(mN,mC,mP)*(hmThreshold/100);
-    const rank=rankAbove.get(r.strike)||rankBelow.get(r.strike);
-    const rankBadge=rank?`<span style="font-size:9px;font-weight:800;color:${rankColors[rank]};background:${rankBg[rank]};padding:0 3px;border-radius:2px;border:1px solid ${rankColors[rank]}44;margin-left:3px">#${rank}</span>`:'';
-    const atmStyle=isATM?'box-shadow:inset 0 0 0 1.5px rgba(255,255,255,0.85);':'';
+    const rank=rankMap.get(r.strike);
+    const rankBadge=rank&&rank<=3?`<span style="font-size:9px;font-weight:800;color:${rankColors[rank]};margin-left:4px">${rank}</span>`:'';
+    const atmStyle='';
     const cells=visCols.map(col=>{
       let bg,txt,val;
       const isTop = r.strike === topStrike[col.key];
@@ -3728,7 +4303,7 @@ function renderHeatmap(){
       const goldStyle = isTop ? 'font-weight:800;' : '';
       return`<div class="hm-cell" style="background:${bg};color:${txt};${goldStyle}">${val}</div>`;
     }).join('');
-    html+=`<div class="hm-row${isATM?' hm-atm':''}" data-strike="${r.strike}" style="grid-template-columns:${gc};${atmStyle}"><div class="hm-strike">${r.strike.toLocaleString()}${isATM?'<span class="atm-badge">ATM</span>':''}</div>${cells}</div>`;
+    html+=`<div class="hm-row${isATM?' hm-atm':''}" data-strike="${r.strike}" style="grid-template-columns:${gc};${atmStyle}"><div class="hm-strike" style="${isATM?'color:#00e5ff;background:#0a2030;box-shadow:inset 0 0 0 1.5px rgba(0,229,255,0.45);':''}">${r.strike.toLocaleString()}${rankBadge}${isATM?'<span class="atm-badge">ATM</span>':''}</div>${cells}</div>`;
   });
   // Preserve scroll position across re-renders so the body doesn't snap
   // to show "all contracts" each refresh. Only auto-center on ATM the
@@ -3797,25 +4372,18 @@ function renderHeatmapTable(){
     .filter(r => Math.abs(r.netGEX||0) > 0 || Math.abs(r.netVolGEX||0) > 0 || Math.abs(r.netDEX||0) > 0)
     .filter(r => _hmtSpot <= 0 || (r.strike >= _hmtSpot - 100 && r.strike <= _hmtSpot + 100))
     .sort((a,b)=>b.strike-a.strike);
-  const changeMinutes = [5, 15, 30].includes(parseInt(gexChangeWindow, 10)) ? parseInt(gexChangeWindow, 10) : 30;
-  const targetTs = Date.now() - changeMinutes * 60 * 1000;
-  let changeSnap = null;
-  for(const s of gexSnapshots){
-    if(s.ts <= targetTs + 90000){
-      if(!changeSnap || s.ts > changeSnap.ts) changeSnap = s;
-    }
-  }
+  const changeMinutes = 30;
+  const rollingNetChangeByStrike = getRollingNetGexChangeByStrike(changeMinutes);
   const rows=data.map(r=>{
-    const prev = changeSnap?.data?.get(r.strike);
-    const changeNet = prev == null ? 0 : (r.netGEX || 0) - prev;
-    return {...r,dispNet:r.netGEX,dispVolGEX:r.netVolGEX,dispDEX:r.netDEX,changeNet};
+    const rolling30NetGex = rollingNetChangeByStrike.get(r.strike) || 0;
+    return {...r,dispNet:r.netGEX,dispVolGEX:r.netVolGEX,dispDEX:r.netDEX,changeNet:rolling30NetGex,rolling30NetGex};
   });
 
   // Per-column max (absolute) so each bar is normalized within its own column
   const mNet    = Math.max(...rows.map(r=>Math.abs(r.dispNet||0)),    1);
   const mVol    = Math.max(...rows.map(r=>Math.abs(r.dispVolGEX||0)), 1);
   const mDEX    = Math.max(...rows.map(r=>Math.abs(r.dispDEX||0)),    1);
-  const mChange = Math.max(...rows.map(r=>Math.abs(r.changeNet||0)),  1);
+  const mChange = Math.max(...rows.map(r=>Math.abs(r.rolling30NetGex||0)),  1);
 
   const fmtG = v=>{const abs=Math.abs(v);const sign=v>=0?'':'-';if(abs>=1e9)return sign+'$'+(abs/1e9).toFixed(2)+'B';if(abs>=1e6)return sign+'$'+(abs/1e6).toFixed(2)+'M';if(abs>=1e3)return sign+'$'+(abs/1e3).toFixed(2)+'K';return sign+'$'+abs.toFixed(2);};
   const fmtChg=v=>{const abs=Math.abs(v||0);const sign=v>0?'+':v<0?'-':'';if(abs>=1e9)return sign+'$'+(abs/1e9).toFixed(2)+'B';if(abs>=1e6)return sign+'$'+(abs/1e6).toFixed(2)+'M';if(abs>=1e3)return sign+'$'+(abs/1e3).toFixed(2)+'K';return sign+'$'+abs.toFixed(2);};
@@ -3826,20 +4394,20 @@ function renderHeatmapTable(){
     {key:'net',    label:'Net GEX',           max:mNet,    getVal:r=>r.dispNet||0,       fmt:fmtG},
     {key:'vol',    label:'Vol Only GEX',      max:mVol,    getVal:r=>r.dispVolGEX||0,    fmt:fmtG},
     {key:'dex',    label:'DEX',               max:mDEX,    getVal:r=>r.dispDEX||0,       fmt:fmtG},
-    {key:'change', label:'Change of Net GEX', max:mChange, getVal:r=>r.changeNet||0,     fmt:fmtChg},
+    {key:'change', label:'Rolling 30 Min Net GEX', max:mChange, getVal:r=>r.rolling30NetGex||0, fmt:fmtChg},
   ];
 
   // Find strike with highest absolute value per column for gold highlight
   const topStrike={};
   visCols.forEach(c=>{ topStrike[c.key] = rows.length ? rows.reduce((a,b)=>Math.abs(c.getVal(b))>Math.abs(c.getVal(a))?b:a, rows[0])?.strike : null; });
 
-  // Rank by absolute net GEX - top 5 each side (kept consistent with heatmap)
-  const aboveATM=rows.filter(r=>r.strike>(atm?.strike||0));
-  const belowATM=rows.filter(r=>r.strike<=(atm?.strike||0));
-  const rankSide=arr=>{const m=new Map();[...arr].sort((a,b)=>Math.abs(b.netGEX)-Math.abs(a.netGEX)).slice(0,5).forEach((r,i)=>m.set(r.strike,i+1));return m;};
-  const rankAbove=rankSide(aboveATM), rankBelow=rankSide(belowATM);
-  const rankColors={1:'#ffd700',2:'#c0c0c0',3:'#cd7f32',4:'#4a7a99',5:'#3a5570'};
-  const rankBg={1:'rgba(255,215,0,0.15)',2:'rgba(192,192,192,0.1)',3:'rgba(205,127,50,0.1)',4:'rgba(74,122,153,0.08)',5:'rgba(58,85,112,0.06)'};
+  const rankMap = new Map(
+    [...rows]
+      .sort((a,b)=>Math.abs(b.dispNet||0)-Math.abs(a.dispNet||0))
+      .slice(0,3)
+      .map((r,i)=>[r.strike,i+1])
+  );
+  const rankColors={1:'#ffd700',2:'#c0c0c0',3:'#cd7f32'};
 
   const gc=`80px repeat(${visCols.length},1fr)`;
   const spotLbl=document.getElementById('hm-spot-label');if(spotLbl)spotLbl.textContent=spotPrice>0?'SPX $'+spotPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'';
@@ -3861,11 +4429,11 @@ function renderHeatmapTable(){
   let html='';
   rows.forEach(r=>{
     const isATM = atm && r.strike===atm.strike;
-    const rank = rankAbove.get(r.strike) || rankBelow.get(r.strike);
-    const rankBadge = rank ? `<span style="font-size:9px;font-weight:800;color:${rankColors[rank]};background:${rankBg[rank]};padding:0 3px;border-radius:2px;border:1px solid ${rankColors[rank]}44;margin-left:3px">#${rank}</span>` : '';
-    const atmStyle = isATM ? 'box-shadow:inset 0 0 0 1.5px rgba(255,255,255,0.85);' : '';
+    const rank = rankMap.get(r.strike);
+    const rankBadge = rank && rank <= 3 ? `<span style="font-size:9px;font-weight:800;color:${rankColors[rank]};margin-left:4px">${rank}</span>` : '';
+    const atmStyle = '';
     const cells = visCols.map(col=>makeBarCell(col.getVal(r), col.max, col.fmt, r.strike===topStrike[col.key])).join('');
-    html += `<div class="hm-row${isATM?' hm-atm':''}" data-strike="${r.strike}" style="grid-template-columns:${gc};${atmStyle}"><div class="hm-strike">${r.strike.toLocaleString()}${rankBadge}${isATM?'<span class="atm-badge">ATM</span>':''}</div>${cells}</div>`;
+    html += `<div class="hm-row${isATM?' hm-atm':''}" data-strike="${r.strike}" style="grid-template-columns:${gc};${atmStyle}"><div class="hm-strike" style="${isATM?'color:#00e5ff;background:#0a2030;box-shadow:inset 0 0 0 1.5px rgba(0,229,255,0.45);':''}">${r.strike.toLocaleString()}${rankBadge}${isATM?'<span class="atm-badge">ATM</span>':''}</div>${cells}</div>`;
   });
 
   // Preserve scroll position across re-renders (same behavior as heatmap mode)
@@ -4780,6 +5348,20 @@ function drawOverviewChart(){
     ctx.restore();
   }
 
+  if(showOverviewFlipCurve){
+    const gexProfileData = data.map(r => r.netGEX || 0);
+    const maxProfileL = Math.max(...gexProfileData.map(v => Math.abs(v || 0)).filter(v => v > 0), 1);
+    const yProfileL = v => yZero - (v / maxProfileL) * (cH / 2) * 0.6;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(INNER.l, PAD.t, cW_L, cH); ctx.clip();
+    ctx.strokeStyle='#00e5ff';
+    ctx.lineWidth=2;
+    ctx.setLineDash([2,4]);
+    strokeSmoothLine(gexProfileData.map((v, i) => ({ x: xL(i), y: yProfileL(v) })));
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   const leftPeakRow = data.reduce((best, row) => {
     if(!best) return row;
     const bestAbsNet = Math.abs(getNetGEX(best));
@@ -5169,6 +5751,74 @@ function positionGexMathTooltip(tt,x,y){
   tt.style.top=Math.max(pad,top)+'px';
 }
 
+function ensureGexStrikeTooltip(){
+  let tt=document.getElementById('gex-strike-tooltip');
+  if(tt) return tt;
+  tt=document.createElement('div');
+  tt.id='gex-strike-tooltip';
+  tt.style.cssText='position:fixed;display:none;z-index:10000;width:280px;max-width:calc(100vw - 24px);background:#07101a;border:1px solid #25415f;border-radius:6px;box-shadow:0 16px 40px rgba(0,0,0,.42);padding:10px 12px;color:#d7e4f5;font-family:Arial;font-size:10px;line-height:1.5;pointer-events:none';
+  document.body.appendChild(tt);
+  return tt;
+}
+
+function buildGexStrikeHTML(data){
+  const fmtVal = (v, digits=0) => {
+    if(!isFinite(v) || v === undefined || v === null) return '—';
+    return v.toLocaleString('en-US', {minimumFractionDigits: digits, maximumFractionDigits: digits});
+  };
+  const fmtGEX = (v) => {
+    if(!isFinite(v)) return '—';
+    const a = Math.abs(v);
+    const s = v >= 0 ? '+' : '−';
+    if(a >= 1e9) return s + '$' + (a/1e9).toFixed(2) + 'B';
+    if(a >= 1e6) return s + '$' + (a/1e6).toFixed(2) + 'M';
+    if(a >= 1e3) return s + '$' + (a/1e3).toFixed(2) + 'K';
+    return s + '$' + a.toFixed(2);
+  };
+
+  const fromSpot = data.spotPrice ? ((data.strike - data.spotPrice) / data.spotPrice * 100) : 0;
+  const fromSpotStr = fromSpot >= 0 ? '+' : '';
+
+  return `
+    <div style="font-weight:700;color:#f4fbff;font-size:12px;margin-bottom:6px">NET GEX</div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-bottom:10px;color:#90a9c4;font-size:10px">
+      <div style="color:#a9bdd2">(strike)</div><div style="color:#fff;font-weight:700">${fmtVal(data.strike, 0)}</div>
+      <div style="color:#a9bdd2">from spot</div><div style="color:#fff;font-weight:700">${fromSpotStr}${fromSpot.toFixed(2)}%</div>
+      <div style="color:#a9bdd2">contract price (otm)</div><div style="color:#fff;font-weight:700">${fmtVal(data.contractPrice, 2)}</div>
+    </div>
+    <div style="border-top:1px solid #1a3a50;padding-top:8px;margin-top:8px">
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 8px;color:#a9bdd2;font-size:10px;margin-bottom:8px">
+        <div>net gex</div><div style="color:#${data.netGEX >= 0 ? '90ffc8' : 'ffaaaa'};font-weight:700">${fmtGEX(data.netGEX)}</div>
+        <div>call gex</div><div style="color:#90ffc8;font-weight:700">${fmtGEX(data.callGEX)}</div>
+        <div>put gex</div><div style="color:#ffaaaa;font-weight:700">${fmtGEX(data.putGEX)}</div>
+      </div>
+      ${(data.callVolume || data.putVolume) ? `
+      <div style="border-top:1px solid #1a3a50;padding-top:8px;display:grid;grid-template-columns:auto 1fr;gap:3px 8px;color:#a9bdd2;font-size:10px;margin-bottom:8px">
+        <div>volume (call)</div><div style="color:#fff;font-weight:700">${fmtVal(data.callVolume)}</div>
+        <div>volume (put)</div><div style="color:#fff;font-weight:700">${fmtVal(data.putVolume)}</div>
+      </div>
+      ` : ''}
+      ${(data.callOI || data.putOI) ? `
+      <div style="border-top:1px solid #1a3a50;padding-top:8px;display:grid;grid-template-columns:auto 1fr;gap:3px 8px;color:#a9bdd2;font-size:10px">
+        <div>open interest (call)</div><div style="color:#fff;font-weight:700">${fmtVal(data.callOI)}</div>
+        <div>open interest (put)</div><div style="color:#fff;font-weight:700">${fmtVal(data.putOI)}</div>
+      </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function positionGexStrikeTooltip(tt,x,y){
+  const pad=12;
+  tt.style.display='block';
+  const rect=tt.getBoundingClientRect();
+  let left=x+14, top=y+14;
+  if(left+rect.width>window.innerWidth-pad) left=x-rect.width-14;
+  if(top+rect.height>window.innerHeight-pad) top=y-rect.height-14;
+  tt.style.left=Math.max(pad,left)+'px';
+  tt.style.top=Math.max(pad,top)+'px';
+}
+
 function initGexMathInfoTooltips(){
   if(document.body?.dataset.gexMathInfoBound==='1') return;
   if(!document.body) return;
@@ -5191,6 +5841,35 @@ function initGexMathInfoTooltips(){
     const to=e.relatedTarget;
     if(to&&to.closest?.('[data-gex-info]')) return;
     const tt=document.getElementById('gex-math-tooltip');
+    if(tt) tt.style.display='none';
+  });
+
+  // GEX strike bar hover handlers
+  document.addEventListener('mouseover',e=>{
+    const target=e.target.closest?.('.gex-bar-cell');
+    if(!target) return;
+    try {
+      const dataStr = target.getAttribute('data-gex-strike');
+      if(!dataStr) return;
+      const data = JSON.parse(dataStr);
+      const tt = ensureGexStrikeTooltip();
+      tt.innerHTML = buildGexStrikeHTML(data);
+      positionGexStrikeTooltip(tt, e.clientX, e.clientY);
+    } catch(err) {
+      console.error('Error parsing GEX strike data:', err);
+    }
+  });
+  document.addEventListener('mousemove',e=>{
+    const target=e.target.closest?.('.gex-bar-cell');
+    const tt=document.getElementById('gex-strike-tooltip');
+    if(!target||!tt||tt.style.display==='none') return;
+    positionGexStrikeTooltip(tt, e.clientX, e.clientY);
+  });
+  document.addEventListener('mouseout',e=>{
+    if(!e.target.closest?.('.gex-bar-cell')) return;
+    const to=e.relatedTarget;
+    if(to&&to.closest?.('.gex-bar-cell')) return;
+    const tt=document.getElementById('gex-strike-tooltip');
     if(tt) tt.style.display='none';
   });
 }
@@ -5567,23 +6246,36 @@ function initOvEvents(){
 window.initOvEvents = initOvEvents;
 window.drawOverviewChart = drawOverviewChart;
 async function getBuySellHistoryRows() {
-  if (typeof DB === 'undefined' || !DB?.db || !DB.db.objectStoreNames?.contains('buySellScores')) return [];
+  if (typeof DB === 'undefined' || !DB?.db) return [];
   const today = new Date().toISOString().split('T')[0];
+  const mapGreekSeriesRow = (row) => ({
+    timestamp: Number(row.timestamp || 0),
+    time: row.time || '',
+    spxPrice: Number(row.price || row.spxPrice || 0),
+    buyPct: Number(row.buyScore ?? row.buyPct ?? 0),
+    sellPct: Number(row.sellScore ?? row.sellPct ?? 0),
+    side: Number(row.buyScore ?? row.buyPct ?? 0) >= Number(row.sellScore ?? row.sellPct ?? 0) ? 'Buy' : 'Sell'
+  });
   try {
-    if (typeof DB.queryBuySellScores_Today === 'function') return await DB.queryBuySellScores_Today();
+    if (typeof DB.queryGreeksTimeSeries_Today === 'function' && DB.db.objectStoreNames?.contains('greeksTimeSeries')) {
+      const records = await DB.queryGreeksTimeSeries_Today('SPXW');
+      if (records.length) {
+        return records.map(mapGreekSeriesRow).sort((a, b) => a.timestamp - b.timestamp);
+      }
+    }
   } catch (err) {
-    console.warn('Buy/Sell IndexedDB query failed, falling back:', err);
+    console.warn('Buy/Sell greek history DB query failed, falling back:', err);
   }
-  if (typeof DB._getAllRecords === 'function') {
+  try {
+    if (DB.db.objectStoreNames?.contains('buySellScores') && typeof DB.queryBuySellScores_Today === 'function') {
+      return await DB.queryBuySellScores_Today();
+    }
+  } catch (err) {
+    console.warn('Buy/Sell score snapshot DB query failed, falling back:', err);
+  }
+  if (typeof DB._getAllRecords === 'function' && DB.db.objectStoreNames?.contains('buySellScores')) {
     return (await DB._getAllRecords('buySellScores')).filter(r => r.date === today).sort((a, b) => a.timestamp - b.timestamp);
   }
-  try {
-    const res = await fetch(`/proxy/api/backup/buy-sell-scores?date=${today}`);
-    if (res.ok) {
-      const data = await res.json();
-      return (Array.isArray(data.records) ? data.records : []).sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
-    }
-  } catch (err) {}
   return [];
 }
 
@@ -5630,7 +6322,19 @@ function niceAxisRange(values, padPct = 0.08) {
 async function renderBuySellHistoryChart() {
   const canvas = document.getElementById('buy-sell-history-canvas');
   if (!canvas) return;
-  await restoreBuySellScoresFromBackup();
+  const panel = canvas.parentElement?.parentElement || canvas.parentElement;
+  if (panel) {
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;min-height:260px;border:1px solid rgba(42,64,96,.55);border-radius:6px;background:rgba(10,15,22,.75);text-align:center;padding:18px">
+        <div>
+          <div style="font-size:11px;color:#4a6a84;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Buy / Sell Score History</div>
+          <div style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">Coming soon</div>
+          <div style="font-size:11px;color:var(--text2);line-height:1.5">This chart has been removed for now while we rebuild the overview layout.</div>
+        </div>
+      </div>
+    `;
+    return;
+  }
   const parent = canvas.parentElement;
   const W = Math.max(240, parent?.clientWidth || 480);
   const H = Math.max(140, parent?.clientHeight || 220);
@@ -5801,7 +6505,7 @@ async function loadOverviewBzilaFlow(){
   }
   bzilaView.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#3a5570;font-size:12px;letter-spacing:.1em">Loading Bzila Flow...</div>';
   try {
-    const response = await fetch('pages/bzila.html');
+    const response = await fetch('pages/bzila/bzila.html');
     if(!response.ok) throw new Error(response.statusText || 'Failed to load Bzila Flow');
     const html = await response.text();
     bzilaView.innerHTML = html;
@@ -6824,15 +7528,30 @@ function renderGEXLadder() {
       // ATM border on both strike and Net GEX cells
       const atmCell = isATM ? 'box-shadow:inset 0 0 0 1.5px rgba(200,200,200,0.5);border-radius:3px;' : '';
 
+      // Encode row data for hover info
+      const rowDataJSON = JSON.stringify({
+        strike: row.strike,
+        spotPrice: spotPrice,
+        contractPrice: row.contractPrice || 0,
+        otmSide: isPos ? 'call' : 'put',
+        netGEX: row.netGEX || 0,
+        callGEX: row.callGEX || 0,
+        putGEX: row.putGEX || 0,
+        callVolume: row.callVolume || row.call?.volume || 0,
+        putVolume: row.putVolume || row.put?.volume || 0,
+        callOI: row.callOI || row.call?.openInterest || 0,
+        putOI: row.putOI || row.put?.openInterest || 0
+      }).replace(/"/g, '&quot;');
+
       html += `<tr style="background:${bgColor};border-bottom:1px solid #0d1520;">`;
       html += `<td style="padding:2px 6px;border-right:1px solid var(--border);text-align:center;font-weight:700;color:${strikeColor};font-size:9px;${atmCell}">${row.strike.toLocaleString()}</td>`;
 
       if(!row.netGEX) {
         html += `<td style="padding:2px 4px;color:#2a4060;text-align:right;background:#05080d;height:18px;${atmCell}">—</td>`;
       } else {
-        html += `<td style="padding:0;background:#05080d;position:relative;height:18px;${atmCell}">` +
-          `<div style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${barColor};border-radius:6px;margin:2px 0 2px 2px"></div>` +
-          `<div style="position:relative;z-index:2;padding:3px 6px;font-size:9px;font-weight:600;color:${textColor};text-align:right;white-space:nowrap">${fmtNum(row.netGEX)}</div>` +
+        html += `<td style="padding:0;background:#05080d;position:relative;height:18px;${atmCell}" data-gex-strike="${rowDataJSON}" class="gex-bar-cell">` +
+          `<div style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${barColor};border-radius:6px;margin:2px 0 2px 2px;cursor:pointer"></div>` +
+          `<div style="position:relative;z-index:2;padding:3px 6px;font-size:9px;font-weight:600;color:${textColor};text-align:right;white-space:nowrap;cursor:pointer">${fmtNum(row.netGEX)}</div>` +
           `</td>`;
       }
       html += '</tr>';
@@ -6881,6 +7600,15 @@ function renderGEXLadder() {
       }
       if(maxoiEl) { maxoiEl.textContent = maxStrike ? maxStrike.toLocaleString() : '—'; }
       if(flipEl)  flipEl.textContent = spot ? spot.toLocaleString() : '—';
+      if (typeof window.updateGreeksDisplay === 'function') {
+        window.updateGreeksDisplay({
+          gex: totalGEX / 1e9,
+          dex: totalDEX / 1e9,
+          chex: 0,
+          vex: 0,
+          dexVelocity: 0
+        });
+      }
     });
   };
 
@@ -7453,7 +8181,14 @@ if(document.getElementById('pnlBarChart')) {
 // === EMBEDDED MOCK DATA ===
 // ── GEX PEAK SNAPSHOT SYSTEM ─────────────────────────────────────
 
-window.gexTakeSnapshot = function gexTakeSnapshot() {
+window.gexTakeSnapshot = async function gexTakeSnapshot() {
+  if (!DB?.db) {
+    await new Promise(resolve => {
+      if (DB?.db) return resolve();
+      window.addEventListener('db-ready', resolve, { once: true });
+      setTimeout(resolve, 3000);
+    });
+  }
   const now = new Date();
   const etStr = now.toLocaleString('en-US', {timeZone:'America/New_York'});
   const et = new Date(etStr);
@@ -7487,7 +8222,17 @@ window.gexTakeSnapshot = function gexTakeSnapshot() {
       { strike: mvcOI.strike,  value: mvcOI.netGEX,       volume: mvcOI.callVolume  + mvcOI.putVolume  },
       { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
       price,
-      'manual'
+      esPrice,
+      selectedExpiry || 'â€”',
+      'manual',
+      rawChain.reduce((sum, row) => sum + Math.abs(Number(row?.netGEX || 0)), 0),
+      topDexRow?.strike ?? null,
+      rawChain.reduce((sum, row) => sum + Number(row?.netDEX || 0), 0),
+      rawChain.reduce((sum, row) => sum + Number(row?.volNetDEX || 0), 0),
+      null,
+      rawChain.reduce((sum, row) => sum + Number(row?.netVolGEX || 0), 0),
+      null,
+      flipPoint
     ).then(() => console.log(`✓ DB MVC saved [manual]: ${mvcOI.strike} @ ${price}`))
      .catch(e  => console.error('DB MVC save failed:', e));
   }
@@ -7519,7 +8264,8 @@ function gexRenderSnapshots() {
 }
 
 // Auto-snapshot at 9:45am, 10:30am, 12:00pm Eastern
-function gexAutoSnapshot() {
+async function gexAutoSnapshot() {
+  if (!DB?.db) return;
   const now = new Date();
   const etStr = now.toLocaleString('en-US', {timeZone:'America/New_York'});
   const et = new Date(etStr);
@@ -7550,14 +8296,28 @@ function gexAutoSnapshot() {
           { strike: peak.strike,   value: peak.netGEX,        volume: peak.callVolume   + peak.putVolume   },
           { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
           price,
-          label
+          esPrice,
+          label,
+          rawChain.reduce((sum, row) => sum + Math.abs(Number(row?.netGEX || 0)), 0),
+          topDexRow?.strike ?? null,
+          totalNetDEX_OI,
+          totalNetDEX_Vol,
+          null,
+          totalNetGEX_Vol,
+          flipPoint
         ).then(() => console.log(`✓ DB MVC saved [${label}]: ${peak.strike} @ ${price}`))
          .catch(e  => console.error('DB MVC auto-save failed:', e));
       }
     }
   }
 }
-setInterval(gexAutoSnapshot, 5000);
+// Snapshotting every 5s was creating unnecessary background churn.
+// A 60s cadence keeps the data fresh without hammering the CPU.
+setInterval(() => {
+  if (document.visibilityState === 'visible') {
+    gexAutoSnapshot();
+  }
+}, 60000);
 gexRenderSnapshots(); // init empty state
 
 // Mock expiration switcher
@@ -7680,7 +8440,6 @@ window.addEventListener('load', () => {
           {sym:'SPY',  price:740.23,   chg:-9.12,  pct:-1.22},
           {sym:'QQQ',  price:497.84,   chg:2.31,   pct:0.47},
           {sym:'SMH',  price:284.65,   chg:3.14,   pct:1.12},
-          {sym:'VIX',  price:18.42,    chg:1.83,   pct:11.04},
           {sym:'ES',   price:7421.75,  chg:-89.25, pct:-1.19},
           {sym:'NQ',   price:20912.50, chg:98.75,  pct:0.47},
           {sym:'NVDA', price:875.40,   chg:12.30,  pct:1.43},
@@ -7777,11 +8536,16 @@ if (false) {}
     log('Refreshing…');
 
     try {
-      // Pull selected ticker options chain from TastyTrade proxy (SPX/SPY/QQQ)
+      // Pull selected ticker options chain from TastyTrade proxy
       const ticker = gexSelectedTicker || 'SPX';
-      const tickerEncoded = encodeURIComponent(ticker === 'SPX' ? '$SPX' : ticker);
+      // Encode ticker for TT API: SPX→$SPX, NQM6→/NQ (futures root), stocks→raw
+      const OV_TICKER_API = { 'SPX': '$SPX', 'NQM6': '/NQ' };
+      const apiTicker = OV_TICKER_API[ticker] || ticker;
+      const tickerEncoded = encodeURIComponent(apiTicker);
+      // noSubscribe=1 for non-SPX to avoid dxLink flooding (chain data is still returned)
+      const noSubParam = ticker !== 'SPX' ? '&noSubscribe=1' : '';
       const _t0 = performance.now();
-      const resp = await fetch(`http://localhost:3001/proxy/api/tt/chains/${tickerEncoded}?range=all`);
+      const resp = await fetch(`http://localhost:3001/proxy/api/tt/chains/${tickerEncoded}?range=all${noSubParam}`);
       if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
       const raw = await resp.json();
       console.log(`[GEX] Chain fetch: ${(performance.now()-_t0).toFixed(0)}ms`);
@@ -7883,12 +8647,28 @@ if (false) {}
         });
       });
 
-      // Get SPX spot price from TT market-data/by-type
+      // Get spot price for selected ticker
       try {
-        const qr = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?index[]=SPX');
+        // Map display ticker → quotes-batch param type and cache lookup key
+        const OV_QUOTE_PARAM = {
+          'SPX':  { param: 'index[]=SPX',      key: 'SPX' },
+          'NQM6': { param: 'future[]=/NQM26',   key: '/NQM26' },
+          'SPY':  { param: 'equity[]=SPY',      key: 'SPY' },
+          'QQQ':  { param: 'equity[]=QQQ',      key: 'QQQ' },
+          'AAPL': { param: 'equity[]=AAPL',     key: 'AAPL' },
+          'AMD':  { param: 'equity[]=AMD',      key: 'AMD' },
+          'AMZN': { param: 'equity[]=AMZN',     key: 'AMZN' },
+          'GOOGL':{ param: 'equity[]=GOOGL',    key: 'GOOGL' },
+          'META': { param: 'equity[]=META',     key: 'META' },
+          'MSFT': { param: 'equity[]=MSFT',     key: 'MSFT' },
+          'NVDA': { param: 'equity[]=NVDA',     key: 'NVDA' },
+          'TSLA': { param: 'equity[]=TSLA',     key: 'TSLA' },
+        };
+        const qInfo = OV_QUOTE_PARAM[ticker] || { param: `equity[]=${ticker}`, key: ticker };
+        const qr = await fetch(`http://localhost:3001/proxy/api/tt/quotes-batch?${qInfo.param}`);
         const qd = await qr.json();
         const qItems = (qd?.data?.items) || [];
-        const q = qItems.find(i => i.symbol === 'SPX') || qItems[0] || {};
+        const q = qItems.find(i => i.symbol === qInfo.key) || qItems[0] || {};
         const price = parseFloat(q.last || q.mark || q.mid || 0);
         if (price > 0) {
           spotPrice = price;
@@ -7901,7 +8681,7 @@ if (false) {}
             });
           }
         }
-      } catch (e) { console.warn('TT SPX quote failed:', e); }
+      } catch (e) { console.warn('TT quote fetch failed:', e); }
 
       processChain({ callExpDateMap, putExpDateMap });
       if (typeof renderInsights0DTE === 'function') {
@@ -8180,22 +8960,16 @@ if (false) {}
   function insightsRenderHistoryEvents(events) {
     const list = document.getElementById('insights-history-list');
     if (!list) return;
-    const todaySlot = insightsHistorySlot(new Date());
-    const today = todaySlot?.dateKey || new Date().toISOString().slice(0, 10);
-    const todaysEvents = events.filter(event => event.dateKey === today).sort((a, b) => String(b.key).localeCompare(String(a.key)));
-    insightsSet('insights-history-time', `${todaysEvents.length}/82 bars`);
-    if (!todaysEvents.length) {
-      list.innerHTML = `
-        <div style="border:1px solid rgba(0,230,118,.28);border-radius:6px;padding:10px;background:rgba(0,230,118,.045)">
-          <div style="font-size:11px;color:#00e676;font-weight:800;margin-bottom:7px">BUY / SELL</div>
-          <div style="font-size:22px;color:var(--text0);font-weight:800;margin-bottom:6px">--</div>
-          <div style="height:6px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden"><div style="height:100%;width:0;background:#00e676"></div></div>
-          <div style="font-size:11px;color:var(--text2);line-height:1.45;margin-top:7px">Records every 5 minutes from 9:00 through 15:45 New York time.</div>
-        </div>
-      `;
-      return;
+    if (document.getElementById('insights-history-time')) {
+      insightsSet('insights-history-time', 'Coming soon');
     }
-    list.innerHTML = todaysEvents.map(insightsHistoryCard).join('');
+    list.innerHTML = `
+      <div style="border:1px solid rgba(42,64,96,.55);border-radius:6px;padding:14px;background:rgba(10,15,22,.75);text-align:center">
+        <div style="font-size:11px;color:#4a6a84;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">Buy / Sell History</div>
+        <div style="font-size:20px;color:var(--text0);font-weight:800;margin-bottom:6px">Coming soon</div>
+        <div style="font-size:11px;color:var(--text2);line-height:1.5">This section is temporarily disabled while the new overview layout is being rebuilt.</div>
+      </div>
+    `;
   }
   function insightsRecordHistoryEvent(event) {
     const slot = insightsHistorySlot(new Date());
@@ -8251,21 +9025,16 @@ if (false) {}
       const cVega = insightsNum(c?.vega), pVega = insightsNum(p?.vega);
       const callGEX = calcDollarGammaExposure(cGamma, cPos, s);
       const putGEX = calcPutGammaExposure(pGamma, pPos, s);
-      const callDEX = Math.abs(cDelta) * cPos * s * 100;
-      const putDEX = pDelta * pPos * s * 100;
-      const callCHEX = -cTheta * cPos * s * 100;
-      const putCHEX = pTheta * pPos * s * 100;
-      const callVEX = cVega * cPos * s * 100;
-      const putVEX = -pVega * pPos * s * 100;
+      const netGEX = callGEX + putGEX;
       const liveSignedVolGEX = spxSignedVolGEXByStrike instanceof Map ? insightsNum(spxSignedVolGEXByStrike.get(strike)) : 0;
       rows.push({
         strike,
         callGEX,
         putGEX,
-        netGEX: callGEX + putGEX,
-        netDEX: callDEX - putDEX,
-        netCHEX: callCHEX + putCHEX,
-        netVEX: callVEX + putVEX,
+        netGEX,
+        netDEX: netGEX,
+        netCHEX: netGEX,
+        netVEX: netGEX,
         netVolGEX: liveSignedVolGEX || (calcVolumeGammaExposure(cGamma, insightsNum(c?.totalVolume), s, true) + calcVolumeGammaExposure(pGamma, insightsNum(p?.totalVolume), s, false))
       });
     });
@@ -8373,6 +9142,14 @@ if (false) {}
       directionBar.style.width = directionPct + '%';
       directionBar.style.background = directionColor;
     }
+    // Publish live buy/sell scores globally so the Exposure Stack tab can read them
+    window.__overviewBuyPct  = buyPct;
+    window.__overviewSellPct = sellPct;
+    // Also push into liveExposureSnapshot so the exposure signal stays in sync
+    if (window.__liveExposureSnapshot) {
+      window.__liveExposureSnapshot.buyScore  = buyPct;
+      window.__liveExposureSnapshot.sellScore = sellPct;
+    }
     insightsRecordHistoryEvent({
       side: directionIsBuy ? 'Buy' : 'Sell',
       score: directionPct,
@@ -8403,62 +9180,137 @@ if (false) {}
   window.setMode = function(){};
 
   // ── Quotes panel — TastyTrade market-metrics per symbol ──────────────
-  window.QUOTE_SYMBOLS = ['$VIX.X','/ESM26','/NQM26','$SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
-  window.QUOTE_LABELS  = {'$VIX.X':'VIX','/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+  window.QUOTE_SYMBOLS = ['/ESM26','/NQM26','$SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+  window.QUOTE_LABELS  = {'/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','VIX':'VIX','SPY':'SPY','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+
+  function dxPrevCloseForSymbol(sym, q) {
+    const summaryKey = sym === '/ESM26' ? '/ES:XCME' : sym === '/NQM26' ? '/NQ:XCME' : sym;
+    const s = dxSummaryCache[summaryKey] || dxSummaryCache[sym] || {};
+    return num(
+      q?.['prev-close'],
+      q?.prevClose,
+      q?.previousClose,
+      q?.closePrice,
+      q?.['close-price'],
+      s?.['prev-close'],
+      s?.prevClose,
+      s?.previousClose,
+      s?.closePrice,
+      s?.['close-price'],
+      s?.['prev-day-close-price'],
+      s?.['prevDayClosePrice']
+    );
+  }
+  function quoteChange(price, base, rawChange) {
+    const delta = Number.isFinite(price) && Number.isFinite(base) && base > 0 ? (price - base) : 0;
+    if (Number.isFinite(rawChange) && rawChange !== 0) return rawChange;
+    return delta;
+  }
+function quotePercentChange(price, base, rawChangePct, rawChange) {
+  if (Number.isFinite(rawChangePct) && rawChangePct !== 0) return rawChangePct;
+  const change = quoteChange(price, base, rawChange);
+  return base > 0 ? (change / base) * 100 : 0;
+}
+function quoteDisplayPercent(sym, q, price, rawChange) {
+  const base = dxPrevCloseForSymbol(sym, q) || q?.prevClose || q?.previousClose || q?.closePrice || q?.['prev-close'] || 0;
+  if (base > 0 && price > 0) return ((price - base) / base) * 100;
+  return quotePercentChange(
+    price,
+    base,
+    quoteNum(q?.['percent-change'], q?.changePct, q?.changePercent, q?.percentChange, q?.['net-percent-change'], q?.netPercentChange, q?.netPercentChangeInDouble),
+    rawChange
+  );
+}
 
   window.fetchQuotes = async function fetchQuotes() {
     try {
-      // /market-data/by-type uses typed array params; TT returns bare symbols (SPX not $SPX)
-      // Build query string - future symbols contain / which must NOT be double-encoded
-      const parts = [];
-      ['SPX','VIX'].forEach(s => parts.push('index[]=' + s));
-      ['SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'].forEach(s => parts.push('equity[]=' + s));
-      ['/ESM6','/NQM6'].forEach(s => parts.push('future[]=' + encodeURIComponent(s)));
-      const qs = parts.join('&');
-
-      const r = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?' + qs);
-      if (!r.ok) { console.warn('TT quotes-batch HTTP', r.status); return; }
-      const raw = await r.json();
-      const items = (raw?.data?.items) || [];
-
       const data = {};
-      items.forEach(q => {
-        const sym    = q.symbol || q['symbol'] || '';
-        const num = (...vals) => {
-          for (const v of vals) {
-            const n = parseFloat(v);
-            if (Number.isFinite(n) && n !== 0) return n;
-          }
-          return 0;
-        };
-        const price    = num(q.last, q.mark, q.mid, q['last-price'], q['mark-price'], q['mid-price'], q['last-trade-price']);
+      const symbols = ['/ESM26','/NQM26','$SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+      const dxKeyMap = { '/ESM26': '/ES:XCME', '/NQM26': '/NQ:XCME' };
+      const num = (...vals) => {
+        for (const v of vals) {
+          const n = parseFloat(v);
+          if (Number.isFinite(n) && n !== 0) return n;
+        }
+        return 0;
+      };
+      symbols.forEach(sym => {
+        const q = dxQuoteCache[dxKeyMap[sym] || sym] || dxQuoteCache[sym] || {};
+        const price = num(q.lastPrice, q.last, q.mark, q.mid, q.price, q['last-price'], q['mark-price'], q['mid-price'], q['last-trade-price']);
         const rawChange = num(q.change, q.netChange, q['net-change'], q['day-change']);
-        const prev     = num(q.prevClose, q.close, q['prev-close'], q['close-price'], q['previous-close'], q['settlement-price']) || (price > 0 && rawChange !== 0 ? price - rawChange : 0);
-        const change   = rawChange || (prev > 0 ? price - prev : 0);
-        const changePct= num(q.changePct, q.percentChange, q['percent-change'], q['net-percent-change']) || (prev > 0 ? (change / prev) * 100 : 0);
+        const prev = dxPrevCloseForSymbol(sym, q) || (price > 0 && rawChange !== 0 ? price - rawChange : 0);
+        const change = quoteChange(price, prev, rawChange);
+        const changePct = quotePercentChange(
+          price,
+          prev,
+          num(q.changePct, q.percentChange, q['percent-change'], q['net-percent-change'], q.netPercentChange, q.netPercentChangeInDouble),
+          rawChange
+        );
         const entry = {
           quote: {
-            lastPrice:                  price,
-            netChange:                  change,
-            netPercentChange:           changePct,
-            netPercentChangeInDouble:   changePct,
-            closePrice:                 prev,
-            totalVolume:                parseInt(q.volume || q['volume'] || 0),
-            bidPrice:                   parseFloat(q.bid || q['bid-price'] || 0),
-            askPrice:                   parseFloat(q.ask || q['ask-price'] || 0),
+            lastPrice:                price,
+            netChange:                change,
+            netPercentChange:         changePct,
+            netPercentChangeInDouble: changePct,
+            closePrice:               prev,
+            totalVolume:              parseInt(q.volume || q['volume'] || 0),
+            bidPrice:                 parseFloat(q.bidPrice || q.bid || q['bid-price'] || 0),
+            askPrice:                 parseFloat(q.askPrice || q.ask || q['ask-price'] || 0),
           }
         };
         data[sym] = entry;
-                // Normalise TT symbol variants to what renderQuotes/topbar expect.
-        const rootSym = sym.split(':')[0];
-        if (rootSym === 'SPX' || rootSym === '$SPX') { data['$SPX'] = entry; data['SPX'] = entry; if(prev>0) spxPrevClose=prev; }
-        if (rootSym === 'VIX' || rootSym === '$VIX' || rootSym === '$VIX.X') { data['$VIX'] = entry; data['$VIX.X'] = entry; data['VIX'] = entry; }
-        // Futures: TT may return /ESM26, /ESM26:XCME, or a root month variant; alias to the dashboard keys.
-        if (rootSym.startsWith('/ES')) { data['/ESM26'] = entry; esPrice = price; if(prev>0) esPrevClose=prev; if(esPrevClose>0&&spxPrevClose>0) esBasis=esPrevClose-spxPrevClose; updateESPriceDisplay(); }
-        if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
+        if (sym === '$SPX' || sym === 'SPX') { data['$SPX'] = entry; data['SPX'] = entry; if (prev > 0) spxPrevClose = prev; }
+        if (sym === '/ESM26') {
+          esPrice = price;
+          if (prev > 0) esPrevClose = prev;
+          const storedPair = getStoredClosePair();
+          if (storedPair?.es > 0 && storedPair?.spx > 0) esBasis = storedPair.es - storedPair.spx;
+          else if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose;
+          updateESPriceDisplay();
+        }
+        if (sym === '/NQM26') { data['/NQM26'] = entry; }
       });
-      if(esPrevClose>0&&spxPrevClose>0) esBasis=esPrevClose-spxPrevClose;
-      if (items.length) console.log('fetchQuotes symbols from TT:', items.map(i=>i.symbol).join(', '));
+      try {
+        const batchRes = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch');
+        const batchJson = await batchRes.json();
+        const batchItems = Array.isArray(batchJson?.data?.items) ? batchJson.data.items : [];
+        batchItems.forEach(item => {
+          const rawSym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
+          if (!rawSym) return;
+          const mapped = rawSym === 'SPX' ? ['SPX', '$SPX']
+            : rawSym === '/ES' || rawSym === '/ES:XCME' || rawSym === '/ESM26' ? ['/ESM26']
+            : rawSym === '/NQ' || rawSym === '/NQ:XCME' || rawSym === '/NQM26' ? ['/NQM26']
+            : [rawSym];
+          const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
+          const pct = quoteNum(item['percent-change'], item.changePercent, item.netPercentChange, item.netPercentChangeInDouble);
+          const last = quoteNum(item.last, item.mark, item.price, item.lastPrice);
+          const chg = quoteNum(item.change, item.netChange, last - prev);
+          mapped.forEach(sym => {
+            const existing = data[sym]?.quote || {};
+            data[sym] = {
+              quote: {
+                ...existing,
+                symbol: sym,
+                lastPrice: last || existing.lastPrice || 0,
+                netChange: chg || existing.netChange || 0,
+                netPercentChange: pct || existing.netPercentChange || 0,
+                netPercentChangeInDouble: pct || existing.netPercentChangeInDouble || 0,
+                changePercent: pct || existing.changePercent || 0,
+                percentChange: pct || existing.percentChange || 0,
+                closePrice: prev || existing.closePrice || 0,
+                prevClose: prev || existing.prevClose || 0,
+                previousClose: prev || existing.previousClose || 0,
+                ['prev-close']: prev || existing['prev-close'] || 0,
+                bidPrice: existing.bidPrice || quoteNum(item.bid),
+                askPrice: existing.askPrice || quoteNum(item.ask)
+              }
+            };
+          });
+        });
+      } catch (_) {}
+      const storedPair = getStoredClosePair();
+      if (storedPair?.es > 0 && storedPair?.spx > 0) esBasis = storedPair.es - storedPair.spx;
+      else if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose;
 
       quotesData = data;
       renderQuotes();
@@ -8498,6 +9350,23 @@ if (false) {}
           netPercentChange: q.netPercentChange || q.changePercent || q.netPercentChangeInDouble || 0,
           closePrice: q.closePrice || q.previousClose || q.prevClose || 0
         });
+      }
+
+      // ── Update VIX topbar ─────────────────────────────────────────────
+      const vixEntry = data['VIX'] || null;
+      if (vixEntry) {
+        const q = vixEntry.quote || vixEntry;
+        const vixPrice = q.lastPrice || q.mark || q.last || 0;
+        const vixChange = q.netChange || q.change || 0;
+        if (vixPrice > 0) {
+          const tbVix = document.getElementById('topbar-vix');
+          if (tbVix) tbVix.textContent = vixPrice.toFixed(2);
+          const tbVixChg = document.getElementById('topbar-vix-chg');
+          if (tbVixChg) {
+            tbVixChg.textContent = (vixChange >= 0 ? '+' : '') + vixChange.toFixed(2);
+            tbVixChg.style.color = vixChange >= 0 ? '#ff4757' : '#00e676'; // VIX up = bad (red), VIX down = good (green)
+          }
+        }
       }
     } catch (e) {
       console.error('fetchQuotes (TastyTrade) error:', e);

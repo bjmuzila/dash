@@ -1,34 +1,27 @@
 @echo off
-title SPX GEX Dashboard Launcher
-cd /d "%~dp0"
-
-echo Starting SPX GEX Dashboard...
-echo Dashboard: http://localhost:8080/
-echo Proxy API:  http://localhost:3001/proxy/api/status
-echo Excel Save: http://localhost:3002/export-mvc
+title SPX GEX Dashboard
+echo.
+echo  Starting SPX GEX Dashboard...
 echo.
 
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3001"') do (
-  for /f "tokens=1" %%b in ('tasklist /FI "PID eq %%a" /FI "IMAGENAME eq node.exe" /NH 2^>nul') do taskkill /PID %%a /F >nul 2>nul
-)
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3002"') do (
-  for /f "tokens=1" %%b in ('tasklist /FI "PID eq %%a" /FI "IMAGENAME eq node.exe" /NH 2^>nul') do taskkill /PID %%a /F >nul 2>nul
-)
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8080"') do (
-  for /f "tokens=1" %%b in ('tasklist /FI "PID eq %%a" /FI "IMAGENAME eq node.exe" /NH 2^>nul') do taskkill /PID %%a /F >nul 2>nul
-)
+:: Kill any existing instances on port 3001
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :3001 2^>nul') do taskkill /PID %%a /F >nul 2>&1
 
-taskkill /F /FI "WINDOWTITLE eq Dashboard :8080*" >nul 2>nul
-taskkill /F /FI "WINDOWTITLE eq TT Proxy :3001*" >nul 2>nul
-taskkill /F /FI "WINDOWTITLE eq MVC Export :3002*" >nul 2>nul
+:: Start proxy (serves static files + APIs on single port)
+start "SPX GEX Proxy" cmd /k "cd /d %~dp0 && node proxy-tastytrade.js"
 
-timeout /t 2 /nobreak >nul
+:: Wait for proxy to fully start
+echo  Waiting for proxy to start...
+timeout /t 3 /nobreak >nul
 
-start /min "TT Proxy :3001" node proxy-tastytrade.js
-start /min "MVC Export :3002" node proxy.js
-start "Dashboard :8080" cmd /k "cd /d ""%~dp0"" && node dashboard-server.js"
+:: Open browser
+echo  Opening dashboard...
+start http://localhost:3001
 
-timeout /t 5 /nobreak >nul
-start "" "http://localhost:8080/"
-
-echo Started. Use http://localhost:8080/ for the dashboard.
+echo.
+echo  Dashboard running at http://localhost:3001
+echo.
+echo  Proxy window is open and running.
+echo  Close THIS window any time - proxy keeps running.
+echo  To stop everything, close the Proxy window.
+echo.

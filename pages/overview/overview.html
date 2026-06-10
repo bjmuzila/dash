@@ -1,0 +1,1231 @@
+  <!-- ═══ PAGE: OVERVIEW ═══ -->
+  <div id="page-overview" style="display:flex;flex-direction:row;flex:1;min-height:0;overflow:hidden">
+
+    <!-- ── LEFT: TOP Chart + BOTTOM Calendar/Stats/MVC (50%) ── -->
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+
+      <!-- TOP: Chart section (50%) -->
+      <div style="display:flex;flex-direction:column;flex:0 0 50%;min-height:0;overflow:hidden">
+        <!-- ── Toolbar ── -->
+        <div id="gex-level-bar" style="display:flex;align-items:center;gap:6px;padding:4px 10px;background:#0a0f16;border-bottom:1px solid #1a2a3a;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto">
+
+        <!-- Ticker toggle: SPX -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="ovtab-spx" onclick="setOVTab('chart')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-weight:700;font-family:Arial">SPX GEX</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- GEX Mode -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="gex-btn-net" onclick="setGEXMode('net',this)" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">Net GEX</button>
+          <button id="gex-btn-call-put" onclick="setGEXMode('call-put',this)" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-family:Arial;font-weight:700">Call - Put</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- Data Mode -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="gex-data-btn-oivol" onclick="setGEXChartDataMode('oi-vol')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">OI + Vol</button>
+          <button id="gex-data-btn-vol" onclick="setGEXChartDataMode('vol-only')" style="font-size:9px;padding:2px 10px;border:none;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-family:Arial;font-weight:700">Vol Only</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- OI Overlay -->
+        <button id="oi-overlay-btn" onclick="toggleOIOverlay()" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ OI Overlay</button>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- DEX overlay toggle + mode switcher -->
+        <button id="ov-dex-toggle" onclick="toggleOverviewDEX(this)" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">+ Net DEX</button>
+        <div id="ov-dex-mode-pills" style="display:none;flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+          <button id="ov-dex-btn-net" onclick="setOvDEXMode('net')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#1a2a3a;color:#a0d4ff;cursor:pointer;font-family:Arial;font-weight:700">Net DEX</button>
+          <button id="ov-dex-btn-cum" onclick="setOvDEXMode('cum')" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-family:Arial;font-weight:700">Cum DEX</button>
+        </div>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- GEX Flip Curve -->
+        <button id="ov-flip-toggle" onclick="toggleOverviewFlipCurve(this)" style="font-size:9px;padding:2px 10px;border:1px solid #1e3050;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0"><span class="ov-flip-label">+ GEX Flip</span> <span id="ov-flip-state" style="margin-left:4px;color:#fff">OFF</span></button>
+
+        <span style="color:#1a2a3a;flex-shrink:0">|</span>
+
+        <!-- GEX Levels inline (hidden, kept for JS data targets) -->
+        <div style="display:none">
+          <span id="ov-callwall-wrap"><b id="ov-callwall"></b></span>
+          <span><b id="ov-putwall"></b></span>
+          <span><b id="ov-flip"></b></span>
+          <span><b id="ov-netgex"></b><span id="gex-current-exp"></span></span>
+        </div>
+        <span id="ov-last-refresh" style="color:#fff;font-size:9px;white-space:nowrap;flex-shrink:0">Last Refresh &#x2014;</span>
+        <button id="ov-refresh-btn" onclick="refreshOverviewGEXButton(this)" style="font-size:9px;padding:2px 10px;border:1px solid rgba(0,229,255,.4);border-radius:2px;background:rgba(0,229,255,.08);color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0;transition:transform .15s ease,box-shadow .15s ease,background .15s ease,color .15s ease,border-color .15s ease">REFRESH</button>
+
+        <!-- Gamma Zero -->
+        <span style="color:#fff;font-size:9px;white-space:nowrap;flex-shrink:0;margin-left:8px">Γ₀: <b id="ov-gamma-zero" style="color:#00e676;font-weight:700;font-variant-numeric:tabular-nums">—</b></span>
+
+        <!-- Share -->
+        <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0;margin-left:auto">
+          <button id="gex-copy-shot-btn" onclick="copyActiveGexChartScreenshot()" title="Copy active GEX chart screenshot" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#0d1825;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY SHOT</button>
+          <button id="gex-share-x-btn" onclick="shareActiveGexChart('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#0d1825;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+          <button id="gex-share-discord-btn" onclick="shareActiveGexChart('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:#0d1825;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+        </div>
+
+      </div>
+
+
+      <!-- Chart view -->
+      <div style="display:flex;flex:1;min-height:0;overflow:hidden">
+        <!-- SPX GEX -->
+        <div id="ov-chart-view" style="display:flex;flex:1;min-height:0;overflow:hidden;position:relative">
+          <div id="overview-scroll" style="position:absolute;inset:0;overflow:hidden;cursor:default">
+            <canvas id="overview-canvas" style="display:block;width:100%;height:100%"></canvas>
+            <div style="position:absolute;bottom:5px;right:8px;font-size:9px;color:#1e3050;pointer-events:none">scroll=zoom · drag Y-axis to scale · drag chart to pan</div>
+          </div>
+          <!-- Loading Spinner -->
+          <div id="overview-progress" style="display:none;position:absolute;top:12px;right:12px;background:rgba(10,15,22,0.85);border:1px solid #1a3a5f;border-radius:8px;padding:12px 16px;backdrop-filter:blur(4px);z-index:100;flex-direction:column;align-items:center;gap:8px;pointer-events:none">
+            <div id="overview-spinner" style="width:24px;height:24px;border:2px solid #1a3a5f;border-top:2px solid #00e5ff;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+            <span id="overview-progress-pct" style="font-size:11px;color:#00e5ff;font-variant-numeric:tabular-nums">Loading...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CENTER BOTTOM (50%): Calendar + Stats + MVC ── -->
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+    <style>
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      /* Hide 1-7DTE Combined pill */
+      #dte-gex-pill-combined { display: none !important; }
+
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+      /* Compact heatmap and table rows */
+      .hm-row {
+        display: grid;
+        min-height: 0 !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 10px !important;
+      }
+      .hm-strike, .hm-cell {
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+        font-size: 10px !important;
+        font-family: 'Inter', sans-serif !important;
+        line-height: 1.3 !important;
+      }
+      .hm-strike {
+        padding-left: 5px !important;
+        padding-right: 5px !important;
+        font-weight: 700 !important;
+        font-variant-numeric: tabular-nums !important;
+      }
+      .hm-cell {
+        height: 20px !important;
+        min-height: 0 !important;
+        font-variant-numeric: tabular-nums !important;
+      }
+      #stats-body[data-loading="1"] .esl-row {
+        visibility: hidden !important;
+      }
+      .hm-bar-cell {
+        height: 18px !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 10px !important;
+      }
+      .hm-bar-cell span[style*="z-index:2"] {
+        font-family: 'Inter', sans-serif !important;
+        font-size: 10px !important;
+      }
+      .atm-badge {
+        font-size: 7px !important;
+        margin-left: 2px !important;
+        padding: 0 2px !important;
+      }
+      /* Heatmap toolbar headers same font */
+      #heatmap-toolbar div {
+        font-family: 'Inter', sans-serif !important;
+      }
+    </style>
+
+    <!-- BOTTOM PANELS: Calendar + ES Stats + Chart -->
+    <div id="bottom-panels" style="display:flex;flex-direction:row;flex:1;min-height:0;border-top:2px solid #1a2a3a;overflow:hidden">
+
+      <!-- ECONOMIC CALENDAR (populated by shared/overview.js) -->
+      <div id="panel-calendar" style="flex:1;display:flex;flex-direction:column;border-right:1px solid #1a2a3a;overflow:hidden">
+        <div style="padding:6px 12px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <span style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#ffffff;font-weight:700">📅 Economic Calendar</span>
+          <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0;margin-left:auto">
+            <button id="cal-refresh-btn" type="button" onclick="refreshTrumpCalendar(this)" title="Fetch latest Trump calendar from factba.se" style="font-size:9px;padding:2px 8px;border:none;border-radius:2px;background:rgba(0,229,255,.1);color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;line-height:1;transition:all .2s ease">REFRESH</button>
+            <button id="cal-copy-shot-btn" type="button" onclick="copyEconCalendarScreenshot()" title="Copy calendar screenshot" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;line-height:1">COPY<br>SHOT</button>
+            <button id="cal-share-x-btn" type="button" onclick="shareEconCalendar('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+            <button id="cal-share-discord-btn" type="button" onclick="shareEconCalendar('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+          </div>
+        </div>
+        <div id="calendar-body" style="flex:1;overflow-y:auto;padding:4px 8px 8px;font-size:11px;color:#2a4060">
+          <!-- ECONOMIC CALENDAR EVENTS (loaded by JS) -->
+          <div id="econ-events-container" style="display:flex;flex-direction:column;gap:2px">
+          </div>
+        </div>
+      </div>
+
+      <!-- ES STATS LADDER -->
+      <div id="panel-stats" style="flex:0 0 220px;min-width:180px;max-width:240px;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid #1a2a3a">
+        <div style="padding:5px 10px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <span style="font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#fff;font-weight:700">⊞ ES STATS LADDER</span>
+          <span style="margin-left:auto"></span>
+        </div>
+        <script>
+          if (window.esStatsLoaded && typeof window.fetchOverviewESStats === 'function') {
+            window.fetchOverviewESStats();
+          }
+          if (!window.esStatsLoaded) {
+            window.esStatsLoaded = true;
+            const SHEET_ID = '1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg';
+            const statsLoading = document.getElementById('stats-loading');
+            if (statsLoading) statsLoading.style.display = 'flex';
+            ['st-nolong-hi','st-est-up','st-vah','st-vpoc','st-mid','st-est-dn','st-val','st-noshort-hi',
+             'st-nolong-hi-dist','st-est-up-dist','st-vah-dist','st-vpoc-dist','st-mid-dist','st-est-dn-dist','st-val-dist','st-noshort-hi-dist']
+              .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = ''; });
+            
+            function applyOverviewESStats(stats) {
+              const map = {
+                'st-nolong-hi': 'NO LONG',
+                'st-est-up': 'UP',
+                'st-vah': 'VAH',
+                'st-vpoc': 'VPOC',
+                'st-mid': 'MID',
+                'st-est-dn': 'DOWN',
+                'st-val': 'VAL',
+                'st-noshort-hi': 'NO SHORT'
+              };
+              Object.entries(map).forEach(([id, key]) => {
+                const el = document.getElementById(id);
+                if (el && stats[key]) el.textContent = stats[key];
+              });
+              const body = document.getElementById('stats-body');
+              if (body) body.removeAttribute('data-loading');
+              const loading = document.getElementById('stats-loading');
+              if (loading) loading.style.display = 'none';
+              if (typeof window.updateStatsPanel === 'function') window.updateStatsPanel();
+            }
+
+            async function fetchESStats(retryCount = 0) {
+              try {
+                const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const text = await response.text();
+                const jsonText = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?\s*$/)?.[1]
+                  || text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+                const json = JSON.parse(jsonText);
+
+                if (!json.table || !json.table.rows || json.table.rows.length === 0) {
+                  throw new Error('No data in response');
+                }
+
+                const stats = {};
+                const fmtESStat = value => {
+                  const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+                  return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : value;
+                };
+                for (let row of json.table.rows) {
+                  const label = row.c[0]?.v;
+                  const value = row.c[1]?.v;
+                  if (label && value) {
+                    stats[label.toString().trim().toUpperCase()] = fmtESStat(value);
+                  }
+                }
+
+                if (Object.keys(stats).length === 0) throw new Error('No stats parsed');
+
+                window.esStatsCache = stats;
+                window.esStatsReady = true;
+                applyOverviewESStats(stats);
+                if (typeof window.updateStatsDebug === 'function') window.updateStatsDebug('✓ Sheet fetched');
+              } catch (err) {
+                const msg = err && err.message ? err.message : String(err);
+                if (typeof window.updateStatsDebug === 'function') window.updateStatsDebug('⚠ ' + msg);
+                console.error('Error fetching ES stats:', err);
+
+                // Retry once after a short delay
+                if (retryCount < 1) {
+                  setTimeout(() => fetchESStats(retryCount + 1), 2000);
+                }
+              }
+            }
+            window.fetchOverviewESStats = fetchESStats;
+            
+            // Delay fetch to after page load
+            window.addEventListener('load', function() {
+              setTimeout(fetchESStats, 500);
+              setInterval(fetchESStats, 300000);
+            });
+            
+            // Also run on this script's own load
+            setTimeout(fetchESStats, 100);
+          }
+        </script>
+        <div id="stats-body" data-loading="1" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#04070c;position:relative;min-height:0">
+
+        <!-- Vertical spine line — positioned at the dot column (right edge of label column) -->
+        <div id="esl-spine" style="position:absolute;left:0;top:0;bottom:0;width:1px;background:#0d1f30;pointer-events:none;z-index:0"></div>
+        <div id="stats-loading" style="position:absolute;inset:0;display:flex;align-items:flex-start;padding:4px 8px 8px;background:#04070c;color:#1e3050;font-size:11px;z-index:5">Loadingâ€¦</div>
+
+        <!-- NO LONG ZONE -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">NO LONG</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff6b6b;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-nolong-hi" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-nolong-hi-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- UP WEEKLY EST -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;white-space:nowrap">↑ WEEKLY EST</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e676;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-est-up" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-est-up-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- CURRENT ES PRICE — dominant highlight row -->
+        <div class="esl-row" id="esl-price-row" style="flex:1.6;display:flex;align-items:center;min-height:0;border-top:1px solid #00e5ff33;border-bottom:1px solid #00e5ff33;position:relative;background:linear-gradient(90deg,rgba(0,229,255,0.0) 0%,rgba(0,229,255,0.08) 50%,rgba(0,229,255,0.0) 100%)">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#00e5ff;white-space:nowrap">CURRENT ES</div>
+            <div style="font-size:7px;color:#1e5a6a;text-transform:uppercase;letter-spacing:.06em;margin-top:1px">MKT PRICE</div>
+          </div>
+          <!-- Pulsing filled dot -->
+          <div style="position:relative;flex-shrink:0;z-index:2;width:14px;height:14px">
+            <div style="position:absolute;inset:0;border-radius:50%;background:#00e5ff;animation:esl-pulse 2s ease-in-out infinite"></div>
+            <div style="position:absolute;inset:2px;border-radius:50%;background:#04070c"></div>
+            <div style="position:absolute;inset:4px;border-radius:50%;background:#00e5ff"></div>
+          </div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-live-es" style="font-size:20px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap;letter-spacing:-.01em">—</div>
+            <div style="font-size:7px;color:#00e5ff;letter-spacing:.12em;text-transform:uppercase;margin-top:2px">● LIVE</div>
+          </div>
+        </div>
+
+        <!-- VAH -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VAH</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e5ff;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-vah" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-vah-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- VPOC -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VPOC</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ffb300;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-vpoc" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-vpoc-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- MID -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">MID</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e5ff;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-mid" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-mid-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- DOWN WEEKLY EST -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;white-space:nowrap">↓ WEEKLY EST</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff4757;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-est-dn" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-est-dn-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- VAL -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VAL</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff9060;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-val" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-val-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+        <!-- NO SHORT ZONE -->
+        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;position:relative">
+          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
+            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">NO SHORT</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e676;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
+          <div style="flex:1;padding-left:8px;min-width:0">
+            <div id="st-noshort-hi" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
+            <div id="st-noshort-hi-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
+          </div>
+        </div>
+
+      </div><!-- /stats-body -->
+      <pre id="stats-debug-terminal" style="display:none;margin:0;height:86px;overflow:auto;background:#02050a;border-top:1px solid #1a2a3a;color:#29b6f6;font-size:9px;line-height:1.25;font-family:'Courier New',monospace;padding:5px 7px;white-space:pre-wrap;flex-shrink:0">waiting for ES stats...</pre>
+      </div>
+
+      <!-- ES STATS LADDER PANEL -->
+      <div style="display:none">
+        <!-- ES Header -->
+        <div style="padding:8px;background:#0a0f16;border-bottom:1px solid #1a2a3a;text-align:center">
+          <div style="font-size:12px;font-weight:700;color:#00e5ff;letter-spacing:.1em">ES</div>
+        </div>
+
+        <!-- WEEKLY ESTIMATED MOVE -->
+        <div style="padding:6px;border-bottom:1px solid #0a1420">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;margin-bottom:4px">Weekly Est Move</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#fff;text-transform:uppercase;font-weight:700">Up</div>
+              <div id="es-est-up" style="font-size:11px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">7590</div>
+            </div>
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#fff;text-transform:uppercase;font-weight:700">Down</div>
+              <div id="es-est-dn" style="font-size:11px;font-weight:700;color:#ff4757;font-variant-numeric:tabular-nums">7379</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- WEEKLY VOLUME PROFILE -->
+        <div style="padding:6px;border-bottom:1px solid #0a1420">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;margin-bottom:4px">Volume Profile</div>
+          <div style="display:flex;flex-direction:column;gap:3px;font-size:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#fff;font-weight:700">VAH</span>
+              <span id="es-vah" style="color:#fff;font-variant-numeric:tabular-nums">7483</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#fff;font-weight:700">VPOC</span>
+              <span id="es-vpoc" style="color:#fff;font-variant-numeric:tabular-nums">7432</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#fff;font-weight:700">VAL</span>
+              <span id="es-val" style="color:#fff;font-variant-numeric:tabular-nums">7398</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#fff;font-weight:700">MID</span>
+              <span id="es-mid" style="color:#fff;font-variant-numeric:tabular-nums">7452</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- NO SHORT/LONG ZONES -->
+        <div style="padding:6px">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;margin-bottom:4px">Short/Long Zones</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#fff;text-transform:uppercase;font-weight:700">No Long</div>
+              <div id="es-nolong" style="font-size:11px;font-weight:700;color:#ff9060;font-variant-numeric:tabular-nums">—</div>
+            </div>
+            <div style="text-align:center;padding:4px;background:#0a1420;border-radius:2px">
+              <div style="font-size:9px;color:#fff;text-transform:uppercase;font-weight:700">No Short</div>
+              <div id="es-noshort" style="font-size:11px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">7284</div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /ES stats -->
+
+      <!-- SIGNAL FEED -->
+      <div id="panel-mvc" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid #1a2a3a">
+        <div style="padding:5px 10px;background:#070c14;border-bottom:1px solid #1a2a3a;display:flex;align-items:center;gap:8px;flex-shrink:0;position:relative">
+          <span id="feed-live-dot" style="width:7px;height:7px;border-radius:50%;background:#00e676;flex-shrink:0;animation:feedPulse 2s infinite"></span>
+          <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:0;flex-shrink:0">
+            <button id="feed-tab-signal" onclick="setFeedTab('signal',this)" style="font-size:8px;padding:4px 8px;border:none;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-weight:700;font-family:Arial;letter-spacing:.14em;text-transform:uppercase">SIGNAL FEED</button>
+            <button id="feed-tab-snapshot" onclick="setFeedTab('snapshot',this)" style="font-size:8px;padding:4px 8px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-weight:700;font-family:Arial;letter-spacing:.14em;text-transform:uppercase">SNAPSHOT</button>
+          </div>
+          <style>@keyframes feedPulse{0%,100%{opacity:1}50%{opacity:.2}}</style>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+            <div style="display:flex;gap:2px;background:transparent;padding:0">
+              <button id="feed-refresh-btn" onclick="refreshFeedPanel()" title="Refresh snapshot" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">REFRESH</button>
+              <button id="feed-copy-shot-btn" onclick="copyFeedPanelScreenshot()" title="Copy panel screenshot" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">COPY</button>
+              <button id="feed-share-x-btn" onclick="shareSnapshot('x')" title="Share on X" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+              <button id="feed-share-discord-btn" onclick="shareSnapshot('discord')" title="Share on Discord" style="font-size:9px;padding:2px 6px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+            </div>
+          </div>
+        </div>
+        <div id="feed-signal-body" style="flex:1;min-height:0;overflow-y:auto;padding:6px;display:none;flex-direction:column;gap:4px;background:#0a0f16;scrollbar-width:thin;scrollbar-color:#1e3050 transparent">
+          <style>
+            #mvc-body .mvc-card{display:none!important}
+            #feed-capture-zone .mvc-card{display:none!important}
+            .sfi{display:flex;align-items:flex-start;gap:12px;padding:9px 16px;background:#0b0f15;border:1px solid #35557b;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(53,85,123,0.20);font-family:Arial,Helvetica,sans-serif}
+            .sfi:hover{background:#101520}
+            .sfi.sfi-buy{border-left:4px solid #1fae5e88}
+            .sfi.sfi-sell{border-left:4px solid #cc223388}
+            .sfi.sfi-signal{border-left:4px solid #29b6f688}
+            .sfi.sfi-neutral{border-left:4px solid #3a557088}
+            .sfi-ico{width:36px;height:36px;border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:19px;margin-top:0;font-weight:800}
+            .sfi-ico.buy{background:#0a2a14;color:#00e676}
+            .sfi-ico.sell{background:#2a0a0a;color:#ff4757}
+            .sfi-ico.signal{background:#0a1e2e;color:#29b6f6}
+            .sfi-ico.neutral{background:#111822;color:#5a7a99}
+            .sfi-time{font-size:14px;color:#ffffff;font-family:Consolas,monospace;font-weight:800;text-align:right}
+            .sfi-msg{font-size:15px;color:#eef2f7;line-height:1.18;margin:0 0 5px;max-width:1000px}
+            .sfi-pill{font-size:9px;font-weight:800;padding:2px 8px;border-radius:3px;letter-spacing:.1em;text-transform:uppercase;line-height:1}
+            .sfi-pill.bull{background:#0a2a14;color:#00e676;border:1px solid #1fae5e44}
+            .sfi-pill.bear{background:#2a0a0a;color:#ff4757;border:1px solid #ff475744}
+            .sfi-pill.info{background:#0a1e2e;color:#29b6f6;border:1px solid #29b6f644}
+            .sfi-pill.warn{background:#2a1a00;color:#ffb300;border:1px solid #ffb30044}
+            .sfi-pill.neutral{background:#111822;color:#5a7a99;border:1px solid #1e3050}
+          </style>
+          <div id="feed-capture-zone" style="display:flex;flex-direction:column;gap:8px;background:#0a0f16;padding:2px 0 0;">
+          <canvas id="buy-sell-history-canvas" style="display:none"></canvas>
+          <!-- CURRENT MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">VS VALUE AREA</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-current" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- 9:45 MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">9:45 MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-945" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- 10:30 MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">10:30 MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-1030" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- 12:00 MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">12:00 MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-1200" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+          </div><!-- /feed-capture-zone -->
+          <!-- SPX MVC Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">SPX MVC</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-spx" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- Market Quality Score Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #00b4d8;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">MARKET QUALITY SCORE</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-quality" style="font-size:16px;font-weight:700;color:#00e5ff;font-variant-numeric:tabular-nums">—</div>
+            </div>
+          </div>
+
+          <!-- Initial Balance Card -->
+          <div class="mvc-card" style="background:#05080d;border:1px solid #1a2a3a;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:0;overflow:hidden;grid-column:span 4">
+            <div style="font-size:13px;font-weight:700;color:#4a7a9b;text-transform:uppercase;letter-spacing:.12em;flex-shrink:0">INITIAL BALANCE</div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:center">
+              <div id="mvc-ib" style="font-size:16px;font-weight:400;color:#7ab8ff">—</div>
+            </div>
+          </div>
+
+        </div>
+        <!-- SNAPSHOT BODY (default, shown at loading) -->
+        <div id="feed-snapshot-body" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:0;background:#0a0f16;padding:0;overflow:hidden">
+          <!-- TOP SECTION: Status + Metrics -->
+          <div style="flex:0 0 auto;padding:8px;border-bottom:1px solid #1a2a3a;display:flex;flex-direction:column;gap:8px;overflow:hidden">
+            <!-- LIVE SNAPSHOT + ORDERS -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:0 4px">
+              <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#ffffff;font-weight:700">LIVE SNAPSHOT</div>
+              <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#fff;font-weight:700">ORDERS <span id="snap-order-count" style="margin-left:6px;background:#1a2a3a;color:#00e5ff;padding:2px 6px;border-radius:2px">0</span></div>
+            </div>
+
+            <!-- STATUS -->
+            <div style="padding:4px;background:#0a0f16;border:1px solid #1e3050;border-radius:3px;font-size:10px;color:#fff;text-align:center" id="snap-status">WAITING</div>
+
+            <!-- 2x2 Grid: P/C Ratio + B/B Ratio, Bull Vol + Bear Vol -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <!-- P/C VOL RATIO -->
+              <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;text-align:center">
+                <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:3px">P/C VOL RATIO</div>
+                <div id="snap-pc-ratio" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">0.00</div>
+                <div id="snap-pc-detail" style="font-size:8px;color:#fff;margin-top:2px">Put 0 / Call 0</div>
+              </div>
+              <!-- B/B RATIO -->
+              <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;text-align:center">
+                <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:3px">B/B RATIO</div>
+                <div id="snap-bb-ratio" style="font-size:16px;font-weight:700;color:#ff4757;font-variant-numeric:tabular-nums">0.00</div>
+                <div id="snap-bb-detail" style="font-size:8px;color:#fff;margin-top:2px">Buy 0 / Sell 0</div>
+              </div>
+              <!-- BULL VOL -->
+              <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;text-align:center">
+                <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:3px">BULL VOL</div>
+                <div id="snap-bull-vol" style="font-size:16px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">0</div>
+                <div id="snap-bull-detail" style="font-size:8px;color:#fff;margin-top:2px">BC + SP premium flow</div>
+              </div>
+              <!-- BEAR VOL -->
+              <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;text-align:center">
+                <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:3px">BEAR VOL</div>
+                <div id="snap-bear-vol" style="font-size:16px;font-weight:700;color:#ff4757;font-variant-numeric:tabular-nums">0</div>
+                <div id="snap-bear-detail" style="font-size:8px;color:#fff;margin-top:2px">SC + SP premium flow</div>
+              </div>
+            </div>
+
+            <!-- BALANCED GAUGE -->
+            <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px">
+              <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:4px">BALANCED GAUGE</div>
+              <div style="display:flex;align-items:center;gap:6px;height:16px">
+                <div style="flex:1;height:12px;background:#1a2a3a;border-radius:2px;overflow:hidden;position:relative">
+                  <div id="snap-gauge-bar" style="height:100%;background:linear-gradient(90deg,#ff4757 0%,#ffb300 50%,#00e676 100%);width:50%;transition:width 0.3s ease"></div>
+                </div>
+                <div id="snap-gauge-text" style="font-size:9px;font-weight:700;color:#00e676;min-width:60px;text-align:right">50% BC + SP</div>
+              </div>
+            </div>
+
+            <!-- NET PREMIUM SPARKLINE -->
+            <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase">NET PREMIUM</div>
+                <div id="snap-net-premium" style="font-size:12px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">$0</div>
+              </div>
+              <canvas id="snap-net-premium-sparkline" style="width:100%;height:50px;display:block;background:#050810;border:1px solid #0a1420;border-radius:2px"></canvas>
+              <div style="font-size:7px;color:#3a5570;display:flex;justify-content:space-between">
+                <span id="snap-net-premium-min">—</span>
+                <span id="snap-net-premium-max">—</span>
+              </div>
+            </div>
+
+            <!-- DEBUG PANEL (hidden, only shows in corner if needed) -->
+            <div id="snap-debug-panel" style="display:none;position:fixed;bottom:20px;right:20px;background:#050a10;border:1px solid #1e3050;border-radius:3px;padding:6px;font-size:8px;color:#888;max-height:120px;width:300px;overflow-y:auto;font-family:monospace;white-space:pre-wrap;word-break:break-all;z-index:9999">Debug: waiting for data...</div>
+
+          </div>
+          <!-- OPTION FLOW TOPS GRID: fills remaining height -->
+          <div style="flex:1;min-height:0;padding:8px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:6px;overflow:hidden">
+            <!-- TOP 3 BUY CALLS -->
+            <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+              <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:4px;flex-shrink:0">BUY CALL VOL</div>
+              <div id="snap-top-buy-calls-list" style="font-size:10px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums;flex:1;min-height:0;display:flex;flex-direction:column;gap:3px;overflow:hidden">
+                <div style="color:#fff;font-size:9px">Waiting for data...</div>
+              </div>
+            </div>
+            <!-- TOP 3 SELL CALLS -->
+            <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+              <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:4px;flex-shrink:0">SELL CALL VOL</div>
+              <div id="snap-top-sell-calls-list" style="font-size:10px;font-weight:700;color:#ff4757;font-variant-numeric:tabular-nums;flex:1;min-height:0;display:flex;flex-direction:column;gap:3px;overflow:hidden">
+                <div style="color:#fff;font-size:9px">Waiting for data...</div>
+              </div>
+            </div>
+            <!-- TOP 3 BUY PUTS -->
+            <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+              <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:4px;flex-shrink:0">BUY PUT VOL</div>
+              <div id="snap-top-buy-puts-list" style="font-size:10px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums;flex:1;min-height:0;display:flex;flex-direction:column;gap:3px;overflow:hidden">
+                <div style="color:#fff;font-size:9px">Waiting for data...</div>
+              </div>
+            </div>
+            <!-- TOP 3 SELL PUTS -->
+            <div style="background:#0a0f16;border:1px solid #1e3050;border-radius:3px;padding:6px;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+              <div style="font-size:8px;color:#fff;font-weight:700;text-transform:uppercase;margin-bottom:4px;flex-shrink:0">SELL PUT VOL</div>
+              <div id="snap-top-sell-puts-list" style="font-size:10px;font-weight:700;color:#ff4757;font-variant-numeric:tabular-nums;flex:1;min-height:0;display:flex;flex-direction:column;gap:3px;overflow:hidden">
+                <div style="color:#fff;font-size:9px">Waiting for data...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+
+    </div><!-- /bottom-panels -->
+    </div><!-- /left column: chart + bottom panels -->
+
+  </div><!-- /page-overview -->
+
+  <!-- ── RIGHT: Heatmap full height ── -->
+  <div id="ladder-resize-handle" style="width:4px;flex-shrink:0;background:#1a2a3a;cursor:ew-resize;z-index:20" onmouseenter="this.style.background='#29b6f6'" onmouseleave="this.style.background='#1a2a3a'"></div>
+  <div id="options-ladder" style="width:530px;min-width:160px;max-width:900px;flex-shrink:0;overflow-y:auto;background:#05080d;display:flex;flex-direction:column;border-left:1px solid #1a2a3a">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#0a0f16;border-bottom:1px solid #1a2a3a;position:sticky;top:0;z-index:11">
+      <span style="font-size:11px;color:#fff;text-transform:uppercase">Intensity</span>
+      <input type="range" id="ladder-intensity" min="0.1" max="3.0" value="1.4" step="0.1" style="flex:1;height:3px;accent-color:#00e5ff" oninput="setLadderIntensity(this.value)">
+      <span id="ladder-intensity-val" style="font-size:12px;color:#00e5ff;font-weight:700;min-width:36px">1.40x</span>
+      <button id="hm-refresh-btn" type="button" onclick="refreshHeatmapButton(this)" title="Refresh options chain" style="font-size:9px;padding:2px 10px;border:1px solid rgba(0,229,255,.4);border-radius:2px;background:rgba(0,229,255,.08);color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0;transition:transform .15s ease,box-shadow .15s ease,background .15s ease,color .15s ease,border-color .15s ease">REFRESH</button>
+      <div style="display:flex;gap:2px;background:#070c14;border-radius:2px;padding:2px;flex-shrink:0">
+        <button id="hm-copy-shot-btn" type="button" onclick="copyHeatmapScreenshot()" title="Copy selected heatmap/table screenshot" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;line-height:1">COPY<br>SHOT</button>
+        <button id="hm-share-x-btn" type="button" onclick="shareHeatmapShot('x')" title="Copy screenshot and open X share" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700">X</button>
+        <button id="hm-share-discord-btn" type="button" onclick="shareHeatmapShot('discord')" title="Copy screenshot and open Discord" style="font-size:9px;padding:2px 5px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700">DISCORD</button>
+      </div>
+    </div>
+    <div id="options-ladder-capture-zone" style="display:flex;flex-direction:column;flex:1;min-height:0;background:#05080d">
+    <div style="display:flex;gap:6px;align-items:center;background:#070c14;border-bottom:1px solid #1a2a3a;padding:3px 6px;position:sticky;top:31px;z-index:12">
+      <div style="display:flex;gap:2px;background:#040810;border-radius:3px;padding:2px;border:1px solid #1a2a3a">
+        <button id="hm-view-btn-heatmap" onclick="setHeatmapViewMode('heatmap')" style="font-size:9px;padding:3px 12px;border:none;border-radius:2px;background:#1a2a3a;color:#00e5ff;cursor:pointer;font-weight:700;font-family:Arial;letter-spacing:.04em;text-transform:uppercase">Heatmap</button>
+        <button id="hm-view-btn-table"   onclick="setHeatmapViewMode('table')"   style="font-size:9px;padding:3px 12px;border:none;border-radius:2px;background:transparent;color:#fff;cursor:pointer;font-weight:700;font-family:Arial;letter-spacing:.04em;text-transform:uppercase">Table</button>
+      </div>
+    </div>
+    <div id="heatmap-toolbar" style="display:grid;grid-template-columns:80px repeat(5,1fr);align-items:center;gap:8px;background:#0a0f16;border-bottom:2px solid #1a2a3a;position:sticky;top:62px;z-index:13;padding:0 0">
+      <div style="padding:5px 4px;font-size:10px;color:#5a7a99;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">STRIKE</div>
+      <div style="padding:5px 4px;font-size:10px;color:#7ab8ff;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">NET GEX</div>
+      <div style="padding:5px 4px;font-size:10px;color:#7ab8ff;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">VOL ONLY GEX</div>
+      <div style="padding:5px 4px;font-size:10px;color:#7ab8ff;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">DEX</div>
+      <div style="padding:5px 4px;font-size:10px;color:#ffb300;text-align:center;font-weight:700;text-transform:uppercase;border-right:1px solid #1a2a3a">
+        VEX
+      </div>
+      <div style="padding:5px 4px;font-size:10px;color:#ffb300;text-align:center;font-weight:700;text-transform:uppercase">
+        DELTA WEIGHTED GEX
+      </div>
+    </div>
+    <div id="ladder-header" style="display:none;grid-template-columns:90px 72px 68px 76px 76px 76px;background:#0a0f16;border-bottom:2px solid #1a2a3a;position:sticky;top:62px;z-index:10">
+      <div style="padding:5px 4px;font-size:11px;color:#7ab8ff;text-align:center;font-weight:700;border-right:1px solid #1a2a3a">NET GEX</div>
+      <div style="padding:5px 4px;font-size:11px;color:#7ab8ff;text-align:center;font-weight:700;border-right:1px solid #1a2a3a">DEX</div>
+      <div style="padding:5px 4px;font-size:11px;color:#5a7a99;text-align:center;font-weight:700;border-right:1px solid #1a2a3a">STRIKE</div>
+      <div style="padding:5px 4px;font-size:11px;color:#ffb300;text-align:center;font-weight:700;border-right:1px solid #1a2a3a">Δ UPDATE</div>
+      <div style="padding:5px 4px;font-size:11px;color:#a0d0ff;text-align:center;font-weight:700;border-right:1px solid #1a2a3a">Δ 1MIN</div>
+      <div style="padding:5px 4px;font-size:11px;color:#ff9060;text-align:center;font-weight:700">Δ 5MIN</div>
+    </div>
+    <div id="heatmap-body" style="display:block;flex:1;overflow-y:auto;min-height:0"></div>
+    <div id="ladder-body" style="display:none;flex:0 0 auto;overflow-y:auto;max-height:100%"></div>
+    </div>
+  </div>
+
+</div><!-- /page-overview -->
+
+<script>
+// ============================================================================
+// FEED TAB SWITCHER - Toggle between Signal Feed and Snapshot
+// ============================================================================
+function setFeedTab(tabName, buttonEl) {
+  const signalBody = document.getElementById('feed-signal-body');
+  const snapshotBody = document.getElementById('feed-snapshot-body');
+  const tabSignalBtn = document.getElementById('feed-tab-signal');
+  const tabSnapshotBtn = document.getElementById('feed-tab-snapshot');
+  window._activeFeedTab = tabName;
+
+  if (tabName === 'signal') {
+    // Show signal feed
+    if (signalBody) signalBody.style.display = 'flex';
+    if (snapshotBody) snapshotBody.style.display = 'none';
+    // Update button styles
+    if (tabSignalBtn) {
+      tabSignalBtn.style.background = '#1a2a3a';
+      tabSignalBtn.style.color = '#00e5ff';
+    }
+    if (tabSnapshotBtn) {
+      tabSnapshotBtn.style.background = 'transparent';
+      tabSnapshotBtn.style.color = '#3a5570';
+    }
+  } else if (tabName === 'snapshot') {
+    // Show snapshot
+    if (signalBody) signalBody.style.display = 'none';
+    if (snapshotBody) snapshotBody.style.display = 'flex';
+    // Update button styles
+    if (tabSignalBtn) {
+      tabSignalBtn.style.background = 'transparent';
+      tabSignalBtn.style.color = '#3a5570';
+    }
+    if (tabSnapshotBtn) {
+      tabSnapshotBtn.style.background = '#1a2a3a';
+      tabSnapshotBtn.style.color = '#00e5ff';
+    }
+    // Load snapshot data
+    loadSnapshotData();
+    startSnapshotUpdates();
+  }
+}
+
+// ============================================================================
+// LOAD SNAPSHOT DATA - Fetch and display snapshot from bzila flow state
+// ============================================================================
+function loadSnapshotData() {
+  try {
+    // Get snapshot data from window.bzila (from spx-flow.js)
+    const bzila = window.bzila || {};
+    const cache = window._snapshotMetricCache || (window._snapshotMetricCache = {});
+    const readMetric = (key, fallback) => {
+      const value = bzila[key];
+      if (value !== undefined && value !== null && !(typeof value === 'number' && !Number.isFinite(value))) {
+        cache[key] = value;
+        return value;
+      }
+      if (cache[key] !== undefined) return cache[key];
+      return fallback;
+    };
+
+    // Debug: log what we have
+    if (!window._snapshotDebugLogged) {
+      window._snapshotDebugLogged = true;
+      console.log('[SNAPSHOT] bzila:', bzila);
+      console.log('[SNAPSHOT] bzila.recentTrades:', bzila.recentTrades);
+      console.log('[SNAPSHOT] orders count:', bzila.recentTrades?.length || 0);
+    }
+
+    // P/C VOL RATIO
+    const putVol = Number(readMetric('putVol', 0)) || 0;
+    const callVol = Number(readMetric('callVol', 0)) || 0;
+    const pcRatio = callVol > 0 ? putVol / callVol : 0;
+    const pcEl = document.getElementById('snap-pc-ratio');
+    if (pcEl) pcEl.textContent = pcRatio.toFixed(2);
+    const pcDetailEl = document.getElementById('snap-pc-detail');
+    if (pcDetailEl) pcDetailEl.textContent = `Put ${putVol.toLocaleString()} / Call ${callVol.toLocaleString()}`;
+
+    // B/B RATIO (Buy/Sell ratio)
+    const buyVol = Number(readMetric('buyVol', 0)) || 0;
+    const sellVol = Number(readMetric('sellVol', 0)) || 0;
+    const bbRatio = buyVol / Math.max(sellVol, 1);
+    const bbEl = document.getElementById('snap-bb-ratio');
+    if (bbEl) bbEl.textContent = bbRatio.toFixed(2);
+    const bbDetailEl = document.getElementById('snap-bb-detail');
+    if (bbDetailEl) bbDetailEl.textContent = `Buy ${buyVol.toLocaleString()} / Sell ${sellVol.toLocaleString()}`;
+
+    // BULL VOL
+    const bullVolEl = document.getElementById('snap-bull-vol');
+    const bullVol = Number(readMetric('bullVol', 0)) || 0;
+    if (bullVolEl) bullVolEl.textContent = bullVol.toLocaleString();
+
+    // BEAR VOL
+    const bearVolEl = document.getElementById('snap-bear-vol');
+    const bearVol = Number(readMetric('bearVol', 0)) || 0;
+    if (bearVolEl) bearVolEl.textContent = bearVol.toLocaleString();
+
+    const trades = Array.isArray(bzila.recentTrades) ? bzila.recentTrades : [];
+    const strikeSums = { bull: new Map(), bear: new Map() };
+    trades.forEach(trade => {
+      const strike = trade?.strike ?? trade?.price;
+      if (strike === undefined || strike === null || strike === '') return;
+      const type = String(trade?.type || '').toUpperCase();
+      const side = String(trade?.side || '').toUpperCase();
+      const size = Number(trade?.size) || 0;
+      const premium = Math.abs(size);
+      const isBull = (side === 'BUY' && type === 'CALL') || (side === 'SELL' && type === 'PUT');
+      const isBear = (side === 'SELL' && type === 'CALL') || (side === 'BUY' && type === 'PUT');
+      if (isBull) strikeSums.bull.set(String(strike), (strikeSums.bull.get(String(strike)) || 0) + premium);
+      if (isBear) strikeSums.bear.set(String(strike), (strikeSums.bear.get(String(strike)) || 0) + premium);
+    });
+    const topStrikeLabel = (map, fallback) => {
+      if (!map.size) return fallback;
+      const [strike] = [...map.entries()].sort((a, b) => b[1] - a[1])[0];
+      return `Top strike ${strike}`;
+    };
+    const bullDetailEl = document.getElementById('snap-bull-detail');
+    if (bullDetailEl) bullDetailEl.textContent = `BC + SP premium flow${trades.length ? ` • ${topStrikeLabel(strikeSums.bull, 'Top strike —')}` : ''}`;
+    const bearDetailEl = document.getElementById('snap-bear-detail');
+    if (bearDetailEl) bearDetailEl.textContent = `SC + SP premium flow${trades.length ? ` • ${topStrikeLabel(strikeSums.bear, 'Top strike —')}` : ''}`;
+
+    // BALANCED GAUGE
+    const bullPct = Number(readMetric('bullPct', 0.5));
+    const gaugeBar = document.getElementById('snap-gauge-bar');
+    const gaugeText = document.getElementById('snap-gauge-text');
+    if (gaugeBar) gaugeBar.style.width = (bullPct * 100) + '%';
+    if (gaugeText) {
+      const pct = (bullPct * 100).toFixed(0);
+      gaugeText.textContent = pct + '% BC + SP';
+      gaugeText.style.color = bullPct > 0.5 ? '#00e676' : bullPct < 0.5 ? '#ff4757' : '#ffb300';
+    }
+
+    // NET PREMIUM - Calculate live from current chain and render sparkline
+    let netPrem = 0;
+    if (window.AppState?.rawChain && window.AppState?.spotPrice && typeof window.CALC?.calculateNetPremium === 'function') {
+      netPrem = window.CALC.calculateNetPremium(window.AppState.rawChain, window.AppState.spotPrice, 'net');
+    } else {
+      // Fallback to stored metric if calculation unavailable
+      netPrem = Number(readMetric('netPremium', 0)) || 0;
+    }
+
+    const netPremEl = document.getElementById('snap-net-premium');
+    if (netPremEl) {
+      const absVal = Math.abs(netPrem);
+      let displayText = '';
+      if (absVal >= 1e9) {
+        displayText = (netPrem >= 0 ? '+' : '-') + '$' + (absVal / 1e9).toFixed(2) + 'B';
+      } else if (absVal >= 1e6) {
+        displayText = (netPrem >= 0 ? '+' : '-') + '$' + (absVal / 1e6).toFixed(1) + 'M';
+      } else {
+        displayText = (netPrem >= 0 ? '+' : '-') + '$' + absVal.toLocaleString();
+      }
+      netPremEl.textContent = displayText;
+      netPremEl.style.color = netPrem >= 0 ? '#00e676' : netPrem < 0 ? '#ff4757' : '#ffb300';
+    }
+
+    // Render Net Premium Sparkline
+    const netPremHistory = window.getNetPremiumHistory?.() || [];
+    if (netPremHistory.length > 0 && typeof renderGreekSparklineCanvas === 'function') {
+      renderGreekSparklineCanvas('snap-net-premium-sparkline', netPremHistory, 'rgb(255, 159, 64)');
+
+      // Update min/max
+      const vals = netPremHistory.map(p => p.value);
+      const minVal = Math.min(...vals);
+      const maxVal = Math.max(...vals);
+
+      const minEl = document.getElementById('snap-net-premium-min');
+      const maxEl = document.getElementById('snap-net-premium-max');
+
+      if (minEl) {
+        const minAbs = Math.abs(minVal);
+        if (minAbs >= 1e6) {
+          minEl.textContent = (minVal >= 0 ? '+' : '-') + '$' + (minAbs / 1e6).toFixed(1) + 'M';
+        } else {
+          minEl.textContent = (minVal >= 0 ? '+' : '-') + '$' + minAbs.toLocaleString();
+        }
+      }
+
+      if (maxEl) {
+        const maxAbs = Math.abs(maxVal);
+        if (maxAbs >= 1e6) {
+          maxEl.textContent = (maxVal >= 0 ? '+' : '-') + '$' + (maxAbs / 1e6).toFixed(1) + 'M';
+        } else {
+          maxEl.textContent = (maxVal >= 0 ? '+' : '-') + '$' + maxAbs.toLocaleString();
+        }
+      }
+    }
+
+    // Save net premium to database via proxy (fire and forget)
+    if (netPrem !== 0 && typeof window.API?.proxy === 'function') {
+      const now = new Date();
+      const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+
+      window.API.proxy('POST', '/metrics/net-premium', {
+        timestamp: etTime.toISOString(),
+        value: netPrem,
+        spotPrice: window.AppState.spotPrice,
+        sessionTime: etTime.getHours() * 60 + etTime.getMinutes()
+      }).catch(err => {
+        console.debug('Net premium save via proxy skipped');
+      });
+    }
+
+    /* Top-3 snapshot lists are rendered by overview.js so this panel
+       does not compete with the live accumulator and cause flicker.
+    // TOP 3 GEX STRIKES - use bzila flow data
+    const topBuyCallsList = document.getElementById('snap-top-buy-calls-list');
+    const topSellCallsList = document.getElementById('snap-top-sell-calls-list');
+    const topBuyPutsList = document.getElementById('snap-top-buy-puts-list');
+    const topSellPutsList = document.getElementById('snap-top-sell-puts-list');
+
+    // Try to get orders from bzila.recentTrades
+    let orders = (bzila.recentTrades && Array.isArray(bzila.recentTrades)) ? bzila.recentTrades : [];
+
+    // Fallback: try to load from localStorage if WebSocket hasn't sent data yet
+    if (orders.length === 0) {
+      try {
+        const saved = localStorage.getItem('spxFlow_v1');
+        if (saved) {
+          const data = JSON.parse(saved);
+          // Reconstruct recent trades from saved state (or use cached data)
+          orders = [];
+        }
+      } catch (e) {}
+    }
+
+    const renderList = (arr) => {
+      if (arr.length === 0) return '<div style="color:#fff;font-size:10px">—</div>';
+      return arr.map((o, i) => {
+        // Format size as premium (divide by 100 if it's a large number, format as $)
+        const sizeNum = o.size || 0;
+        const premium = sizeNum > 1000 ? '$' + (sizeNum / 1000).toFixed(1) + 'K' : '$' + sizeNum;
+        const strikeOrPrice = o.strike || o.price || '—';
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:1px;font-size:10px">
+            <div style="display:flex;justify-content:space-between;gap:4px">
+              <span style="color:#fff">${i+1}</span>
+              <span style="color:#fff;flex:1;text-align:right">${strikeOrPrice}</span>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:4px;font-size:9px;color:#888">
+              <span>${premium}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    };
+
+    if (orders.length > 0) {
+      console.log('[SNAPSHOT] Orders available:', orders.length, 'first:', orders[0]);
+
+      // Group by side/type and get top 3 by size
+      const buyCalls = orders.filter(o => o.side === 'BUY' && o.type === 'CALL').sort((a,b) => (b.size||0) - (a.size||0)).slice(0, 3);
+      const sellCalls = orders.filter(o => o.side === 'SELL' && o.type === 'CALL').sort((a,b) => (b.size||0) - (a.size||0)).slice(0, 3);
+      const buyPuts = orders.filter(o => o.side === 'BUY' && o.type === 'PUT').sort((a,b) => (b.size||0) - (a.size||0)).slice(0, 3);
+      const sellPuts = orders.filter(o => o.side === 'SELL' && o.type === 'PUT').sort((a,b) => (b.size||0) - (a.size||0)).slice(0, 3);
+
+      if (topBuyCallsList) topBuyCallsList.innerHTML = renderList(buyCalls);
+      if (topSellCallsList) topSellCallsList.innerHTML = renderList(sellCalls);
+      if (topBuyPutsList) topBuyPutsList.innerHTML = renderList(buyPuts);
+      if (topSellPutsList) topSellPutsList.innerHTML = renderList(sellPuts);
+    } else {
+      // No data available yet
+      const emptyMsg = '<div style="color:#fff;font-size:10px">—</div>';
+      if (topBuyCallsList) topBuyCallsList.innerHTML = emptyMsg;
+      if (topSellCallsList) topSellCallsList.innerHTML = emptyMsg;
+      if (topBuyPutsList) topBuyPutsList.innerHTML = emptyMsg;
+      if (topSellPutsList) topSellPutsList.innerHTML = emptyMsg;
+    }
+
+    */
+    // ORDER COUNT
+    const orderCount = document.getElementById('snap-order-count');
+    if (orderCount) orderCount.textContent = (Number(readMetric('orderCount', 0)) || 0).toLocaleString();
+
+    // STATUS
+    const status = document.getElementById('snap-status');
+    if (status) {
+      const statusText = readMetric('status', 'WAITING') || 'WAITING';
+      status.textContent = statusText;
+      status.style.color = statusText === 'LIVE' ? '#00e676' : '#3a5570';
+    }
+  } catch (err) {
+    console.error('Snapshot load failed:', err);
+  }
+}
+
+window.updateSnapshotMetrics = function() {
+  loadSnapshotData();
+};
+
+// ============================================================================
+// SNAPSHOT BUTTON HANDLERS
+// ============================================================================
+function refreshFeedPanel() {
+  if (typeof refreshSignalFeed === 'function') refreshSignalFeed();
+  const btn = document.getElementById('feed-refresh-btn');
+  if (btn) {
+    btn.style.opacity = '0.5';
+    setTimeout(() => btn.style.opacity = '1', 200);
+  }
+}
+
+function copySnapshotScreenshot() {
+  try {
+    if (typeof window.copyFeedPanelScreenshot === 'function') {
+      return window.copyFeedPanelScreenshot();
+    }
+  } catch (err) {
+    console.error('Copy failed:', err);
+  }
+}
+
+function shareSnapshot(platform) {
+  try {
+    window.copyFeedPanelScreenshot().then(() => {
+      if (platform === 'x') {
+        window.open('https://twitter.com/intent/tweet', '_blank', 'noopener,noreferrer');
+      } else if (platform === 'discord') {
+        alert('Panel screenshot copied! Paste in Discord.');
+      }
+    });
+  } catch (err) {
+    console.error('Share failed:', err);
+  }
+}
+
+window.copyFeedPanelScreenshot = async function() {
+  const btn = document.getElementById('feed-copy-shot-btn');
+  const restoreText = 'COPY';
+  try {
+    if (btn) { btn.textContent = '...'; btn.style.color = '#ffb300'; }
+    const html2canvasFn = await (typeof window.loadHtml2CanvasSafe === 'function'
+      ? window.loadHtml2CanvasSafe()
+      : Promise.resolve(window.html2canvas));
+    if (typeof html2canvasFn !== 'function') throw new Error('html2canvas unavailable');
+    const activeTab = window._activeFeedTab
+      || (document.getElementById('feed-snapshot-body')?.style.display !== 'none' ? 'snapshot' : 'signal');
+    const target = activeTab === 'snapshot'
+      ? document.getElementById('feed-snapshot-body')
+      : document.getElementById('panel-mvc');
+    if (!target) throw new Error('feed panel missing');
+    const canvas = await html2canvasFn(target, {
+      backgroundColor: '#0a0f16',
+      scale: Math.min(2, window.devicePixelRatio || 1),
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      ignoreElements: el => el.id === 'feed-copy-shot-btn' || el.id === 'feed-share-x-btn' || el.id === 'feed-share-discord-btn'
+    });
+    const blob = await new Promise((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error('capture failed')), 'image/png'));
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') throw new Error('clipboard unavailable');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    if (btn) { btn.textContent = '✓'; btn.style.color = '#00e676'; setTimeout(() => { btn.textContent = restoreText; btn.style.color = '#00e5ff'; }, 1500); }
+    return true;
+  } catch (err) {
+    console.error('Feed screenshot copy failed:', err);
+    if (btn) { btn.textContent = 'ERR'; btn.style.color = '#ff4757'; setTimeout(() => { btn.textContent = restoreText; btn.style.color = '#00e5ff'; }, 1500); }
+    return false;
+  }
+};
+
+
+// Auto-update snapshot every 1000ms when visible (optimized to reduce reflows)
+let snapUpdateInterval = null;
+
+function startSnapshotUpdates() {
+  if (snapUpdateInterval) return;
+  snapUpdateInterval = setInterval(() => {
+    const snapshotBody = document.getElementById('feed-snapshot-body');
+    if (snapshotBody && snapshotBody.style.display === 'flex') {
+      loadSnapshotData();
+    }
+  }, 500); // Update every 500ms to catch chart updates quickly
+
+  // Also update whenever the chart renders
+  const origDrawChart = window.drawOverviewChart;
+  if (origDrawChart) {
+    window.drawOverviewChart = function() {
+      const result = origDrawChart.apply(this, arguments);
+      setTimeout(() => loadSnapshotData(), 100);
+      return result;
+    };
+  }
+}
+
+// Initialize snapshot data immediately and keep updating
+(function() {
+  console.log('[SNAPSHOT-INIT] Starting snapshot initialization');
+
+  // Load immediately
+  loadSnapshotData();
+  startSnapshotUpdates();
+
+  // Also try when page fully loads
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('[SNAPSHOT-INIT] DOMContentLoaded fired');
+      loadSnapshotData();
+    });
+  } else {
+    console.log('[SNAPSHOT-INIT] Page already loaded');
+  }
+
+  // Also retry every 2 seconds to catch data when it arrives
+  setInterval(() => {
+    loadSnapshotData();
+  }, 2000);
+})();
+
+function stopSnapshotUpdates() {
+  if (snapUpdateInterval) {
+    clearInterval(snapUpdateInterval);
+    snapUpdateInterval = null;
+  }
+}
+
+// Start updates on page load
+window.addEventListener('load', () => {
+  if (!window._activeFeedTab) {
+    const snapshotBody = document.getElementById('feed-snapshot-body');
+    window._activeFeedTab = snapshotBody && snapshotBody.style.display !== 'none' ? 'snapshot' : 'signal';
+  }
+  loadSnapshotData();
+  startSnapshotUpdates();
+});
+</script>
+
+<script>
+// ============================================================================
+// MANUAL MVC SNAPSHOT - Collects current GEX state and saves to database
+// ============================================================================
+async function takeManualMVCSnapshot() {
+  if (!window.AppState) {
+    alert('App not ready');
+    return;
+  }
+
+  try {
+    const now = new Date();
+    const etNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+
+    // Get current chart mode (OI+Vol or Vol Only)
+    const chartMode = window.AppState?.gexChartDataMode || 'oi-vol';
+    
+    // Collect OI+Vol data - pass RAW values, DB converts to billions
+    const mvcOIVol = window.AppState?.mvcOIVol || { strike: null, value: 0, volume: 0 };
+    const totalNetGEX_OI = window.AppState?.totalNetGEX || 0;
+    
+    // Collect Vol Only data - pass RAW values
+    const mvcVolOnly = window.AppState?.mvcVolOnly || { strike: null, value: 0, volume: 0 };
+    const totalNetGEX_Vol = window.AppState?.totalNetGEX_Vol || 0;
+    
+    // Get current SPX price from GEX levels or AppState
+    const spxPrice = window.AppState?.currentPrice?.spx || 
+                     window.AppState?.spxPrice || 
+                     parseFloat(document.getElementById('ov-netgex')?.textContent?.replace(/[^\d.-]/g, '')) || 0;
+    
+    // Get DEX data - pass RAW values
+    const netDexStrike = window.AppState?.netDexStrike || { value: 0 };
+    const totalNetDEX_OI = window.AppState?.totalNetDEX_OI || 0;
+    const totalNetDEX_Vol = window.AppState?.totalNetDEX_Vol || 0;
+    
+    // Get expiration (0DTE by default)
+    const expiration = window.AppState?.selectedExpiration || '0-DTE';
+    
+    // Save snapshot (fire and forget)
+    DB.saveMVCSnapshot(
+      mvcOIVol,           // {strike, value(raw), volume}
+      mvcVolOnly,         // {strike, value(raw), volume}
+      spxPrice,
+      window.AppState?.currentPrice?.es || window.AppState?.esPrice || 0,
+      expiration,
+      'manual',
+      totalNetGEX_OI,     // raw value
+      netDexStrike,       // {value(raw)}
+      totalNetDEX_OI,     // raw value
+      totalNetDEX_Vol,    // raw value
+      totalNetGEX_Vol,    // raw value
+      window.flipPoint    // GEX flip point
+    ).then(() => {
+      if (window.dbRefreshAll) {
+        window.dbRefreshAll().catch(e => console.warn('DB refresh failed:', e));
+      }
+    }).catch(err => {
+      console.error('Snapshot save failed:', err);
+    });
+    
+    // Show button feedback immediately (don't wait for save)
+    
+    const snapBtn = document.getElementById('gex-snap-btn');
+    if (snapBtn) {
+      snapBtn.style.background = '#0d6a2a';
+      snapBtn.textContent = '✓ SNAP';
+      setTimeout(() => {
+        snapBtn.style.background = '#1a3a2a';
+        snapBtn.textContent = '🔵 SNAP';
+      }, 2000);
+    }
+    
+    console.log('✓ Snapshot saved:', { mvcOIVol, mvcVolOnly, spxPrice, totalNetGEX_OI, totalNetGEX_Vol });
+  } catch (err) {
+    console.error('Snapshot failed:', err);
+    alert(`Snapshot failed: ${err.message}`);
+  }
+}
+</script>

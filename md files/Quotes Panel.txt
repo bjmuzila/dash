@@ -1,0 +1,60 @@
+Quotes Panel % Change Fix — Complete Summary
+The Problem
+The quotes panel was showing 0.00% for all symbols (VIX, ES, NQ, SPX, QQQ, AAPL, etc.) despite having correct live prices from dxLink WebSocket.
+Root Causes & Solutions (in order)
+1. Missing Summary Events in Browser
+
+Problem: dxLink was sending Summary events (which contain prevDayClosePrice), but the browser wasn't caching them.
+Solution: Added dxSummaryCache = {} on browser and code to cache Summary events when they arrive via WebSocket.
+
+2. normalizeDxFeedData Missing Summary
+
+Problem: The browser's normalizeDxFeedData() function didn't have Summary in its fieldsByType object, so it returned empty arrays for Summary events.
+Solution: Added Summary: ['openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice'] to fieldsByType.
+
+3. Quote Building Not Using Summary Cache
+
+Problem: The code building quotesData was reading dxQuoteCache for prev-close but dxQuoteCache only has Quote events (bid/ask), not Summary data.
+Solution: Updated the quote building loop to also read from dxSummaryCache[sym] and use s.prevDayClosePrice in the prev-close fallback chain.
+
+4. ES/NQ Symbol Key Mismatch
+
+Problem: Browser subscribes /ESM26 but dxLink cache keys are /ES:XCME. Lookup was failing.
+Solution: Added dxKeyMap in fetchQuotes to map /ESM26 → /ES:XCME and /NQM26 → /NQ:XCME for cache lookups.
+
+5. TT Market-Data API Not Seeding Prev-Close
+
+Problem: Code was trying to fetch prev-close from TT /market-data/by-type endpoint at proxy startup but the response wasn't being parsed (wrong field names).
+Solution: Fixed field name from item['previous-close'] to item['prev-close'] to match actual API response structure.
+
+6. Early Summary Render Causing 0% (Price Missing)
+
+Problem: renderQuotes() was being called immediately when Summary arrived, but dxLink Quote/Trade events hadn't populated prices yet. Resulted in price: 0, making % calculation fail.
+Solution: Removed the immediate renderQuotes() call and let Summary silently cache. Quotes render on normal tick cycle when prices exist.
+
+7. todayRegularClose Overriding Correct Prev-Close
+
+Problem: fetchTodayRegularSessionClose() was calling Yahoo Finance and returning today's intraday close (~309.92 for AAPL), which overrode the correct previous day close (315.2).
+Solution: Disabled the todayRegularClose override since market-data prev-close is more reliable.
+
+8. Futures Using Wrong Close Reference
+
+Problem: ES/NQ were showing -0.42% when TradingView showed -0.25%. The issue: futures use CME settlement (5pm ET open = dayOpenPrice) not prevDayClosePrice.
+Solution: For futures symbols, use s.dayOpenPrice (CME settlement reference) instead of s.prevDayClosePrice.
+
+Final Architecture
+Data Flow:
+
+Proxy seeded at startup with prev-closes from TT /market-data/by-type API
+dxLink Summary events arrive with dayOpenPrice, dayLowPrice, prevDayClosePrice fields
+Browser caches Summary into dxSummaryCache
+fetchQuotes() reads from dxSummaryCache (or market-data fallback) for prev-close
+Quotes panel displays correct % change = (price - prevClose) / prevClose * 100
+
+Special handling:
+
+Equities: Use prevDayClosePrice from Summary
+Futures (ES/NQ): Use dayOpenPrice from Summary (CME settlement)
+VIX: Uses hardcoded fallback if needed
+
+The quotes panel now shows accurate % changes matching TradingView in real-time.

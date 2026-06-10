@@ -1,10 +1,12 @@
 const fs = require("fs");
 const http = require("http");
+const https = require("https");
 const path = require("path");
 
 const ROOT = __dirname;
 const PORT = 8080;
 const PROXY_PORT = 3001;
+const FEED_ALERT_DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1513884964490444830/REDACTED";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -59,6 +61,50 @@ function proxyToTastytrade(req, res) {
   req.pipe(forwarded);
 }
 
+function proxyToDiscordWebhook(req, res) {
+  const target = new URL(FEED_ALERT_DISCORD_WEBHOOK_URL);
+  let body = [];
+
+  req.on("data", (chunk) => body.push(chunk));
+  req.on("end", () => {
+    const payload = Buffer.concat(body);
+    const forwarded = https.request(
+      {
+        hostname: target.hostname,
+        port: target.port || 443,
+        path: `${target.pathname}${target.search}`,
+        method: req.method,
+        headers: {
+          "Content-Type": req.headers["content-type"] || "application/json",
+          "Content-Length": payload.length,
+          "User-Agent": req.headers["user-agent"] || "spx-gex-dashboard",
+        }
+      },
+      (proxyRes) => {
+        const chunks = [];
+        proxyRes.on("data", (chunk) => chunks.push(chunk));
+        proxyRes.on("end", () => {
+          const responseBody = Buffer.concat(chunks);
+          res.writeHead(proxyRes.statusCode || 502, {
+            "Access-Control-Allow-Origin": "*",
+            "Content-Type": proxyRes.headers["content-type"] || "application/json; charset=utf-8"
+          });
+          res.end(responseBody);
+        });
+      }
+    );
+
+    forwarded.on("error", (error) => {
+      send(res, 502, JSON.stringify({ error: "Discord webhook unavailable", detail: error.message }), {
+        "Content-Type": "application/json; charset=utf-8"
+      });
+    });
+
+    if (payload.length) forwarded.write(payload);
+    forwarded.end();
+  });
+}
+
 function serveFile(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
@@ -79,6 +125,11 @@ function serveFile(req, res) {
 const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") {
     send(res, 204, "");
+    return;
+  }
+
+  if (req.url.startsWith("/proxy/discord-webhook")) {
+    proxyToDiscordWebhook(req, res);
     return;
   }
 

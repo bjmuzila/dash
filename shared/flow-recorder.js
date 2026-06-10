@@ -78,6 +78,15 @@
     return parseInt(m[1], 10) / 1000;
   }
 
+  function isOtmOption(symbol, optType) {
+    const strike = getOptionStrike(symbol);
+    const refPrice = state.spxPrice || state.esPrice || 0;
+    if (!strike || !refPrice) return false;
+    if (optType === 'C') return strike > refPrice;
+    if (optType === 'P') return strike < refPrice;
+    return false;
+  }
+
   function isSpx0DTE(symbol) {
     const m = String(symbol || '').match(/(\d{6})[CP]\d{8}$/);
     if (!m) return false;
@@ -116,10 +125,10 @@
   }
 
   function processQuote(item) {
-    const symbol = item.eventSymbol || '';
+    const symbol = typeof item.eventSymbol === 'string' ? item.eventSymbol : '';
     const bid = parseFloat(item.bidPrice || 0);
     const ask = parseFloat(item.askPrice || 0);
-    if (!(bid > 0) || !(ask > 0)) return;
+    if (!symbol || !(bid > 0) || !(ask > 0)) return;
     if (symbol.startsWith('.SPXW') || symbol.startsWith('SPXW')) state.spxQuotes[symbol] = { bid, ask, ts: Date.now() };
     if (symbol.startsWith('/ES') || symbol.startsWith('/NQ')) state.futureQuotes[symbol] = { bid, ask, ts: Date.now() };
   }
@@ -128,16 +137,15 @@
     const symbol = item.eventSymbol || '';
     if (!isSpx0DTE(symbol)) return;
     const optType = getOptionType(symbol);
-    const strike = getOptionStrike(symbol);
-    const refPrice = state.spxPrice || state.esPrice || 0;
-    if (!optType || !strike || !refPrice) return;
-    if (optType === 'C' && strike <= refPrice) return;
-    if (optType === 'P' && strike >= refPrice) return;
+    if (!optType) return;
+    if (!isOtmOption(symbol, optType)) return;
 
     const tradePrice = parseFloat(item.price || 0);
     const size = parseInt(item.size || 0, 10);
     if (!(tradePrice > 0) || !size) return;
-    const direction = getAggressorDirection(item, state.spxQuotes[symbol]);
+
+    const quote = state.spxQuotes[symbol];
+    const direction = getAggressorDirection(item, quote);
     if (!direction) return;
     const signedPremium = tradePrice * size * 100 * direction;
     if (optType === 'C') state.bucket.callPremium += signedPremium;
@@ -175,15 +183,18 @@
 
   async function flushMinute() {
     ensureSession();
-    if (typeof DB === 'undefined' || !DB?.db) return;
+    if (typeof DB === 'undefined' || !DB?.db || typeof DB.saveMinutePremiumFlow !== 'function') return;
     const price = state.spxPrice || state.esPrice || 0;
     const bucket = state.bucket;
     state.bucket = { callPremium: 0, putPremium: 0 };
     try {
-      await Promise.all([
-        DB.saveMinutePremiumFlow(bucket.callPremium, bucket.putPremium, price),
-        DB.saveMinuteCumulativeDelta(state.cvd || 0, state.esPrice || price)
-      ]);
+      const writes = [
+        DB.saveMinutePremiumFlow(bucket.callPremium, bucket.putPremium, price)
+      ];
+      if (typeof DB.saveMinuteCumulativeDelta === 'function') {
+        writes.push(DB.saveMinuteCumulativeDelta(state.cvd || 0, state.esPrice || price));
+      }
+      await Promise.all(writes);
     } catch (err) {
       state.bucket.callPremium += bucket.callPremium;
       state.bucket.putPremium += bucket.putPremium;
@@ -210,7 +221,8 @@
             return;
           }
           if (type !== 'Trade' && type !== 'TradeETH') return;
-          const symbol = item.eventSymbol || '';
+          const symbol = typeof item.eventSymbol === 'string' ? item.eventSymbol : '';
+          if (!symbol) return;
           if (symbol.startsWith('.SPXW') || symbol.startsWith('SPXW')) processSpxTrade(item);
           else processFutureTrade(item);
         });

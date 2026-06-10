@@ -1,0 +1,118 @@
+<script>
+if (!window.__insightsTimerTracker) {
+  window.__insightsTimerTracker = { intervals: new Set(), timeouts: new Set() };
+  const __setInterval = window.setInterval.bind(window);
+  const __setTimeout = window.setTimeout.bind(window);
+  const __clearInterval = window.clearInterval.bind(window);
+  const __clearTimeout = window.clearTimeout.bind(window);
+  window.setInterval = function(fn, delay, ...args) {
+    const id = __setInterval(fn, delay, ...args);
+    window.__insightsTimerTracker.intervals.add(id);
+    return id;
+  };
+  window.setTimeout = function(fn, delay, ...args) {
+    const id = __setTimeout(fn, delay, ...args);
+    window.__insightsTimerTracker.timeouts.add(id);
+    return id;
+  };
+  window.clearInterval = function(id) {
+    window.__insightsTimerTracker.intervals.delete(id);
+    return __clearInterval(id);
+  };
+  window.clearTimeout = function(id) {
+    window.__insightsTimerTracker.timeouts.delete(id);
+    return __clearTimeout(id);
+  };
+  window.__insightsTimerTracker.clear = function() {
+    this.intervals.forEach(id => __clearInterval(id));
+    this.timeouts.forEach(id => __clearTimeout(id));
+    this.intervals.clear();
+    this.timeouts.clear();
+  };
+}
+</script>
+<style>
+  #insights-shell { display:flex; flex:1; flex-direction:column; min-height:0; overflow:hidden; background:var(--bg0); }
+  #insights-tabs { display:flex; gap:0; border-bottom:1px solid var(--border); background:var(--bg1); padding:10px 16px; }
+  #insights-tabs button { padding:0 12px; border:none; background:transparent; color:var(--text2); font-size:10px; font-weight:800; cursor:pointer; border-bottom:2px solid transparent; padding-bottom:4px; transition:.2s; }
+  #insights-tabs button.active { color:var(--cyan); border-bottom-color:rgba(0,229,255,.45); }
+  #insights-content { flex:1; min-height:0; overflow:auto; position:relative; }
+</style>
+<div id="insights-shell">
+  <div id="insights-tabs">
+    <button data-tab="exposure" class="active" onclick="window.switchInsightsTab('exposure')">EXPOSURE STACK</button>
+    <button data-tab="ib" onclick="window.switchInsightsTab('ib')">IB LOGIC & AI</button>
+    <button data-tab="chain" onclick="window.switchInsightsTab('chain')">OPTIONS CHAIN</button>
+  </div>
+  <div id="insights-content">
+    <div id="insights-loader" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-family:Arial,sans-serif">Loading...</div>
+  </div>
+</div>
+<script>
+(function() {
+  const TAB_PATHS = {
+    exposure: 'pages/insights/exposure/exposure.html',
+    'initial-balance': 'pages/insights/initial-balance/initial-balance.html',
+    ib: 'pages/insights/initial-balance/initial-balance.html',
+    chain: 'pages/insights/options-chain/options-chain.html'
+  };
+
+  const TAB_SCRIPTS = {
+    exposure: 'pages/insights/exposure/exposure.js',
+    'initial-balance': 'pages/insights/initial-balance/initial-balance.js',
+    ib: 'pages/insights/initial-balance/initial-balance.js',
+    chain: 'pages/insights/options-chain/options-chain.js'
+  };
+
+  async function loadTab(tabName) {
+    const content = document.getElementById('insights-content');
+    const loader = document.getElementById('insights-loader');
+    const htmlPath = TAB_PATHS[tabName] || TAB_PATHS.exposure;
+    const scriptPath = TAB_SCRIPTS[tabName] || TAB_SCRIPTS.exposure;
+    if (loader) loader.textContent = 'Loading...';
+    const res = await fetch(htmlPath, { cache: 'no-store' });
+    const html = res.ok ? await res.text() : `<div style="padding:24px;color:#ff4757">Failed to load ${tabName}</div>`;
+    if (content) content.innerHTML = html;
+    const existing = document.querySelector(`script[data-insights-tab="${tabName}"]`);
+    if (existing) existing.remove();
+    const script = document.createElement('script');
+    script.src = scriptPath;
+    script.dataset.insightsTab = tabName;
+    await new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = () => reject(new Error(`Failed to load ${scriptPath}`));
+      document.body.appendChild(script);
+    });
+    const activeBtn = document.querySelectorAll('#insights-tabs button');
+    activeBtn.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tabName));
+    const initMap = {
+      exposure: 'init_insights_exposure',
+      ib: 'init_insights_initial_balance',
+      chain: 'init_insights_options_chain'
+    };
+    const initName = initMap[tabName] || initMap.exposure;
+    if (typeof window[initName] === 'function') {
+      requestAnimationFrame(() => window[initName]());
+    }
+  }
+
+  window.switchInsightsTab = function(tabName) {
+    loadTab(tabName).catch(err => {
+      const content = document.getElementById('insights-content');
+      if (content) content.innerHTML = `<div style="padding:24px;color:#ff4757">Failed to load ${tabName}: ${err.message}</div>`;
+    });
+  };
+
+  window.init_insights = function init_insights() {
+    window.switchInsightsTab('exposure');
+  };
+
+  if (window.PageRuntime?.register) {
+    window.PageRuntime.register('insights', () => {
+      if (window.__insightsTimerTracker?.clear) window.__insightsTimerTracker.clear();
+    });
+  }
+
+  window.init_insights();
+})();
+</script>

@@ -1,0 +1,985 @@
+<script>
+window.addEventListener('api-ready', () => {
+  if(window.init_database) window.init_database();
+});
+</script>
+<!-- PAGE: ESTIMATED MOVES -->
+<div id="page-database" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+  <div style="padding:7px 16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:15px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">Estimated Moves</span>
+      <span id="em-target-date" style="font-size:12px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase"></span>
+      <div id="em-period-tabs" style="display:flex;align-items:center;gap:4px;margin-left:8px">
+        <button class="em-period-tab" data-period="daily" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('daily')" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:12px;padding:6px 10px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Daily</button>
+        <button class="em-period-tab" data-period="weekly" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('weekly')" style="background:#0a1628;border:1px solid #1e3a5f;color:#5a7a99;font-size:12px;padding:6px 10px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Weekly</button>
+        <button class="em-period-tab" data-period="monthly" onclick="window.setEstimatedMovePeriod && window.setEstimatedMovePeriod('monthly')" style="background:#0a1628;border:1px solid #1e3a5f;color:#5a7a99;font-size:12px;padding:6px 10px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Monthly</button>
+      </div>
+      <!-- Weekly expiration picker -->
+      <div id="em-weekly-exp-wrap" style="display:none;align-items:center;gap:6px;margin-left:12px">
+        <span style="font-size:11px;color:#3a5570;letter-spacing:.12em;text-transform:uppercase;font-weight:700">Weekly Exp</span>
+        <select id="em-weekly-exp-select" onchange="window.onWeeklyExpChange && window.onWeeklyExpChange(this.value)"
+          style="background:#04070c;border:1px solid #1e3a5f;color:#7ab8ff;font-size:12px;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em;outline:none">
+          <option value="">-- Auto --</option>
+        </select>
+      </div>
+      <!-- Monthly expiration picker -->
+      <div id="em-monthly-exp-wrap" style="display:none;align-items:center;gap:6px;margin-left:12px">
+        <span style="font-size:11px;color:#3a5570;letter-spacing:.12em;text-transform:uppercase;font-weight:700">Monthly Exp</span>
+        <select id="em-monthly-exp-select" onchange="window.onMonthlyExpChange && window.onMonthlyExpChange(this.value)"
+          style="background:#04070c;border:1px solid #1e3a5f;color:#7ab8ff;font-size:12px;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em;outline:none">
+          <option value="">-- Auto --</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="em-status" style="font-size:12px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase">Ready</span>
+      <button id="em-start-btn" onclick="window.refreshEstimatedMoves && window.refreshEstimatedMoves()" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:13px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Start</button>
+      <button id="em-save-btn" onclick="window.captureEMSnapshot && window.captureEMSnapshot()" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:13px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Save</button>
+      <button id="em-export-btn" onclick="window.exportSnapshots && window.exportSnapshots()" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:13px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Export</button>
+      <!-- Share pillbox -->
+      <div style="display:flex;gap:2px;background:#070c14;border:1px solid #1e3a5f;border-radius:2px;padding:2px">
+        <button id="em-copy-shot-btn" onclick="window.copyEMScreenshot && window.copyEMScreenshot()" title="Copy screenshot to clipboard"
+          style="font-size:11px;padding:4px 10px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em">COPY SHOT</button>
+        <button id="em-share-x-btn" onclick="window.shareEM && window.shareEM('x')" title="Open X/Twitter"
+          style="font-size:11px;padding:4px 10px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em">X</button>
+        <button id="em-share-discord-btn" onclick="window.shareEM && window.shareEM('discord')" title="Post to Discord"
+          style="font-size:11px;padding:4px 10px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em">DISCORD</button>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1;display:flex;min-height:0;overflow:hidden;background:#080c14">
+    <div id="em-sidebar" style="width:230px;min-width:230px;flex-shrink:0;background:#04070c;border-right:1px solid #0d1825;box-sizing:border-box;overflow-y:auto;display:flex;flex-direction:column">
+
+      <!-- Last Sync -->
+      <div style="padding:12px 14px;border-bottom:1px solid #0d1825;flex-shrink:0">
+        <div style="font-size:9px;color:#3a5570;letter-spacing:.14em;text-transform:uppercase;font-weight:700;margin-bottom:4px">Last Sync</div>
+        <div id="em-last-sync" style="font-size:13px;color:#e8edf5;font-weight:600;font-variant-numeric:tabular-nums">--</div>
+      </div>
+
+      <!-- Drawer sections: Daily / Weekly / Monthly -->
+      <div style="flex:1;overflow-y:auto">
+
+        <!-- DAILY -->
+        <div>
+          <button onclick="window.emToggleDrawer('daily')"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid #0d1825;cursor:pointer;text-align:left">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="em-drawer-arrow-daily" style="font-size:10px;color:#5a7a99;transition:transform .15s">▶</span>
+              <span style="font-size:13px;font-weight:700;color:#e8edf5;letter-spacing:.08em;text-transform:uppercase">Daily</span>
+            </div>
+            <span id="em-drawer-count-daily" style="font-size:10px;color:#7ab8ff;background:#07111d;border:1px solid #1a2a3a;padding:2px 8px;border-radius:10px;font-weight:700">0</span>
+          </button>
+          <div id="em-drawer-daily" style="display:none;flex-direction:column;gap:1px;background:#020407"></div>
+        </div>
+
+        <!-- WEEKLY -->
+        <div>
+          <button onclick="window.emToggleDrawer('weekly')"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid #0d1825;cursor:pointer;text-align:left">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="em-drawer-arrow-weekly" style="font-size:10px;color:#5a7a99;transition:transform .15s">▶</span>
+              <span style="font-size:13px;font-weight:700;color:#e8edf5;letter-spacing:.08em;text-transform:uppercase">Weekly</span>
+            </div>
+            <span id="em-drawer-count-weekly" style="font-size:10px;color:#7ab8ff;background:#07111d;border:1px solid #1a2a3a;padding:2px 8px;border-radius:10px;font-weight:700">0</span>
+          </button>
+          <div id="em-drawer-weekly" style="display:none;flex-direction:column;gap:1px;background:#020407"></div>
+        </div>
+
+        <!-- MONTHLY -->
+        <div>
+          <button onclick="window.emToggleDrawer('monthly')"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid #0d1825;cursor:pointer;text-align:left">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="em-drawer-arrow-monthly" style="font-size:10px;color:#5a7a99;transition:transform .15s">▶</span>
+              <span style="font-size:13px;font-weight:700;color:#e8edf5;letter-spacing:.08em;text-transform:uppercase">Monthly</span>
+            </div>
+            <span id="em-drawer-count-monthly" style="font-size:10px;color:#7ab8ff;background:#07111d;border:1px solid #1a2a3a;padding:2px 8px;border-radius:10px;font-weight:700">0</span>
+          </button>
+          <div id="em-drawer-monthly" style="display:none;flex-direction:column;gap:1px;background:#020407"></div>
+        </div>
+
+      </div>
+
+      <!-- Symbol list -->
+      <div style="padding:10px 14px;border-top:1px solid #0d1825;flex-shrink:0">
+        <div style="font-size:9px;color:#3a5570;letter-spacing:.14em;text-transform:uppercase;font-weight:700;margin-bottom:6px">Symbols</div>
+        <div id="em-symbol-list" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+      </div>
+
+    </div>
+    <div style="flex:1;min-width:0;overflow:auto;padding:18px">
+      <div style="width:100%;max-width:980px;margin:0 auto;background:#0b111b;border:1px solid #1a2a3a;box-shadow:0 18px 50px rgba(0,0,0,.35)" class="em-capture-target">
+        <div style="border-bottom:1px solid #1a2a3a;background:#0e1522;padding:10px 14px;text-align:center">
+          <div style="font-size:16px;font-weight:700;color:#a8b8cc;letter-spacing:.16em;text-transform:uppercase"><span id="em-period-title">Daily</span> Estimated Move For <span id="em-table-date" style="color:#00e5ff">--</span></div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:16px">
+            <thead style="background:#0a0f18">
+              <tr style="border-bottom:1px solid #1a2a3a;color:#00e5ff;text-align:center;font-size:13px;letter-spacing:.12em;text-transform:uppercase">
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Ticker</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Close</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Exp</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">EM</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Up</th>
+                <th style="padding:10px">Down</th>
+              </tr>
+            </thead>
+            <tbody id="em-table-body" style="font-family:Consolas,Monaco,monospace"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const SYMBOLS = ['ESM','NQM','SPY','QQQ','SPX','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NDX','NFLX','SMH','PLTR'];
+  const API_SYMBOL = { ESM:'/ESM6', NQM:'/NQM6', SPX:'$SPX', NDX:'$NDX' };
+  const CHAIN_SYMBOL = { SPX:'$SPX', NDX:'$NDX' };
+  const FUTURE_PROXY = { ESM:'SPX', NQM:'NDX' };
+  const PERIODS = {
+    daily: { title:'Daily', minDays:0, maxDays:2, fallbackScale:1, note:'Daily uses yesterday\'s 4 PM Eastern close and the nearest available expiration ATM straddle when no daily expiration is listed.' },
+    weekly: { title:'Weekly', minDays:0, maxDays:10, fallbackScale:1, note:'Weekly pulls the nearest listed weekly expiration and estimates the move from the ATM straddle mid.' },
+    monthly: { title:'Monthly', minDays:21, maxDays:45, fallbackScale:Math.sqrt(4), note:'Monthly targets the nearest listed expiration about one month out. If unavailable, the weekly move is scaled by sqrt(4).' }
+  };
+  let activePeriod = 'daily';
+  let refreshBusy = false;
+  let lastDailyCloseLabel = '';
+  let weeklyExpOverride = '';
+  let monthlyExpOverride = '';
+  let knownExpirations = [];
+  function populateExpDropdown(id, expirations, overrideVal){
+    const sel=document.getElementById(id); if(!sel) return;
+    const current=overrideVal || sel.value;
+    sel.innerHTML='<option value="">-- Auto --</option>';
+    expirations.forEach(exp=>{
+      const opt=document.createElement('option');
+      opt.value=exp; opt.textContent=labelForDate(exp)+' ('+daysTo(exp)+'d)';
+      if(exp===current) opt.selected=true;
+      sel.appendChild(opt);
+    });
+  }
+  function updateExpPickerVisibility(){
+    const ww=document.getElementById('em-weekly-exp-wrap');
+    const mw=document.getElementById('em-monthly-exp-wrap');
+    if(ww) ww.style.display=(activePeriod==='weekly' && knownExpirations.length) ? 'flex' : 'none';
+    if(mw) mw.style.display=(activePeriod==='monthly' && knownExpirations.length) ? 'flex' : 'none';
+  }
+  window.onWeeklyExpChange=function(val){ weeklyExpOverride=val; };
+  window.onMonthlyExpChange=function(val){ monthlyExpOverride=val; };
+  function fmt(num, digits=2){ const n=Number(num); return Number.isFinite(n) ? n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:digits}) : ''; }
+  function fmtEm(num, ticker){ 
+    let n=Number(num); 
+    if(!Number.isFinite(n)) return '';
+    if(ticker === 'ESM' || ticker === 'NQM') n = Math.round(n * 4) / 4;
+    return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); 
+  }
+  function roundToQuarter(num){ const n=Number(num); return Number.isFinite(n) ? Math.round(n * 4) / 4 : n; }
+  function fmtPrice(ticker,num){
+    const n=(ticker === 'ESM' || ticker === 'NQM') ? roundToQuarter(num) : Number(num);
+    return fmt(n,2);
+  }
+  function nextFridayLabel(){ const d=new Date(); const add=(5-d.getDay()+7)%7 || 7; d.setDate(d.getDate()+add); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'}); }
+  function labelForDate(exp){ return exp ? new Date(exp+'T12:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric'}) : nextFridayLabel(); }
+  function daysTo(exp){ return Math.ceil((new Date(exp+'T16:00:00') - new Date()) / 86400000); }
+  function previousTradingDate(){
+    const d=new Date();
+    d.setHours(12,0,0,0);
+    do { d.setDate(d.getDate()-1); } while(d.getDay()===0 || d.getDay()===6);
+    return d;
+  }
+  function setStatus(text,color){ const el=document.getElementById('em-status'); if(el){ el.textContent=text; el.style.color=color||'var(--text3)'; } }
+  function rowHtml(row){
+    // In daily mode, hide rows that errored or have no EM
+    if(activePeriod === 'daily' && (row.error || !row.em || row.em <= 0)) return '';
+    const muted=row.error?'opacity:.7':'';
+    const errText = row.error ? `<span style="color:#ff4757;font-size:9px">${row.error}</span>` : '';
+    return `<tr style="text-align:center;border-bottom:1px solid #121b2a;${muted}" title="${row.error ? row.error.replace(/"/g,'&quot;') : ''}">
+      <td style="padding:8px;border-right:1px solid #1a2a3a;font-weight:700;color:#e8edf5">${row.ticker}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#cbd5e1">${row.error ? errText : fmtPrice(row.ticker,row.close)}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#7ab8ff">${row.expiration ? labelForDate(row.expiration) : ''}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#e8c060">${fmtEm(row.em, row.ticker)}</td>
+      <td style="padding:8px;border-right:1px solid #1a2a3a;color:#00e676">${fmtPrice(row.ticker,row.up)}</td>
+      <td style="padding:8px;color:#ff4757">${fmtPrice(row.ticker,row.down)}</td>
+    </tr>`;
+  }
+  function normalizeOptions(chain){
+    // Shape 1: { options: [...] } — legacy
+    if(Array.isArray(chain?.options) && chain.options.length){
+      return chain.options.map(o=>({
+        expiration: o.expiration || o.expirationDate || o['expiration-date'],
+        strike: Number(o.strike || o.strikePrice || o['strike-price']),
+        type: String(o.optionType || o.type || '').toUpperCase(),
+        bid: Number(o.bid || o.bidPrice || o['bid-price'] || 0),
+        ask: Number(o.ask || o.askPrice || o['ask-price'] || 0),
+        iv: Number(o.iv || o.volatility || o.impliedVolatility || o['implied-volatility'] || 0),
+        dte: Number(o.dte || o.daysToExpiration || 0)
+      })).filter(o=>o.expiration && Number.isFinite(o.strike));
+    }
+    // Shape 3: TastyTrade { data: { items: [{ expiration-date, strikes: [{ strike-price, call, put }] }] } }
+    const items2 = chain?.data?.items || chain?.items || [];
+    if(items2.length && items2[0]?.strikes){
+      const result = [];
+      items2.forEach(item => {
+        const exp = item['expiration-date'] || item.expiration;
+        (item.strikes || []).forEach(s => {
+          const strike = Number(s['strike-price'] || s.strike);
+          if(!exp || !Number.isFinite(strike)) return;
+          const mapLeg = (leg, type, strikeObj) => leg ? {
+            expiration: exp, strike, type,
+            bid: Number(leg.bid || leg['bid-price'] || 0),
+            ask: Number(leg.ask || leg['ask-price'] || 0),
+            iv:  Number(leg['implied-volatility'] || leg['mid-iv'] || leg['smv-vol'] ||
+                        strikeObj?.['implied-volatility'] || strikeObj?.['iv'] || leg.iv || 0),
+            dte: Number(leg['days-to-expiration'] || leg.dte || 0)
+          } : null;
+          const c = mapLeg(s.call, 'CALL', s);
+          const p = mapLeg(s.put,  'PUT',  s);
+          if(c) result.push(c);
+          if(p) result.push(p);
+        });
+      });
+      return result;
+    }
+    return [];
+  }
+  function mid(o){ return Number.isFinite(o.bid) && Number.isFinite(o.ask) && o.bid>0 && o.ask>0 ? (o.bid+o.ask)/2 : (Number.isFinite(o.last) ? o.last : 0); }
+  async function fetchBatchQuote(ticker, quoteSymbol){
+    try{
+      const batch=await fetch('http://localhost:3001/proxy/api/tt/quotes-batch').then(r=>r.ok?r.json():null);
+      const items=batch?.data?.items || [];
+      const aliases={
+        ESM:['/ES:XCME','/ESM6','/ESM26'],
+        NQM:['/NQ:XCME','/NQM6','/NQM26'],
+        SPX:['SPX'],
+        NDX:['NDX'],
+        SPY:['SPY'],
+        QQQ:['QQQ'],
+        AAPL:['AAPL'],
+        AMD:['AMD'],
+        AMZN:['AMZN'],
+        GOOGL:['GOOGL'],
+        META:['META'],
+        MSFT:['MSFT'],
+        NVDA:['NVDA'],
+        TSLA:['TSLA'],
+        COIN:['COIN'],
+        HOOD:['HOOD'],
+        IWM:['IWM'],
+        NFLX:['NFLX'],
+        SMH:['SMH'],
+        PLTR:['PLTR']
+      };
+      const match=items.find(item=>(aliases[ticker] || [quoteSymbol, ticker]).includes(item.symbol));
+      const close=Number(match?.last || match?.mark || 0);
+      return close > 0 ? close : 0;
+    }catch(e){
+      return 0;
+    }
+  }
+  async function fetchQuoteDetail(ticker){
+    const quoteSymbol=API_SYMBOL[ticker] || ticker;
+    const isFuture = ticker === 'ESM' || ticker === 'NQM';
+    let close=null, previousClose=null;
+
+    const batchClose=await fetchBatchQuote(ticker, quoteSymbol);
+    if(batchClose > 0){
+      close=batchClose;
+      previousClose=batchClose;
+    }
+
+    // Futures: try DXLink live price first
+    if(isFuture && window.lastDXLinkPrices){
+      const p = window.lastDXLinkPrices[quoteSymbol] || window.lastDXLinkPrices[quoteSymbol.replace('/','')] || 0;
+      if(p > 1000){ close = p; }
+    }
+
+    if(!close){
+      const quoteRoutes = isFuture ? [
+        `http://localhost:3001/proxy/api/marketdata/v1/quotes?symbols=${encodeURIComponent(quoteSymbol)}`,
+        `http://localhost:3001/proxy/api/quote/${encodeURIComponent(quoteSymbol)}`
+      ] : [
+        `http://localhost:3001/proxy/api/quote/${encodeURIComponent(quoteSymbol)}`,
+        `http://localhost:3001/proxy/api/tt/quote/${encodeURIComponent(quoteSymbol)}`,
+        `http://localhost:3001/proxy/api/marketdata/v1/quotes?symbols=${encodeURIComponent(quoteSymbol)}`
+      ];
+
+      for(const url of quoteRoutes){
+        try{
+          const raw=await fetch(url).then(r=>r.ok?r.json():null);
+          if(!raw) continue;
+          if(isFuture) console.log(`[EM] futures raw ${ticker} from ${url.split('?')[0].split('/').pop()}:`, JSON.stringify(raw).slice(0,300));
+          // Schwab multi-quote shape: { "SYMBOL": { quote: { lastPrice } } }
+          // Try direct key, encoded key, or any key containing the base symbol
+          const baseKey = quoteSymbol.replace('/','');
+          const matchKey = Object.keys(raw).find(k => k===quoteSymbol || k===baseKey || raw[k]?.quote?.lastPrice > 0);
+          const q = raw?.quote || raw?.[quoteSymbol]?.quote || raw?.[quoteSymbol] ||
+                    (matchKey ? (raw[matchKey]?.quote || raw[matchKey]) : null) ||
+                    raw?.data?.quote || raw?.data?.items?.[0] || {};
+          const c = Number(q.lastPrice||q.last||q.mark||q['last-price']||q.bidPrice||q['bid-price']||q.askPrice||0);
+          if(isFuture) console.log(`[EM] futures ${ticker} resolved q:`, JSON.stringify(q).slice(0,200), '→ c=', c);
+          if(c > 0){
+            close = c;
+            previousClose = Number(q.closePrice||q['close-price']||q.prevClose||q.previousClose||0);
+            console.log(`[EM] quote ${ticker}: ${close} from ${url.split('?')[0].split('/').pop()}`);
+            break;
+          }
+        }catch(e){ console.warn(`[EM] quote failed ${ticker}:`, e.message); }
+      }
+    }
+
+    if(!close || close<=0) throw new Error(`No price for ${ticker}`);
+    return { close, previousClose: previousClose>0 ? previousClose : close };
+  }
+  async function fetchPrevious4pmClose(ticker){
+    const quoteSymbol=API_SYMBOL[ticker] || ticker;
+    try{
+      const date=previousTradingDate();
+      const end=new Date(date);
+      end.setHours(16,0,0,0);
+      const start=new Date(end.getTime()-45*60000);
+      const url=`http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=2&frequencyType=minute&frequency=5&startDate=${start.getTime()}&endDate=${end.getTime()}&needExtendedHoursData=false`;
+      const data=await fetch(url).then(r=>r.ok?r.json():null);
+      const candles=(data?.candles || []).filter(c=>Number.isFinite(Number(c.close))).sort((a,b)=>Number(a.datetime)-Number(b.datetime));
+      const closeCandle=candles.filter(c=>Number(c.datetime)<=end.getTime()).pop() || candles.pop();
+      const close=Number(closeCandle?.close);
+      if(Number.isFinite(close) && close>0) {
+        lastDailyCloseLabel=date.toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
+        return close;
+      }
+    }catch(e){}
+    return null;
+  }
+  async function fetchFridayClose(ticker){
+    const quoteSymbol = API_SYMBOL[ticker] || ticker;
+    const isFuture = ticker === 'ESM' || ticker === 'NQM';
+    try{
+      // Walk back to most recent Friday
+      const now = new Date();
+      let fri = new Date(now);
+      while(fri.getDay() !== 5) fri.setDate(fri.getDate() - 1);
+
+      // 3:55 PM ET = 19:55 UTC (EDT) window
+      const friDateStr = fri.toISOString().split('T')[0];
+      const startUTC = new Date(`${friDateStr}T19:45:00Z`).getTime();
+      const endUTC   = new Date(`${friDateStr}T20:05:00Z`).getTime();
+
+      let candles = [];
+
+      if(isFuture){
+        // Futures use Schwab pricehistory — symbol is /ESM6 or /NQM6
+        const url = `http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=5&frequencyType=minute&frequency=5&startDate=${startUTC}&endDate=${endUTC}&needExtendedHoursData=true`;
+        const data = await fetch(url).then(r=>r.ok?r.json():null);
+        candles = (data?.candles || []).map(c=>({ close: Number(c.close||0), datetime: Number(c.datetime||0) }));
+        console.log(`[EM] futures friday candles ${ticker}:`, candles.length, candles.slice(-2));
+      } else if(ticker === 'SPX' || ticker === 'NDX'){
+        // Index via TT candles
+        const url = `http://localhost:3001/proxy/api/tt/candles/${encodeURIComponent(quoteSymbol)}?start=${startUTC}&end=${endUTC}&interval=5&unit=minute`;
+        const data = await fetch(url).then(r=>r.ok?r.json():null);
+        const raw = data?.candles || data?.data?.candles || data?.data?.items || [];
+        candles = raw.map(c=>({ close: Number(c.close||c['close-price']||c.closePrice||0), datetime: Number(c.time||c.timestamp||c.datetime||0) }));
+      } else {
+        // Stocks via Schwab pricehistory
+        const url = `http://localhost:3001/proxy/api/marketdata/v1/pricehistory?symbol=${encodeURIComponent(quoteSymbol)}&periodType=day&period=5&frequencyType=minute&frequency=5&startDate=${startUTC}&endDate=${endUTC}&needExtendedHoursData=false`;
+        const data = await fetch(url).then(r=>r.ok?r.json():null);
+        candles = (data?.candles || []).map(c=>({ close: Number(c.close||0), datetime: Number(c.datetime||0) }));
+      }
+
+      candles = candles.filter(c => c.close > 0).sort((a,b) => a.datetime - b.datetime);
+      const closeCandle = candles[candles.length - 1];
+      const close = closeCandle?.close;
+      if(Number.isFinite(close) && close > 1){
+        console.log(`[EM] ${ticker} Friday close: ${close}`);
+        return close;
+      }
+    }catch(e){ console.warn(`[EM] fetchFridayClose failed ${ticker}:`, e.message); }
+    return null;
+  }
+  function chooseExpiration(expirations, period){
+    if(period === 'weekly' && weeklyExpOverride && expirations.includes(weeklyExpOverride)) return weeklyExpOverride;
+    if(period === 'monthly' && monthlyExpOverride && expirations.includes(monthlyExpOverride)) return monthlyExpOverride;
+    const cfg=PERIODS[period] || PERIODS.weekly;
+    const future=expirations.filter(exp=>new Date(exp+'T16:00:00') >= new Date()).sort();
+    if(period === 'weekly'){
+      return future.find(exp=>daysTo(exp)>=0 && daysTo(exp)<=1) || future[0] || expirations[0];
+    }
+    return future.find(exp=>daysTo(exp)>=cfg.minDays && daysTo(exp)<=cfg.maxDays) || future[0] || expirations[0];
+  }
+  async function estimateMove(ticker){
+    if(FUTURE_PROXY[ticker]) return estimateFutureMove(ticker, FUTURE_PROXY[ticker]);
+    const quoteDetail=await fetchQuoteDetail(ticker);
+    let dailyClose=null;
+    if(activePeriod === 'daily'){
+      dailyClose = await fetchPrevious4pmClose(ticker);
+    } else if(activePeriod === 'weekly'){
+      dailyClose = await fetchFridayClose(ticker);
+    }
+    const close=activePeriod === 'daily' || activePeriod === 'weekly'
+      ? (Number.isFinite(dailyClose) && dailyClose>0 ? dailyClose : quoteDetail.close)
+      : quoteDetail.close;
+    if(!Number.isFinite(close) || close<=0) throw new Error('No quote');
+    // Determine target expiration — use override if set, otherwise auto-pick by DTE
+    let targetExpForFetch = activePeriod === 'daily'
+      ? (weeklyExpOverride || knownExpirations.find(e=>daysTo(e)>=0 && daysTo(e)<=1) || knownExpirations[0] || '')
+      : activePeriod === 'weekly'
+      ? (weeklyExpOverride || knownExpirations.find(e=>daysTo(e)>=1 && daysTo(e)<=7) || knownExpirations[0] || '')
+      : (monthlyExpOverride || knownExpirations.find(e=>daysTo(e)>=21 && daysTo(e)<=45) || knownExpirations[0] || '');
+
+    // If still no expiration, fetch per-ticker from proxy
+    if(!targetExpForFetch){
+      try{
+        const chainSym0 = (CHAIN_SYMBOL[ticker] || ticker).replace(/^\$/,'');
+        const expR = await fetch(`http://localhost:3001/proxy/api/tt/expirations/${encodeURIComponent(chainSym0)}`).then(r=>r.ok?r.json():null);
+        let raw = expR?.expirations || expR?.data?.expirations || expR?.data?.items || expR?.items || [];
+        if(raw.length && typeof raw[0]==='object') raw = raw.map(e=>e['expiration-date']||e.expirationDate||e.expiration||e.date||e);
+        const tickerExps = raw.filter(e=>typeof e==='string' && new Date(e+'T16:00:00')>=new Date()).sort();
+        if(tickerExps.length){
+          if(!knownExpirations.length) knownExpirations = tickerExps;
+          targetExpForFetch = activePeriod==='daily'
+            ? (tickerExps.find(e=>daysTo(e)>=0 && daysTo(e)<=1) || tickerExps[0])
+            : activePeriod==='weekly'
+            ? (tickerExps.find(e=>daysTo(e)>=1 && daysTo(e)<=7) || tickerExps[0])
+            : (tickerExps.find(e=>daysTo(e)>=21 && daysTo(e)<=45) || tickerExps[0]);
+          console.log(`[EM] per-ticker exp ${ticker}: ${targetExpForFetch}`);
+        }
+      }catch(e){ console.warn(`[EM] per-ticker expirations failed ${ticker}:`, e.message); }
+    }
+    const chainSym = (CHAIN_SYMBOL[ticker] || ticker).replace(/^\$/,'');
+    const chainParams = new URLSearchParams();
+    if(chainSym === 'SPX' || chainSym === 'NDX') chainParams.set('atmOnly', 'true');
+    if(targetExpForFetch) chainParams.set('expiration', targetExpForFetch);
+    const chainUrl = `http://localhost:3001/proxy/api/tt/chains/${encodeURIComponent(chainSym)}?${chainParams.toString()}`;
+    console.log(`[EM] chain fetch ${ticker}: ${chainUrl}`);
+    const chain = await fetch(chainUrl).then(r=>r.ok?r.json():{}).catch(e=>({ _err: e.message }));
+    if(ticker === 'SPY' || ticker === 'ESM') {
+      const sample = chain?.data?.items?.[0]?.strikes?.[0];
+      console.log(`[EM] chain sample ${ticker}:`, sample ? JSON.stringify(sample).slice(0,400) : 'none');
+    }
+    console.log(`[EM] chain ${ticker}: ${chain?.options?.length || 0} options, exp target=${targetExpForFetch}`);
+    const options=normalizeOptions(chain);
+    if(!options.length) throw new Error('No options available');
+    const expirations=[...new Set(options.map(o=>o.expiration))].sort();
+    const weeklyExp=chooseExpiration(expirations.length ? expirations : knownExpirations, 'weekly');
+    const targetExp=targetExpForFetch || (activePeriod === 'daily' ? chooseExpiration(expirations, 'weekly') : chooseExpiration(expirations, activePeriod));
+    const expOptions=options.filter(o=>o.expiration===targetExp);
+    const strike=[...new Set(expOptions.map(o=>o.strike))].sort((a,b)=>Math.abs(a-close)-Math.abs(b-close))[0];
+    if(!Number.isFinite(strike)) throw new Error('No option strikes');
+    const call=expOptions.find(o=>o.strike===strike && (o.type==='CALL' || o.type==='C'));
+    const put=expOptions.find(o=>o.strike===strike && (o.type==='PUT' || o.type==='P'));
+    if(!call || !put) throw new Error('Missing ATM straddle');
+    const avgIV = ((call.iv || 0) + (put.iv || 0)) / 2;
+    const dte = call.dte || put.dte || daysTo(targetExp);
+    const straddleMid = mid(call) + mid(put);
+    let em;
+    if(avgIV > 0 && dte > 0){
+      // Primary: IV formula — works even when market is closed (bid/ask = 0)
+      em = 0.84 * avgIV * close * Math.sqrt(dte / 365);
+    } else if(straddleMid > 0){
+      // Fallback: straddle mid price (only valid during market hours)
+      em = straddleMid;
+    } else {
+      em = 0;
+    }
+    if(activePeriod==='monthly' && targetExp===weeklyExp) em *= PERIODS[activePeriod].fallbackScale;
+    if(ticker === 'ESM' || ticker === 'NQM'){
+      em = Math.round(em * 4) / 4;
+    } else {
+      em = Math.round(em * 100) / 100;
+    }
+    return { ticker, close, em, up:close+em, down:close-em, expiration:targetExp, strike };
+  }
+  async function estimateFutureMove(futureTicker, indexTicker){
+    const futureQuote = await fetchQuoteDetail(futureTicker);
+    const indexQuote  = await fetchQuoteDetail(indexTicker);
+    let futureFriClose = null, indexFriClose = null;
+
+    if(activePeriod === 'daily'){
+      futureFriClose = await fetchPrevious4pmClose(futureTicker);
+      indexFriClose  = await fetchPrevious4pmClose(indexTicker);
+    } else if(activePeriod === 'weekly'){
+      futureFriClose = await fetchFridayClose(futureTicker);
+      indexFriClose  = await fetchFridayClose(indexTicker);
+    }
+
+    // Use Friday close if available, else live quote (never previousClose which can be stale/wrong)
+    const futureClose = (Number.isFinite(futureFriClose) && futureFriClose > 1000)
+      ? futureFriClose : futureQuote.close;
+    const indexClose  = (Number.isFinite(indexFriClose)  && indexFriClose  > 1000)
+      ? indexFriClose  : indexQuote.close;
+
+    if(!Number.isFinite(futureClose) || futureClose <= 0 || !Number.isFinite(indexClose) || indexClose <= 0)
+      throw new Error('No quote for futures/index');
+
+    // Basis = futures close - index close at same point in time
+    const basis = futureClose - indexClose;
+    console.log(`[EM] ${futureTicker} basis: ${basis.toFixed(2)} (fut=${futureClose} idx=${indexClose})`);
+
+    const indexMove = await estimateMove(indexTicker);
+    const em   = indexMove.em;
+    const up   = Math.round((indexMove.up   + basis) * 4) / 4;
+    const down = Math.round((indexMove.down + basis) * 4) / 4;
+
+    return { ticker: futureTicker, close: futureClose, em, up, down, expiration: indexMove.expiration, strike: indexMove.strike };
+  }
+  function updatePeriodChrome(label){
+    const cfg=PERIODS[activePeriod];
+    document.querySelectorAll('.em-period-tab').forEach(btn=>{
+      const active=btn.dataset.period===activePeriod;
+      btn.style.color=active ? '#00e5ff' : '#5a7a99';
+      btn.style.borderColor=active ? '#00e5ff' : '#1e3a5f';
+    });
+    const title=document.getElementById('em-period-title'); if(title) title.textContent=cfg.title;
+    const note=document.getElementById('em-method-note'); if(note) note.textContent=cfg.note;
+    const dailyNote=document.getElementById('em-daily-close-note');
+    if(dailyNote){
+      dailyNote.style.display=activePeriod === 'daily' ? 'block' : 'none';
+      dailyNote.textContent=lastDailyCloseLabel ? `Base close: ${lastDailyCloseLabel} regular-session 4 PM ET` : 'Base close: previous regular-session 4 PM ET';
+    }
+    ['em-target-date','em-table-date'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=label || nextFridayLabel(); });
+  }
+  window.setEstimatedMovePeriod=function(period){
+    if(!PERIODS[period]) return;
+    if(activePeriod===period) return;
+    activePeriod=period;
+    updatePeriodChrome();
+    if(!knownExpirations.length){
+      prefetchExpirations().then(()=>updateExpPickerVisibility());
+    } else {
+      updateExpPickerVisibility();
+    }
+    // Refresh if table has any real data rows (not just the placeholder)
+    const body=document.getElementById('em-table-body');
+    const hasData = body && body.querySelectorAll('tr').length > 0 &&
+                    !body.textContent.includes('Click Start');
+    if(hasData) window.refreshEstimatedMoves();
+  };
+  window.refreshEstimatedMoves=async function(){
+    if(refreshBusy) return;
+    refreshBusy=true; setStatus('Syncing','#00e5ff');
+    const btn=document.getElementById('em-start-btn'); if(btn) btn.textContent='Refresh';
+    const body=document.getElementById('em-table-body');
+    if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570;letter-spacing:.12em;text-transform:uppercase">Loading estimated moves...</td></tr>';
+    try{
+      // No longer blocking on window.API — quotes go direct to proxy
+      if(window.API?.isReady && !window.API.isReady()){
+        await Promise.race([
+          new Promise(resolve=>{ window.addEventListener('api-ready', resolve, { once:true }); }),
+          new Promise(resolve=>setTimeout(resolve, 3000))
+        ]);
+      }
+      // Fetch in batches of 4 with delay to avoid dxLink rate limit
+      const settled=[];
+      for(let i=0;i<SYMBOLS.length;i+=4){
+        const batch=SYMBOLS.slice(i,i+4);
+        const results=await Promise.allSettled(batch.map(estimateMove));
+        settled.push(...results);
+        if(i+4<SYMBOLS.length) await new Promise(r=>setTimeout(r,400));
+      }
+      const rows=settled.map((r,i)=>r.status==='fulfilled' ? r.value : { ticker:SYMBOLS[i], error:r.reason?.message || 'Unavailable' });
+      if(body) body.innerHTML=rows.map(rowHtml).join('');
+      const exp=rows.find(r=>r.expiration)?.expiration;
+      const label=labelForDate(exp);
+      // Collect all unique expirations from successful rows for dropdowns
+      const allExps=[...new Set(rows.filter(r=>r.expiration).map(r=>r.expiration))].sort();
+      if(allExps.length){ 
+        // Accumulate with existing expirations instead of replacing
+        knownExpirations=[...new Set([...knownExpirations, ...allExps])].sort();
+      }
+      // Rebuild SPX/general chain expirations for a richer dropdown — use what we have
+      const chainSymbol=CHAIN_SYMBOL['SPX'] || 'SPX';
+      // Skip window.API.fetchOptionsChain — not available on this page
+      // Also fetch expirations directly from proxy for more complete list
+      try{
+        const expResp = await fetch('http://localhost:3001/proxy/api/tt/expirations/SPX');
+        const expJson = await expResp.json();
+        const proxyExps = (expJson.expirations || []).filter(e => new Date(e+'T16:00:00') >= new Date()).sort();
+        if(proxyExps.length) {
+          // Accumulate all expirations
+          knownExpirations = [...new Set([...knownExpirations, ...proxyExps])].sort();
+        }
+      }catch(e){}
+      // Filter out expired expirations
+      knownExpirations = knownExpirations.filter(e => new Date(e+'T16:00:00') >= new Date()).sort();
+      // Get all weeklies and monthlies (not just top 2)
+      const categorized = categorizeExpirations(knownExpirations);
+      populateExpDropdown('em-weekly-exp-select', categorized.weeklies.length ? categorized.weeklies : knownExpirations, weeklyExpOverride);
+      populateExpDropdown('em-monthly-exp-select', categorized.monthlies.length ? categorized.monthlies : knownExpirations, monthlyExpOverride);
+      updateExpPickerVisibility();
+      updatePeriodChrome(label);
+      const sync=document.getElementById('em-last-sync'); if(sync) sync.textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      setStatus('Live','#00e676');
+    }catch(e){
+      setStatus('Error','#ff4757');
+      if(body) body.innerHTML=`<tr><td colspan="6" style="padding:24px;text-align:center;color:#ff4757">${e.message}</td></tr>`;
+    }finally{ refreshBusy=false; }
+  };
+  function categorizeExpirations(expirations){
+    // Return all expirations sorted by closeness, don't filter by DTE
+    // User can pick weekly or monthly manually
+    return {
+      weeklies: expirations.sort((a,b) => daysTo(a) - daysTo(b)),
+      monthlies: expirations.sort((a,b) => daysTo(a) - daysTo(b))
+    };
+  }
+  let snapshotDB = null;
+  
+  async function initSnapshotDB(){
+    return new Promise((resolve, reject)=>{
+      const req = indexedDB.open('EM_Dashboard', 1);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => { snapshotDB = req.result; resolve(); };
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if(!db.objectStoreNames.contains('snapshots')){
+          db.createObjectStore('snapshots', { keyPath:'id', autoIncrement:true });
+        }
+      };
+    });
+  }
+  
+  async function saveSnapshot(tableHtml){
+    if(!snapshotDB) return Promise.reject('DB not ready');
+    return new Promise((resolve, reject)=>{
+      const now = new Date();
+      const snapshot = {
+        timestamp: now.getTime(),
+        date: now.toLocaleDateString('en-US'),
+        time: now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit'}),
+        period: activePeriod,
+        tableHtml: tableHtml,
+        expirations: knownExpirations.slice(0, 3)
+      };
+      const tx = snapshotDB.transaction(['snapshots'], 'readwrite');
+      const store = tx.objectStore('snapshots');
+      const req = store.add(snapshot);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve(snapshot);
+    });
+  }
+  
+  // Track which drawers are open
+  const emDrawerOpen = { daily: false, weekly: false, monthly: false };
+
+  window.emToggleDrawer = function(period){
+    emDrawerOpen[period] = !emDrawerOpen[period];
+    const el    = document.getElementById(`em-drawer-${period}`);
+    const arrow = document.getElementById(`em-drawer-arrow-${period}`);
+    if(el) el.style.display = emDrawerOpen[period] ? 'flex' : 'none';
+    if(arrow) arrow.style.transform = emDrawerOpen[period] ? 'rotate(90deg)' : 'rotate(0deg)';
+    if(emDrawerOpen[period]) renderDrawerEntries(period);
+  };
+
+  async function renderDrawerEntries(period){
+    const el = document.getElementById(`em-drawer-${period}`);
+    if(!el || !snapshotDB) return;
+    try{
+      const all = await new Promise((resolve, reject)=>{
+        const tx = snapshotDB.transaction(['snapshots'], 'readonly');
+        const req = tx.objectStore('snapshots').getAll();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result || []);
+      });
+      const entries = all.filter(s => s.period === period).sort((a,b) => b.timestamp - a.timestamp);
+      if(!entries.length){
+        el.innerHTML = `<div style="padding:8px 12px;font-size:9px;color:#2a3f55">No ${period} snapshots</div>`;
+        return;
+      }
+      el.innerHTML = entries.map(s => `
+        <div style="margin:4px 8px;padding:8px 10px;background:#07111d;border:1px solid #1a2a3a;cursor:pointer;border-radius:3px;display:flex;align-items:center;justify-content:space-between"
+          onmouseover="this.style.borderColor='#00e5ff'" 
+          onmouseout="this.style.borderColor='#1a2a3a'">
+          <div onclick="window.loadSnapshot && window.loadSnapshot(${s.id})" style="flex:1">
+            <div style="font-size:13px;color:#e8edf5;font-weight:700;font-variant-numeric:tabular-nums">${s.date}</div>
+            <div style="font-size:11px;color:#5a7a99;margin-top:2px">${s.time}</div>
+          </div>
+          <span onclick="window.deleteSnapshot && window.deleteSnapshot(${s.id}, '${period}')"
+            style="color:#ff4757;font-size:16px;line-height:1;padding:0 2px;cursor:pointer;font-weight:700"
+            onmouseover="this.style.color='#ff6b78'"
+            onmouseout="this.style.color='#ff4757'"
+            title="Delete">×</span>
+        </div>`).join('');
+    }catch(e){ console.warn('renderDrawerEntries failed:', e); }
+  }
+
+  async function renderSnapshotList(){
+    if(!snapshotDB) return;
+    try{
+      const all = await new Promise((resolve, reject)=>{
+        const tx = snapshotDB.transaction(['snapshots'], 'readonly');
+        const req = tx.objectStore('snapshots').getAll();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result || []);
+      });
+      ['daily','weekly','monthly'].forEach(period => {
+        const count = all.filter(s => s.period === period).length;
+        const el = document.getElementById(`em-drawer-count-${period}`);
+        if(el) el.textContent = count;
+        if(el) el.style.color = count > 0 ? '#5a7a99' : '#2a3f55';
+        // Re-render open drawers
+        if(emDrawerOpen[period]) renderDrawerEntries(period);
+      });
+    }catch(e){ console.warn('renderSnapshotList failed:', e); }
+  }
+
+  window.deleteSnapshot = async function(id, period){
+    if(!snapshotDB) return;
+    try{
+      await new Promise((resolve, reject)=>{
+        const tx = snapshotDB.transaction(['snapshots'], 'readwrite');
+        tx.objectStore('snapshots').delete(id);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+      await renderSnapshotList();
+      if(emDrawerOpen[period]) renderDrawerEntries(period);
+    }catch(e){ console.error('Delete snapshot failed:', e); }
+  };
+
+  window.loadSnapshot = async function(id){
+    if(!snapshotDB) return;
+    try{
+      const snap = await new Promise((resolve, reject)=>{
+        const tx = snapshotDB.transaction(['snapshots'], 'readonly');
+        const req = tx.objectStore('snapshots').get(id);
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result);
+      });
+      if(!snap) return;
+      const body = document.getElementById('em-table-body');
+      if(body) body.innerHTML = snap.tableHtml;
+      const dateEl = document.getElementById('em-table-date');
+      if(dateEl) dateEl.textContent = snap.date;
+      setStatus(`Loaded ${snap.date} ${snap.time}`, '#e8c060');
+    }catch(e){ console.warn('loadSnapshot failed:', e); }
+  };
+
+  window.captureEMSnapshot = async function(){
+    try{
+      const body = document.getElementById('em-table-body');
+      if(!body || !body.innerHTML.trim()) {
+        setStatus('No data to save', '#ff4757');
+        return;
+      }
+      setStatus('Saving snapshot...', '#00e5ff');
+      const tableHtml = body.innerHTML;
+      const snapshot = await saveSnapshot(tableHtml);
+      setStatus(`Snapshot ${snapshot.time}`, '#00e676');
+      await renderSnapshotList();
+    }catch(e){
+      setStatus('Snapshot failed', '#ff4757');
+      console.error('Snapshot error:', e);
+    }
+  };
+  
+  window.exportSnapshots = async function(){
+    if(!snapshotDB){
+      setStatus('DB not ready', '#ff4757');
+      return;
+    }
+    try{
+      setStatus('Exporting...', '#00e5ff');
+      const snapshots = await new Promise((resolve, reject)=>{
+        const tx = snapshotDB.transaction(['snapshots'], 'readonly');
+        const req = tx.objectStore('snapshots').getAll();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result || []);
+      });
+
+      if(!snapshots.length){ setStatus('No snapshots', '#ff4757'); return; }
+
+      let csv = 'Date,Period,Ticker,Close,Exp,EM,Up,Down\n';
+      snapshots.forEach(snap => {
+        const doc = new DOMParser().parseFromString(`<table>${snap.tableHtml}</table>`, 'text/html');
+        doc.querySelectorAll('tr').forEach(row => {
+          const tds = row.querySelectorAll('td');
+          if(tds.length < 6) return;
+          const ticker = tds[0]?.textContent?.trim();
+          if(!ticker) return;
+          const close = tds[1]?.textContent?.trim();
+          const exp   = tds[2]?.textContent?.trim();
+          const em    = tds[3]?.textContent?.trim();
+          const up    = tds[4]?.textContent?.trim();
+          const down  = tds[5]?.textContent?.trim();
+          csv += `"${snap.date}","${snap.period}","${ticker}","${close}","${exp}","${em}","${up}","${down}"\n`;
+        });
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `em-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setStatus(`Exported ${snapshots.length} snapshots`, '#00e676');
+    }catch(e){
+      setStatus('Export failed', '#ff4757');
+      console.error('Export error:', e);
+    }
+  };
+
+  function colToLetter(idx){
+    let s = '', n = idx;
+    while(n >= 0){ s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; }
+    return s;
+  }
+  window.init_database=function(){
+    const list=document.getElementById('em-symbol-list');
+    if(list) list.innerHTML=SYMBOLS.map(s=>`<span style="font-size:11px;color:#7ab8ff;background:#07111d;border:1px solid #13253a;padding:3px 6px;border-radius:2px">${s}</span>`).join('');
+    const label=nextFridayLabel();
+    updatePeriodChrome(label);
+    setStatus('Ready','#5a7a99');
+    const body=document.getElementById('em-table-body');
+    if(body) body.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#3a5570;letter-spacing:.12em;text-transform:uppercase">Click Start to load estimated moves</td></tr>';
+    // Prefetch expirations so dropdowns and chain calls have a target
+    prefetchExpirations();
+    initSnapshotDB().then(()=>renderSnapshotList()).catch(err => console.warn('Snapshot DB init failed:', err));
+  };
+
+  async function prefetchExpirations(){
+    try{
+      const r = await fetch('http://localhost:3001/proxy/api/tt/expirations/SPX');
+      if(!r.ok) return;
+      const json = await r.json();
+      let raw = json.expirations || json.data?.expirations || json.data?.items || json.items || [];
+      if(raw.length && typeof raw[0]==='object') raw = raw.map(e=>e['expiration-date']||e.expirationDate||e.expiration||e.date||e);
+      const exps = raw.filter(e=>typeof e==='string' && new Date(e+'T16:00:00')>=new Date()).sort();
+      if(exps.length){
+        knownExpirations = exps;
+        const categorized = categorizeExpirations(knownExpirations);
+        const weeklies = categorized.weeklies.length ? categorized.weeklies : knownExpirations;
+        const monthlies = categorized.monthlies.length ? categorized.monthlies : knownExpirations;
+        populateExpDropdown('em-weekly-exp-select', weeklies, weeklyExpOverride);
+        populateExpDropdown('em-monthly-exp-select', monthlies, monthlyExpOverride);
+        // Auto-select nearest weekly if no override set
+        if(!weeklyExpOverride){
+          const nearest = weeklies.find(e=>daysTo(e)>=1 && daysTo(e)<=7) || weeklies[0];
+          if(nearest){
+            weeklyExpOverride = nearest;
+            const sel = document.getElementById('em-weekly-exp-select');
+            if(sel) sel.value = nearest;
+          }
+        }
+        if(!monthlyExpOverride){
+          const nearest = monthlies.find(e=>daysTo(e)>=21 && daysTo(e)<=45) || monthlies[0];
+          if(nearest){
+            monthlyExpOverride = nearest;
+            const sel = document.getElementById('em-monthly-exp-select');
+            if(sel) sel.value = nearest;
+          }
+        }
+        updateExpPickerVisibility();
+        console.log('[EM] expirations ready:', knownExpirations.slice(0,5), '| weekly auto:', weeklyExpOverride);
+      }
+    }catch(e){ console.warn('[EM] prefetchExpirations failed:', e.message); }
+  }
+  
+  // ============================================================================
+  // SCREENSHOT / SHARE
+  // ============================================================================
+  const EM_DISCORD_WEBHOOK = '/proxy/api/webhooks/1466249857122570454/REDACTED';
+
+  async function loadHtml2Canvas(){
+    if(typeof html2canvas !== 'undefined') return;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  function setBtnState(btn, state, origText, origColor){
+    if(!btn) return;
+    if(state === 'loading'){ btn.textContent='…'; btn.style.color='#ffb300'; }
+    else if(state === 'success'){ btn.textContent='✓'; btn.style.color='#00e676'; setTimeout(()=>{ btn.textContent=origText; btn.style.color=origColor; }, 1500); }
+    else if(state === 'error')  { btn.textContent='ERR'; btn.style.color='#ff4757'; setTimeout(()=>{ btn.textContent=origText; btn.style.color=origColor; }, 1500); }
+  }
+
+  async function captureEMBlob(){
+    await loadHtml2Canvas();
+    const target = document.querySelector('.em-capture-target');
+    if(!target) throw new Error('No capture target');
+
+    // Clone and strip EXP (col 3) and EM (col 4) columns for cleaner screenshot
+    const clone = target.cloneNode(true);
+    clone.querySelectorAll('tr').forEach(tr => {
+      const cells = tr.querySelectorAll('th, td');
+      // col index 2 = EXP, col index 3 = EM (0-based)
+      [3, 2].forEach(i => { if(cells[i]) cells[i].remove(); });
+    });
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'background:#05080d;display:inline-block;padding:12px;position:fixed;left:-9999px;top:0';
+    wrapper.appendChild(clone);
+    document.body.appendChild(wrapper);
+    try{
+      const canvas = await html2canvas(wrapper, { backgroundColor:'#05080d', scale:2, useCORS:true, logging:false, allowTaint:true });
+      return await new Promise(res => canvas.toBlob(res, 'image/png'));
+    }finally{
+      document.body.removeChild(wrapper);
+    }
+  }
+
+  window.copyEMScreenshot = async function(){
+    const btn = document.getElementById('em-copy-shot-btn');
+    const orig = btn?.textContent || 'COPY SHOT';
+    setBtnState(btn, 'loading', orig, '#00e5ff');
+    try{
+      const blob = await captureEMBlob();
+      await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+      setBtnState(btn, 'success', orig, '#00e5ff');
+    }catch(e){
+      console.error('Copy shot failed:', e);
+      setBtnState(btn, 'error', orig, '#00e5ff');
+    }
+  };
+
+  window.shareEM = async function(platform){
+    const btn = document.getElementById(platform === 'x' ? 'em-share-x-btn' : 'em-share-discord-btn');
+    const origColor = platform === 'x' ? '#00e5ff' : '#7289da';
+    const orig = btn?.textContent || platform.toUpperCase();
+    setBtnState(btn, 'loading', orig, origColor);
+
+    if(platform === 'x'){
+      // Copy shot first, then open X
+      try{
+        const blob = await captureEMBlob();
+        await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+      }catch(e){ console.warn('X copy failed:', e); }
+      setBtnState(btn, 'success', orig, origColor);
+      const period = document.getElementById('em-period-title')?.textContent || 'Weekly';
+      const date   = document.getElementById('em-table-date')?.textContent || '';
+      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`${period} Estimated Moves ${date}`)}`, '_blank');
+      return;
+    }
+
+    // Discord
+    try{
+      const blob = await captureEMBlob();
+      const period = document.getElementById('em-period-title')?.textContent || 'Weekly';
+      const date   = document.getElementById('em-table-date')?.textContent || '';
+      const form = new FormData();
+      form.append('payload_json', JSON.stringify({ content: `**${period} Estimated Moves — ${date}**` }));
+      form.append('files[0]', blob, 'estimated-moves.png');
+      const res = await fetch(EM_DISCORD_WEBHOOK, { method:'POST', body:form });
+      if(!res.ok){
+        const body = await res.text().catch(()=>'');
+        throw new Error(`Discord ${res.status}: ${body}`);
+      }
+      setBtnState(btn, 'success', orig, origColor);
+    }catch(e){
+      console.error('Discord share failed:', e);
+      setBtnState(btn, 'error', orig, origColor);
+    }
+  };
+
+  // ============================================================================
+  // Initialize DB on load
+  initSnapshotDB().then(()=>renderSnapshotList()).catch(err => console.warn('Snapshot DB init failed:', err));
+})();
+</script>

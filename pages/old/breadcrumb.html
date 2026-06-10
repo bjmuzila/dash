@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Breadcrumb Navigation</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+  <style>
+    :root {
+      --link-color: var(--color-text-secondary, #7a9bb5);
+      --link-hover: var(--color-text-primary, #e8edf5);
+      --separator-color: var(--color-border-secondary, #1a2a3a);
+      --active-bg: var(--color-background-secondary, #0d1825);
+      --active-border: var(--color-border-info, #00b4d8);
+    }
+
+    nav[aria-label="Breadcrumb"] {
+      padding: 0;
+    }
+
+    .breadcrumb-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .breadcrumb-item {
+      margin: 0;
+      padding: 0;
+    }
+
+    .breadcrumb-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      color: var(--link-color);
+      text-decoration: none;
+      font-size: 13px;
+      border: none;
+      transition: all 0.15s ease;
+      cursor: pointer;
+      font-family: inherit;
+      background: transparent;
+      width: 100%;
+      text-align: left;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+
+    .breadcrumb-link:hover {
+      color: var(--link-hover);
+      background: rgba(0, 180, 216, 0.08);
+    }
+
+    .breadcrumb-link i {
+      font-size: 16px;
+      flex-shrink: 0;
+      opacity: 0.8;
+    }
+
+    .breadcrumb-link[aria-current="page"] {
+      color: var(--link-hover);
+      background: rgba(0, 180, 216, 0.12);
+      font-weight: 600;
+    }
+
+    /* Parent items with expand toggle */
+    .parent-item .parent-toggle,
+    .sub-parent .sub-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 12px;
+      position: relative;
+    }
+
+    .parent-item .parent-toggle .expand-icon,
+    .sub-parent .sub-toggle .expand-icon {
+      transition: transform 0.15s;
+      margin-left: auto;
+      flex-shrink: 0;
+      font-size: 12px;
+      opacity: 0.6;
+    }
+
+    .parent-item.open > .parent-toggle .expand-icon,
+    .sub-parent.open > .sub-toggle .expand-icon {
+      transform: rotate(90deg);
+    }
+
+    /* Nested lists */
+    .breadcrumb-sublist {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-left: 28px;
+    }
+
+    .breadcrumb-sublist .breadcrumb-item .breadcrumb-link {
+      padding: 8px 16px;
+      font-size: 12px;
+      color: var(--link-color);
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 400;
+    }
+
+    .breadcrumb-sublist .breadcrumb-item .breadcrumb-link:hover {
+      color: var(--link-hover);
+    }
+
+    .breadcrumb-sublist .breadcrumb-item .breadcrumb-link i {
+      font-size: 14px;
+    }
+
+    .breadcrumb-subsublist {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-left: 28px;
+    }
+
+    .breadcrumb-subsublist .breadcrumb-item .breadcrumb-link {
+      padding: 6px 16px;
+      font-size: 11px;
+      color: var(--link-color);
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 400;
+      opacity: 0.9;
+    }
+
+    .breadcrumb-subsublist .breadcrumb-item .breadcrumb-link:hover {
+      color: var(--link-hover);
+    }
+
+    /* Collapsible section */
+    .breadcrumb-section {
+      padding: 12px;
+      border-top: 0.5px solid var(--separator-color);
+      font-size: 12px;
+      color: var(--link-color);
+    }
+
+    .breadcrumb-details {
+      cursor: pointer;
+    }
+
+    .breadcrumb-summary {
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 0;
+      font-weight: 500;
+      color: var(--link-color);
+      background: none;
+      border: none;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .breadcrumb-summary:hover {
+      color: var(--link-hover);
+    }
+
+    .collapse-icon {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      transition: transform 0.2s;
+    }
+
+    .breadcrumb-details[open] .collapse-icon {
+      transform: rotate(90deg);
+    }
+
+    .breadcrumb-hidden {
+      margin-top: 8px;
+      padding-left: 12px;
+      border-left: 1px solid var(--separator-color);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .breadcrumb-hidden a {
+      display: block;
+      padding: 6px;
+      color: var(--link-color);
+      text-decoration: none;
+      font-size: 12px;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+
+    .breadcrumb-hidden a:hover {
+      background-color: var(--active-bg);
+      color: var(--link-hover);
+    }
+
+    .sub-parent .sub-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      padding-left: 28px;
+    }
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background: transparent;">
+
+<div style="background: var(--color-background-primary, #0a0f16);">
+  <nav aria-label="Breadcrumb">
+    <ol class="breadcrumb-list">
+      <li class="breadcrumb-item">
+        <a href="#" class="breadcrumb-link" data-page="overview" aria-current="page">
+          <i class="ti ti-layout-dashboard"></i>
+          <span>Overview</span>
+        </a>
+      </li>
+      <li class="breadcrumb-item parent-item">
+        <button class="breadcrumb-link parent-toggle" data-section="bzila">
+          <i class="ti ti-flame"></i>
+          <span>Bzila Flow</span>
+          <span class="expand-icon">›</span>
+        </button>
+        <ol class="breadcrumb-sublist" data-section="bzila" style="display: none;">
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="bzila-spx">SPX 0DTE</a></li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="bzila-charts">Multi Charts</a></li>
+        </ol>
+      </li>
+      <li class="breadcrumb-item parent-item">
+        <button class="breadcrumb-link parent-toggle" data-section="database">
+          <i class="ti ti-database"></i>
+          <span>Database</span>
+          <span class="expand-icon">›</span>
+        </button>
+        <ol class="breadcrumb-sublist" data-section="database" style="display: none;">
+          <li class="breadcrumb-item parent-item sub-parent">
+            <button class="breadcrumb-link sub-toggle" data-subsection="data">
+              <span>Data</span>
+              <span class="expand-icon">›</span>
+            </button>
+            <ol class="breadcrumb-subsublist" data-subsection="data" style="display: none;">
+              <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="db-mvc">MVC</a></li>
+              <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="db-premium">Premium Flow</a></li>
+              <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="db-score">Buy/Sell Score</a></li>
+              <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="db-trades">Big Trades</a></li>
+            </ol>
+          </li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="db-moves">EST. Moves</a></li>
+        </ol>
+      </li>
+      <li class="breadcrumb-item">
+        <a href="#" class="breadcrumb-link" data-page="trading">
+          <i class="ti ti-chart-candlestick"></i>
+          <span>Trading</span>
+        </a>
+      </li>
+      <li class="breadcrumb-item">
+        <a href="#" class="breadcrumb-link" data-page="stats">
+          <i class="ti ti-chart-bar"></i>
+          <span>Stats</span>
+        </a>
+      </li>
+      <li class="breadcrumb-item parent-item">
+        <button class="breadcrumb-link parent-toggle" data-section="insights">
+          <i class="ti ti-bulb"></i>
+          <span>Insights</span>
+          <span class="expand-icon">›</span>
+        </button>
+        <ol class="breadcrumb-sublist" data-section="insights" style="display: none;">
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="insights-exposure">Exposure Stack</a></li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="insights-ib">IB Logic & AI</a></li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="insights-vol">Volatility Trend</a></li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="insights-signals">Live Signals</a></li>
+        </ol>
+      </li>
+      <li class="breadcrumb-item parent-item">
+        <button class="breadcrumb-link parent-toggle" data-section="personal">
+          <i class="ti ti-user"></i>
+          <span>Personal</span>
+          <span class="expand-icon">›</span>
+        </button>
+        <ol class="breadcrumb-sublist" data-section="personal" style="display: none;">
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="personal-profile">Profile</a></li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="personal-settings">Settings</a></li>
+          <li class="breadcrumb-item"><a href="#" class="breadcrumb-link" data-page="personal-logs">Activity Logs</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</div>
+
+<script>
+  // Handle breadcrumb link clicks
+  document.querySelectorAll('.breadcrumb-link:not(.parent-toggle):not(.sub-toggle)').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const page = link.getAttribute('data-page');
+      if (window.loadPage) {
+        window.loadPage(page);
+      } else {
+        console.warn('loadPage function not available');
+      }
+      updateBreadcrumbState(page);
+    });
+  });
+
+  // Handle parent toggle buttons
+  document.querySelectorAll('.parent-toggle').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const section = btn.getAttribute('data-section');
+      const sublist = document.querySelector(`.breadcrumb-sublist[data-section="${section}"]`);
+      const parentItem = btn.closest('.parent-item');
+      
+      if (sublist.style.display === 'none') {
+        sublist.style.display = 'flex';
+        parentItem.classList.add('open');
+      } else {
+        sublist.style.display = 'none';
+        parentItem.classList.remove('open');
+        // Close any open subsections
+        parentItem.querySelectorAll('.breadcrumb-subsublist').forEach(sub => {
+          sub.style.display = 'none';
+        });
+        parentItem.querySelectorAll('.sub-parent').forEach(sp => {
+          sp.classList.remove('open');
+        });
+      }
+    });
+  });
+
+  // Handle sub-toggle buttons
+  document.querySelectorAll('.sub-toggle').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const subsection = btn.getAttribute('data-subsection');
+      const subsublist = document.querySelector(`.breadcrumb-subsublist[data-subsection="${subsection}"]`);
+      const subParent = btn.closest('.sub-parent');
+      
+      if (subsublist.style.display === 'none') {
+        subsublist.style.display = 'flex';
+        subParent.classList.add('open');
+      } else {
+        subsublist.style.display = 'none';
+        subParent.classList.remove('open');
+      }
+    });
+  });
+
+  // Handle collapsible hidden items
+  document.querySelectorAll('.breadcrumb-hidden a').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const page = link.getAttribute('data-page');
+      if (window.loadPage) {
+        window.loadPage(page);
+      }
+      updateBreadcrumbState(page);
+    });
+  });
+
+  function updateBreadcrumbState(activePage) {
+    // Remove aria-current from all links
+    document.querySelectorAll('[aria-current="page"]').forEach(el => {
+      el.removeAttribute('aria-current');
+    });
+
+    // Add aria-current to active link
+    const activeLink = document.querySelector(`[data-page="${activePage}"]`);
+    if (activeLink) {
+      activeLink.setAttribute('aria-current', 'page');
+    }
+  }
+
+  // Optional: Support configurable separator
+  window.setBreadcrumbSeparator = function(separator) {
+    document.querySelectorAll('.separator').forEach(el => {
+      el.textContent = separator;
+    });
+  };
+
+  // Optional: Add custom breadcrumb items
+  window.addBreadcrumbItem = function(label, page, index) {
+    const list = document.querySelector('.breadcrumb-list');
+    const item = document.createElement('li');
+    item.className = 'breadcrumb-item';
+    item.innerHTML = `
+      <a href="#" class="breadcrumb-link" data-page="${page}">
+        <span class="separator">›</span>
+        <span>${label}</span>
+      </a>
+    `;
+    if (index !== undefined) {
+      list.insertBefore(item, list.children[index]);
+    } else {
+      list.appendChild(item);
+    }
+    
+    item.querySelector('a').addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.loadPage) window.loadPage(page);
+      updateBreadcrumbState(page);
+    });
+  };
+</script>
+
+</body>
+</html>

@@ -8,22 +8,17 @@ function getGEXScale(row) {
   return spot > 0 ? spot : 0;
 }
 
-// Calculate Net GEX for a single row
+// Calculate Net GEX for a single row (per-point basis)
+// Always calculate from raw gamma/OI/volume, never use pre-calculated values
 function calculateNetGEX(row, mode = 'net') {
-  if (mode === 'vol' && ('callVolGEX' in row || 'putVolGEX' in row)) {
-    return (row.callVolGEX || 0) - (row.putVolGEX || 0);
-  }
-  if (mode !== 'vol' && ('callGEX' in row || 'putGEX' in row)) {
-    return (row.callGEX || 0) - (row.putGEX || 0);
-  }
-
+  const spot = Number(row.spotPrice || row.spot || 0);
   const callPos = mode === 'vol' ? (row.callVolume || 0) : (row.callOI || 0) + (row.callVolume || 0);
   const putPos = mode === 'vol' ? (row.putVolume || 0) : (row.putOI || 0) + (row.putVolume || 0);
-  const scale = getGEXScale(row);
-  const callGEX = (row.callGamma || 0) * callPos * 100 * scale;
-  const putGEX = (row.putGamma || 0) * putPos * 100 * scale;
+  // GEX per 1% move: Gamma × Position × Spot²
+  const callGEX = (row.callGamma || 0) * callPos * spot * spot;
+  const putGEX = (row.putGamma || 0) * putPos * spot * spot * -1;
 
-  return callGEX - putGEX;
+  return callGEX + putGEX;
 }
 
 // Calculate Net DEX for a single row
@@ -50,23 +45,36 @@ function calculateCumulativeDEX(chain, atmStrike, spotPrice, mode = 'net') {
   return cumDEX;
 }
 
-// Find GEX flip point (where net GEX crosses zero)
-function findGEXFlip(chain) {
+// Find GEX flip point (where cumulative net GEX crosses zero)
+function findGEXFlip(chain, spotPrice = null) {
   const sorted = [...chain].sort((a, b) => a.strike - b.strike);
-  
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const curr = sorted[i];
-    const next = sorted[i + 1];
-    
-    if (curr.netGEX && next.netGEX && Math.sign(curr.netGEX) !== Math.sign(next.netGEX)) {
-      // Linear interpolation to find exact zero crossing
-      const slope = (next.netGEX - curr.netGEX) / (next.strike - curr.strike);
-      const flip = curr.strike - curr.netGEX / slope;
-      return Math.round(flip * 100) / 100;
-    }
+  if (!sorted.length) return null;
+
+  const cumulative = [];
+  let running = 0;
+  for (const row of sorted) {
+    running += Number(row.netGEX || 0);
+    cumulative.push({ strike: row.strike, cumGEX: running });
   }
-  
-  return null;
+
+  const levels = cumulative.map(row => row.strike);
+  const totalGamma = cumulative.map(row => row.cumGEX);
+  const zeroCrossIdx = [];
+  for (let i = 0; i < totalGamma.length - 1; i++) {
+    if (Math.sign(totalGamma[i]) !== Math.sign(totalGamma[i + 1])) zeroCrossIdx.push(i);
+  }
+
+  if (zeroCrossIdx.length > 0) {
+    const idx = zeroCrossIdx[0];
+    const negGamma = totalGamma[idx];
+    const posGamma = totalGamma[idx + 1];
+    const negStrike = levels[idx];
+    const posStrike = levels[idx + 1];
+    const zeroGamma = posStrike - ((posStrike - negStrike) * posGamma / (posGamma - negGamma));
+    return Math.round(zeroGamma * 100) / 100;
+  }
+
+  return spotPrice != null && !isNaN(spotPrice) ? Number(spotPrice) : null;
 }
 
 // Find call wall (strike with max call GEX)
@@ -104,6 +112,28 @@ function formatStrike(strike) {
   return strike.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
+// Calculate daily estimated move from ATM straddle
+function calculateDailyEstimatedMove(chain, spotPrice) {
+  if (!chain || chain.length === 0) return null;
+  
+  // Find ATM strike (round to nearest 5)
+  const atmStrike = Math.round(spotPrice / 5) * 5;
+  
+  // Find ATM call and put
+  const atmCall = chain.find(o => o.strike === atmStrike && o.type === 'call');
+  const atmPut = chain.find(o => o.strike === atmStrike && o.type === 'put');
+  
+  if (!atmCall || !atmPut) return null;
+  
+  // Straddle mid = (call mid + put mid) / 2
+  const callMid = ((atmCall.bid || 0) + (atmCall.ask || 0)) / 2;
+  const putMid = ((atmPut.bid || 0) + (atmPut.ask || 0)) / 2;
+  const stradleMid = (callMid + putMid) / 2;
+  
+  // Estimated move = straddle mid × 0.84
+  return Math.round(stradleMid * 0.84 * 100) / 100;
+}
+
 // Export all calculation functions
 window.CALC = {
   calculateNetGEX,
@@ -112,6 +142,7 @@ window.CALC = {
   findGEXFlip,
   findCallWall,
   findPutWall,
+  calculateDailyEstimatedMove,
   formatGEX,
   formatStrike
 };

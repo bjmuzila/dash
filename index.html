@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <script>
@@ -218,6 +218,7 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
 <title>SPX GEX Terminal</title>
 <link rel="stylesheet" href="shared/styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -265,13 +266,24 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
       };
 
       const startServedPromptCleaner = () => {
+        let cleanerScheduled = false;
+        const scheduleCleanup = () => {
+          if (cleanerScheduled) return;
+          cleanerScheduled = true;
+          requestAnimationFrame(() => {
+            cleanerScheduled = false;
+            removeServedPrompts();
+          });
+        };
+
         removeServedPrompts();
-        new MutationObserver(removeServedPrompts).observe(document.body || document.documentElement, {
+        new MutationObserver(scheduleCleanup).observe(document.body || document.documentElement, {
           childList: true,
           subtree: true,
           characterData: true,
         });
-        setInterval(removeServedPrompts, 250);
+        window.addEventListener('error', scheduleCleanup, { passive: true });
+        window.addEventListener('unhandledrejection', scheduleCleanup, { passive: true });
       };
 
       if (document.readyState === 'loading') {
@@ -376,7 +388,7 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
 <body>
 
 <!-- TOPBAR -->
-<div class="topbar" style="flex-direction:column;height:auto;padding:0">
+<div class="topbar" style="flex-direction:column;height:auto;padding:0;position:relative;z-index:1000">
   <!-- ROW 1: main info -->
   <div style="display:flex;align-items:center;gap:12px;min-width:0;flex-wrap:nowrap;padding:4px 12px;width:100%;box-sizing:border-box;border-bottom:1px solid #0d1825">
     <div class="logo" style="flex-shrink:0">SPX<span> // </span>GEX</div>
@@ -468,10 +480,15 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
       <span id="mvc-vol" style="font-size:12px;font-weight:700;color:#a0d4ff;font-variant-numeric:tabular-nums">—</span>
     </div>
     <span style="color:#1e3050">|</span>
+    <!-- GEX Flip (showing Gamma Zero value) -->
+    <span style="font-size:9px;color:#ffb300;letter-spacing:.1em;text-transform:uppercase;font-weight:700;flex-shrink:0">GEX Flip</span>
+    <span id="topbar-gex-flip" style="font-size:12px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">--</span>
+    <span style="color:#1e3050">|</span>
     <!-- PEAK GEX -->
     <span style="font-size:9px;color:#ffb300;letter-spacing:.1em;text-transform:uppercase;font-weight:700;flex-shrink:0">Peak GEX</span>
     <div id="gex-peak-list" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"></div>
-    <button onclick="typeof gexTakeSnapshot==='function'?gexTakeSnapshot():console.warn('gexTakeSnapshot not ready')" title="Snap current peak GEX" style="font-size:9px;padding:1px 6px;background:transparent;border:1px solid #1e3050;color:#00e5ff;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">⊕ SNAP</button>
+    <span style="color:#1e3050">|</span>
+    <button onclick="typeof gexDatabaseSnapshot==='function'?gexDatabaseSnapshot():console.warn('gexDatabaseSnapshot not ready')" title="Snap current MVC and related database stats" style="font-size:9px;padding:1px 6px;background:transparent;border:1px solid #1e3050;color:#00e5ff;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;flex-shrink:0">⊕ SNAP</button>
   </div>
 </div>
 
@@ -514,10 +531,6 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
       <span class="nav-icon">⊞</span>Overview
     </div>
 
-    <div class="nav-item" id="nav-bzila" onclick="loadPage('bzila')" data-page="bzila">
-      <span class="nav-icon">⚡</span>Bzila Flow
-    </div>
-
     <div class="nav-divider"></div>
     <div class="nav-item" id="nav-database" onclick="loadPage('database')" data-page="database">
       <span class="nav-icon">🗄</span>Database
@@ -554,8 +567,10 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
   <div class="quotes-panel">
     <div class="quotes-header">
       <span style="color:#4a6a84;font-weight:700;letter-spacing:.12em">QUOTES</span>
-      <div style="display:flex;align-items:center;gap:6px">
-        <span id="quotes-countdown" style="font-size:9px;font-weight:700;color:#29b6f6;font-variant-numeric:tabular-nums;min-width:22px;text-align:right">—</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <span id="quotes-prelim-label" style="font-size:9px;font-weight:700;color:#3a5570;letter-spacing:.08em;text-transform:uppercase">DC PRELIM</span>
+        <span id="quotes-prelim-value" style="font-size:9px;font-weight:700;color:#00e5ff;font-variant-numeric:tabular-nums;min-width:72px;text-align:right">—</span>
+        <span id="quotes-countdown" style="font-size:9px;font-weight:700;color:#29b6f6;font-variant-numeric:tabular-nums;min-width:36px;text-align:right">LIVE</span>
         <span id="quotes-ts" style="color:#1e3050;font-size:9px;font-variant-numeric:tabular-nums"></span>
       </div>
     </div>
@@ -564,17 +579,65 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
     </div>
   </div>
 
-  <!-- QUOTE & AFFIRMATION -->
-  <div class="lnav-bottom">
-    <div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Quote of the Day</div>
-    <div id="qotd-text" style="font-size:10px;color:var(--text1);line-height:1.6;font-style:italic;margin-bottom:4px">"Knowledge is gathering facts. Wisdom is knowing which ones matter."</div>
-    <div style="font-size:9px;color:var(--text3);text-align:right;margin-bottom:12px">– Maxime Lagacé</div>
+  <div class="lnav-bottom" id="daily-em-panel" style="padding:10px 10px 12px">
+    <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ffb300;font-weight:700;margin-bottom:8px">Daily Est. Moves</div>
 
-    <div style="border-top:1px solid var(--border);padding-top:10px;margin-bottom:8px">
-      <div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Affirmation of the Day</div>
-      <div id="affirmation-text" style="font-size:10px;color:var(--text1);line-height:1.6;font-style:italic;margin-bottom:4px">"Therefore do not worry about tomorrow, for tomorrow will worry about itself. Each day has enough trouble of its own."</div>
-      <div style="font-size:9px;color:var(--text3);text-align:right">Matthew 6:34</div>
+    <div style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:10px;font-weight:700;color:#00e5ff;letter-spacing:.1em">ESM6</span>
+        <span id="em-es-ref" style="font-size:9px;color:#ffffff;font-variant-numeric:tabular-nums">cls: x</span>
+      </div>
+      <div id="em-es-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">1 UP</div>
+          <div id="em-es-1up" style="font-size:14px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">x</div>
+        </div>
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">1 DN</div>
+          <div id="em-es-1dn" style="font-size:14px;font-weight:700;color:#ff5252;font-variant-numeric:tabular-nums">x</div>
+        </div>
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">EM</div>
+          <div id="em-es-range" style="font-size:13px;font-weight:700;color:#e8c060;font-variant-numeric:tabular-nums">x</div>
+        </div>
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">%MOVE</div>
+          <div id="em-es-pct" style="font-size:13px;font-weight:700;color:#a0d4ff;font-variant-numeric:tabular-nums">x</div>
+        </div>
+      </div>
     </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:10px;font-weight:700;color:#00e5ff;letter-spacing:.1em">NQM6</span>
+        <span id="em-nq-ref" style="font-size:9px;color:#ffffff;font-variant-numeric:tabular-nums">cls: x</span>
+      </div>
+      <div id="em-nq-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">1 UP</div>
+          <div id="em-nq-1up" style="font-size:14px;font-weight:700;color:#00e676;font-variant-numeric:tabular-nums">x</div>
+        </div>
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">1 DN</div>
+          <div id="em-nq-1dn" style="font-size:14px;font-weight:700;color:#ff5252;font-variant-numeric:tabular-nums">x</div>
+        </div>
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">EM</div>
+          <div id="em-nq-range" style="font-size:13px;font-weight:700;color:#e8c060;font-variant-numeric:tabular-nums">x</div>
+        </div>
+        <div style="background:#060f1a;border:1px solid #1a2a3a;border-radius:2px;padding:4px 6px;text-align:center">
+          <div style="font-size:9px;color:#ffffff;letter-spacing:.08em;margin-bottom:2px">%MOVE</div>
+          <div id="em-nq-pct" style="font-size:13px;font-weight:700;color:#a0d4ff;font-variant-numeric:tabular-nums">x</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button id="em-copy-shot-btn" onclick="if(typeof window.copyDailyEMScreenshot==='function') window.copyDailyEMScreenshot()" style="flex:1;padding:3px 0;background:transparent;border:1px solid #1e3050;color:#00e5ff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit;border-radius:2px" title="Copy a snapshot image of the Daily Est. Moves panel">COPY SNAP</button>
+      <button id="em-recalc-btn" onclick="var b=this;if(typeof window.updateDailyEM==='function'){b.textContent='...';window.updateDailyEM(true).finally(function(){b.textContent='RECALC'})}" style="flex:1;padding:3px 0;background:transparent;border:1px solid #1e3050;color:#3a5570;font-size:9px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit;border-radius:2px" title="Recalculate from live quotes">RECALC</button>
+    </div>
+
+
   </div>
 </div>
 
@@ -596,13 +659,19 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
 </div>
 
 <!-- SHARED SCRIPTS -->
-<script src="shared/api.js"></script>
 <script src="shared/calculations.js"></script>
+<script src="shared/api.js"></script>
 <script src="shared/app.js"></script>
-<script src="shared/database.js"></script> 
+<script src="shared/page-runtime.js"></script>
+<script src="pages/database/database.js"></script>
+<script>
+if (window.DB && !window.SharedDB) {
+  window.SharedDB = window.DB;
+}
+</script>
 <script src="shared/flow-recorder.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="pages/overview.js?v=20260526-insights-expiry-v35"></script>
+<script src="pages/overview/overview.js?v=20260610-gex-flip-label"></script>
 
 <!-- GEX Level Auto-Sync to MotiveWave -->
 <script>
@@ -646,6 +715,9 @@ function resetLoadedPageScroll() {
 
 async function loadPage(pageName) {
   try {
+    if (window.PageRuntime?.cleanup) {
+      window.PageRuntime.cleanup(window.AppState?.currentPage);
+    }
     console.log(`Loading page: ${pageName}`);
     
     // Update nav active state
@@ -671,7 +743,7 @@ async function loadPage(pageName) {
     resetLoadedPageScroll();
     
     // Load the page HTML
-    const response = await fetch(`pages/${pageName}.html`);
+    const response = await fetch(`pages/${pageName}/${pageName}.html`);
     if (!response.ok) {
       throw new Error(`Failed to load ${pageName}: ${response.statusText}`);
     }
@@ -752,13 +824,16 @@ function updateStrikeCount() {
   }
 }
 
-// Inline minimal DB for GEX snapshots
-window.DB = {
+// Inline minimal DB REMOVED — it was overwriting window.DB and opening the
+// database at an old version (5), which made every save/load fail.
+// window.DB is now defined ONLY by pages/database/database.js.
+// The object below is intentionally NOT assigned to window.DB.
+const __inlineDB_unused = {
   db: null,
   _autoSnapScheduled: false,
   async init() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('OptionsMarketDB', 4);
+      const request = indexedDB.open('OptionsMarketDB', 5);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         this.db = request.result;
@@ -916,33 +991,34 @@ window.DB = {
       request.onsuccess = () => resolve(request.result);
     });
   },
-  async saveMVCSnapshot(mvcOIVol, mvcVolOnly, currentPrice, expiration, triggerType = 'manual', totalNetGEX = 0, netDexStrike = null, totalNetDEX_OI = 0, spxPrice = 0) {
+  async saveMVCSnapshot(mvcOIVol, mvcVolOnly, currentPrice, esPrice, selectedExpiry, triggerType = 'manual', totalNetGEX = 0, netDexStrike = null, totalNetDEX_OI = 0, totalNetDEX_Vol = 0, unused = null, totalNetGEX_Vol = 0, gexFlip = 0) {
     if (!this.db) await this.init();
     const now = new Date();
     const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()];
     const pctOIVol = totalNetGEX !== 0 ? parseFloat((Math.abs(mvcOIVol.value) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
     const pctVolOnly = totalNetGEX !== 0 ? parseFloat((Math.abs(mvcVolOnly.value) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
-    
+
     const record = {
       timestamp: now.getTime(),
       date: now.toISOString().split('T')[0],
       day: dayName,
       time: now.toTimeString().split(' ')[0],
       triggerType: triggerType,
-      expiration: expiration || '—',
-      strikeOIVol: mvcOIVol.strike,
-      mvcValueOIVol: mvcOIVol.value,
+      expiration: selectedExpiry || '—',
+      strikeOIVol: mvcOIVol?.strike ?? null,
+      mvcValueOIVol: mvcOIVol?.value ?? null,
       pctNetGEXOIVol: pctOIVol,
-      volumeOIVol: mvcOIVol.volume,
-      strikeVolOnly: mvcVolOnly.strike,
-      mvcValueVolOnly: mvcVolOnly.value,
+      volumeOIVol: mvcOIVol?.volume ?? null,
+      strikeVolOnly: mvcVolOnly?.strike ?? null,
+      mvcValueVolOnly: mvcVolOnly?.value ?? null,
       pctNetGEXVolOnly: pctVolOnly,
-      volumeVolOnly: mvcVolOnly.volume,
+      volumeVolOnly: mvcVolOnly?.volume ?? null,
       currentPrice: currentPrice,
-      spxPrice: spxPrice,
+      spxPrice: esPrice,
       totalNetGEX: totalNetGEX,
-      netDexStrike: netDexStrike || 0,
-      totalNetDEX_OI: totalNetDEX_OI || 0
+      netDexStrike: netDexStrike ?? null,
+      totalNetDEX_OI: totalNetDEX_OI ?? null,
+      gexFlip: gexFlip ?? null
     };
     
     return new Promise((resolve, reject) => {
@@ -984,42 +1060,42 @@ window.DB = {
     if (!this.db) await this.init();
     if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([storeName], 'readonly');
-      const store = tx.objectStore(storeName);
-      const request = store.getAll();
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result || []);
+      try {
+        const tx = this.db.transaction([storeName], 'readonly');
+        const store = tx.objectStore(storeName);
+        const request = store.getAll();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result || []);
+      } catch (e) { if (e.name === 'InvalidStateError') resolve([]); else reject(e); }
     });
   },
   async _queryByIndex(storeName, indexName, value) {
     if (!this.db) await this.init();
     if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([storeName], 'readonly');
-      const store = tx.objectStore(storeName);
-      if (!store.indexNames.contains(indexName)) {
-        resolve([]);
-        return;
-      }
-      const request = store.index(indexName).getAll(value);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result || []);
+      try {
+        const tx = this.db.transaction([storeName], 'readonly');
+        const store = tx.objectStore(storeName);
+        if (!store.indexNames.contains(indexName)) { resolve([]); return; }
+        const request = store.index(indexName).getAll(value);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result || []);
+      } catch (e) { if (e.name === 'InvalidStateError') resolve([]); else reject(e); }
     });
   },
   async _queryByRange(storeName, indexName, minValue, maxValue = Date.now()) {
     if (!this.db) await this.init();
     if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([storeName], 'readonly');
-      const store = tx.objectStore(storeName);
-      if (!store.indexNames.contains(indexName)) {
-        resolve([]);
-        return;
-      }
-      const range = IDBKeyRange.bound(minValue, maxValue);
-      const request = store.index(indexName).getAll(range);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result || []);
+      try {
+        const tx = this.db.transaction([storeName], 'readonly');
+        const store = tx.objectStore(storeName);
+        if (!store.indexNames.contains(indexName)) { resolve([]); return; }
+        const range = IDBKeyRange.bound(minValue, maxValue);
+        const request = store.index(indexName).getAll(range);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result || []);
+      } catch (e) { if (e.name === 'InvalidStateError') resolve([]); else reject(e); }
     });
   },
   async queryMVC_Recent(hoursBack = 24) {
@@ -1049,16 +1125,20 @@ window.DB = {
     const records = await this._queryByIndex('buySellScores', 'date', today);
     return records.sort((a, b) => b.timestamp - a.timestamp);
   },
-  async _getAllRecords(storeName) {
-    if (!this.db) await this.init();
-    if (!this.db || !this.db.objectStoreNames.contains(storeName)) return [];
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([storeName], 'readonly');
-      const store = tx.objectStore(storeName);
-      const request = store.getAll();
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result || []);
-    });
+  async queryGreeksTimeSeries_Today(expiration = '') {
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+    const records = await this._queryByRange('greeksTimeSeries', 'timestamp', startOfDay.getTime()).catch(() => []);
+    const fallback = records.length ? records : await this._queryByRange('greeksHistory', 'timestamp', startOfDay.getTime()).catch(() => []);
+    const active = fallback;
+    const sorted = active.sort((a, b) => a.timestamp - b.timestamp);
+    return expiration ? sorted.filter(r => !r.expiration || r.expiration === expiration) : sorted;
+  },
+  async queryGreeksTimeSeries_Hours(hoursBack = 24, expiration = '') {
+    const cutoff = Date.now() - (hoursBack * 60 * 60 * 1000);
+    const records = (await this._queryByRange('greeksTimeSeries', 'timestamp', cutoff).catch(() => []))
+      .concat(await this._queryByRange('greeksHistory', 'timestamp', cutoff).catch(() => []));
+    const sorted = records.sort((a, b) => a.timestamp - b.timestamp);
+    return expiration ? sorted.filter(r => !r.expiration || r.expiration === expiration) : sorted;
   },
   async saveBuySellScore(score) {
     if (!this.db) await this.init();
@@ -1145,14 +1225,13 @@ function hideGexSnapshot(btn) {
 }
 window.hideGexSnapshot = hideGexSnapshot;
 
-// Initialize DB on page load
-window.addEventListener('DOMContentLoaded', () => {
-  window.DB.init()
-    .then(() => {
-      window.DB.startAutoSnapScheduler();
-      console.log('✓ Auto-snap scheduler started');
-    })
-    .catch(err => console.error('DB init failed:', err));
+// Start scheduler + sidebar widgets once the shared DB is ready
+// (pages/database/database.js inits on DOMContentLoaded and fires 'db-ready')
+window.addEventListener('db-ready', () => {
+  window.DB.startAutoSnapScheduler();
+  console.log('✓ Auto-snap scheduler started');
+  updateSnapshotCount();
+  loadGexPeaks();
 });
 
 let lastSnapshotTime = 0;
@@ -1175,7 +1254,8 @@ async function gexTakeSnapshot(triggerType = 'manual') {
   const selectedDTE = window.AppState?.selectedDTE || 0;
   const netDexStrike = window.AppState?.netDexStrike || 0;
   const totalNetDEX_OI = window.AppState?.totalNetDEX_OI || 0;
-  
+  const gexFlip = window.lastGammaZeroCalc?.gammaZeroPoint ?? 0; // Gamma zero (flip point)
+
   // Get MVC values - these should be calculated by overview.js
   const mvcOIVol = window.mvcOIVol || { strike: 0, value: 0, volume: 0 };
   const mvcVolOnly = window.mvcVolOnly || { strike: 0, value: 0, volume: 0 };
@@ -1194,7 +1274,7 @@ async function gexTakeSnapshot(triggerType = 'manual') {
   }
   
   try {
-    await window.DB.saveMVCSnapshot(mvcOIVol, mvcVolOnly, esPrice, expiration, triggerType, totalNetGEX, netDexStrike, totalNetDEX_OI, spxPrice);
+    await window.DB.saveMVCSnapshot(mvcOIVol, mvcVolOnly, spxPrice, esPrice, expiration, triggerType, totalNetGEX, netDexStrike, totalNetDEX_OI, gexFlip);
     console.log(`✓ MVC snapshot saved [${triggerType}]`);
     
     // Show toast only for manual snaps
@@ -1415,12 +1495,45 @@ document.addEventListener('click', function(e) {
 
 <!-- Database modules -->
 <script src="es-stats-spx-price.js?v=20260525-spx-conversion"></script>
-<script src="estimated-moves.js?v=20260527-em-page-snapshots"></script>
+<script src="pages/estimated-moves/estimated-moves.js?v=20260527-em-page-snapshots"></script>
 
-<!-- SPX 0DTE Premium Flow (Bzila) -->
-<script src="pages/bzila.js?v=20260528-v10"></script>
+<!-- SPX 0DTE Flow Pipeline (shared) -->
+<script src="shared/spx-flow.js?v=20260610-v1"></script>
 
 <script>
+// Fix ES change display in topbar - ALWAYS use actual yesterday's close
+// This ensures ES change is always correct regardless of quote data timing
+const ES_PREV_CLOSE = 7400.25; // Yesterday's actual close - update this daily
+
+function updateTopbarESChange() {
+  const tbEsPrice = document.getElementById('topbar-es-price');
+  const tbEsChg = document.getElementById('topbar-es-chg');
+
+  if (!tbEsPrice || !tbEsChg || tbEsPrice.textContent === '—') return;
+
+  const esPrice = parseFloat(tbEsPrice.textContent.replace(/,/g, ''));
+
+  if (esPrice > 0 && ES_PREV_CLOSE > 0) {
+    const esChg = esPrice - ES_PREV_CLOSE;
+    const esPct = (esChg / ES_PREV_CLOSE) * 100;
+    const sign = esChg >= 0 ? '+' : '';
+
+    tbEsChg.textContent = sign + esChg.toFixed(2) + ' (' + sign + esPct.toFixed(2) + '%)';
+    tbEsChg.style.color = esChg >= 0 ? '#00e676' : '#ff4757';
+  }
+}
+
+// Update topbar ES change whenever topbar price changes
+const observer = new MutationObserver(() => {
+  updateTopbarESChange();
+});
+
+const tbEsPrice = document.getElementById('topbar-es-price');
+if (tbEsPrice) {
+  observer.observe(tbEsPrice, { characterData: true, subtree: true });
+  updateTopbarESChange(); // Initial update
+}
+
 // Initialize dashboard - must be at end after all functions defined
 console.log('Inline script end - readyState:', document.readyState);
 console.log('Calling initDashboard directly...');
@@ -1455,6 +1568,545 @@ initDashboard();
       setTimeout(applyBottomPanelLayout, 250);
     })();
   </script>
+<script>
+// =============================================================================
+// Daily Estimated Moves - left nav panel (ESM6 / NQM6)
+// =============================================================================
+(function() {
+  const PROXY = 'http://localhost:3001';
+  const EM_CACHE_KEY = 'nav_daily_em_v1';
+
+  const fmt2 = n => (n != null && isFinite(n) && n > 0) ? n.toFixed(2) : 'x';
+  const fmtFut = n => (n != null && isFinite(n) && n > 0) ? (Math.round(n * 4) / 4).toFixed(2) : 'x';
+  const fmtPct = n => (n != null && isFinite(n) && n > 0) ? (n * 100).toFixed(2) + '%' : 'x';
+
+  function getEtNow() {
+    return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  }
+
+  function isMorningDisplayTime() {
+    const now = getEtNow();
+    const dow = now.getDay();
+    if (dow === 0 || dow === 6) return false;
+    return (now.getHours() * 60 + now.getMinutes()) >= (4 * 60);
+  }
+
+  function isInEmWindow() {
+    const now = getEtNow();
+    const dow = now.getDay();
+    if (dow === 0 || dow === 6) return false;
+    const mins = now.getHours() * 60 + now.getMinutes();
+    return mins >= (16 * 60) && mins <= (18 * 60);
+  }
+
+  // During 4-6pm we capture tomorrow's EM, so cache under tomorrow's date
+  // so it loads correctly the next morning.
+  function nextWeekday(from) {
+    // Use the date string + noon UTC to avoid local/UTC mismatch across timezones
+    const base = (typeof from === 'string' ? from : from.toISOString().slice(0, 10));
+    const d = new Date(base + 'T12:00:00Z');
+    do { d.setUTCDate(d.getUTCDate() + 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function getCacheKeyDate() {
+    const now = getEtNow();
+    if (isInEmWindow()) return nextWeekday(now); // 4-6pm: key to tomorrow
+    const dow = now.getDay();
+    if (dow === 0 || dow === 6) return nextWeekday(now); // weekend: key to Monday
+    return now.toISOString().slice(0, 10);
+  }
+
+  function loadCachedEM() {
+    try {
+      const raw = localStorage.getItem(EM_CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.date !== getCacheKeyDate()) return null;
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveCachedEM(record) {
+    try {
+      localStorage.setItem(EM_CACHE_KEY, JSON.stringify(record));
+    } catch (_) {}
+  }
+
+  function getExpStr() {
+    const ny = getEtNow();
+    return ny.toISOString().slice(0, 10);
+  }
+
+  // During market hours, use live prices from quotes-batch so the EM is anchored to
+  // the current price, not yesterday's close. Fall back to em-closes otherwise.
+  async function getCloses() {
+    const afterClose = isInEmWindow();
+    const todayStr = getEtNow().toISOString().slice(0, 10);
+
+    if (isMarketHours()) {
+      try {
+        const r = await fetch(PROXY + '/proxy/api/tt/quotes-batch?symbols=SPX,NDX,/ES:XCME,/NQ:XCME');
+        if (r.ok) {
+          const d = await r.json();
+          const items = d?.data?.items || d?.items || [];
+          const bySymbol = {};
+          items.forEach(item => { if (item?.symbol) bySymbol[item.symbol] = item; });
+          const getPrice = (...keys) => {
+            for (const k of keys) {
+              const v = parseFloat(bySymbol[k]?.last || bySymbol[k]?.mid || bySymbol[k]?.bid || 0);
+              if (v > 0) return v;
+            }
+            return 0;
+          };
+          const spx = getPrice('SPX', '$SPX');
+          const ndx = getPrice('NDX', '$NDX');
+          const es  = getPrice('/ES:XCME', '/ESM6');
+          const nq  = getPrice('/NQ:XCME', '/NQM6');
+          if (spx > 0 && ndx > 0) {
+            return { spx, es: es || spx, ndx, nq: nq || ndx };
+          }
+        }
+      } catch(_) {}
+    }
+
+    // Outside market hours (or live fetch failed): use yesterday's close
+    const url = PROXY + '/proxy/api/tt/em-closes' + (afterClose ? '?closeDate=' + todayStr : '');
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('em-closes failed: ' + r.status);
+    const d = await r.json();
+    const data = d?.data || {};
+    if (!data.spx) throw new Error('SPX close = 0');
+    if (!data.ndx) throw new Error('NDX close = 0');
+    return { spx: data.spx, es: data.es || data.spx, ndx: data.ndx, nq: data.nq || data.ndx };
+  }
+
+  // mid: bid/ask first, then mark, then last (same priority as weekly EM page)
+  function optMid(leg) {
+    const bid = parseFloat(leg?.bid || leg?.['bid-price'] || 0);
+    const ask = parseFloat(leg?.ask || leg?.['ask-price'] || 0);
+    if (bid > 0 && ask > 0) return (bid + ask) / 2;
+    const mark = parseFloat(leg?.mark || leg?.['mark-price'] || leg?.['mid-price'] || 0);
+    if (mark > 0) return mark;
+    const last = parseFloat(leg?.last || leg?.['last-price'] || 0);
+    if (last > 0) return last;
+    return 0;
+  }
+
+  // Calculate days to expiration
+  function calcDTE(expDateStr) {
+    return Math.ceil((new Date(expDateStr + 'T16:00:00') - new Date()) / 86400000);
+  }
+
+  async function getStraddle(indexSym, spotClose, logs) {
+    logs = logs || [];
+    const log = msg => { logs.push('[getStraddle] ' + indexSym + ': ' + msg); };
+    const ny = getEtNow();
+    const today = ny.toISOString().slice(0, 10);
+    const dayOfWeek = ny.getDay();
+    const nextTradingDay = () => {
+      // Anchor to today's date string at noon UTC — avoids local/UTC mismatch
+      const d = new Date(today + 'T12:00:00Z');
+      do { d.setUTCDate(d.getUTCDate() + 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+      return d.toISOString().slice(0, 10);
+    };
+
+    // Skip proxy cache — always recalculate to get fresh IV data
+    // (Proxy cache can be stale and uses different calculation method)
+    console.log('[getStraddle] skipping proxy cache, calculating fresh IV-based EM');
+
+    // Build expiration candidates.
+    // After close (4-6pm): today's 0DTE has expired — skip it, go straight to tomorrow.
+    // Weekend: next Monday.
+    // Otherwise: today first, then tomorrow/Monday as fallbacks.
+    let expirations;
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      expirations = [nextTradingDay()];
+    } else if (isInEmWindow()) {
+      // 4-6pm: today's options expired, fetch tomorrow's expiration
+      expirations = [nextTradingDay()];
+    } else {
+      const d1 = new Date(today + 'T12:00:00Z'); d1.setUTCDate(d1.getUTCDate() + 1);
+      const tomorrow = d1.toISOString().slice(0, 10);
+      const monday   = nextTradingDay();
+      expirations = [...new Set([today, tomorrow, monday])];
+    }
+    console.log('[getStraddle] ' + indexSym + ' trying expirations:', expirations);
+
+    for (const expStr of expirations) {
+      try {
+        // noSubscribe=1 bypasses any proxy early-return blocks (same as weekly EM page)
+        const chainUrl = PROXY + '/proxy/api/tt/chains/' + encodeURIComponent(indexSym) +
+          '?range=all&expiration=' + encodeURIComponent(expStr) + '&noSubscribe=1';
+        console.log('[getStraddle] ' + indexSym + ' fetching', chainUrl);
+        const r = await fetch(chainUrl);
+        if (!r.ok) { console.log('[getStraddle] fetch failed ' + r.status); continue; }
+        const j = await r.json();
+
+        const sortedGroups = (j.data?.items || [])
+          .map(g => ({ dateStr: String(g['expiration-date'] || '').trim(), group: g }))
+          .filter(x => x.dateStr)
+          .sort((a, b) => a.dateStr.localeCompare(b.dateStr));
+
+        const candidateGroups = sortedGroups
+          .filter(x => x.dateStr >= expStr).map(x => x.group)
+          .concat(sortedGroups.filter(x => x.dateStr < expStr).map(x => x.group));
+
+        for (const expGroup of candidateGroups) {
+          const groupExp = String(expGroup['expiration-date'] || '').trim();
+          if (!expGroup?.strikes?.length) continue;
+
+          // Find ATM strike closest to spotClose
+          let atm = expGroup.strikes[0], minDist = Infinity;
+          for (const s of expGroup.strikes) {
+            const dist = Math.abs(parseFloat(s['strike-price']) - spotClose);
+            if (dist < minDist) { minDist = dist; atm = s; }
+          }
+
+          let callMid = optMid(atm?.call);
+          let putMid  = optMid(atm?.put);
+          log('callMid=' + callMid.toFixed(2) + ' putMid=' + putMid.toFixed(2));
+
+          // For NDX: use straddle method since IV data isn't available from TastyTrade
+          // For SPX: try IV formula first, fallback to straddle
+          const dte = calcDTE(groupExp);
+          let em = 0;
+
+          if (indexSym === 'NDX') {
+            // NDX: straddle-based calculation
+            log('NDX: initial callMid=' + callMid + ' putMid=' + putMid);
+
+            // Try option-marks for NDX straddle prices
+            if ((callMid <= 0 || putMid <= 0)) {
+              const callSym = atm?.call?.['streamer-symbol'] || atm?.call?.symbol || '';
+              const putSym  = atm?.put?.['streamer-symbol']  || atm?.put?.symbol  || '';
+              if (callSym || putSym) {
+                try {
+                  const syms = [callSym, putSym].filter(Boolean);
+                  log('NDX: fetching option-marks for: ' + syms.join(','));
+                  const mr = await fetch(PROXY + '/proxy/api/tt/option-marks?symbols=' + encodeURIComponent(syms.join(',')));
+                  if (mr.ok) {
+                    const md = await mr.json();
+                    const marks = {};
+                    (md?.data?.items || []).forEach(m => { if (m?.symbol) marks[m.symbol] = m; });
+
+                    if (callSym && marks[callSym] && callMid <= 0) callMid = optMid(marks[callSym]);
+                    if (putSym && marks[putSym] && putMid <= 0) putMid = optMid(marks[putSym]);
+                    log('NDX: option-marks result: callMid=' + callMid.toFixed(2) + ' putMid=' + putMid.toFixed(2));
+                  }
+                } catch(e) { log('NDX: option-marks error: ' + e.message); }
+              }
+            }
+
+            const straddle = callMid + putMid;
+            log('NDX: straddle=' + straddle);
+            if (straddle > 0) {
+              em = straddle * 0.85;
+              log('NDX straddle em=' + em.toFixed(2));
+            } else {
+              // Last resort: estimate based on typical NDX/SPX IV relationship (~2.5x higher IV)
+              const spxEstimate = window._lastSPXEM || 55;  // Use last calculated SPX EM
+              em = spxEstimate * 2.5;  // NDX typically has ~2.5x higher IV than SPX
+              log('NDX all methods failed, using SPX relationship: spxEM=' + spxEstimate + ' ndxEM=' + em.toFixed(2));
+            }
+          } else {
+            // SPX: IV formula primary, straddle fallback
+            let callIV = parseFloat(atm?.call?.['implied-volatility'] || atm?.call?.iv || 0);
+            let putIV  = parseFloat(atm?.put?.['implied-volatility']  || atm?.put?.iv  || 0);
+            log('atm strike=' + atm['strike-price'] + ' callIV=' + callIV + ' putIV=' + putIV);
+
+            // option-marks fallback when prices or IV are missing
+            const callSym = atm?.call?.['streamer-symbol'] || atm?.call?.symbol || '';
+            const putSym  = atm?.put?.['streamer-symbol']  || atm?.put?.symbol  || '';
+            if ((callMid <= 0 || putMid <= 0 || callIV <= 0 || putIV <= 0) && (callSym || putSym)) {
+              try {
+                const syms = [callSym, putSym].filter(Boolean);
+                log('fetching option-marks for: ' + syms.join(','));
+                const mr = await fetch(PROXY + '/proxy/api/tt/option-marks?symbols=' + encodeURIComponent(syms.join(',')));
+                if (mr.ok) {
+                  const md = await mr.json();
+                  const marks = {};
+                  (md?.data?.items || []).forEach(m => { if (m?.symbol) marks[m.symbol] = m; });
+
+                  if (callSym && marks[callSym]) {
+                    if (callMid <= 0) callMid = optMid(marks[callSym]);
+                    if (callIV <= 0) callIV = parseFloat(marks[callSym]?.['implied-volatility'] || marks[callSym]?.iv || 0);
+                  }
+                  if (putSym && marks[putSym]) {
+                    if (putMid <= 0) putMid = optMid(marks[putSym]);
+                    if (putIV <= 0) putIV = parseFloat(marks[putSym]?.['implied-volatility'] || marks[putSym]?.iv || 0);
+                  }
+                  log('option-marks result: callMid=' + callMid.toFixed(2) + ' putMid=' + putMid.toFixed(2) + ' callIV=' + callIV + ' putIV=' + putIV);
+                }
+              } catch(e) { log('option-marks error: ' + e.message); }
+            }
+
+            const avgIV = (callIV + putIV) / 2;
+            log('after option-marks: avgIV=' + avgIV);
+
+            if (avgIV > 0 && dte > 0) {
+              em = 0.84 * avgIV * spotClose * Math.sqrt(dte / 365);
+              log('IV method: avgIV%=' + (avgIV*100).toFixed(2) + ' dte=' + dte + ' spotClose=' + spotClose + ' em=' + em.toFixed(2));
+            } else {
+              // FALLBACK: Straddle mid only if IV unavailable
+              const straddle = callMid + putMid;
+              log('IV unavailable, trying straddle fallback: callMid=' + callMid + ' putMid=' + putMid + ' straddle=' + straddle);
+              if (straddle > 0) {
+                em = straddle * 0.85;
+                log('straddle fallback em=' + em.toFixed(2));
+              } else {
+                // Last resort: use 2% historical estimate
+                em = spotClose * 0.02 * 0.85;
+                log('all methods failed, historical fallback em=' + em.toFixed(2));
+              }
+            }
+          }
+          if (em > 0) return { em, strike: parseFloat(atm['strike-price']), call: callMid, put: putMid, exp: groupExp };
+        }
+      } catch(e) {
+        console.log('[getStraddle] ' + indexSym + ' exp=' + expStr + ' error:', e.message);
+      }
+    }
+
+    // If all expirations failed, return a fallback based on historical vol
+    console.warn('[getStraddle] ' + indexSym + ' exhausted expirations [' + expirations.join(', ') + '], using fallback');
+    const fallbackStraddle = spotClose * 0.02;  // 2% as last resort
+    const fallbackEM = fallbackStraddle * 0.85;
+    return {
+      em: fallbackEM,
+      strike: spotClose,
+      call: fallbackStraddle / 2,
+      put: fallbackStraddle / 2,
+      exp: expirations[0] || getCacheKeyDate()
+    };
+  }
+
+  function render(pfx, futClose, em, debugText) {
+    const ref = document.getElementById('em-' + pfx + '-ref');
+    const up = document.getElementById('em-' + pfx + '-1up');
+    const dn = document.getElementById('em-' + pfx + '-1dn');
+    const range = document.getElementById('em-' + pfx + '-range');
+    const pct = document.getElementById('em-' + pfx + '-pct');
+    const dbg = document.getElementById('em-' + pfx + '-debug');
+    const grid = document.getElementById('em-' + pfx + '-grid');
+    const showClose = futClose > 0 && em > 0;
+
+    if (ref) ref.textContent = showClose ? ('cls: ' + fmtFut(futClose)) : 'cls: x';
+    if (up) up.textContent = showClose ? fmtFut(futClose + em) : 'x';
+    if (dn) dn.textContent = showClose ? fmtFut(futClose - em) : 'x';
+    if (grid) grid.style.display = 'grid';
+    if (range) range.textContent = fmtFut(em);
+    if (pct) pct.textContent = showClose ? fmtPct(em / futClose) : 'x';
+    if (dbg) dbg.textContent = debugText || 'DBG: x';
+  }
+
+  function fmtExpDate(d) {
+    if (!d) return '';
+    const parts = d.split('-');
+    return parts.length === 3 ? (parseInt(parts[1]) + '/' + parseInt(parts[2])) : d;
+  }
+
+  function renderFromCache(rec) {
+    if (!rec) return;
+    window._dailyEMExpDate = fmtExpDate(rec.esExp || rec.date);
+    render('es', rec.esClose, rec.esEm, rec.esDebug);
+    render('nq', rec.nqClose, rec.nqEm);
+  }
+
+  function renderWaitingState() {
+    render('es', 0, 0, 'DBG: x');
+    render('nq', 0, 0);
+  }
+
+  async function loadHtml2Canvas() {
+    if (typeof html2canvas !== 'undefined') return;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function captureElement(el) {
+    await loadHtml2Canvas();
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;background:#05080d;padding:12px;display:inline-block';
+    const clone = el.cloneNode(true);
+    // Remove buttons, cls lines, and debug line
+    clone.querySelectorAll('#em-copy-shot-btn,#em-recalc-btn,#em-es-ref,#em-nq-ref,#em-es-debug').forEach(n => n.remove());
+    // Inject expiration date at bottom
+    const expDate = window._dailyEMExpDate || '';
+    if (expDate) {
+      const expEl = document.createElement('div');
+      expEl.style.cssText = 'font-size:9px;color:#4a6a8a;text-align:center;margin-top:6px;letter-spacing:.1em;text-transform:uppercase';
+      expEl.textContent = 'exp: ' + expDate;
+      clone.appendChild(expEl);
+    }
+    wrapper.appendChild(clone);
+    document.body.appendChild(wrapper);
+    try {
+      return await html2canvas(wrapper, { backgroundColor: '#05080d', scale: 2, useCORS: true, logging: false, allowTaint: true });
+    } finally {
+      document.body.removeChild(wrapper);
+    }
+  }
+
+  function canvasToBlob(canvas) {
+    return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  }
+
+  window.copyDailyEMScreenshot = async function() {
+    const btn = document.getElementById('em-copy-shot-btn');
+    if (btn) {
+      btn.textContent = '...';
+      btn.style.color = '#ffb300';
+    }
+    try {
+      const el = document.getElementById('daily-em-panel');
+      const canvas = await captureElement(el);
+      const blob = await canvasToBlob(canvas);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      if (btn) {
+        btn.textContent = 'COPIED';
+        btn.style.color = '#00e676';
+        setTimeout(() => { btn.textContent = 'COPY SNAP'; btn.style.color = '#00e5ff'; }, 1400);
+      }
+    } catch (e) {
+      console.error('[DailyEM] copy snapshot failed:', e);
+      if (btn) {
+        btn.textContent = 'ERR';
+        btn.style.color = '#ff4757';
+        setTimeout(() => { btn.textContent = 'COPY SNAP'; btn.style.color = '#00e5ff'; }, 1400);
+      }
+    }
+  };
+
+  function isMarketHours() {
+    const now = getEtNow();
+    const dow = now.getDay();
+    if (dow === 0 || dow === 6) return false;  // Weekend
+    const mins = now.getHours() * 60 + now.getMinutes();
+    return mins >= (9.5 * 60) && mins < (16 * 60);  // 9:30 AM – 4:00 PM
+  }
+
+  window.updateDailyEM = async function(forceRefresh) {
+    const logs = ['[updateDailyEM] starting, forceRefresh=' + forceRefresh];
+    // Clear localStorage cache to force fresh calculation
+    try { localStorage.removeItem(EM_CACHE_KEY); } catch(_) {}
+    try {
+      const cached = loadCachedEM();
+      logs.push('[updateDailyEM] cached: ' + (cached ? 'yes' : 'no'));
+
+      const isMorning = isMorningDisplayTime();
+      logs.push('[updateDailyEM] isMorning=' + isMorning);
+
+      // Always calculate fresh EM
+      logs.push('[updateDailyEM] calculating fresh IV-based values');
+
+      // Only skip fetch on weekends (no live chains)
+      const etNowCheck = getEtNow();
+      const isWeekend = etNowCheck.getDay() === 0 || etNowCheck.getDay() === 6;
+      if (!forceRefresh && isWeekend) {
+        logs.push('[updateDailyEM] weekend, skipping live chain fetch');
+        if (cached) renderFromCache(cached);
+        else renderWaitingState();
+        showDebugLogs(logs);
+        return;
+      }
+
+      logs.push('[updateDailyEM] fetching closes...');
+      const closes = await getCloses();
+      logs.push('[updateDailyEM] closes: spx=' + closes.spx + ' es=' + closes.es + ' ndx=' + closes.ndx);
+
+      logs.push('[updateDailyEM] fetching straddles...');
+      const [esData, nqData] = await Promise.all([
+        getStraddle('SPX', closes.spx, logs),
+        getStraddle('NDX', closes.ndx, logs)
+      ]);
+
+      const esDebug = 'cls: ' + (closes.es > 0 ? closes.es.toFixed(2) : '--') + ' | strike ' + fmt2(esData.strike) + ' | call ' + fmt2(esData.call) + ' + put ' + fmt2(esData.put);
+      
+      // Only cache if after 4 AM (real close, not pre-market)
+      if (isMorning || isInEmWindow()) {
+        saveCachedEM({
+          date: getCacheKeyDate(),
+          esExp: esData.exp,
+          esClose: closes.es,
+          nqClose: closes.ndx,
+          esEm: esData.em,
+          nqEm: nqData.em,
+          esDebug: esDebug
+        });
+        
+        // ALSO save straddle values to proxy for after-hours fetch
+        try {
+          await fetch(PROXY + '/proxy/api/em/' + getCacheKeyDate(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              spx: esData.em,
+              ndx: nqData.em,
+              esExp: esData.exp,
+              spxStrike: esData.strike,
+              ndxStrike: nqData.strike,
+              spxCall: esData.call,
+              spxPut: esData.put,
+              ndxCall: nqData.call,
+              ndxPut: nqData.put
+            })
+          });
+        } catch(_) {}
+      }
+
+      window._dailyEMExpDate = fmtExpDate(esData.exp || getCacheKeyDate());
+      window._lastSPXEM = esData.em;  // For NDX fallback calculation
+      logs.push('[updateDailyEM] esData.em=' + esData.em.toFixed(2) + ' nqData.em=' + nqData.em.toFixed(2));
+
+      render(
+        'es',
+        closes.es,
+        esData.em,
+        esDebug
+      );
+      render('nq', closes.ndx, nqData.em);
+      showDebugLogs(logs);
+    } catch (e) {
+      logs.push('[NavEM] FAILED: ' + e.message);
+      if (e.stack) logs.push(e.stack);
+      showDebugLogs(logs);
+
+      const cached = loadCachedEM();
+      if (cached) renderFromCache(cached);
+      else renderWaitingState();
+    }
+  };
+
+  function showDebugLogs(_logArray) { /* debug output suppressed */ }
+
+  setTimeout(() => {
+    // Clear any stale EM cache from previous logic
+    window.updateDailyEM();
+    
+    // Refresh every 5 minutes during market hours; auto-save at 3:55–4:05 PM ET
+    setInterval(() => {
+      const now = getEtNow();
+      const mins = now.getHours() * 60 + now.getMinutes();
+      const dow = now.getDay();
+      if (dow >= 1 && dow <= 5) {
+        if (mins >= 235 && mins <= 245) {
+          window.updateDailyEM(true);  // Force refresh during save window
+        } else if (isMarketHours()) {
+          window.updateDailyEM();  // Live refresh during market hours
+        }
+      }
+    }, 5 * 60 * 1000);  // Every 5 minutes
+  }, 2500);
+})();
+</script>
 </body>
 </html>
 

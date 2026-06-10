@@ -176,6 +176,18 @@
       color: var(--text0);
       font-weight: 700;
     }
+
+    .event-countdown {
+      color: var(--amber);
+      font-size: 12px;
+      font-weight: 700;
+      font-family: Consolas, monospace;
+      flex-shrink: 0;
+    }
+
+    body.hide-countdown .event-countdown {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -383,8 +395,18 @@ ${eventsText.trim() || 'No events scheduled'}`;
       if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
       
       try {
+        // Hide countdown via parent window
+        if (window.parent.toggleEconCountdownVisibility) {
+          window.parent.toggleEconCountdownVisibility(true);
+        }
+        
         const template = formatCalendarTemplate();
         await navigator.clipboard.writeText(template);
+        
+        // Restore countdown
+        if (window.parent.toggleEconCountdownVisibility) {
+          window.parent.toggleEconCountdownVisibility(false);
+        }
         
         if (btn) {
           btn.textContent = '✓';
@@ -396,6 +418,9 @@ ${eventsText.trim() || 'No events scheduled'}`;
         }
       } catch (e) {
         console.error('Copy error:', e);
+        if (window.parent.toggleEconCountdownVisibility) {
+          window.parent.toggleEconCountdownVisibility(false);
+        }
         if (btn) {
           btn.textContent = 'ERR';
           btn.style.color = '#ff4757';
@@ -450,19 +475,44 @@ ${eventsText.trim() || 'No events scheduled'}`;
       const orig = btn ? btn.textContent : '';
       if (btn) { btn.textContent = '…'; btn.style.color = '#ffb300'; }
       
-      if (platform === 'x') {
-        setTimeout(() => {
-          if (btn) {
-            btn.textContent = orig;
-            btn.style.color = '#00e5ff';
-          }
-          window.open('https://twitter.com/intent/tweet?text=Economic%20Calendar', '_blank');
-        }, 300);
-        return;
-      }
+      // Hide countdown - try both window.top and window.parent
+      const hideCountdown = () => {
+        if (window.parent && window.parent.toggleEconCountdownVisibility) {
+          window.parent.toggleEconCountdownVisibility(true);
+        } else if (window.top && window.top.toggleEconCountdownVisibility) {
+          window.top.toggleEconCountdownVisibility(true);
+        } else if (typeof toggleEconCountdownVisibility !== 'undefined') {
+          toggleEconCountdownVisibility(true);
+        }
+      };
       
-      // Discord: send text template via webhook
+      const showCountdown = () => {
+        if (window.parent && window.parent.toggleEconCountdownVisibility) {
+          window.parent.toggleEconCountdownVisibility(false);
+        } else if (window.top && window.top.toggleEconCountdownVisibility) {
+          window.top.toggleEconCountdownVisibility(false);
+        } else if (typeof toggleEconCountdownVisibility !== 'undefined') {
+          toggleEconCountdownVisibility(false);
+        }
+      };
+      
       try {
+        if (platform === 'x') {
+          hideCountdown();
+          setTimeout(() => {
+            showCountdown();
+            if (btn) {
+              btn.textContent = orig;
+              btn.style.color = '#00e5ff';
+            }
+            window.open('https://twitter.com/intent/tweet?text=Economic%20Calendar', '_blank');
+          }, 100);
+          return;
+        }
+        
+        // Discord: send text template via webhook
+        hideCountdown();
+        
         const template = formatCalendarTemplate();
         
         const payload = JSON.stringify({
@@ -476,6 +526,8 @@ ${eventsText.trim() || 'No events scheduled'}`;
           },
           body: payload
         });
+        
+        showCountdown();
         
         if (!response.ok) {
           throw new Error(`Discord webhook failed: ${response.status}`);
@@ -491,6 +543,7 @@ ${eventsText.trim() || 'No events scheduled'}`;
         }
       } catch (e) {
         console.error('Discord share error:', e);
+        showCountdown();
         if (btn) {
           btn.textContent = 'ERR';
           btn.style.color = '#ff4757';
