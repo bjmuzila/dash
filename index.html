@@ -14,7 +14,7 @@ window.pushGexLevels = function() {
   const key = cw + ',' + pw;
   if (key === window._lastGexEmit) return;
   window._lastGexEmit = key;
-  fetch('http://localhost:3001/proxy/api/gex-levels?callWall=' + cw + '&putWall=' + pw)
+  fetch(window.location.origin + '/proxy/api/gex-levels?callWall=' + cw + '&putWall=' + pw)
     .then(() => console.log('✓ GEX pushed to MotiveWave:', { cw, pw }))
     .catch(e => console.warn('GEX push failed:', e.message));
 };
@@ -75,7 +75,7 @@ setTimeout(() => { window.pushGexLevels(); setInterval(window.pushGexLevels, 500
       return parsed.toString();
     } catch (_) {
       if (typeof value === "string" && value.startsWith("/api/")) return `/proxy${value}`;
-      if (typeof value === "string" && value.startsWith("/proxy/")) return `http://localhost:3001${value}`;
+      if (typeof value === "string" && value.startsWith("/proxy/")) return `window.location.origin${value}`;
       return value;
     }
   }
@@ -1305,7 +1305,7 @@ function initDashboard() {
 // ═══════════════════════════════════════════════════════════════════
 async function schwabStatusPoll() {
   try {
-    const r = await fetch('http://localhost:3001/health');
+    const r = await fetch(window.location.origin + '/health');
     const j = await r.json();
     const dot  = document.getElementById('schwab-status-dot');
     const txt  = document.getElementById('schwab-status-text');
@@ -1356,7 +1356,7 @@ function schwabAuthPanelClose() {
 async function schwabOpenLogin() {
   if (!window._schwabAuthUrl) {
     try {
-      const r = await fetch('http://localhost:3001/health');
+      const r = await fetch(window.location.origin + '/health');
       const j = await r.json();
       window._schwabAuthUrl = j.authUrl;
       window._schwabRedirectUri = j.redirectUri;
@@ -1427,7 +1427,7 @@ async function schwabSubmitCode() {
   statusEl.textContent = 'Sending code to proxy...';
 
   try {
-    const resp = await fetch('http://localhost:3001/proxy/token', {
+    const resp = await fetch(window.location.origin + '/proxy/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, redirectUri: window._schwabRedirectUri || 'https://127.0.0.1:3001/callback' })
@@ -1573,7 +1573,7 @@ initDashboard();
 // Daily Estimated Moves - left nav panel (ESM6 / NQM6)
 // =============================================================================
 (function() {
-  const PROXY = 'http://localhost:3001';
+  const PROXY = window.location.origin;
   const EM_CACHE_KEY = 'nav_daily_em_v1';
 
   const fmt2 = n => (n != null && isFinite(n) && n > 0) ? n.toFixed(2) : 'x';
