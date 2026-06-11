@@ -1042,11 +1042,11 @@ function submitManualUrl(){
 async function doTokenExchange(code,redirectUri){
   if(_exchanging)return; _exchanging=true;
   try{
-    const res=await fetch(PROXY++ '/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
+    const res=await fetch(PROXY + '/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
     if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err.error_description||err.error||'HTTP '+res.status);}
     const data=await res.json();
     accessToken=data.access_token; refreshToken=data.refresh_token;
-    fetch(PROXY++ '/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
+    fetch(PROXY + '/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
     const statusEl=document.getElementById('auth-polling-status');if(statusEl)statusEl.style.display='none';
     const mw=document.getElementById('auth-manual-wrap');if(mw)mw.style.display='none';
     forceShowTopbar();
@@ -1094,7 +1094,7 @@ function doLogout(){
   try{stopAutoRefresh();}catch(e){}
   try{if(typeof chartStopAutoRefresh==='function')chartStopAutoRefresh();}catch(e){}
   accessToken=null; refreshToken=null;
-  fetch(PROXY++ '/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
+  fetch(PROXY + '/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
     // Show auth panel again
     const ap=document.getElementById('auth-panel');
     if(ap){ ap.style.display='flex'; }
@@ -1112,11 +1112,11 @@ function doLogout(){
 
 // ── PROXY GET ──────────────────────────────────────────────────────
 async function proxyGet(path){
-  let res=await fetch(PROXY++ '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
+  let res=await fetch(PROXY + '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
   if(res.status===401){
     log('Token expired — refreshing…','warn');
-    const ref=await fetch(PROXY++ '/proxy/refresh',{method:'POST'});
-    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY++ '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
+    const ref=await fetch(PROXY + '/proxy/refresh',{method:'POST'});
+    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY + '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
   }
   if(!res.ok){let d='';try{const j=await res.json();d=j.error_description||j.error||j.message||JSON.stringify(j).slice(0,120);}catch{}throw new Error(res.status+' — '+d);}
   return res;
@@ -3909,11 +3909,11 @@ const _rs0=document.getElementById('right-stats'); if(_rs0) _rs0.style.display='
 (async function(){
   // Auth panel is visible by default - hide it only if we have a valid token
   for(let i=0;i<8;i++){
-    try{ const t=await fetch(PROXY++ '/proxy/api/status'); if(t.ok) break; }catch(e){}
+    try{ const t=await fetch(PROXY + '/proxy/api/status'); if(t.ok) break; }catch(e){}
     await new Promise(r=>setTimeout(r,500));
   }
   try{
-    const r=await fetch(PROXY++ '/proxy/api/auto-connect');
+    const r=await fetch(PROXY + '/proxy/api/auto-connect');
     const d=await r.json();
     if(d.connected && d.access_token){
       accessToken=d.access_token;
