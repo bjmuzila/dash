@@ -1788,7 +1788,7 @@ async function buildChainOnce(retryCount = 0){
         if (newSyms.length) {
           const feedTypesBySymbol = {};
           newSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-          fetch(window.location.origin +/proxy/dxlink/subscribe', {
+          fetch(window.location.origin + '/proxy/dxlink/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ symbols: newSyms, feedTypesBySymbol })
@@ -1844,7 +1844,7 @@ async function fetchGEX(){
     if (allSyms.length) {
       const feedTypesBySymbol = {};
       allSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-      fetch(window.location.origin +/proxy/dxlink/subscribe', {
+      fetch(window.location.origin + '/proxy/dxlink/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbols: allSyms, feedTypesBySymbol })
@@ -2523,7 +2523,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch(window.location.origin +/proxy/discord-webhook', {
+    fetch(window.location.origin + '/proxy/discord-webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3473,7 +3473,7 @@ async function fetchQuoteOfDay(){
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
 
-    const res = await fetch(window.location.origin +/proxy/api/quote-of-day', { signal: controller.signal });
+    const res = await fetch(window.location.origin + '/proxy/api/quote-of-day', { signal: controller.signal });
     clearTimeout(timeoutId);
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3764,7 +3764,7 @@ window.refreshTrumpCalendar = function(btn) {
 
   // Try proxy endpoint first, fallback to direct fetch
   const tryProxyRoute = () => {
-    return fetch(window.location.origin +/proxy/api/trump-calendar-refresh', {
+    return fetch(window.location.origin + '/proxy/api/trump-calendar-refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -5090,7 +5090,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = window.location.origin +/proxy/twitter';
+const TWITTER_PROXY = window.location.origin + '/proxy/twitter';
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -10280,7 +10280,7 @@ if (false) {}
       // 2. Dedicated quote fetch — TT cash index uses $SPX symbol
       if (!(spotPrice > 0)) {
         try {
-          const qr = await fetch(window.location.origin +/proxy/api/tt/quotes-batch?symbols[]=%24SPX&symbols[]=SPX&symbols[]=%24SPXW');
+          const qr = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch?symbols[]=%24SPX&symbols[]=SPX&symbols[]=%24SPXW');
           const qd = await qr.json();
           const qItems = (qd?.data?.items) || [];
           const q = qItems.find(i => ['$SPX','SPX','$SPXW'].includes(i.symbol)) || qItems[0] || {};
@@ -10346,7 +10346,7 @@ if (false) {}
             newSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
             const subController = new AbortController();
             const subTimeoutId = setTimeout(() => subController.abort(), 10000); // 10 second timeout
-            fetch(window.location.origin +/proxy/dxlink/subscribe', {
+            fetch(window.location.origin + '/proxy/dxlink/subscribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ symbols: newSyms, feedTypesBySymbol }),
@@ -10942,7 +10942,7 @@ if (false) {}
 
   window.fetchQuotes = async function fetchQuotes() {
     try {
-      const r = await fetch(window.location.origin +/proxy/api/tt/quotes-batch');
+      const r = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch');
       if (!r.ok) { console.warn('TT quotes-batch HTTP', r.status); return; }
       const raw = await r.json();
       const items = (raw?.data?.items) || [];

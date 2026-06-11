@@ -1953,7 +1953,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch(window.location.origin +/proxy/discord-webhook', {
+    fetch(window.location.origin + '/proxy/discord-webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3454,7 +3454,7 @@ async function fetchQuotes(){
       if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
     });
     if (!Object.keys(data).length) {
-      const fallback = await fetch(window.location.origin +/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const fallback = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
       const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
       items.forEach(item => {
         const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
@@ -3486,7 +3486,7 @@ async function fetchQuotes(){
     const expectedSymbols = ['SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
     const needsFallback = !window.__quoteFallbackLoaded && expectedSymbols.some(sym => !resolveQuoteEntry(sym));
     if (needsFallback || !Object.keys(data).length) {
-      const fallback = await fetch(window.location.origin +/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const fallback = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
       const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
       items.forEach(item => {
         const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
@@ -3661,7 +3661,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = window.location.origin +/proxy/twitter';
+const TWITTER_PROXY = window.location.origin + '/proxy/twitter';
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -8923,7 +8923,7 @@ if (false) {}
         footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
       }]
     };
-    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || window.location.origin +/proxy/discord-webhook';
+    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || window.location.origin + '/proxy/discord-webhook';
     const blob = await getInsightsShareBlob();
     const form = new FormData();
     form.append('payload_json', JSON.stringify(payload));
@@ -9324,7 +9324,7 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
         if (sym === '/NQM26') { data['/NQM26'] = entry; }
       });
       try {
-        const batchRes = await fetch(window.location.origin +/proxy/api/tt/quotes-batch');
+        const batchRes = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch');
         const batchJson = await batchRes.json();
         const batchItems = Array.isArray(batchJson?.data?.items) ? batchJson.data.items : [];
         batchItems.forEach(item => {
