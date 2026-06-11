@@ -3892,8 +3892,8 @@ window.refreshTrumpCalendar = function(btn) {
 }
 
 // ── SIGNAL FEED ───────────────────────────────────────────────────────────
-const FEED_DISCORD_WEBHOOK_URL = 'http://localhost:8080/proxy/discord-webhook';
-const FEED_ALERT_DISCORD_WEBHOOK_URL = 'http://localhost:8080/proxy/discord-webhook';
+const FEED_DISCORD_WEBHOOK_URL = '' + window.location.origin + '/proxy/discord-webhook';
+const FEED_ALERT_DISCORD_WEBHOOK_URL = '' + window.location.origin + '/proxy/discord-webhook';
 
 function _feedGetState(){
   if(!window.__signalFeedState){
