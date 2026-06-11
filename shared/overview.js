@@ -1042,11 +1042,11 @@ function submitManualUrl(){
 async function doTokenExchange(code,redirectUri){
   if(_exchanging)return; _exchanging=true;
   try{
-    const res=await fetch(PROXY+'/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
+    const res=await fetch(PROXY++ '/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
     if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err.error_description||err.error||'HTTP '+res.status);}
     const data=await res.json();
     accessToken=data.access_token; refreshToken=data.refresh_token;
-    fetch(PROXY+'/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
+    fetch(PROXY++ '/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
     const statusEl=document.getElementById('auth-polling-status');if(statusEl)statusEl.style.display='none';
     const mw=document.getElementById('auth-manual-wrap');if(mw)mw.style.display='none';
     forceShowTopbar();
@@ -1094,7 +1094,7 @@ function doLogout(){
   try{stopAutoRefresh();}catch(e){}
   try{if(typeof chartStopAutoRefresh==='function')chartStopAutoRefresh();}catch(e){}
   accessToken=null; refreshToken=null;
-  fetch(PROXY+'/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
+  fetch(PROXY++ '/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
     // Show auth panel again
     const ap=document.getElementById('auth-panel');
     if(ap){ ap.style.display='flex'; }
@@ -1112,11 +1112,11 @@ function doLogout(){
 
 // ── PROXY GET ──────────────────────────────────────────────────────
 async function proxyGet(path){
-  let res=await fetch(PROXY+'/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
+  let res=await fetch(PROXY++ '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
   if(res.status===401){
     log('Token expired — refreshing…','warn');
-    const ref=await fetch(PROXY+'/proxy/refresh',{method:'POST'});
-    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY+'/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
+    const ref=await fetch(PROXY++ '/proxy/refresh',{method:'POST'});
+    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY++ '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
   }
   if(!res.ok){let d='';try{const j=await res.json();d=j.error_description||j.error||j.message||JSON.stringify(j).slice(0,120);}catch{}throw new Error(res.status+' — '+d);}
   return res;
@@ -1139,7 +1139,7 @@ async function fetchGEX(){
     {
       // Fallback to REST API for quotes
       try {
-        const quoteRes = await fetch(PROXY + '/proxy/api/marketdata/v1/quotes?symbols=%24SPX');
+        const quoteRes = await fetch(PROXY + + '/proxy/api/marketdata/v1/quotes?symbols=%24SPX');
         const quoteData = await quoteRes.json();
         const spxQuote = quoteData.SPX?.quote || quoteData['$SPX']?.quote || quoteData.data?.quotes?.[0] || {};
         spotPrice = spxQuote.lastPrice || spxQuote.last || spotPrice || 5250;
@@ -1184,7 +1184,7 @@ async function fetchGEX(){
     };
     
     const t0 = performance.now();
-    const chainRes = await fetch(PROXY + '/proxy/api/tt/chains/SPX?range=all');
+    const chainRes = await fetch(PROXY + + '/proxy/api/tt/chains/SPX?range=all');
     const chainData = await chainRes.json();
     const t1 = performance.now();
     console.log(`[GEX] Chain fetch: ${(t1-t0).toFixed(0)}ms`);
@@ -1953,7 +1953,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch('window.location.origin/proxy/discord-webhook', {
+    fetch(window.location.origin +/proxy/discord-webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3090,7 +3090,7 @@ async function shareHeatmapShot(platform){
 
 (() => {
   let html2canvasPromise = null;
-  const DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/1466249857122570454/REDACTED';
+  const DISCORD_WEBHOOK_URL = + '/proxy/api/webhooks/1466249857122570454/REDACTED';
 
 
   function loadHtml2CanvasSafe() {
@@ -3353,7 +3353,7 @@ async function preloadQuotePrevCloses() {
   if (quotePrevCloseLoadPromise) return quotePrevCloseLoadPromise;
   quotePrevCloseLoadPromise = (async () => {
     try {
-      const res = await proxyGet('/proxy/api/tt/quotes-batch');
+      const res = await proxyGet(+ '/proxy/api/tt/quotes-batch');
       const json = await res.json();
       const items = Array.isArray(json?.data?.items) ? json.data.items : [];
       items.forEach(item => {
@@ -3454,7 +3454,7 @@ async function fetchQuotes(){
       if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
     });
     if (!Object.keys(data).length) {
-      const fallback = await fetch('window.location.origin/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const fallback = await fetch(window.location.origin +/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
       const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
       items.forEach(item => {
         const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
@@ -3486,7 +3486,7 @@ async function fetchQuotes(){
     const expectedSymbols = ['SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
     const needsFallback = !window.__quoteFallbackLoaded && expectedSymbols.some(sym => !resolveQuoteEntry(sym));
     if (needsFallback || !Object.keys(data).length) {
-      const fallback = await fetch('window.location.origin/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
+      const fallback = await fetch(window.location.origin +/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
       const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
       items.forEach(item => {
         const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
@@ -3661,7 +3661,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = 'window.location.origin/proxy/twitter';
+const TWITTER_PROXY = window.location.origin +/proxy/twitter';
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -3909,11 +3909,11 @@ const _rs0=document.getElementById('right-stats'); if(_rs0) _rs0.style.display='
 (async function(){
   // Auth panel is visible by default - hide it only if we have a valid token
   for(let i=0;i<8;i++){
-    try{ const t=await fetch(PROXY+'/proxy/api/status'); if(t.ok) break; }catch(e){}
+    try{ const t=await fetch(PROXY++ '/proxy/api/status'); if(t.ok) break; }catch(e){}
     await new Promise(r=>setTimeout(r,500));
   }
   try{
-    const r=await fetch(PROXY+'/proxy/api/auto-connect');
+    const r=await fetch(PROXY++ '/proxy/api/auto-connect');
     const d=await r.json();
     if(d.connected && d.access_token){
       accessToken=d.access_token;
@@ -6322,7 +6322,7 @@ async function getBuySellHistoryRows() {
 
 async function backupBuySellScore(record) {
   try {
-    await fetch('/proxy/api/backup/buy-sell-scores', {
+    await fetch(+ '/proxy/api/backup/buy-sell-scores', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ record })
@@ -8923,7 +8923,7 @@ if (false) {}
         footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
       }]
     };
-    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || 'window.location.origin/proxy/discord-webhook';
+    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || window.location.origin +/proxy/discord-webhook';
     const blob = await getInsightsShareBlob();
     const form = new FormData();
     form.append('payload_json', JSON.stringify(payload));
@@ -9324,7 +9324,7 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
         if (sym === '/NQM26') { data['/NQM26'] = entry; }
       });
       try {
-        const batchRes = await fetch('window.location.origin/proxy/api/tt/quotes-batch');
+        const batchRes = await fetch(window.location.origin +/proxy/api/tt/quotes-batch');
         const batchJson = await batchRes.json();
         const batchItems = Array.isArray(batchJson?.data?.items) ? batchJson.data.items : [];
         batchItems.forEach(item => {

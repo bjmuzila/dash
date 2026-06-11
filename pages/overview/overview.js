@@ -1470,7 +1470,7 @@ function startOAuth(){
   btn.textContent='Connecting...';
   
   // Just fetch token from proxy (which loads from .env)
-  fetch(PROXY+'/proxy/token')
+  fetch(PROXY++ '/proxy/token')
     .then(r => r.json())
     .then(data => {
       if(data.sessionToken || data.accessToken) {
@@ -1505,11 +1505,11 @@ function submitManualUrl(){
 async function doTokenExchange(code,redirectUri){
   if(_exchanging)return; _exchanging=true;
   try{
-    const res=await fetch(PROXY+'/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
+    const res=await fetch(PROXY++ '/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
     if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err.error_description||err.error||'HTTP '+res.status);}
     const data=await res.json();
     accessToken=data.access_token; refreshToken=data.refresh_token;
-    fetch(PROXY+'/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
+    fetch(PROXY++ '/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
     const statusEl=document.getElementById('auth-polling-status');if(statusEl)statusEl.style.display='none';
     const mw=document.getElementById('auth-manual-wrap');if(mw)mw.style.display='none';
     forceShowTopbar();
@@ -1557,7 +1557,7 @@ function doLogout(){
   try{stopAutoRefresh();}catch(e){}
   try{if(typeof chartStopAutoRefresh==='function')chartStopAutoRefresh();}catch(e){}
   accessToken=null; refreshToken=null;
-  fetch(PROXY+'/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
+  fetch(PROXY++ '/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
     // Show auth panel again
     const ap=document.getElementById('auth-panel');
     if(ap){ ap.style.display='flex'; }
@@ -1575,11 +1575,11 @@ function doLogout(){
 
 // ── PROXY GET ──────────────────────────────────────────────────────
 async function proxyGet(path){
-  let res=await fetch(PROXY+'/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
+  let res=await fetch(PROXY++ '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
   if(res.status===401){
     log('Token expired — refreshing…','warn');
-    const ref=await fetch(PROXY+'/proxy/refresh',{method:'POST'});
-    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY+'/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
+    const ref=await fetch(PROXY++ '/proxy/refresh',{method:'POST'});
+    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY++ '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
   }
   if(!res.ok){let d='';try{const j=await res.json();d=j.error_description||j.error||j.message||JSON.stringify(j).slice(0,120);}catch{}throw new Error(res.status+' — '+d);}
   return res;
@@ -1655,7 +1655,7 @@ async function buildChainOnce(retryCount = 0){
     };
 
     const t0 = performance.now();
-    const chainRes = await fetch(PROXY + '/proxy/api/tt/chains/SPX?range=all');
+    const chainRes = await fetch(PROXY + + '/proxy/api/tt/chains/SPX?range=all');
     const chainData = await chainRes.json();
     const t1 = performance.now();
     console.log(`[GEX] Chain fetch: ${(t1-t0).toFixed(0)}ms`);
@@ -1788,7 +1788,7 @@ async function buildChainOnce(retryCount = 0){
         if (newSyms.length) {
           const feedTypesBySymbol = {};
           newSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-          fetch('window.location.origin/proxy/dxlink/subscribe', {
+          fetch(window.location.origin +/proxy/dxlink/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ symbols: newSyms, feedTypesBySymbol })
@@ -1844,7 +1844,7 @@ async function fetchGEX(){
     if (allSyms.length) {
       const feedTypesBySymbol = {};
       allSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-      fetch('window.location.origin/proxy/dxlink/subscribe', {
+      fetch(window.location.origin +/proxy/dxlink/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbols: allSyms, feedTypesBySymbol })
@@ -2523,7 +2523,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch('window.location.origin/proxy/discord-webhook', {
+    fetch(window.location.origin +/proxy/discord-webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3339,7 +3339,7 @@ async function fetchStockGEX(sym){
   el.innerHTML='<span style="color:#2a4060">loading…</span>';
   try{
     // Fetch from TastyTrade /tt/chains (returns Schwab-format callExpDateMap/putExpDateMap)
-    const res = await proxyGet('/proxy/api/tt/chains/'+sym+'?range=50');
+    const res = await proxyGet(+ '/proxy/api/tt/chains/'+sym+'?range=50');
     const cd = await res.json();
     
     // Get underlying price
@@ -3473,7 +3473,7 @@ async function fetchQuoteOfDay(){
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
 
-    const res = await fetch('window.location.origin/proxy/api/quote-of-day', { signal: controller.signal });
+    const res = await fetch(window.location.origin +/proxy/api/quote-of-day', { signal: controller.signal });
     clearTimeout(timeoutId);
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3764,7 +3764,7 @@ window.refreshTrumpCalendar = function(btn) {
 
   // Try proxy endpoint first, fallback to direct fetch
   const tryProxyRoute = () => {
-    return fetch('window.location.origin/proxy/api/trump-calendar-refresh', {
+    return fetch(window.location.origin +/proxy/api/trump-calendar-refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -4409,7 +4409,7 @@ async function shareHeatmapShot(platform){
 
 (() => {
   let html2canvasPromise = null;
-  const DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/1466249857122570454/REDACTED';
+  const DISCORD_WEBHOOK_URL = + '/proxy/api/webhooks/1466249857122570454/REDACTED';
 
 
   function loadHtml2CanvasSafe() {
@@ -5090,7 +5090,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = 'window.location.origin/proxy/twitter';
+const TWITTER_PROXY = window.location.origin +/proxy/twitter';
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -5267,11 +5267,11 @@ const _rs0=document.getElementById('right-stats'); if(_rs0) _rs0.style.display='
 (async function(){
   // Auth panel is visible by default - hide it only if we have a valid token
   for(let i=0;i<8;i++){
-    try{ const t=await fetch(PROXY+'/proxy/api/status'); if(t.ok) break; }catch(e){}
+    try{ const t=await fetch(PROXY++ '/proxy/api/status'); if(t.ok) break; }catch(e){}
     await new Promise(r=>setTimeout(r,500));
   }
   try{
-    const r=await fetch(PROXY+'/proxy/api/auto-connect');
+    const r=await fetch(PROXY++ '/proxy/api/auto-connect');
     const d=await r.json();
     if(d.connected && d.access_token){
       accessToken=d.access_token;
@@ -7953,7 +7953,7 @@ async function getBuySellHistoryRows() {
 
 async function backupBuySellScore(record) {
   try {
-    await fetch('/proxy/api/backup/buy-sell-scores', {
+    await fetch(+ '/proxy/api/backup/buy-sell-scores', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ record })
@@ -10280,7 +10280,7 @@ if (false) {}
       // 2. Dedicated quote fetch — TT cash index uses $SPX symbol
       if (!(spotPrice > 0)) {
         try {
-          const qr = await fetch('window.location.origin/proxy/api/tt/quotes-batch?symbols[]=%24SPX&symbols[]=SPX&symbols[]=%24SPXW');
+          const qr = await fetch(window.location.origin +/proxy/api/tt/quotes-batch?symbols[]=%24SPX&symbols[]=SPX&symbols[]=%24SPXW');
           const qd = await qr.json();
           const qItems = (qd?.data?.items) || [];
           const q = qItems.find(i => ['$SPX','SPX','$SPXW'].includes(i.symbol)) || qItems[0] || {};
@@ -10346,7 +10346,7 @@ if (false) {}
             newSyms.forEach(s => { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
             const subController = new AbortController();
             const subTimeoutId = setTimeout(() => subController.abort(), 10000); // 10 second timeout
-            fetch('window.location.origin/proxy/dxlink/subscribe', {
+            fetch(window.location.origin +/proxy/dxlink/subscribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ symbols: newSyms, feedTypesBySymbol }),
@@ -10576,7 +10576,7 @@ if (false) {}
         footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
       }]
     };
-    const webhook = '/proxy/api/webhooks/1466249857122570454/REDACTED';
+    const webhook = + '/proxy/api/webhooks/1466249857122570454/REDACTED';
     const blob = await getInsightsShareBlob();
     const form = new FormData();
     form.append('payload_json', JSON.stringify(payload));
@@ -10942,7 +10942,7 @@ if (false) {}
 
   window.fetchQuotes = async function fetchQuotes() {
     try {
-      const r = await fetch('window.location.origin/proxy/api/tt/quotes-batch');
+      const r = await fetch(window.location.origin +/proxy/api/tt/quotes-batch');
       if (!r.ok) { console.warn('TT quotes-batch HTTP', r.status); return; }
       const raw = await r.json();
       const items = (raw?.data?.items) || [];
