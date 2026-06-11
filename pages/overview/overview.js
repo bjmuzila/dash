@@ -174,7 +174,7 @@ function getDXQuoteSocket() {
     return _dxQuoteSocket;
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  _dxQuoteSocket = new WebSocket(`${proto}://'' + window.location.host/ws/dxlink`);
+  _dxQuoteSocket = new WebSocket(`${proto}://${window.location.host}/ws/dxlink`);
   _dxQuoteSocket.onopen = () => {
     dxlinkConnected = true;
     const syms = Array.from(_dxQuoteSubSymbols);
@@ -1353,7 +1353,7 @@ function processSignedOptionTrade(item) {
 function connectSignedVolFlow() {
   if (spxFlowSocket && (spxFlowSocket.readyState === WebSocket.OPEN || spxFlowSocket.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  spxFlowSocket = new WebSocket(`${proto}://'' + window.location.host/ws/dxlink`);
+  spxFlowSocket = new WebSocket(`${proto}://${window.location.host}/ws/dxlink`);
   spxFlowSocket.onopen = () => {
     spxFlowSocket.send(JSON.stringify({ type: 'subscribe', symbols: ['SPX'], spxSubscribe: true }));
   };

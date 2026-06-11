@@ -891,7 +891,7 @@ function processSignedOptionTrade(item) {
 function connectSignedVolFlow() {
   if (spxFlowSocket && (spxFlowSocket.readyState === WebSocket.OPEN || spxFlowSocket.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  spxFlowSocket = new WebSocket(`${proto}://'' + window.location.host/ws/dxlink`);
+  spxFlowSocket = new WebSocket(`${proto}://${window.location.host}/ws/dxlink`);
   spxFlowSocket.onopen = () => {
     spxFlowSocket.send(JSON.stringify({ type: 'subscribe', symbols: ['SPX'], spxSubscribe: true }));
   };
@@ -1489,7 +1489,7 @@ function connectTopbarDxFeed() {
     return;
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(`${proto}://'' + window.location.host/ws/dxlink`);
+  const sock = new WebSocket(`${proto}://${window.location.host}/ws/dxlink`);
   window._topbarDxSocket = sock;
   sock.onopen = () => {
     sock.send(JSON.stringify({ type: 'subscribe', symbols: ['SPX', '/ES:XCME', '/ES', '/ESM26'] }));
