@@ -3653,11 +3653,17 @@ const server = http.createServer(async (req, res) => {
       log('Chain fetch: all', streamerSyms.length, 'symbols already subscribed, skipping queue');
     }
 
-    // awaitDX: wait for live dxLink Greeks to populate before building response
+    // awaitDX: wait for live dxLink data — but only if cache is cold (< 20% already populated)
     if (awaitDX && streamerSyms.length) {
-      log('[awaitDX] Waiting for dxLink Summary for', streamerSyms.length, 'symbols…');
-      await waitForOptionData(streamerSyms, 0);
-      log('[awaitDX] dxLink wait complete');
+      const alreadyReady = streamerSyms.filter(s => dxSummaryCache[s] && Object.keys(dxSummaryCache[s]).length > 0).length;
+      const pctReady = alreadyReady / streamerSyms.length;
+      if (pctReady < 0.2) {
+        log('[awaitDX] Cold cache (' + Math.round(pctReady * 100) + '% ready) — waiting up to 8s for dxLink…');
+        await waitForOptionData(streamerSyms, 8000);
+        log('[awaitDX] dxLink wait complete');
+      } else {
+        log('[awaitDX] Cache warm (' + Math.round(pctReady * 100) + '% ready) — skipping wait');
+      }
     }
 
     // REMOVED: Yahoo/CBOE fallbacks (2026-06-11)
