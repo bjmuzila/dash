@@ -201,9 +201,34 @@
             if (loading) loading.style.display = 'none';
             if (typeof window.updateStatsPanel === 'function') window.updateStatsPanel();
           };
-          // If est moves already ran before this page loaded, apply immediately
+          // Apply immediately if est moves already ran in this session
           if (window.esStatsReady && window.esStatsCache) {
             window.applyOverviewESStats(window.esStatsCache);
+          } else {
+            // Otherwise load from SQLite via API (persists all week on Render disk)
+            (async function() {
+              try {
+                const proxyBase = (window.EM_PROXY_BASE || `${location.protocol}//${location.hostname}:3001`).replace(/\/$/, '');
+                const res = await fetch(`${proxyBase}/api/es-stats`);
+                if (!res.ok) return;
+                const row = await res.json();
+                if (!row || !row.no_long) return;
+                const stats = {
+                  'NO LONG':  row.no_long,
+                  'UP':       row.up,
+                  'MID':      row.mid,
+                  'DOWN':     row.down,
+                  'NO SHORT': row.no_short
+                };
+                window.esStatsCache = stats;
+                window.esStatsCacheExp = row.expiration;
+                window.esStatsReady = true;
+                window.applyOverviewESStats(stats);
+                console.log('[ESStats] Ladder restored from SQLite for expiration:', row.expiration);
+              } catch(e) {
+                console.warn('[ESStats] Failed to load from API:', e.message);
+              }
+            })();
           }
         </script>
         <div id="stats-body" data-loading="1" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#04070c;position:relative;min-height:0">

@@ -567,6 +567,19 @@ window.refreshEstimatedMoves = async function(){
       window.esStatsReady = true;
       if (typeof window.applyOverviewESStats === 'function') window.applyOverviewESStats(stats);
       console.log('[ESStats] Ladder updated for expiration:', esmRow.expiration);
+      // Persist to SQLite via API
+      fetch(EM.proxyUrl('/api/es-stats'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expiration: esmRow.expiration,
+          no_long:   stats['NO LONG'],
+          up:        stats['UP'],
+          mid:       stats['MID'],
+          down:      stats['DOWN'],
+          no_short:  stats['NO SHORT']
+        })
+      }).catch(e => console.warn('[ESStats] Failed to persist:', e.message));
     } else if (esmRow) {
       console.log('[ESStats] Ladder unchanged — already set for expiration:', esmRow.expiration);
     }

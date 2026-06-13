@@ -726,6 +726,21 @@ export default function EstimatedMoves() {
 
     const exp = settled.find((row) => row.expiration)?.expiration;
     if (exp) setTargetDateLabel(labelForDate(exp));
+
+    // Persist UP / DOWN to SQLite (NO LONG / NO SHORT come from zones tab)
+    const esmRow = settled.find((r) => r.ticker === "ESM" && r.up && r.down);
+    if (esmRow && esmRow.expiration) {
+      const fmtStat = (v: number) => Math.round(v).toLocaleString("en-US");
+      fetch("/api/es-stats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expiration: esmRow.expiration,
+          up:   fmtStat(esmRow.up!),
+          down: fmtStat(esmRow.down!),
+        }),
+      }).catch((e) => console.warn("[ESStats] Failed to persist est moves:", e));
+    }
   }, [knownExpirations, expOverride]);
 
   const refreshZones = useCallback(async () => {
@@ -733,7 +748,27 @@ export default function EstimatedMoves() {
     setStatus({ text: "Loading weekly zones", color: "#00e5ff" });
     const levels = await fetchNoShortNoLongZones();
     setZoneLevels(levels);
-  }, []);
+
+    // Persist NO LONG, NO SHORT, and MID from ESM zones to SQLite
+    const esm = levels.find((l) => l.ticker === "ESM6");
+    if (esm) {
+      const fmtStat = (v: number) => Math.round(v).toLocaleString("en-US");
+      const mid = (esm.high + esm.low) / 2;
+      // Use nearest expiration as key — same week as estimated moves
+      const targetExp = getTargetExpiration(knownExpirations, expOverride)
+        || new Date().toISOString().slice(0, 10);
+      fetch("/api/es-stats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expiration: targetExp,
+          no_long:  fmtStat(esm.noLongNear),
+          no_short: fmtStat(esm.noShortNear),
+          mid:      fmtStat(mid),
+        }),
+      }).catch((e) => console.warn("[ESStats] Failed to persist zones:", e));
+    }
+  }, [knownExpirations, expOverride]);
 
   const refresh = useCallback(async () => {
     if (busyRef.current) return;
