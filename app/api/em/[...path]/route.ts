@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PROXY_BASE = process.env.EM_PROXY_BASE ?? "http://localhost:3001";
+const PROXY_BASE = process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com";
 
 // Catch-all proxy: /api/em/[...path] → http://localhost:3001/proxy/api/tt/[...path]
 // Also handles: /api/em/subscription-ready, /api/em/discord-webhook

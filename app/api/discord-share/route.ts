@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 // Forwards a multipart Discord webhook post through the local proxy,
 // mirroring the vanilla site's /proxy/api/webhooks/... path.
 const PROXY_WEBHOOK_URL =
-  "http://localhost:3001/proxy/api/webhooks/1466249857122570454/REDACTED";
+  `${process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com"}/proxy/api/webhooks/1466249857122570454/REDACTED`;
 
 export async function POST(request: Request) {
   try {

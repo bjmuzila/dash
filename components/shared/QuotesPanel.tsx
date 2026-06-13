@@ -42,7 +42,7 @@ export default function QuotesPanel() {
     function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
       try {
-        const ws = new WebSocket("ws://localhost:3001/ws/dxlink");
+        const ws = new WebSocket((process.env.NEXT_PUBLIC_WS_URL ?? "wss://dash-1-vq07.onrender.com") + "/ws/dxlink");
         wsRef.current = ws;
 
         ws.onopen = () => {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Proxies /api/personal-logs[/...] → http://localhost:3001/proxy/api/personal-logs[/...]
-const PROXY = "http://localhost:3001/proxy/api/personal-logs";
+const PROXY = `${process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com"}/proxy/api/personal-logs`;
 
 function targetUrl(params: { path?: string[] }): string {
   const suffix = params.path?.length ? "/" + params.path.join("/") : "";

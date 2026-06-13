@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const PROXY_URL = "http://localhost:3001/proxy/api/tt/gex-top-3";
+const PROXY_URL = `${process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com"}/proxy/api/tt/gex-top-3`;
 
 export async function GET() {
   try {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const PROXY = "http://localhost:3001";
+const PROXY = process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com";
 
 // Symbols to compute EM for, in order
 const TICKERS = [
