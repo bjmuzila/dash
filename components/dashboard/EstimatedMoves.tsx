@@ -565,9 +565,26 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
 
 async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
   const start = Date.now() - (140 * 24 * 60 * 60 * 1000);
-  const r = await fetch(API.dxlinkCandles(symbol, start, 24), { cache: "no-store" });
-  if (!r.ok) throw new Error(`History failed for ${symbol}`);
-  return parseHistoryItems(await r.json());
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const r = await fetch(API.dxlinkCandles(symbol, start, 12), { cache: "no-store" });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`History failed for ${symbol}`);
+
+    try {
+      return parseHistoryItems(JSON.parse(text));
+    } catch (error) {
+      if (attempt === 1) {
+        throw new Error(
+          error instanceof Error
+            ? `${error.message} while parsing weekly candles for ${symbol}`
+            : `Invalid candle payload for ${symbol}`
+        );
+      }
+    }
+  }
+
+  throw new Error(`History failed for ${symbol}`);
 }
 
 async function fetchNoShortNoLongZones(): Promise<ZoneLevels[]> {

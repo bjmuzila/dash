@@ -9,13 +9,15 @@ export async function GET(request: NextRequest) {
       headers: { "Cache-Control": "no-cache" },
       signal: AbortSignal.timeout(15000),
     });
-    const body = await res.arrayBuffer();
-    const headers = new Headers();
-    res.headers.forEach((value, key) => {
-      if (!["transfer-encoding", "connection"].includes(key)) headers.set(key, value);
-    });
-    headers.set("Access-Control-Allow-Origin", "*");
-    return new NextResponse(body, { status: res.status, headers });
+    const text = await res.text();
+    try {
+      return NextResponse.json(JSON.parse(text), { status: res.status });
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid upstream JSON", detail: text.slice(0, 500) },
+        { status: 502 }
+      );
+    }
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });
   }
