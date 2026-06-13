@@ -1308,7 +1308,7 @@ export default function InsightsPage() {
             </div>
 
             {/* 2-col grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, flex: 1, minHeight: 0, autoRows: "minmax(0, 1fr)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, flex: 1, minHeight: 0, gridAutoRows: "minmax(0, 1fr)" }}>
 
               {/* GEX */}
               <GreekCard
