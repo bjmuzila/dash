@@ -181,100 +181,29 @@
           <span style="margin-left:auto"></span>
         </div>
         <script>
-          if (window.esStatsLoaded && typeof window.fetchOverviewESStats === 'function') {
-            window.fetchOverviewESStats();
-          }
-          if (!window.esStatsLoaded) {
-            window.esStatsLoaded = true;
-            const SHEET_ID = '1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg';
-            const statsLoading = document.getElementById('stats-loading');
-            if (statsLoading) statsLoading.style.display = 'flex';
-            ['st-nolong-hi','st-est-up','st-vah','st-vpoc','st-mid','st-est-dn','st-val','st-noshort-hi',
-             'st-nolong-hi-dist','st-est-up-dist','st-vah-dist','st-vpoc-dist','st-mid-dist','st-est-dn-dist','st-val-dist','st-noshort-hi-dist']
-              .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = ''; });
-            
-            function applyOverviewESStats(stats) {
-              const map = {
-                'st-nolong-hi': 'NO LONG',
-                'st-est-up': 'UP',
-                'st-vah': 'VAH',
-                'st-vpoc': 'VPOC',
-                'st-mid': 'MID',
-                'st-est-dn': 'DOWN',
-                'st-val': 'VAL',
-                'st-noshort-hi': 'NO SHORT'
-              };
-              Object.entries(map).forEach(([id, key]) => {
-                const el = document.getElementById(id);
-                if (el && stats[key]) el.textContent = stats[key];
-              });
-              const body = document.getElementById('stats-body');
-              if (body) body.removeAttribute('data-loading');
-              const loading = document.getElementById('stats-loading');
-              if (loading) loading.style.display = 'none';
-              if (typeof window.updateStatsPanel === 'function') window.updateStatsPanel();
-            }
-
-            async function fetchESStats(retryCount = 0) {
-              try {
-                const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
-
-                const response = await fetch(url, { signal: controller.signal });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                const text = await response.text();
-                const jsonText = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?\s*$/)?.[1]
-                  || text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
-                const json = JSON.parse(jsonText);
-
-                if (!json.table || !json.table.rows || json.table.rows.length === 0) {
-                  throw new Error('No data in response');
-                }
-
-                const stats = {};
-                const fmtESStat = value => {
-                  const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
-                  return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : value;
-                };
-                for (let row of json.table.rows) {
-                  const label = row.c[0]?.v;
-                  const value = row.c[1]?.v;
-                  if (label && value) {
-                    stats[label.toString().trim().toUpperCase()] = fmtESStat(value);
-                  }
-                }
-
-                if (Object.keys(stats).length === 0) throw new Error('No stats parsed');
-
-                window.esStatsCache = stats;
-                window.esStatsReady = true;
-                applyOverviewESStats(stats);
-                if (typeof window.updateStatsDebug === 'function') window.updateStatsDebug('✓ Sheet fetched');
-              } catch (err) {
-                const msg = err && err.message ? err.message : String(err);
-                if (typeof window.updateStatsDebug === 'function') window.updateStatsDebug('⚠ ' + msg);
-                console.error('Error fetching ES stats:', err);
-
-                // Retry once after a short delay
-                if (retryCount < 1) {
-                  setTimeout(() => fetchESStats(retryCount + 1), 2000);
-                }
-              }
-            }
-            window.fetchOverviewESStats = fetchESStats;
-            
-            // Delay fetch to after page load
-            window.addEventListener('load', function() {
-              setTimeout(fetchESStats, 500);
-              setInterval(fetchESStats, 300000);
+          // ES Stats Ladder — populated by estimated-moves.js after refresh.
+          // No Google Sheets dependency.
+          window.applyOverviewESStats = function(stats) {
+            const map = {
+              'st-nolong-hi': 'NO LONG',
+              'st-est-up':    'UP',
+              'st-mid':       'MID',
+              'st-est-dn':    'DOWN',
+              'st-noshort-hi':'NO SHORT'
+            };
+            Object.entries(map).forEach(([id, key]) => {
+              const el = document.getElementById(id);
+              if (el && stats[key]) el.textContent = stats[key];
             });
-            
-            // Also run on this script's own load
-            setTimeout(fetchESStats, 100);
+            const body = document.getElementById('stats-body');
+            if (body) body.removeAttribute('data-loading');
+            const loading = document.getElementById('stats-loading');
+            if (loading) loading.style.display = 'none';
+            if (typeof window.updateStatsPanel === 'function') window.updateStatsPanel();
+          };
+          // If est moves already ran before this page loaded, apply immediately
+          if (window.esStatsReady && window.esStatsCache) {
+            window.applyOverviewESStats(window.esStatsCache);
           }
         </script>
         <div id="stats-body" data-loading="1" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#04070c;position:relative;min-height:0">
@@ -325,30 +254,6 @@
           </div>
         </div>
 
-        <!-- VAH -->
-        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
-          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
-            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VAH</div>
-          </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #00e5ff;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
-          <div style="flex:1;padding-left:8px;min-width:0">
-            <div id="st-vah" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
-            <div id="st-vah-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
-          </div>
-        </div>
-
-        <!-- VPOC -->
-        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
-          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
-            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VPOC</div>
-          </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ffb300;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
-          <div style="flex:1;padding-left:8px;min-width:0">
-            <div id="st-vpoc" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
-            <div id="st-vpoc-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
-          </div>
-        </div>
-
         <!-- MID -->
         <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
           <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
@@ -370,18 +275,6 @@
           <div style="flex:1;padding-left:8px;min-width:0">
             <div id="st-est-dn" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
             <div id="st-est-dn-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
-          </div>
-        </div>
-
-        <!-- VAL -->
-        <div class="esl-row" style="flex:1;display:flex;align-items:center;min-height:0;border-bottom:1px solid #0a1420;position:relative">
-          <div style="flex:1;text-align:right;padding-right:10px;min-width:0">
-            <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#fff;white-space:nowrap">VAL</div>
-          </div>
-          <div style="width:10px;height:10px;border-radius:50%;border:2px solid #ff9060;background:#04070c;flex-shrink:0;position:relative;z-index:2"></div>
-          <div style="flex:1;padding-left:8px;min-width:0">
-            <div id="st-val" style="font-size:13px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap">—</div>
-            <div id="st-val-dist" style="font-size:9px;color:#fff;margin-top:1px;font-variant-numeric:tabular-nums">—</div>
           </div>
         </div>
 

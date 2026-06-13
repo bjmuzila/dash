@@ -548,6 +548,28 @@ window.refreshEstimatedMoves = async function(){
     const sync=document.getElementById('em-last-sync');
     if(sync) sync.textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     EM.setStatus('Live','#00e676');
+
+    // Publish ES Stats Ladder data from ESM estimated moves result.
+    // Only write once per expiration — re-running estimated moves won't overwrite.
+    const esmRow = rows.find(r => r.ticker === 'ESM' && r.up && r.down);
+    if (esmRow && esmRow.expiration !== window.esStatsCacheExp) {
+      const fmtStat = v => Math.round(v).toLocaleString('en-US');
+      const mid = (esmRow.up + esmRow.down) / 2;
+      const stats = {
+        'NO LONG':  fmtStat(esmRow.up),
+        'UP':       fmtStat(esmRow.up),
+        'MID':      fmtStat(mid),
+        'DOWN':     fmtStat(esmRow.down),
+        'NO SHORT': fmtStat(esmRow.down)
+      };
+      window.esStatsCache = stats;
+      window.esStatsCacheExp = esmRow.expiration;
+      window.esStatsReady = true;
+      if (typeof window.applyOverviewESStats === 'function') window.applyOverviewESStats(stats);
+      console.log('[ESStats] Ladder updated for expiration:', esmRow.expiration);
+    } else if (esmRow) {
+      console.log('[ESStats] Ladder unchanged — already set for expiration:', esmRow.expiration);
+    }
   }catch(e){
     console.error('Refresh failed:', e);
     EM.setStatus('Error','#ff4757');
