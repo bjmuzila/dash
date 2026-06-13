@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-const PROXY = process.env.NEXT_PUBLIC_PROXY_URL ?? "https://dash-1-vq07.onrender.com";
+const PROXY = process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com";
 const CACHE_KEY = "nav_daily_em_v1";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { computeGexSummary } from "@/lib/math/gex";
 import type { ChainRow } from "@/lib/math/calculations";
 
-const PROXY = process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com";
+const PROXY = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
 
 interface ProxyOption {
   "open-interest"?: number;

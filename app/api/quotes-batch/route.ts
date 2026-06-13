@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PROXY = process.env.PROXY_URL ?? "https://dash-1-vq07.onrender.com";
+const PROXY = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
