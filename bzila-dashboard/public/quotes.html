@@ -1,0 +1,168 @@
+<div id="page-quotes" style="display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg0);color:var(--text2);font-family:Arial,sans-serif;padding:10px">
+  <style>
+    .quotes-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 10px;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .quote-card {
+      background: #0a0f16;
+      border: 1px solid #1a2a3a;
+      border-radius: 4px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .quote-symbol {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--cyan);
+      text-transform: uppercase;
+    }
+
+    .quote-price {
+      font-weight: 600;
+      font-size: 16px;
+      color: #fff;
+    }
+
+    .quote-change-pct {
+      font-weight: 600;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .quote-change-pct.up {
+      color: #00d876;
+    }
+
+    .quote-change-pct.down {
+      color: #ff4444;
+    }
+
+    .quote-arrow {
+      font-size: 12px;
+    }
+
+    .quote-bid-ask {
+      font-size: 10px;
+      color: #7fa3bf;
+      display: flex;
+      gap: 8px;
+    }
+
+    .loading {
+      padding: 40px 20px;
+      text-align: center;
+      color: #7fa3bf;
+    }
+  </style>
+
+  <div id="quotes-container" class="quotes-grid">
+    <div class="loading">Loading quotes...</div>
+  </div>
+</div>
+
+<script>
+window.QuotesPanel = {
+  symbols: ['/ES', '/NQ', 'SPX', 'SPCX', 'VIX', 'SPY', 'QQQ', 'SMH', 'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'TSLA'],
+  prevCloses: {},
+
+  async init() {
+    await this.loadPrevCloses();
+    await this.render();
+    setInterval(() => this.render(), 30000);
+  },
+
+  async loadPrevCloses() {
+    try {
+      const resp = await fetch('/proxy/api/spx-prevclose');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && typeof data === 'object') {
+          this.prevCloses = data.prevClose !== undefined
+            ? { '/ES': data.prevClose, '/NQ': data.prevClose }
+            : data;
+        }
+      }
+    } catch (e) {
+      console.error('[Quotes] prevclose load failed:', e.message);
+    }
+  },
+
+  async fetchQuotes() {
+    try {
+      const url = '/proxy/api/tt/quotes-batch?symbols=' + this.symbols.join(',');
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return Array.isArray(data) ? data : [];
+    } catch (e) {
+      console.error('[Quotes] fetch failed:', e.message);
+      return [];
+    }
+  },
+
+  calculateChange(symbol, lastPrice) {
+    const prev = this.prevCloses[symbol];
+    if (!prev || prev === 0) return null;
+    const change = lastPrice - prev;
+    const pct = (change / prev) * 100;
+    return {
+      pct: pct.toFixed(2),
+      up: change > 0,
+      down: change < 0
+    };
+  },
+
+  async render() {
+    const container = document.getElementById('quotes-container');
+    if (!container) return;
+
+    const quotes = await this.fetchQuotes();
+    if (!quotes.length) {
+      container.innerHTML = '<div class="loading">No data</div>';
+      return;
+    }
+
+    let html = '';
+    quotes.forEach(q => {
+      if (!q || !q.symbol) return;
+      const change = this.calculateChange(q.symbol, q.last);
+      const arrow = change ? (change.up ? '▲' : '▼') : '';
+      const pctClass = change ? (change.up ? 'up' : 'down') : '';
+      const pctTxt = change ? `${change.up ? '+' : ''}${change.pct}%` : '—';
+
+      html += `
+        <div class="quote-card">
+          <div class="quote-symbol">${q.symbol}</div>
+          <div class="quote-price">${(q.last || 0).toFixed(2)}</div>
+          <div class="quote-change-pct ${pctClass}">
+            <span class="quote-arrow">${arrow}</span>
+            <span>${pctTxt}</span>
+          </div>
+          <div class="quote-bid-ask">
+            <span>B: ${(q.bid || 0).toFixed(2)}</span>
+            <span>A: ${(q.ask || 0).toFixed(2)}</span>
+          </div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+  }
+};
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => window.QuotesPanel.init());
+} else {
+  window.QuotesPanel.init();
+}
+</script>

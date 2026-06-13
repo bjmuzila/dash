@@ -1,0 +1,202 @@
+Open Interest Fix — Exact Code Changes
+================================================================================
+
+REMOVE YAHOO FALLBACK
+====================
+
+Location: proxy-tastytrade.js around line 1104
+
+FIND AND DELETE THIS ENTIRE FUNCTION:
+
+async function fetchYahooOI(symbol, expDate) {
+  // Skip Yahoo for index options (SPX/SPXW) — use CBOE instead
+  if (symbol === 'SPX' || symbol === 'SPXW' || symbol === '$SPX') return {};
+  try {
+    const url = `https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(symbol)}?date=${Math.round(new Date(expDate).getTime() / 1000)}`;
+    const res = await fetch(url);
+    if (!res.ok) { console.warn('[Yahoo OI]', symbol, expDate, 'fetch failed:', res.status); return {}; }
+    const data = await res.json();
+    const opts = data?.optionChain?.result?.[0]?.options?.[0]?.option || [];
+    const oiMap = new Map();
+    opts.forEach(opt => {
+      const strike = Number(opt.strike);
+      const oi  = Math.round(Number(opt.openInterest) || 0);
+      if (strike && oi > 0) oiMap.set(strike.toFixed(1), { call: oi, put: oi });
+    });
+    return Object.fromEntries(oiMap.entries());
+  } catch (e) {
+    console.warn('[Yahoo OI] error:', e.message);
+    return {};
+  }
+}
+
+[DELETE everything from line 1104 to the closing brace, typically around line 1120]
+
+================================================================================
+REMOVE CBOE FALLBACK
+====================
+
+Location: proxy-tastytrade.js around line 1148
+
+FIND AND DELETE THIS ENTIRE FUNCTION:
+
+function fetchCBOEOI(symbol, expDate) {
+  return new Promise((resolve) => {
+    if (!symbol || !expDate) { resolve([]); return; }
+    const cboeMap = { 'SPX': '_SPX', 'SPXW': '_SPXW' };
+    const cboeSymbol = cboeMap[symbol] || symbol;
+    const url = `https://cdn.cboe.com/api/global/delayed_quotes/options/${cboeSymbol}.json`;
+    const opts = [];
+    try {
+      const req2 = https.get(url, (res2) => {
+        let body = '';
+        res2.on('data', (chunk) => { body += chunk; });
+        res2.on('end', () => {
+          try {
+            const contentType = res2.headers['content-type'] || '';
+            if (!contentType.includes('application/json')) {
+              log('CBOE unexpected content', url, 'status', res2.statusCode, 'content-type', contentType);
+              resolve([]);
+              return;
+            }
+            const json = JSON.parse(body);
+            const data = json?.data || {};
+            (data.options || []).forEach(opt => {
+              if (Number(opt.expiration_date) === Number(expDate)) {
+                opts.push({
+                  strikePrice: Number(opt.strike),
+                  openInterest: Math.round(Number(opt.open_interest) || 0),
+                });
+              }
+            });
+            resolve(opts);
+          } catch (e) {
+            log('CBOE parse error', url, e.message, 'content-type', contentType || 'unknown');
+            resolve([]);
+          }
+        });
+      });
+      req2.on('error',   (e) => { log('CBOE fetch error', url, e.message); resolve([]); });
+      req2.setTimeout(5000, () => { req2.destroy(); resolve([]); });
+    } catch (e) {
+      log('CBOE setup error:', e.message);
+      resolve([]);
+    }
+  });
+}
+
+[DELETE everything from line 1148 to the closing brace, typically around line 1200]
+
+================================================================================
+REMOVE CBOE PUTCALL RATIO ENDPOINTS
+===================================
+
+Location: proxy-tastytrade.js around line 3327
+
+FIND AND DELETE THIS ENTIRE SECTION:
+
+  // ── GET /proxy/api/tt/put-call-ratio  ──────────────────────────────────────
+  // Returns today's equity put/call ratio from CBOE, with TT fallback.
+  if (req.method === 'GET' && p === '/proxy/api/tt/put-call-ratio') {
+    if (putCallCache && (Date.now() - putCallCache.ts) < 24 * 60 * 60 * 1000) {
+      return sendJSON(res, 200, putCallCache);
+    }
+    try {
+      // Primary: CBOE daily equity P/C CSV
+      ... [entire try block with CBOE CSV parsing] ...
+    } catch (e) {
+      log('CBOE putcall primary error:', e.message);
+      try {
+        // Fallback: CBOE index P/C CSV
+        ... [entire fallback try block] ...
+      } catch (e2) {
+        log('CBOE putcall fallback error:', e2.message);
+        if (putCallCache) {
+          return sendJSON(res, 200, putCallCache);
+        }
+      }
+    }
+    return sendJSON(res, 200, { ratio: 0, date: '', source: 'unavailable', error: 'CBOE P/C data unavailable' });
+  }
+
+[DELETE everything from line 3327 to line 3383 (the closing brace of the put-call-ratio endpoint)]
+
+================================================================================
+UPDATE CHAIN FETCH LOGIC
+=======================
+
+Location: proxy-tastytrade.js around line 3026
+
+FIND THIS CODE:
+
+      const opt = opts[i] || {};
+      const rawOpenInterest = opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? null;
+      const liveOpenInterest = dxCache.openInterest ?? null;
+      const yahooOI = opts.length > 0 && !liveOpenInterest && !rawOpenInterest
+        ? await fetchYahooOI(sym, expDate)
+        : null;
+      const oi = liveOpenInterest ?? yahooOI?.openInterest ?? rawOpenInterest ?? 0;
+
+REPLACE WITH:
+
+      const opt = opts[i] || {};
+      const oi = opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0;
+
+EXPLANATION: Remove Yahoo fallback completely. Use only TastyTrade openInterest field.
+
+================================================================================
+ADD DEBUG LOGGING (OPTIONAL)
+============================
+
+Location: proxy-tastytrade.js around line 3020 (in buildChainResponse function)
+
+ADD THESE LINES after fetching opts and before processing:
+
+      if (opts.length > 0) {
+        const oiSample = [opts[0]?.openInterest, opts[1]?.openInterest, opts[2]?.openInterest].filter(x => x);
+        log('DEBUG [Chain OI] symbol:', sym, 'expDate:', expDate, 'total strikes:', opts.length, 'sample OI:', oiSample.slice(0, 3));
+      }
+
+This will log: "[TT-Proxy] DEBUG [Chain OI] symbol: SPX expDate: 2026-06-11 total strikes: 554 sample OI: [123456, 234567, 345678]"
+
+================================================================================
+SUMMARY OF CHANGES
+==================
+
+Files to edit: 1 file (proxy-tastytrade.js)
+
+Changes:
+1. DELETE fetchYahooOI() - removes ~20 lines
+2. DELETE fetchCBOEOI() - removes ~50 lines
+3. DELETE /proxy/api/tt/put-call-ratio endpoint - removes ~60 lines
+4. UPDATE chain OI logic - changes 5 lines to 1 line
+5. ADD debug logging - adds 5 lines (optional)
+
+Total: ~130 lines removed, 5 lines changed, 5 lines added
+Net impact: Removes 120 lines of unreliable fallback code
+
+Expected improvement:
+- Proxy starts faster (no Yahoo/CBOE calls)
+- OI loads immediately and consistently
+- Real-time OI updates via dxLink
+- No "CBOE fetch error" or "Yahoo OI" logs
+- Multi-Greek option chains show OI correctly
+
+================================================================================
+TESTING AFTER CHANGES
+====================
+
+1. Restart proxy (should NOT see any CBOE or Yahoo messages)
+
+2. Load option chain - verify OI appears immediately
+   Expected log: "[TT-Proxy] DEBUG [Chain OI] symbol: SPX ... sample OI: [123456, ...]"
+
+3. In browser, verify rawChain has OI:
+   console.log('callOI sample:', window.rawChain?.[0].callOI);
+   Expected: Large number like 45678
+
+4. Wait 5 seconds - OI should update via dxLink
+   Verify: row.callOI and row.putOI change in real-time
+
+5. Check multi-greek option chains for stocks
+   Expected: All strikes show OI instantly

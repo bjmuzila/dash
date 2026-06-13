@@ -4,24 +4,36 @@ echo.
 echo  Starting SPX GEX Dashboard...
 echo.
 
-:: Kill any existing instances on port 3001
+:: Kill any existing instances on ports 3001 and 3002
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :3001 2^>nul') do taskkill /PID %%a /F >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :3002 2^>nul') do taskkill /PID %%a /F >nul 2>&1
 
-:: Start proxy (serves static files + APIs on single port)
-start "SPX GEX Proxy" cmd /k "cd /d %~dp0 && node proxy-tastytrade.js"
+:: Copy logo to Next.js public folder
+if not exist "%~dp0bzila-dashboard\public\bzilatrades-logo.png" (
+    copy "%~dp0assets\bzilatrades-logo.png" "%~dp0bzila-dashboard\public\bzilatrades-logo.png" >nul 2>&1
+)
 
-:: Wait for proxy to fully start
+:: Install proxy dependencies if needed, then start (port 3001)
+start "Tastytrade Proxy" cmd /k "cd /d %~dp0 && npm install --prefix . dotenv ws 2>nul & node proxy-tastytrade.js"
+
+:: Wait for proxy to initialize
 echo  Waiting for proxy to start...
 timeout /t 3 /nobreak >nul
 
-:: Open browser
+:: Install dashboard dependencies if needed, then start Next.js (port 3002)
+start "BzilaTrades Next" cmd /k "cd /d %~dp0\bzila-dashboard && npm install html2canvas 2>nul & npm run dev"
+
+:: Wait for Next.js to compile
+echo  Waiting for Next.js to start...
+timeout /t 5 /nobreak >nul
+
+:: Open dashboard
 echo  Opening dashboard...
-start http://localhost:3001
+start http://localhost:3002
 
 echo.
-echo  Dashboard running at http://localhost:3001
+echo  Proxy:      http://localhost:3001
+echo  Dashboard:  http://localhost:3002
 echo.
-echo  Proxy window is open and running.
-echo  Close THIS window any time - proxy keeps running.
-echo  To stop everything, close the Proxy window.
+echo  Close this window any time.
 echo.

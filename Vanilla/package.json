@@ -1,0 +1,16 @@
+{
+  "name": "spx-gex-dashboard",
+  "version": "1.0.0",
+  "description": "SPX GEX Dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@dxfeed/dxlink-websocket-client": "^0.8.1",
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^17.4.2",
+    "ws": "^8.21.0"
+  }
+}

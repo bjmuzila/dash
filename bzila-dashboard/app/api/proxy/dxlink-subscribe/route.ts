@@ -1,0 +1,18 @@
+import { NextResponse } from "next/server";
+
+const PROXY = "http://localhost:3001";
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const res = await fetch(`${PROXY}/proxy/dxlink/subscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    return NextResponse.json(json, { status: res.status });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}

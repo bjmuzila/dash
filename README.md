@@ -1,2 +1,0 @@
-# SPXGEXDASH
-Bzila Gex Dashboard

@@ -1,0 +1,79 @@
+<!-- PAGE: ESTIMATED MOVES -->
+<div id="page-database" style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;background:var(--bg0)">
+  <div style="padding:7px 16px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:15px;font-weight:700;color:var(--cyan);letter-spacing:.15em;text-transform:uppercase">Estimated Moves</span>
+      <span style="font-size:12px;color:#3a5570;letter-spacing:.12em;text-transform:uppercase;font-weight:700">Weekly</span>
+      <span id="em-target-date" style="font-size:12px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase"></span>
+      <div id="em-exp-wrap" style="display:flex;align-items:center;gap:6px;margin-left:12px">
+        <span style="font-size:11px;color:#3a5570;letter-spacing:.12em;text-transform:uppercase;font-weight:700">Expiration</span>
+        <select id="em-exp-select" onchange="window.onExpirationChange && window.onExpirationChange(this.value)"
+          style="background:#04070c;border:1px solid #1e3a5f;color:#7ab8ff;font-size:12px;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em;outline:none;min-width:180px">
+          <option value="">-- Auto --</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="em-status" style="font-size:12px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase">Ready</span>
+      <button id="em-start-btn" onclick="window.refreshEstimatedMoves && window.refreshEstimatedMoves()" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:13px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Start</button>
+      <button id="em-save-btn" onclick="window.captureEMSnapshot && window.captureEMSnapshot()" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:13px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Save</button>
+      <button id="em-export-btn" onclick="window.exportSnapshots && window.exportSnapshots()" style="background:#0a1628;border:1px solid #1e3a5f;color:#00e5ff;font-size:13px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Export</button>
+      <div style="display:flex;gap:2px;background:#070c14;border:1px solid #1e3a5f;border-radius:2px;padding:2px">
+        <button id="em-copy-shot-btn" onclick="window.copyEMScreenshot && window.copyEMScreenshot()" title="Copy screenshot to clipboard"
+          style="font-size:11px;padding:4px 10px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em">COPY SHOT</button>
+        <button id="em-share-x-btn" onclick="window.shareEM && window.shareEM('x')" title="Open X/Twitter"
+          style="font-size:11px;padding:4px 10px;border:none;border-radius:2px;background:transparent;color:#00e5ff;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em">X</button>
+        <button id="em-share-discord-btn" onclick="window.shareEM && window.shareEM('discord')" title="Post to Discord"
+          style="font-size:11px;padding:4px 10px;border:none;border-radius:2px;background:transparent;color:#7289da;cursor:pointer;font-family:Arial;font-weight:700;letter-spacing:.06em">DISCORD</button>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1;display:flex;min-height:0;overflow:hidden;background:#080c14">
+    <div id="em-sidebar" style="width:230px;min-width:230px;flex-shrink:0;background:#04070c;border-right:1px solid #0d1825;box-sizing:border-box;overflow-y:auto;display:flex;flex-direction:column">
+      <div style="padding:12px 14px;border-bottom:1px solid #0d1825;flex-shrink:0">
+        <div style="font-size:9px;color:#3a5570;letter-spacing:.14em;text-transform:uppercase;font-weight:700;margin-bottom:4px">Last Sync</div>
+        <div id="em-last-sync" style="font-size:13px;color:#e8edf5;font-weight:600;font-variant-numeric:tabular-nums">--</div>
+      </div>
+      <div style="flex:1;overflow-y:auto">
+        <div>
+          <button onclick="window.emToggleDrawer && window.emToggleDrawer()"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid #0d1825;cursor:pointer;text-align:left">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="em-drawer-arrow-weekly" style="font-size:10px;color:#5a7a99;transition:transform .15s">▶</span>
+              <span style="font-size:13px;font-weight:700;color:#e8edf5;letter-spacing:.08em;text-transform:uppercase">Weekly</span>
+            </div>
+            <span id="em-drawer-count-weekly" style="font-size:10px;color:#7ab8ff;background:#07111d;border:1px solid #1a2a3a;padding:2px 8px;border-radius:10px;font-weight:700">0</span>
+          </button>
+          <div id="em-drawer-weekly" style="display:none;flex-direction:column;gap:1px;background:#020407"></div>
+        </div>
+      </div>
+      <div style="padding:10px 14px;border-top:1px solid #0d1825;flex-shrink:0">
+        <div style="font-size:9px;color:#3a5570;letter-spacing:.14em;text-transform:uppercase;font-weight:700;margin-bottom:6px">Symbols</div>
+        <div id="em-symbol-list" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:0;overflow:auto;padding:18px">
+      <div style="width:100%;max-width:980px;margin:0 auto;background:#0b111b;border:1px solid #1a2a3a;box-shadow:0 18px 50px rgba(0,0,0,.35)" class="em-capture-target">
+        <div style="border-bottom:1px solid #1a2a3a;background:#0e1522;padding:10px 14px;text-align:center">
+          <div style="font-size:16px;font-weight:700;color:#a8b8cc;letter-spacing:.16em;text-transform:uppercase">Weekly Estimated Move For <span id="em-table-date" style="color:#00e5ff">--</span></div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:16px">
+            <thead style="background:#0a0f18">
+              <tr style="border-bottom:1px solid #1a2a3a;color:#00e5ff;text-align:center;font-size:13px;letter-spacing:.12em;text-transform:uppercase">
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Ticker</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Close</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Exp</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">EM</th>
+                <th style="padding:10px;border-right:1px solid #1a2a3a">Up</th>
+                <th style="padding:10px">Down</th>
+              </tr>
+            </thead>
+            <tbody id="em-table-body" style="font-family:Consolas,Monaco,monospace"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="estimated-moves.js"></script>

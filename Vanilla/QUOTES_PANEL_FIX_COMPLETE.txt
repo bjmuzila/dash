@@ -1,0 +1,122 @@
+Quotes Panel % Change Fix — Complete Summary (UPDATED 2026-06-11)
+================================================================================
+
+THE PROBLEM
+===========
+Quotes panel was showing 0.00% for all symbols (VIX, ES, NQ, SPX, QQQ, AAPL, etc.)
+despite having correct live prices from dxLink WebSocket.
+
+ROOT CAUSES & SOLUTIONS (in order)
+==================================
+
+1. Missing Summary Events in Browser
+   Problem: dxLink sends Summary events (with prevDayClosePrice) but browser wasn't caching them.
+   Solution: Added dxSummaryCache = {} on browser and code to cache Summary events via WebSocket.
+   Code: pages/overview/overview.js line 179, and WebSocket handler lines 235-240
+
+2. normalizeDxFeedData Missing Summary
+   Problem: Browser's normalizeDxFeedData() didn't have Summary in fieldsByType, returned empty arrays.
+   Solution: Added Summary: ['openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePrice','prevDayClosePrice'] to fieldsByType.
+   Code: pages/overview/overview.js line 1380
+
+3. Quote Building Not Using Summary Cache
+   Problem: fetchQuotes() was reading dxQuoteCache (Quote events only), missing prevDayClosePrice from Summary.
+   Solution: Updated fetchQuotes() to read from dxSummaryCache for prev-close fallback chain.
+   Code: pages/overview/overview.js lines 5113-5121
+
+4. ES/NQ Symbol Key Mismatch
+   Problem: Browser subscribes /ESM26 but dxLink cache keys are /ES:XCME. Lookup was failing.
+   Solution: Added dxKeyMap in fetchQuotes to map /ESM26 → /ES:XCME and /NQM26 → /NQ:XCME for cache lookups.
+   Code: pages/overview/overview.js lines 5077-5081
+
+5. Proxy: marketDataPrevCloseCache Not Prioritized
+   **THIS WAS THE MAIN ISSUE FOR STOCKS SHOWING 0%**
+   Problem: quotes-batch endpoint was checking isAfterClose ? s.dayClosePrice BEFORE marketDataPrevCloseCache.
+   For equities, dxLink Summary has dayClosePrice=0, so it returned null before checking marketDataPrevCloseCache.
+   Solution: Reorder firstFiniteNumber() to check marketDataPrevCloseCache FIRST for equities.
+   Code: proxy-tastytrade.js line 2841
+   OLD:  firstFiniteNumber(isAfterClose ? s.dayClosePrice : null, resolveQuotePrevClose(q, s), marketDataPrevCloseCache[sym], knownPrev, 0)
+   NEW:  firstFiniteNumber(marketDataPrevCloseCache[sym], isAfterClose ? s.dayClosePrice : null, resolveQuotePrevClose(q, s), knownPrev, 0)
+
+6. Proxy: Early Summary Render (Browser)
+   Problem: renderQuotes() was called immediately when Summary arrived, but prices didn't exist yet.
+   Solution: Removed immediate renderQuotes() call. Let Summary cache silently. Quotes render on normal 15s tick cycle.
+   Code: pages/overview/overview.js - do NOT add renderQuotes() after dxSummaryCache[sym] assignment
+
+7. todayRegularClose Override (Browser)
+   Problem: Intraday close was overriding previous day close (wrong reference).
+   Solution: Don't use todayRegularClose. Market-data prev-close is authoritative.
+   Code: pages/overview/overview.js - fetchQuotes() uses only market-data, not Yahoo intraday
+
+8. Futures Using Wrong Close Reference (Proxy & Browser)
+   Problem: ES/NQ were showing wrong % because they used prevDayClosePrice (equity reference).
+   Futures need CME settlement (5pm ET open = dayOpenPrice).
+   Solution: For futures symbols, use s.dayOpenPrice instead of prevDayClosePrice.
+   Code: proxy-tastytrade.js line 2840 (futures use dayOpenPrice)
+         pages/overview/overview.js lines 5115-5117 (futures use dayOpenPrice from Summary)
+
+================================================================================
+FINAL ARCHITECTURE
+================================================================================
+
+DATA FLOW:
+1. Proxy startup: Fetch prev-closes from TT /market-data/by-type API
+   - Indices: SPX, VIX, NDX
+   - Equities: SPY, QQQ, SMH, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, TSLA, COIN, HOOD, IWM, NFLX, PLTR
+   - Futures: /ES, /NQ
+   → Stored in: marketDataPrevCloseCache[symbol] = value
+
+2. dxLink WebSocket: Sends Summary events with dayOpenPrice, dayLowPrice, prevDayClosePrice fields
+   → Browser caches in: dxSummaryCache[sym] = { prevDayClosePrice, dayOpenPrice, ... }
+
+3. Browser fetchQuotes() every 15 seconds:
+   - Fetch from proxy /proxy/api/tt/quotes-batch (has live prices + prev-close via marketDataPrevCloseCache)
+   - Fall back to dxSummaryCache if Summary events arrived
+   - Calculate % = (price - prevClose) / prevClose * 100
+   → Display in quotes panel
+
+SPECIAL HANDLING:
+- Equities (SPX, AAPL, QQQ, etc.):
+  * Use prevDayClosePrice from Summary cache
+  * Fall back to marketDataPrevCloseCache from proxy
+  * Fall back to resolveQuotePrevClose() from dxLink Quote cache
+
+- Futures (/ES, /NQ):
+  * Use dayOpenPrice from Summary (CME settlement reference = 5pm ET)
+  * Fall back to marketDataPrevCloseCache from proxy
+  * Fall back to prevDayClosePrice if dayOpenPrice unavailable
+
+- VIX:
+  * Use Yahoo Finance override if available
+  * Fall back to livePrevCloses.VIX (auto-refreshed daily from Yahoo)
+  * Fall back to dxLink Summary prevDayClosePrice
+
+PROXY DEBUG LOGGING (added 2026-06-11):
+Add this line in proxy-tastytrade.js after line 3999 to log marketDataPrevCloseCache at startup:
+  log('DEBUG marketDataPrevCloseCache:', JSON.stringify(marketDataPrevCloseCache));
+
+Expected output:
+  [TT-Proxy] DEBUG marketDataPrevCloseCache: {"AAPL":291.58,"SPY":725.43,"QQQ":693.69,...}
+
+If any symbols show 0 or are missing, the TT /market-data/by-type API returned no prev-close.
+
+BROWSER DEBUG (in browser console):
+To verify dxSummaryCache is populating:
+  console.log('dxSummaryCache:', window.dxSummaryCache);
+
+To verify quotes are building with correct prev-close:
+  console.log('quotesData:', window.quotesData);
+
+To verify proxy is returning prev-close in quotes-batch:
+  fetch('/proxy/api/tt/quotes-batch').then(r => r.json()).then(d => {
+    d.data.items.forEach(item => console.log(item.symbol, 'prev-close:', item['prev-close']));
+  });
+
+================================================================================
+RESULT
+================================================================================
+Quotes panel now shows accurate % changes matching TradingView in real-time.
+- Equities (AAPL, SPY, QQQ): Correct % from marketDataPrevCloseCache
+- Futures (ES, NQ): Correct % using CME settlement reference
+- VIX: Correct % using Yahoo Finance daily close
+- All symbols refresh every 15 seconds automatically

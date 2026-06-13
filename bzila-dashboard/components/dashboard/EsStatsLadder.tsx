@@ -1,0 +1,236 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+
+const SHEET_ID = "1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg";
+const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
+
+interface LadderRow {
+  key: string;
+  label: string;
+  dotColor: string;
+  valueKey: string;
+}
+
+const ROWS: LadderRow[] = [
+  { key: "NO LONG",  label: "NO LONG",  dotColor: "#ff6b6b", valueKey: "NO LONG" },
+  { key: "UP",       label: "UP EST",   dotColor: "#22c55e", valueKey: "UP" },
+  { key: "VAH",      label: "VAH",      dotColor: "#00e5ff", valueKey: "VAH" },
+  { key: "VPOC",     label: "VPOC",     dotColor: "#a78bfa", valueKey: "VPOC" },
+  { key: "MID",      label: "MID",      dotColor: "#faad14", valueKey: "MID" },
+  { key: "DOWN",     label: "DOWN EST", dotColor: "#f97316", valueKey: "DOWN" },
+  { key: "VAL",      label: "VAL",      dotColor: "#00b4ff", valueKey: "VAL" },
+  { key: "NO SHORT", label: "NO SHORT", dotColor: "#ff6b6b", valueKey: "NO SHORT" },
+];
+
+function fmtDist(v: number, spot: number): string {
+  const d = v - spot;
+  const pct = ((d / spot) * 100).toFixed(1);
+  return (d > 0 ? "+" : "") + d.toFixed(0) + " (" + pct + "%)";
+}
+
+interface Props {
+  esSpot?: number; // current ES price for distance calc
+}
+
+export default function EsStatsLadder({ esSpot }: Props) {
+  const [stats, setStats] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const fetch_ = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch(SHEET_URL, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const jsonText =
+        text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);\s*$/)?.[1] ??
+        text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
+      const json = JSON.parse(jsonText);
+      const rows = json?.table?.rows ?? [];
+      const map: Record<string, number> = {};
+      for (const row of rows) {
+        const label = row?.c?.[0]?.v?.toString().trim().toUpperCase();
+        const value = parseFloat(String(row?.c?.[1]?.v ?? "").replace(/[^0-9.-]/g, ""));
+        if (label && Number.isFinite(value)) map[label] = value;
+      }
+      setStats(map);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch_();
+    const t = setInterval(fetch_, 5 * 60_000);
+    return () => clearInterval(t);
+  }, [fetch_]);
+
+  const spot = esSpot ?? 0;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        background: "var(--overview-bg, #05080d)",
+        overflow: "hidden",
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          padding: "5px 10px",
+          background: "var(--overview-header-bg, #070c14)",
+          borderBottom: "1px solid var(--overview-border-soft, #0d1f30)",
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 8,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+            color: "#fff",
+            fontWeight: 700,
+          }}
+        >
+          ⊞ ES STATS LADDER
+        </span>
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }}>
+        {/* vertical spine */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            bottom: 0,
+            width: 1,
+            background: "#0d1f30",
+            pointerEvents: "none",
+            zIndex: 0,
+          }}
+        />
+
+        {loading && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "flex-start",
+              padding: "6px 10px",
+              background: "var(--overview-bg, #05080d)",
+              color: "#1e3050",
+              fontSize: 11,
+              zIndex: 5,
+            }}
+          >
+            Loading…
+          </div>
+        )}
+        {err && !loading && (
+          <div style={{ padding: 8, fontSize: 10, color: "#ef4444" }}>⚠ {err}</div>
+        )}
+
+        {ROWS.map((row) => {
+          const val = stats[row.valueKey];
+          const hasVal = val != null && Number.isFinite(val);
+          const distStr = hasVal && spot > 0 ? fmtDist(val, spot) : "";
+          const distPos = hasVal && spot > 0 ? val > spot : null;
+
+          return (
+            <div
+              key={row.key}
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                minHeight: 0,
+                borderBottom: "1px solid #0a1420",
+                position: "relative",
+                zIndex: 1,
+              }}
+            >
+              {/* Label side */}
+              <div
+                style={{
+                  flex: 1,
+                  textAlign: "right",
+                  paddingRight: 10,
+                  minWidth: 0,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 8,
+                    fontWeight: 700,
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.label}
+                </div>
+              </div>
+
+              {/* Dot */}
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  border: `2px solid ${row.dotColor}`,
+                  background: "var(--overview-bg, #05080d)",
+                  flexShrink: 0,
+                  position: "relative",
+                  zIndex: 2,
+                }}
+              />
+
+              {/* Value side */}
+              <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: "#fff",
+                    fontVariantNumeric: "tabular-nums",
+                    lineHeight: 1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {hasVal ? val.toLocaleString("en-US", { maximumFractionDigits: 0 }) : "—"}
+                </div>
+                {distStr && (
+                  <div
+                    style={{
+                      fontSize: 9,
+                      color: distPos ? "#22c55e" : "#f97316",
+                      marginTop: 1,
+                      fontVariantNumeric: "tabular-nums",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {distStr}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

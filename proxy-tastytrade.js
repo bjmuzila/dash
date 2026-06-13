@@ -21,13 +21,16 @@ const path      = require('path');
 const { URL }   = require('url');
 const { spawn }  = require('child_process');
 const WebSocket = require('ws');
+// const Database  = require('better-sqlite3');  // Optional - comment out if build fails
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const PORT           = parseInt(process.env.PORT || '3001', 10);
 const TOKEN_FILE     = path.join(__dirname, 'tastytrade_token.json');
 const SCHWAB_TOKEN_FILE = path.join(__dirname, '.schwab_tokens.json');
 const BACKUP_DIR     = path.join(__dirname, 'data');
+const DB_FILE        = path.join(__dirname, 'data', 'trading.db');
 const BUY_SELL_BACKUP_FILE = path.join(BACKUP_DIR, 'buy-sell-scores.json');
+const DAILY_CLOSES_FILE    = path.join(BACKUP_DIR, 'daily-closes.json');
 const REFRESH_ENV    = process.env.REFRESH_TOKEN || '';
 const CLIENT_SECRET  = process.env.CLIENT_SECRET  || '';
 const SCHWAB_CLIENT_ID = process.env.SCHWAB_CLIENT_ID || 'REDACTED';
@@ -48,8 +51,386 @@ let schwabAccessToken  = null;
 let schwabRefreshToken = null;
 let schwabTokenExpiry  = 0;
 
+// ─── OPTION CHAIN CACHE (IN-MEMORY + SQLite) ──────────────────────────────────
+// Caches fetched option chains to eliminate redundant TT API calls and subscriptions
+// TTL: 1 hour per symbol (or 10 min if no explicit expiration)
+const chainCache = new Map();
+const CHAIN_CACHE_TTL_MS = 3600000;  // 1 hour for explicit expiration
+const CHAIN_CACHE_TTL_DEFAULT_MS = 600000;  // 10 min for default (nearest) expirations
+
+function getChainsFromCache(symbol, expiration) {
+  const key = `${symbol.toUpperCase()}:${expiration || 'DEFAULT'}`;
+  const ttl = expiration ? CHAIN_CACHE_TTL_MS : CHAIN_CACHE_TTL_DEFAULT_MS;
+
+  // Check in-memory cache first
+  const cached = chainCache.get(key);
+  if (cached) {
+    const age = Date.now() - cached.timestamp;
+    if (age <= ttl) {
+      log(`[CACHE HIT] ${key} (${Math.round(age / 1000)}s old, ${cached.data.length} expirations)`);
+      return cached.data;
+    }
+    chainCache.delete(key);
+  }
+
+  // Check SQLite if DB ready
+  if (db) {
+    try {
+      const row = db.prepare('SELECT data, timestamp FROM chains_cache WHERE symbol = ? AND expiration = ?').get(symbol.toUpperCase(), expiration || 'DEFAULT');
+      if (row) {
+        const age = Date.now() - row.timestamp;
+        if (age <= ttl) {
+          const data = JSON.parse(row.data);
+          // Restore to in-memory cache for next access
+          chainCache.set(key, { timestamp: row.timestamp, data });
+          log(`[CACHE HIT-DB] ${key} (${Math.round(age / 1000)}s old, ${data.length} expirations)`);
+          return data;
+        } else {
+          db.prepare('DELETE FROM chains_cache WHERE symbol = ? AND expiration = ?').run(symbol.toUpperCase(), expiration || 'DEFAULT');
+        }
+      }
+    } catch (e) {
+      console.warn('[CACHE] SQLite read error:', e.message);
+    }
+  }
+
+  return null;
+}
+
+function setChainsInCache(symbol, expiration, strikeData) {
+  const key = `${symbol.toUpperCase()}:${expiration || 'DEFAULT'}`;
+  const timestamp = Date.now();
+
+  // Store in-memory
+  chainCache.set(key, { timestamp, data: strikeData });
+
+  // Store in SQLite if ready
+  if (db) {
+    try {
+      const data = JSON.stringify(strikeData);
+      db.prepare(`
+        INSERT OR REPLACE INTO chains_cache (symbol, expiration, data, timestamp)
+        VALUES (?, ?, ?, ?)
+      `).run(symbol.toUpperCase(), expiration || 'DEFAULT', data, timestamp);
+      log(`[CACHE SET-DB] ${key} (${strikeData.length} expirations)`);
+    } catch (e) {
+      console.warn('[CACHE] SQLite write error:', e.message);
+    }
+  } else {
+    log(`[CACHE SET] ${key} (${strikeData.length} expirations, DB not ready)`);
+  }
+}
+
 function ensureBackupDir() {
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
+
+// ─── SQLite DB ────────────────────────────────────────────────────────────────
+let db = null;
+
+function initDB() {
+  ensureBackupDir();
+  db = new Database(DB_FILE);
+  db.pragma('journal_mode = WAL');  // safe concurrent reads
+  db.pragma('synchronous = NORMAL');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chains_cache (
+      symbol      TEXT NOT NULL,
+      expiration  TEXT NOT NULL,
+      data        TEXT NOT NULL,
+      timestamp   INTEGER NOT NULL,
+      PRIMARY KEY (symbol, expiration)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chains_ts ON chains_cache(timestamp);
+
+    CREATE TABLE IF NOT EXISTS mvc (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      triggerType TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mvc_date ON mvc(date);
+    CREATE INDEX IF NOT EXISTS idx_mvc_ts ON mvc(timestamp);
+
+    CREATE TABLE IF NOT EXISTS premium_flow (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      ticker      TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pf_ticker ON premium_flow(ticker);
+    CREATE INDEX IF NOT EXISTS idx_pf_date ON premium_flow(date);
+
+    CREATE TABLE IF NOT EXISTS chain_snapshots (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      symbol      TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cs_date ON chain_snapshots(date);
+    CREATE INDEX IF NOT EXISTS idx_cs_symbol ON chain_snapshots(symbol);
+
+    CREATE TABLE IF NOT EXISTS greeks_history (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      strike      REAL NOT NULL,
+      expiration  TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gh_strike_exp ON greeks_history(strike, expiration);
+
+    CREATE TABLE IF NOT EXISTS multi_stock_flow (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      stock       TEXT NOT NULL,
+      dte         INTEGER NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_msf_stock_dte ON multi_stock_flow(stock, dte);
+    CREATE INDEX IF NOT EXISTS idx_msf_date ON multi_stock_flow(date);
+
+    CREATE TABLE IF NOT EXISTS greeks_time_series (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      ticker      TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gts_ticker ON greeks_time_series(ticker);
+    CREATE INDEX IF NOT EXISTS idx_gts_date ON greeks_time_series(date);
+
+    CREATE TABLE IF NOT EXISTS big_trades (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      ticker      TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bt_ticker ON big_trades(ticker);
+    CREATE INDEX IF NOT EXISTS idx_bt_date ON big_trades(date);
+
+    CREATE TABLE IF NOT EXISTS es_15m_candles (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      slot_key    TEXT NOT NULL UNIQUE,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ec_date ON es_15m_candles(date);
+    CREATE INDEX IF NOT EXISTS idx_ec_slotkey ON es_15m_candles(slot_key);
+
+    CREATE TABLE IF NOT EXISTS gex_top3 (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      ticker      TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gt_ticker ON gex_top3(ticker);
+    CREATE INDEX IF NOT EXISTS idx_gt_date ON gex_top3(date);
+
+    CREATE TABLE IF NOT EXISTS bzila_live_snapshots (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      ticker      TEXT NOT NULL,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bls_ticker ON bzila_live_snapshots(ticker);
+    CREATE INDEX IF NOT EXISTS idx_bls_date ON bzila_live_snapshots(date);
+
+    CREATE TABLE IF NOT EXISTS greeks_intraday (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts        INTEGER NOT NULL,
+      date      TEXT    NOT NULL,
+      time      TEXT    NOT NULL,
+      gex       REAL    NOT NULL,
+      dex       REAL    NOT NULL,
+      chex      REAL    NOT NULL,
+      vex       REAL    NOT NULL,
+      buy_pct   REAL    NOT NULL DEFAULT 0,
+      spot      REAL    NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_greeks_date ON greeks_intraday(date);
+
+    CREATE TABLE IF NOT EXISTS buy_sell_scores (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts        INTEGER NOT NULL,
+      date      TEXT    NOT NULL,
+      time      TEXT    NOT NULL,
+      slot_key  TEXT    NOT NULL UNIQUE,
+      spx_price REAL    NOT NULL DEFAULT 0,
+      side      TEXT    NOT NULL DEFAULT 'Buy',
+      score     REAL    NOT NULL DEFAULT 0,
+      buy_pct   REAL    NOT NULL DEFAULT 0,
+      sell_pct  REAL    NOT NULL DEFAULT 0,
+      gex       REAL    NOT NULL DEFAULT 0,
+      dex       REAL    NOT NULL DEFAULT 0,
+      chex      REAL    NOT NULL DEFAULT 0,
+      vex       REAL    NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_bss_date ON buy_sell_scores(date);
+
+    CREATE TABLE IF NOT EXISTS gex_levels (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts         INTEGER NOT NULL,
+      date       TEXT    NOT NULL,
+      call_wall  REAL    NOT NULL DEFAULT 0,
+      put_wall   REAL    NOT NULL DEFAULT 0,
+      zero_gamma REAL    NOT NULL DEFAULT 0,
+      spot       REAL    NOT NULL DEFAULT 0,
+      es_spot    REAL    NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_gex_date ON gex_levels(date);
+  `);
+
+  log('[DB] SQLite initialized at', DB_FILE);
+}
+
+// ── Prepared statements (lazy, created after initDB) ─────────────────────────
+let _stmts = null;
+function stmts() {
+  if (_stmts) return _stmts;
+  _stmts = {
+    insertGreeks: db.prepare(`
+      INSERT INTO greeks_intraday (ts, date, time, gex, dex, chex, vex, buy_pct, spot)
+      VALUES (@ts, @date, @time, @gex, @dex, @chex, @vex, @buy_pct, @spot)
+    `),
+    queryGreeksByDate: db.prepare(`
+      SELECT * FROM greeks_intraday WHERE date = ? ORDER BY ts ASC
+    `),
+    queryGreeksRange: db.prepare(`
+      SELECT * FROM greeks_intraday WHERE ts >= ? ORDER BY ts ASC
+    `),
+    insertBSS: db.prepare(`
+      INSERT INTO buy_sell_scores
+        (ts, date, time, slot_key, spx_price, side, score, buy_pct, sell_pct, gex, dex, chex, vex)
+      VALUES
+        (@ts, @date, @time, @slot_key, @spx_price, @side, @score, @buy_pct, @sell_pct, @gex, @dex, @chex, @vex)
+      ON CONFLICT(slot_key) DO UPDATE SET
+        ts=excluded.ts, spx_price=excluded.spx_price, side=excluded.side,
+        score=excluded.score, buy_pct=excluded.buy_pct, sell_pct=excluded.sell_pct,
+        gex=excluded.gex, dex=excluded.dex, chex=excluded.chex, vex=excluded.vex
+    `),
+    queryBSSByDate: db.prepare(`
+      SELECT * FROM buy_sell_scores WHERE date = ? ORDER BY ts ASC
+    `),
+    insertGexLevel: db.prepare(`
+      INSERT INTO gex_levels (ts, date, call_wall, put_wall, zero_gamma, spot, es_spot)
+      VALUES (@ts, @date, @call_wall, @put_wall, @zero_gamma, @spot, @es_spot)
+    `),
+    deleteOldRecords: db.prepare(`
+      DELETE FROM greeks_intraday WHERE date < ?
+    `),
+    deleteOldBSS: db.prepare(`
+      DELETE FROM buy_sell_scores WHERE date < ?
+    `),
+    deleteOldGex: db.prepare(`
+      DELETE FROM gex_levels WHERE date < ?
+    `),
+  };
+  return _stmts;
+}
+
+function dbEtDate(nowMs) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date(nowMs || Date.now()));
+  const m = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  return `${m.year}-${m.month}-${m.day}`;
+}
+
+function dbInsertGreeks(snapshot) {
+  if (!db) return;
+  try {
+    stmts().insertGreeks.run({
+      ts: snapshot.ts, date: dbEtDate(snapshot.ts), time: snapshot.time,
+      gex: snapshot.gex, dex: snapshot.dex, chex: snapshot.chex, vex: snapshot.vex,
+      buy_pct: snapshot.buyPct || 0, spot: snapshot.spot || 0,
+    });
+  } catch (e) {
+    if (!e.message.includes('UNIQUE')) log('[DB] insertGreeks error:', e.message);
+  }
+}
+
+function dbInsertBSS(record) {
+  if (!db) return;
+  try {
+    stmts().insertBSS.run({
+      ts: Number(record.timestamp || Date.now()),
+      date: String(record.date || dbEtDate()),
+      time: String(record.time || ''),
+      slot_key: String(record.slotKey),
+      spx_price: Number(record.spxPrice || 0),
+      side: String(record.side || 'Buy'),
+      score: Number(record.score || 0),
+      buy_pct: Number(record.buyPct || 0),
+      sell_pct: Number(record.sellPct || 0),
+      gex: Number(record.gex || 0),
+      dex: Number(record.dex || 0),
+      chex: Number(record.chex || 0),
+      vex: Number(record.vex || 0),
+    });
+  } catch (e) {
+    log('[DB] insertBSS error:', e.message);
+  }
+}
+
+function dbInsertGexLevel(levels) {
+  if (!db) return;
+  try {
+    stmts().insertGexLevel.run({
+      ts: Date.now(), date: dbEtDate(),
+      call_wall: levels.callWall || 0, put_wall: levels.putWall || 0,
+      zero_gamma: levels.zeroGamma || 0, spot: levels.spot || 0, es_spot: levels.esSpot || 0,
+    });
+  } catch (e) {
+    log('[DB] insertGexLevel error:', e.message);
+  }
+}
+
+// Nightly clear: delete records older than today (runs at 4:05am ET)
+function scheduleNightlyClear() {
+  function msUntilNext405amET() {
+    const now = new Date();
+    const etStr = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const target = new Date(etStr);
+    target.setHours(4, 5, 0, 0);
+    if (etStr >= target) target.setDate(target.getDate() + 1);
+    return target - etStr;
+  }
+  function doClear() {
+    const today = dbEtDate();
+    if (!db) return;
+    try {
+      const s = stmts();
+      s.deleteOldRecords.run(today);
+      s.deleteOldBSS.run(today);
+      s.deleteOldGex.run(today);
+
+      // Delete old records from new IndexedDB-replacement tables
+      const tablesToClean = ['mvc','premium_flow','chain_snapshots','multi_stock_flow','greeks_time_series','big_trades','es_15m_candles','gex_top3','bzila_live_snapshots'];
+      for (const tbl of tablesToClean) {
+        try {
+          db.prepare(`DELETE FROM ${tbl} WHERE date < ?`).run(today);
+        } catch (e) {
+          // Table may not exist yet, ignore
+        }
+      }
+
+      log('[DB] Nightly clear complete — kept date:', today);
+    } catch (e) {
+      log('[DB] Nightly clear error:', e.message);
+    }
+    setTimeout(() => { doClear(); setTimeout(doClear, 24 * 60 * 60 * 1000); }, msUntilNext405amET());
+  }
+  setTimeout(doClear, msUntilNext405amET());
+  log('[DB] Nightly clear scheduled, next run in', Math.round(msUntilNext405amET() / 60000), 'minutes');
 }
 
 function readBuySellBackup() {
@@ -179,10 +560,12 @@ let subscriptionSending = false;
 const queuedSubscriptionKeys = new Set();
 const activeAutoSubscriptionKeys = new Set();
 const activeCandleSubscriptionKeys = new Set();
-const SUBSCRIPTION_BATCH_SIZE = 200;
-const SUBSCRIPTION_BATCH_DELAY = 100;   // ms between batches
-const SUBSCRIPTION_BATCH_DELAY_MAX = 500;
-let subscriptionBatchDelay = SUBSCRIPTION_BATCH_DELAY;
+const SUBSCRIPTION_BATCH_SIZE = 500;    // large batches for fast drain
+const SUBSCRIPTION_BATCH_DELAY_BASE = 500;   // 500ms between batches
+const SUBSCRIPTION_BATCH_DELAY_MAX = 2000;   // 2 second max backoff
+let subscriptionBatchDelay = SUBSCRIPTION_BATCH_DELAY_BASE;
+let subscriptionErrorCount = 0;
+let pendingNewSubscriptions = false;  // Track if there are new subscriptions to send
 
 const CORE_LIVE_SUBSCRIPTIONS = new Set([
   'SPX',
@@ -231,7 +614,11 @@ async function bootstrapDashboardCorePhases() {
   log('[BOOT] Phase 2: core quote warmup');
   seedCoreLiveSubscriptions();
 
-  log('[BOOT] Phase 3: page-requested subscriptions remain deferred');
+  log('[BOOT] Phase 3: SPY/QQQ option prewarm (non-blocking)');
+  // Run SPY/QQQ prewarm in background—don't wait for it
+  prewarmCache().catch(e => log('Prewarm error:', e.message));
+
+  log('[BOOT] Phase 4: page-requested subscriptions remain deferred');
 }
 
 function subscriptionKey(item) {
@@ -256,6 +643,7 @@ function defaultAutoTypesForSymbol(sym) {
 
 function addAutoSubscription(sym, types = null) {
   if (!sym) return;
+  const isNew = !subscriptions.has(sym);
   subscriptions.add(sym);
   const current = subscriptionTypesBySymbol.get(sym) || new Set();
   const incoming = types || defaultAutoTypesForSymbol(sym);
@@ -267,6 +655,7 @@ function addAutoSubscription(sym, types = null) {
     }
   });
   subscriptionTypesBySymbol.set(sym, current);
+  if (isNew) pendingNewSubscriptions = true;  // Mark that we have new subs to queue
   if (/\{type=optstat\}$/i.test(String(sym))) {
     log('!!!!!!!!!! OPTSTAT SUBSCRIBE QUEUED !!!!!!!!!!', sym, 'types=', [...current].join(','));
   }
@@ -275,26 +664,62 @@ function addAutoSubscription(sym, types = null) {
 async function sendSubscriptionsRateLimited() {
   if (subscriptionSending || subscriptionQueue.length === 0) return;
   subscriptionSending = true;
-  
-  while (subscriptionQueue.length > 0) {
-    if (!dxSocket || dxSocket.readyState !== WebSocket.OPEN) break;
-    const batch = subscriptionQueue.splice(0, SUBSCRIPTION_BATCH_SIZE);
-    batch.forEach(item => queuedSubscriptionKeys.delete(subscriptionKey(item)));
-    if (batch.length > 0) {
-      log(`Sending subscription batch (${batch.length} items)`);
-      dxSocket.send(JSON.stringify({
-        type: 'FEED_SUBSCRIPTION',
-        channel: DX_CHANNEL,
-        reset: false,
-        add: batch
-      }));
-      batch.forEach(item => activeAutoSubscriptionKeys.add(subscriptionKey(item)));
+
+  try {
+    while (subscriptionQueue.length > 0) {
+      if (!dxSocket || dxSocket.readyState !== WebSocket.OPEN) {
+        log('[SUBSCRIPTIONS] WebSocket not open, pausing subscriptions');
+        break;
+      }
+
+      // Wait BEFORE sending (not after) to respect rate limit
+      if (subscriptionErrorCount > 0) {
+        const delay = Math.min(subscriptionBatchDelay, SUBSCRIPTION_BATCH_DELAY_MAX);
+        log(`[SUBSCRIPTIONS] Backing off ${delay}ms (error count: ${subscriptionErrorCount})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      const batch = subscriptionQueue.splice(0, SUBSCRIPTION_BATCH_SIZE);
+      batch.forEach(item => queuedSubscriptionKeys.delete(subscriptionKey(item)));
+
+      if (batch.length === 0) break;
+
+      log(`[SUBSCRIPTIONS] Sending batch (${batch.length} items) | queue remaining: ${subscriptionQueue.length}`);
+
+      const sendPromise = new Promise((resolve, reject) => {
+        try {
+          dxSocket.send(JSON.stringify({
+            type: 'FEED_SUBSCRIPTION',
+            channel: DX_CHANNEL,
+            reset: false,
+            add: batch
+          }));
+          setTimeout(() => {
+            batch.forEach(item => activeAutoSubscriptionKeys.add(subscriptionKey(item)));
+            subscriptionErrorCount = 0;
+            resolve();
+          }, 100);
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      try {
+        await sendPromise;
+      } catch (err) {
+        subscriptionErrorCount++;
+        subscriptionBatchDelay = Math.min(subscriptionBatchDelay * 1.5, SUBSCRIPTION_BATCH_DELAY_MAX);
+        log(`[SUBSCRIPTIONS] Send error: ${err.message} | next delay: ${subscriptionBatchDelay}ms`);
+      }
+
+      // Wait between batches
+      if (subscriptionQueue.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, SUBSCRIPTION_BATCH_DELAY_BASE));
+      }
     }
-    if (subscriptionQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, subscriptionBatchDelay));
-    }
+  } finally {
+    subscriptionSending = false;
   }
-  subscriptionSending = false;
 }
 
 const dxClients     = new Set();
@@ -302,6 +727,131 @@ const subscriptions = new Set();
 const subscriptionTypesBySymbol = new Map();
 const candleSubscriptions = new Set();  // separate set for candle symbols
 const dxCandleCache = {};
+
+// ─── Persistent daily closes (survives proxy restarts) ───────────────────────
+// Saved to data/daily-closes.json whenever dxLink streams a close after 4pm ET
+let savedDailyCloses = { date: '', ES: 0, SPX: 0, VIX: 0 };
+function loadDailyCloses() {
+  try {
+    ensureBackupDir();
+    if (fs.existsSync(DAILY_CLOSES_FILE)) {
+      const d = JSON.parse(fs.readFileSync(DAILY_CLOSES_FILE, 'utf8'));
+      if (d?.date) savedDailyCloses = d;
+    }
+  } catch(_) {}
+}
+function saveDailyCloses() {
+  try {
+    ensureBackupDir();
+    fs.writeFileSync(DAILY_CLOSES_FILE, JSON.stringify(savedDailyCloses), 'utf8');
+  } catch(_) {}
+}
+loadDailyCloses();
+
+// ─── Live prev-close cache (auto-refreshed daily, no manual updates needed) ───
+const livePrevCloses = {
+  VIX:  0,   // ^VIX
+  ES:   0,   // /ESM26
+  SPX:  0,   // $SPX
+  NQ:   0,   // /NQM26
+  date: '',  // ET date string for which these closes were fetched
+};
+
+async function refreshLivePrevCloses() {
+  try {
+    const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const yest = new Date(etNow);
+    yest.setDate(yest.getDate() - 1);
+    while (yest.getDay() === 0 || yest.getDay() === 6) yest.setDate(yest.getDate() - 1);
+    const closeDateStr = yest.toISOString().slice(0, 10);
+
+    // Primary: dxSummaryCache (TT dxLink stream) — already in memory, most accurate
+    // After 4pm ET use dayClosePrice (today's close); before use prevDayClosePrice
+    const etMins = getEtMinutes();
+    const useToday = etMins >= 960;
+    const getDX = (...keys) => {
+      for (const k of keys) {
+        const s = dxSummaryCache[k] || {};
+        const v = firstFiniteNumber(
+          useToday ? s.dayClosePrice : null,
+          s.prevDayClosePrice,
+          dxTradeCache[k]?.price,
+          0
+        );
+        if (v > 0) return v;
+      }
+      return 0;
+    };
+
+    let es  = getDX('/ES:XCME', '/ESM26', '/ESM6');
+    let nq  = getDX('/NQ:XCME', '/NQM26', '/NQM6');
+    let vix = getDX('VIX', '$VIX', '$VIX.X');
+    // SPX: after close use last trade price; dxSummaryCache rarely has dayClosePrice for indices
+    let spx = useToday
+      ? firstFiniteNumber(dxTradeCache['SPX']?.price, dxTradeCache['$SPX']?.price, getDX('SPX', '$SPX', '$SPX.X'), 0)
+      : getDX('SPX', '$SPX', '$SPX.X');
+
+    // After close: savedDailyCloses has closes captured from dxLink at 4pm (persisted to disk)
+    const today = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'})).toISOString().slice(0,10);
+    if (useToday && savedDailyCloses.date === today) {
+      if (savedDailyCloses.ES  > 0) es  = savedDailyCloses.ES;
+      if (savedDailyCloses.NQ  > 0) nq  = savedDailyCloses.NQ;
+      if (savedDailyCloses.SPX > 0) spx = savedDailyCloses.SPX;
+      if (savedDailyCloses.VIX > 0) vix = savedDailyCloses.VIX;
+    }
+
+    // Fallback: Yahoo Finance daily close bar (handles cases where dxLink hasn't streamed yet)
+    const period2 = Math.floor(new Date(closeDateStr + 'T21:00:00Z').getTime() / 1000);
+    const period1 = period2 - 86400 * 3;
+    const yf = async (ticker) => {
+      try {
+        const r = await fetch(
+          `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1d`,
+          { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
+        );
+        if (!r.ok) return 0;
+        const d = await r.json();
+        const closes = d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
+        const filtered = closes.filter(v => v > 0);
+        return filtered[filtered.length - 1] || 0;
+      } catch (_) { return 0; }
+    };
+
+    if (!spx || !es || !vix || !nq) {
+      // Primary fallback: TT REST market-data (authenticated, accurate, once-daily is fine)
+      const [ttSpx, ttEs, ttVix, ttNq] = await Promise.all([
+        spx ? Promise.resolve(spx) : fetchTTDailyClose('SPX'),
+        es  ? Promise.resolve(es)  : fetchTTDailyClose('/ESM26'),
+        vix ? Promise.resolve(vix) : fetchTTDailyClose('VIX'),
+        nq  ? Promise.resolve(nq)  : fetchTTDailyClose('/NQM26'),
+      ]);
+      if (!spx && ttSpx > 0) spx = ttSpx;
+      if (!es  && ttEs  > 0) es  = ttEs;
+      if (!vix && ttVix > 0) vix = ttVix;
+      if (!nq  && ttNq  > 0) nq  = ttNq;
+    }
+
+    // Final fallback: Yahoo (no auth needed but ES=F returns live price after hours)
+    if (!spx || !vix) {
+      const [ySpx, yVix] = await Promise.all([
+        spx ? Promise.resolve(spx) : yf('^GSPC'),
+        vix ? Promise.resolve(vix) : yf('^VIX'),
+      ]);
+      if (!spx && ySpx > 0) spx = ySpx;
+      if (!vix && yVix > 0) vix = yVix;
+    }
+
+    if (spx > 0) livePrevCloses.SPX = spx;
+    if (es  > 0) livePrevCloses.ES  = es;
+    if (vix > 0) livePrevCloses.VIX = vix;
+    livePrevCloses.date = closeDateStr;
+    console.log(`[prevCloses] refreshed for ${closeDateStr}: SPX=${spx.toFixed(2)} ES=${es.toFixed(2)} VIX=${vix.toFixed(2)}`);
+  } catch (e) {
+    console.error('[prevCloses] refresh error:', e.message);
+  }
+}
+
+// Startup call is deferred to after log() is defined — see schedulePrevCloseRefresh() below
 
 // ─── dxLink market data cache (Greeks + Summary per streamer-symbol) ──────────
 const dxGreeksCache  = {};   // streamer-symbol → {delta, gamma, theta, vega, iv}
@@ -360,28 +910,40 @@ function computeIntradaySnapshot(spot) {
   let totalCharmCall = 0, totalCharmPut = 0;
   let totalVegaCall  = 0, totalVegaPut  = 0;
 
+  // Filter to today's 0DTE symbols only. dxGreeksCache accumulates ALL subscribed expirations
+  // (it's never pruned), so we must filter explicitly. todayYmd() now uses ET timezone so
+  // the YYMMDD compact date matches SPXW symbol date stamps correctly.
+  const todayCompact = todayYmd().compact;
   for (const [sym, greeks] of Object.entries(dxGreeksCache)) {
     if (!isSpxwSymbol(sym)) continue;
+    if (optionExpirationCompact(sym) !== todayCompact) continue;
     const summary  = dxSummaryCache[sym] || {};
-    const oi       = maxWholeNumber(summary.openInterest);
-    if (!oi) continue;
+    const oi       = maxWholeNumber(summary.openInterest) || 0;
+    const vol      = maxWholeNumber(summary.dayVolume) || 0;
+    const contracts = oi + vol;
+    if (!contracts) continue;
     const gamma    = firstFiniteNumber(greeks.gamma,  0);
     const delta    = firstFiniteNumber(greeks.delta,  0);
     const theta    = firstFiniteNumber(greeks.theta,  0); // charm proxy
     const vega     = firstFiniteNumber(greeks.vega,   0);
     const isCall   = /C\d{4,8}$/.test(sym);
-    const mult     = 100 * spot;
+    // Formulas mirror mult-greek.js exactly:
+    //   GEX  = gamma  * contracts * spot² (spot*spot*0.01*100 = spot²)
+    //   DEX  = |delta| * contracts * spot * 100 (calls positive, puts negative)
+    //   CHEX/VEX = theta/vega * contracts * spot * 100
+    const mult     = 100 * spot;   // for DEX/CHEX/VEX
+    const gexMult  = spot * spot;  // for GEX: spot² matches mult-greek's spot*spot*0.01*100
 
     if (isCall) {
-      totalGEX        += Math.abs(gamma) * oi * mult;
-      totalDeltaCall  += delta * oi * 100;
-      totalCharmCall  += theta * oi * 100;
-      totalVegaCall   += vega  * oi * 100;
+      totalGEX        += Math.abs(gamma) * contracts * gexMult;
+      totalDeltaCall  += Math.abs(delta) * contracts * mult;  // abs: matches mult-greek
+      totalCharmCall  += (-theta) * contracts * mult;         // matches mult-greek sign
+      totalVegaCall   += vega  * contracts * mult;
     } else {
-      totalGEX        -= Math.abs(gamma) * oi * mult;
-      totalDeltaPut   += delta * oi * 100;   // delta is negative for puts
-      totalCharmPut   += theta * oi * 100;
-      totalVegaPut    += vega  * oi * 100;
+      totalGEX        -= Math.abs(gamma) * contracts * gexMult;
+      totalDeltaPut   -= Math.abs(delta) * contracts * mult;  // negative contribution
+      totalCharmPut   += theta  * contracts * mult;           // matches mult-greek sign
+      totalVegaPut    -= vega   * contracts * mult;
     }
   }
 
@@ -515,9 +1077,22 @@ const restMonitor = {
   startedAt: Date.now()
 };
 
-function log(...a) { 
+function log(...a) {
   console.log('[TT-Proxy]', ...a);
 }
+
+// ─── Schedule prev-close refresh (must be after log() is defined) ────────────
+refreshLivePrevCloses();
+(function scheduleMidnightRefresh() {
+  const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const nextMidnight = new Date(etNow);
+  nextMidnight.setHours(24, 1, 0, 0); // 12:01am ET
+  const msUntil = nextMidnight - etNow;
+  setTimeout(() => {
+    refreshLivePrevCloses();
+    setInterval(refreshLivePrevCloses, 24 * 60 * 60 * 1000);
+  }, msUntil);
+})();
 function warn(...a) { console.warn('[TT-Proxy]', ...a); }
 function error(...a) { console.error('[TT-Proxy]', ...a); }
 function formatEtTimestamp(ts = Date.now()) {
@@ -660,11 +1235,16 @@ function optionDistance(option, underlyingPrice) {
 }
 
 function todayYmd() {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(2);
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return { yy, mm, dd, ymd: `${now.getFullYear()}-${mm}-${dd}`, compact: `${yy}${mm}${dd}` };
+  // Use ET date so option expiry compact (YYMMDD) matches SPXW symbol date stamps
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  const yy = map.year.slice(2);
+  const mm = map.month;
+  const dd = map.day;
+  return { yy, mm, dd, ymd: `${map.year}-${mm}-${dd}`, compact: `${yy}${mm}${dd}` };
 }
 
 function optionExpirationCompact(symbol) {
@@ -1302,6 +1882,29 @@ function marketDataQueryForSymbols(symbols) {
   return parts.join('&');
 }
 
+// Fetch yesterday's close for a symbol from TT REST market-data/history (1 daily bar)
+async function fetchTTDailyClose(symbol) {
+  try {
+    const clean = normalizeRestSymbol(symbol);
+    const qs = clean === 'SPX' || clean === 'NDX' || clean === 'VIX'
+      ? `index[]=${encodeURIComponent(clean)}`
+      : marketDataQueryForSymbols([clean]);
+    const { status, data } = await ttGet(`/market-data/by-type?${qs}`);
+    if (status !== 200) return 0;
+    const item = data?.data?.items?.[0] || {};
+    // TT market-data returns prev-close and close fields
+    const close = firstFiniteNumber(
+      item['prev-close'],
+      item['previous-close'],
+      item.prevClose,
+      item['close-price'],
+      item.closePrice,
+      0
+    );
+    return close;
+  } catch (_) { return 0; }
+}
+
 async function fetchPrevCloseFallback(symbol) {
   const clean = normalizeRestSymbol(symbol);
   const cached = prevCloseFallbackCache[clean];
@@ -1491,20 +2094,35 @@ async function ensureDxLinkReady() {
 }
 
 function sendSubscriptions() {
-  // AUTO channel - queue subscriptions and send rate-limited
+  // AUTO channel - queue ONLY NEW subscriptions (not re-queuing old ones)
   if (!dxSocket || dxSocket.readyState !== WebSocket.OPEN || !dxChannelOpen) return;
-  if (subscriptions.size === 0) return;
-  
-  // Build subscription items
+  if (!pendingNewSubscriptions) return;  // Exit early if no new subscriptions
+
+  pendingNewSubscriptions = false;  // Reset flag
+
+  // Log current state
+  if (subscriptions.size > 1000) {
+    log(`[SUBSCRIPTIONS] WARNING: subscriptions set has ${subscriptions.size} symbols!`);
+  }
+
+  // Queue only symbols that haven't been queued or activated yet
+  let newCount = 0;
   subscriptions.forEach(sym => {
     const types = [...(subscriptionTypesBySymbol.get(sym) || new Set(defaultAutoTypesForSymbol(sym)))];
     types.forEach(t => {
-      queueAutoSubscription({ type: t, symbol: sym });
+      const key = `${t}:${sym}`;
+      // Only queue if not already active or queued
+      if (!activeAutoSubscriptionKeys.has(key) && !queuedSubscriptionKeys.has(key)) {
+        queueAutoSubscription({ type: t, symbol: sym });
+        newCount++;
+      }
     });
   });
-  
-  log('Queued', subscriptionQueue.length, 'subscription items');
-  sendSubscriptionsRateLimited();
+
+  if (newCount > 0) {
+    log(`[SUBSCRIPTIONS] Found ${newCount} new subscription items to queue (total symbols: ${subscriptions.size})`);
+    sendSubscriptionsRateLimited();
+  }
 }
 
 function shouldAcceptBrowserSubscription(sym, msg = {}) {
@@ -1639,18 +2257,76 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function waitForOptionData(streamerSymbols, timeoutMs = 4500) {
+// ─── Subscription Manager v2 ────────────────────────────────────────────────
+// Simplified: Just dedup subscriptions, return immediately (don't wait for cache)
+// Pages get whatever's in REST response, live data arrives via WebSocket
+const subscriptionManager = {
+  activeSubscriptions: new Set(),
+  pageRequests: new Map(),
+
+  /**
+   * Register a page's interest in symbols
+   * Just deduplicates subscriptions, returns immediately
+   */
+  async request(pageId, symbols, options = {}) {
+    if (!Array.isArray(symbols) || symbols.length === 0) {
+      return { ready: true, count: 0, total: 0 };
+    }
+
+    // Register page
+    this.pageRequests.set(pageId, {
+      symbols: new Set(symbols),
+      requested: Date.now()
+    });
+
+    // Subscribe only NEW symbols to dxLink
+    const newSymbols = symbols.filter(sym => !this.activeSubscriptions.has(sym));
+    if (newSymbols.length > 0) {
+      log(`[SubscriptionMgr] Adding ${newSymbols.length} new subscriptions for page ${pageId}`);
+      newSymbols.forEach(sym => {
+        this.activeSubscriptions.add(sym);
+        addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
+      });
+      sendSubscriptionsRateLimited();
+    }
+
+    // Return immediately - don't wait for cache
+    // Pages will get live updates via WebSocket as data arrives
+    log(`[SubscriptionMgr] Subscription registered: ${symbols.length} symbols (${newSymbols.length} new)`);
+    return { ready: true, count: symbols.length, total: symbols.length };
+  },
+
+  cleanup() {
+    const now = Date.now();
+    const timeout = 5 * 60 * 1000;
+    let removed = 0;
+
+    for (const [pageId, data] of this.pageRequests) {
+      if (now - data.requested > timeout) {
+        log(`[SubscriptionMgr] Cleanup: Removing stale page ${pageId}`);
+        this.pageRequests.delete(pageId);
+        removed++;
+      }
+    }
+
+    if (removed > 0) log(`[SubscriptionMgr] Cleanup: Removed ${removed} stale page(s)`);
+  }
+};
+
+setInterval(() => subscriptionManager.cleanup(), 60000);
+
+async function waitForOptionData(streamerSymbols, timeoutMs = 3000) {
   const sample = [...new Set((streamerSymbols || []).filter(Boolean))];
   if (!sample.length) return;
   const started = Date.now();
+  const threshold = Math.max(1, Math.floor(sample.length * 0.6)); // return when 60% have data
   while (Date.now() - started < timeoutMs) {
     let readyCount = 0;
     for (const sym of sample) {
-      const hasGreeks = !!dxGreeksCache[sym] && Object.keys(dxGreeksCache[sym]).length > 0;
       const hasSummary = !!dxSummaryCache[sym] && Object.keys(dxSummaryCache[sym]).length > 0;
-      if (hasGreeks && hasSummary) readyCount++;
+      if (hasSummary) readyCount++;
     }
-    if (readyCount >= Math.max(20, Math.floor(sample.length * 0.75))) return;
+    if (readyCount >= threshold) return;
     await sleep(120);
   }
 }
@@ -1666,7 +2342,7 @@ function convertCompactToObjects(data) {
     Trade:   ['price','dayVolume','size'],
     TradeETH:['price','dayVolume','size'],
     Greeks:  ['volatility','delta','gamma','theta','rho','vega'],
-    Summary: ['openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePrice','dayClosePriceType','prevDayClosePrice','prevClosePriceType'],
+    Summary: ['openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePriceType','dayLowPrice','dayClosePrice','prevClosePriceType','prevDayVolume','prevDayClosePrice'],
     TimeAndSale: ['time','sequence','exchangeCode','price','size','bidPrice','askPrice','saleConditions','flags'],
     Candle:  ['eventFlags','index','time','sequence','count','open','high','low','close','volume','vwap','bidVolume','askVolume','impVolatility'],
     Message: ['eventTime','attachment'],
@@ -1807,7 +2483,7 @@ function connectDxLink() {
           TradeETH:['eventType','eventSymbol','price','dayVolume','size'],
           TimeAndSale: ['eventType','eventSymbol','time','sequence','exchangeCode','price','size','bidPrice','askPrice','saleConditions','flags'],
           Greeks:  ['eventType','eventSymbol','volatility','delta','gamma','theta','rho','vega'],
-          Summary: ['eventType','eventSymbol','openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePrice','dayClosePriceType','prevDayClosePrice','prevClosePriceType']
+          Summary: ['eventType','eventSymbol','openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePriceType','dayLowPrice','dayClosePrice','prevClosePriceType','prevDayVolume','prevDayClosePrice']
         }
       }));
       sendSubscriptions();
@@ -1844,7 +2520,7 @@ function connectDxLink() {
           // COMPACT: rows = [sym, v1, v2, sym, v1, v2, ...]
           // Fields defined by FEED_SETUP acceptEventFields order
           const greeksFields  = ['volatility','delta','gamma','theta','rho','vega'];
-          const summaryFields = ['openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePrice','dayClosePriceType','prevDayClosePrice','prevClosePriceType'];
+          const summaryFields = ['openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePriceType','dayLowPrice','dayClosePrice','prevClosePriceType','prevDayVolume','prevDayClosePrice'];
           const quoteFields   = ['bidPrice','askPrice','bidSize','askSize'];
           const tradeFields   = ['price','dayVolume','size'];
           const candleFields  = ['eventFlags','index','time','sequence','count','open','high','low','close','volume','vwap','bidVolume','askVolume','impVolatility'];
@@ -1892,6 +2568,21 @@ function connectDxLink() {
                 const entry = {};
                 getDxCacheAliases(sym, key).forEach(alias => { dxSummaryCache[alias] = entry; });
                 summaryFields.forEach((f, j) => entry[f] = rows[base + j]);
+                // Re-seed prevCloses once we have real dxLink data (runs at most once per session)
+                if (!refreshLivePrevCloses._seededFromDX && (sym === 'SPX' || sym === '$SPX' || sym === 'VIX') && entry.prevDayClosePrice > 0) {
+                  refreshLivePrevCloses._seededFromDX = true;
+                  setTimeout(refreshLivePrevCloses, 500);
+                }
+                // After 4pm: capture dayClosePrice to persistent file so it survives restarts
+                const etM = getEtMinutes();
+                if (etM >= 960 && entry.dayClosePrice > 0) {
+                  const today = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'})).toISOString().slice(0,10);
+                  if (savedDailyCloses.date !== today) savedDailyCloses = { date: today, ES: 0, SPX: 0, VIX: 0 };
+                  const rootSym = String(sym).split(':')[0];
+                  if (rootSym.startsWith('/ES') && savedDailyCloses.ES === 0) { savedDailyCloses.ES = entry.dayClosePrice; saveDailyCloses(); }
+                  if ((rootSym === 'SPX' || rootSym === '$SPX') && savedDailyCloses.SPX === 0) { savedDailyCloses.SPX = entry.dayClosePrice; saveDailyCloses(); }
+                  if ((rootSym === 'VIX' || rootSym === '$VIX') && savedDailyCloses.VIX === 0) { savedDailyCloses.VIX = entry.dayClosePrice; saveDailyCloses(); }
+                }
 
               } else if (eventType === 'Quote') {
                 const key = normalizeDxCacheSymbol(sym);
@@ -2088,10 +2779,28 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && p === '/proxy/api/backup/buy-sell-scores') {
-    const date = u.searchParams.get('date');
-    const records = readBuySellBackup()
-      .filter(r => !date || r.date === date)
-      .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+    const date = u.searchParams.get('date') || dbEtDate();
+    let records = [];
+    if (db) {
+      try {
+        const rows = stmts().queryBSSByDate.all(date);
+        records = rows.map(r => ({
+          timestamp: r.ts, date: r.date, time: r.time,
+          slotKey: r.slot_key, spxPrice: r.spx_price,
+          side: r.side, score: r.score,
+          buyPct: r.buy_pct, sellPct: r.sell_pct,
+          gex: r.gex, dex: r.dex, chex: r.chex, vex: r.vex,
+        }));
+      } catch (e) {
+        log('[DB] buy-sell-scores query error:', e.message);
+        // fallback to JSON file
+        records = readBuySellBackup().filter(r => !date || r.date === date)
+          .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+      }
+    } else {
+      records = readBuySellBackup().filter(r => !date || r.date === date)
+        .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+    }
     return sendJSON(res, 200, { ok: true, records });
   }
 
@@ -2122,6 +2831,7 @@ const server = http.createServer(async (req, res) => {
       const merged = [nextRecord, ...existing.filter(r => r.slotKey !== nextRecord.slotKey)]
         .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
       writeBuySellBackup(merged);
+      dbInsertBSS(nextRecord);  // also persist to SQLite
       return sendJSON(res, 200, { ok: true, count: merged.length, file: BUY_SELL_BACKUP_FILE });
     } catch (err) {
       return sendJSON(res, 500, { ok: false, error: err.message });
@@ -2287,6 +2997,25 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, { data: { spx: spxFinal, es: esFinal, ndx: ndxFinal, nq: nqFinal, basis, nqBasis, closeDate: closeDate.toISOString().slice(0,10) } });
   }
 
+  // ── GET /proxy/api/tt/prev-closes  ───────────────────────────────────────────
+  // Returns cached prev closes. POST forces a refresh.
+  if (p === '/proxy/api/tt/prev-closes') {
+    if (req.method === 'POST') {
+      await refreshLivePrevCloses();
+    }
+    const etMins = getEtMinutes();
+    const debug = {
+      esSummary: dxSummaryCache['/ES:XCME'] || dxSummaryCache['/ESM26'] || dxSummaryCache['/ESM6'] || null,
+      esSummaryKeys: Object.keys(dxSummaryCache).filter(k => k.includes('ES')).slice(0,10),
+      esBasisCache,
+      savedDailyCloses,
+      spxTrade:  dxTradeCache['SPX'] || dxTradeCache['$SPX'] || null,
+      etMins,
+      isAfterClose: etMins >= 960,
+    };
+    return sendJSON(res, 200, { data: livePrevCloses, debug });
+  }
+
   // ── GET /proxy/api/tt/debug-summary  ─────────────────────────────────────────
   if (req.method === 'GET' && p === '/proxy/api/tt/debug-summary') {
     const target = ['SPX','$SPX','/ESM6','/ES:XCME','NDX','$NDX','/NQM6','/NQ:XCME'];
@@ -2434,6 +3163,77 @@ const server = http.createServer(async (req, res) => {
       spot: spxSpot,
       ts: Date.now(),
       rows: top3
+    });
+  }
+
+  // ── GET /proxy/api/tt/gex-expirations  ───────────────────────────────────────
+  // Returns sorted list of available expiration dates in dxGreeksCache (YYYY-MM-DD).
+  if (req.method === 'GET' && p === '/proxy/api/tt/gex-expirations') {
+    const expSet = new Set();
+    for (const sym of Object.keys(dxGreeksCache)) {
+      if (!isSpxwSymbol(sym)) continue;
+      const compact = optionExpirationCompact(sym); // YYMMDD
+      if (compact.length === 6) {
+        const yy = compact.slice(0,2), mm = compact.slice(2,4), dd = compact.slice(4,6);
+        expSet.add(`20${yy}-${mm}-${dd}`);
+      }
+    }
+    const today = todayYmd().ymd;
+    const expirations = [...expSet].filter(d => d >= today).sort();
+    return sendJSON(res, 200, { expirations, today });
+  }
+
+  // ── GET /proxy/api/tt/gex-chain  ─────────────────────────────────────────────
+  // Full per-strike GEX chain for the bzila-dashboard GEX chart.
+  // Optional ?expiry=YYYY-MM-DD to filter by expiration date (default: all dates).
+  // Returns all SPXW strikes with callGamma, callDelta, callOI, putGamma, putDelta,
+  // putOI, callGEX, putGEX, netGEX, callVol, putVol, plus spot + gexLevelCache summary.
+  if (req.method === 'GET' && p === '/proxy/api/tt/gex-chain') {
+    let spxSpot = firstFiniteNumber(gexLevelCache.spot, 0);
+    if (!(spxSpot > 0)) spxSpot = firstFiniteNumber(dxTradeCache['$SPX']?.price, dxQuoteCache['$SPX']?.last, dxTradeCache['SPX']?.price, dxQuoteCache['SPX']?.last, 0);
+    if (!(spxSpot > 0)) spxSpot = await fetchUnderlyingLast('SPX').catch(() => 0);
+
+    // Optional expiry filter: ?expiry=YYYY-MM-DD
+    const expiryParam = u.searchParams.get('expiry') || '';
+    let filterCompact = '';
+    if (expiryParam && /^\d{4}-\d{2}-\d{2}$/.test(expiryParam)) {
+      filterCompact = expiryParam.replace(/-/g, '').slice(2); // YYMMDD
+    }
+
+    const strikeMap = {};
+    for (const [sym, greeks] of Object.entries(dxGreeksCache)) {
+      if (!isSpxwSymbol(sym)) continue;
+      // Apply expiry filter if provided
+      if (filterCompact && optionExpirationCompact(sym) !== filterCompact) continue;
+      const m = String(sym).match(/[CP](\d{4,6})$/);
+      if (!m) continue;
+      const strike = parseInt(m[1], 10);
+      if (!strike) continue;
+      const summary = dxSummaryCache[sym] || {};
+      const gamma   = Math.abs(firstFiniteNumber(greeks.gamma, 0));
+      const delta   = firstFiniteNumber(greeks.delta, 0);
+      const oi      = maxWholeNumber(summary.openInterest);
+      const vol     = maxWholeNumber(summary.volume);
+      const isCall  = /C\d{4,8}$/.test(sym);
+      if (!strikeMap[strike]) strikeMap[strike] = { strike, callGamma: 0, callDelta: 0, callOI: 0, callVol: 0, putGamma: 0, putDelta: 0, putOI: 0, putVol: 0 };
+      if (isCall) { strikeMap[strike].callGamma = gamma; strikeMap[strike].callDelta = delta;  strikeMap[strike].callOI = oi; strikeMap[strike].callVol = vol; }
+      else        { strikeMap[strike].putGamma  = gamma; strikeMap[strike].putDelta  = delta;  strikeMap[strike].putOI  = oi; strikeMap[strike].putVol  = vol; }
+    }
+
+    const rows = Object.values(strikeMap).map(r => {
+      const callGEX = r.callGamma * r.callOI * spxSpot * spxSpot;
+      const putGEX  = r.putGamma  * r.putOI  * spxSpot * spxSpot * -1;
+      return { ...r, callGEX, putGEX, netGEX: callGEX + putGEX };
+    }).sort((a, b) => a.strike - b.strike);
+
+    return sendJSON(res, 200, {
+      spot:      spxSpot,
+      expiry:    filterCompact ? expiryParam : null,
+      callWall:  gexLevelCache.callWall  || 0,
+      putWall:   gexLevelCache.putWall   || 0,
+      gexFlip:   gexLevelCache.zeroGamma || 0,
+      ts:        Date.now(),
+      rows,
     });
   }
 
@@ -2591,7 +3391,12 @@ const server = http.createServer(async (req, res) => {
       const q = dxQuoteCache[dxKey] || dxQuoteCache[sym] || {};
       const t = dxTradeCache[dxKey] || dxTradeCache[sym] || {};
       const s = dxSummaryCache[dxKey] || dxSummaryCache[sym] || {};
-      const yahooOverride = sym === 'VIX' ? await fetchYahooIntradayQuote(sym) : null;
+      const yahooRaw = sym === 'VIX' ? await fetchYahooIntradayQuote(sym) : null;
+      // Always prefer livePrevCloses (auto-refreshed from Yahoo daily close) over intraday meta
+      const vixKnownPrev = livePrevCloses.VIX || 0;
+      const yahooOverride = yahooRaw
+        ? { ...yahooRaw, prevClose: firstFiniteNumber(vixKnownPrev, yahooRaw.prevClose) }
+        : (sym === 'VIX' ? { last: 0, prevClose: vixKnownPrev } : null);
       const qLast = firstFiniteNumber(
         yahooOverride?.last,
         q.last,
@@ -2626,14 +3431,22 @@ const server = http.createServer(async (req, res) => {
           (!dayOpen || openVsMidPct < 0.08);
         if (likelyStaleTrade) last = mid;
       }
-      // For futures: dayOpenPrice = 5pm ET open = prior CME settlement (most accurate)
+      // After 4pm ET: today's dayClosePrice is the new reference (session just closed)
+      // During market hours: use prevDayClosePrice (yesterday's settlement)
+      const etMins = getEtMinutes();
+      const isAfterClose = etMins >= 960; // 4:00pm ET = 960 mins
+      const knownPrev = sym.startsWith('/ES') ? (livePrevCloses.ES  || 0)
+                      : sym.startsWith('/NQ') ? (livePrevCloses.NQ  || 0)
+                      : sym === 'SPX' || sym === '$SPX' ? (livePrevCloses.SPX || 0)
+                      : 0;
+      // For futures: prefer knownPrev (from TT REST / savedDailyCloses) over dxLink fields
+      // which can be stale or use wrong session reference. Fall back to dxLink if knownPrev=0.
       const prev = isFuturesSymbol(sym)
-        ? firstFiniteNumber(s.dayOpenPrice, s.prevDayClosePrice, marketDataPrevCloseCache[sym], 0)
-        : resolveQuotePrevClose(q, s) || firstFiniteNumber(marketDataPrevCloseCache[sym], 0);
-      const todayRegularClose = 0; // Disabled: was overriding correct prevDayClosePrice from dxSummaryCache
+        ? firstFiniteNumber(knownPrev || null, isAfterClose ? s.dayClosePrice : null, s.prevDayClosePrice, marketDataPrevCloseCache[sym], 0)
+        : firstFiniteNumber(marketDataPrevCloseCache[sym], isAfterClose ? s.dayClosePrice : null, resolveQuotePrevClose(q, s), knownPrev, 0);
       const baseClose = sym === 'VIX'
         ? firstFiniteNumber(yahooOverride?.prevClose, prev, 0)
-        : (todayRegularClose > 0 ? todayRegularClose : prev);
+        : prev;
       if (!last && !bid && !ask && !prev) return null;
       const rawChange = firstFiniteNumber(
         q.change,
@@ -2690,15 +3503,36 @@ const server = http.createServer(async (req, res) => {
     // awaitDX=1: subscribe chain to dxLink and wait for live Greeks before responding
     const awaitDX = u.searchParams.get('awaitDX') === '1';
 
-    // SPY block was a safeguard against flooding — removed for awaitDX (GEX overview) callers
-    // which explicitly opt into dxLink subscription. Legacy non-awaitDX SPY calls still blocked.
-    if (/^SPY$/i.test(sym) && !noSubscribe && !awaitDX) {
-      return sendJSON(res, 200, { data: { items: [], underlyingPrice: 0, symbol: sym, rootSymbol: sym } });
-    }
+    // REMOVED: SPY block (2026-06-11) - allow SPY/QQQ chains to fetch and subscribe for OI real-time updates
+    // SPY and QQQ need dxLink Summary events for openInterest to populate
 
     const exp = u.searchParams.get('expiration') || '';
     const rangeRaw = u.searchParams.get('range') || '';
     const rangeParam = rangeRaw === 'all' ? Infinity : parseInt(rangeRaw || '0', 10);
+
+    // CHECK CACHE (2026-06-12): Return cached chain data if fresh (<1hr for explicit exp, <10min for defaults)
+    // This eliminates redundant TT API calls and massive subscription queues
+    const cachedItems = getChainsFromCache(sym, exp);
+    if (cachedItems && !awaitDX) {
+      // Still subscribe to symbols if not already subscribed (cache doesn't prevent live updates)
+      const streamerSyms = noSubscribe ? [] : cachedItems
+        .flatMap(eg => eg.strikes || [])
+        .flatMap(strike => [strike.call?.['streamer-symbol'], strike.put?.['streamer-symbol']])
+        .filter(Boolean);
+      const newSyms = streamerSyms.filter(sym => !subscriptions.has(sym));
+      if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
+        newSyms.forEach(sym => {
+          addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
+          queueAutoSubscription({ type: 'Quote',   symbol: sym });
+          queueAutoSubscription({ type: 'Greeks',  symbol: sym });
+          queueAutoSubscription({ type: 'Summary', symbol: sym });
+          queueAutoSubscription({ type: 'Trade',   symbol: sym });
+        });
+        sendSubscriptionsRateLimited();
+        log('Subscribed', newSyms.length, 'NEW symbols from CACHED chain');
+      }
+      return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: 0, symbol: sym }, context: 'cache' });
+    }
 
     const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(sym)}/nested`);
     if (s1 !== 200 || !d1?.data?.items?.length) {
@@ -2716,7 +3550,19 @@ const server = http.createServer(async (req, res) => {
     // Filter to requested expiration or nearest few
     let targetExps = expirations.map(e => e['expiration-date']).filter(Boolean).sort();
     if (exp) targetExps = targetExps.filter(e => e === exp);
-    else targetExps = targetExps.slice(0, 2); // only 2 nearest expirations on initial load; DTE clicks lazy-fetch the rest
+    else {
+      // FIXED (2026-06-12): Ensure 0DTE is included when no explicit expiration is passed
+      // Previous behavior skipped 0DTE if not in top 2, causing QQQ to show no data
+      const todayDate = todayYmd().ymd;
+      const hasTodayExpiry = targetExps.some(d => d === todayDate);
+      if (hasTodayExpiry) {
+        // Prioritize 0DTE, then add up to 2 more nearby expirations
+        targetExps = [todayDate, ...targetExps.filter(d => d !== todayDate).slice(0, 2)];
+      } else {
+        // No 0DTE today, just fetch 3 nearest expirations
+        targetExps = targetExps.slice(0, 3);
+      }
+    }
 
     // Fetch underlying price first so chain requests are centered on ATM
     const quotePrice = await fetchUnderlyingLast(sym).catch(() => 0);
@@ -2791,8 +3637,10 @@ const server = http.createServer(async (req, res) => {
       ? filteredOptions.filter(o => o['expiration-date'] === exp)
       : filteredOptions;
     const streamerSyms = noSubscribe ? [] : subscribeOptions.map(o => o['streamer-symbol']).filter(Boolean);
-    if (streamerSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
-      streamerSyms.forEach(sym => {
+    // Only subscribe symbols not already active — prevents re-flooding on every chain fetch
+    const newSyms = streamerSyms.filter(sym => !subscriptions.has(sym));
+    if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
+      newSyms.forEach(sym => {
         addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
         queueAutoSubscription({ type: 'Quote',   symbol: sym });
         queueAutoSubscription({ type: 'Greeks',  symbol: sym });
@@ -2800,30 +3648,39 @@ const server = http.createServer(async (req, res) => {
         queueAutoSubscription({ type: 'Trade',   symbol: sym });
       });
       sendSubscriptionsRateLimited();
-      log('Subscribed', streamerSyms.length, 'symbols for expiry', exp || 'nearest', 'to dxLink');
+      log('Subscribed', newSyms.length, 'NEW symbols (', streamerSyms.length - newSyms.length, 'already active) for expiry', exp || 'nearest');
+    } else if (streamerSyms.length) {
+      log('Chain fetch: all', streamerSyms.length, 'symbols already subscribed, skipping queue');
     }
 
     // awaitDX: wait for live dxLink Greeks to populate before building response
     if (awaitDX && streamerSyms.length) {
-      log('[awaitDX] Waiting for dxLink Greeks for', streamerSyms.length, 'symbols…');
-      await waitForOptionData(streamerSyms, 5000);
+      log('[awaitDX] Waiting for dxLink Summary for', streamerSyms.length, 'symbols…');
+      await waitForOptionData(streamerSyms, 0);
       log('[awaitDX] dxLink wait complete');
     }
 
+    // REMOVED: Yahoo/CBOE fallbacks (2026-06-11)
+    // OI now comes from TastyTrade REST data directly (opt['open-interest'])
+    // Real-time updates via dxLink Summary.openInterest
     const oiFallbackMaps = new Map();
-    await Promise.all(targetExps.map(async (expDate) => {
-      try {
-        const map = /^SPX[W]?$/i.test(sym)
-          ? await fetchCboeSpxOI(expDate)
-          : await fetchYahooOI(sym, expDate);
-        oiFallbackMaps.set(expDate, map || new Map());
-      } catch (e) {
-        oiFallbackMaps.set(expDate, new Map());
-      }
-    }));
 
     // Build nested structure: data.data.items = array of expGroups
     const expMap = {};
+    // Debug: Log sample OI from TT REST data
+    if (filteredOptions.length > 0) {
+      const sampleOI = [
+        filteredOptions[0]?.['open-interest'] ?? filteredOptions[0]?.openInterest,
+        filteredOptions[Math.floor(filteredOptions.length / 4)]?.['open-interest'] ?? filteredOptions[Math.floor(filteredOptions.length / 4)]?.openInterest,
+        filteredOptions[Math.floor(filteredOptions.length / 2)]?.['open-interest'] ?? filteredOptions[Math.floor(filteredOptions.length / 2)]?.openInterest
+      ].filter(x => x > 0);
+      if (sampleOI.length > 0) log('DEBUG [Chain OI] symbol:', sym, 'expDate:', targetExps[0] || 'all', 'total options:', filteredOptions.length, 'sample OI:', sampleOI.slice(0, 3));
+    }
+
+    // NOTE (2026-06-11): TastyTrade REST /option-chains returns openInterest=0 for all options
+    // Real OI comes from dxLink Summary events (populated in real-time)
+    // See debug logs above for confirmation: restOI=0, liveOI=7367+ from dxLink
+
     for (const opt of filteredOptions) {
       const expDate = opt['expiration-date'] || '';
       const strikePrice = parseFloat(opt['strike-price'] || 0);
@@ -2837,11 +3694,6 @@ const server = http.createServer(async (req, res) => {
       const summary = dxSummaryCache[streamerSym] || {};
       const quote   = dxQuoteCache[streamerSym]   || {};
       const trade   = dxTradeCache[streamerSym]   || {};
-      const oiFallbackMap = oiFallbackMaps.get(expDate) || new Map();
-      const fallbackOiItem =
-        oiFallbackMap.get(streamerSym) ||
-        oiFallbackMap.get(String(opt.symbol || '').trim().toUpperCase()) ||
-        null;
       const fallbackGreeks = estimateOptionGreekFallback(opt, underlyingPrice, side);
       const liveDelta = finiteNumber(greeks.delta, opt.delta, opt['delta']);
       const liveGamma = finiteNumber(greeks.gamma, opt.gamma, opt['gamma']);
@@ -2849,11 +3701,13 @@ const server = http.createServer(async (req, res) => {
       const liveVega  = finiteNumber(greeks.vega, opt.vega, opt['vega']);
       const liveIv    = greeks.volatility > 0 ? greeks.volatility : firstFiniteNumber(opt['implied-volatility'], opt['iv']);
 
-      // OI: prefer TT REST, fall back to dxLink Summary (openInterest field)
-      const restOI  = Number(opt['open-interest'] ?? opt.openInterest ?? 0) || 0;
-      const liveOI  = Number(summary.openInterest ?? 0) || 0;
-      const fallbackOI = Number(fallbackOiItem?.oi ?? 0) || 0;
-      const finalOI = restOI || liveOI || fallbackOI;
+      // OI: Priority chain (2026-06-11 fix)
+      // 1. dxLink Summary (real-time updates)
+      // 2. TastyTrade REST data (authoritative at fetch time)
+      // 3. Default to 0 (never use stale Yahoo/CBOE fallbacks)
+      const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
+      const restOI  = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
+      const finalOI = liveOI || restOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
       const liveVol  = Number(trade.dayVolume ?? summary.dayVolume ?? 0) || 0;
@@ -2863,10 +3717,10 @@ const server = http.createServer(async (req, res) => {
         symbol:               opt.symbol || '',
         'streamer-symbol':    streamerSym,
         'open-interest':      finalOI,
+        openInterest:         finalOI,
         volume:               finalVol,
         _rawOpenInterest:     opt['open-interest'] ?? opt.openInterest ?? null,
         _summaryOpenInterest: summary.openInterest ?? null,
-        _fallbackOpenInterest: fallbackOiItem?.oi ?? null,
         _rawVolume:           opt.volume ?? opt['volume'] ?? opt['day-volume'] ?? null,
         _tradeDayVolume:      trade.dayVolume ?? null,
         _summaryDayVolume:    summary.dayVolume ?? null,
@@ -2895,6 +3749,10 @@ const server = http.createServer(async (req, res) => {
 
     const cachedGreeks = Object.keys(dxGreeksCache).length;
     log('chains built items:', items.length, 'first strikes:', items[0]?.strikes?.length, '| dxLink greeks cached:', cachedGreeks, '| underlying:', underlyingPrice);
+
+    // SAVE TO CACHE (2026-06-12): Cache the built items for future requests
+    setChainsInCache(sym, exp, items);
+
     return sendJSON(res, 200, { data: { items, underlyingPrice, symbol: sym, rootSymbol }, context: '/option-chains/' + sym + '/nested' });
   }
 
@@ -2921,6 +3779,37 @@ const server = http.createServer(async (req, res) => {
         }
       } catch(e) {}
       sendJSON(res, 200, { ok:true, subscriptions:[...subscriptions] });
+    });
+    return;
+  }
+
+  // ── POST /proxy/api/subscription-ready ─────────────────────────────────────
+  // Just registers subscription, returns immediately
+  // Live data arrives via WebSocket /ws/dxlink
+  if (req.method === 'POST' && p === '/proxy/api/subscription-ready') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body);
+        const { pageId, symbols } = parsed;
+
+        if (!pageId || !Array.isArray(symbols) || symbols.length === 0) {
+          return sendJSON(res, 400, { error: 'pageId and symbols required' });
+        }
+
+        const result = await subscriptionManager.request(pageId, symbols);
+
+        return sendJSON(res, 200, {
+          ready: true,
+          symbols: symbols.length,
+          newSubscriptions: result.count,
+          message: `Subscribed to ${symbols.length} symbols. Live data arrives via WebSocket.`
+        });
+      } catch (e) {
+        log('[subscription-ready] Error:', e.message);
+        return sendJSON(res, 500, { error: e.message });
+      }
     });
     return;
   }
@@ -3446,13 +4335,29 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── GET /proxy/api/greeks-intraday ─────────────────────────────────────────
-  // Returns today's intraday GEX/DEX/CHEX/VEX history
+  // Returns today's intraday GEX/DEX/CHEX/VEX history — reads SQLite first,
+  // falls back to in-memory array if DB not ready
   if (req.method === 'GET' && p === '/proxy/api/greeks-intraday') {
-    const date = u.searchParams.get('date') || new Date().toISOString().split('T')[0];
-    const records = intradayGreeksHistory.filter(r => {
-      if (!date) return true;
-      return new Date(r.ts).toISOString().split('T')[0] === date;
-    });
+    const date = u.searchParams.get('date') || dbEtDate();
+    let records = [];
+    if (db) {
+      try {
+        const rows = stmts().queryGreeksByDate.all(date);
+        records = rows.map(r => ({
+          ts: r.ts, time: r.time,
+          gex: r.gex, dex: r.dex, chex: r.chex, vex: r.vex,
+          buyPct: r.buy_pct, spot: r.spot,
+        }));
+      } catch (e) {
+        log('[DB] greeks-intraday query error:', e.message);
+      }
+    }
+    // Merge in-memory ring buffer for any points not yet committed
+    if (records.length < intradayGreeksHistory.length) {
+      const lastDbTs = records.length ? records[records.length - 1].ts : 0;
+      const fresh = intradayGreeksHistory.filter(r => r.ts > lastDbTs);
+      records = [...records, ...fresh];
+    }
     return sendJSON(res, 200, { ok: true, date, records, count: records.length });
   }
 
@@ -3496,6 +4401,110 @@ const server = http.createServer(async (req, res) => {
     const savedCsv = fs.existsSync(GEX_CSV_PATH) ? fs.readFileSync(GEX_CSV_PATH, 'utf8') : rows[0] + '\n';
     res.writeHead(200, { 'Content-Type': 'text/csv', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache' });
     return res.end(savedCsv);
+  }
+
+  // ── DATABASE REST API ─────────────────────────────────────────
+  // POST /proxy/api/db/insert: Insert row into table { table, data }
+  if (req.method === 'POST' && p === '/proxy/api/db/insert') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try {
+        const { table, data } = JSON.parse(body);
+        if (!db || !table) return sendJSON(res, 400, { error: 'Missing table' });
+
+        const tableMap = {
+          'mvc': { cols: ['timestamp','date','triggerType','data'] },
+          'premium_flow': { cols: ['timestamp','date','ticker','data'] },
+          'chain_snapshots': { cols: ['timestamp','date','symbol','data'] },
+          'greeks_history': { cols: ['timestamp','strike','expiration','data'] },
+          'multi_stock_flow': { cols: ['timestamp','date','stock','dte','data'] },
+          'greeks_time_series': { cols: ['timestamp','date','ticker','data'] },
+          'big_trades': { cols: ['timestamp','date','ticker','data'] },
+          'es_15m_candles': { cols: ['timestamp','date','slot_key','data'] },
+          'gex_top3': { cols: ['timestamp','date','ticker','data'] },
+          'bzila_live_snapshots': { cols: ['timestamp','date','ticker','data'] }
+        };
+
+        const schema = tableMap[table];
+        if (!schema) return sendJSON(res, 400, { error: 'Unknown table' });
+
+        const cols = schema.cols.join(',');
+        const placeholders = schema.cols.map(() => '?').join(',');
+        const values = schema.cols.map(c => {
+          if (c === 'data' && typeof data[c] === 'object') return JSON.stringify(data[c]);
+          return data[c];
+        });
+
+        db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`).run(...values);
+        return sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        log('[DB API] Insert error:', e.message);
+        return sendJSON(res, 500, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // GET /proxy/api/db/query?table=...&date=...&limit=1000: Query table
+  if (req.method === 'GET' && p === '/proxy/api/db/query') {
+    try {
+      if (!db) return sendJSON(res, 500, { error: 'DB not initialized' });
+
+      const table = u.searchParams.get('table');
+      const date = u.searchParams.get('date');
+      const ticker = u.searchParams.get('ticker');
+      const limit = Math.min(parseInt(u.searchParams.get('limit') || '1000', 10), 10000);
+
+      if (!table) return sendJSON(res, 400, { error: 'Missing table param' });
+
+      let query = `SELECT * FROM ${table}`;
+      const params = [];
+
+      if (date) { query += ` WHERE date = ?`; params.push(date); }
+      else if (ticker) { query += ` WHERE ticker = ? OR stock = ?`; params.push(ticker, ticker); }
+
+      query += ` ORDER BY timestamp DESC LIMIT ?`;
+      params.push(limit);
+
+      const rows = db.prepare(query).all(...params);
+
+      // Parse JSON columns
+      const parsed = rows.map(r => {
+        if (r.data && typeof r.data === 'string') {
+          try { r.data = JSON.parse(r.data); } catch (e) { }
+        }
+        return r;
+      });
+
+      return sendJSON(res, 200, { data: parsed });
+    } catch (e) {
+      log('[DB API] Query error:', e.message);
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
+  // GET /proxy/api/db/cleanup: Delete records older than N days (admin only)
+  if (req.method === 'GET' && p === '/proxy/api/db/cleanup') {
+    try {
+      if (!db) return sendJSON(res, 500, { error: 'DB not initialized' });
+
+      const days = parseInt(u.searchParams.get('days') || '7', 10);
+      const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      const tables = ['mvc','premium_flow','chain_snapshots','multi_stock_flow','greeks_time_series','big_trades','es_15m_candles','gex_top3','bzila_live_snapshots'];
+      let totalDeleted = 0;
+
+      for (const tbl of tables) {
+        const result = db.prepare(`DELETE FROM ${tbl} WHERE date < ?`).run(cutoffDate);
+        totalDeleted += result.changes;
+      }
+
+      return sendJSON(res, 200, { deleted: totalDeleted, cutoffDate });
+    } catch (e) {
+      log('[DB API] Cleanup error:', e.message);
+      return sendJSON(res, 500, { error: e.message });
+    }
   }
 
   // ── STATIC FILE SERVING ───────────────────────────────────────
@@ -3573,46 +4582,10 @@ wss.on('connection', ws => {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'subscribe' && Array.isArray(msg.symbols)) {
-        if (msg.spxSubscribe) {
-          let targetCompact = todayYmd().compact;
-          try {
-            const { status, data } = await ttGet('/option-chains/SPX/nested');
-            const chainObj = data?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || data?.data?.items?.[0];
-            const allExpDates = (chainObj?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-            const targetExp = getTargetExpirationDate(allExpDates);
-            if (targetExp) targetCompact = String(targetExp).replace(/-/g, '').slice(2);
-          } catch (e) {}
-          [...subscriptions].forEach(s => {
-            if (isSpxwSymbol(s) && optionExpirationCompact(s) !== targetCompact) {
-              subscriptions.delete(s);
-              subscriptionTypesBySymbol.delete(s);
-            }
-          });
-          await ensureTodaySpxOptionSubscriptions();
-        }
-        msg.symbols.forEach(s => {
-          const requestedTypes = Array.isArray(msg.feedTypesBySymbol?.[s])
-            ? msg.feedTypesBySymbol[s]
-            : (Array.isArray(msg.feedTypes) ? msg.feedTypes : null);
-          normalizeRequestedCandleSymbols(s).forEach(sym => {
-            if (/\{=/.test(sym)) {
-              candleSubscriptions.add(sym);
-            } else {
-              if (!shouldAcceptBrowserSubscription(sym, msg)) return;
-              const optstatTypes = /\{type=optstat\}$/i.test(String(sym))
-                ? ['Message', 'Configuration']
-                : requestedTypes;
-              addAutoSubscription(sym, optstatTypes);
-            }
-          });
-        });
-        
-        // Debounce subscription sends (wait 300ms for more subscriptions to batch)
-        clearTimeout(subscriptionDebounceTimer);
-        subscriptionDebounceTimer = setTimeout(() => {
-          sendSubscriptions();
-          sendCandleSubscriptions();
-        }, 300);
+        // DISABLED: WebSocket subscriptions cause massive queuing on refresh
+        // All subscriptions must come via REST POST /proxy/dxlink/subscribe instead
+        log(`[WS] Browser subscribe IGNORED (${msg.symbols.length} symbols) — use REST POST instead`);
+        return;
       }
     } catch(e) {
       console.error('[WS] Message parse error:', e.message);
@@ -3685,36 +4658,68 @@ function isDST(date) {
 }
 
 async function prewarmCache() {
-  log('Pre-warming dxLink cache for SPX options...');
-  try {
-    // Get nested chain to find root symbol
-    const { status: s1, data: d1 } = await ttGet('/option-chains/SPX/nested');
-    if (s1 !== 200 || !d1?.data?.items?.length) { log('Prewarm: nested chain failed', s1); return; }
-    const chainObj = d1.data.items.find(c => c['root-symbol'] === 'SPXW') || d1.data.items[0];
-    const rootSymbol = chainObj['root-symbol'] || 'SPXW';
-    const allExpDates = (chainObj.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-    const targetExp = getTargetExpirationDate(allExpDates);
-    const expirations = [targetExp].filter(Boolean);
-    log('Prewarm: fetching expiration', targetExp, 'for', rootSymbol);
+  log('Pre-warming dxLink cache for SPX, SPY, QQQ options...');
+  const allPrewarmSyms = [];
 
-    let allOptions = [];
-    for (const expDate of expirations) {
-      const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`);
-      if (s2 === 200 && d2?.data?.items) {
-        allOptions = allOptions.concat(d2.data.items);
+  try {
+    // Helper to prewarm a single symbol (0DTE only)
+    const prewarmSymbol = async (symbol, rootSymbol, rangeType) => {
+      try {
+        const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(symbol)}/nested`);
+        if (s1 !== 200 || !d1?.data?.items?.length) { log(`Prewarm: nested chain failed for ${symbol}`, s1); return; }
+        const chainObj = d1.data.items[0];
+        const allExpDates = (chainObj.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
+
+        // CRITICAL: Only 0DTE (today's expiration)
+        const today = new Date().toISOString().split('T')[0];
+        const todayExp = allExpDates.find(d => d === today);
+        if (!todayExp) { log(`Prewarm: no 0DTE expiration for ${symbol}`); return []; }
+
+        const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(symbol)}?expiration-date=${todayExp}`);
+        if (s2 !== 200 || !d2?.data?.items) { log(`Prewarm: chain fetch failed for ${symbol}`, s2); return; }
+
+        const quotePrice = await fetchUnderlyingLast(symbol).catch(() => 0);
+        const underlyingPrice = quotePrice > 0 ? quotePrice : (symbol === 'SPY' ? 725 : symbol === 'QQQ' ? 700 : 5800);
+
+        // Range: $50 for SPX (tighter), 10% for stocks (much tighter for faster prewarm)
+        let rangeAbs = 50;
+        if (rangeType === 'pct20') {
+          rangeAbs = underlyingPrice * 0.10;  // Changed from 0.20 to 0.10 for faster prewarm
+        }
+
+        const rangeFiltered = d2.data.items
+          .filter(o => {
+            const strike = parseFloat(o?.['strike-price'] || o?.strike || 0);
+            return strike > 0 && Math.abs(strike - underlyingPrice) <= rangeAbs;
+          })
+          .sort((a, b) => {
+            const da = Math.abs(parseFloat(a?.['strike-price'] || 0) - underlyingPrice);
+            const db = Math.abs(parseFloat(b?.['strike-price'] || 0) - underlyingPrice);
+            return da - db;
+          });
+
+        const syms = rangeFiltered.map(o => o['streamer-symbol']).filter(Boolean);
+        log(`Prewarm: ${symbol} 0DTE ${todayExp}: got ${d2.data.items.length} total, filtered to ±${rangeAbs.toFixed(0)} range: ${rangeFiltered.length} strikes, ${syms.length} symbols around $${underlyingPrice.toFixed(2)}`);
+
+        return syms;
+      } catch(e) {
+        log(`Prewarm error for ${symbol}:`, e.message);
+        return [];
       }
-    }
-    
-    const quotePrice = await fetchUnderlyingLast('SPX').catch(() => 0);
-    const underlyingPrice = quotePrice > 0 ? quotePrice : 5800;
-    // Filter to $100 above and below spot = 20 strikes per side + ATM = 41 total (5-point SPX spacing)
-    const prewarmRange = 100;
-    const rangeFiltered = allOptions.filter(o => {
-      const strike = parseFloat(o?.['strike-price'] || o?.strike || 0);
-      return strike > 0 && Math.abs(strike - underlyingPrice) <= prewarmRange;
-    });
-    const allSyms = rangeFiltered.map(o => o['streamer-symbol']).filter(Boolean);
-    log('Prewarm: got', allOptions.length, 'options; filtered to $' + prewarmRange + ' range:', rangeFiltered.length, '; subscribing', allSyms.length, 'around', underlyingPrice);
+    };
+
+    // Prewarm ONLY 0DTE SPX, SPY, QQQ — hard cap to keep queue small
+    const SPX_CAP = 200, SPY_CAP = 100, QQQ_CAP = 100;
+    const spxSyms = (await prewarmSymbol('SPX', 'SPXW', 'dollar100')) || [];
+    const spySyms = (await prewarmSymbol('SPY', 'SPY', 'pct20')) || [];
+    const qqqSyms = (await prewarmSymbol('QQQ', 'QQQ', 'pct20')) || [];
+
+    allPrewarmSyms.push(
+      ...spxSyms.slice(0, SPX_CAP),
+      ...spySyms.slice(0, SPY_CAP),
+      ...qqqSyms.slice(0, QQQ_CAP)
+    );
+    log(`Prewarm: total ${allPrewarmSyms.length} option symbols (SPX: ${Math.min(spxSyms.length, SPX_CAP)}, SPY: ${Math.min(spySyms.length, SPY_CAP)}, QQQ: ${Math.min(qqqSyms.length, QQQ_CAP)})`);
 
     // Wait for dxLink to be ready, then subscribe via rate-limited queue
     const waitAndSubscribe = () => {
@@ -3722,7 +4727,7 @@ async function prewarmCache() {
         setTimeout(waitAndSubscribe, 1000);
         return;
       }
-      allSyms.forEach(sym => {
+      allPrewarmSyms.forEach(sym => {
         addAutoSubscription(sym, ['Greeks','Summary','Quote','Trade','TradeETH']);
         queueAutoSubscription({ type: 'Greeks',  symbol: sym });
         queueAutoSubscription({ type: 'Summary', symbol: sym });
@@ -3730,7 +4735,7 @@ async function prewarmCache() {
         queueAutoSubscription({ type: 'Trade',   symbol: sym });
         queueAutoSubscription({ type: 'TradeETH', symbol: sym });
       });
-      log('Prewarm: queued', allSyms.length, 'nearest option symbols (', subscriptionQueue.length, 'total items) - sending rate-limited');
+      log(`Prewarm: queued ${allPrewarmSyms.length} option symbols (${subscriptionQueue.length} total items) - sending rate-limited`);
       sendSubscriptionsRateLimited();
     };
     waitAndSubscribe();
@@ -3744,6 +4749,17 @@ async function prewarmCache() {
 server.listen(PORT, async () => {
   log(`Proxy running on port ${PORT}`);
   warn(`REST monitor enabled | stall=${Math.round(REST_MONITOR_STALL_MS / 1000)}s | summary=${Math.round(REST_MONITOR_SUMMARY_MS / 1000)}s | tick=${Math.round(REST_MONITOR_TICK_MS / 1000)}s`);
+
+  // ── Init SQLite DB ───────────────────────────────────────────────────────────
+  try {
+    initDB();
+    scheduleNightlyClear();
+  } catch (e) {
+    log('[DB] SQLite init failed (better-sqlite3 not installed?). Run: npm install better-sqlite3');
+    log('[DB] Error:', e.message);
+    // Non-fatal — proxy continues with JSON fallback
+  }
+
   loadTokenFile();
   const ok = await refreshAccessToken();
       if (ok) {
@@ -3789,6 +4805,7 @@ server.listen(PORT, async () => {
           marketDataPrevCloseCache['/NQ:XCME'] = marketDataPrevCloseCache['NDX'];
         }
         log('Seeded market-data prev-closes for', Object.keys(marketDataPrevCloseCache).length, 'symbols');
+        log('DEBUG marketDataPrevCloseCache:', JSON.stringify(marketDataPrevCloseCache));
       } catch(e) {
         console.warn('[Startup] Market-data seed failed:', e.message);
       }
@@ -3857,12 +4874,18 @@ server.listen(PORT, async () => {
   setInterval(() => {
     try {
       const now = new Date();
-      const day = now.getUTCDay();
-      if (day === 0 || day === 6) return;
-      const etHour = (now.getUTCHours() - 5 + 24) % 24;
-      const etMin  = now.getUTCMinutes();
+      // Use Intl for correct ET offset (handles EDT/EST automatically)
+      const etParts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false
+      }).formatToParts(now);
+      const etMap = Object.fromEntries(etParts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+      const etWeekday = etMap.weekday; // 'Sun','Mon',...
+      if (etWeekday === 'Sun' || etWeekday === 'Sat') return;
+      const etHour = parseInt(etMap.hour, 10);
+      const etMin  = parseInt(etMap.minute, 10);
       const etTime = etHour * 60 + etMin;
-      if (etTime < 9 * 60 + 30 || etTime > 16 * 60 + 15) return;
+      if (etTime < 9 * 60 || etTime > 16 * 60) return;
 
       const spot = firstFiniteNumber(
         dxTradeCache['SPX']?.price,
@@ -3880,11 +4903,12 @@ server.listen(PORT, async () => {
 
       const snapshot = computeIntradaySnapshot(spot);
 
-      // Keep max 800 points (~6.5 hours at 30s intervals)
+      // Keep in-memory ring buffer (fallback / WS history on connect)
       intradayGreeksHistory.push(snapshot);
       if (intradayGreeksHistory.length > 800) intradayGreeksHistory.shift();
 
-      // Save to disk every 5 snapshots
+      // Persist to SQLite (primary) + JSON file (legacy fallback)
+      dbInsertGreeks(snapshot);
       if (intradayGreeksHistory.length % 5 === 0) saveIntradayHistory();
 
       // Broadcast to all connected browser clients
