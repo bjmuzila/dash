@@ -861,8 +861,8 @@ const dxQuoteCache   = {};   // streamer-symbol → {bid, ask, last}
 const dxTradeCache   = {};   // streamer-symbol → {price, dayVolume, size}
 const marketDataSnapshotCache = {}; // symbol → { value, ts }
 const prevCloseFallbackCache = {}; // symbol -> { value, ts }
-const historyDailyCache = new Map(); // symbol -> { ts, payload }
-const historyDailyInFlight = new Map(); // symbol -> Promise<payload>
+const historyDailyCache = new Map(); // key(symbol|interval) -> { ts, payload }
+const historyDailyInFlight = new Map(); // key(symbol|interval) -> Promise<payload>
 let spx0dteEnsurePromise = null;
 let putCallCache = { ratio: 0, date: '', source: '', ts: 0 };
 
@@ -1339,17 +1339,19 @@ function buildDailyHistoryFromCandles(symbol, candles) {
   return { data: { items } };
 }
 
-async function getDailyHistoryPayload(symbol) {
+async function getHistoryPayload(symbol, interval = '1Day') {
   const clean = String(symbol || '').replace(/^\$/, '').trim().toUpperCase();
   if (!clean) return { status: 400, payload: { error: 'Invalid symbol' } };
+  const safeInterval = String(interval || '1Day').trim() || '1Day';
+  const cacheKey = `${clean}|${safeInterval}`;
 
-  const cached = historyDailyCache.get(clean);
+  const cached = historyDailyCache.get(cacheKey);
   const now = Date.now();
   if (cached && (now - cached.ts) < 15 * 60 * 1000) {
     return { status: 200, payload: cached.payload };
   }
-  if (historyDailyInFlight.has(clean)) {
-    return { status: 200, payload: await historyDailyInFlight.get(clean) };
+  if (historyDailyInFlight.has(cacheKey)) {
+    return { status: 200, payload: await historyDailyInFlight.get(cacheKey) };
   }
 
   const requestPromise = (async () => {
@@ -1359,21 +1361,25 @@ async function getDailyHistoryPayload(symbol) {
     const fmt = d => d.toISOString().split('T')[0];
 
     const { status, data } = await ttGet(
-      `/market-data/history/${encodeURIComponent(clean)}?start-date=${fmt(start)}&end-date=${fmt(end)}&interval=1Day`
+      `/market-data/history/${encodeURIComponent(clean)}?start-date=${fmt(start)}&end-date=${fmt(end)}&interval=${encodeURIComponent(safeInterval)}`
     );
 
     if (status === 200) {
       const raw = data?.data?.candles || data?.data?.items || data?.candles || [];
       const payload = buildDailyHistoryFromCandles(clean, raw);
       if (payload.data.items.length) {
-        historyDailyCache.set(clean, { ts: Date.now(), payload });
+        historyDailyCache.set(cacheKey, { ts: Date.now(), payload });
         return payload;
       }
     }
 
-    const cachedStale = historyDailyCache.get(clean);
+    const cachedStale = historyDailyCache.get(cacheKey);
     if ((status === 429 || status === 400) && cachedStale?.payload?.data?.items?.length) {
       return cachedStale.payload;
+    }
+
+    if (safeInterval !== '1Day') {
+      throw Object.assign(new Error(`History unavailable for ${clean} (${safeInterval})`), { status, data });
     }
 
     const dxKeyMap = { SPX:'$SPX', NDX:'NDX', VIX:'VIX' };
@@ -1388,18 +1394,18 @@ async function getDailyHistoryPayload(symbol) {
     if (last > 0 || close > 0) {
       const synthetic = buildSyntheticPriceHistory(clean, last, close);
       const payload = buildDailyHistoryFromCandles(clean, synthetic.candles);
-      historyDailyCache.set(clean, { ts: Date.now(), payload });
+      historyDailyCache.set(cacheKey, { ts: Date.now(), payload });
       return payload;
     }
 
-    throw Object.assign(new Error(`History unavailable for ${clean}`), { status, data });
+    throw Object.assign(new Error(`History unavailable for ${clean} (${safeInterval})`), { status, data });
   })();
 
-  historyDailyInFlight.set(clean, requestPromise);
+  historyDailyInFlight.set(cacheKey, requestPromise);
   try {
     return { status: 200, payload: await requestPromise };
   } finally {
-    historyDailyInFlight.delete(clean);
+    historyDailyInFlight.delete(cacheKey);
   }
 }
 
@@ -4001,8 +4007,9 @@ const server = http.createServer(async (req, res) => {
   const histMatch = p.match(/^\/proxy\/api\/tt\/market-data\/history\/(.+)$/);
   if (req.method === 'GET' && histMatch) {
     const sym = decodeURIComponent(histMatch[1]);
+    const interval = u.searchParams.get('interval') || '1Day';
     try {
-      const { payload } = await getDailyHistoryPayload(sym);
+      const { payload } = await getHistoryPayload(sym, interval);
       return sendJSON(res, 200, payload);
     } catch (err) {
       const status = Number(err?.status) || 502;

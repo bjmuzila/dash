@@ -96,7 +96,8 @@ const API = {
     `/api/em/option-marks?symbols=${encodeURIComponent(symbols)}`,
   emCloses: () => `/api/em/em-closes`,
   subscriptionReady: () => `/api/proxy/subscription-ready`,
-  history: (symbol: string) => `/api/em/market-data/history/${encodeURIComponent(symbol)}`,
+  history: (symbol: string, interval = "1Day") =>
+    `/api/em/market-data/history/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`,
 };
 
 function getEtNow(): Date {
@@ -561,7 +562,7 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
 }
 
 async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
-  const r = await fetch(API.history(symbol), { cache: "no-store" });
+  const r = await fetch(API.history(symbol, "1Week"), { cache: "no-store" });
   if (!r.ok) throw new Error(`History failed for ${symbol}`);
   return parseHistoryItems(await r.json());
 }
@@ -574,27 +575,12 @@ async function fetchNoShortNoLongZones(): Promise<ZoneLevels[]> {
   ];
 
   return Promise.all(configs.map(async ({ ticker, historySymbol }) => {
-    const candles = await fetchWeeklyHistory(historySymbol);
-    const grouped = new Map<string, HistoryItem[]>();
-
-    candles.forEach((item) => {
-      const key = getWeekKey(new Date(item.time));
-      const arr = grouped.get(key) || [];
-      arr.push(item);
-      grouped.set(key, arr);
-    });
-
-    let weekCandles = grouped.get(targetWeek) || [];
-    if (weekCandles.length < 4) {
-      const orderedGroups = [...grouped.entries()]
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map((entry) => entry[1])
-        .filter((items) => items.length >= 4);
-      weekCandles = orderedGroups[orderedGroups.length - 1] || [];
-    }
-
-    if (!weekCandles.length) throw new Error(`No weekly candles for ${ticker}`);
-    return buildZoneLevels(ticker, weekCandles);
+    const weeklyBars = await fetchWeeklyHistory(historySymbol);
+    const exactMatch = weeklyBars.find((item) => getWeekKey(new Date(item.time)) === targetWeek);
+    const candidates = weeklyBars.filter((item) => getWeekKey(new Date(item.time)) <= targetWeek);
+    const selected = exactMatch || candidates[candidates.length - 1] || weeklyBars[weeklyBars.length - 1];
+    if (!selected) throw new Error(`No weekly candles for ${ticker}`);
+    return buildZoneLevels(ticker, [selected]);
   }));
 }
 
