@@ -109,8 +109,10 @@ export default function OverviewPage() {
 
   // ── WebSocket connection ─────────────────────────────────────────────────────
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/dxlink`);
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+      ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
+      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -310,20 +312,16 @@ export default function OverviewPage() {
   // ── Load expirations (from cache or API) then auto-select nearest ────────────
   useEffect(() => {
     const loadExpirations = async () => {
-      // Try cache first
-      const cached = await queryExpirationCache("SPX");
-      let json = cached;
+      // Always fetch fresh from API (cache caused stale-data bugs)
+      let json = await fetch("/api/gex/expirations")
+        .then(r => r.json())
+        .catch(() => null);
 
-      // Fall back to API if cache miss/stale
+      // Fall back to cache if API fails
       if (!json) {
-        json = await fetch("/api/gex/expirations")
-          .then(r => r.json())
-          .catch(() => null);
-
-        if (json) {
-          // Cache the response
-          saveExpirationCache("SPX", [], json).catch(() => {});
-        }
+        json = await queryExpirationCache("SPX");
+      } else {
+        saveExpirationCache("SPX", [], json).catch(() => {});
       }
 
       if (!json) return;
