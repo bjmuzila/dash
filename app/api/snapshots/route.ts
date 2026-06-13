@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDb, persistDb } from "@/lib/db";
 import type { SqlValue } from "sql.js";
 
 export async function GET(req: NextRequest) {
@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
       tableHtml,
       JSON.stringify(expirations || []),
     ]);
+    persistDb();
 
     // Get the last inserted ID
     const idResult = db.exec("SELECT last_insert_rowid() as id");

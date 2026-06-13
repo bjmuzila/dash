@@ -5,9 +5,10 @@ import path from "path";
 import fs from "fs";
 import initSqlJs, { type Database, type QueryExecResult, type SqlValue } from "sql.js";
 
+// On Render: use /data (persistent disk). Locally: fall back to project db.
 const DB_PATH =
   process.env.DB_PATH ??
-  path.resolve(process.cwd(), "../trading_db_complete/trading_metrics.db");
+  (fs.existsSync("/data") ? "/data/trading_metrics.db" : path.resolve(process.cwd(), "../trading_db_complete/trading_metrics.db"));
 
 let _db: Database | null = null;
 
@@ -15,9 +16,23 @@ export async function getDb(): Promise<Database> {
   if (_db) return _db;
 
   const SQL = await initSqlJs();
-  const fileBuffer = fs.readFileSync(DB_PATH);
-  _db = new SQL.Database(fileBuffer);
+
+  if (fs.existsSync(DB_PATH)) {
+    const fileBuffer = fs.readFileSync(DB_PATH);
+    _db = new SQL.Database(fileBuffer);
+  } else {
+    // First run on fresh disk — create empty DB
+    _db = new SQL.Database();
+  }
+
   return _db;
+}
+
+/** Write in-memory DB back to disk (call after every mutation) */
+export function persistDb(): void {
+  if (!_db) return;
+  const data = _db.export();
+  fs.writeFileSync(DB_PATH, Buffer.from(data));
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
@@ -88,19 +103,23 @@ export interface Snapshot {
 
 export async function saveSnapshot(snap: Snapshot): Promise<Snapshot> {
   const db = await getDb();
-  const sql = `
-    INSERT INTO snapshots (timestamp, date, time, period, tableHtml, expirations)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `;
-  // Note: Using sync exec for simplicity, should use prepare/bind for production
-  db.run(sql, [
-    snap.timestamp,
-    snap.date,
-    snap.time,
-    snap.period,
-    snap.tableHtml,
-    JSON.stringify(snap.expirations || [])
-  ]);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      time TEXT NOT NULL,
+      period TEXT NOT NULL DEFAULT 'weekly',
+      tableHtml TEXT NOT NULL,
+      expirations TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.run(
+    `INSERT INTO snapshots (timestamp, date, time, period, tableHtml, expirations) VALUES (?, ?, ?, ?, ?, ?)`,
+    [snap.timestamp, snap.date, snap.time, snap.period, snap.tableHtml, JSON.stringify(snap.expirations || [])]
+  );
+  persistDb();
   return snap;
 }
 
@@ -122,5 +141,6 @@ export async function getSnapshots(period?: string): Promise<Snapshot[]> {
 export async function deleteSnapshot(id: number): Promise<boolean> {
   const db = await getDb();
   db.run("DELETE FROM snapshots WHERE id = ?", [id]);
+  persistDb();
   return true;
 }
