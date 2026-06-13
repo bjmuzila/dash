@@ -98,6 +98,8 @@ const API = {
   subscriptionReady: () => `/api/proxy/subscription-ready`,
   history: (symbol: string, interval = "1Day") =>
     `/api/em/market-data/history/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`,
+  dxlinkCandles: (symbol: string, start: number, count: number) =>
+    `/api/dxlink/candles?symbol=${encodeURIComponent(symbol)}&start=${start}&count=${count}`,
 };
 
 function getEtNow(): Date {
@@ -562,7 +564,8 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
 }
 
 async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
-  const r = await fetch(API.history(symbol, "1Week"), { cache: "no-store" });
+  const start = Date.now() - (140 * 24 * 60 * 60 * 1000);
+  const r = await fetch(API.dxlinkCandles(symbol, start, 24), { cache: "no-store" });
   if (!r.ok) throw new Error(`History failed for ${symbol}`);
   return parseHistoryItems(await r.json());
 }
@@ -570,8 +573,8 @@ async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
 async function fetchNoShortNoLongZones(): Promise<ZoneLevels[]> {
   const targetWeek = getCompletedWeekKey();
   const configs: Array<{ ticker: ZoneLevels["ticker"]; historySymbol: string }> = [
-    { ticker: "ESM6", historySymbol: "/ES:XCME" },
-    { ticker: "NQM6", historySymbol: "/NQ:XCME" },
+    { ticker: "ESM6", historySymbol: "/ES{=w}" },
+    { ticker: "NQM6", historySymbol: "/NQ{=w}" },
   ];
 
   return Promise.all(configs.map(async ({ ticker, historySymbol }) => {
