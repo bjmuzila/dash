@@ -611,7 +611,7 @@ export default function EstimatedMoves() {
         useCORS: true,
         logging: false,
       });
-      canvas.toBlob(async (blob) => {
+      canvas.toBlob(async (blob: Blob | null) => {
         if (!blob) return;
         try {
           await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
