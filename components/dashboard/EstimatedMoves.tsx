@@ -57,6 +57,13 @@ const API_SYMBOL: Record<string, string> = {
 };
 const CHAIN_SYMBOL: Record<string, string> = { SPX: "$SPX", NDX: "$NDX" };
 const FUTURE_PROXY: Record<string, string> = { ESM: "SPX", NQM: "NDX" };
+const QUOTE_SYMBOLS = Array.from(new Set([
+  ...SYMBOLS,
+  ...Object.values(API_SYMBOL),
+  "/ESM6",
+  "/NQM6",
+  "VIX",
+]));
 
 // ─── API URL helpers ──────────────────────────────────────────────────────────
 // Reuse the existing Next.js API routes (same ones the rest of the dashboard uses)
@@ -222,7 +229,7 @@ function makeEngine(): EMEngine {
 
 async function fetchAllQuotes(engine: EMEngine) {
   if (Date.now() - engine.quoteCacheTime < 5000) return engine.quoteCache;
-  const r = await fetch(API.quotesBatch());
+  const r = await fetch(`${API.quotesBatch()}?symbols=${encodeURIComponent(QUOTE_SYMBOLS.join(","))}`);
   if (!r.ok) throw new Error("quotes-batch failed");
   const json = await r.json();
   const items: unknown[] = json?.data?.items || [];
@@ -271,6 +278,25 @@ async function fetchQuoteDetail(ticker: string, engine: EMEngine) {
   }
   if (!Number.isFinite(close) || close <= 0) throw new Error(`Invalid price for ${ticker}: ${close}`);
   return { quote: q, close, prevClose };
+}
+
+// Fetch per-expiration IV from market-metrics (no dxFeed subscription needed)
+const metricsIvCache: Record<string, Record<string, number>> = {};
+async function fetchMetricsIv(ticker: string, targetExp: string): Promise<number> {
+  if (metricsIvCache[ticker]?.[targetExp] != null) return metricsIvCache[ticker][targetExp];
+  try {
+    const r = await fetch(`/api/proxy/tt/quote/${encodeURIComponent(ticker)}`);
+    if (!r.ok) return 0;
+    const json = await r.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const expiryIvs: any[] = json?.data?.items?.[0]?.["option-expiration-implied-volatilities"] ?? [];
+    if (!metricsIvCache[ticker]) metricsIvCache[ticker] = {};
+    expiryIvs.forEach((e: any) => {
+      const iv = Number(e["implied-volatility"] ?? 0);
+      if (e["expiration-date"] && iv > 0) metricsIvCache[ticker][e["expiration-date"]] = iv;
+    });
+    return metricsIvCache[ticker][targetExp] ?? 0;
+  } catch { return 0; }
 }
 
 async function fetchOptionMarks(symbols: string[]) {
@@ -349,9 +375,24 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
   const indexQuote = isFuture ? await fetchQuoteDetail(lookupSym, engine) : null;
   const indexClose = isFuture ? (indexQuote!.prevClose > 0 ? indexQuote!.prevClose : indexQuote!.close) : close;
 
+  // If still all IV=0, fetch per-expiration IV from market-metrics (no dxFeed needed)
+  const allIvZero = expOptions.every((o) => Number(o.iv || 0) === 0);
+  const metricsIv = allIvZero ? await fetchMetricsIv(chainSym, targetExp) : 0;
+
   const strikes = [...new Set(expOptions.map((o) => o.strike))]
     .sort((a, b) => Math.abs(a - indexClose) - Math.abs(b - indexClose));
-  if (!strikes.length) throw new Error("No strikes found");
+
+  // If no strikes but we have metricsIv, compute EM directly from IV
+  if (!strikes.length || (allIvZero && metricsIv > 0 && expOptions.length === 0)) {
+    if (metricsIv > 0) {
+      const dte = daysTo(targetExp);
+      const em = 0.84 * metricsIv * indexClose * Math.sqrt(dte / 365);
+      if (Number.isFinite(em) && em > 0) {
+        return { ticker, close, em, up: indexClose + em, down: indexClose - em, expiration: targetExp, strike: Math.round(indexClose) };
+      }
+    }
+    throw new Error("No strikes found");
+  }
 
   let strike: number | null = null;
   let em = 0;
@@ -363,6 +404,10 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
 
     const candidateDte = c.dte || p.dte || daysTo(targetExp);
     let avgIV = (Number(c.iv || 0) + Number(p.iv || 0)) / 2;
+
+    // Use market-metrics IV if chain IV is zero
+    if (avgIV === 0 && metricsIv > 0) avgIV = metricsIv;
+
     let candidateEm = 0;
 
     if (avgIV > 0 && candidateDte > 0) {

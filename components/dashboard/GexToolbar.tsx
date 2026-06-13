@@ -79,12 +79,12 @@ function ToggleBtn({ label, active, onClick }: { label: string; active: boolean;
 function expiryLabel(expiry: string): string {
   if (!expiry) return "ALL";
   const dte = getExpiryDte(expiry);
-  if (dte === 0) return "0DTE";
-  if (dte === 1) return "1DTE";
-  if (dte === 2) return "2DTE";
   const d = new Date(expiry + "T00:00:00");
   const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  return `${days[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}`;
+  const dateStr = `${d.getMonth()+1}/${d.getDate()}`;
+  if (dte === 0) return `0DTE ${dateStr}`;
+  if (dte === 1) return `1DTE ${dateStr}`;
+  return `${days[d.getDay()]} ${dateStr}`;
 }
 
 function getExpiryDte(expiry: string): number {
