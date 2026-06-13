@@ -1,0 +1,12 @@
+.next/
+node_modules/
+.env*.local
+.env
+out/
+*.tsbuildinfo
+estimated-moves/
+build_spx_ohlc_5m/
+.tsbuildinfo
+.turbo/
+.DS_Store
+*.log
