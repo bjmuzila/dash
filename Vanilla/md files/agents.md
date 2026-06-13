@@ -71,6 +71,15 @@ do not reference or bring up or edit any schwab code back into anything. That co
 | `NEXT_PUBLIC_WS_URL` | Client WebSocket connections | `wss://vanila-8zn1.onrender.com` |
 | `REFRESH_TOKEN` | Vanilla proxy TastyTrade auth | (secret) |
 
+## Persistence / Database
+- SQLite via `sql.js` (pure WASM, no native compile)
+- **On Render:** DB lives at `/data/trading_metrics.db` on a persistent 1GB Render Disk mounted at `/data`
+- **Locally:** falls back to `../trading_db_complete/trading_metrics.db`
+- `lib/db.ts` — `getDb()` loads DB into memory, `persistDb()` writes it back to disk
+- **Must call `persistDb()` after every `db.run()` mutation** or changes are lost on restart
+- API route that writes: `app/api/snapshots/route.ts` (POST calls `persistDb()`)
+- `lib/db.ts` helpers `saveSnapshot()` and `deleteSnapshot()` also call `persistDb()`
+
 ## Versioning
 Version format: `YYYY.MM.DD-vN` (bump N for each push on same day)
 Current version tracked in `package.json` → `"version"` field.

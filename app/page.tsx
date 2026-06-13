@@ -194,7 +194,7 @@ export default function OverviewPage() {
   // ── Load chain structure (strike list + symbols) for expiry ─────────────────
   const loadStructure = useCallback(async (expiry: string) => {
     try {
-      const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`;
+      const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&awaitDX=1`;
       const res = await fetch(url);
       if (!res.ok) return;
       const json = await res.json();
