@@ -234,8 +234,9 @@ function normalizeFeedData(data: unknown[]): FeedItem[] {
 
 const WS_URL =
   typeof window !== "undefined"
-    ? (process.env.NEXT_PUBLIC_WS_URL ??
-        `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:3001/ws/dxlink`)
+    ? (process.env.NEXT_PUBLIC_WS_URL
+        ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
+        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:3001/ws/dxlink`)
     : "";
 
 export function useSpxFlow(enabled = true) {

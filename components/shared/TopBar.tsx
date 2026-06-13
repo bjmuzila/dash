@@ -193,6 +193,7 @@ export default function TopBar() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
       try {
         const ws = new WebSocket((process.env.NEXT_PUBLIC_WS_URL ?? "wss://vanila-8zn1.onrender.com") + "/ws/dxlink");
+
         wsRef.current = ws;
 
         ws.onopen = () => {

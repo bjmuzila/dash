@@ -170,7 +170,7 @@ export default function QuotesPanel() {
         }
 
         // Tell proxy to subscribe these symbols to dxFeed — they'll stream on WS from now on
-        await fetch("http://localhost:3001/proxy/dxlink/subscribe", {
+        await fetch((process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com") + "/proxy/dxlink/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
