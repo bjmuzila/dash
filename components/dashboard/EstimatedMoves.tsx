@@ -534,8 +534,8 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
         }
       }
 
-      const cMid = mid(c);
-      const pMid = mid(p);
+      const cMid = c ? mid(c) : 0;
+      const pMid = p ? mid(p) : 0;
       if (cMid > 0 && pMid > 0) {
         candidateEm = (cMid + pMid) * 0.85;
       } else if (avgIV > 0 && candidateDte > 0) {
