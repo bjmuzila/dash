@@ -59,11 +59,14 @@ function isStale(ev: CalEvent, nowMs: number): boolean {
 
 const DAY_LABELS: Record<number, string> = { 0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri" };
 
+type ImpactFilter = "All" | "High" | "Medium" | "Low";
+
 export default function EconCalendarPanel() {
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [impactFilter, setImpactFilter] = useState<ImpactFilter>("All");
 
   const doLoad = useCallback(async () => {
     setError(null);
@@ -96,6 +99,7 @@ export default function EconCalendarPanel() {
 
   const weekEvents = events
     .filter(e => weekDays.includes(e.date))
+    .filter(e => impactFilter === "All" || e.impact === impactFilter)
     .sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
 
   const activeEvents = weekEvents.filter(e => !isStale(e, now));
@@ -183,7 +187,23 @@ export default function EconCalendarPanel() {
           📅 Economic Calendar
         </span>
         <span style={{ fontSize: 9, color: "#1e3050", marginLeft: 4 }}>{today}</span>
-        <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>
+        <select
+          value={impactFilter}
+          onChange={e => setImpactFilter(e.target.value as ImpactFilter)}
+          style={{
+            marginLeft: "auto",
+            background: "#070c14", color: "#6b7280",
+            border: "1px solid #0d1f30", borderRadius: 3,
+            fontSize: 9, fontWeight: 700, padding: "2px 5px",
+            cursor: "pointer", letterSpacing: ".06em",
+          }}
+        >
+          <option value="All">ALL</option>
+          <option value="High">HIGH</option>
+          <option value="Medium">MED</option>
+          <option value="Low">LOW</option>
+        </select>
+        <button onClick={trigger} style={{ ...btnStyle }}>
           {btnLabel}
         </button>
       </div>

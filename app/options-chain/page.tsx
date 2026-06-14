@@ -457,8 +457,8 @@ export default function OptionsChainPage() {
 
   // WS connection
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/dxlink`);
+    const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const ws = new WebSocket(`${wsBase}/ws/dxlink`);
     wsRef.current = ws;
 
     ws.onopen = () => {

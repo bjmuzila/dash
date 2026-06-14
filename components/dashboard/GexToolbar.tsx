@@ -16,7 +16,6 @@ function ChevronBoxBtn({ open, onClick, title }: { open: boolean; onClick: () =>
         xmlns="http://www.w3.org/2000/svg"
         style={{ display: "block", transform: open ? "rotate(270deg)" : "rotate(90deg)", transition: "transform 0.2s ease" }}
       >
-        <rect x="2" y="2" width="20" height="20" rx="4" ry="4" stroke="currentColor" strokeWidth="2" fill="none" />
         <polyline points="9 7 15 12 9 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
       </svg>
     </button>

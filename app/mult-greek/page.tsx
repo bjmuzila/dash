@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { queryExpirationCache, saveExpirationCache } from "@/lib/snapdb";
+// expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -401,16 +401,10 @@ export default function MultGreekPage() {
   // Fetch expirations (from cache or API)
   useEffect(() => {
     const loadExpirations = async () => {
-      // Try cache first
-      const cached = await queryExpirationCache("SPX");
-      const json = cached || (await fetch("/api/expirations?ticker=SPX").then(r => r.json()).catch(() => null));
+      // Always fetch fresh from /api/expirations (TT format: { data: { items: [...] } })
+      const json = await fetch("/api/expirations?ticker=SPX").then(r => r.json()).catch(() => null);
 
       if (!json) return;
-
-      // Cache if we got fresh data from API
-      if (!cached) {
-        saveExpirationCache("SPX", [], json).catch(() => {});
-      }
 
       const items = json.data?.items ?? [];
       const seen = new Set<string>();
@@ -476,8 +470,8 @@ export default function MultGreekPage() {
 
   // Connect dxlink WS
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/dxlink`);
+    const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const ws = new WebSocket(`${wsBase}/ws/dxlink`);
     wsRef.current = ws;
 
     ws.onopen = () => {
