@@ -84,6 +84,7 @@ export default function OverviewPage() {
   const [feedTab, setFeedTab]             = useState<FeedTab>("snapshot");
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
+  const [toolbarOpen, setToolbarOpen] = useState(true);
 
   // Live data refs — mutated in WS handler, never trigger renders directly
   const liveRef    = useRef<Record<string, LiveEntry>>({});
@@ -518,21 +519,40 @@ export default function OverviewPage() {
 
       <div style={{ width: heatmapOpen ? 530 : 0, minWidth: heatmapOpen ? 160 : 0, maxWidth: 900, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: heatmapOpen ? "1px solid var(--overview-border)" : "none", background: "var(--overview-bg)", overflow: "hidden", transition: "width 0.2s ease" }}>
 
-        {/* Heatmap top controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", background: "var(--overview-control-bg)", borderBottom: "1px solid var(--overview-border)", flexShrink: 0 }}>
-          <span style={{ fontSize: 10, color: "#fff", textTransform: "uppercase", fontWeight: 700 }}>Intensity</span>
-          <input
-            type="range" min={0.1} max={3.0} step={0.1}
-            value={heatmapIntensity}
-            onChange={e => setHeatmapIntensity(Number(e.target.value))}
-            style={{ flex: 1, height: 3, accentColor: "#00e5ff" }}
-          />
-          <span style={{ fontSize: 11, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "inherit" }}>
-            {heatmapIntensity.toFixed(2)}x
-          </span>
-          <button onClick={hmRefresh} style={{ ...hmBtnStyle }}>
-            {hmBtnLabel}
-          </button>
+        {/* Heatmap top controls — collapsible */}
+        <div style={{ display: "flex", flexDirection: "column", background: "var(--overview-control-bg)", borderBottom: "1px solid var(--overview-border)", flexShrink: 0 }}>
+          {/* Always-visible slim header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", minHeight: 22 }}>
+            <button
+              onClick={() => setToolbarOpen(v => !v)}
+              title={toolbarOpen ? "Collapse controls" : "Expand controls"}
+              style={{ background: "none", border: "none", color: "#3a5570", fontSize: 9, cursor: "pointer", padding: "0 2px", lineHeight: 1, flexShrink: 0 }}
+            >
+              {toolbarOpen ? "▲" : "▼"}
+            </button>
+            <span style={{ fontSize: 9, color: "#3a5570", textTransform: "uppercase", fontWeight: 700, letterSpacing: ".1em" }}>GEX Heatmap</span>
+            {!toolbarOpen && (
+              <span style={{ marginLeft: "auto", fontSize: 10, color: "#00e5ff", fontWeight: 700 }}>{heatmapIntensity.toFixed(2)}x</span>
+            )}
+          </div>
+          {/* Collapsible slider row */}
+          {toolbarOpen && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px 6px" }}>
+              <span style={{ fontSize: 10, color: "#fff", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>Intensity</span>
+              <input
+                type="range" min={0.1} max={3.0} step={0.1}
+                value={heatmapIntensity}
+                onChange={e => setHeatmapIntensity(Number(e.target.value))}
+                style={{ flex: 1, height: 3, accentColor: "#00e5ff" }}
+              />
+              <span style={{ fontSize: 11, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "inherit" }}>
+                {heatmapIntensity.toFixed(2)}x
+              </span>
+              <button onClick={hmRefresh} style={{ ...hmBtnStyle }}>
+                {hmBtnLabel}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Heatmap secondary toolbar with GEX summary */}

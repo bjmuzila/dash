@@ -11,7 +11,6 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
     const mq = window.matchMedia("(max-width: 767px)");
     const update = (mobile: boolean) => {
       setIsMobile(mobile);
-      // Default: collapsed on mobile, open on desktop
       setSidebarOpen(!mobile);
     };
     update(mq.matches);
@@ -46,32 +45,35 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         <Sidebar onClose={() => setSidebarOpen(false)} isMobile={isMobile} />
       </div>
 
-      {/* Hamburger toggle — always visible, all screen sizes */}
-      <button
-        onClick={() => setSidebarOpen(v => !v)}
-        aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-        style={{
-          position: isMobile ? "fixed" : "relative",
-          ...(isMobile
-            ? { bottom: 16, left: sidebarOpen ? "auto" : 16, right: sidebarOpen ? 16 : "auto", zIndex: 300 }
-            : { zIndex: 10, alignSelf: "flex-start", marginTop: 6 }),
-          width: 28,
-          height: 28,
-          borderRadius: isMobile ? "50%" : 4,
-          background: "#0a0f16",
-          border: "1px solid #1e3050",
-          color: "#00e5ff",
-          fontSize: isMobile ? 18 : 14,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: "pointer",
-          flexShrink: 0,
-          boxShadow: isMobile ? "0 4px 12px rgba(0,0,0,0.6)" : "none",
-        }}
-      >
-        {sidebarOpen ? "◀" : "☰"}
-      </button>
+      {/* ☰ FAB — shown when sidebar is closed (all screen sizes) */}
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open sidebar"
+          style={{
+            position: isMobile ? "fixed" : "absolute",
+            top: isMobile ? "auto" : 6,
+            bottom: isMobile ? 16 : "auto",
+            left: isMobile ? 16 : 4,
+            zIndex: 300,
+            width: 28,
+            height: 28,
+            borderRadius: isMobile ? "50%" : 4,
+            background: "#0a0f16",
+            border: "1px solid #1e3050",
+            color: "#00e5ff",
+            fontSize: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            flexShrink: 0,
+            boxShadow: isMobile ? "0 4px 12px rgba(0,0,0,0.6)" : "none",
+          }}
+        >
+          ☰
+        </button>
+      )}
 
       <main
         className="flex-1 overflow-hidden"
