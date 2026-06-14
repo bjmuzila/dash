@@ -177,12 +177,9 @@
           <span style="margin-left:auto"></span>
         </div>
         <script>
-          if (window.esStatsLoaded && typeof window.fetchOverviewESStats === 'function') {
-            window.fetchOverviewESStats();
-          }
-          if (!window.esStatsLoaded) {
-            window.esStatsLoaded = true;
-            const SHEET_ID = '1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg';
+          if (false) {
+            // Google Sheets fetch removed — data now comes from proxy SQLite
+            const SHEET_ID = '';
             const statsLoading = document.getElementById('stats-loading');
             if (statsLoading) statsLoading.style.display = 'flex';
             ['st-nolong-hi','st-est-up','st-vah','st-vpoc','st-mid','st-est-dn','st-val','st-noshort-hi',
@@ -261,18 +258,50 @@
                 }
               }
             }
-            window.fetchOverviewESStats = fetchESStats;
-
-            // Delay fetch to after page load
-            window.addEventListener('load', function() {
-              setTimeout(fetchESStats, 500);
-              setInterval(fetchESStats, 300000);
-            });
-
-            // Also run on this script's own load
-            setTimeout(fetchESStats, 100);
           }
         </script>
+        <script>
+          // ES Stats Ladder — populated from proxy SQLite via /proxy/api/es-stats
+          window.applyOverviewESStats = function(stats) {
+            const map = {
+              'st-nolong-hi':  'NO LONG',
+              'st-est-up':     'UP',
+              'st-mid':        'MID',
+              'st-est-dn':     'DOWN',
+              'st-noshort-hi': 'NO SHORT'
+            };
+            Object.entries(map).forEach(([id, key]) => {
+              const el = document.getElementById(id);
+              if (el && stats[key]) el.textContent = stats[key];
+            });
+            const body = document.getElementById('stats-body');
+            if (body) body.removeAttribute('data-loading');
+            const loading = document.getElementById('stats-loading');
+            if (loading) loading.style.display = 'none';
+            if (typeof window.updateStatsPanel === 'function') window.updateStatsPanel();
+          };
+          (async function() {
+            try {
+              const proxyBase = (window.EM_PROXY_BASE || `${location.protocol}//${location.hostname}:3001`).replace(/\/$/, '');
+              const res = await fetch(`${proxyBase}/proxy/api/es-stats`);
+              if (!res.ok) return;
+              const row = await res.json();
+              if (!row || !row.no_long) return;
+              const stats = {
+                'NO LONG':  row.no_long,
+                'UP':       row.up,
+                'MID':      row.mid,
+                'DOWN':     row.down,
+                'NO SHORT': row.no_short
+              };
+              window.esStatsCache = stats;
+              window.esStatsCacheExp = row.expiration;
+              window.esStatsReady = true;
+              window.applyOverviewESStats(stats);
+            } catch(e) {
+              console.warn('[ESStats] Failed to load:', e.message);
+            }
+          })();
         <div id="stats-body" data-loading="1" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#04070c;position:relative;min-height:0">
 
         <!-- Vertical spine line — positioned at the dot column (right edge of label column) -->
