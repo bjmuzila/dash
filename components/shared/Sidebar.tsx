@@ -6,13 +6,29 @@ import QuotesPanel from "./QuotesPanel";
 import DailyEmPanel from "./DailyEmPanel";
 import pkg from "../../package.json";
 
+// ── Shared chevron-in-box button icon (matches design reference) ─────────────
+function ChevronBox({ direction = "right", size = 22 }: { direction?: "left" | "right"; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="4" ry="4" stroke="currentColor" strokeWidth="2" fill="none" />
+      {direction === "right" ? (
+        <polyline points="9 7 15 12 9 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      ) : (
+        <polyline points="15 7 9 12 15 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      )}
+    </svg>
+  );
+}
+
 // ── Collapsed ticker ────────────────────────────────────────────────────────
 const WS_SYMBOLS = [
   { sym: "VIX",      label: "VIX" },
   { sym: "/ES:XCME", label: "ES" },
   { sym: "/NQ:XCME", label: "NQ" },
   { sym: "SPX",      label: "SPX" },
+  { sym: "SPCX",     label: "SPCX" },
   { sym: "QQQ",      label: "QQQ" },
+  { sym: "SMH",      label: "SMH" },
   { sym: "NVDA",     label: "NVDA" },
   { sym: "AAPL",     label: "AAPL" },
   { sym: "TSLA",     label: "TSLA" },
@@ -20,7 +36,10 @@ const WS_SYMBOLS = [
   { sym: "MSFT",     label: "MSFT" },
   { sym: "AMD",      label: "AMD" },
   { sym: "AMZN",     label: "AMZN" },
+  { sym: "GOOGL",    label: "GOOGL" },
 ];
+
+const REST_SYMBOLS = WS_SYMBOLS.filter(s => !s.sym.startsWith("/") && !["VIX","SPX"].includes(s.sym));
 
 function CollapsedTicker() {
   const wsLiveRef = useRef<Record<string, { lastPrice: number; prevClose: number; pctFeed: number; bidPrice: number; askPrice: number }>>({});
@@ -87,49 +106,76 @@ function CollapsedTicker() {
       } catch (_) {}
     }
     connect();
+
+    // Seed prevClose from REST on mount
+    async function seedPrevCloses() {
+      try {
+        const syms = WS_SYMBOLS.map(s => s.sym).join(",");
+        const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        const items: Array<Record<string, unknown>> = d?.data?.items || [];
+        items.forEach(q => {
+          const sym = String(q.symbol || "");
+          const prev = Number(q["prev-close"] ?? 0);
+          if (prev > 0) {
+            if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
+            wsLiveRef.current[sym].prevClose = prev;
+          }
+        });
+      } catch (_) {}
+    }
+    seedPrevCloses();
+
+    // Subscribe equities to proxy
+    async function subscribeEquities() {
+      try {
+        await fetch((process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com") + "/proxy/dxlink/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbols: REST_SYMBOLS.map(s => s.sym), feedTypes: ["Quote", "Trade", "Summary"] }),
+        });
+      } catch (_) {}
+    }
+    subscribeEquities();
+
     return () => wsRef.current?.close();
   }, []);
 
-  const items = WS_SYMBOLS.map(({ sym, label }) => ({ label, pct: rows[sym] ?? null }));
-  // duplicate for seamless loop
-  const doubled = [...items, ...items];
+  // Sort by % change: highest to lowest, nulls at bottom
+  const sorted = WS_SYMBOLS
+    .map(({ sym, label }) => ({ label, pct: rows[sym] ?? null }))
+    .sort((a, b) => {
+      if (a.pct === null && b.pct === null) return 0;
+      if (a.pct === null) return 1;
+      if (b.pct === null) return -1;
+      return b.pct - a.pct;
+    });
 
   return (
-    <div style={{ flex: 1, overflow: "hidden", position: "relative", minHeight: 0 }}>
-      <style>{`
-        @keyframes scrollUp {
-          0%   { transform: translateY(0); }
-          100% { transform: translateY(-50%); }
-        }
-        .ticker-track {
-          animation: scrollUp ${items.length * 2.2}s linear infinite;
-        }
-        .ticker-track:hover { animation-play-state: paused; }
-      `}</style>
-      <div className="ticker-track" style={{ display: "flex", flexDirection: "column" }}>
-        {doubled.map(({ label, pct }, i) => {
-          const up = pct !== null ? pct >= 0 : null;
-          const color = up === null ? "#3a5570" : up ? "#00e676" : "#ff4757";
-          return (
-            <div
-              key={i}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                padding: "6px 0",
-                borderBottom: "1px solid #0a1420",
-                gap: 2,
-              }}
-            >
-              <span style={{ fontSize: 8, fontWeight: 700, color: "#7a9ab8", letterSpacing: ".06em" }}>{label}</span>
-              <span style={{ fontSize: 9, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
-                {pct !== null ? `${pct >= 0 ? "▲" : "▼"}${Math.abs(pct).toFixed(1)}%` : "—"}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+    <div style={{ flex: 1, overflowY: "auto", minHeight: 0, background: "#05080d" }}>
+      {sorted.map(({ label, pct }, i) => {
+        const up = pct !== null ? pct >= 0 : null;
+        const color = up === null ? "#3a5570" : up ? "#00e676" : "#ff4757";
+        return (
+          <div
+            key={label}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              padding: "5px 0",
+              borderBottom: "1px solid #0a1420",
+              gap: 1,
+            }}
+          >
+            <span style={{ fontSize: 8, fontWeight: 700, color: "#7a9ab8", letterSpacing: ".06em" }}>{label}</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
+              {pct !== null ? `${pct >= 0 ? "▲" : "▼"}${Math.abs(pct).toFixed(1)}%` : "—"}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -150,7 +196,7 @@ export default function Sidebar({
   const isOverview = pathname === "/";
 
   const borderColor = isOverview ? "var(--overview-border, var(--border))" : "var(--border)";
-  const bg = isOverview ? "var(--overview-bg, var(--surface))" : "var(--surface)";
+  const bg = isOverview ? "var(--overview-bg, #05080d)" : "var(--surface, #05080d)";
 
   if (collapsed) {
     return (
@@ -160,20 +206,20 @@ export default function Sidebar({
           display: "flex",
           flexDirection: "column",
           borderRight: `1px solid ${borderColor}`,
-          background: bg,
+          background: "#05080d",
           height: "100%",
           overflow: "hidden",
           flexShrink: 0,
         }}
       >
         {/* Expand button */}
-        <div style={{ display: "flex", justifyContent: "center", padding: "6px 0", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: "5px 0", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <button
             onClick={onOpen}
             aria-label="Expand sidebar"
-            style={{ background: "none", border: "1px solid #1e3050", borderRadius: 4, color: "#00e5ff", fontSize: 13, cursor: "pointer", padding: "2px 5px", lineHeight: 1.4 }}
+            style={{ background: "none", border: "none", color: "#00e5ff", cursor: "pointer", padding: 0, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
           >
-            ▶
+            <ChevronBox direction="right" size={22} />
           </button>
         </div>
 
@@ -191,30 +237,27 @@ export default function Sidebar({
   return (
     <nav
       className="flex flex-col w-44 shrink-0 border-r"
-      style={{ borderColor, background: bg, overflow: "hidden", height: "100%" }}
+      style={{ borderColor, background: "#05080d", overflow: "hidden", height: "100%" }}
     >
       {/* Header row: collapse button */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "6px 8px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "4px 6px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         <button
           onClick={onClose}
           aria-label="Collapse sidebar"
-          style={{ background: "none", border: "1px solid #1e3050", borderRadius: 4, color: "#00e5ff", fontSize: 13, cursor: "pointer", padding: "2px 7px", lineHeight: 1.4 }}
+          style={{ background: "none", border: "none", color: "#00e5ff", cursor: "pointer", padding: 0, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
         >
-          ◀
+          <ChevronBox direction="left" size={22} />
         </button>
       </div>
 
-      {/* Spacer */}
-      <div className="flex-1 min-h-0" />
-
-      {/* Sticky bottom panels */}
-      <div style={{ flexShrink: 0, overflowY: "auto", maxHeight: "60vh" }}>
+      {/* Panels fill available space */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: "#05080d" }}>
         <QuotesPanel />
         <DailyEmPanel />
       </div>
 
       {/* Version */}
-      <div style={{ flexShrink: 0, padding: "6px 8px", borderTop: "1px solid var(--border)", textAlign: "center", fontSize: 9, color: "#2a4a6a", letterSpacing: "0.05em" }}>
+      <div style={{ flexShrink: 0, padding: "4px 6px", borderTop: "1px solid var(--border)", textAlign: "center", fontSize: 9, color: "#2a4a6a", letterSpacing: "0.05em" }}>
         v{pkg.version}
       </div>
     </nav>

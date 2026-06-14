@@ -4225,6 +4225,50 @@ const server = http.createServer(async (req, res) => {
     schwabReq.end();
   }
 
+  // ── GET /proxy/api/econ-calendar ─────────────────────────────────────────
+  if (req.method === 'GET' && p === '/proxy/api/econ-calendar') {
+    const CACHE_TTL = 30 * 60 * 1000; // 30 min
+    if (!global._econCalCache) global._econCalCache = { body: null, ts: 0 };
+    const cache = global._econCalCache;
+    if (cache.body && (Date.now() - cache.ts) < CACHE_TTL) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'X-Cache': 'HIT' });
+      res.end(cache.body);
+      return;
+    }
+    try {
+      const FF_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.forexfactory.com/',
+      };
+      const data = await new Promise((resolve, reject) => {
+        function doGet(url, redirects) {
+          if (redirects > 5) return reject(new Error('Too many redirects'));
+          const u = new URL(url);
+          const mod = u.protocol === 'https:' ? https : http;
+          mod.get({ hostname: u.hostname, path: u.pathname + u.search, headers: FF_HEADERS }, r => {
+            if ((r.statusCode === 301 || r.statusCode === 302 || r.statusCode === 307) && r.headers.location) {
+              return doGet(r.headers.location, redirects + 1);
+            }
+            let d = '';
+            r.on('data', c => d += c);
+            r.on('end', () => resolve({ status: r.statusCode, body: d }));
+          }).on('error', reject);
+        }
+        doGet('https://nfs.faireconomy.media/ff_calendar_thisweek.json', 0);
+      });
+      if (data.status === 200) {
+        cache.body = data.body;
+        cache.ts = Date.now();
+      }
+      res.writeHead(data.status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=1800' });
+      res.end(data.body);
+    } catch (err) {
+      sendJSON(res, 502, { error: err.message });
+    }
+    return;
+  }
+
   // ── GET /proxy/api/quote-of-day ──────────────────────────────────────────
   if (req.method === 'GET' && p === '/proxy/api/quote-of-day') {
     try {

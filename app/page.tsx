@@ -85,6 +85,7 @@ export default function OverviewPage() {
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
   const [toolbarOpen, setToolbarOpen] = useState(true);
+  const [chartOpen, setChartOpen] = useState(true);
   const [splitPct, setSplitPct] = useState(50);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -390,7 +391,7 @@ export default function OverviewPage() {
       <div ref={splitContainerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
         {/* TOP: Chart + toolbar */}
-        <div style={{ display: "flex", flexDirection: "column", flex: `0 0 ${splitPct}%`, minHeight: 80, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", flex: chartOpen ? `0 0 ${splitPct}%` : "0 0 auto", minHeight: chartOpen ? 80 : 0, overflow: "hidden" }}>
           <GexToolbar
             gexMode={gexMode}
             dataMode={dataMode}
@@ -412,10 +413,10 @@ export default function OverviewPage() {
             onToggleDex={() => setShowDex(p => !p)}
             onToggleFlip={() => setShowFlipCurve(p => !p)}
             onRefresh={handleRefresh}
-            onExpandChart={() => setSplitPct(p => Math.min(85, p + 10))}
-            onCollapseChart={() => setSplitPct(p => Math.max(15, p - 10))}
+            chartOpen={chartOpen}
+            onToggleChart={() => setChartOpen(p => !p)}
           />
-          <div style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--overview-bg)" }}>
+          <div style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--overview-bg)", display: chartOpen ? "block" : "none" }}>
             {chain.length === 0 && (
               <div style={{
                 position: "absolute", inset: 0, display: "flex", flexDirection: "column",
@@ -535,62 +536,41 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* ══ RIGHT: Collapse tab + Full-height Heatmap ══ */}
-      <style>{`.hm-divider:hover .hm-collapse-btn { opacity: 1 !important; }`}</style>
-      <div
-        className="hm-divider"
-        onClick={() => setHeatmapOpen(v => !v)}
-        style={{ width: 16, flexShrink: 0, position: "relative", background: "var(--overview-border)", zIndex: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-      >
-        <button
-          className="hm-collapse-btn"
-          title={heatmapOpen ? "Collapse heatmap" : "Expand heatmap"}
-          style={{
-            position: "absolute",
-            top: "50%",
-            transform: "translateY(-50%)",
-            width: 16,
-            height: 48,
-            background: "#0d1f30",
-            border: "1px solid #1e3050",
-            borderRadius: 3,
-            color: "#00e5ff",
-            fontSize: 10,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            zIndex: 30,
-            opacity: 0,
-            transition: "opacity 0.15s",
-            pointerEvents: "none",
-          }}
-        >
-          {heatmapOpen ? "▶" : "◀"}
-        </button>
-      </div>
+      {/* ══ RIGHT: Full-height Heatmap ══ */}
+      <div style={{ width: heatmapOpen ? 530 : 0, minWidth: heatmapOpen ? 160 : 0, maxWidth: 900, flexShrink: 0, display: "flex", flexDirection: "column", background: "var(--overview-bg)", overflow: "hidden", transition: "width 0.2s ease" }}>
 
-      <div style={{ width: heatmapOpen ? 530 : 0, minWidth: heatmapOpen ? 160 : 0, maxWidth: 900, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: heatmapOpen ? "1px solid var(--overview-border)" : "none", background: "var(--overview-bg)", overflow: "hidden", transition: "width 0.2s ease" }}>
-
-        {/* Heatmap top controls — collapsible */}
+        {/* Heatmap header */}
         <div style={{ display: "flex", flexDirection: "column", background: "var(--overview-control-bg)", borderBottom: "1px solid var(--overview-border)", flexShrink: 0 }}>
-          <style>{`.hm-toolbar-header:hover .hm-toggle-btn { opacity: 1 !important; }`}</style>
-          {/* Always-visible slim header */}
-          <div className="hm-toolbar-header" style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", minHeight: 22, cursor: "pointer" }} onClick={() => setToolbarOpen(v => !v)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", minHeight: 26 }}>
+            {/* Collapse heatmap panel */}
             <button
-              className="hm-toggle-btn"
-              title={toolbarOpen ? "Collapse controls" : "Expand controls"}
-              style={{ background: "none", border: "none", color: "#00e5ff", fontSize: 9, cursor: "pointer", padding: "0 2px", lineHeight: 1, flexShrink: 0, opacity: 0, transition: "opacity 0.15s" }}
+              onClick={() => setHeatmapOpen(v => !v)}
+              title={heatmapOpen ? "Collapse heatmap" : "Expand heatmap"}
+              style={{ background: "none", border: "none", color: "#00e5ff", cursor: "pointer", padding: 0, lineHeight: 1, display: "flex", alignItems: "center", flexShrink: 0 }}
             >
-              {toolbarOpen ? "▲" : "▼"}
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                style={{ display: "block", transform: heatmapOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s ease" }}>
+                <rect x="2" y="2" width="20" height="20" rx="4" ry="4" stroke="currentColor" strokeWidth="2" fill="none" />
+                <polyline points="9 7 15 12 9 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              </svg>
+            </button>
+            {/* Collapse intensity slider */}
+            <button
+              onClick={() => setToolbarOpen(v => !v)}
+              title={toolbarOpen ? "Collapse controls" : "Expand controls"}
+              style={{ background: "none", border: "none", color: "#3a5570", cursor: "pointer", padding: 0, lineHeight: 1, display: "flex", alignItems: "center", flexShrink: 0 }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                style={{ display: "block", transform: toolbarOpen ? "rotate(270deg)" : "rotate(90deg)", transition: "transform 0.2s ease" }}>
+                <rect x="2" y="2" width="20" height="20" rx="4" ry="4" stroke="currentColor" strokeWidth="2" fill="none" />
+                <polyline points="9 7 15 12 9 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              </svg>
             </button>
             <span style={{ fontSize: 9, color: "#3a5570", textTransform: "uppercase", fontWeight: 700, letterSpacing: ".1em" }}>GEX Heatmap</span>
             {!toolbarOpen && (
               <span style={{ marginLeft: "auto", fontSize: 10, color: "#00e5ff", fontWeight: 700 }}>{heatmapIntensity.toFixed(2)}x</span>
             )}
           </div>
-          {/* Collapsible slider row */}
           {toolbarOpen && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px 6px" }}>
               <span style={{ fontSize: 10, color: "#fff", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>Intensity</span>
@@ -610,25 +590,22 @@ export default function OverviewPage() {
           )}
         </div>
 
-        {/* Heatmap secondary toolbar with GEX summary */}
-        <div style={{ display: "none", gap: 6, alignItems: "center", background: "var(--overview-header-bg)", borderBottom: "1px solid var(--overview-border)", padding: "3px 8px", flexShrink: 0 }}>
-          <span style={{ fontSize: 9, fontWeight: 700, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.1em" }}>GEX Heatmap</span>
-          {selectedExpiry && <span style={{ fontSize: 8, color: "#faad14", fontFamily: "inherit" }}>{selectedExpiry}</span>}
-          {spotPrice > 0 && (
-            <div style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 9, fontFamily: "inherit" }}>
-              <span style={{ color: "#3a5570" }}>Flip: <b style={{ color: "#faad14" }}>{summary.gexFlip?.toFixed(0) ?? "—"}</b></span>
-              <span style={{ color: "#3a5570" }}>CW: <b style={{ color: "#22c55e" }}>{summary.callWall?.toLocaleString() ?? "—"}</b></span>
-              <span style={{ color: "#3a5570" }}>PW: <b style={{ color: "#f97316" }}>{summary.putWall?.toLocaleString() ?? "—"}</b></span>
-              <span style={{ color: "#3a5570" }}>Net: <b style={{ color: summary.isPositiveGamma ? "#00e676" : "#ef4444" }}>{summary.totalNetGEXFormatted}</b></span>
-            </div>
-          )}
-        </div>
-
         {/* Heatmap body */}
         <div style={{ flex: 1, overflow: "hidden" }}>
           <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={heatmapIntensity} window={20} />
         </div>
       </div>
+
+      {/* Collapsed heatmap — slim re-open tab, no border */}
+      {!heatmapOpen && (
+        <div
+          onClick={() => setHeatmapOpen(true)}
+          title="Expand heatmap"
+          style={{ width: 20, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: "var(--overview-bg)" }}
+        >
+          <span style={{ writingMode: "vertical-rl", fontSize: 8, color: "#3a5570", fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", userSelect: "none" }}>HEATMAP ▶</span>
+        </div>
+      )}
     </div>
   );
 }

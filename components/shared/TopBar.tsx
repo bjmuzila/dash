@@ -1,27 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
-
-const NAV_ITEMS = [
-  { label: "Overview",      href: "/" },
-  { label: "Dashboard",     href: "/dashboard" },
-  { label: "Database",      href: "/database" },
-  { label: "Insights",      href: "/insights" },
-  { label: "Est. Move",     href: "/estimated-move" },
-  { label: "Options Chain", href: "/options-chain" },
-  { label: "Multi Greek",   href: "/mult-greek" },
-  { label: "Bzila Flow",    href: "/bzila" },
-  { label: "Econ Calendar", href: "/economic-calendar" },
-  { label: "Quotes",        href: "/quotes" },
-  { label: "GEX Ladder",    href: "/gex" },
-  { label: "Top 10",        href: "/top10" },
-  { label: "Trading",       href: "/trading" },
-  { label: "Logs",          href: "/logs" },
-  { label: "Personal",      href: "/personal" },
-  { label: "Legacy",        href: "/legacy" },
-];
 
 // ─── types ───────────────────────────────────────────────────────────────────
 interface QuoteData {
@@ -125,8 +105,6 @@ function saveTodayCloses(es: number, spx: number) {
 
 // ─── component ───────────────────────────────────────────────────────────────
 export default function TopBar() {
-  const router = useRouter();
-  const pathname = usePathname();
   const [clock, setClock] = useState("—");
   const [session, setSession] = useState("ET");
   const [ddOpen, setDdOpen] = useState(false);
@@ -440,29 +418,6 @@ export default function TopBar() {
           </div>
         </div>
 
-        {/* Page selector dropdown */}
-        <select
-          value={pathname}
-          onChange={e => router.push(e.target.value)}
-          style={{
-            background: "#07101b",
-            color: "#00e5ff",
-            border: "1px solid #1e3050",
-            borderRadius: 3,
-            fontSize: 11,
-            fontWeight: 700,
-            padding: "0 8px",
-            height: 34,
-            cursor: "pointer",
-            letterSpacing: ".04em",
-            flexShrink: 0,
-          }}
-        >
-          {NAV_ITEMS.map(({ label, href }) => (
-            <option key={href} value={href}>{label}</option>
-          ))}
-        </select>
-
         {/* Right: logo + actions + TT LIVE + dropdown */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <SnapButton mode="share" />
@@ -508,19 +463,17 @@ export default function TopBar() {
         </div>
       </div>
 
-      {/* ── ROW 2 ── (hidden on mobile) */}
-      <div className="topbar-row2" style={{ display: "flex", alignItems: "center", gap: 16, padding: TOPBAR_ROW2_PADDING, borderTop: "1px solid #0d1825", minHeight: 30, background: "rgba(5,10,16,.7)", flexShrink: 0 }}>
-        {row2.peaks.length > 0 && (
-          <>
-            <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#ffb300", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>Peak GEX</span>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {row2.peaks.map((p, i) => (
-                <span key={i} style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#fff", padding: "3px 8px", background: "#0a1628", border: "1px solid #1e3050", borderRadius: 2 }}>{p}</span>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
+      {/* ── ROW 2 ── only rendered when there's content */}
+      {row2.peaks.length > 0 && (
+        <div className="topbar-row2" style={{ display: "flex", alignItems: "center", gap: 16, padding: TOPBAR_ROW2_PADDING, borderTop: "1px solid #0d1825", background: "rgba(5,10,16,.7)", flexShrink: 0 }}>
+          <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#ffb300", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>Peak GEX</span>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {row2.peaks.map((p, i) => (
+              <span key={i} style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#fff", padding: "3px 8px", background: "#0a1628", border: "1px solid #1e3050", borderRadius: 2 }}>{p}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

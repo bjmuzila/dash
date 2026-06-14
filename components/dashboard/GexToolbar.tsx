@@ -1,8 +1,27 @@
 "use client";
 
-import { useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { GexMode, DataMode, ChartMode } from "./GexChart";
+
+// Chevron-in-box matching design reference; rotates 180° when open
+function ChevronBoxBtn({ open, onClick, title }: { open: boolean; onClick: () => void; title: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{ background: "none", border: "none", color: "#00e5ff", cursor: "pointer", padding: 0, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
+    >
+      <svg
+        width="20" height="20" viewBox="0 0 24 24" fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        style={{ display: "block", transform: open ? "rotate(270deg)" : "rotate(90deg)", transition: "transform 0.2s ease" }}
+      >
+        <rect x="2" y="2" width="20" height="20" rx="4" ry="4" stroke="currentColor" strokeWidth="2" fill="none" />
+        <polyline points="9 7 15 12 9 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      </svg>
+    </button>
+  );
+}
 
 interface GexToolbarProps {
   gexMode:       GexMode;
@@ -16,8 +35,8 @@ interface GexToolbarProps {
   putWall:       number | undefined;
   netGex:        string;
   // DTE picker
-  expirations:   string[];   // YYYY-MM-DD list
-  selectedExpiry: string;    // "" = all / default
+  expirations:   string[];
+  selectedExpiry: string;
   onExpiry:      (v: string) => void;
   onGexMode:     (m: GexMode) => void;
   onDataMode:    (m: DataMode) => void;
@@ -26,8 +45,8 @@ interface GexToolbarProps {
   onToggleDex:   () => void;
   onToggleFlip:  () => void;
   onRefresh:     () => Promise<void>;
-  onExpandChart:   () => void;
-  onCollapseChart: () => void;
+  chartOpen:     boolean;
+  onToggleChart: () => void;
 }
 
 interface PillGroupProps {
@@ -36,9 +55,9 @@ interface PillGroupProps {
   onChange: (v: string) => void;
 }
 
-const TOOLBAR_FONT_SIZE = 11;
-const TOOLBAR_BUTTON_PADDING = "5px 12px";
-const TOOLBAR_GROUP_PADDING = 3;
+const TOOLBAR_FONT_SIZE = 9;
+const TOOLBAR_BUTTON_PADDING = "3px 7px";
+const TOOLBAR_GROUP_PADDING = 2;
 
 function PillGroup({ options, active, onChange }: PillGroupProps) {
   return (
@@ -105,7 +124,7 @@ export default function GexToolbar({
   expirations, selectedExpiry, onExpiry,
   onGexMode, onDataMode, onChartMode,
   onToggleOI, onToggleDex, onToggleFlip,
-  onRefresh, onExpandChart, onCollapseChart,
+  onRefresh, chartOpen, onToggleChart,
 }: GexToolbarProps) {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
   const visibleExpirations = expirations.slice(0, 3);
@@ -113,7 +132,7 @@ export default function GexToolbar({
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 6,
-      padding: "8px 12px", background: "var(--overview-control-bg, #0a0f16)",
+      padding: "4px 8px", background: "var(--overview-control-bg, #0a0f16)",
       borderBottom: "1px solid var(--overview-border, #1a2a3a)",
       flexShrink: 0, flexWrap: "nowrap", overflowX: "auto",
     }}>
@@ -132,7 +151,7 @@ export default function GexToolbar({
         <button
           onClick={() => onExpiry("")}
           style={{
-            fontSize: TOOLBAR_FONT_SIZE, padding: "5px 10px", border: "none", borderRadius: 2,
+            fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2,
             background: selectedExpiry === "" ? "#1a2a3a" : "transparent",
             color: selectedExpiry === "" ? "#00e5ff" : "#fff",
             cursor: "pointer", fontWeight: 700, fontFamily: "inherit",
@@ -145,7 +164,7 @@ export default function GexToolbar({
             key={exp}
             onClick={() => onExpiry(exp)}
             style={{
-              fontSize: TOOLBAR_FONT_SIZE, padding: "5px 10px", border: "none", borderRadius: 2,
+              fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2,
               background: selectedExpiry === exp ? "#1a2a3a" : "transparent",
               color: selectedExpiry === exp ? "#00e5ff" : "#fff",
               cursor: "pointer", fontWeight: 700, fontFamily: "inherit",
@@ -196,33 +215,9 @@ export default function GexToolbar({
         {netGex && <span><span style={{ color: "#3a5570" }}>GEX </span><span style={{ color: "#00e5ff", fontWeight: 700 }}>{netGex}</span></span>}
       </div>
 
-      {/* Chart size controls */}
-      <div style={{ marginLeft: "auto", display: "flex", gap: 3, flexShrink: 0 }}>
-        <button
-          onClick={onExpandChart}
-          title="Expand chart"
-          aria-label="Expand chart"
-          style={{ padding: "5px 8px", border: "1px solid #1e3050", borderRadius: 4, background: "#0a1628", color: "#00e5ff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}
-          onMouseEnter={e => (e.currentTarget.style.background = "#0d2035")}
-          onMouseLeave={e => (e.currentTarget.style.background = "#0a1628")}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-        <button
-          onClick={onCollapseChart}
-          title="Collapse chart"
-          aria-label="Collapse chart"
-          style={{ padding: "5px 8px", border: "1px solid #1e3050", borderRadius: 4, background: "#0a1628", color: "#7a9ab8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}
-          onMouseEnter={e => (e.currentTarget.style.background = "#0d2035")}
-          onMouseLeave={e => (e.currentTarget.style.background = "#0a1628")}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+      {/* Chart collapse/expand */}
+      <div style={{ marginLeft: "auto", display: "flex", gap: 3, flexShrink: 0, alignItems: "center" }}>
+        <ChevronBoxBtn open={chartOpen} onClick={onToggleChart} title={chartOpen ? "Collapse chart" : "Expand chart"} />
       </div>
 
       {/* Refresh button */}
