@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
 
 const NAV_ITEMS = [
+  { label: "Econ Calendar", href: "/economic-calendar" },
   { label: "Overview",      href: "/" },
   { label: "Dashboard",     href: "/dashboard" },
   { label: "Database",      href: "/database" },
