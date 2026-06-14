@@ -21,7 +21,7 @@ const path      = require('path');
 const { URL }   = require('url');
 const { spawn }  = require('child_process');
 const WebSocket = require('ws');
-// const Database  = require('better-sqlite3');  // Optional - comment out if build fails
+const Database  = require('better-sqlite3');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const PORT           = parseInt(process.env.PORT || '3001', 10);
