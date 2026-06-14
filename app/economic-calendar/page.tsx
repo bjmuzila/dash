@@ -15,10 +15,11 @@ interface CalEvent {
 }
 
 const IMPACT_COLOR: Record<string, string> = {
-  High:    "#ef4444",
-  Medium:  "#faad14",
-  Low:     "#3a5570",
-  Holiday: "#6b7280",
+  High:      "#ef4444",
+  Medium:    "#faad14",
+  Low:       "#3a5570",
+  Holiday:   "#6b7280",
+  President: "#a855f7",
 };
 
 function impactColor(impact: string): string {
@@ -45,13 +46,21 @@ export default function EconomicCalendarPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/calendar");
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.error ?? `HTTP ${res.status}`);
+      const [econRes, trumpRes] = await Promise.all([
+        fetch("/api/calendar"),
+        fetch("/api/trump-calendar"),
+      ]);
+      const econJson = await econRes.json();
+      const trumpJson = trumpRes.ok ? await trumpRes.json() : { events: [] };
+      if (!econRes.ok) {
+        setError(econJson.error ?? `HTTP ${econRes.status}`);
         return;
       }
-      setEvents(json.events ?? []);
+      const merged = [
+        ...(econJson.events ?? []),
+        ...(trumpJson.events ?? []),
+      ].sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
+      setEvents(merged);
       setLastRefresh(new Date().toLocaleTimeString());
     } catch (e) {
       setError(String(e));
@@ -64,23 +73,34 @@ export default function EconomicCalendarPage() {
 
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 
-  const filtered = filter
-    ? events.filter(ev =>
-        ev.title?.toLowerCase().includes(filter.toLowerCase()) ||
-        ev.country?.toLowerCase().includes(filter.toLowerCase()) ||
-        ev.impact?.toLowerCase().includes(filter.toLowerCase())
-      )
-    : events;
+  // Next 7 days from today (inclusive)
+  const next7: Set<string> = new Set();
+  const todayDate = new Date(today + "T12:00:00");
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(todayDate);
+    d.setDate(todayDate.getDate() + i);
+    next7.add(d.toISOString().slice(0, 10));
+  }
+
+  const filtered = events.filter(ev => {
+    const inRange = next7.has(ev.date);
+    const matchesFilter = !filter || (
+      ev.title?.toLowerCase().includes(filter.toLowerCase()) ||
+      ev.country?.toLowerCase().includes(filter.toLowerCase()) ||
+      ev.impact?.toLowerCase().includes(filter.toLowerCase())
+    );
+    return inRange && matchesFilter;
+  });
 
   const groups = groupByDate(filtered);
   const sortedDates = Object.keys(groups).sort();
 
   return (
-    <div className="flex flex-col h-full" style={{ background: "var(--bg)" }}>
+    <div className="flex flex-col h-full" style={{ background: "#05080d" }}>
       {/* Header */}
       <div
         className="flex items-center justify-between px-4 py-2 flex-shrink-0 border-b"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+        style={{ borderColor: "#1a2a3a", background: "#05080d" }}
       >
         <div className="flex items-center gap-3">
           <span className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--accent)" }}>
@@ -113,7 +133,7 @@ export default function EconomicCalendarPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto px-4 py-3" style={{ background: "#02070f" }}>
+      <div className="flex-1 overflow-auto px-4 py-3" style={{ background: "#05080d" }}>
         {error ? (
           <div className="text-xs p-4 rounded border" style={{ color: "#ef4444", borderColor: "rgba(239,68,68,0.3)", background: "rgba(239,68,68,0.05)" }}>
             ⚠ {error}

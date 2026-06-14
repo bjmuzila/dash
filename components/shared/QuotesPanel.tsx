@@ -192,25 +192,48 @@ export default function QuotesPanel() {
       return b.pct - a.pct;
     });
 
+  const [rowHeight, setRowHeight] = useState(28);
+
   return (
-    <div style={{ borderTop: "1px solid #0d1825", background: "rgba(5,10,16,.5)", flexShrink: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", borderBottom: "1px solid #0d1825" }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "rgba(5,10,16,.5)" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", borderBottom: "1px solid #0d1825", flexShrink: 0 }}>
         <span style={{ fontSize: 9, color: "#4a6a84", fontWeight: 700, letterSpacing: ".12em" }}>QUOTES</span>
         <span style={{ fontSize: 9, color: ts ? "#1e3050" : "#29b6f6", fontVariantNumeric: "tabular-nums" }}>{ts || "LIVE"}</span>
       </div>
-      <div style={{ maxHeight: 340, overflowY: "auto" }}>
+
+      {/* Rows — fill all available space */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {sortedRows.map(({ sym, label, pct }) => {
           const up = pct !== null ? pct >= 0 : null;
           const color = up === null ? "#3a5570" : up ? "#00e676" : "#ff4757";
           const arrow = up === null ? "" : up ? "▲" : "▼";
           const pctText = pct !== null ? `${arrow} ${Math.abs(pct).toFixed(2)}%` : "—";
           return (
-            <div key={sym} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "3px 10px", borderBottom: "1px solid #0a1220" }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "#ffffff", letterSpacing: ".08em" }}>{label}</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{pctText}</span>
+            <div
+              key={sym}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: `0 10px`, height: rowHeight,
+                borderBottom: "1px solid #0a1220", flexShrink: 0,
+              }}
+            >
+              <span style={{ fontSize: Math.max(8, rowHeight * 0.36), fontWeight: 700, color: "#ffffff", letterSpacing: ".08em" }}>{label}</span>
+              <span style={{ fontSize: Math.max(9, rowHeight * 0.42), fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{pctText}</span>
             </div>
           );
         })}
+      </div>
+
+      {/* Row height slider */}
+      <div style={{ flexShrink: 0, padding: "4px 8px", borderTop: "1px solid #0a1220", display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 7, color: "#2a4a6a", letterSpacing: ".06em" }}>SIZE</span>
+        <input
+          type="range" min={16} max={56} step={1}
+          value={rowHeight}
+          onChange={e => setRowHeight(Number(e.target.value))}
+          style={{ flex: 1, height: 2, accentColor: "#1e3050", cursor: "pointer" }}
+        />
       </div>
     </div>
   );

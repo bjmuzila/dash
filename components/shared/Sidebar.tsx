@@ -250,7 +250,7 @@ export default function Sidebar({
       </div>
 
       {/* Panels fill available space */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: "#05080d" }}>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#05080d" }}>
         <QuotesPanel />
         <DailyEmPanel />
       </div>

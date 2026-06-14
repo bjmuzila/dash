@@ -16,10 +16,11 @@ interface CalEvent {
 }
 
 const IMPACT_COLOR: Record<string, string> = {
-  High:    "#ef4444",
-  Medium:  "#faad14",
-  Low:     "#3a5570",
-  Holiday: "#6b7280",
+  High:      "#ef4444",
+  Medium:    "#faad14",
+  Low:       "#3a5570",
+  Holiday:   "#6b7280",
+  President: "#a855f7",
 };
 
 function impactColor(impact: string): string {
@@ -31,21 +32,18 @@ function etDateStr(d: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
 }
 
-// Get Mon–Fri of the current ET week
+// Get next 7 days from today ET (inclusive)
 function etWeekDays(): string[] {
   const now = new Date();
-  const etStr = new Intl.DateTimeFormat("en-CA", {
+  const todayStr = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
     year: "numeric", month: "2-digit", day: "2-digit",
   }).format(now);
-  const [y, m, day] = etStr.split("-").map(Number);
-  const d = new Date(y, m - 1, day);
-  const dow = d.getDay();
-  const mon = new Date(d);
-  mon.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
-  return Array.from({ length: 5 }, (_, i) => {
-    const x = new Date(mon);
-    x.setDate(mon.getDate() + i);
+  const [y, m, day] = todayStr.split("-").map(Number);
+  const base = new Date(y, m - 1, day);
+  return Array.from({ length: 7 }, (_, i) => {
+    const x = new Date(base);
+    x.setDate(base.getDate() + i);
     return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
   });
 }
@@ -59,7 +57,7 @@ function isStale(ev: CalEvent, nowMs: number): boolean {
 
 const DAY_LABELS: Record<number, string> = { 0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri" };
 
-type ImpactFilter = "All" | "High" | "Medium" | "Low";
+type ImpactFilter = "All" | "High" | "Medium" | "Low" | "President";
 
 export default function EconCalendarPanel() {
   const [events, setEvents] = useState<CalEvent[]>([]);
@@ -70,14 +68,22 @@ export default function EconCalendarPanel() {
 
   const doLoad = useCallback(async () => {
     setError(null);
-    const res = await fetch("/api/calendar");
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error ?? `HTTP ${res.status}`);
+    const [econRes, trumpRes] = await Promise.all([
+      fetch("/api/calendar"),
+      fetch("/api/trump-calendar"),
+    ]);
+    const econJson = await econRes.json();
+    const trumpJson = trumpRes.ok ? await trumpRes.json() : { events: [] };
+    if (!econRes.ok) {
+      setError(econJson.error ?? `HTTP ${econRes.status}`);
       setEvents([]);
       return;
     }
-    setEvents(json.events ?? []);
+    const merged = [
+      ...(econJson.events ?? []),
+      ...(trumpJson.events ?? []),
+    ].sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
+    setEvents(merged);
   }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(async () => {
@@ -202,6 +208,7 @@ export default function EconCalendarPanel() {
           <option value="High">HIGH</option>
           <option value="Medium">MED</option>
           <option value="Low">LOW</option>
+          <option value="President">POTUS</option>
         </select>
         <button onClick={trigger} style={{ ...btnStyle }}>
           {btnLabel}

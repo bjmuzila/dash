@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-06-14 (session 6) — UI Polish: Chevron Buttons, Sidebar, TopBar, Heatmap
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- Replaced scrolling ticker with static sorted list (highest % → lowest, nulls last), live via WS + REST seed
+- Background fixed to `#05080d` on both collapsed and expanded states to match the GEX chart
+- QuotesPanel + DailyEmPanel now fill the sidebar from the top (no empty spacer gap)
+- Collapse/expand buttons replaced with bare chevron SVG (no border box)
+
+### TopBar (`components/shared/TopBar.tsx`)
+- Removed empty ROW 2 strip — only renders when Peak GEX data is present
+- Page selector dropdown temporarily removed then restored (with `useRouter`/`usePathname`/`NAV_ITEMS`)
+
+### GEX Toolbar (`components/dashboard/GexToolbar.tsx`)
+- Replaced +/− expand/collapse buttons with a single chevron button (rotates 180° on toggle)
+- Collapse now hides only the toolbar controls — chart stays visible at full height
+- New props: `chartOpen: boolean`, `onToggleChart: () => void`
+- Removed unused `useCallback` import
+
+### Overview Page (`app/page.tsx`)
+- Added `gexToolbarOpen` state wired to GexToolbar chevron
+- Removed thick 16px heatmap divider — heatmap has no left border
+- Heatmap collapse/expand chevrons use same bare-chevron style with 180° rotation
+- Collapsed heatmap shows slim 20px re-open tab
+
+### Version
+- Bumped to `2026.6.14-v15`
+
 ## 2026-06-14 (session 5) — Sidebar Collapse Rail + Toolbar Cleanup
 
 ### GEX Heatmap Column Layout

@@ -13,7 +13,6 @@ const NAV_ITEMS = [
   { label: "Options Chain", href: "/options-chain" },
   { label: "Multi Greek",   href: "/mult-greek" },
   { label: "Bzila Flow",    href: "/bzila" },
-  { label: "Quotes",        href: "/quotes" },
   { label: "Trading",       href: "/trading" },
   { label: "Logs",          href: "/logs" },
   { label: "Personal",      href: "/personal" },

@@ -540,6 +540,14 @@ export default function MultGreekPage() {
     loadAll(selectedExpiry);
   }, [selectedExpiry, loadAll]);
 
+  // Auto-load when expirations are ready
+  useEffect(() => {
+    if (selectedExpiry && strikes.SPX.length === 0 && strikes.SPY.length === 0 && strikes.QQQ.length === 0) {
+      loadAll(selectedExpiry);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedExpiry]);
+
   const doRefresh = useCallback(async () => {
     if (!activeExpiry) throw new Error("No expiry selected");
     await loadAll(activeExpiry);
