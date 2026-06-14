@@ -85,7 +85,7 @@ export default function OverviewPage() {
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
   const [toolbarOpen, setToolbarOpen] = useState(true);
-  const [chartOpen, setChartOpen] = useState(true);
+  const [gexToolbarOpen, setGexToolbarOpen] = useState(true);
   const [splitPct, setSplitPct] = useState(50);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -391,7 +391,7 @@ export default function OverviewPage() {
       <div ref={splitContainerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
         {/* TOP: Chart + toolbar */}
-        <div style={{ display: "flex", flexDirection: "column", flex: chartOpen ? `0 0 ${splitPct}%` : "0 0 auto", minHeight: chartOpen ? 80 : 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", flex: `0 0 ${splitPct}%`, minHeight: 80, overflow: "hidden" }}>
           <GexToolbar
             gexMode={gexMode}
             dataMode={dataMode}
@@ -413,10 +413,10 @@ export default function OverviewPage() {
             onToggleDex={() => setShowDex(p => !p)}
             onToggleFlip={() => setShowFlipCurve(p => !p)}
             onRefresh={handleRefresh}
-            chartOpen={chartOpen}
-            onToggleChart={() => setChartOpen(p => !p)}
+            chartOpen={gexToolbarOpen}
+            onToggleChart={() => setGexToolbarOpen(p => !p)}
           />
-          <div style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--overview-bg)", display: chartOpen ? "block" : "none" }}>
+          <div style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--overview-bg)" }}>
             {chain.length === 0 && (
               <div style={{
                 position: "absolute", inset: 0, display: "flex", flexDirection: "column",

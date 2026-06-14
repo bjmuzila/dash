@@ -1,7 +1,27 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
+
+const NAV_ITEMS = [
+  { label: "Overview",      href: "/" },
+  { label: "Dashboard",     href: "/dashboard" },
+  { label: "Database",      href: "/database" },
+  { label: "Insights",      href: "/insights" },
+  { label: "Est. Move",     href: "/estimated-move" },
+  { label: "Options Chain", href: "/options-chain" },
+  { label: "Multi Greek",   href: "/mult-greek" },
+  { label: "Bzila Flow",    href: "/bzila" },
+  { label: "Econ Calendar", href: "/economic-calendar" },
+  { label: "Quotes",        href: "/quotes" },
+  { label: "GEX Ladder",    href: "/gex" },
+  { label: "Top 10",        href: "/top10" },
+  { label: "Trading",       href: "/trading" },
+  { label: "Logs",          href: "/logs" },
+  { label: "Personal",      href: "/personal" },
+  { label: "Legacy",        href: "/legacy" },
+];
 
 // ─── types ───────────────────────────────────────────────────────────────────
 interface QuoteData {
@@ -105,6 +125,8 @@ function saveTodayCloses(es: number, spx: number) {
 
 // ─── component ───────────────────────────────────────────────────────────────
 export default function TopBar() {
+  const router = useRouter();
+  const pathname = usePathname();
   const [clock, setClock] = useState("—");
   const [session, setSession] = useState("ET");
   const [ddOpen, setDdOpen] = useState(false);
@@ -417,6 +439,17 @@ export default function TopBar() {
             {spxChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, fontWeight: 600, color: spxChg.up ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{spxChg.text}</span>}
           </div>
         </div>
+
+        {/* Page selector */}
+        <select
+          value={pathname}
+          onChange={e => router.push(e.target.value)}
+          style={{ background: "#07101b", color: "#00e5ff", border: "1px solid #1e3050", borderRadius: 3, fontSize: 11, fontWeight: 700, padding: "0 8px", height: 34, cursor: "pointer", letterSpacing: ".04em", flexShrink: 0 }}
+        >
+          {NAV_ITEMS.map(({ label, href }) => (
+            <option key={href} value={href}>{label}</option>
+          ))}
+        </select>
 
         {/* Right: logo + actions + TT LIVE + dropdown */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>

@@ -137,96 +137,50 @@ export default function GexToolbar({
       flexShrink: 0, flexWrap: "nowrap", overflowX: "auto",
     }}>
 
-      {/* DTE / Expiry picker */}
-      <div style={{
-        display: "flex",
-        gap: 2,
-        background: "var(--overview-header-bg, #070c14)",
-        borderRadius: 2,
-        padding: TOOLBAR_GROUP_PADDING,
-        flexShrink: 0,
-        maxWidth: "100%",
-        overflowX: "auto",
-      }}>
-        <button
-          onClick={() => onExpiry("")}
-          style={{
-            fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2,
-            background: selectedExpiry === "" ? "#1a2a3a" : "transparent",
-            color: selectedExpiry === "" ? "#00e5ff" : "#fff",
-            cursor: "pointer", fontWeight: 700, fontFamily: "inherit",
-          }}
-        >
-          ALL
-        </button>
-        {visibleExpirations.map(exp => (
+      {/* Toolbar collapse/expand — always visible */}
+      <ChevronBoxBtn open={chartOpen} onClick={onToggleChart} title={chartOpen ? "Collapse toolbar" : "Expand toolbar"} />
+
+      {/* All controls hidden when toolbar collapsed */}
+      {chartOpen && <>
+        <SEP />
+
+        {/* DTE / Expiry picker */}
+        <div style={{ display: "flex", gap: 2, background: "var(--overview-header-bg, #070c14)", borderRadius: 2, padding: TOOLBAR_GROUP_PADDING, flexShrink: 0, overflowX: "auto" }}>
           <button
-            key={exp}
-            onClick={() => onExpiry(exp)}
-            style={{
-              fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2,
-              background: selectedExpiry === exp ? "#1a2a3a" : "transparent",
-              color: selectedExpiry === exp ? "#00e5ff" : "#fff",
-              cursor: "pointer", fontWeight: 700, fontFamily: "inherit",
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            {expiryLabel(exp)}
-          </button>
-        ))}
-      </div>
-      <SEP />
+            onClick={() => onExpiry("")}
+            style={{ fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2, background: selectedExpiry === "" ? "#1a2a3a" : "transparent", color: selectedExpiry === "" ? "#00e5ff" : "#fff", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}
+          >ALL</button>
+          {visibleExpirations.map(exp => (
+            <button key={exp} onClick={() => onExpiry(exp)} style={{ fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2, background: selectedExpiry === exp ? "#1a2a3a" : "transparent", color: selectedExpiry === exp ? "#00e5ff" : "#fff", cursor: "pointer", fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+              {expiryLabel(exp)}
+            </button>
+          ))}
+        </div>
+        <SEP />
 
-      {/* Chart mode */}
-      <PillGroup
-        options={[{ label: "Line", value: "line" }, { label: "Bars", value: "bars" }]}
-        active={chartMode}
-        onChange={v => onChartMode(v as ChartMode)}
-      />
-      <SEP />
+        <PillGroup options={[{ label: "Line", value: "line" }, { label: "Bars", value: "bars" }]} active={chartMode} onChange={v => onChartMode(v as ChartMode)} />
+        <SEP />
+        <PillGroup options={[{ label: "Net GEX", value: "net" }, { label: "Call - Put", value: "call-put" }]} active={gexMode} onChange={v => onGexMode(v as GexMode)} />
+        <SEP />
+        <PillGroup options={[{ label: "OI + Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]} active={dataMode} onChange={v => onDataMode(v as DataMode)} />
+        <SEP />
 
-      {/* GEX mode */}
-      <PillGroup
-        options={[{ label: "Net GEX", value: "net" }, { label: "Call - Put", value: "call-put" }]}
-        active={gexMode}
-        onChange={v => onGexMode(v as GexMode)}
-      />
-      <SEP />
+        <ToggleBtn label="OI Overlay" active={showOI}        onClick={onToggleOI} />
+        <ToggleBtn label="Net DEX"    active={showDex}       onClick={onToggleDex} />
+        <ToggleBtn label="GEX Flip"   active={showFlipCurve} onClick={onToggleFlip} />
+        <SEP />
 
-      {/* Data mode */}
-      <PillGroup
-        options={[{ label: "OI + Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]}
-        active={dataMode}
-        onChange={v => onDataMode(v as DataMode)}
-      />
-      <SEP />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: TOOLBAR_FONT_SIZE, fontFamily: "inherit" }}>
+          {callWall  != null && <span><span style={{ color: "#3a5570" }}>CW </span><span style={{ color: "#22c55e", fontWeight: 700 }}>{callWall.toLocaleString()}</span></span>}
+          {putWall   != null && <span><span style={{ color: "#3a5570" }}>PW </span><span style={{ color: "#f97316", fontWeight: 700 }}>{putWall.toLocaleString()}</span></span>}
+          {flipPoint != null && <span><span style={{ color: "#3a5570" }}>Flip </span><span style={{ color: "#faad14", fontWeight: 700 }}>{flipPoint.toFixed(0)}</span></span>}
+          {netGex && <span><span style={{ color: "#3a5570" }}>GEX </span><span style={{ color: "#00e5ff", fontWeight: 700 }}>{netGex}</span></span>}
+        </div>
 
-      <ToggleBtn label="OI Overlay" active={showOI}        onClick={onToggleOI} />
-      <ToggleBtn label="Net DEX"    active={showDex}       onClick={onToggleDex} />
-      <ToggleBtn label="GEX Flip"   active={showFlipCurve} onClick={onToggleFlip} />
-      <SEP />
-
-      {/* GEX levels */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: TOOLBAR_FONT_SIZE, fontFamily: "inherit" }}>
-        {callWall != null && <span><span style={{ color: "#3a5570" }}>CW </span><span style={{ color: "#22c55e", fontWeight: 700 }}>{callWall.toLocaleString()}</span></span>}
-        {putWall  != null && <span><span style={{ color: "#3a5570" }}>PW </span><span style={{ color: "#f97316", fontWeight: 700 }}>{putWall.toLocaleString()}</span></span>}
-        {flipPoint != null && <span><span style={{ color: "#3a5570" }}>Flip </span><span style={{ color: "#faad14", fontWeight: 700 }}>{flipPoint.toFixed(0)}</span></span>}
-        {netGex && <span><span style={{ color: "#3a5570" }}>GEX </span><span style={{ color: "#00e5ff", fontWeight: 700 }}>{netGex}</span></span>}
-      </div>
-
-      {/* Chart collapse/expand */}
-      <div style={{ marginLeft: "auto", display: "flex", gap: 3, flexShrink: 0, alignItems: "center" }}>
-        <ChevronBoxBtn open={chartOpen} onClick={onToggleChart} title={chartOpen ? "Collapse chart" : "Expand chart"} />
-      </div>
-
-      {/* Refresh button */}
-      <button
-        onClick={trigger}
-        style={{ ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}
-      >
-        {btnLabel}
-      </button>
+        <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+          <button onClick={trigger} style={{ ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}>{btnLabel}</button>
+        </div>
+      </>}
     </div>
   );
 }
