@@ -3716,29 +3716,29 @@ async function fetchStockGEX(sym){
 // Weekly economic events — update this array each week.
 // date: "YYYY-MM-DD", time: "HH:MM" in 24h ET, label: "am"/"pm" display hint
 const ECON_EVENTS = [
-  // ── Monday, June 8 ──
+  // ── Monday, June 15 ──
+  { date:"2026-06-15", time:"08:30", name:"Empire State Manufacturing Survey", period:"Jun." },
+  { date:"2026-06-15", time:"09:15", name:"Industrial Production, M/M%", period:"May" },
+  { date:"2026-06-15", time:"09:15", name:"Capacity Utilization %", period:"May" },
+  { date:"2026-06-15", time:"10:00", name:"NAHB Housing Market Index", period:"Jun." },
+
+  // ── Tuesday, June 16 ──
+  { date:"2026-06-16", time:"08:30", name:"Housing Starts", period:"May" },
+  { date:"2026-06-16", time:"08:30", name:"Import Prices", period:"May" },
+
+  // ── Wednesday, June 17 ──
+  { date:"2026-06-17", time:"08:30", name:"Retail Sales", period:"May" },
+  { date:"2026-06-17", time:"10:00", name:"Manufacturing & Trade: Inventories & Sales", period:"Apr." },
+  { date:"2026-06-17", time:"10:00", name:"Pending Home Sales Idx, M/M%", period:"May" },
+  { date:"2026-06-17", time:"14:00", name:"U.S. Interest Rate Decision", period:"-" },
+
+  // ── Thursday, June 18 ──
+  { date:"2026-06-18", time:"08:30", name:"Weekly Jobless Claims", period:"Jun. 13" },
+  { date:"2026-06-18", time:"08:30", name:"Philadelphia Fed Business Outlook Survey", period:"Jun." },
+  { date:"2026-06-18", time:"10:00", name:"Leading Indicators", period:"May" },
+
+  // ── Friday, June 19 ──
   // No events scheduled
-
-  // ── Tuesday, June 9 ──
-  { date:"2026-06-09", time:"06:00", name:"NFIB Index of Small Business Optimism", period:"May" },
-  { date:"2026-06-09", time:"10:00", name:"Monthly Wholesale Trade", period:"April" },
-  { date:"2026-06-09", time:"10:00", name:"Existing Home Sales", period:"May" },
-
-  // ── Wednesday, June 10 ──
-  { date:"2026-06-10", time:"08:30", name:"CPI", period:"May" },
-  { date:"2026-06-10", time:"08:30", name:"CPI, Y/Y%", period:"May" },
-  { date:"2026-06-10", time:"08:30", name:"CPI Core, Y/Y%", period:"May" },
-  { date:"2026-06-10", time:"14:00", name:"Monthly Treasury Balance", period:"May" },
-
-  // ── Thursday, June 11 ──
-  { date:"2026-06-11", time:"08:30", name:"Weekly Jobless Claims", period:"week of June 7" },
-  { date:"2026-06-11", time:"08:30", name:"PPI", period:"May" },
-  { date:"2026-06-11", time:"08:30", name:"Ex-Food & Energy PPI, M/M%", period:"May" },
-  { date:"2026-06-11", time:"08:30", name:"Personal Consumption", period:"May" },
-
-  // ── Friday, June 12 ──
-  { date:"2026-06-12", time:"09:59", noTime:true, name:"SpaceX $SPCX IPO", period:"" },
-  { date:"2026-06-12", time:"10:00", name:"U. Michigan Prelim Consumer Survey", period:"June" },
 ];
 
 // Determines event urgency class for the countdown badge
