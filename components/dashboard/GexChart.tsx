@@ -320,9 +320,8 @@ export default function GexChart({
     // ── GEX profile line (net GEX as smooth curve over bars, dashed cyan) ──
     if (showFlipCurve) {
       const gVals = data.map(r => getNet(r));
-      const maxP  = Math.max(...gVals.map(Math.abs).filter(v => v > 0), 1);
-      // Scale the curve to 80% of chart height so it's always visible
-      const yP = (v: number) => yZero - (v / maxP) * (cH / 2) * 0.78;
+      // Use same Y scale as bars so the curve is a true overlay
+      const yP = (v: number) => yFor(v);
       ctx.strokeStyle = "#00e5ff";
       ctx.lineWidth   = 1.5;
       ctx.setLineDash([2, 3]);

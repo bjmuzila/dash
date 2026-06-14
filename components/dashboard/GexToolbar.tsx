@@ -157,8 +157,6 @@ export default function GexToolbar({
         </div>
         <SEP />
 
-        <PillGroup options={[{ label: "Line", value: "line" }, { label: "Bars", value: "bars" }]} active={chartMode} onChange={v => onChartMode(v as ChartMode)} />
-        <SEP />
         <PillGroup options={[{ label: "Net GEX", value: "net" }, { label: "Call - Put", value: "call-put" }]} active={gexMode} onChange={v => onGexMode(v as GexMode)} />
         <SEP />
         <PillGroup options={[{ label: "OI + Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]} active={dataMode} onChange={v => onDataMode(v as DataMode)} />

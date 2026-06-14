@@ -322,6 +322,16 @@ async function dbGetAll(db: IDBDatabase): Promise<Snapshot[]> {
   });
 }
 
+async function dbDeleteSnapshot(db: IDBDatabase, id: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["snapshots"], "readwrite");
+    const store = tx.objectStore("snapshots");
+    const req = store.delete(id);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve();
+  });
+}
+
 interface EMEngine {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   quoteCache: Record<string, any>;
@@ -891,6 +901,13 @@ export default function EstimatedMoves() {
     setStatus({ text: "Exported", color: "#00e676" });
   }, [activeView]);
 
+  const deleteSnapshot = useCallback(async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    if (!dbRef.current) return;
+    await dbDeleteSnapshot(dbRef.current, id);
+    setSnapshots((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
   const loadSnapshot = useCallback((snap: Snapshot) => {
     const view = snap.view ?? "estimated";
     setActiveView(view);
@@ -1046,9 +1063,12 @@ export default function EstimatedMoves() {
                 {filteredSnapshots.length === 0 ? (
                   <div style={{ padding: "10px 14px", fontSize: 11, color: "#3a5570" }}>No snapshots</div>
                 ) : filteredSnapshots.map((snap) => (
-                  <div key={snap.id} onClick={() => loadSnapshot(snap)} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: "1px solid #0d1825", background: "#04070c" }}>
-                    <div style={{ fontSize: 11, color: "#e8edf5", fontWeight: 700 }}>{snap.date}</div>
-                    <div style={{ fontSize: 10, color: "#7ab8ff", fontVariantNumeric: "tabular-nums" }}>{snap.time}</div>
+                  <div key={snap.id} onClick={() => loadSnapshot(snap)} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: "1px solid #0d1825", background: "#04070c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: "#e8edf5", fontWeight: 700 }}>{snap.date}</div>
+                      <div style={{ fontSize: 10, color: "#7ab8ff", fontVariantNumeric: "tabular-nums" }}>{snap.time}</div>
+                    </div>
+                    <button onClick={(e) => deleteSnapshot(e, snap.id!)} style={{ background: "none", border: "none", color: "#5a7a99", fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>×</button>
                   </div>
                 ))}
               </div>
