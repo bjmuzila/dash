@@ -2,9 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-const SHEET_ID = "1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg";
-const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=LEVELS`;
-
 interface LadderRow {
   key: string;
   label: string;
@@ -13,14 +10,11 @@ interface LadderRow {
 }
 
 const ROWS: LadderRow[] = [
-  { key: "NO LONG",  label: "NO LONG",  dotColor: "#ff6b6b", valueKey: "NO LONG" },
-  { key: "UP",       label: "UP EST",   dotColor: "#22c55e", valueKey: "UP" },
-  { key: "VAH",      label: "VAH",      dotColor: "#00e5ff", valueKey: "VAH" },
-  { key: "VPOC",     label: "VPOC",     dotColor: "#a78bfa", valueKey: "VPOC" },
-  { key: "MID",      label: "MID",      dotColor: "#faad14", valueKey: "MID" },
-  { key: "DOWN",     label: "DOWN EST", dotColor: "#f97316", valueKey: "DOWN" },
-  { key: "VAL",      label: "VAL",      dotColor: "#00b4ff", valueKey: "VAL" },
-  { key: "NO SHORT", label: "NO SHORT", dotColor: "#ff6b6b", valueKey: "NO SHORT" },
+  { key: "NO LONG",  label: "NO LONG",  dotColor: "#ff6b6b", valueKey: "no_long" },
+  { key: "UP",       label: "UP EST",   dotColor: "#22c55e", valueKey: "up" },
+  { key: "MID",      label: "MID",      dotColor: "#faad14", valueKey: "mid" },
+  { key: "DOWN",     label: "DOWN EST", dotColor: "#f97316", valueKey: "down" },
+  { key: "NO SHORT", label: "NO SHORT", dotColor: "#ff6b6b", valueKey: "no_short" },
 ];
 
 function fmtDist(v: number, spot: number): string {
@@ -34,7 +28,7 @@ interface Props {
 }
 
 export default function EsStatsLadder({ esSpot }: Props) {
-  const [stats, setStats] = useState<Record<string, number>>({});
+  const [stats, setStats] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -42,21 +36,14 @@ export default function EsStatsLadder({ esSpot }: Props) {
     setLoading(true);
     setErr(null);
     try {
-      const res = await fetch(SHEET_URL, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch("/api/es-stats", { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      const jsonText =
-        text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);\s*$/)?.[1] ??
-        text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
-      const json = JSON.parse(jsonText);
-      const rows = json?.table?.rows ?? [];
-      const map: Record<string, number> = {};
-      for (const row of rows) {
-        const label = row?.c?.[0]?.v?.toString().trim().toUpperCase();
-        const value = parseFloat(String(row?.c?.[1]?.v ?? "").replace(/[^0-9.-]/g, ""));
-        if (label && Number.isFinite(value)) map[label] = value;
+      const row = await res.json();
+      if (!row) {
+        setStats({});
+        return;
       }
-      setStats(map);
+      setStats(row);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -144,8 +131,9 @@ export default function EsStatsLadder({ esSpot }: Props) {
         )}
 
         {ROWS.map((row) => {
-          const val = stats[row.valueKey];
-          const hasVal = val != null && Number.isFinite(val);
+          const rawVal = stats[row.valueKey];
+          const val = rawVal != null ? parseFloat(String(rawVal).replace(/[^0-9.-]/g, "")) : NaN;
+          const hasVal = Number.isFinite(val);
           const distStr = hasVal && spot > 0 ? fmtDist(val, spot) : "";
           const distPos = hasVal && spot > 0 ? val > spot : null;
 
