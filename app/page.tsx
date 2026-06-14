@@ -83,6 +83,7 @@ export default function OverviewPage() {
   const [showFlipCurve, setShowFlipCurve] = useState(false);
   const [feedTab, setFeedTab]             = useState<FeedTab>("snapshot");
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
+  const [heatmapOpen, setHeatmapOpen] = useState(true);
 
   // Live data refs — mutated in WS handler, never trigger renders directly
   const liveRef    = useRef<Record<string, LiveEntry>>({});
@@ -486,10 +487,36 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* ══ RIGHT: Resize handle + Full-height Heatmap ══ */}
-      <div style={{ width: 4, flexShrink: 0, background: "var(--overview-border)", cursor: "ew-resize", zIndex: 20 }} />
+      {/* ══ RIGHT: Collapse tab + Full-height Heatmap ══ */}
+      {/* Vertical tab button on the border */}
+      <div style={{ width: 16, flexShrink: 0, position: "relative", background: "var(--overview-border)", zIndex: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <button
+          onClick={() => setHeatmapOpen(v => !v)}
+          title={heatmapOpen ? "Collapse heatmap" : "Expand heatmap"}
+          style={{
+            position: "absolute",
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 16,
+            height: 48,
+            background: "#0d1f30",
+            border: "1px solid #1e3050",
+            borderRadius: 3,
+            color: "#00e5ff",
+            fontSize: 10,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            zIndex: 30,
+          }}
+        >
+          {heatmapOpen ? "▶" : "◀"}
+        </button>
+      </div>
 
-      <div style={{ width: 530, minWidth: 160, maxWidth: 900, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--overview-border)", background: "var(--overview-bg)", overflow: "hidden" }}>
+      <div style={{ width: heatmapOpen ? 530 : 0, minWidth: heatmapOpen ? 160 : 0, maxWidth: 900, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: heatmapOpen ? "1px solid var(--overview-border)" : "none", background: "var(--overview-bg)", overflow: "hidden", transition: "width 0.2s ease" }}>
 
         {/* Heatmap top controls */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", background: "var(--overview-control-bg)", borderBottom: "1px solid var(--overview-border)", flexShrink: 0 }}>
