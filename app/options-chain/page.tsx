@@ -222,7 +222,6 @@ function ChainTable({
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const autoCenterBlockedRef = useRef(false);
-  void renderTick; // ensure re-render on tick
 
   useEffect(() => {
     const body = bodyRef.current;
@@ -247,7 +246,7 @@ function ChainTable({
     );
   }, [strikes, spot]);
 
-  // Filter strikes by range
+  // Filter strikes by range — include renderTick so re-runs when WS data arrives
   const filtered = useMemo(() => {
     let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
     if (rangePercent === "all") {
@@ -265,7 +264,8 @@ function ChainTable({
       if (r2.length) rows = r2;
     }
     return rows;
-  }, [strikes, liveData, spot, rangePercent]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strikes, spot, rangePercent, renderTick]);
 
   // Compute maxAbs for net columns
   const maxAbs = useMemo(() => {
@@ -286,7 +286,8 @@ function ChainTable({
       if (vex  > m.vex)  m.vex  = vex;
     });
     return m;
-  }, [filtered, liveData, spot]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, spot, renderTick]);
 
   // Auto-scroll to ATM on first load
   useEffect(() => {
@@ -638,6 +639,9 @@ export default function OptionsChainPage() {
       loadChain(t, e);
     }
   }, [ticker, selectedExpiry, activeTicker, expirations.length, fetchExpirations, loadChain]);
+
+  // Bump renderTick when rangePercent changes so ChainTable filtered useMemo re-runs
+  useEffect(() => { setRenderTick(t => t + 1); }, [rangePercent]);
 
   // Auto-fetch expirations for default ticker on mount
   useEffect(() => { fetchExpirations("SPX"); }, [fetchExpirations]);

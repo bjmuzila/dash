@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-06-14 (session 8) — Bug Fixes, Calendar Enhancements, Quotes Panel
+
+### Options Chain (`app/options-chain/page.tsx`)
+- Fixed % range dropdown not filtering — `filtered` useMemo now depends on `renderTick` instead of `liveData` ref (which never changes identity)
+- Added `useEffect` to bump `renderTick` on `rangePercent` change so filter applies immediately
+
+### Multi-Greek (`app/mult-greek/page.tsx`)
+- Auto-loads on mount when expirations are ready — no need to click GO manually
+
+### Econ Calendar Page (`app/economic-calendar/page.tsx`)
+- Fixed background color to `#05080d` (was using CSS vars that rendered as pure black in some contexts)
+- Events now show next 7 days (rolling window from today) instead of Mon–Fri current week only
+
+### EconCalendarPanel (`components/dashboard/EconCalendarPanel.tsx`)
+- Same 7-day rolling window fix applied to Overview panel
+- Added "POTUS" option to impact filter dropdown
+- Added "President" purple (`#a855f7`) impact color
+
+### Trump Calendar (`app/api/trump-calendar/route.ts`) — NEW
+- New API route fetching `https://media-cdn.factba.se/rss/json/trump/calendar-full.json`
+- Filters out "executive time", "pool call", "in-town pool" noise events
+- 30-min in-memory cache
+- Events tagged with `impact: "President"` and rendered in purple
+
+### Calendar Merge (both Econ Calendar page + EconCalendarPanel)
+- Both now fetch ForexFactory + Trump calendar in parallel and merge/sort by date+time
+
+### Quotes Panel (`components/shared/QuotesPanel.tsx`)
+- Expanded to fill full sidebar height via flex layout
+- Row height slider at bottom (16–56px) for adjustable density
+- Font size scales with row height
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- Wrapper div changed from `overflowY: auto` to `display: flex, flexDirection: column` so QuotesPanel can fill available space
+
+### Nav Cleanup (`components/shared/TopBar.tsx`)
+- Removed "Quotes", "GEX Ladder", "Econ Calendar" from NAV_ITEMS
+- `app/quotes/page.tsx` — redirects to `/`
+- `app/gex/page.tsx` — redirects to `/`
+- `app/top10/page.tsx` — redirects to `/`
+
+### push-to-github skill (`skills/push-to-github/SKILL.md`)
+- Updated to auto-read package.json, compute version, bump it, and output ready-to-paste PowerShell block
+
+### Version
+- Bumped to `2026.6.14-v11`
+
 ## 2026-06-14 (session 6) — UI Polish: Chevron Buttons, Sidebar, TopBar, Heatmap
 
 ### Sidebar (`components/shared/Sidebar.tsx`)

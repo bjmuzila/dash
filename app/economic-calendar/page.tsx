@@ -43,16 +43,24 @@ export default function EconomicCalendarPage() {
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [impactFilter, setImpactFilter] = useState<ImpactFilter>("high-usd");
+  const [quote, setQuote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/calendar");
-      const json = await res.json();
-      if (!res.ok) { setError(json.error ?? `HTTP ${res.status}`); return; }
+      const [calRes, quoteRes] = await Promise.all([
+        fetch("/api/calendar"),
+        fetch("/api/calendar-quote"),
+      ]);
+      const json = await calRes.json();
+      if (!calRes.ok) { setError(json.error ?? `HTTP ${calRes.status}`); return; }
       setEvents(json.events ?? []);
       setLastRefresh(new Date().toLocaleTimeString());
+      if (quoteRes.ok) {
+        const qj = await quoteRes.json();
+        if (qj.quote) setQuote(qj.quote);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -118,6 +126,15 @@ export default function EconomicCalendarPage() {
           </button>
         </div>
       </div>
+
+      {/* Quote of the day */}
+      {quote && (
+        <div style={{ padding: "8px 16px", borderBottom: "1px solid #0d1f30", background: "#070c14", flexShrink: 0 }}>
+          <p style={{ margin: 0, fontSize: 12, fontStyle: "italic", color: "#e8edf5", lineHeight: 1.6, textAlign: "center", letterSpacing: "0.02em" }}>
+            &ldquo;{quote}&rdquo;
+          </p>
+        </div>
+      )}
 
       {/* Body */}
       <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 20 }}>
