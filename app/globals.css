@@ -38,3 +38,59 @@ textarea {
 ::-webkit-scrollbar-track { background: var(--surface); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* Mobile responsive */
+@media (max-width: 767px) {
+  /* Hide GEX Row 2 on small screens */
+  .topbar-row2 { display: none !important; }
+
+  /* Allow TopBar Row 1 to wrap */
+  .topbar-row1 { row-gap: 6px; }
+
+  /* Make page content scrollable vertically instead of clipped */
+  body { overflow: hidden; }
+  main { overflow-y: auto !important; }
+
+  /* Allow page-level containers to scroll naturally */
+  main > div {
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: auto !important;
+    min-height: 100%;
+  }
+
+  /* Hide resize handle on mobile */
+  .overview-root > div[style*="ew-resize"] {
+    display: none !important;
+  }
+
+  /* Overview page: stack vertically on mobile */
+  .overview-root {
+    flex-direction: column !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    height: auto !important;
+  }
+
+  /* Heatmap column: full width on mobile */
+  .overview-root > div:last-of-type {
+    width: 100% !important;
+    min-width: unset !important;
+    max-width: unset !important;
+    border-left: none !important;
+    border-top: 1px solid #1a2a3a;
+    min-height: 320px;
+  }
+
+  /* Chart top section: full height on mobile */
+  .overview-root > div:first-of-type > div:first-child {
+    flex: 0 0 300px !important;
+  }
+
+  /* Bottom panels: stack on mobile */
+  .overview-root > div:first-of-type > div:last-child {
+    flex-direction: column !important;
+    height: auto !important;
+    flex: 0 0 auto !important;
+  }
+}

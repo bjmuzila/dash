@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import TopBar from "@/components/shared/TopBar";
-import Sidebar from "@/components/shared/Sidebar";
+import LayoutShell from "@/components/shared/LayoutShell";
 
 export const metadata: Metadata = {
   title: "BzilaTrades Dashboard",
   description: "Real-time SPX GEX & options flow dashboard",
+  viewport: "width=device-width, initial-scale=1, maximum-scale=1",
 };
 
 export default function RootLayout({
@@ -17,10 +18,7 @@ export default function RootLayout({
     <html lang="en">
       <body className="flex h-screen flex-col overflow-hidden">
         <TopBar />
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 overflow-hidden" style={{ display: "flex", flexDirection: "column" }}>{children}</main>
-        </div>
+        <LayoutShell>{children}</LayoutShell>
       </body>
     </html>
   );

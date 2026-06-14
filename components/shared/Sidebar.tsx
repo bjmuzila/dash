@@ -25,7 +25,7 @@ const NAV_ITEMS = [
   { label: "Legacy",       href: "/legacy" },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onClose, isMobile }: { onClose?: () => void; isMobile?: boolean }) {
   const pathname = usePathname();
   const isOverview = pathname === "/";
 
@@ -36,8 +36,22 @@ export default function Sidebar() {
         borderColor: isOverview ? "var(--overview-border, var(--border))" : "var(--border)",
         background: isOverview ? "var(--overview-bg, var(--surface))" : "var(--surface)",
         overflow: "hidden",
+        height: "100%",
       }}
     >
+      {/* Mobile close button */}
+      {isMobile && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 8px 0" }}>
+          <button
+            onClick={onClose}
+            aria-label="Close menu"
+            style={{ background: "none", border: "none", color: "#5a7a99", fontSize: 20, cursor: "pointer", padding: "2px 6px" }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Scrollable nav links */}
       <div className="flex flex-col py-4 gap-1 overflow-y-auto flex-1 min-h-0">
         {NAV_ITEMS.map(({ label, href }) => {
@@ -46,6 +60,7 @@ export default function Sidebar() {
             <Link
               key={href}
               href={href}
+              onClick={isMobile ? onClose : undefined}
               className={clsx(
                 "px-4 py-2 text-xs tracking-wide transition-colors rounded-sm mx-2",
                 active

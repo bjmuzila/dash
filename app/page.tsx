@@ -379,7 +379,7 @@ export default function OverviewPage() {
   } as CSSProperties;
 
   return (
-    <div style={{ ...overviewTheme, display: "flex", flexDirection: "row", flex: 1, minHeight: 0, overflow: "hidden", height: "100%", fontFamily: "Arial, Helvetica, sans-serif", fontWeight: 700, background: "var(--overview-bg)" }}>
+    <div className="overview-root" style={{ ...overviewTheme, display: "flex", flexDirection: "row", flex: 1, minHeight: 0, overflow: "hidden", height: "100%", fontFamily: "Arial, Helvetica, sans-serif", fontWeight: 700, background: "var(--overview-bg)" }}>
 
       {/* ══ LEFT COLUMN: Chart (top 50%) + Bottom panels (bottom 50%) ══ */}
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>

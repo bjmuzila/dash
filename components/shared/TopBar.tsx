@@ -361,11 +361,12 @@ export default function TopBar() {
     >
       {/* ── ROW 1 ── */}
       <div
+        className="topbar-row1"
         style={{
           display: "flex",
           alignItems: "center",
           gap: 10,
-          flexWrap: "nowrap",
+          flexWrap: "wrap",
           padding: TOPBAR_ROW1_PADDING,
           width: "100%",
           boxSizing: "border-box",
@@ -455,8 +456,8 @@ export default function TopBar() {
         </div>
       </div>
 
-      {/* ── ROW 2 ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: TOPBAR_ROW2_PADDING, borderTop: "1px solid #0d1825", minHeight: 30, background: "rgba(5,10,16,.7)", flexShrink: 0 }}>
+      {/* ── ROW 2 ── (hidden on mobile) */}
+      <div className="topbar-row2" style={{ display: "flex", alignItems: "center", gap: 16, padding: TOPBAR_ROW2_PADDING, borderTop: "1px solid #0d1825", minHeight: 30, background: "rgba(5,10,16,.7)", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#ffb300", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700 }}>Current MVC</span>
           <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570" }}>OI+V:</span>
