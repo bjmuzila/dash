@@ -59,6 +59,28 @@ export default function EsStatsLadder({ esSpot }: Props) {
 
   const spot = esSpot ?? 0;
 
+  // Build sorted ladder entries: level rows + current price row, sorted descending by value
+  type LadderEntry =
+    | { type: "level"; row: LadderRow; val: number; hasVal: boolean }
+    | { type: "spot"; val: number };
+
+  const entries: LadderEntry[] = ROWS.map((row) => {
+    const rawVal = stats[row.valueKey];
+    const val = rawVal != null ? parseFloat(String(rawVal).replace(/[^0-9.-]/g, "")) : NaN;
+    return { type: "level" as const, row, val, hasVal: Number.isFinite(val) };
+  });
+
+  if (spot > 0) {
+    entries.push({ type: "spot" as const, val: spot });
+  }
+
+  // Sort descending (highest price at top)
+  entries.sort((a, b) => {
+    const av = Number.isFinite(a.val) ? a.val : -Infinity;
+    const bv = Number.isFinite(b.val) ? b.val : -Infinity;
+    return bv - av;
+  });
+
   return (
     <div
       style={{
@@ -130,10 +152,57 @@ export default function EsStatsLadder({ esSpot }: Props) {
           <div style={{ padding: 8, fontSize: 10, color: "#ef4444" }}>⚠ {err}</div>
         )}
 
-        {ROWS.map((row) => {
-          const rawVal = stats[row.valueKey];
-          const val = rawVal != null ? parseFloat(String(rawVal).replace(/[^0-9.-]/g, "")) : NaN;
-          const hasVal = Number.isFinite(val);
+        {entries.map((entry, i) => {
+          if (entry.type === "spot") {
+            return (
+              <div
+                key="__spot__"
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  minHeight: 0,
+                  borderBottom: "1px solid #0a1420",
+                  position: "relative",
+                  zIndex: 1,
+                  background: "rgba(0,229,255,0.04)",
+                }}
+              >
+                {/* Label side */}
+                <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 8, fontWeight: 700, letterSpacing: "0.1em",
+                    textTransform: "uppercase", color: "#00e5ff", whiteSpace: "nowrap",
+                  }}>
+                    ES NOW
+                  </div>
+                </div>
+
+                {/* Dot — filled cyan */}
+                <div
+                  style={{
+                    width: 10, height: 10, borderRadius: "50%",
+                    border: "2px solid #00e5ff",
+                    background: "#00e5ff",
+                    flexShrink: 0, position: "relative", zIndex: 2,
+                  }}
+                />
+
+                {/* Value side */}
+                <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 13, fontWeight: 700, color: "#00e5ff",
+                    fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
+                  }}>
+                    {entry.val.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // level row
+          const { row, val, hasVal } = entry;
           const distStr = hasVal && spot > 0 ? fmtDist(val, spot) : "";
           const distPos = hasVal && spot > 0 ? val > spot : null;
 

@@ -1,6 +1,14 @@
 # Changelog
 
-## 2026-06-13
+## 2026-06-13 (session 3)
+
+### ES Stats Ladder — Current Price Row in Timeline
+- `components/dashboard/EsStatsLadder.tsx` — added "ES NOW" row sourced from `esSpot` prop (same `spotPrice` state already passed from `app/page.tsx`)
+- All rows (5 levels + spot) are now sorted descending by value so the current price appears at its correct position in the ladder
+- Spot row renders with a filled cyan dot, cyan label/value, and subtle cyan background tint — visually distinct from level rows
+- Data wiring unchanged: `esSpot` prop is already fed by the same WebSocket-backed `spotPrice` used by the GEX toolbar
+
+## 2026-06-13 (session 2)
 
 ### Built Dynamic Economic Calendar via Next.js API
 - Created `app/api/econ-calendar/events.json` — persistent data file, source of truth for all pages
