@@ -520,23 +520,23 @@ function GreekCard({
   sparkData: { ts: number; value: number }[];
 }) {
   return (
-    <section style={{
+    <section className="greek-card" style={{
       border: `1px solid ${borderColor}`,
       background: `linear-gradient(180deg,${color}0d,rgba(0,0,0,.25))`,
       borderRadius: 8, padding: 14, display: "flex", flexDirection: "column", minHeight: 0, height: "100%",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${borderColor}`, display: "flex", alignItems: "center", justifyContent: "center", color, fontWeight: 800, fontSize: 16 }}>{icon}</div>
+          <div className="greek-icon" style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${borderColor}`, display: "flex", alignItems: "center", justifyContent: "center", color, fontWeight: 800, fontSize: 16, flexShrink: 0 }}>{icon}</div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>{label}</div>
-            <div style={{ fontSize: 10, color, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>{subtitle}</div>
+            <div className="greek-label" style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>{label}</div>
+            <div className="greek-subtitle" style={{ fontSize: 10, color, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>{subtitle}</div>
           </div>
         </div>
-        <div style={{ fontSize: 10, color, border: `1px solid ${borderColor}`, padding: "4px 8px", borderRadius: 4, fontWeight: 800 }}>{badge}</div>
+        <div className="greek-badge" style={{ fontSize: 10, color, border: `1px solid ${borderColor}`, padding: "4px 8px", borderRadius: 4, fontWeight: 800, flexShrink: 0 }}>{badge}</div>
       </div>
       <div style={{ fontSize: 10, color: "#c9d7db", marginBottom: 4 }}>Current Value</div>
-      <div id={`${id}-value`} style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace" }}>{value}</div>
+      <div id={`${id}-value`} className="greek-value" style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace" }}>{value}</div>
       <div id={`${id}-desc`} style={{ marginTop: 8, fontSize: 12, color: "#d7e6e8", lineHeight: 1.5, flex: 1 }}>{desc}</div>
       <Sparkline data={sparkData} color={color} />
     </section>
@@ -1255,12 +1255,12 @@ export default function InsightsPage() {
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#02070f", overflow: "hidden" }}>
 
       {/* Header */}
-      <div style={{ padding: "6px 14px", background: "#070c14", borderBottom: "1px solid #1a2a3a", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-        <span style={{ fontSize: 10, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em" }}>Insights</span>
-        <div style={{ display: "flex", gap: 0, marginLeft: 12 }}>
+      <div style={{ padding: "6px 8px", background: "#070c14", borderBottom: "1px solid #1a2a3a", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em", flexShrink: 0 }}>Insights</span>
+        <div style={{ display: "flex", gap: 0, flexWrap: "wrap" }}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding: "5px 14px", fontSize: 10, fontWeight: 800,
+              padding: "5px 10px", fontSize: 10, fontWeight: 800,
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: "transparent", border: "none",
               borderBottom: tab === t.id ? "2px solid #00e5ff" : "2px solid transparent",
@@ -1273,7 +1273,7 @@ export default function InsightsPage() {
           value={selectedExpiry}
           onChange={(e) => setSelectedExpiry(e.target.value)}
           style={{
-            marginLeft: 12,
+            marginLeft: 4,
             background: "#0a1220",
             color: "#e4e4e7",
             border: "1px solid #1e3050",
@@ -1294,11 +1294,16 @@ export default function InsightsPage() {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 8px", display: "flex", flexDirection: "column", minHeight: 0 }}
+        className="insights-content"
+      >
+        <style>{`
+          @media (min-width: 641px) { .insights-content { padding: 16px !important; } }
+        `}</style>
 
         {/* ── EXPOSURE TAB ─────────────────────────────────────────────────── */}
         {tab === "exposure" && (
-          <div id="exposure-board" style={{ maxWidth: 1100, display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+          <div id="exposure-board" style={{ maxWidth: 1100, width: "100%", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
             {/* Title row */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
               <div>
@@ -1307,8 +1312,19 @@ export default function InsightsPage() {
               </div>
             </div>
 
-            {/* 2-col grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, flex: 1, minHeight: 0, gridAutoRows: "minmax(0, 1fr)" }}>
+            {/* 2-col grid — collapses to 1-col on narrow screens */}
+            <style>{`
+              @media (max-width: 640px) {
+                #exposure-board .exposure-grid { grid-template-columns: 1fr !important; }
+                #exposure-board .greek-card { min-height: 160px !important; height: auto !important; }
+                #exposure-board .greek-card .greek-value { font-size: 22px !important; }
+                #exposure-board .greek-card .greek-badge { display: none !important; }
+                #exposure-board .greek-card .greek-icon { width: 22px !important; height: 22px !important; font-size: 13px !important; }
+                #exposure-board .greek-card .greek-label { font-size: 13px !important; }
+                #exposure-board .greek-card .greek-subtitle { font-size: 9px !important; }
+              }
+            `}</style>
+            <div className="exposure-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, flex: 1, minHeight: 0, gridAutoRows: "minmax(0, 1fr)" }}>
 
               {/* GEX */}
               <GreekCard
@@ -1369,9 +1385,9 @@ export default function InsightsPage() {
               />
 
               {/* Buy/Sell Pressure */}
-              <section style={{ border: "1px solid rgba(0,230,118,.24)", background: "linear-gradient(180deg,rgba(0,40,25,.6),rgba(0,0,0,.28))", borderRadius: 8, padding: 14, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+              <section className="greek-card" style={{ border: "1px solid rgba(0,230,118,.24)", background: "linear-gradient(180deg,rgba(0,40,25,.6),rgba(0,0,0,.28))", borderRadius: 8, padding: 14, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
                 <div style={{ fontSize: 12, color: "#00e676", fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", marginBottom: 10 }}>Buy/Sell Pressure</div>
-                <div style={{ fontSize: 28, fontWeight: 900, color: buyPct > 50 ? "#00e676" : "#ff4d57", fontFamily: "monospace" }}>
+                <div className="greek-value" style={{ fontSize: 28, fontWeight: 900, color: buyPct > 50 ? "#00e676" : "#ff4d57", fontFamily: "monospace" }}>
                   {buyPct}% Buy / {sellPct}% Sell
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#c9d7db", margin: "10px 0 6px" }}>
@@ -1406,9 +1422,9 @@ export default function InsightsPage() {
               <RelativeVolumeSparkline candles={esCandles} etClock={etClock} lastRefresh={lastRefresh} />
 
               {/* Institutional Analysis */}
-              <section style={{ border: "1px solid rgba(0,180,200,.26)", background: "linear-gradient(180deg,rgba(0,40,45,.5),rgba(0,0,0,.28))", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+              <section className="greek-card" style={{ border: "1px solid rgba(0,180,200,.26)", background: "linear-gradient(180deg,rgba(0,40,45,.5),rgba(0,0,0,.28))", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
                 <div style={{ fontSize: 10, color: "#00e5ff", fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", marginBottom: 10 }}>Institutional Analysis</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
+                <div className="exposure-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
                   <div style={{ border: "1px solid rgba(0,180,200,.2)", borderRadius: 6, padding: 10 }}>
                     <div style={{ fontSize: 8, color: "#00e5ff", fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase" }}>Active Regime</div>
                     <div style={{ fontSize: 13, fontWeight: 900, color: regime ? regime.badge : "#eef7ff", marginTop: 5 }}>{regime ? regime.name : "--"}</div>

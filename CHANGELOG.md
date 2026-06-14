@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-06-14 (session 9) — Economic Calendar Overhaul + Nav Restore
+
+### Economic Calendar Full Page (`app/economic-calendar/page.tsx`)
+- Complete rewrite to match target layout: left column (day label + time), right column (impact·country badge, bold title, A/F/P values)
+- Multi-select filter dropdown — checkboxes for High·USD, High, Medium, Low, All (can combine e.g. High·USD + Medium simultaneously)
+- Google Sheets daily quote fetched from `/api/calendar-quote` and displayed italic below header
+- All blue/muted text replaced with white
+- Larger fonts throughout (title 15px, time 13px, date headers 14px, impact 11px)
+- Date section headers with TODAY badge for current day
+- Removed all Trump calendar references — FF data only
+
+### EconCalendarPanel (`components/dashboard/EconCalendarPanel.tsx`)
+- Full rewrite to match same layout as full page (left time/day column, right content column)
+- Multi-select filter dropdown (same High·USD + High + Medium + Low + All)
+- Google Sheets daily quote block below header
+- Stale events (>30 min past) faded to 32% opacity, pushed below divider
+- 60s interval tick for live stale detection
+- Removed dead `/api/trump-calendar` fetch — FF-only data
+- White text throughout, bigger fonts (title 12px, time 11px)
+
+### New API Route (`app/api/calendar-quote/route.ts`)
+- Proxies `/proxy/api/quote-of-day` from Vanilla through Next.js
+- 1hr revalidation cache
+
+### TopBar Nav (`components/shared/TopBar.tsx`)
+- Restored "Econ Calendar" → `/economic-calendar` at top of NAV_ITEMS (had been removed in session 8)
+
+### Version
+- Bumped to `2026.6.14-v13`
+
 ## 2026-06-14 (session 8) — Bug Fixes, Calendar Enhancements, Quotes Panel
 
 ### Options Chain (`app/options-chain/page.tsx`)

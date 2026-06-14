@@ -15,10 +15,11 @@ interface CalEvent {
 }
 
 const IMPACT_COLOR: Record<string, string> = {
-  High:    "#ef4444",
-  Medium:  "#f59e0b",
-  Low:     "#3a5570",
-  Holiday: "#6b7280",
+  High:      "#ef4444",
+  Medium:    "#f59e0b",
+  Low:       "#3a5570",
+  Holiday:   "#6b7280",
+  President: "#a855f7",
 };
 
 function impactColor(i: string) { return IMPACT_COLOR[i] ?? "#3a5570"; }
@@ -32,18 +33,20 @@ function groupByDate(events: CalEvent[]): Record<string, CalEvent[]> {
   return g;
 }
 
-type FilterKey = "high-usd" | "high" | "medium" | "low" | "all";
+type FilterKey = "high-usd" | "high" | "medium" | "low" | "trump" | "all";
 
 const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
   { value: "high-usd", label: "High · USD", color: "#ef4444" },
   { value: "high",     label: "High",       color: "#ef4444" },
   { value: "medium",   label: "Medium",     color: "#f59e0b" },
   { value: "low",      label: "Low",        color: "#3a5570" },
+  { value: "trump",    label: "TRUMP",      color: "#a855f7" },
   { value: "all",      label: "All",        color: "#fff"    },
 ];
 
 function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   if (active.has("all")) return true;
+  if (active.has("trump")    && ev.impact === "President") return true;
   if (active.has("high-usd") && ev.impact === "High" && ev.country === "USD") return true;
   if (active.has("high")     && ev.impact === "High") return true;
   if (active.has("medium")   && ev.impact === "Medium") return true;
@@ -145,6 +148,7 @@ export default function EconomicCalendarPage() {
               {today}
             </span>
           )}
+          <span style={{ fontSize: 10, color: "#3a5570" }}>USA only · incl. Trump</span>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

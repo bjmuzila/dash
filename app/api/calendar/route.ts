@@ -10,6 +10,14 @@ interface FFEvent {
   actual?: string;
 }
 
+interface FactbaEvent {
+  date?: string;
+  time?: string;
+  details?: string;
+  type?: string;
+  daily_text?: string;
+}
+
 interface CalEvent {
   date: string;
   time: string;
@@ -36,38 +44,91 @@ function toET(iso: string): { date: string; time: string; time_formatted: string
   return { date: etDate, time: et24, time_formatted: etTime };
 }
 
+const TRUMP_EXCLUDE = ["executive time", "pool call", "in-town pool"];
+
+async function fetchTrumpEvents(): Promise<CalEvent[]> {
+  try {
+    const res = await fetch("https://media-cdn.factba.se/rss/json/trump/calendar-full.json", {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return [];
+    const raw: FactbaEvent[] | { events: FactbaEvent[] } = await res.json();
+    const items: FactbaEvent[] = Array.isArray(raw) ? raw : ((raw as { events: FactbaEvent[] }).events ?? []);
+
+    return items
+      .filter(ev => {
+        const name = String(ev.details || ev.type || ev.daily_text || "").toLowerCase();
+        return ev.date && !TRUMP_EXCLUDE.some(x => name.includes(x));
+      })
+      .map(ev => {
+        const title = ev.details || ev.type || ev.daily_text || "President Event";
+        const date = ev.date ?? "";
+        const rawTime = ev.time ?? "";
+        let time_formatted = rawTime || "TBD";
+        if (rawTime && rawTime.includes(":")) {
+          const [h, m] = rawTime.split(":").map(Number);
+          const ampm = h >= 12 ? "PM" : "AM";
+          const h12 = h % 12 || 12;
+          time_formatted = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+        }
+        return {
+          date,
+          time: rawTime,
+          time_formatted,
+          title,
+          country: "USD",
+          impact: "President",
+          forecast: "",
+          previous: "",
+          actual: "",
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
 export async function GET() {
   const proxyBase = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
 
   try {
-    const res = await fetch(`${proxyBase}/proxy/api/econ-calendar`, {
-      next: { revalidate: 1800 },
-    });
+    const [econRes, trumpEvents] = await Promise.all([
+      fetch(`${proxyBase}/proxy/api/econ-calendar`, {
+        next: { revalidate: 1800 },
+      }),
+      fetchTrumpEvents(),
+    ]);
 
-    if (!res.ok) {
-      const detail = await res.text().then(t => t.slice(0, 200)).catch(() => "");
-      console.error(`[calendar] proxy returned ${res.status}: ${detail}`);
-      return NextResponse.json({ error: `Upstream ${res.status}`, detail, events: [] }, { status: 502 });
+    if (!econRes.ok) {
+      const detail = await econRes.text().then(t => t.slice(0, 200)).catch(() => "");
+      console.error(`[calendar] proxy returned ${econRes.status}: ${detail}`);
+      return NextResponse.json({ error: `Upstream ${econRes.status}`, detail, events: [] }, { status: 502 });
     }
 
-    const raw: FFEvent[] = await res.json();
+    const raw: FFEvent[] = await econRes.json();
 
-    const events: CalEvent[] = raw.map(ev => {
-      const { date, time, time_formatted } = toET(ev.date);
-      return {
-        date,
-        time,
-        time_formatted,
-        title: ev.title,
-        country: ev.country,
-        impact: ev.impact,
-        forecast: ev.forecast,
-        previous: ev.previous,
-        actual: ev.actual ?? "",
-      };
-    });
+    // USD-only economic events
+    const econEvents: CalEvent[] = raw
+      .filter(ev => ev.country === "USD")
+      .map(ev => {
+        const { date, time, time_formatted } = toET(ev.date);
+        return {
+          date,
+          time,
+          time_formatted,
+          title: ev.title,
+          country: ev.country,
+          impact: ev.impact,
+          forecast: ev.forecast,
+          previous: ev.previous,
+          actual: ev.actual ?? "",
+        };
+      });
 
-    console.log(`[calendar] loaded ${events.length} events`);
+    const events: CalEvent[] = [...econEvents, ...trumpEvents];
+
+    console.log(`[calendar] loaded ${econEvents.length} USD econ + ${trumpEvents.length} Trump events`);
     return NextResponse.json({ events }, {
       headers: { "Cache-Control": "s-maxage=1800, stale-while-revalidate=3600" },
     });

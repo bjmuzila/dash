@@ -5,7 +5,6 @@ import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
 
 const NAV_ITEMS = [
-  { label: "Econ Calendar", href: "/economic-calendar" },
   { label: "Overview",      href: "/" },
   { label: "Dashboard",     href: "/dashboard" },
   { label: "Database",      href: "/database" },
@@ -18,6 +17,7 @@ const NAV_ITEMS = [
   { label: "Logs",          href: "/logs" },
   { label: "Personal",      href: "/personal" },
   { label: "Legacy",        href: "/legacy" },
+  { label: "Econ Calendar", href: "/economic-calendar" },
 ];
 
 // ─── types ───────────────────────────────────────────────────────────────────

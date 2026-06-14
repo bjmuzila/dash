@@ -444,6 +444,49 @@ function scheduleNightlyClear() {
   log('[DB] Nightly clear scheduled, next run in', Math.round(msUntilNext405amET() / 60000), 'minutes');
 }
 
+// ── TRUMP CALENDAR: fetch and cache to disk ───────────────────────────────────
+function fetchAndCacheTrumpCalendar() {
+  const calendarUrl = 'https://media-cdn.factba.se/rss/json/trump/calendar-full.json';
+  const outputPath = path.join(__dirname, 'data', 'trump_calendar_latest.json');
+  const dataDir = path.join(__dirname, 'data');
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+  https.get(calendarUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (calRes) => {
+    let data = '';
+    calRes.on('data', chunk => data += chunk);
+    calRes.on('end', () => {
+      try {
+        let calendarData = JSON.parse(data);
+        if (Array.isArray(calendarData)) {
+          calendarData = { events: calendarData, count: calendarData.length, fetched: new Date().toISOString() };
+        }
+        fs.writeFileSync(outputPath, JSON.stringify(calendarData, null, 2));
+        log(`[Trump Calendar] Fetched ${calendarData.count || calendarData.events.length} events`);
+      } catch (e) {
+        warn('[Trump Calendar] Parse error:', e.message);
+      }
+    });
+  }).on('error', err => warn('[Trump Calendar] Fetch error:', err.message));
+}
+
+function scheduleMorningTrumpCalendar() {
+  function msUntilNext7amET() {
+    const now = new Date();
+    const etStr = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const target = new Date(etStr);
+    target.setHours(7, 0, 0, 0);
+    if (etStr >= target) target.setDate(target.getDate() + 1);
+    return target - etStr;
+  }
+  // Fetch immediately on startup, then every morning at 7am ET
+  fetchAndCacheTrumpCalendar();
+  setTimeout(function repeat() {
+    fetchAndCacheTrumpCalendar();
+    setTimeout(repeat, 24 * 60 * 60 * 1000);
+  }, msUntilNext7amET());
+  log('[Trump Calendar] Scheduled daily 7am ET refresh, next in', Math.round(msUntilNext7amET() / 60000), 'minutes');
+}
+
 function readBuySellBackup() {
   ensureBackupDir();
   if (!fs.existsSync(BUY_SELL_BACKUP_FILE)) return [];
@@ -4864,6 +4907,9 @@ server.listen(PORT, async () => {
     log('[DB] Error:', e.message);
     // Non-fatal — proxy continues with JSON fallback
   }
+
+  // Fetch Trump calendar at startup + schedule daily 7am ET refresh
+  scheduleMorningTrumpCalendar();
 
   loadTokenFile();
   const ok = await refreshAccessToken();

@@ -16,10 +16,11 @@ interface CalEvent {
 }
 
 const IMPACT_COLOR: Record<string, string> = {
-  High:    "#ef4444",
-  Medium:  "#f59e0b",
-  Low:     "#3a5570",
-  Holiday: "#6b7280",
+  High:      "#ef4444",
+  Medium:    "#f59e0b",
+  Low:       "#3a5570",
+  Holiday:   "#6b7280",
+  President: "#a855f7",
 };
 
 function impactColor(i: string) { return IMPACT_COLOR[i] ?? "#3a5570"; }
@@ -55,18 +56,26 @@ function dayLabel(dateStr: string, today: string): string {
   return d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
 }
 
-type FilterKey = "high-usd" | "high" | "medium" | "low" | "all";
+function fullDayLabel(dateStr: string, today: string): string {
+  if (dateStr === today) return "TODAY";
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
+}
+
+type FilterKey = "high-usd" | "high" | "medium" | "low" | "trump" | "all";
 
 const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
   { value: "high-usd", label: "High·USD", color: "#ef4444" },
   { value: "high",     label: "High",     color: "#ef4444" },
   { value: "medium",   label: "Medium",   color: "#f59e0b" },
   { value: "low",      label: "Low",      color: "#3a5570" },
+  { value: "trump",    label: "TRUMP",    color: "#a855f7" },
   { value: "all",      label: "All",      color: "#fff"    },
 ];
 
 function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   if (active.has("all")) return true;
+  if (active.has("trump")   && ev.impact === "President") return true;
   if (active.has("high-usd") && ev.impact === "High" && ev.country === "USD") return true;
   if (active.has("high")     && ev.impact === "High") return true;
   if (active.has("medium")   && ev.impact === "Medium") return true;
@@ -84,7 +93,6 @@ export default function EconCalendarPanel() {
   const [dropOpen,      setDropOpen]      = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
   useEffect(() => {
     function h(e: MouseEvent) {
       if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropOpen(false);
@@ -125,7 +133,6 @@ export default function EconCalendarPanel() {
     doLoad().finally(() => setLoading(false));
   }, [doLoad]);
 
-  // Tick every 60s to update stale detection
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(id);
@@ -158,7 +165,6 @@ export default function EconCalendarPanel() {
 
   const renderEvent = (ev: CalEvent, i: number, faded: boolean) => {
     const col = faded ? "#1e2a38" : impactColor(ev.impact);
-    const dl  = dayLabel(ev.date, today);
 
     return (
       <div
@@ -174,16 +180,13 @@ export default function EconCalendarPanel() {
           minHeight: 48,
         }}
       >
-        {/* Left: day + time */}
+        {/* Left: time */}
         <div style={{
           display: "flex", flexDirection: "column", justifyContent: "center",
           padding: "6px 8px",
           borderRight: "1px solid #0d1520",
           gap: 2,
         }}>
-          <span style={{ fontSize: 9, fontWeight: 700, color: faded ? "#1e2a38" : (dl === "TODAY" ? "#00e5ff" : "#fff"), letterSpacing: "0.06em" }}>
-            {dl}
-          </span>
           <span style={{ fontSize: 11, color: faded ? "#1e2a38" : "#fff", fontFamily: "monospace" }}>
             {ev.time_formatted || ev.time || "TBD"}
           </span>
@@ -230,6 +233,41 @@ export default function EconCalendarPanel() {
       </div>
     );
   };
+
+  // Group events by date for day separators
+  function renderWithDaySeparators(evList: CalEvent[], faded: boolean) {
+    const result: React.ReactNode[] = [];
+    let lastDate = "";
+    evList.forEach((ev, i) => {
+      if (ev.date !== lastDate) {
+        lastDate = ev.date;
+        const isToday = ev.date === today;
+        const label = fullDayLabel(ev.date, today);
+        result.push(
+          <div
+            key={`sep-${faded ? "s" : "a"}-${ev.date}`}
+            style={{
+              padding: "4px 10px",
+              background: isToday ? "rgba(0,229,255,0.06)" : "#070c14",
+              borderTop: "1px solid #0d1f30",
+              display: "flex", alignItems: "center", gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 9, fontWeight: 800, color: isToday ? "#00e5ff" : "#3a5570", letterSpacing: "0.1em" }}>
+              {label}
+            </span>
+            {isToday && (
+              <span style={{ fontSize: 8, fontWeight: 900, background: "#00e5ff", color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
+                TODAY
+              </span>
+            )}
+          </div>
+        );
+      }
+      result.push(renderEvent(ev, i, faded));
+    });
+    return result;
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden", fontFamily: "Arial, Helvetica, sans-serif" }}>
@@ -316,13 +354,13 @@ export default function EconCalendarPanel() {
           <div style={{ color: "#fff", fontSize: 11, padding: "8px 10px" }}>No events this week.</div>
         ) : (
           <>
-            {activeEvents.map((ev, i) => renderEvent(ev, i, false))}
+            {renderWithDaySeparators(activeEvents, false)}
             {staleEvents.length > 0 && (
               <>
                 {activeEvents.length > 0 && (
                   <div style={{ height: 1, background: "#0d1f30", margin: "2px 0" }} />
                 )}
-                {staleEvents.map((ev, i) => renderEvent(ev, i, true))}
+                {renderWithDaySeparators(staleEvents, true)}
               </>
             )}
           </>
