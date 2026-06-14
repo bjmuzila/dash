@@ -165,13 +165,13 @@ export default function EsStatsLadder({ esSpot }: Props) {
                   borderBottom: "1px solid #0a1420",
                   position: "relative",
                   zIndex: 1,
-                  background: "rgba(0,229,255,0.04)",
+                  background: "linear-gradient(90deg, rgba(0,229,255,0.12) 0%, rgba(0,180,255,0.07) 50%, rgba(0,229,255,0.12) 100%)",
                 }}
               >
                 {/* Label side */}
                 <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 8, fontWeight: 700, letterSpacing: "0.1em",
+                    fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
                     textTransform: "uppercase", color: "#00e5ff", whiteSpace: "nowrap",
                   }}>
                     ES NOW
@@ -184,6 +184,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                     width: 10, height: 10, borderRadius: "50%",
                     border: "2px solid #00e5ff",
                     background: "#00e5ff",
+                    boxShadow: "0 0 6px #00e5ff88",
                     flexShrink: 0, position: "relative", zIndex: 2,
                   }}
                 />
@@ -191,7 +192,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 {/* Value side */}
                 <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 13, fontWeight: 700, color: "#00e5ff",
+                    fontSize: 16, fontWeight: 700, color: "#00e5ff",
                     fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
                   }}>
                     {entry.val.toLocaleString("en-US", { maximumFractionDigits: 2 })}
@@ -220,24 +221,11 @@ export default function EsStatsLadder({ esSpot }: Props) {
               }}
             >
               {/* Label side */}
-              <div
-                style={{
-                  flex: 1,
-                  textAlign: "right",
-                  paddingRight: 10,
-                  minWidth: 0,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 8,
-                    fontWeight: 700,
-                    letterSpacing: "0.1em",
-                    textTransform: "uppercase",
-                    color: "#fff",
-                    whiteSpace: "nowrap",
-                  }}
-                >
+              <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
+                <div style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
+                  textTransform: "uppercase", color: "#fff", whiteSpace: "nowrap",
+                }}>
                   {row.label}
                 </div>
               </div>
@@ -245,41 +233,26 @@ export default function EsStatsLadder({ esSpot }: Props) {
               {/* Dot */}
               <div
                 style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
+                  width: 10, height: 10, borderRadius: "50%",
                   border: `2px solid ${row.dotColor}`,
                   background: "var(--overview-bg, #05080d)",
-                  flexShrink: 0,
-                  position: "relative",
-                  zIndex: 2,
+                  flexShrink: 0, position: "relative", zIndex: 2,
                 }}
               />
 
               {/* Value side */}
               <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: "#fff",
-                    fontVariantNumeric: "tabular-nums",
-                    lineHeight: 1,
-                    whiteSpace: "nowrap",
-                  }}
-                >
+                <div style={{
+                  fontSize: 16, fontWeight: 700, color: "#fff",
+                  fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
+                }}>
                   {hasVal ? val.toLocaleString("en-US", { maximumFractionDigits: 0 }) : "—"}
                 </div>
                 {distStr && (
-                  <div
-                    style={{
-                      fontSize: 9,
-                      color: distPos ? "#22c55e" : "#f97316",
-                      marginTop: 1,
-                      fontVariantNumeric: "tabular-nums",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
+                  <div style={{
+                    fontSize: 11, color: distPos ? "#22c55e" : "#f97316",
+                    marginTop: 1, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                  }}>
                     {distStr}
                   </div>
                 )}
