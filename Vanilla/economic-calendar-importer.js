@@ -91,6 +91,23 @@ function initCalendarImporter() {
   });
 }
 
+async function persistEvents(events) {
+  try {
+    const res = await fetch('/api/econ-calendar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(events),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    showStatus(`✓ Saved ${data.count} events to server`, 'success');
+    console.log('✓ Persisted to /api/econ-calendar:', data);
+  } catch (err) {
+    showStatus(`⚠️ Saved in memory only — server write failed: ${err.message}`, 'info');
+    console.warn('persistEvents error:', err);
+  }
+}
+
 async function handleFileDrop(files) {
   const file = files[0];
   if (!file) return;
@@ -132,45 +149,25 @@ async function loadFromJSON(file) {
     });
 
     // Update global ECON_EVENTS
-    if (typeof ECON_EVENTS !== 'undefined' || window.ECON_EVENTS) {
-      window.ECON_EVENTS = normalized;
-      console.log('✓ ECON_EVENTS updated:', window.ECON_EVENTS);
-      
-      showStatus(`✓ Loaded ${normalized.length} events`, 'success');
+    window.ECON_EVENTS = normalized;
+    showStatus(`✓ Loaded ${normalized.length} events — saving...`, 'success');
 
-      // Re-render calendar with retry logic
-      let renderAttempts = 0;
-      const tryRender = () => {
-        if (window.renderEconCalendar) {
-          console.log('Calling renderEconCalendar...');
-          window.renderEconCalendar();
-          console.log('✓ Calendar rendered');
-        } else {
-          renderAttempts++;
-          if (renderAttempts < 5) {
-            console.log(`renderEconCalendar not ready, retrying... (${renderAttempts}/5)`);
-            setTimeout(tryRender, 500);
-          } else {
-            console.warn('renderEconCalendar never became available');
-            showStatus('⚠️ Events loaded but calendar may need refresh', 'info');
-          }
-        }
-      };
-      tryRender();
+    // Persist to Next.js API (writes events.json on disk)
+    await persistEvents(normalized);
 
-      // Export snippet to console
-      console.log('Copy this for overview.js:');
-      console.log(`const ECON_EVENTS = ${JSON.stringify(normalized, null, 2)};`);
+    // Re-render calendar with retry logic
+    let renderAttempts = 0;
+    const tryRender = () => {
+      if (window.renderEconCalendar) {
+        window.renderEconCalendar();
+      } else {
+        renderAttempts++;
+        if (renderAttempts < 5) setTimeout(tryRender, 500);
+      }
+    };
+    tryRender();
 
-      // Auto-save to localStorage
-      localStorage.setItem('ECON_EVENTS_BACKUP', JSON.stringify(normalized));
-      console.log('✓ Backup saved to localStorage');
-    } else {
-      console.warn('Creating new window.ECON_EVENTS...');
-      window.ECON_EVENTS = normalized;
-      showStatus(`✓ Loaded ${normalized.length} events (created new array)`, 'success');
-      console.log('✓ New ECON_EVENTS created:', window.ECON_EVENTS);
-    }
+    localStorage.setItem('ECON_EVENTS_BACKUP', JSON.stringify(normalized));
   } catch (err) {
     showStatus(`❌ ${err.message}`, 'error');
     console.error('Full error:', err);
@@ -218,14 +215,14 @@ async function loadFromScreenshot(file) {
         }
 
         window.ECON_EVENTS = events;
-        showStatus(`✓ Extracted ${events.length} events from screenshot`, 'success');
+        showStatus(`✓ Extracted ${events.length} events — saving...`, 'success');
+
+        await persistEvents(events);
 
         if (window.renderEconCalendar) {
           window.renderEconCalendar();
         }
 
-        console.log('Extracted events:');
-        console.log(`const ECON_EVENTS = ${JSON.stringify(events, null, 2)};`);
         localStorage.setItem('ECON_EVENTS_BACKUP', JSON.stringify(events));
       } catch (err) {
         showStatus(`❌ OCR failed: ${err.message}`, 'error');

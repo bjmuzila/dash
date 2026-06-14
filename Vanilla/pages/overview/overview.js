@@ -3713,33 +3713,23 @@ async function fetchStockGEX(sym){
 
 // ── ECONOMIC CALENDAR ─────────────────────────────────────────────
 
-// Weekly economic events — update this array each week.
-// date: "YYYY-MM-DD", time: "HH:MM" in 24h ET, label: "am"/"pm" display hint
-const ECON_EVENTS = [
-  // ── Monday, June 15 ──
-  { date:"2026-06-15", time:"08:30", name:"Empire State Manufacturing Survey", period:"Jun." },
-  { date:"2026-06-15", time:"09:15", name:"Industrial Production, M/M%", period:"May" },
-  { date:"2026-06-15", time:"09:15", name:"Capacity Utilization %", period:"May" },
-  { date:"2026-06-15", time:"10:00", name:"NAHB Housing Market Index", period:"Jun." },
+// Economic events — loaded dynamically from Next.js API. Fallback to empty array.
+let ECON_EVENTS = [];
 
-  // ── Tuesday, June 16 ──
-  { date:"2026-06-16", time:"08:30", name:"Housing Starts", period:"May" },
-  { date:"2026-06-16", time:"08:30", name:"Import Prices", period:"May" },
-
-  // ── Wednesday, June 17 ──
-  { date:"2026-06-17", time:"08:30", name:"Retail Sales", period:"May" },
-  { date:"2026-06-17", time:"10:00", name:"Manufacturing & Trade: Inventories & Sales", period:"Apr." },
-  { date:"2026-06-17", time:"10:00", name:"Pending Home Sales Idx, M/M%", period:"May" },
-  { date:"2026-06-17", time:"14:00", name:"U.S. Interest Rate Decision", period:"-" },
-
-  // ── Thursday, June 18 ──
-  { date:"2026-06-18", time:"08:30", name:"Weekly Jobless Claims", period:"Jun. 13" },
-  { date:"2026-06-18", time:"08:30", name:"Philadelphia Fed Business Outlook Survey", period:"Jun." },
-  { date:"2026-06-18", time:"10:00", name:"Leading Indicators", period:"May" },
-
-  // ── Friday, June 19 ──
-  // No events scheduled
-];
+(async function loadEconEvents() {
+  try {
+    const res = await fetch('/api/econ-calendar');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      ECON_EVENTS.push(...data);
+      // Re-render if calendar already initialized
+      if (typeof renderEconCalendar === 'function') renderEconCalendar();
+    }
+  } catch(e) {
+    console.warn('[EconCalendar] Failed to load from API:', e.message);
+  }
+})();
 
 // Determines event urgency class for the countdown badge
 function _econUrgency(ms){
