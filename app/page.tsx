@@ -85,6 +85,9 @@ export default function OverviewPage() {
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
   const [toolbarOpen, setToolbarOpen] = useState(true);
+  const [splitPct, setSplitPct] = useState(50);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
 
   // Live data refs — mutated in WS handler, never trigger renders directly
   const liveRef    = useRef<Record<string, LiveEntry>>({});
@@ -383,11 +386,11 @@ export default function OverviewPage() {
   return (
     <div className="overview-root" style={{ ...overviewTheme, display: "flex", flexDirection: "row", flex: 1, minHeight: 0, overflow: "hidden", height: "100%", fontFamily: "Arial, Helvetica, sans-serif", fontWeight: 700, background: "var(--overview-bg)" }}>
 
-      {/* ══ LEFT COLUMN: Chart (top 50%) + Bottom panels (bottom 50%) ══ */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
+      {/* ══ LEFT COLUMN: Chart (resizable top) + Bottom panels ══ */}
+      <div ref={splitContainerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
         {/* TOP: Chart + toolbar */}
-        <div style={{ display: "flex", flexDirection: "column", flex: "0 0 50%", minHeight: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", flex: `0 0 ${splitPct}%`, minHeight: 80, overflow: "hidden" }}>
           <GexToolbar
             gexMode={gexMode}
             dataMode={dataMode}
@@ -438,8 +441,50 @@ export default function OverviewPage() {
           </div>
         </div>
 
+        {/* ── Drag handle ── */}
+        <div
+          onMouseDown={(e) => {
+            e.preventDefault();
+            isDragging.current = true;
+            const container = splitContainerRef.current;
+            if (!container) return;
+            const onMove = (ev: MouseEvent) => {
+              if (!isDragging.current) return;
+              const rect = container.getBoundingClientRect();
+              const pct = ((ev.clientY - rect.top) / rect.height) * 100;
+              setSplitPct(Math.min(85, Math.max(15, pct)));
+            };
+            const onUp = () => {
+              isDragging.current = false;
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          }}
+          style={{
+            height: 5,
+            flexShrink: 0,
+            cursor: "ns-resize",
+            background: "var(--overview-border)",
+            position: "relative",
+            zIndex: 10,
+          }}
+        >
+          {/* Visual grip dots */}
+          <div style={{
+            position: "absolute", left: "50%", top: "50%",
+            transform: "translate(-50%, -50%)",
+            display: "flex", gap: 3,
+          }}>
+            {[0,1,2].map(i => (
+              <span key={i} style={{ width: 3, height: 3, borderRadius: "50%", background: "#1e3050", display: "block" }} />
+            ))}
+          </div>
+        </div>
+
         {/* BOTTOM: Calendar | ES Stats | Signal/Snapshot feed */}
-        <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0, borderTop: "2px solid var(--overview-border)", overflow: "hidden", background: "var(--overview-bg)" }}>
+        <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 60, overflow: "hidden", background: "var(--overview-bg)" }}>
 
           {/* Economic Calendar */}
           <div style={{ flex: 1, display: "flex", flexDirection: "column", borderRight: "1px solid var(--overview-border)", overflow: "hidden", background: "var(--overview-bg)" }}>
@@ -489,10 +534,14 @@ export default function OverviewPage() {
       </div>
 
       {/* ══ RIGHT: Collapse tab + Full-height Heatmap ══ */}
-      {/* Vertical tab button on the border */}
-      <div style={{ width: 16, flexShrink: 0, position: "relative", background: "var(--overview-border)", zIndex: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <style>{`.hm-divider:hover .hm-collapse-btn { opacity: 1 !important; }`}</style>
+      <div
+        className="hm-divider"
+        onClick={() => setHeatmapOpen(v => !v)}
+        style={{ width: 16, flexShrink: 0, position: "relative", background: "var(--overview-border)", zIndex: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+      >
         <button
-          onClick={() => setHeatmapOpen(v => !v)}
+          className="hm-collapse-btn"
           title={heatmapOpen ? "Collapse heatmap" : "Expand heatmap"}
           style={{
             position: "absolute",
@@ -511,6 +560,9 @@ export default function OverviewPage() {
             justifyContent: "center",
             padding: 0,
             zIndex: 30,
+            opacity: 0,
+            transition: "opacity 0.15s",
+            pointerEvents: "none",
           }}
         >
           {heatmapOpen ? "▶" : "◀"}
@@ -521,12 +573,13 @@ export default function OverviewPage() {
 
         {/* Heatmap top controls — collapsible */}
         <div style={{ display: "flex", flexDirection: "column", background: "var(--overview-control-bg)", borderBottom: "1px solid var(--overview-border)", flexShrink: 0 }}>
+          <style>{`.hm-toolbar-header:hover .hm-toggle-btn { opacity: 1 !important; }`}</style>
           {/* Always-visible slim header */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", minHeight: 22 }}>
+          <div className="hm-toolbar-header" style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", minHeight: 22, cursor: "pointer" }} onClick={() => setToolbarOpen(v => !v)}>
             <button
-              onClick={() => setToolbarOpen(v => !v)}
+              className="hm-toggle-btn"
               title={toolbarOpen ? "Collapse controls" : "Expand controls"}
-              style={{ background: "none", border: "none", color: "#3a5570", fontSize: 9, cursor: "pointer", padding: "0 2px", lineHeight: 1, flexShrink: 0 }}
+              style={{ background: "none", border: "none", color: "#00e5ff", fontSize: 9, cursor: "pointer", padding: "0 2px", lineHeight: 1, flexShrink: 0, opacity: 0, transition: "opacity 0.15s" }}
             >
               {toolbarOpen ? "▲" : "▼"}
             </button>
