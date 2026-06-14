@@ -287,6 +287,17 @@ function initDB() {
       es_spot    REAL    NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_gex_date ON gex_levels(date);
+
+    CREATE TABLE IF NOT EXISTS es_stats (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      expiration TEXT    NOT NULL UNIQUE,
+      no_long    TEXT,
+      up         TEXT,
+      mid        TEXT,
+      down       TEXT,
+      no_short   TEXT,
+      updated_at TEXT    DEFAULT (datetime('now'))
+    );
   `);
 
   log('[DB] SQLite initialized at', DB_FILE);
@@ -4417,6 +4428,43 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── DATABASE REST API ─────────────────────────────────────────
+  // GET /proxy/api/es-stats — return latest ES stats ladder row
+  if (req.method === 'GET' && p === '/proxy/api/es-stats') {
+    try {
+      if (!db) return sendJSON(res, 500, { error: 'DB not ready' });
+      const row = db.prepare('SELECT * FROM es_stats ORDER BY id DESC LIMIT 1').get();
+      return sendJSON(res, 200, row || null);
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
+  // POST /proxy/api/es-stats — upsert ES stats ladder (partial ok)
+  if (req.method === 'POST' && p === '/proxy/api/es-stats') {
+    readRequestJson(req).then(body => {
+      try {
+        if (!db) return sendJSON(res, 500, { error: 'DB not ready' });
+        const { expiration, no_long, up, mid, down, no_short } = body;
+        if (!expiration) return sendJSON(res, 400, { error: 'Missing expiration' });
+        db.prepare(`
+          INSERT INTO es_stats (expiration, no_long, up, mid, down, no_short)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(expiration) DO UPDATE SET
+            no_long  = CASE WHEN excluded.no_long  IS NOT NULL THEN excluded.no_long  ELSE no_long  END,
+            up       = CASE WHEN excluded.up        IS NOT NULL THEN excluded.up       ELSE up       END,
+            mid      = CASE WHEN excluded.mid       IS NOT NULL THEN excluded.mid      ELSE mid      END,
+            down     = CASE WHEN excluded.down      IS NOT NULL THEN excluded.down     ELSE down     END,
+            no_short = CASE WHEN excluded.no_short  IS NOT NULL THEN excluded.no_short ELSE no_short END,
+            updated_at = datetime('now')
+        `).run(expiration, no_long ?? null, up ?? null, mid ?? null, down ?? null, no_short ?? null);
+        return sendJSON(res, 200, { ok: true, expiration });
+      } catch (e) {
+        return sendJSON(res, 500, { error: e.message });
+      }
+    }).catch(e => sendJSON(res, 400, { error: e.message }));
+    return;
+  }
+
   // POST /proxy/api/db/insert: Insert row into table { table, data }
   if (req.method === 'POST' && p === '/proxy/api/db/insert') {
     let body = '';

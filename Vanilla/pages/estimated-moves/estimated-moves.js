@@ -568,7 +568,7 @@ window.refreshEstimatedMoves = async function(){
       if (typeof window.applyOverviewESStats === 'function') window.applyOverviewESStats(stats);
       console.log('[ESStats] Ladder updated for expiration:', esmRow.expiration);
       // Persist to SQLite via API
-      fetch(EM.proxyUrl('/api/es-stats'), {
+      fetch(EM.proxyUrl('/proxy/api/es-stats'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

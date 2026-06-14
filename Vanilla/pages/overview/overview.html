@@ -209,7 +209,7 @@
             (async function() {
               try {
                 const proxyBase = (window.EM_PROXY_BASE || `${location.protocol}//${location.hostname}:3001`).replace(/\/$/, '');
-                const res = await fetch(`${proxyBase}/api/es-stats`);
+                const res = await fetch(`${proxyBase}/proxy/api/es-stats`);
                 if (!res.ok) return;
                 const row = await res.json();
                 if (!row || !row.no_long) return;
