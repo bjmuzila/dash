@@ -226,7 +226,7 @@ export default function Sidebar({
         <CollapsedTicker />
 
         {/* Version */}
-        <div style={{ flexShrink: 0, padding: "5px 2px", borderTop: "1px solid var(--border)", textAlign: "center", fontSize: 7, color: "#1e3050", letterSpacing: "0.04em" }}>
+        <div style={{ flexShrink: 0, padding: "5px 2px", borderTop: "1px solid var(--border)", textAlign: "center", fontSize: 7, color: "#fff", letterSpacing: "0.04em" }}>
           v{pkg.version.split("-")[0].slice(2)}
         </div>
       </nav>
@@ -256,7 +256,7 @@ export default function Sidebar({
       </div>
 
       {/* Version */}
-      <div style={{ flexShrink: 0, padding: "4px 6px", borderTop: "1px solid var(--border)", textAlign: "center", fontSize: 9, color: "#2a4a6a", letterSpacing: "0.05em" }}>
+      <div style={{ flexShrink: 0, padding: "4px 6px", borderTop: "1px solid var(--border)", textAlign: "center", fontSize: 9, color: "#fff", letterSpacing: "0.05em" }}>
         v{pkg.version}
       </div>
     </nav>

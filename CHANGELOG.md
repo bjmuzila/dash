@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-14 (session 10) — ES Stats Ladder: Remove Google Sheets, Wire SQLite
+
+### `EsStatsLadder.tsx` (`components/dashboard/EsStatsLadder.tsx`)
+- **Removed Google Sheets dependency entirely** — no more `SHEET_ID`/`SHEET_URL`
+- **Removed VAH, VPOC, VAL rows** from the ladder
+- **Added MID row** (sourced from No Short No Long Zones tab: `(HIGH + LOW) / 2`)
+- Now fetches from `/api/es-stats` (Next.js SQLite route) instead of Google Sheets
+- Rows sort dynamically by price (descending); current ES spot (`ES NOW`) inserted inline
+- `valueKey` fields changed to snake_case matching SQLite column names (`no_long`, `up`, `mid`, `down`, `no_short`)
+
+### `app/api/es-stats/route.ts` (existing — verified correct)
+- GET returns latest row from `es_stats` SQLite table
+- POST does partial upsert: `ON CONFLICT(expiration) DO UPDATE SET ... CASE WHEN excluded.x IS NOT NULL`
+- Allows Est. Moves tab and Zones tab to write independently without clobbering each other
+
+### `EstimatedMoves.tsx` (`components/dashboard/EstimatedMoves.tsx`) (existing — verified correct)
+- After running Est. Moves: POSTs `{ expiration, up, down }` to `/api/es-stats`
+- After running Zones tab: POSTs `{ expiration, no_long, no_short, mid }` to `/api/es-stats`
+- Mid = `(esm.high + esm.low) / 2` from ESM6 zone levels
+
+### Root cause identified
+- `EsStatsLadder.tsx` was the blocker — it was still calling Google Sheets on every load, never touching SQLite
+- Now all reads and writes go through the same `/api/es-stats` Next.js route backed by sql.js (WASM) on Render persistent disk
+
 ## 2026-06-14 (session 9) — Economic Calendar Overhaul + Nav Restore
 
 ### Economic Calendar Full Page (`app/economic-calendar/page.tsx`)

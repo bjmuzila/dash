@@ -171,7 +171,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 {/* Label side */}
                 <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
+                    fontSize: 13, fontWeight: 700, letterSpacing: "0.1em",
                     textTransform: "uppercase", color: "#00e5ff", whiteSpace: "nowrap",
                   }}>
                     ES NOW
@@ -223,7 +223,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
               {/* Label side */}
               <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
+                  fontSize: 13, fontWeight: 700, letterSpacing: "0.1em",
                   textTransform: "uppercase", color: "#fff", whiteSpace: "nowrap",
                 }}>
                   {row.label}

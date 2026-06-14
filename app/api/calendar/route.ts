@@ -56,34 +56,50 @@ async function fetchTrumpEvents(): Promise<CalEvent[]> {
     const raw: FactbaEvent[] | { events: FactbaEvent[] } = await res.json();
     const items: FactbaEvent[] = Array.isArray(raw) ? raw : ((raw as { events: FactbaEvent[] }).events ?? []);
 
-    return items
-      .filter(ev => {
-        const name = String(ev.details || ev.type || ev.daily_text || "").toLowerCase();
-        return ev.date && !TRUMP_EXCLUDE.some(x => name.includes(x));
-      })
-      .map(ev => {
-        const title = ev.details || ev.type || ev.daily_text || "President Event";
-        const date = ev.date ?? "";
-        const rawTime = ev.time ?? "";
-        let time_formatted = rawTime || "TBD";
-        if (rawTime && rawTime.includes(":")) {
-          const [h, m] = rawTime.split(":").map(Number);
-          const ampm = h >= 12 ? "PM" : "AM";
-          const h12 = h % 12 || 12;
-          time_formatted = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
-        }
-        return {
-          date,
-          time: rawTime,
-          time_formatted,
-          title,
-          country: "USD",
-          impact: "President",
-          forecast: "",
-          previous: "",
-          actual: "",
-        };
+    const mapped: CalEvent[] = [];
+    const seenDateHour = new Set<string>();
+
+    for (const ev of items) {
+      const name = String(ev.details || ev.type || ev.daily_text || "").toLowerCase();
+
+      // Skip excluded keywords
+      if (!ev.date || TRUMP_EXCLUDE.some(x => name.includes(x))) continue;
+
+      // Skip TBD (no time set)
+      const rawTime = ev.time ?? "";
+      if (!rawTime) continue;
+
+      const title = ev.details || ev.type || ev.daily_text || "President Event";
+      const date = ev.date;
+
+      // One event per hour per day
+      const hour = rawTime.split(":")[0];
+      const hourKey = `${date}-${hour}`;
+      if (seenDateHour.has(hourKey)) continue;
+      seenDateHour.add(hourKey);
+
+      let time_formatted = rawTime;
+      if (rawTime.includes(":")) {
+        const [h, m] = rawTime.split(":").map(Number);
+        const ampm = h >= 12 ? "PM" : "AM";
+        const h12 = h % 12 || 12;
+        time_formatted = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+      }
+
+      mapped.push({
+        date,
+        time: rawTime,
+        time_formatted,
+        title,
+        country: "USD",
+        impact: "President",
+        forecast: "",
+        previous: "",
+        actual: "",
       });
+    }
+
+    return mapped;
   } catch {
     return [];
   }
