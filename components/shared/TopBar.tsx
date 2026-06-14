@@ -423,17 +423,23 @@ export default function TopBar() {
           <SnapButton mode="save" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/bzilatrades-logo.png" alt="BzilaTrades" style={{ height: 42, width: "auto", objectFit: "contain" }} />
-          {ttLive && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "#ffb300", padding: "5px 10px", border: "1px solid rgba(255,179,0,.3)", borderRadius: 3, letterSpacing: ".08em" }}>
-              ● TT LIVE
-            </span>
-          )}
           <div id="topbar-dd-root" style={{ position: "relative" }}>
             <button
               onClick={(e) => { e.stopPropagation(); setDdOpen((v) => !v); }}
-              style={{ fontSize: 20, lineHeight: 1, padding: "1px 8px 3px", border: "1px solid #1e3050", borderRadius: 2, background: "#07101b", color: "#5a7a99", cursor: "pointer", minWidth: 34, height: 34 }}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                fontSize: 12, fontWeight: 700, letterSpacing: ".08em",
+                padding: "5px 10px",
+                border: `1px solid ${ttLive ? "rgba(255,179,0,.4)" : "#1e3050"}`,
+                borderRadius: 3,
+                background: "#07101b",
+                color: ttLive ? "#ffb300" : "#5a7a99",
+                cursor: "pointer", height: 34,
+              }}
             >
-              ⋮
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: ttLive ? "#ffb300" : "#3a5570", display: "inline-block", flexShrink: 0 }} />
+              {ttLive ? "TT LIVE" : "TT"}
+              <span style={{ fontSize: 16, lineHeight: 1, color: ttLive ? "rgba(255,179,0,.6)" : "#3a5570" }}>⋮</span>
             </button>
             {ddOpen && (
               <div style={{ position: "fixed", top: 46, right: 8, background: "#0a0f16", border: "1px solid #1a2a3a", borderRadius: 3, minWidth: 240, zIndex: 999999, boxShadow: "0 6px 20px rgba(0,0,0,.9)" }}>

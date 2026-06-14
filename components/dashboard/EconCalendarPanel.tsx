@@ -5,43 +5,25 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 
 interface CalEvent {
   date: string;
-  time?: string;
-  time_formatted?: string;
-  type?: string;
-  details?: string;
-  location?: string;
-  coverage?: string;
-  daily_text?: string;
+  time: string;
+  time_formatted: string;
+  title: string;
+  country: string;
+  impact: string;
+  forecast: string;
+  previous: string;
+  actual: string;
 }
 
-// Exclude routine noise
-const SKIP_DETAILS = ["executive time", "pool call", "in-town pool", "travel pool"];
-function shouldSkip(ev: CalEvent): boolean {
-  const d = (ev.details || ev.daily_text || "").toLowerCase();
-  return SKIP_DETAILS.some(s => d.includes(s));
-}
-
-const TYPE_COLORS: Record<string, string> = {
-  "pool report":  "#faad14",
-  "president":    "#00e5ff",
-  "press":        "#a78bfa",
-  "travel":       "#f97316",
-  "call":         "#22c55e",
-  "meeting":      "#00b4ff",
-  "remarks":      "#00e676",
-  "speech":       "#00e676",
-  "briefing":     "#a78bfa",
-  "signing":      "#ff9060",
-  "executive":    "#3a5570",
+const IMPACT_COLOR: Record<string, string> = {
+  High:    "#ef4444",
+  Medium:  "#faad14",
+  Low:     "#3a5570",
+  Holiday: "#6b7280",
 };
 
-function getColor(type?: string): string {
-  if (!type) return "#6b7280";
-  const k = type.toLowerCase();
-  for (const [kw, v] of Object.entries(TYPE_COLORS)) {
-    if (k.includes(kw)) return v;
-  }
-  return "#9ca3af";
+function impactColor(impact: string): string {
+  return IMPACT_COLOR[impact] ?? "#3a5570";
 }
 
 // ET date string YYYY-MM-DD
@@ -58,7 +40,7 @@ function etWeekDays(): string[] {
   }).format(now);
   const [y, m, day] = etStr.split("-").map(Number);
   const d = new Date(y, m - 1, day);
-  const dow = d.getDay(); // 0=Sun
+  const dow = d.getDay();
   const mon = new Date(d);
   mon.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
   return Array.from({ length: 5 }, (_, i) => {
@@ -68,31 +50,10 @@ function etWeekDays(): string[] {
   });
 }
 
-// Parse event time (HH:MM or HH:MM:SS in ET) → Date object for today's date
-function parseEventTime(ev: CalEvent): Date | null {
-  const raw = ev.time;
-  if (!raw) return null;
-  const [h, mi] = raw.split(":").map(Number);
-  if (isNaN(h) || isNaN(mi)) return null;
-  // Construct a Date in ET by using a reference ISO string trick
-  const etStr = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date());
-  const [y, m, d] = etStr.split("-").map(Number);
-  // Build a UTC date that corresponds to ET h:mi on ev.date
-  const base = new Date(`${ev.date}T${String(h).padStart(2,"0")}:${String(mi).padStart(2,"0")}:00`);
-  return base;
-}
-
-// Is this event stale? (its date+time is >30 min in the past ET)
+// Is event stale? >30 min past its date+time ET
 function isStale(ev: CalEvent, nowMs: number): boolean {
-  const t = parseEventTime(ev);
-  if (!t) {
-    // No time: stale if date is before today ET
-    const today = etDateStr(new Date());
-    return ev.date < today;
-  }
+  if (!ev.time) return ev.date < etDateStr(new Date());
+  const t = new Date(`${ev.date}T${ev.time}:00`);
   return nowMs - t.getTime() > 30 * 60 * 1000;
 }
 
@@ -119,7 +80,6 @@ export default function EconCalendarPanel() {
     doLoad().finally(() => setLoading(false));
   }, [doLoad]);
 
-  // Tick every minute so stale status updates live
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(id);
@@ -129,49 +89,81 @@ export default function EconCalendarPanel() {
   const weekDays = etWeekDays();
 
   const weekEvents = events
-    .filter(e => weekDays.includes(e.date) && !shouldSkip(e))
-    .sort((a, b) => {
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      return (a.time ?? "").localeCompare(b.time ?? "");
-    });
+    .filter(e => weekDays.includes(e.date))
+    .sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
 
-  // Split into active (upcoming/no-time) and stale (>30 min past)
   const activeEvents = weekEvents.filter(e => !isStale(e, now));
   const staleEvents  = weekEvents.filter(e =>  isStale(e, now));
 
-  const renderEvent = (ev: CalEvent, i: number, faded: boolean) => (
-    <div
-      key={`${ev.date}-${ev.time ?? ""}-${i}`}
-      style={{
-        display: "grid", gridTemplateColumns: "66px 1fr",
-        gap: 6, padding: "4px 6px",
-        background: "var(--overview-card-bg, #05080d)",
-        border: "1px solid var(--overview-border-soft, #0d1f30)",
-        borderLeft: `3px solid ${faded ? "#1e2a38" : getColor(ev.type)}`,
-        borderRadius: 3,
-        opacity: faded ? 0.35 : 1,
-        transition: "opacity 0.4s",
-      }}
-    >
-      <div style={{ fontSize: 9, fontFamily: "inherit", color: faded ? "#2a3a4a" : "#6b7280", paddingTop: 1 }}>
-        <div style={{ color: faded ? "#1e2a38" : "#3a5570", fontWeight: 700 }}>
-          {ev.date === today ? "Today" : DAY_LABELS[weekDays.indexOf(ev.date)] ?? ev.date.slice(5)}
+  const renderEvent = (ev: CalEvent, i: number, faded: boolean) => {
+    const col = faded ? "#1e2a38" : impactColor(ev.impact);
+    const dayIdx = weekDays.indexOf(ev.date);
+    const dayLabel = ev.date === today ? "Today" : (DAY_LABELS[dayIdx] ?? ev.date.slice(5));
+
+    return (
+      <div
+        key={`${ev.date}-${ev.time}-${i}`}
+        style={{
+          display: "grid", gridTemplateColumns: "60px 1fr",
+          gap: 6, padding: "4px 6px",
+          background: "var(--overview-card-bg, #05080d)",
+          border: "1px solid var(--overview-border-soft, #0d1f30)",
+          borderLeft: `3px solid ${col}`,
+          borderRadius: 3,
+          opacity: faded ? 0.35 : 1,
+          transition: "opacity 0.4s",
+        }}
+      >
+        {/* Time column */}
+        <div style={{ fontSize: 9, color: faded ? "#1e2a38" : "#6b7280", paddingTop: 1, lineHeight: 1.4 }}>
+          <div style={{ color: faded ? "#1a2535" : "#3a5570", fontWeight: 700, fontSize: 8, textTransform: "uppercase" }}>
+            {dayLabel}
+          </div>
+          {ev.time_formatted || ev.time || "TBD"}
         </div>
-        {ev.time_formatted ?? (ev.time ? ev.time.slice(0, 5) : "TBD")}
+
+        {/* Content column */}
+        <div>
+          {/* Impact badge + country */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 1 }}>
+            <span style={{
+              fontSize: 7, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+              color: col, lineHeight: 1,
+            }}>
+              {ev.impact}
+            </span>
+            <span style={{ fontSize: 7, color: faded ? "#1e2a38" : "#3a5570" }}>{ev.country}</span>
+          </div>
+
+          {/* Title */}
+          <div style={{ fontSize: 11, color: faded ? "#2a3a4a" : "#c8d8e8", lineHeight: 1.3, fontWeight: ev.impact === "High" ? 600 : 400 }}>
+            {ev.title}
+          </div>
+
+          {/* Forecast / Previous / Actual */}
+          {(ev.forecast || ev.previous || ev.actual) && (
+            <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+              {ev.actual && (
+                <span style={{ fontSize: 9, color: faded ? "#1e2a38" : "#22c55e" }}>
+                  A: {ev.actual}
+                </span>
+              )}
+              {ev.forecast && (
+                <span style={{ fontSize: 9, color: faded ? "#1e2a38" : "#faad14" }}>
+                  F: {ev.forecast}
+                </span>
+              )}
+              {ev.previous && (
+                <span style={{ fontSize: 9, color: faded ? "#1a2535" : "#3a5570" }}>
+                  P: {ev.previous}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-      <div>
-        <div style={{ fontSize: 9, fontWeight: 700, color: faded ? "#1e2a38" : getColor(ev.type), textTransform: "uppercase", letterSpacing: "0.06em", lineHeight: 1.2 }}>
-          {ev.type}
-        </div>
-        <div style={{ fontSize: 11, color: faded ? "#2a3a4a" : "#c8d8e8", lineHeight: 1.3 }}>
-          {ev.details || ev.daily_text || "—"}
-        </div>
-        {ev.location && (
-          <div style={{ fontSize: 9, color: faded ? "#1a2535" : "#3a5570", marginTop: 1 }}>{ev.location}</div>
-        )}
-      </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
