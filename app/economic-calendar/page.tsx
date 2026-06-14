@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 interface CalEvent {
   date: string;
@@ -16,193 +16,316 @@ interface CalEvent {
 
 const IMPACT_COLOR: Record<string, string> = {
   High:    "#ef4444",
-  Medium:  "#faad14",
+  Medium:  "#f59e0b",
   Low:     "#3a5570",
   Holiday: "#6b7280",
 };
 
-function impactColor(impact: string): string {
-  return IMPACT_COLOR[impact] ?? "#3a5570";
-}
+function impactColor(i: string) { return IMPACT_COLOR[i] ?? "#3a5570"; }
 
 function groupByDate(events: CalEvent[]): Record<string, CalEvent[]> {
-  const groups: Record<string, CalEvent[]> = {};
+  const g: Record<string, CalEvent[]> = {};
   for (const ev of events) {
-    if (!groups[ev.date]) groups[ev.date] = [];
-    groups[ev.date].push(ev);
+    if (!g[ev.date]) g[ev.date] = [];
+    g[ev.date].push(ev);
   }
-  return groups;
+  return g;
 }
 
-type ImpactFilter = "high-usd" | "high" | "all";
+type FilterKey = "high-usd" | "high" | "medium" | "low" | "all";
+
+const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
+  { value: "high-usd", label: "High · USD", color: "#ef4444" },
+  { value: "high",     label: "High",       color: "#ef4444" },
+  { value: "medium",   label: "Medium",     color: "#f59e0b" },
+  { value: "low",      label: "Low",        color: "#3a5570" },
+  { value: "all",      label: "All",        color: "#fff"    },
+];
+
+function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
+  if (active.has("all")) return true;
+  if (active.has("high-usd") && ev.impact === "High" && ev.country === "USD") return true;
+  if (active.has("high")     && ev.impact === "High") return true;
+  if (active.has("medium")   && ev.impact === "Medium") return true;
+  if (active.has("low")      && ev.impact === "Low") return true;
+  return false;
+}
+
+function etToday() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+}
+
+function dayLabel(dateStr: string, today: string): string {
+  if (dateStr === today) return "TODAY";
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+}
 
 export default function EconomicCalendarPage() {
-  const [events, setEvents] = useState<CalEvent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [impactFilter, setImpactFilter] = useState<ImpactFilter>("high-usd");
-  const [quote, setQuote] = useState<string | null>(null);
+  const [events,       setEvents]       = useState<CalEvent[]>([]);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [lastRefresh,  setLastRefresh]  = useState<string | null>(null);
+  const [quote,        setQuote]        = useState<string | null>(null);
+  const [search,       setSearch]       = useState("");
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd"]));
+  const [dropOpen,     setDropOpen]     = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropOpen(false);
+    }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [calRes, quoteRes] = await Promise.all([
+      const [calRes, qRes] = await Promise.all([
         fetch("/api/calendar"),
         fetch("/api/calendar-quote"),
       ]);
-      const json = await calRes.json();
-      if (!calRes.ok) { setError(json.error ?? `HTTP ${calRes.status}`); return; }
-      setEvents(json.events ?? []);
+      const j = await calRes.json();
+      if (!calRes.ok) { setError(j.error ?? `HTTP ${calRes.status}`); return; }
+      setEvents(j.events ?? []);
       setLastRefresh(new Date().toLocaleTimeString());
-      if (quoteRes.ok) {
-        const qj = await quoteRes.json();
+      if (qRes.ok) {
+        const qj = await qRes.json();
         if (qj.quote) setQuote(qj.quote);
       }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(String(e)); }
+    finally    { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  const today = etToday();
 
-  const filtered = events.filter(ev => {
-    if (impactFilter === "high-usd" && !(ev.impact === "High" && ev.country === "USD")) return false;
-    if (impactFilter === "high"     && ev.impact !== "High") return false;
-    if (search && !(
-      ev.title?.toLowerCase().includes(search.toLowerCase()) ||
-      ev.country?.toLowerCase().includes(search.toLowerCase())
-    )) return false;
-    return true;
-  });
+  function toggleFilter(key: FilterKey) {
+    setActiveFilters(prev => {
+      const next = new Set(prev);
+      if (key === "all") return new Set(["all"]);
+      next.delete("all");
+      if (next.has(key)) { next.delete(key); if (next.size === 0) next.add("all"); }
+      else next.add(key);
+      return next;
+    });
+  }
 
-  const groups = groupByDate(filtered);
+  const filtered = events.filter(ev =>
+    passes(ev, activeFilters) &&
+    (!search || ev.title?.toLowerCase().includes(search.toLowerCase()) || ev.country?.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const groups     = groupByDate(filtered);
   const sortedDates = Object.keys(groups).sort();
 
-  const FILTER_OPTS: { value: ImpactFilter; label: string }[] = [
-    { value: "high-usd", label: "High · USD" },
-    { value: "high",     label: "High" },
-    { value: "all",      label: "All" },
-  ];
+  const filterLabel = activeFilters.has("all")
+    ? "ALL"
+    : Array.from(activeFilters).map(k => FILTER_OPTS.find(o => o.value === k)?.label ?? k).join(" + ");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", fontFamily: "Arial, Helvetica, sans-serif" }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", borderBottom: "1px solid #0d1f30", background: "#070c14", flexShrink: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0a0e17", fontFamily: "Arial, Helvetica, sans-serif", color: "#fff" }}>
+
+      {/* ── Top bar ──────────────────────────────────────────── */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "8px 16px", background: "#0d1220",
+        borderBottom: "1px solid #1a2540", flexShrink: 0,
+      }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "#00e5ff" }}>
+          <span style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.15em", color: "#fff" }}>
             📅 Economic Calendar
           </span>
-          {lastRefresh && <span style={{ fontSize: 10, color: "#3a5570", fontFamily: "monospace" }}>Updated {lastRefresh}</span>}
+          {lastRefresh && (
+            <span style={{ fontSize: 11, color: "#fff", fontFamily: "monospace", background: "#141c2e", padding: "2px 8px", borderRadius: 3 }}>
+              {today}
+            </span>
+          )}
         </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {/* Impact filter pills */}
-          <div style={{ display: "flex", gap: 2, background: "#05080d", borderRadius: 3, padding: 2 }}>
-            {FILTER_OPTS.map(o => (
-              <button key={o.value} onClick={() => setImpactFilter(o.value)} style={{
-                fontSize: 9, padding: "3px 8px", border: "none", borderRadius: 2, cursor: "pointer", fontWeight: 700,
-                background: impactFilter === o.value ? "#1a2a3a" : "transparent",
-                color: impactFilter === o.value ? "#00e5ff" : "#6b7280",
+          {/* Multi-select dropdown */}
+          <div ref={dropRef} style={{ position: "relative" }}>
+            <button
+              onClick={() => setDropOpen(o => !o)}
+              style={{
+                fontSize: 11, padding: "4px 12px", border: "1px solid #1e3050",
+                borderRadius: 3, background: "#141c2e", color: "#fff",
+                cursor: "pointer", fontWeight: 700, display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              {filterLabel} <span style={{ fontSize: 8 }}>▾</span>
+            </button>
+            {dropOpen && (
+              <div style={{
+                position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 200,
+                background: "#0d1220", border: "1px solid #1e3050", borderRadius: 4,
+                padding: "4px 0", minWidth: 170, boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
               }}>
-                {o.label}
-              </button>
-            ))}
+                {FILTER_OPTS.map(o => {
+                  const on = activeFilters.has(o.value);
+                  return (
+                    <div
+                      key={o.value}
+                      onClick={() => toggleFilter(o.value)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "8px 16px", cursor: "pointer",
+                        background: on ? "#111a2e" : "transparent",
+                      }}
+                    >
+                      <span style={{
+                        width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                        border: `2px solid ${o.color}`,
+                        background: on ? o.color : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 9, color: "#05080d", fontWeight: 900,
+                      }}>{on ? "✓" : ""}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: on ? "#fff" : "#8a9ab8" }}>
+                        {o.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
+
           <input
-            type="text"
-            placeholder="Search…"
-            value={search}
+            type="text" placeholder="Search…" value={search}
             onChange={e => setSearch(e.target.value)}
-            style={{ fontSize: 11, padding: "3px 8px", background: "#0b111b", border: "1px solid #0d1f30", color: "#fff", outline: "none", borderRadius: 3, width: 140 }}
+            style={{ fontSize: 12, padding: "4px 10px", background: "#141c2e", border: "1px solid #1e3050", color: "#fff", outline: "none", borderRadius: 3, width: 140 }}
           />
-          <button onClick={load} disabled={loading} style={{ fontSize: 11, padding: "3px 10px", border: "1px solid #0d1f30", borderRadius: 3, background: "transparent", color: "#00e5ff", cursor: "pointer" }}>
-            {loading ? "…" : "↻"}
+          <button
+            onClick={load} disabled={loading}
+            style={{ fontSize: 13, padding: "4px 14px", border: "none", borderRadius: 3, background: "#00b4d8", color: "#05080d", cursor: "pointer", fontWeight: 800 }}
+          >
+            {loading ? "…" : "↻ Now"}
           </button>
         </div>
       </div>
 
-      {/* Quote of the day */}
+      {/* ── Quote of the day ─────────────────────────────────── */}
       {quote && (
-        <div style={{ padding: "8px 16px", borderBottom: "1px solid #0d1f30", background: "#070c14", flexShrink: 0 }}>
-          <p style={{ margin: 0, fontSize: 12, fontStyle: "italic", color: "#e8edf5", lineHeight: 1.6, textAlign: "center", letterSpacing: "0.02em" }}>
+        <div style={{ padding: "10px 20px", borderBottom: "1px solid #1a2540", background: "#0d1220", flexShrink: 0, textAlign: "center" }}>
+          <span style={{ fontSize: 13, fontStyle: "italic", color: "#fff", lineHeight: 1.7 }}>
             &ldquo;{quote}&rdquo;
-          </p>
+          </span>
         </div>
       )}
 
-      {/* Body */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* ── Event list ───────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
         {error ? (
-          <div style={{ fontSize: 11, color: "#ef4444", padding: 12, border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, background: "rgba(239,68,68,0.05)" }}>
+          <div style={{ fontSize: 13, color: "#ef4444", padding: 16, margin: 16, border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, background: "rgba(239,68,68,0.05)" }}>
             ⚠ {error}
           </div>
         ) : loading && events.length === 0 ? (
-          <div style={{ color: "#3a5570", fontSize: 12, textAlign: "center", marginTop: 40 }}>Loading…</div>
+          <div style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 60 }}>Loading…</div>
         ) : sortedDates.length === 0 ? (
-          <div style={{ color: "#3a5570", fontSize: 12 }}>No events match.</div>
+          <div style={{ color: "#fff", fontSize: 14, padding: 20 }}>No events match.</div>
         ) : (
           sortedDates.map(date => {
             const isToday = date === today;
             const evs = groups[date];
-            const d = new Date(date + "T12:00:00");
-            const label = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }).toUpperCase();
+            const d   = new Date(date + "T12:00:00");
+            const fullLabel = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }).toUpperCase();
 
             return (
               <div key={date}>
-                {/* Date header */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, paddingBottom: 4, borderBottom: `1px solid ${isToday ? "#00e5ff33" : "#0d1f30"}` }}>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: isToday ? "#00e5ff" : "#fff", letterSpacing: "0.1em" }}>
-                    {label}
+                {/* ── Date section header ── */}
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 16px 6px",
+                  background: isToday ? "rgba(0,229,255,0.04)" : "transparent",
+                  borderTop: "1px solid #1a2540",
+                }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: isToday ? "#00e5ff" : "#fff", letterSpacing: "0.08em" }}>
+                    {fullLabel}
                   </span>
                   {isToday && (
-                    <span style={{ fontSize: 8, fontWeight: 800, background: "#00e5ff", color: "#05080d", padding: "1px 6px", borderRadius: 3, letterSpacing: "0.12em" }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, background: "#00e5ff", color: "#05080d", padding: "2px 8px", borderRadius: 3, letterSpacing: "0.12em" }}>
                       TODAY
                     </span>
                   )}
                 </div>
 
-                {/* Events */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  {evs.map((ev, i) => (
-                    <div key={i} style={{
-                      display: "grid",
-                      gridTemplateColumns: "80px 55px 1fr 90px 90px 90px",
-                      gap: 10,
-                      padding: "7px 12px",
-                      background: "#070c14",
-                      border: "1px solid #0d1f30",
-                      borderLeft: `3px solid ${impactColor(ev.impact)}`,
-                      borderRadius: 3,
-                      alignItems: "center",
-                    }}>
-                      <span style={{ fontSize: 11, fontFamily: "monospace", color: "#fff" }}>
-                        {ev.time_formatted || "All day"}
-                      </span>
-                      <span style={{ fontSize: 9, fontWeight: 800, color: impactColor(ev.impact), textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                        {ev.impact}
-                      </span>
-                      <span style={{ fontSize: 13, color: "#fff", fontWeight: ev.impact === "High" ? 700 : 400 }}>
-                        {ev.title}
-                        <span style={{ fontSize: 9, color: "#3a5570", marginLeft: 6 }}>{ev.country}</span>
-                      </span>
-                      <span style={{ fontSize: 11, color: ev.actual ? "#22c55e" : "#3a5570", textAlign: "right", fontFamily: "monospace" }}>
-                        {ev.actual ? `A: ${ev.actual}` : "—"}
-                      </span>
-                      <span style={{ fontSize: 11, color: ev.forecast ? "#faad14" : "#3a5570", textAlign: "right", fontFamily: "monospace" }}>
-                        {ev.forecast ? `F: ${ev.forecast}` : "—"}
-                      </span>
-                      <span style={{ fontSize: 11, color: ev.previous ? "#fff" : "#3a5570", textAlign: "right", fontFamily: "monospace" }}>
-                        {ev.previous ? `P: ${ev.previous}` : "—"}
-                      </span>
+                {/* ── Events for this date ── */}
+                {evs.map((ev, i) => {
+                  const col = impactColor(ev.impact);
+                  const dl  = dayLabel(ev.date, today);
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "80px 1fr",
+                        borderTop: i === 0 ? "none" : "1px solid #111827",
+                        borderLeft: `3px solid ${col}`,
+                        background: "#0a0e17",
+                        minHeight: 56,
+                      }}
+                    >
+                      {/* Left: day + time */}
+                      <div style={{
+                        display: "flex", flexDirection: "column", justifyContent: "center",
+                        padding: "10px 12px",
+                        borderRight: "1px solid #111827",
+                        gap: 3,
+                      }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: isToday && dl === "TODAY" ? "#00e5ff" : "#fff", letterSpacing: "0.06em" }}>
+                          {dl}
+                        </span>
+                        <span style={{ fontSize: 13, color: "#fff", fontFamily: "monospace" }}>
+                          {ev.time_formatted || "All day"}
+                        </span>
+                      </div>
+
+                      {/* Right: content */}
+                      <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
+                        {/* Impact + country row */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                            {ev.impact}
+                          </span>
+                          <span style={{ fontSize: 11, color: "#fff", fontWeight: 600 }}>
+                            {ev.country}
+                          </span>
+                        </div>
+
+                        {/* Title */}
+                        <div style={{ fontSize: 15, fontWeight: ev.impact === "High" ? 700 : 500, color: "#fff", lineHeight: 1.3 }}>
+                          {ev.title}
+                        </div>
+
+                        {/* A / F / P values */}
+                        {(ev.actual || ev.forecast || ev.previous) && (
+                          <div style={{ display: "flex", gap: 14, marginTop: 2 }}>
+                            {ev.actual && (
+                              <span style={{ fontSize: 12, color: "#22c55e", fontFamily: "monospace" }}>
+                                A: <strong>{ev.actual}</strong>
+                              </span>
+                            )}
+                            {ev.forecast && (
+                              <span style={{ fontSize: 12, color: "#f59e0b", fontFamily: "monospace" }}>
+                                F: {ev.forecast}
+                              </span>
+                            )}
+                            {ev.previous && (
+                              <span style={{ fontSize: 12, color: "#8a9ab8", fontFamily: "monospace" }}>
+                                P: {ev.previous}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             );
           })

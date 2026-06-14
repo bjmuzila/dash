@@ -68,22 +68,18 @@ export default function EconCalendarPanel() {
 
   const doLoad = useCallback(async () => {
     setError(null);
-    const [econRes, trumpRes] = await Promise.all([
-      fetch("/api/calendar"),
-      fetch("/api/trump-calendar"),
-    ]);
+    const econRes  = await fetch("/api/calendar");
     const econJson = await econRes.json();
-    const trumpJson = trumpRes.ok ? await trumpRes.json() : { events: [] };
     if (!econRes.ok) {
       setError(econJson.error ?? `HTTP ${econRes.status}`);
       setEvents([]);
       return;
     }
-    const merged = [
-      ...(econJson.events ?? []),
-      ...(trumpJson.events ?? []),
-    ].sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
-    setEvents(merged);
+    const sorted = (econJson.events ?? [])
+      .sort((a: CalEvent, b: CalEvent) =>
+        a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time)
+      );
+    setEvents(sorted);
   }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(async () => {
