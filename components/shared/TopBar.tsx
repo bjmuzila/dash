@@ -465,6 +465,7 @@ export default function TopBar() {
 
         {/* Right: logo + actions + TT LIVE + dropdown */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <SnapButton mode="share" />
           <SnapButton mode="save" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/bzilatrades-logo.png" alt="BzilaTrades" style={{ height: 42, width: "auto", objectFit: "contain" }} />
@@ -509,19 +510,8 @@ export default function TopBar() {
 
       {/* ── ROW 2 ── (hidden on mobile) */}
       <div className="topbar-row2" style={{ display: "flex", alignItems: "center", gap: 16, padding: TOPBAR_ROW2_PADDING, borderTop: "1px solid #0d1825", minHeight: 30, background: "rgba(5,10,16,.7)", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#ffb300", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700 }}>Current MVC</span>
-          <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570" }}>OI+V:</span>
-          <span style={{ fontSize: 12, fontWeight: 700, color: "#00e5ff", fontVariantNumeric: "tabular-nums" }}>{row2.mvcOI}</span>
-          <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570", marginLeft: 4 }}>Net GEX:</span>
-          <span style={{ fontSize: 12, fontWeight: 700, color: "#a0d4ff", fontVariantNumeric: "tabular-nums" }}>{row2.mvcVol}</span>
-        </div>
-        <span style={{ color: "#1e3050" }}>|</span>
-        <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#ffb300", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>GEX Flip</span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#00e676", fontVariantNumeric: "tabular-nums" }}>{row2.gexFlip}</span>
         {row2.peaks.length > 0 && (
           <>
-            <span style={{ color: "#1e3050" }}>|</span>
             <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#ffb300", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>Peak GEX</span>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               {row2.peaks.map((p, i) => (
@@ -530,8 +520,6 @@ export default function TopBar() {
             </div>
           </>
         )}
-        <span style={{ color: "#1e3050", marginLeft: "auto" }}>|</span>
-        <SnapButton mode="share" />
       </div>
     </div>
   );

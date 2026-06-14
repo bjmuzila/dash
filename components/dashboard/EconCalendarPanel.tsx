@@ -62,12 +62,18 @@ const DAY_LABELS: Record<number, string> = { 0: "Mon", 1: "Tue", 2: "Wed", 3: "T
 export default function EconCalendarPanel() {
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   const doLoad = useCallback(async () => {
+    setError(null);
     const res = await fetch("/api/calendar");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
+    if (!res.ok) {
+      setError(json.error ?? `HTTP ${res.status}`);
+      setEvents([]);
+      return;
+    }
     setEvents(json.events ?? []);
   }, []);
 
@@ -186,6 +192,8 @@ export default function EconCalendarPanel() {
       <div style={{ flex: 1, overflowY: "auto", padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
         {loading ? (
           <div style={{ color: "#1e3050", fontSize: 11, padding: "4px 0" }}>Loading…</div>
+        ) : error ? (
+          <div style={{ color: "#ef4444", fontSize: 10, padding: "4px 0", wordBreak: "break-all" }}>Error: {error}</div>
         ) : weekEvents.length === 0 ? (
           <div style={{ color: "#1e3050", fontSize: 11, padding: "4px 0" }}>No events this week.</div>
         ) : (

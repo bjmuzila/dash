@@ -26,6 +26,8 @@ interface GexToolbarProps {
   onToggleDex:   () => void;
   onToggleFlip:  () => void;
   onRefresh:     () => Promise<void>;
+  onExpandChart:   () => void;
+  onCollapseChart: () => void;
 }
 
 interface PillGroupProps {
@@ -103,7 +105,7 @@ export default function GexToolbar({
   expirations, selectedExpiry, onExpiry,
   onGexMode, onDataMode, onChartMode,
   onToggleOI, onToggleDex, onToggleFlip,
-  onRefresh,
+  onRefresh, onExpandChart, onCollapseChart,
 }: GexToolbarProps) {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
   const visibleExpirations = expirations.slice(0, 3);
@@ -194,10 +196,39 @@ export default function GexToolbar({
         {netGex && <span><span style={{ color: "#3a5570" }}>GEX </span><span style={{ color: "#00e5ff", fontWeight: 700 }}>{netGex}</span></span>}
       </div>
 
-      {/* Refresh button with snapshot.md feedback */}
+      {/* Chart size controls */}
+      <div style={{ marginLeft: "auto", display: "flex", gap: 3, flexShrink: 0 }}>
+        <button
+          onClick={onExpandChart}
+          title="Expand chart"
+          aria-label="Expand chart"
+          style={{ padding: "5px 8px", border: "1px solid #1e3050", borderRadius: 4, background: "#0a1628", color: "#00e5ff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}
+          onMouseEnter={e => (e.currentTarget.style.background = "#0d2035")}
+          onMouseLeave={e => (e.currentTarget.style.background = "#0a1628")}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+        <button
+          onClick={onCollapseChart}
+          title="Collapse chart"
+          aria-label="Collapse chart"
+          style={{ padding: "5px 8px", border: "1px solid #1e3050", borderRadius: 4, background: "#0a1628", color: "#7a9ab8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}
+          onMouseEnter={e => (e.currentTarget.style.background = "#0d2035")}
+          onMouseLeave={e => (e.currentTarget.style.background = "#0a1628")}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Refresh button */}
       <button
         onClick={trigger}
-        style={{ marginLeft: "auto", ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}
+        style={{ ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}
       >
         {btnLabel}
       </button>

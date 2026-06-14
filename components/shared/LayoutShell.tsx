@@ -29,7 +29,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar — always mounted; collapsed rail when closed on desktop */}
       <div
         style={{
           position: isMobile ? "fixed" : "static",
@@ -37,43 +37,18 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
           left: 0,
           bottom: 0,
           zIndex: isMobile ? 200 : "auto",
-          display: sidebarOpen ? "flex" : "none",
+          display: isMobile && !sidebarOpen ? "none" : "flex",
           flexDirection: "column",
           height: isMobile ? "100dvh" : "auto",
         }}
       >
-        <Sidebar onClose={() => setSidebarOpen(false)} isMobile={isMobile} />
+        <Sidebar
+          collapsed={!isMobile && !sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          onOpen={() => setSidebarOpen(true)}
+          isMobile={isMobile}
+        />
       </div>
-
-      {/* ☰ FAB — shown when sidebar is closed (all screen sizes) */}
-      {!sidebarOpen && (
-        <button
-          onClick={() => setSidebarOpen(true)}
-          aria-label="Open sidebar"
-          style={{
-            position: isMobile ? "fixed" : "absolute",
-            top: isMobile ? "auto" : 6,
-            bottom: isMobile ? 16 : "auto",
-            left: isMobile ? 16 : 4,
-            zIndex: 300,
-            width: 28,
-            height: 28,
-            borderRadius: isMobile ? "50%" : 4,
-            background: "#0a0f16",
-            border: "1px solid #1e3050",
-            color: "#00e5ff",
-            fontSize: 14,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            flexShrink: 0,
-            boxShadow: isMobile ? "0 4px 12px rgba(0,0,0,0.6)" : "none",
-          }}
-        >
-          ☰
-        </button>
-      )}
 
       <main
         className="flex-1 overflow-hidden"

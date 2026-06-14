@@ -159,7 +159,7 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
       <div style={{
         display: "grid",
-        gridTemplateColumns: "80px repeat(5, 1fr)",
+        gridTemplateColumns: "68px repeat(5, 1fr)",
         background: "var(--overview-header-bg, #070c14)",
         borderBottom: "1px solid var(--overview-border-soft, #0d1f30)",
         flexShrink: 0,
@@ -171,7 +171,7 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
           STRIKE
         </div>
         {COLS.map(c => (
-          <div key={c.key} style={{ padding: "5px 6px", fontSize: 9, fontWeight: 700, color: "#ffffff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "right" }}>
+          <div key={c.key} style={{ padding: "5px 6px", fontSize: 9, fontWeight: 700, color: "#ffffff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center" }}>
             {c.label}
           </div>
         ))}
@@ -195,7 +195,7 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
               data-strike={row.strike}
               style={{
                 display: "grid",
-                gridTemplateColumns: "80px repeat(5, 1fr)",
+                gridTemplateColumns: "68px repeat(5, 1fr)",
                 borderBottom: "1px solid #0a1420",
                 outline: isATM ? "1.5px solid rgba(0,229,255,0.7)" : "none",
                 outlineOffset: isATM ? "-1px" : "0",
@@ -233,7 +233,7 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
                     padding: "4px 6px",
                     fontSize: 10,
                     fontFamily: "inherit",
-                    textAlign: "right",
+                    textAlign: "center",
                     background: cellBg(c.key, v, topRank),
                     color: "#ffffff",
                     fontWeight: topRank > 0 ? 800 : 400,

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 interface FFEvent {
   title: string;
   country: string;
-  date: string; // ISO8601 with offset e.g. "2026-06-10T08:30:00-04:00"
+  date: string;
   impact: string;
   forecast: string;
   previous: string;
@@ -11,8 +11,8 @@ interface FFEvent {
 }
 
 interface CalEvent {
-  date: string;        // YYYY-MM-DD ET
-  time: string;        // HH:MM (24h ET)
+  date: string;
+  time: string;
   time_formatted: string;
   title: string;
   country: string;
@@ -36,13 +36,35 @@ function toET(iso: string): { date: string; time: string; time_formatted: string
   return { date: etDate, time: et24, time_formatted: etTime };
 }
 
+const FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+
+const FETCH_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.forexfactory.com/",
+};
+
 export async function GET() {
+  let statusCode = 0;
+  let bodySnippet = "";
+
   try {
-    const res = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", {
-      next: { revalidate: 1800 },
-      headers: { "User-Agent": "Mozilla/5.0" },
+    const res = await fetch(FF_URL, {
+      cache: "no-store",
+      headers: FETCH_HEADERS,
     });
-    if (!res.ok) return NextResponse.json({ error: "Calendar unavailable", events: [] }, { status: res.status });
+
+    statusCode = res.status;
+
+    if (!res.ok) {
+      bodySnippet = await res.text().then(t => t.slice(0, 200)).catch(() => "");
+      console.error(`[calendar] FF returned ${statusCode}: ${bodySnippet}`);
+      return NextResponse.json(
+        { error: `Upstream ${statusCode}`, detail: bodySnippet, events: [] },
+        { status: 502 }
+      );
+    }
 
     const raw: FFEvent[] = await res.json();
 
@@ -61,9 +83,13 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ events });
+    console.log(`[calendar] loaded ${events.length} events`);
+    return NextResponse.json({ events }, {
+      headers: { "Cache-Control": "s-maxage=1800, stale-while-revalidate=3600" },
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[calendar] fetch error: ${msg}`);
     return NextResponse.json({ error: msg, events: [] }, { status: 500 });
   }
 }

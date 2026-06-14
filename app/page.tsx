@@ -412,6 +412,8 @@ export default function OverviewPage() {
             onToggleDex={() => setShowDex(p => !p)}
             onToggleFlip={() => setShowFlipCurve(p => !p)}
             onRefresh={handleRefresh}
+            onExpandChart={() => setSplitPct(p => Math.min(85, p + 10))}
+            onCollapseChart={() => setSplitPct(p => Math.max(15, p - 10))}
           />
           <div style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--overview-bg)" }}>
             {chain.length === 0 && (
