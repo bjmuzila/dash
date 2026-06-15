@@ -47,8 +47,12 @@ const TOPBAR_CHANGE_SIZE = 12;
 const ES_DISPLAY_LABEL = "ESU";
 const ES_DISPLAY_SYMBOL = "/ESU26";
 const NQ_DISPLAY_SYMBOL = "/NQU26";
-const ES_FEED_SYMBOLS = [ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME"];
+const ES_FEED_SYMBOLS = [ES_DISPLAY_SYMBOL, "/ESU6"];
 const NQ_FEED_SYMBOLS = [NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"];
+
+function isEsuSymbol(sym: string) {
+  return /^\/ESU(26|6)?$/i.test(sym);
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function fmt(v: number, decimals = 2) {
@@ -207,7 +211,7 @@ export default function TopBar() {
             if (price > 0 && live.current.spxPrice === 0) live.current.spxPrice = price;
             if (prev  > 0 && live.current.spxPrev  === 0) live.current.spxPrev  = prev;
           }
-          if (sym.startsWith("/ES")) {
+          if (isEsuSymbol(sym)) {
             if (price > 0 && live.current.esPrice === 0) live.current.esPrice = price;
             if (prev  > 0 && live.current.esPrev  === 0) live.current.esPrev  = prev;
           }
@@ -293,7 +297,7 @@ export default function TopBar() {
                 return isFinite(v) && v > 0 ? v : 0;
               };
 
-              if (sym.startsWith("/ES")) {
+              if (isEsuSymbol(sym)) {
                 if (eType === "Trade"   && n("price"))               live.current.esPrice = n("price");
                 if (eType === "Quote"   && n("bidPrice") && n("askPrice"))
                   live.current.esPrice = (n("bidPrice") + n("askPrice")) / 2;

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import type { SqlValue } from "sql.js";
 
 export async function GET(
   req: NextRequest,
@@ -8,21 +7,18 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const db = await getDb();
+    const pool = await getDb();
 
-    const results = db.exec("SELECT * FROM snapshots WHERE id = ?", [
-      parseInt(id, 10) as SqlValue,
-    ]);
+    const result = await pool.query(
+      "SELECT * FROM snapshots WHERE id = $1",
+      [parseInt(id, 10)]
+    );
 
-    if (!results.length || !results[0].values.length) {
+    if (!result.rows.length) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const { columns, values } = results[0];
-    const row = Object.fromEntries(
-      columns.map((col, i) => [col, values[0][i]])
-    ) as any;
-
+    const row = result.rows[0];
     return NextResponse.json({
       ...row,
       expirations: row.expirations ? JSON.parse(row.expirations) : [],
@@ -39,22 +35,14 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const db = await getDb();
+    const pool = await getDb();
 
-    // Check if exists first
-    const checkResults = db.exec("SELECT id FROM snapshots WHERE id = ?", [
-      parseInt(id, 10) as SqlValue,
-    ]);
-
-    if (!checkResults.length || !checkResults[0].values.length) {
+    const check = await pool.query("SELECT id FROM snapshots WHERE id = $1", [parseInt(id, 10)]);
+    if (!check.rows.length) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // Delete it
-    db.run("DELETE FROM snapshots WHERE id = ?", [
-      parseInt(id, 10) as SqlValue,
-    ]);
-
+    await pool.query("DELETE FROM snapshots WHERE id = $1", [parseInt(id, 10)]);
     return NextResponse.json({ id, message: "Deleted" }, { status: 200 });
   } catch (err) {
     console.error("[/api/snapshots/[id] DELETE]", err);

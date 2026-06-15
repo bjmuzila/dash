@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, persistDb } from "@/lib/db";
-
-// POST: write a test row. GET: read it back.
-// Tests the full save→persist→reload cycle.
+import { getDb } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const db = await getDb();
-    db.run("CREATE TABLE IF NOT EXISTS _write_test (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, val TEXT)");
-    db.run("INSERT INTO _write_test (ts, val) VALUES (?, ?)", [Date.now(), body.val ?? "ping"]);
-    persistDb();
-    const r = db.exec("SELECT last_insert_rowid() as id");
-    const id = r[0]?.values[0]?.[0];
+    const pool = await getDb();
+    await pool.query(
+      "CREATE TABLE IF NOT EXISTS _write_test (id SERIAL PRIMARY KEY, ts BIGINT, val TEXT)"
+    );
+    const result = await pool.query(
+      "INSERT INTO _write_test (ts, val) VALUES ($1, $2) RETURNING id",
+      [Date.now(), body.val ?? "ping"]
+    );
+    const id = result.rows[0]?.id;
     return NextResponse.json({ ok: true, id });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
@@ -21,14 +21,11 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   try {
-    const db = await getDb();
+    const pool = await getDb();
     let rows: unknown[] = [];
     try {
-      const r = db.exec("SELECT * FROM _write_test ORDER BY id DESC LIMIT 10");
-      if (r[0]) {
-        const { columns, values } = r[0];
-        rows = values.map(row => Object.fromEntries(columns.map((c, i) => [c, row[i]])));
-      }
+      const r = await pool.query("SELECT * FROM _write_test ORDER BY id DESC LIMIT 10");
+      rows = r.rows;
     } catch { rows = []; }
     return NextResponse.json({ rows });
   } catch (err) {

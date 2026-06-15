@@ -1,36 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, persistDb } from "@/lib/db";
-import type { SqlValue } from "sql.js";
+import { getDb } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const period = searchParams.get("period");
 
-    const db = await getDb();
-    let sql = "SELECT * FROM snapshots";
-    const params: SqlValue[] = [];
+    const pool = await getDb();
+    let sql = `SELECT * FROM snapshots`;
+    const params: unknown[] = [];
 
     if (period) {
-      sql += " WHERE period = ?";
+      sql += " WHERE period = $1";
       params.push(period);
     }
 
     sql += " ORDER BY id DESC";
 
-    const results = db.exec(sql, params);
-    if (!results.length) {
-      return NextResponse.json([]);
-    }
-
-    const { columns, values } = results[0];
-    const snapshots = values.map((row) => {
-      const obj = Object.fromEntries(columns.map((col, i) => [col, row[i]])) as any;
-      return {
-        ...obj,
-        expirations: obj.expirations ? JSON.parse(obj.expirations) : [],
-      };
-    });
+    const result = await pool.query(sql, params);
+    const snapshots = result.rows.map((row: any) => ({
+      ...row,
+      expirations: row.expirations ? JSON.parse(row.expirations) : [],
+    }));
 
     return NextResponse.json(snapshots);
   } catch (err) {
@@ -45,57 +36,19 @@ export async function POST(req: NextRequest) {
     const { timestamp, date, time, period, tableHtml, expirations } = body;
 
     if (!timestamp || !date || !time || !period || !tableHtml) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const db = await getDb();
-
-    // Ensure table exists
-    db.run(`
-      CREATE TABLE IF NOT EXISTS snapshots (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp INTEGER NOT NULL,
-        date TEXT NOT NULL,
-        time TEXT NOT NULL,
-        period TEXT NOT NULL DEFAULT 'weekly',
-        tableHtml TEXT NOT NULL,
-        expirations TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    const sql = `
-      INSERT INTO snapshots (timestamp, date, time, period, tableHtml, expirations)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
-
-    db.run(sql, [
-      timestamp,
-      date,
-      time,
-      period,
-      tableHtml,
-      JSON.stringify(expirations || []),
-    ]);
-    persistDb();
-
-    // Get the last inserted ID
-    const idResult = db.exec("SELECT last_insert_rowid() as id");
-    const lastId = idResult.length > 0 ? idResult[0].values[0][0] : null;
+    const pool = await getDb();
+    const result = await pool.query(
+      `INSERT INTO snapshots (timestamp, date, time, period, "tableHtml", expirations)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [timestamp, date, time, period, tableHtml, JSON.stringify(expirations || [])]
+    );
+    const lastId = result.rows[0]?.id ?? null;
 
     return NextResponse.json(
-      {
-        id: lastId,
-        timestamp,
-        date,
-        time,
-        period,
-        tableHtml,
-        expirations: expirations || [],
-      },
+      { id: lastId, timestamp, date, time, period, tableHtml, expirations: expirations || [] },
       { status: 201 }
     );
   } catch (err) {

@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "2026.6.15-v65",
+    "version":  "2026.6.15-v67",
     "private":  true,
     "workspaces":  [
 
@@ -18,14 +18,14 @@
                          "next":  "^15.3.3",
                          "react":  "^19",
                          "react-dom":  "^19",
-                         "sql.js":  "^1.12.0",
+                         "pg":  "^8.11.3",
                          "tailwind-merge":  "^2.3.0"
                      },
     "devDependencies":  {
                             "@types/node":  "^20",
                             "@types/react":  "^19",
                             "@types/react-dom":  "^19",
-                            "@types/sql.js":  "^1.4.9",
+                            "@types/pg":  "^8.11.6",
                             "autoprefixer":  "^10.4.19",
                             "postcss":  "^8.4.38",
                             "tailwindcss":  "^3.4.3",

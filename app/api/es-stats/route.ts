@@ -1,54 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, persistDb } from "@/lib/db";
-
-const CREATE_TABLE = `
-  CREATE TABLE IF NOT EXISTS es_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    expiration TEXT NOT NULL UNIQUE,
-    no_long TEXT,
-    up TEXT,
-    mid TEXT,
-    down TEXT,
-    no_short TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`;
+import { getDb } from "@/lib/db";
 
 let _tableEnsured = false;
 
 export async function GET() {
   try {
-    const db = await getDb();
+    const pool = await getDb();
 
-    // Only create table once per process
     if (!_tableEnsured) {
-      try {
-        db.run(CREATE_TABLE);
-        _tableEnsured = true;
-      } catch (e) {
-        console.debug("[/api/es-stats] table creation note:", e);
-        _tableEnsured = true;
-      }
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS es_stats (
+          id SERIAL PRIMARY KEY, expiration TEXT NOT NULL UNIQUE,
+          no_long TEXT, up TEXT, mid TEXT, down TEXT, no_short TEXT,
+          updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      _tableEnsured = true;
     }
 
-    let results = db.exec("SELECT * FROM es_stats WHERE expiration = 'WEEKLY' LIMIT 1");
+    let result = await pool.query(
+      "SELECT * FROM es_stats WHERE expiration = 'WEEKLY' LIMIT 1"
+    );
 
-    if (!results.length) {
-      results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
+    if (!result.rows.length) {
+      result = await pool.query("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
     }
 
-    if (!results.length) {
-      return NextResponse.json(null);
-    }
-
-    const { columns, values } = results[0];
-
-    if (!values.length || !values[0]) {
-      return NextResponse.json(null);
-    }
-
-    const row = Object.fromEntries(columns.map((col, i) => [col, values[0][i]]));
-    return NextResponse.json(row);
+    if (!result.rows.length) return NextResponse.json(null);
+    return NextResponse.json(result.rows[0]);
   } catch (err) {
     console.error("[/api/es-stats GET]", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
@@ -61,23 +40,19 @@ export async function POST(req: NextRequest) {
     const { expiration } = body;
     if (!expiration) return NextResponse.json({ error: "Missing expiration" }, { status: 400 });
 
-    const db = await getDb();
-    db.run(CREATE_TABLE);
-
-    // Upsert row, only overwriting fields that were provided
-    db.run(
+    const pool = await getDb();
+    await pool.query(
       `INSERT INTO es_stats (expiration, no_long, up, mid, down, no_short)
-       VALUES (?, ?, ?, ?, ?, ?)
+       VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT(expiration) DO UPDATE SET
-         no_long  = CASE WHEN excluded.no_long  IS NOT NULL THEN excluded.no_long  ELSE no_long  END,
-         up       = CASE WHEN excluded.up        IS NOT NULL THEN excluded.up       ELSE up       END,
-         mid      = CASE WHEN excluded.mid       IS NOT NULL THEN excluded.mid      ELSE mid      END,
-         down     = CASE WHEN excluded.down      IS NOT NULL THEN excluded.down     ELSE down     END,
-         no_short = CASE WHEN excluded.no_short  IS NOT NULL THEN excluded.no_short ELSE no_short END,
+         no_long  = CASE WHEN EXCLUDED.no_long  IS NOT NULL THEN EXCLUDED.no_long  ELSE es_stats.no_long  END,
+         up       = CASE WHEN EXCLUDED.up        IS NOT NULL THEN EXCLUDED.up       ELSE es_stats.up       END,
+         mid      = CASE WHEN EXCLUDED.mid       IS NOT NULL THEN EXCLUDED.mid      ELSE es_stats.mid      END,
+         down     = CASE WHEN EXCLUDED.down      IS NOT NULL THEN EXCLUDED.down     ELSE es_stats.down     END,
+         no_short = CASE WHEN EXCLUDED.no_short  IS NOT NULL THEN EXCLUDED.no_short ELSE es_stats.no_short END,
          updated_at = CURRENT_TIMESTAMP`,
       [expiration, body.no_long ?? null, body.up ?? null, body.mid ?? null, body.down ?? null, body.no_short ?? null]
     );
-    persistDb();
     return NextResponse.json({ ok: true, expiration });
   } catch (err) {
     console.error("[/api/es-stats POST]", err);

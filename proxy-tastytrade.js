@@ -571,6 +571,8 @@ const CORE_LIVE_SUBSCRIPTIONS = new Set([
   'SPX',
   'VIX',
   'NDX',
+  '/ESU26',
+  '/ESU6',
   '/ES:XCME',
   '/NQ:XCME',
   'US10Y',
@@ -1898,25 +1900,27 @@ function normalizeRestSymbol(symbol) {
 function normalizeDxCacheSymbol(symbol) {
   const s = String(symbol || '').trim();
   if (!s) return s;
-  if (/^\/ES(:XCME)?$|^\/ES[MU](\d+)?$/i.test(s)) return '/ES:XCME';
-  if (/^\/NQ(:XCME)?$|^\/NQ[MU](\d+)?$/i.test(s)) return '/NQ:XCME';
+  if (/^\/ESU(26|6)?$/i.test(s)) return '/ESU26';
+  if (/^\/ES(:XCME)?$/i.test(s)) return '/ES:XCME';
+  if (/^\/NQU(26|6)?$/i.test(s)) return '/NQU26';
+  if (/^\/NQ(:XCME)?$/i.test(s)) return '/NQ:XCME';
   return s;
 }
 
 function getDxCacheAliases(symbol, normalized) {
   const aliases = new Set([normalized]);
   const raw = String(symbol || '').trim();
-  if (/^\/ES(:XCME)?$|^\/ES[MU](\d+)?$/i.test(raw)) {
-    aliases.add('/ES:XCME');
+  if (/^\/ESU(26|6)?$/i.test(raw)) {
     aliases.add('/ESU26');
     aliases.add('/ESU6');
+  } else if (/^\/ES(:XCME)?$/i.test(raw)) {
+    aliases.add('/ES:XCME');
     aliases.add('/ES');
-  } else if (/^\/NQ(:XCME)?$|^\/NQ[MU](\d+)?$/i.test(raw)) {
-    aliases.add('/NQ:XCME');
-    aliases.add('/NQM26');
+  } else if (/^\/NQU(26|6)?$/i.test(raw)) {
     aliases.add('/NQU26');
-    aliases.add('/NQM6');
     aliases.add('/NQU6');
+  } else if (/^\/NQ(:XCME)?$/i.test(raw)) {
+    aliases.add('/NQ:XCME');
     aliases.add('/NQ');
   }
   return [...aliases].filter(Boolean);
