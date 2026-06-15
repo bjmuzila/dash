@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-06-15 (session 17) — Database Page Fixes + Options Chain Auto-Load
+
+### Database Page (`app/database/page.tsx`)
+- Fixed `dateFilter` state initialization: was passing function reference `todayET` instead of calling it `todayET()` — caused undefined state
+
+### Options Chain Page (`app/options-chain/page.tsx`)
+- Moved `loadChain` callback before `fetchExpirations` to resolve dependency order issue
+- Updated `fetchExpirations` to auto-load chain when expirations are fetched and default expiry is selected
+- Added `loadChain` to `fetchExpirations` dependency array
+- Fixed useEffect hook to properly pass `fetchExpirations` dependency
+
+### SQL.js WASM Initialization (`lib/db.ts`)
+- Simplified `initSqlJs()` initialization with memoized `_SQLPromise` to prevent multiple concurrent initializations
+- Added error handling wrapper around sql.js init with console logging
+- Attempted fixes: wasmBinary buffer slicing, locateFile callback, direct initSqlJs() call
+- Current state: still experiencing "Cannot set properties of undefined (setting 'exports')" — likely a module loading or WASM file access issue
+
+### Version
+- Bumped to `2026.6.15-v62`
+
+---
+
 ## 2026-06-15 (session 16) — Dashboard Consolidation + Performance Optimization
 
 ### Performance & Architecture

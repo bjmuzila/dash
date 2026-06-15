@@ -25,6 +25,19 @@ const DB_PATH = resolveDbPath();
 let _db: Database | null = null;
 let _tablesEnsured = false;
 
+let _SQLPromise: Promise<any> | null = null;
+
+async function initSQL() {
+  if (_SQLPromise) return _SQLPromise;
+  _SQLPromise = initSqlJs({
+    locateFile: (file: string) => path.join(process.cwd(), "node_modules/sql.js/dist", file),
+  }).catch(e => {
+    _SQLPromise = null;
+    throw e;
+  });
+  return _SQLPromise;
+}
+
 export async function getDb(): Promise<Database> {
   if (_db) {
     if (!_tablesEnsured) {
@@ -34,40 +47,35 @@ export async function getDb(): Promise<Database> {
     return _db;
   }
 
-  const wasmPath = path.resolve(
-    process.cwd(),
-    "node_modules/sql.js/dist/sql-wasm.wasm"
-  );
-  const wasmBuf = fs.readFileSync(wasmPath);
-  const SQL = await initSqlJs({
-    wasmBinary: wasmBuf.buffer.slice(
-      wasmBuf.byteOffset,
-      wasmBuf.byteOffset + wasmBuf.byteLength
-    ) as ArrayBuffer,
-  });
+  try {
+    const SQL = await initSQL();
 
-  if (fs.existsSync(DB_PATH)) {
-    try {
-      const fileBuffer = fs.readFileSync(DB_PATH);
-      _db = new SQL.Database(fileBuffer);
-      // Quick integrity check
-      _db.run("SELECT 1");
-    } catch (e) {
-      console.error("[db] Corrupted DB file, starting fresh:", String(e));
-      // Rename corrupted file for forensics, start clean
+    if (fs.existsSync(DB_PATH)) {
       try {
-        fs.renameSync(DB_PATH, DB_PATH + ".corrupted." + Date.now());
-      } catch (_) {}
+        const fileBuffer = fs.readFileSync(DB_PATH);
+        _db = new SQL.Database(fileBuffer);
+        // Quick integrity check
+        _db.run("SELECT 1");
+      } catch (e) {
+        console.error("[db] Corrupted DB file, starting fresh:", String(e));
+        // Rename corrupted file for forensics, start clean
+        try {
+          fs.renameSync(DB_PATH, DB_PATH + ".corrupted." + Date.now());
+        } catch (_) {}
+        _db = new SQL.Database();
+      }
+    } else {
       _db = new SQL.Database();
     }
-  } else {
-    _db = new SQL.Database();
+
+    _tablesEnsured = true;
+    await ensureAllTables(_db);
+
+    return _db;
+  } catch (e) {
+    console.error("[db] Database init failed:", String(e));
+    throw e;
   }
-
-  _tablesEnsured = true;
-  await ensureAllTables(_db);
-
-  return _db;
 }
 
 function ensureAllTables(db: Database): void {
@@ -143,6 +151,13 @@ function ensureAllTables(db: Database): void {
   db.run("CREATE INDEX IF NOT EXISTS idx_bsg_session ON bzila_strike_gex_history(session)");
   db.run("CREATE INDEX IF NOT EXISTS idx_bsg_ts ON bzila_strike_gex_history(timestamp)");
   try { db.run("ALTER TABLE bzila_strike_gex_history ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
+
+  // trades
+  db.run(`CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+    symbol TEXT, side TEXT, qty REAL, price REAL, data TEXT
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(timestamp)");
 
   // expirations_cache
   db.run(`CREATE TABLE IF NOT EXISTS expirations_cache (
