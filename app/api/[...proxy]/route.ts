@@ -9,7 +9,10 @@ import { ensureToken, ttFetch } from '@/lib/proxy/auth';
  *   /api/tt/* -> TastyTrade API proxy
  */
 
-export async function GET(request: NextRequest, { params }: { params: { proxy: string[] } }) {
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { proxy: string[] } }
+) {
   const pathArray = params.proxy || [];
   const path = '/' + pathArray.join('/');
 
@@ -48,7 +51,10 @@ export async function GET(request: NextRequest, { params }: { params: { proxy: s
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-export async function POST(request: NextRequest, { params }: { params: { proxy: string[] } }) {
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { proxy: string[] } }
+) {
   const pathArray = params.proxy || [];
   const path = '/' + pathArray.join('/');
 
@@ -89,7 +95,10 @@ export async function POST(request: NextRequest, { params }: { params: { proxy: 
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { proxy: string[] } }) {
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { proxy: string[] } }
+) {
   const pathArray = params.proxy || [];
   const path = '/' + pathArray.join('/');
 
