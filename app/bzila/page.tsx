@@ -509,8 +509,8 @@ function StrikeBucketChart({
           if (Number.isFinite(nextValue)) {
             lastValue = nextValue;
           }
-          if (!Number.isFinite(lastValue) || lastValue === null) return null;
-          return { x: xAt(index), y: yAt(lastValue), value: lastValue };
+          if (lastValue === null || !Number.isFinite(lastValue)) return null;
+          return { x: xAt(index), y: yAt(lastValue as number), value: lastValue };
         })
         .filter((entry): entry is { x: number; y: number; value: number } => Boolean(entry));
 
