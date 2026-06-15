@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 interface CalEvent {
   date: string;
@@ -92,6 +93,7 @@ export default function EconCalendarPanel() {
   const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function h(e: MouseEvent) {
@@ -270,7 +272,7 @@ export default function EconCalendarPanel() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden", fontFamily: "Arial, Helvetica, sans-serif" }}>
+    <div ref={containerRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden", fontFamily: "Arial, Helvetica, sans-serif" }}>
 
       {/* Header */}
       <div style={{
@@ -333,6 +335,8 @@ export default function EconCalendarPanel() {
         <button onClick={trigger} style={{ ...btnStyle }}>
           {btnLabel}
         </button>
+        <BoxSnapBtn    targetRef={containerRef} label="Econ Calendar" />
+        <BoxDiscordBtn targetRef={containerRef} label="Econ Calendar" />
       </div>
 
       {/* Quote */}

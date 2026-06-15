@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     const latest = searchParams.get("latest") === "1";
     const limit = Math.min(Number(searchParams.get("limit") ?? 200), 1000);
 
-    if (latest && date) {
+    if (latest) {
       const snap = await getLatestBzilaSnapshot(date);
       return NextResponse.json({ snap });
     }

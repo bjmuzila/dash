@@ -5,10 +5,22 @@ import path from "path";
 import fs from "fs";
 import initSqlJs, { type Database, type QueryExecResult, type SqlValue } from "sql.js";
 
-// On Render: use /data (persistent disk). Locally: fall back to project db.
-const DB_PATH =
-  process.env.DB_PATH ??
-  (fs.existsSync("/data") ? "/data/trading_metrics.db" : path.resolve(process.cwd(), "../trading_db_complete/trading_metrics.db"));
+function resolveDbPath(): string {
+  const envPath = process.env.DB_PATH?.trim();
+  const localDataPath = path.resolve(process.cwd(), "data", "trading_metrics.db");
+  const candidates = [
+    envPath ? path.resolve(process.cwd(), envPath) : null,
+    fs.existsSync("/data") ? "/data/trading_metrics.db" : null,
+    localDataPath,
+    path.resolve(process.cwd(), "trading_metrics.db"),
+    path.resolve(process.cwd(), "../trading_db_complete/trading_metrics.db"),
+  ].filter((value): value is string => Boolean(value));
+
+  const existing = candidates.find((candidate) => fs.existsSync(candidate));
+  return existing ?? localDataPath;
+}
+
+const DB_PATH = resolveDbPath();
 
 let _db: Database | null = null;
 
@@ -38,6 +50,7 @@ export async function getDb(): Promise<Database> {
 export function persistDb(): void {
   if (!_db) return;
   const data = _db.export();
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   fs.writeFileSync(DB_PATH, Buffer.from(data));
 }
 
@@ -566,12 +579,16 @@ export async function insertBzilaSnapshot(r: { timestamp: number; date: string; 
   return Number(row[0]?.values[0]?.[0] ?? 0);
 }
 
-export async function getLatestBzilaSnapshot(date: string): Promise<{ stats: unknown; orders: unknown[] } | null> {
+export async function getLatestBzilaSnapshot(date?: string): Promise<{ stats: unknown; orders: unknown[] } | null> {
   await ensureBzilaSnapshotsTable();
-  const rows = await queryAll<BzilaSnapshotRecord>(
-    "SELECT * FROM bzila_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT 1",
-    [date]
-  );
+  const rows = date
+    ? await queryAll<BzilaSnapshotRecord>(
+        "SELECT * FROM bzila_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT 1",
+        [date]
+      )
+    : await queryAll<BzilaSnapshotRecord>(
+        "SELECT * FROM bzila_snapshots ORDER BY timestamp DESC LIMIT 1"
+      );
   if (!rows.length) return null;
   const r = rows[0];
   return {

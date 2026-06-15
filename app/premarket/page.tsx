@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 // ── Symbol definitions ───────────────────────────────────────────────────────
 
@@ -29,24 +30,24 @@ const ASIA = [
 const YAHOO_SYMS = [...EUROPE, ...ASIA];
 
 const COMMODITIES = [
-  { sym: "/CL:XNYM", label: "Crude Oil",   wsKey: "/CL:XNYM" },
-  { sym: "/HG:XCEC", label: "Copper",      wsKey: "/HG:XCEC" },
-  { sym: "/NG:XNYM", label: "Natural Gas", wsKey: "/NG:XNYM" },
+  { sym: "/CL",  label: "Crude Oil",   wsKey: "/CL" },
+  { sym: "/HG",  label: "Copper",      wsKey: "/HG" },
+  { sym: "/NG",  label: "Natural Gas", wsKey: "/NG" },
 ];
 
 const RISK_ASSETS = [
-  { sym: "/GC:XCEC", label: "Gold",        wsKey: "/GC:XCEC" },
-  { sym: "/VX:XCBF", label: "VIX Futures", wsKey: "/VX:XCBF" },
+  { sym: "/GC",  label: "Gold",        wsKey: "/GC" },
+  { sym: "/VX",  label: "VIX Futures", wsKey: "/VX" },
 ];
 
 const FIXED_FX_CRYPTO = [
-  { sym: "/ZN:XCBT",   label: "10Y",     wsKey: "/ZN:XCBT" },
-  { sym: "/ZB:XCBT",   label: "30Y",     wsKey: "/ZB:XCBT" },
-  { sym: "DX/Y:NYB",   label: "USD",     wsKey: "DX/Y:NYB" },
-  { sym: "EURUSD:FX",  label: "EURO",    wsKey: "EURUSD:FX" },
-  { sym: "USDJPY:FX",  label: "YEN",     wsKey: "USDJPY:FX" },
-  { sym: "GBPUSD:FX",  label: "POUND",   wsKey: "GBPUSD:FX" },
-  { sym: "/BTC:XCME",  label: "BITCOIN", wsKey: "/BTC:XCME" },
+  { sym: "/ZN",        label: "10Y",     wsKey: "/ZN" },
+  { sym: "/ZB",        label: "30Y",     wsKey: "/ZB" },
+  { sym: "DX/Y:NYB",  label: "USD",     wsKey: "DX/Y:NYB" },
+  { sym: "6E/",        label: "EURO",    wsKey: "6E/" },
+  { sym: "6J/",        label: "YEN",     wsKey: "6J/" },
+  { sym: "6B/",        label: "POUND",   wsKey: "6B/" },
+  { sym: "/BTC",       label: "BITCOIN", wsKey: "/BTC" },
 ];
 
 // SPX is populated from DXLink as a key data point for RV sigma
@@ -204,13 +205,10 @@ function RVSigmaPanel({ spxPrice, spxPrev }: { spxPrice: number | null; spxPrev:
   }
 
   return (
-    <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-      <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase" }}>Daily RV Sigma Levels</span>
-        <div style={{ display: "flex", gap: 16 }}>
-          <span style={{ color: "#3a5570", fontSize: 10, letterSpacing: ".06em" }}>SPX</span>
-          <span style={{ color: "#3a5570", fontSize: 10, letterSpacing: ".06em" }}>ES EQUIV.</span>
-        </div>
+    <div style={{ background: "#060d15" }}>
+      <div style={{ padding: "3px 10px", display: "flex", justifyContent: "flex-end", gap: 16, borderBottom: "1px solid #0d1e2e" }}>
+        <span style={{ color: "#3a5570", fontSize: 10, letterSpacing: ".06em" }}>SPX</span>
+        <span style={{ color: "#3a5570", fontSize: 10, letterSpacing: ".06em" }}>ES EQUIV.</span>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <tbody>
@@ -254,10 +252,7 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
   const overnightRange = esChg != null ? Math.abs(esChg).toFixed(2) + " pts" : "—";
 
   return (
-    <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-      <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e" }}>
-        <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase" }}>Premarket Positioning</span>
-      </div>
+    <div style={{ background: "#060d15" }}>
       <div style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
         {/* Left col */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -319,6 +314,12 @@ export default function PremarketPage() {
   const [ts, setTs] = useState("");
   const [wsLive, setWsLive] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Panel refs for snap/discord
+  const refPositioning  = useRef<HTMLDivElement>(null);
+  const refGlobalMarkets = useRef<HTMLDivElement>(null);
+  const refRVSigma      = useRef<HTMLDivElement>(null);
+  const refOtherMarkets = useRef<HTMLDivElement>(null);
 
   // ── DXLink WebSocket ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -444,7 +445,7 @@ export default function PremarketPage() {
     }
     seedRest();
 
-    // Subscribe equity symbols to proxy
+    // Subscribe ALL symbols to proxy (only /ES and /NQ are pre-subscribed)
     async function subscribeEquities() {
       try {
         await fetch(
@@ -454,7 +455,7 @@ export default function PremarketPage() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              symbols: EQUITY_SYMS.map(s => s.sym),
+              symbols: ALL_WS.map(s => s.sym),
               feedTypes: ["Quote", "Trade", "Summary"],
             }),
           }
@@ -541,13 +542,25 @@ export default function PremarketPage() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, flex: 1, minHeight: 0 }}>
         {/* Left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
           {/* Premarket Positioning summary */}
-          <PositioningPanel esRow={esRow} spxRow={spxRow} />
+          <div ref={refPositioning} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Premarket Positioning</span>
+              <BoxSnapBtn    targetRef={refPositioning} label="Premarket Positioning" />
+              <span style={{ width: 4 }} />
+              <BoxDiscordBtn targetRef={refPositioning} label="Premarket Positioning" message={`📸 Premarket Positioning — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
+            </div>
+            <PositioningPanel esRow={esRow} spxRow={spxRow} />
+          </div>
 
           {/* Global Markets – US Futures */}
-          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e" }}>
-              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase" }}>Global Markets</span>
+          <div ref={refGlobalMarkets} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Global Markets</span>
+              <BoxSnapBtn    targetRef={refGlobalMarkets} label="Global Markets" />
+              <span style={{ width: 4 }} />
+              <BoxDiscordBtn targetRef={refGlobalMarkets} label="Global Markets" message={`📸 Global Markets — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
             </div>
             <TableShell>
               <SectionHeader title="US Futures" />
@@ -568,13 +581,25 @@ export default function PremarketPage() {
 
         {/* Right column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
           {/* RV Sigma */}
-          <RVSigmaPanel spxPrice={spxPrice} spxPrev={spxPrev || null} />
+          <div ref={refRVSigma} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Daily RV Sigma Levels</span>
+              <BoxSnapBtn    targetRef={refRVSigma} label="RV Sigma" />
+              <span style={{ width: 4 }} />
+              <BoxDiscordBtn targetRef={refRVSigma} label="RV Sigma" message={`📸 RV Sigma — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
+            </div>
+            <RVSigmaPanel spxPrice={spxPrice} spxPrev={spxPrev || null} />
+          </div>
 
           {/* Commodities, Risk Assets, Fixed Income / FX / Crypto */}
-          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e" }}>
-              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase" }}>Other Markets</span>
+          <div ref={refOtherMarkets} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Other Markets</span>
+              <BoxSnapBtn    targetRef={refOtherMarkets} label="Other Markets" />
+              <span style={{ width: 4 }} />
+              <BoxDiscordBtn targetRef={refOtherMarkets} label="Other Markets" message={`📸 Other Markets — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
             </div>
             <TableShell>
               <SectionHeader title="Commodities" />

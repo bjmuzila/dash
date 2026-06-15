@@ -1,6 +1,8 @@
 "use client";
 
+import { type RefObject } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import type { GexMode, DataMode, ChartMode } from "./GexChart";
 
 // Chevron-in-box matching design reference; rotates 180° when open
@@ -46,6 +48,10 @@ interface GexToolbarProps {
   onRefresh:     () => Promise<void>;
   chartOpen:     boolean;
   onToggleChart: () => void;
+  /** Ref to the GEX chart container — used for snap/discord screenshot */
+  containerRef?: RefObject<HTMLElement | null>;
+  /** Message text sent to Discord (title + expiry) */
+  discordMessage?: string;
 }
 
 interface PillGroupProps {
@@ -124,6 +130,7 @@ export default function GexToolbar({
   onGexMode, onDataMode, onChartMode,
   onToggleOI, onToggleDex, onToggleFlip,
   onRefresh, chartOpen, onToggleChart,
+  containerRef, discordMessage,
 }: GexToolbarProps) {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
   const visibleExpirations = expirations.slice(0, 3);
@@ -174,8 +181,10 @@ export default function GexToolbar({
           {netGex && <span><span style={{ color: "#3a5570" }}>GEX </span><span style={{ color: "#00e5ff", fontWeight: 700 }}>{netGex}</span></span>}
         </div>
 
-        <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
           <button onClick={trigger} style={{ ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}>{btnLabel}</button>
+          {containerRef && <BoxSnapBtn    targetRef={containerRef} label="GEX Chart" />}
+          {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} />}
         </div>
       </>}
     </div>

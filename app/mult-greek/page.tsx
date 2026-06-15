@@ -439,8 +439,10 @@ export default function MultGreekPage() {
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
         fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`)
-          .then(r => r.json())
-          .then(json => ({ ticker, json }))
+          .then(async r => {
+            const json = await r.json();
+            return { ticker, json, ok: r.ok, status: r.status };
+          })
       )
     );
 
@@ -448,34 +450,50 @@ export default function MultGreekPage() {
 
     const newStrikes: Partial<Record<Ticker, StrikeRow[]>> = {};
     const newSpots: Partial<Record<Ticker, number>> = {};
+    let successCount = 0;
+    const errStatuses: number[] = [];
 
     for (const result of results) {
       if (result.status !== "fulfilled") continue;
-      const { ticker, json } = result.value as { ticker: Ticker; json: Record<string, unknown> };
-      if (json.error) continue; // proxy error — keep existing data for this ticker
+      const { ticker, json, ok, status } = result.value as { ticker: Ticker; json: Record<string, unknown>; ok: boolean; status: number };
+      if (!ok || json.error) {
+        errStatuses.push(status);
+        console.error(`[MultGreek] ${ticker} chains failed: HTTP ${status}`, json);
+        continue;
+      }
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
       if (!items.length) continue;
       const target = (items as { "expiration-date"?: string }[]).filter(i =>
         String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
       );
       const parsed = buildStrikes(target.length ? target : items as unknown[], liveDataRef.current);
-      if (parsed.length) newStrikes[ticker] = parsed;
+      if (parsed.length) { newStrikes[ticker] = parsed; successCount++; }
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
 
     activeExpiryRef.current = expDate;
     setActiveExpiry(expDate);
-    setStrikes(prev => ({ ...prev, ...newStrikes }));
-    setSpots(prev => {
-      const merged = { ...prev };
-      (Object.keys(newSpots) as Ticker[]).forEach(tk => {
-        const v = newSpots[tk as Ticker];
-        if (v && v > 0) merged[tk as Ticker] = v;
+    if (successCount > 0) {
+      setStrikes(prev => ({ ...prev, ...newStrikes }));
+      setSpots(prev => {
+        const merged = { ...prev };
+        (Object.keys(newSpots) as Ticker[]).forEach(tk => {
+          const v = newSpots[tk as Ticker];
+          if (v && v > 0) merged[tk as Ticker] = v;
+        });
+        return merged;
       });
-      return merged;
-    });
-    setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "LIVE" : "CLOSED" });
+    }
+
+    if (successCount === 0) {
+      const code = errStatuses[0] ?? "?";
+      setStatus({ state: "err", msg: `PROXY ERR ${code}` });
+    } else if (successCount < TICKERS.length) {
+      setStatus({ state: "live", msg: `PARTIAL (${successCount}/${TICKERS.length})` });
+    } else {
+      setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "LIVE" : "CLOSED" });
+    }
     setRenderTick(t => t + 1);
     setLastUpdate(etTimeNow());
   }, []);

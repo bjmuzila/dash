@@ -188,8 +188,12 @@ export async function saveBzilaLiveSnapshot(snapshot: Partial<BzilaLiveSnapshotP
 
 export async function getLatestBzilaSnapshotToday(): Promise<{ stats: BzilaLiveSnapshotStats; orders: BzilaLiveSnapshotOrder[] } | null> {
   const today = etDateStr();
-  const res   = await fetch(`/api/snapshots/bzila?latest=1&date=${today}`);
-  const json  = await res.json();
+  let res   = await fetch(`/api/snapshots/bzila?latest=1&date=${today}`);
+  let json  = await res.json();
+  if (!json.snap) {
+    res = await fetch("/api/snapshots/bzila?latest=1");
+    json = await res.json();
+  }
   if (!json.snap) return null;
   return {
     stats:  json.snap.stats  as BzilaLiveSnapshotStats,

@@ -636,7 +636,9 @@ const CORE_LIVE_SUBSCRIPTIONS = new Set([
   'VIX',
   'NDX',
   '/ES:XCME',
+  '/ESU26',
   '/NQ:XCME',
+  '/NQU26',
   'US10Y',
   '2YY',
   '2Y',
@@ -1812,9 +1814,11 @@ function getDxCacheAliases(symbol, normalized) {
   if (/^\/ES(:XCME)?$|^\/ES[A-Z](\d+)?$/i.test(raw)) {
     aliases.add('/ES:XCME');
     aliases.add('/ESU26');
+    aliases.add('/ESM26');
     aliases.add('/ES');
   } else if (/^\/NQ(:XCME)?$|^\/NQ[A-Z](\d+)?$/i.test(raw)) {
     aliases.add('/NQ:XCME');
+    aliases.add('/NQU26');
     aliases.add('/NQM26');
     aliases.add('/NQ');
   }
@@ -3454,13 +3458,15 @@ const server = http.createServer(async (req, res) => {
       'SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA',
       'COIN','HOOD','IWM','NFLX','PLTR','NDX'
     ];
-    // dxLink cache keys for indices use $ prefix
+    // dxLink cache keys: indices use $ prefix, ES/NQ continuous fall back to front month
     const dxKeyMap = { SPX:'$SPX', NDX:'NDX', VIX:'VIX' };
+    const dxFallbackMap = { '/ES:XCME': '/ESU26', '/NQ:XCME': '/NQU26' };
     const items = await Promise.all(allSyms.map(async sym => {
       const dxKey = dxKeyMap[sym] || sym;
-      const q = dxQuoteCache[dxKey] || dxQuoteCache[sym] || {};
-      const t = dxTradeCache[dxKey] || dxTradeCache[sym] || {};
-      const s = dxSummaryCache[dxKey] || dxSummaryCache[sym] || {};
+      const dxFallback = dxFallbackMap[sym] || null;
+      const q = dxQuoteCache[dxKey] || dxQuoteCache[sym] || (dxFallback ? dxQuoteCache[dxFallback] : null) || {};
+      const t = dxTradeCache[dxKey] || dxTradeCache[sym] || (dxFallback ? dxTradeCache[dxFallback] : null) || {};
+      const s = dxSummaryCache[dxKey] || dxSummaryCache[sym] || (dxFallback ? dxSummaryCache[dxFallback] : null) || {};
       const yahooRaw = sym === 'VIX' ? await fetchYahooIntradayQuote(sym) : null;
       // Always prefer livePrevCloses (auto-refreshed from Yahoo daily close) over intraday meta
       const vixKnownPrev = livePrevCloses.VIX || 0;
@@ -4741,8 +4747,8 @@ wss.on('connection', ws => {
   setTimeout(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
     ['SPX','VIX','/ES:XCME','/NQ:XCME','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'].forEach(sym => {
-      // Also check $SPX alias for index quotes
-      const dxAlias = sym === 'SPX' ? '$SPX' : null;
+      // Check aliases: $SPX for index, /ESU26 for ES continuous contract fallback
+      const dxAlias = sym === 'SPX' ? '$SPX' : sym === '/ES:XCME' ? '/ESU26' : sym === '/NQ:XCME' ? '/NQU26' : null;
       const q = dxQuoteCache[sym] || (dxAlias ? dxQuoteCache[dxAlias] : null);
       const t = dxTradeCache[sym] || (dxAlias ? dxTradeCache[dxAlias] : null);
       if (q) {
