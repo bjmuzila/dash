@@ -2147,7 +2147,15 @@ async function fetchDxLinkToken() {
   return true;
 }
 
+let lastBroadcast = 0;
+const BROADCAST_THROTTLE_MS = 250;
+
 function broadcast(msg) {
+  // Throttle broadcasts to 250ms intervals to prevent firehosing
+  const now = Date.now();
+  if (now - lastBroadcast < BROADCAST_THROTTLE_MS) return;
+  lastBroadcast = now;
+
   const s = typeof msg === 'string' ? msg : JSON.stringify(msg);
   dxClients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(s); });
 }
