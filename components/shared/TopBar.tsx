@@ -47,7 +47,7 @@ const TOPBAR_CHANGE_SIZE = 12;
 const ES_DISPLAY_LABEL = "ESU";
 const ES_DISPLAY_SYMBOL = "/ESU26";
 const NQ_DISPLAY_SYMBOL = "/NQU26";
-const ES_FEED_SYMBOLS = [ES_DISPLAY_SYMBOL, "/ESU26", "/ES:XCME"];
+const ES_FEED_SYMBOLS = [ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME"];
 const NQ_FEED_SYMBOLS = [NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -553,4 +553,3 @@ export default function TopBar() {
     </div>
   );
 }
-

@@ -2,7 +2,8 @@
 var EM = window.EM || (window.EM = {});
 
 EM.SYMBOLS = ['ESM','NQM','SPY','QQQ','SPX','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NDX','NFLX','SMH','PLTR'];
-EM.API_SYMBOL = { ESM:'/ES:XCME', NQM:'/NQ:XCME', SPX:'$SPX', NDX:'$NDX' };
+EM.DISPLAY_LABEL = { ESM:'ESU', NQM:'NQU' };
+EM.API_SYMBOL = { ESM:'/ESU26', NQM:'/NQ:XCME', SPX:'$SPX', NDX:'$NDX' };
 EM.CHAIN_SYMBOL = { SPX:'$SPX', NDX:'$NDX' };
 EM.FUTURE_PROXY = { ESM:'SPX', NQM:'NDX' };
 EM.IV_ONLY_SYMBOLS = new Set(['SPY', 'NDX']);
@@ -115,7 +116,7 @@ EM.rowHtml = function(row){
   if (!row || !row.ticker) return '';
   const muted=row.error?'opacity:.55':'';
   return `<tr style="text-align:center;border-bottom:1px solid #121b2a;${muted}" title="${row.error ? row.error.replace(/"/g,'&quot;') : ''}">
-    <td style="padding:8px;border-right:1px solid #1a2a3a;font-weight:700;color:#e8edf5">${row.ticker}</td>
+    <td style="padding:8px;border-right:1px solid #1a2a3a;font-weight:700;color:#e8edf5">${EM.DISPLAY_LABEL[row.ticker] || row.ticker}</td>
     <td style="padding:8px;border-right:1px solid #1a2a3a;color:#cbd5e1">${EM.fmtPrice(row.ticker,row.close)}</td>
     <td style="padding:8px;border-right:1px solid #1a2a3a;color:#7ab8ff">${row.expiration ? EM.labelForDate(row.expiration) : ''}</td>
     <td style="padding:8px;border-right:1px solid #1a2a3a;color:#e8c060">${EM.fmtEm(row.em)}</td>
@@ -217,7 +218,7 @@ EM.fetchAllQuotes = async function(){
   const map = {};
   items.forEach(q => { map[q.symbol] = q; });
   const aliases = {
-    ESM: ['/ESM6', '/ES:XCME', '/ES'],
+    ESM: ['/ESU26', '/ESU6', '/ES:XCME', '/ES'],
     NQM: ['/NQM6', '/NQ:XCME', '/NQ'],
     SPX: ['$SPX'],
     NDX: ['$NDX'],
@@ -506,7 +507,7 @@ window.refreshEstimatedMoves = async function(){
     if (!EM.bulkSubscribed) {
       try{
         EM.setStatus('Subscribing…','#00e5ff');
-        const bulkSyms = ['SPX','VIX','ESM','NQM','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NFLX','PLTR','NDX'];
+        const bulkSyms = ['SPX','VIX','/ESU26','NQM','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NFLX','PLTR','NDX'];
 
         // Use subscription manager to wait for data
         const pageId = 'estimated-moves-' + Date.now();

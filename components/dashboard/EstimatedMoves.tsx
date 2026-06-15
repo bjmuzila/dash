@@ -35,7 +35,7 @@ interface OptionData {
 }
 
 interface ZoneLevels {
-  ticker: "ESM6" | "NQM6";
+  ticker: "ESU6" | "NQM6";
   open: number;
   high: number;
   low: number;
@@ -75,11 +75,11 @@ const SYMBOLS = [
 ];
 
 const DISPLAY_LABEL: Record<string, string> = {
-  ESM: "ESU", NQM: "NQU", ESM6: "ESU", NQM6: "NQU",
+  ESM: "ESU", NQM: "NQU", ESU6: "ESU", NQM6: "NQU",
 };
 
 const API_SYMBOL: Record<string, string> = {
-  ESM: "/ES:XCME", NQM: "/NQ:XCME", SPX: "$SPX", NDX: "$NDX",
+  ESM: "/ESU26", NQM: "/NQ:XCME", SPX: "$SPX", NDX: "$NDX",
 };
 const CHAIN_SYMBOL: Record<string, string> = { SPX: "$SPX", NDX: "$NDX" };
 const FUTURE_PROXY: Record<string, string> = { ESM: "SPX", NQM: "NDX" };
@@ -359,7 +359,7 @@ async function fetchAllQuotes(engine: EMEngine) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   items.forEach((q: any) => { map[q.symbol] = q; });
   const aliases: Record<string, string[]> = {
-    ESM: ["/ESU26", "/ESM6", "/ES:XCME", "/ES"],
+    ESM: ["/ESU26", "/ESU6", "/ES:XCME", "/ES"],
     NQM: ["/NQU26", "/NQM6", "/NQ:XCME", "/NQ"],
     SPX: ["$SPX"], NDX: ["$NDX"], SPY: ["SPY"], QQQ: ["QQQ"],
   };
@@ -604,7 +604,7 @@ async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
 async function fetchNoShortNoLongZones(): Promise<ZoneLevels[]> {
   const targetWeek = getCompletedWeekKey();
   const configs: Array<{ ticker: ZoneLevels["ticker"]; historySymbol: string }> = [
-    { ticker: "ESM6", historySymbol: "/ES{=w}" },
+    { ticker: "ESU6", historySymbol: "/ESU6{=w}" },
     { ticker: "NQM6", historySymbol: "/NQ{=w}" },
   ];
 
@@ -710,7 +710,7 @@ export default function EstimatedMoves() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             pageId: "em-" + Date.now(),
-            symbols: ["SPX","VIX","ESM","NQM","SPY","QQQ","SMH","AAPL","AMD","AMZN",
+            symbols: ["SPX","VIX","/ESU26","NQM","SPY","QQQ","SMH","AAPL","AMD","AMZN",
               "GOOGL","META","MSFT","NVDA","TSLA","COIN","HOOD","IWM","NFLX","PLTR","NDX"],
             timeout: 4000, threshold: 0.7,
           }),
@@ -763,8 +763,8 @@ export default function EstimatedMoves() {
     const levels = await fetchNoShortNoLongZones();
     setZoneLevels(levels);
 
-    // Persist NO LONG, NO SHORT, and MID from ESM zones to SQLite
-    const esm = levels.find((l) => l.ticker === "ESM6");
+    // Persist NO LONG, NO SHORT, and MID from ESU zones to SQLite
+    const esm = levels.find((l) => l.ticker === "ESU6");
     if (esm) {
       const fmtStat = (v: number) => Math.round(v).toLocaleString("en-US");
       const mid = (esm.high + esm.low) / 2;
@@ -963,7 +963,7 @@ export default function EstimatedMoves() {
     return map;
   }, [zoneLevels]);
 
-  const currentSymbols = activeView === "estimated" ? SYMBOLS : ["ESM6", "NQM6"];
+  const currentSymbols = activeView === "estimated" ? SYMBOLS : ["ESU6", "NQM6"];
   const filteredSnapshots = snapshots.filter((snap) => (snap.view ?? "estimated") === activeView);
   const viewTitle = activeView === "estimated" ? "Estimated Moves" : "No Short No Long Zones";
   const subTitle = activeView === "estimated" ? "Weekly" : "Last Week OHLC";
@@ -1081,7 +1081,7 @@ export default function EstimatedMoves() {
             <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>Symbols</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
               {currentSymbols.map((symbol) => (
-                <span key={symbol} style={{ fontSize: 11, color: "#7ab8ff", background: "#07111d", border: "1px solid #13253a", padding: "3px 6px", borderRadius: 2 }}>{symbol}</span>
+                <span key={symbol} style={{ fontSize: 11, color: "#7ab8ff", background: "#07111d", border: "1px solid #13253a", padding: "3px 6px", borderRadius: 2 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
               ))}
             </div>
           </div>
@@ -1167,7 +1167,7 @@ export default function EstimatedMoves() {
                             </tr>
                           );
                         }
-                        const es = zoneMap.get("ESM6");
+                        const es = zoneMap.get("ESU6");
                         const nq = zoneMap.get("NQM6");
                         const renderCell = (row: ZoneLevels | undefined) => {
                           if (!row) return "--";
@@ -1258,7 +1258,7 @@ export default function EstimatedMoves() {
                   { label: "No Long", stack: (row: ZoneLevels) => [fmtFuture(row.noLongNear), fmtFuture(row.noLongFar)] },
                   { label: "No Short", stack: (row: ZoneLevels) => [fmtFuture(row.noShortNear), fmtFuture(row.noShortFar)] },
                 ].map((rowDef) => {
-                  const es = zoneMap.get("ESM6");
+                  const es = zoneMap.get("ESU6");
                   const nq = zoneMap.get("NQM6");
                   const render = (row: ZoneLevels | undefined) => {
                     if (!row) return "--";

@@ -113,7 +113,7 @@ async function getCloses(): Promise<{ spx: number; es: number; ndx: number; nq: 
         };
         const spx = getPrice("SPX", "$SPX");
         const ndx = getPrice("NDX", "$NDX");
-        const es = getPrice("/ES:XCME", "/ESU26", "/ESU6", "/ESM26", "/ESM6");
+        const es = getPrice("/ESU26", "/ESU6", "/ES:XCME", "/ES");
         const nq = getPrice("/NQ:XCME", "/NQU26", "/NQU6", "/NQM26", "/NQM6");
         if (spx > 0 && ndx > 0) return { spx, es: es || spx, ndx, nq: nq || ndx };
       }
