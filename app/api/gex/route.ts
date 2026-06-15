@@ -14,6 +14,8 @@ interface ProxyOption {
   bid?: number;
   ask?: number;
   last?: number;
+  "implied-volatility"?: number;
+  impliedVolatility?: number;
 }
 
 interface ProxyStrike {
@@ -24,6 +26,8 @@ interface ProxyStrike {
 
 interface ProxyExpGroup {
   "expiration-date": string;
+  "days-to-expiration"?: number;
+  daysToExpiration?: number;
   strikes: ProxyStrike[];
 }
 
@@ -59,6 +63,8 @@ export async function GET(request: Request) {
     // Flatten nested expGroup → strike structure into per-strike ChainRows.
     // Merge all expirations when no expiry filter, or just the selected one.
     const strikeMap = new Map<number, ChainRow>();
+    // Per-expiration rows for BS spot-sweep profile (needs correct DTE per row)
+    const profileRows: ChainRow[] = [];
 
     for (const expGroup of items) {
       const expDate = expGroup["expiration-date"];
@@ -94,6 +100,11 @@ export async function GET(request: Request) {
                           (Math.abs(putDelta) * putOI  * spot * 100);
         const volNetDEX = (callDelta * callVolume * spot * 100) -
                           (Math.abs(putDelta) * putVolume * spot * 100);
+
+        // Per-expiration row for profile sweep (IV + DTE must stay per-expiration)
+        if ((callIV > 0 || putIV > 0) && (callOI > 0 || putOI > 0)) {
+          profileRows.push({ strike, callOI, putOI, callIV, putIV, dte });
+        }
 
         // Merge expirations: accumulate OI/volume across dates for same strike
         const existing = strikeMap.get(strike);
@@ -153,7 +164,8 @@ export async function GET(request: Request) {
     } catch { /* non-fatal */ }
 
     const summary = computeGexSummary(chain, spotPrice);
-    const profile = computeGEXProfile(chain, spotPrice);
+    // Use per-expiration rows for profile sweep so each row has its correct DTE
+    const profile = computeGEXProfile(profileRows.length >= 5 ? profileRows : chain, spotPrice);
 
     return NextResponse.json({
       timestamp:  Date.now(),
