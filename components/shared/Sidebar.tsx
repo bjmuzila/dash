@@ -22,7 +22,7 @@ function ChevronBox({ direction = "right", size = 22 }: { direction?: "left" | "
 // ── Collapsed ticker ────────────────────────────────────────────────────────
 const WS_SYMBOLS = [
   { sym: "VIX",      label: "VIX" },
-  { sym: "/ES:XCME", label: "ES" },
+  { sym: "/ES:XCME", label: "ESU" },
   { sym: "/NQ:XCME", label: "NQ" },
   { sym: "SPX",      label: "SPX" },
   { sym: "SPCX",     label: "SPCX" },

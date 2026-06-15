@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 // All symbols — indices/futures always streamed, equities subscribed on mount
 const WS_SYMBOLS: Array<{ sym: string; label: string }> = [
   { sym: "VIX",      label: "VIX" },
-  { sym: "/ES:XCME", label: "ES" },
+  { sym: "/ES:XCME", label: "ESU" },
   { sym: "/NQ:XCME", label: "NQ" },
   { sym: "SPX",      label: "SPX" },
   { sym: "SPCX",     label: "SPCX" },

@@ -3,7 +3,7 @@
 /**
  * DailyEmPanel — port of the vanilla index.html Daily Estimated Moves panel.
  *
- * Shows ESM6 and NQM6 daily estimated moves (1UP, 1DN, EM range, %MOVE).
+ * Shows ESU and NQU daily estimated moves (1UP, 1DN, EM range, %MOVE).
  *
  * Logic matches vanilla:
  *   - Computed window: 4–6pm ET (EM is captured for *tomorrow*)
@@ -113,8 +113,8 @@ async function getCloses(): Promise<{ spx: number; es: number; ndx: number; nq: 
         };
         const spx = getPrice("SPX", "$SPX");
         const ndx = getPrice("NDX", "$NDX");
-        const es = getPrice("/ES:XCME", "/ESM6", "/ESM26");
-        const nq = getPrice("/NQ:XCME", "/NQM6", "/NQM26");
+        const es = getPrice("/ES:XCME", "/ESU6", "/ESU26", "/ESM6", "/ESM26");
+        const nq = getPrice("/NQ:XCME", "/NQU6", "/NQU26", "/NQM6", "/NQM26");
         if (spx > 0 && ndx > 0) return { spx, es: es || spx, ndx, nq: nq || ndx };
       }
     } catch (_) {}
@@ -401,11 +401,11 @@ export default function DailyEmPanel() {
       </div>
 
       {/* ES */}
-      <FutureDisplay label="ESM6" pfx="es" data={esData} />
+      <FutureDisplay label="ESU" pfx="es" data={esData} />
 
       {/* Divider + NQ */}
       <div style={{ borderTop: "1px solid #0d1825", paddingTop: 10 }}>
-        <FutureDisplay label="NQM6" pfx="nq" data={nqData} />
+        <FutureDisplay label="NQU" pfx="nq" data={nqData} />
       </div>
 
       {/* Buttons */}
