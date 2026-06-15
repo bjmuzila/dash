@@ -83,20 +83,9 @@ export default function EsCandlesPage() {
   const lastSaveRef = useRef(0);
 
   const loadCandles = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/snapshots/candles?date=${todayET()}&limit=4000`, { cache: "no-store" });
-      const json = await res.json();
-      const data = Array.isArray(json.rows) ? (json.rows as Candle[]) : [];
-      const sorted = sortCandles(data);
-      rowMapRef.current = new Map(sorted.map((row) => [row.slotKey, row]));
-      setRows(sorted);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
+    setLoading(false);
+    setError("ES Candles data feed disabled");
+    setRows([]);
   }, []);
 
   const fetchLiveCandles = useCallback(async () => {
@@ -148,36 +137,10 @@ export default function EsCandlesPage() {
     }
   }, []);
 
+  // Data feed disabled — no API calls
   useEffect(() => {
     void loadCandles();
   }, [loadCandles]);
-
-  useEffect(() => {
-    let active = true;
-    const tick = async () => {
-      await fetchLiveCandles();
-      if (!active) return;
-      const now = Date.now();
-      if (now - lastSaveRef.current >= 5000) {
-        lastSaveRef.current = now;
-        const snapshot = sortCandles([...rowMapRef.current.values()]).filter((row) => Number(row.volume || 0) > 0);
-        if (snapshot.length) {
-          fetch("/api/snapshots/candles", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(snapshot),
-          }).catch(() => {});
-        }
-      }
-    };
-
-    void tick();
-    const id = setInterval(() => { void tick(); }, 15_000);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
-  }, []);
 
   useEffect(() => {
     const id = setInterval(() => void loadCandles(), 60_000);
