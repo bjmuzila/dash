@@ -368,6 +368,46 @@ export default function GexChart({
         const pts = data.map((r, i) => ({ x: xAt(i), y: clamp(yFor(getNet(r)), PAD_T, PAD_T + cH) }));
         drawSmoothCurve(pts);
       }
+
+      // ── Gamma flip marker ──
+      const flip = flipPoint ?? gexProfile?.flipPoint ?? null;
+      if (flip != null && Number.isFinite(flip)) {
+        const leftIdx = data.findIndex(r => r.strike >= flip);
+        let flipX: number | null = null;
+        if (leftIdx === 0) {
+          flipX = xAt(0);
+        } else if (leftIdx > 0) {
+          const prev = data[leftIdx - 1];
+          const curr = data[leftIdx];
+          const span = curr.strike - prev.strike;
+          const t = span > 0 ? clamp((flip - prev.strike) / span, 0, 1) : 0;
+          flipX = xAt(leftIdx - 1) + t * gap;
+        } else if (data.length && flip >= data[data.length - 1].strike) {
+          flipX = xAt(data.length - 1);
+        }
+
+        if (flipX !== null) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(PAD_L, PAD_T, cW, cH);
+          ctx.clip();
+          ctx.setLineDash([6, 5]);
+          ctx.strokeStyle = "rgba(0,229,255,0.85)";
+          ctx.lineWidth = 1.3;
+          ctx.beginPath();
+          ctx.moveTo(flipX, PAD_T);
+          ctx.lineTo(flipX, PAD_T + cH);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+
+          ctx.fillStyle = "#00e5ff";
+          ctx.font = "bold 9px Arial";
+          ctx.textAlign = "center";
+          const lbl = `GEX FLIP ${Math.round(flip).toLocaleString()}`;
+          ctx.fillText(lbl, clamp(flipX, PAD_L + 48, PAD_L + cW - 48), PAD_T + 11);
+        }
+      }
     }
 
     ctx.restore(); // end clip

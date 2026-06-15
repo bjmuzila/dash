@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: spx-gex-dashboard
+    runtime: node
+    plan: standard
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=1024
