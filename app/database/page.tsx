@@ -105,7 +105,7 @@ export default function DatabasePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [count, setCount]     = useState(0);
-  const [dateFilter, setDateFilter] = useState<string>(todayET);
+  const [dateFilter, setDateFilter] = useState<string>(todayET());
   const [limit, setLimit]     = useState(200);
 
   const load = useCallback(async (t: TableId, date: string, lim: number) => {
