@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       date:      body.date ?? `${etDate.year}-${etDate.month}-${etDate.day}`,
       time:      body.time ?? now.toTimeString().split(" ")[0],
       ticker:    body.ticker ?? "SPX",
+      session:   body.session ?? "rth",
       orders:    Array.isArray(body.orders) ? body.orders : [],
       stats:     body.stats ?? {},
     });
@@ -28,12 +29,13 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const date  = searchParams.get("date") ?? undefined;
-    const latest = searchParams.get("latest") === "1";
-    const limit = Math.min(Number(searchParams.get("limit") ?? 200), 1000);
+    const date    = searchParams.get("date") ?? undefined;
+    const session = searchParams.get("session") ?? undefined;
+    const latest  = searchParams.get("latest") === "1";
+    const limit   = Math.min(Number(searchParams.get("limit") ?? 200), 1000);
 
     if (latest) {
-      const snap = await getLatestBzilaSnapshot(date);
+      const snap = await getLatestBzilaSnapshot(date, session);
       return NextResponse.json({ snap });
     }
     const rows = await getBzilaSnapshots(date, limit);

@@ -112,6 +112,22 @@ function etDateStr(d = new Date()): string {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+/**
+ * Returns the current trading session:
+ *   "rth" — 09:30–17:00 ET
+ *   "ext" — 17:00–09:30 ET (spans midnight)
+ */
+export function currentSession(d = new Date()): "rth" | "ext" {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const hour   = Number(parts.find(p => p.type === "hour")?.value   ?? 0);
+  const minute = Number(parts.find(p => p.type === "minute")?.value ?? 0);
+  const mins   = hour * 60 + minute;
+  return (mins >= 570 && mins < 1020) ? "rth" : "ext";
+}
+
 // ── MVC Snapshots ─────────────────────────────────────────────────────────────
 
 export async function saveMVCSnapshot(p: MVCPayload): Promise<number> {
@@ -178,6 +194,7 @@ export async function saveBzilaLiveSnapshot(snapshot: Partial<BzilaLiveSnapshotP
       date:      etDateStr(now),
       time:      now.toTimeString().split(" ")[0],
       ticker:    "SPX",
+      session:   currentSession(now),
       orders:    Array.isArray(snapshot.orders) ? snapshot.orders : [],
       stats:     snapshot.stats ?? {},
     }),
@@ -186,18 +203,21 @@ export async function saveBzilaLiveSnapshot(snapshot: Partial<BzilaLiveSnapshotP
   return json.id ?? 0;
 }
 
-export async function getLatestBzilaSnapshotToday(): Promise<{ stats: BzilaLiveSnapshotStats; orders: BzilaLiveSnapshotOrder[] } | null> {
-  const today = etDateStr();
-  let res   = await fetch(`/api/snapshots/bzila?latest=1&date=${today}`);
-  let json  = await res.json();
+export async function getLatestBzilaSnapshotToday(): Promise<{ stats: BzilaLiveSnapshotStats; orders: BzilaLiveSnapshotOrder[]; session: string } | null> {
+  const today   = etDateStr();
+  const session = currentSession();
+  let res  = await fetch(`/api/snapshots/bzila?latest=1&date=${today}&session=${session}`);
+  let json = await res.json();
   if (!json.snap) {
-    res = await fetch("/api/snapshots/bzila?latest=1");
+    // fallback: try without session filter
+    res  = await fetch(`/api/snapshots/bzila?latest=1&date=${today}`);
     json = await res.json();
   }
   if (!json.snap) return null;
   return {
-    stats:  json.snap.stats  as BzilaLiveSnapshotStats,
-    orders: json.snap.orders as BzilaLiveSnapshotOrder[],
+    stats:   json.snap.stats   as BzilaLiveSnapshotStats,
+    orders:  json.snap.orders  as BzilaLiveSnapshotOrder[],
+    session: json.snap.session as string ?? session,
   };
 }
 

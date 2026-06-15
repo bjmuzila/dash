@@ -558,20 +558,23 @@ export async function ensureBzilaSnapshotsTable(): Promise<void> {
       date TEXT NOT NULL,
       time TEXT,
       ticker TEXT,
+      session TEXT DEFAULT 'rth',
       orders TEXT,
       stats TEXT
     )
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_bs_date ON bzila_snapshots(date)");
   db.run("CREATE INDEX IF NOT EXISTS idx_bs_ts ON bzila_snapshots(timestamp)");
+  // Migrate: add session column if missing
+  try { db.run("ALTER TABLE bzila_snapshots ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
 }
 
-export async function insertBzilaSnapshot(r: { timestamp: number; date: string; time: string; ticker: string; orders: unknown[]; stats: unknown }): Promise<number> {
+export async function insertBzilaSnapshot(r: { timestamp: number; date: string; time: string; ticker: string; session?: string; orders: unknown[]; stats: unknown }): Promise<number> {
   const db = await getDb();
   await ensureBzilaSnapshotsTable();
   db.run(
-    `INSERT INTO bzila_snapshots (timestamp,date,time,ticker,orders,stats) VALUES (?,?,?,?,?,?)`,
-    [r.timestamp, r.date, r.time, r.ticker,
+    `INSERT INTO bzila_snapshots (timestamp,date,time,ticker,session,orders,stats) VALUES (?,?,?,?,?,?,?)`,
+    [r.timestamp, r.date, r.time, r.ticker, r.session ?? "rth",
      JSON.stringify(r.orders ?? []), JSON.stringify(r.stats ?? {})]
   );
   persistDb();
@@ -579,16 +582,30 @@ export async function insertBzilaSnapshot(r: { timestamp: number; date: string; 
   return Number(row[0]?.values[0]?.[0] ?? 0);
 }
 
-export async function getLatestBzilaSnapshot(date?: string): Promise<{ stats: unknown; orders: unknown[] } | null> {
+export async function getLatestBzilaSnapshot(date?: string, session?: string): Promise<{ stats: unknown; orders: unknown[] } | null> {
   await ensureBzilaSnapshotsTable();
-  const rows = date
-    ? await queryAll<BzilaSnapshotRecord>(
-        "SELECT * FROM bzila_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT 1",
-        [date]
-      )
-    : await queryAll<BzilaSnapshotRecord>(
-        "SELECT * FROM bzila_snapshots ORDER BY timestamp DESC LIMIT 1"
+  let rows: BzilaSnapshotRecord[];
+  if (date && session) {
+    rows = await queryAll<BzilaSnapshotRecord>(
+      "SELECT * FROM bzila_snapshots WHERE date = ? AND session = ? ORDER BY timestamp DESC LIMIT 1",
+      [date, session]
+    );
+    // For ext session, also check previous date (ext spans midnight)
+    if (!rows.length && session === "ext") {
+      rows = await queryAll<BzilaSnapshotRecord>(
+        "SELECT * FROM bzila_snapshots WHERE session = 'ext' ORDER BY timestamp DESC LIMIT 1"
       );
+    }
+  } else if (date) {
+    rows = await queryAll<BzilaSnapshotRecord>(
+      "SELECT * FROM bzila_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT 1",
+      [date]
+    );
+  } else {
+    rows = await queryAll<BzilaSnapshotRecord>(
+      "SELECT * FROM bzila_snapshots ORDER BY timestamp DESC LIMIT 1"
+    );
+  }
   if (!rows.length) return null;
   const r = rows[0];
   return {

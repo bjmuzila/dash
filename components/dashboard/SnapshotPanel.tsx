@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSpxFlow, type FlowOrder } from "@/hooks/useSpxFlow";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
+import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, currentSession, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 function fmtVol(v = 0) {
@@ -22,23 +22,37 @@ function fmtPrem(v = 0) {
   return `${s}$${a.toFixed(0)}`;
 }
 
+/**
+ * Returns a stable session key that changes only when crossing a session boundary.
+ * RTH:  09:30–17:00 ET  → key = "YYYY-MM-DD:rth"
+ * EXT:  17:00–09:30 ET  → key = "YYYY-MM-DD:ext" where date is the *start* date of the ext session
+ *        (i.e. the date when 17:00 was crossed, so pre-midnight and post-midnight share the same key)
+ */
 function getSnapshotSessionKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
   }).formatToParts(date);
   const read = (type: string) => Number(parts.find((p) => p.type === type)?.value || 0);
-  const year = read("year");
+  const year  = read("year");
   const month = read("month");
-  const day = read("day");
-  const mins = read("hour") * 60 + read("minute");
-  const bucket = mins < 570 ? "pre" : mins < 1080 ? "rth" : "eve";
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}:${bucket}`;
+  const day   = read("day");
+  const mins  = read("hour") * 60 + read("minute");
+  const session = currentSession(date);
+  // For ext session that crosses midnight, subtract 1 day if we're in the 00:00–09:30 window
+  // so the key stays consistent with the prior evening's session start
+  let keyDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  if (session === "ext" && mins < 570) {
+    // We're in the post-midnight portion of ext — use yesterday's date as the key
+    const prev = new Date(date);
+    prev.setDate(prev.getDate() - 1);
+    const pp = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(prev).reduce((a, p) => ({ ...a, [p.type]: p.value }), {} as Record<string, string>);
+    keyDate = `${pp.year}-${pp.month}-${pp.day}`;
+  }
+  return `${keyDate}:${session}`;
 }
 
 function strikeLabel(orders: FlowOrder[], bucket: "bull" | "bear") {
@@ -234,12 +248,14 @@ export default function SnapshotPanel() {
   const lastPersistRef = useRef(0);
   const seededRef = useRef(false);
 
-  // ── On mount: seed cumulative state from today's last saved snapshot ──────
+  // ── On mount: seed cumulative state from current session's last saved snapshot ──────
   useEffect(() => {
     if (seededRef.current) return;
     seededRef.current = true;
     getLatestBzilaSnapshotToday().then(snap => {
       if (!snap) return;
+      // Only seed if the snapshot belongs to the current session
+      if (snap.session && snap.session !== currentSession()) return;
       const { stats, orders } = snap;
       const hydratedOrders = orders
         .map(hydrateOrder)
