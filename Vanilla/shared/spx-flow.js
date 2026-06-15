@@ -518,15 +518,18 @@
     ws.onopen = () => {
       console.log('[spx-flow] WebSocket connected');
       state.connected = true;
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        symbols: [ES_STREAM_SYMBOL, NQ_STREAM_SYMBOL],
-        feedTypesBySymbol: {
-          [ES_STREAM_SYMBOL]: ['Quote', 'TimeAndSale'],
-          [NQ_STREAM_SYMBOL]: ['Quote', 'TimeAndSale']
-        },
-        spxSubscribe: true
-      }));
+      // Use REST POST instead of WebSocket (WS subscriptions disabled on server)
+      fetch('/proxy/dxlink/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbols: [ES_STREAM_SYMBOL, NQ_STREAM_SYMBOL],
+          feedTypesBySymbol: {
+            [ES_STREAM_SYMBOL]: ['Quote', 'TimeAndSale'],
+            [NQ_STREAM_SYMBOL]: ['Quote', 'TimeAndSale']
+          }
+        })
+      }).catch(e => console.warn('[spx-flow] REST subscribe failed:', e.message));
       publishBzila();
     };
 

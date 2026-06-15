@@ -300,7 +300,7 @@ export default function GexChart({
 
     // ── DEX line — white, 60% height scale centered on yZero ──
     if (showDex) {
-      const dexVals = data.map(r => r.netDEX ?? 0);
+      const dexVals = data.map(r => isVol ? (r.volNetDEX ?? 0) : (r.netDEX ?? 0));
       const maxDex  = Math.max(...dexVals.map(Math.abs).filter(v => v > 0), 1);
       const yDex    = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6;
       ctx.strokeStyle = "rgba(255,255,255,0.80)";
