@@ -23,6 +23,17 @@ function fmtDist(v: number, spot: number): string {
   return (d > 0 ? "+" : "") + d.toFixed(0) + " (" + pct + "%)";
 }
 
+function fmtPrice(val: number): string {
+  const whole = Math.floor(val);
+  const frac = val - whole;
+  let decimals = ".00";
+  if (frac < 0.125) decimals = ".00";
+  else if (frac < 0.375) decimals = ".25";
+  else if (frac < 0.625) decimals = ".50";
+  else decimals = ".75";
+  return (whole + Number(decimals)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 interface Props {
   esSpot?: number; // current ES price for distance calc
 }
@@ -36,16 +47,24 @@ export default function EsStatsLadder({ esSpot }: Props) {
     setLoading(true);
     setErr(null);
     try {
-      const res = await fetch("/api/es-stats", { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const row = await res.json();
-      if (!row) {
-        setStats({});
-        return;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch("/api/es-stats", { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const row = await res.json();
+        if (!row) {
+          setStats({});
+          return;
+        }
+        setStats(row);
+      } finally {
+        clearTimeout(timeoutId);
       }
-      setStats(row);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr(msg.includes("abort") ? "Request timeout" : msg);
     } finally {
       setLoading(false);
     }
@@ -195,7 +214,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                     fontSize: 16, fontWeight: 700, color: "#00e5ff",
                     fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
                   }}>
-                    {entry.val.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                    {fmtPrice(entry.val)}
                   </div>
                 </div>
               </div>
@@ -246,7 +265,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                   fontSize: 16, fontWeight: 700, color: "#fff",
                   fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
                 }}>
-                  {hasVal ? val.toLocaleString("en-US", { maximumFractionDigits: 0 }) : "—"}
+                  {hasVal ? fmtPrice(val) : "—"}
                 </div>
                 {distStr && (
                   <div style={{

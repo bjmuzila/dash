@@ -14,22 +14,38 @@ const CREATE_TABLE = `
   )
 `;
 
+let _tableEnsured = false;
+
 export async function GET() {
   try {
     const db = await getDb();
-    try {
-      db.run(CREATE_TABLE);
-    } catch (e) {
-      // Table creation might fail if it already exists, that's ok
-      console.debug("[/api/es-stats] table creation note:", e);
+
+    // Only create table once per process
+    if (!_tableEnsured) {
+      try {
+        db.run(CREATE_TABLE);
+        _tableEnsured = true;
+      } catch (e) {
+        console.debug("[/api/es-stats] table creation note:", e);
+        _tableEnsured = true;
+      }
     }
 
     let results = db.exec("SELECT * FROM es_stats WHERE expiration = 'WEEKLY' LIMIT 1");
-    if (!results.length) results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
-    if (!results.length) return NextResponse.json(null);
+
+    if (!results.length) {
+      results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
+    }
+
+    if (!results.length) {
+      return NextResponse.json(null);
+    }
 
     const { columns, values } = results[0];
-    if (!values.length || !values[0]) return NextResponse.json(null);
+
+    if (!values.length || !values[0]) {
+      return NextResponse.json(null);
+    }
 
     const row = Object.fromEntries(columns.map((col, i) => [col, values[0][i]]));
     return NextResponse.json(row);

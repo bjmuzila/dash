@@ -305,11 +305,18 @@ export default function GexChart({
       const yDex    = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6;
       ctx.strokeStyle = "rgba(255,255,255,0.80)";
       ctx.lineWidth   = 2;
-      ctx.beginPath();
-      dexVals.forEach((v, i) => {
-        i === 0 ? ctx.moveTo(xAt(i), yDex(v)) : ctx.lineTo(xAt(i), yDex(v));
-      });
-      ctx.stroke();
+      const pts = dexVals.map((v, i) => ({ x: xAt(i), y: yDex(v) }));
+      if (pts.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const midX = (pts[i].x + pts[i + 1].x) / 2;
+          const midY = (pts[i].y + pts[i + 1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+        }
+        ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+        ctx.stroke();
+      }
       // DEX zero-crossing label
       ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "bold 8px Arial"; ctx.textAlign = "left";
       ctx.fillText("DEX", PAD_L + 3, yDex(0) - 3);

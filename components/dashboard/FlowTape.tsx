@@ -18,6 +18,12 @@ const ACTION_COLORS: Record<string, string> = {
   "SELL PUT": "#22c55e",
 };
 
+function fmtAction(action: string): string {
+  return action
+    .replace(/^BUY/, "ASK")
+    .replace(/^SELL/, "BID");
+}
+
 function fmtPremium(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
   if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
@@ -150,7 +156,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
               }}
             >
               <span style={{ color: "var(--muted)" }}>{fmtTime(o.ts)}</span>
-              <span style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>{o.action}</span>
+              <span style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>{fmtAction(o.action)}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.strike.toLocaleString()}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.size.toLocaleString()}</span>
               <span className="text-right" style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>

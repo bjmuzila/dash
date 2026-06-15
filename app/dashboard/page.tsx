@@ -68,7 +68,9 @@ function RestTape({ orders, connected }: { orders: { ts: number; symbol: string;
             <span style={{ color: "var(--text)", fontWeight: 700 }}>{o.underlying ?? o.symbol}</span>
             <span style={{ color: "var(--muted)" }}>{o.expiration ? o.expiration.slice(5) : "--"}</span>
             <span style={{ color: "var(--text)", fontWeight: 700 }}>{o.strike ? `${Number(o.strike).toLocaleString()}${o.type}` : "--"}</span>
-            <span className="text-right" style={{ color: o.side === "buy" ? "#22c55e" : "#f97316", fontWeight: 700 }}>{String(o.side || "").toUpperCase()}</span>
+            <span className="text-right" style={{ color: o.side === "buy" ? "#22c55e" : "#f97316", fontWeight: 700 }}>
+              {o.side === "buy" ? "ASK" : o.side === "sell" ? "BID" : String(o.side || "").toUpperCase()}
+            </span>
             <span className="text-right" style={{ color: "var(--text)", fontWeight: 700 }}>{Number(o.size || 0).toLocaleString()}</span>
             <span className="text-right" style={{ color: "var(--text)", fontWeight: 700 }}>{fmtRestPremium(o.premium)}</span>
           </div>
