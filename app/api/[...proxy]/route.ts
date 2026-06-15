@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const path = url.pathname.replace('/api', '');
 
-  // Handle proxy/api/tt/* paths - route to TastyTrade
+  // Handle proxy/api/tt/* paths - route to TastyTrade with timeout
   if (path.startsWith('/proxy/api/tt/')) {
     try {
       const ttPath = path.replace('/proxy', ''); // /api/tt/...
@@ -22,26 +22,48 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
       }
 
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+
       const response = await ttFetch(ttPath + request.nextUrl.search);
+      clearTimeout(timeout);
       const data = await response.json();
       return NextResponse.json(data, { status: response.status });
     } catch (error) {
       console.error('[API] TastyTrade proxy error:', error);
-      return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+      return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
     }
   }
 
-  // Handle proxy/api/* paths - forward to proxy server on 3001
+  // Handle proxy/api/* paths - forward to proxy server
   if (path.startsWith('/proxy/')) {
     try {
-      const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
-      console.log('[PROXY] GET', proxyUrl);
-      const response = await fetch(proxyUrl, { method: 'GET' });
+      // Try local first, fall back to remote if needed
+      const localProxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
+      const remoteProxyUrl = process.env.REMOTE_PROXY_URL
+        ? `${process.env.REMOTE_PROXY_URL}${path}${request.nextUrl.search}`
+        : null;
+
+      let response;
+      try {
+        response = await Promise.race([
+          fetch(localProxyUrl, { method: 'GET' }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+        ]);
+      } catch (localErr) {
+        if (remoteProxyUrl) {
+          console.log('[PROXY] Local failed, trying remote:', remoteProxyUrl);
+          response = await fetch(remoteProxyUrl, { method: 'GET' });
+        } else {
+          throw localErr;
+        }
+      }
+
       const data = await response.json().catch(() => response.text());
       return NextResponse.json(data, { status: response.status });
     } catch (error) {
-      console.error('[PROXY] Error:', error);
-      return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+      console.error('[PROXY] GET error:', error);
+      return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
     }
   }
 

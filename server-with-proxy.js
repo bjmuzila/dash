@@ -1,6 +1,6 @@
 /**
- * Custom Next.js server that spawns proxy as child process
- * This allows a single server to handle both Next.js and proxy logic
+ * Custom Next.js server that optionally spawns proxy as child process
+ * Falls back to Next.js-only if proxy fails to start
  *
  * Usage: node server-with-proxy.js
  */
@@ -16,14 +16,33 @@ const handle = app.getRequestHandler();
 
 // Spawn proxy server as child process on port 3001
 let proxyProcess = null;
+let proxyReady = false;
 
 function startProxy() {
+  // Skip proxy in production on Render if it's not working
+  if (process.env.RENDER && process.env.NODE_ENV === 'production') {
+    console.log('[SERVER] Skipping proxy startup on Render (use API routes instead)');
+    return;
+  }
+
   console.log('[SERVER] Starting proxy server on port 3001...');
   try {
     proxyProcess = spawn('node', [path.join(__dirname, 'proxy-tastytrade.js')], {
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: { ...process.env, PORT: '3001' },
-      detached: false
+      stdio: 'pipe',
+      env: { ...process.env, PORT: '3001' }
+    });
+
+    let stdoutData = '';
+    proxyProcess.stdout?.on('data', (data) => {
+      stdoutData += data.toString();
+      console.log('[PROXY]', data.toString().trim());
+      if (stdoutData.includes('listening') || stdoutData.includes('ready')) {
+        proxyReady = true;
+      }
+    });
+
+    proxyProcess.stderr?.on('data', (data) => {
+      console.error('[PROXY ERR]', data.toString().trim());
     });
 
     proxyProcess.on('error', (err) => {
@@ -32,15 +51,9 @@ function startProxy() {
 
     proxyProcess.on('exit', (code, signal) => {
       console.warn(`[SERVER] Proxy exited with code ${code}, signal ${signal}`);
-      // Try to restart after 5 seconds
-      setTimeout(() => {
-        console.log('[SERVER] Restarting proxy...');
-        startProxy();
-      }, 5000);
     });
   } catch (err) {
     console.error('[SERVER] Failed to start proxy:', err);
-    // Continue anyway - Next.js can still serve the frontend
   }
 }
 
@@ -53,7 +66,6 @@ app.prepare().then(() => {
   }).listen(PORT, (err) => {
     if (err) throw err;
     console.log(`[SERVER] Next.js ready on http://localhost:${PORT}`);
-    console.log(`[SERVER] Proxy running on http://localhost:3001`);
   });
 }).catch((err) => {
   console.error('[SERVER] Failed to start:', err);
