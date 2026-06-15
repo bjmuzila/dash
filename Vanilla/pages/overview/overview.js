@@ -8648,7 +8648,33 @@ async function renderBuySellHistoryChart() {
   ctx.fillStyle = '#00e676'; ctx.textAlign = 'center'; ctx.fillText('Buy %', 0, 0); ctx.restore();
 }
 window.renderBuySellHistoryChart = renderBuySellHistoryChart;
+// Fetch ES stats from backend and populate window.esStatsCache
+async function loadESStats() {
+  try {
+    const resp = await fetch('/proxy/api/es-stats');
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && typeof data === 'object') {
+        window.esStatsCache = {
+          'NO LONG': data.no_long,
+          'UP': data.up,
+          'MID': data.mid,
+          'DOWN': data.down,
+          'NO SHORT': data.no_short,
+          'VAH': data.vah,
+          'VPOC': data.vpoc,
+          'VAL': data.val
+        };
+        console.log('[ES Stats] Loaded from backend:', window.esStatsCache);
+      }
+    }
+  } catch (e) {
+    console.warn('[ES Stats] Failed to load:', e.message);
+  }
+}
+
 window.init_overview = function init_overview(){
+  loadESStats().catch(() => {});
   setTimeout(() => {
     try { initOvEvents(); } catch(e) {}
     try { drawOverviewChart(); } catch(e) {}
