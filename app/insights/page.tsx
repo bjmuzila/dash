@@ -6,7 +6,7 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, type EsCandleRecord } from "@/lib/snapdb";
 import IbLogic from "@/components/insights/IbLogic";
 
-type InsightsTab = "exposure" | "vix" | "ib" | "top10";
+type InsightsTab = "exposure" | "vix" | "ib";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -912,7 +912,6 @@ const TABS: { id: InsightsTab; label: string }[] = [
   { id: "exposure", label: "Exposure Stack" },
   { id: "vix",      label: "VIX / Vol" },
   { id: "ib",       label: "IB Logic & AI" },
-  { id: "top10",    label: "Top 10" },
 ];
 
 export default function InsightsPage() {
@@ -1585,13 +1584,6 @@ export default function InsightsPage() {
         {tab === "ib" && <IbLogic />}
 
         {/* ── TOP 10 TAB ───────────────────────────────────────────────────── */}
-        {tab === "top10" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 11, color: "#00e5ff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 700 }}>Top 10</div>
-            <div style={{ fontSize: 12, color: "#5a7a99" }}>Loading...</div>
-          </div>
-        )}
-
       </div>
     </div>
   );

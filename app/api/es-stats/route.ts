@@ -22,6 +22,7 @@ export async function GET() {
     if (!results.length) results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
     if (!results.length) return NextResponse.json(null);
     const { columns, values } = results[0];
+    if (!values.length || !values[0]) return NextResponse.json(null);
     const row = Object.fromEntries(columns.map((col, i) => [col, values[0][i]]));
     return NextResponse.json(row);
   } catch (err) {

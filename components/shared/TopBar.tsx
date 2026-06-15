@@ -345,8 +345,7 @@ export default function TopBar() {
     }
 
     // -- SPX --
-    // Prefer ES-derived conversion whenever we have ES and SPX close data.
-    // Fall back to live $SPX only when the conversion inputs are missing.
+    // Use the live SPX websocket price directly.
     let spxDisplay  = 0;
     let spxBaseline = 0;
 
@@ -361,13 +360,7 @@ export default function TopBar() {
       if (L.spxPrice > 0) window.__gexAppState.spotPrice = L.spxPrice;
     }
 
-    const esClose  = C.es  || L.esPrev  || 0;
-    const spxClose = C.spx || L.spxPrev || 0;
-    if (esPrice > 0 && esClose > 0 && spxClose > 0) {
-      const spread = esClose - spxClose;
-      spxDisplay  = esPrice - spread;
-      spxBaseline = spxClose;
-    } else if (L.spxPrice > 0) {
+    if (L.spxPrice > 0) {
       spxDisplay  = L.spxPrice;
       spxBaseline = L.spxPrev || 0;
     }
