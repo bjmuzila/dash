@@ -40,23 +40,23 @@ export async function GET(request: NextRequest) {
         ? `${process.env.REMOTE_PROXY_URL}${path}${request.nextUrl.search}`
         : null;
 
-      let response;
+      let proxyResponse: Response;
       try {
-        response = await Promise.race([
+        proxyResponse = await Promise.race([
           fetch(localProxyUrl, { method: 'GET' }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+          new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
         ]);
       } catch (localErr) {
         if (remoteProxyUrl) {
           console.log('[PROXY] Local failed, trying remote:', remoteProxyUrl);
-          response = await fetch(remoteProxyUrl, { method: 'GET' });
+          proxyResponse = await fetch(remoteProxyUrl, { method: 'GET' });
         } else {
           throw localErr;
         }
       }
 
-      const data = await response.json().catch(() => response.text());
-      return NextResponse.json(data, { status: response.status });
+      const data = await proxyResponse.json().catch(() => proxyResponse.text());
+      return NextResponse.json(data, { status: proxyResponse.status });
     } catch (error) {
       console.error('[PROXY] GET error:', error);
       return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
@@ -93,13 +93,13 @@ export async function POST(request: NextRequest) {
     if (path.startsWith('/proxy/')) {
       const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
       console.log('[PROXY] POST', proxyUrl);
-      const response = await fetch(proxyUrl, {
+      const proxyResponse = await fetch(proxyUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = await response.json().catch(() => response.text());
-      return NextResponse.json(data, { status: response.status });
+      const data = await proxyResponse.json().catch(() => proxyResponse.text());
+      return NextResponse.json(data, { status: proxyResponse.status });
     }
   } catch (error) {
     console.error('[API] POST error:', error);
@@ -115,9 +115,9 @@ export async function DELETE(request: NextRequest) {
     if (path.startsWith('/proxy/')) {
       const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
       console.log('[PROXY] DELETE', proxyUrl);
-      const response = await fetch(proxyUrl, { method: 'DELETE' });
-      const data = await response.json().catch(() => response.text());
-      return NextResponse.json(data, { status: response.status });
+      const proxyResponse = await fetch(proxyUrl, { method: 'DELETE' });
+      const data = await proxyResponse.json().catch(() => proxyResponse.text());
+      return NextResponse.json(data, { status: proxyResponse.status });
     }
   } catch (error) {
     console.error('[PROXY] DELETE error:', error);
