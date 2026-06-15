@@ -40,7 +40,10 @@ export async function getDb(): Promise<Database> {
   );
   const wasmBuf = fs.readFileSync(wasmPath);
   const SQL = await initSqlJs({
-    wasmBinary: new Uint8Array(wasmBuf),
+    wasmBinary: wasmBuf.buffer.slice(
+      wasmBuf.byteOffset,
+      wasmBuf.byteOffset + wasmBuf.byteLength
+    ) as ArrayBuffer,
   });
 
   if (fs.existsSync(DB_PATH)) {
