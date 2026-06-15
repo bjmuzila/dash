@@ -28,13 +28,6 @@ async function postToDiscord(imageBase64: string, content: string): Promise<void
   if (!res.ok) throw new Error(`Discord ${res.status}`);
 }
 
-function downloadImage(dataUrl: string, filename: string) {
-  const a = document.createElement("a");
-  a.href = dataUrl;
-  a.download = filename;
-  a.click();
-}
-
 // ── Shared button style ───────────────────────────────────────────────────────
 const BTN_BASE: CSSProperties = {
   display: "inline-flex",
@@ -83,28 +76,30 @@ function IconX({ size = 10 }: { size?: number }) {
 
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
-/** Screenshot the target element and download as PNG.
+/** Screenshot the target element and copy PNG to clipboard.
  *  Pass label="📷" to render emoji-only (no text label). */
 export function BoxSnapBtn({ targetRef, label = "SNAP" }: { targetRef: RefObject<HTMLElement | null>; label?: string }) {
   const [s, set] = useState<BtnState>("idle");
   const emojiOnly = label === "📷";
-  const filename = emojiOnly ? "snap" : label.toLowerCase().replace(/\s+/g, "-");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
       const img = await captureElement(targetRef.current);
-      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadImage(img, `${filename}-${ts}.png`);
+      // Convert base64 data URL → Blob → ClipboardItem
+      const base64 = img.replace(/^data:image\/\w+;base64,/, "");
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "image/png" });
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       set("ok");
     } catch { set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, filename]);
+  }, [s, targetRef]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : emojiOnly ? "📷" : label;
   return (
-    <button onClick={run} disabled={s === "busy"} title="Screenshot this panel"
+    <button onClick={run} disabled={s === "busy"} title="Copy screenshot to clipboard"
       style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: emojiOnly ? "2px 5px" : "2px 7px", fontSize: emojiOnly ? 13 : 9 }}>
       {emojiOnly ? btnContent : <><IconCamera />{btnContent}</>}
     </button>

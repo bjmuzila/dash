@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSpxFlow } from "@/hooks/useSpxFlow";
-import { savePremiumFlowSnapshot } from "@/lib/snapdb";
+import { savePremiumFlowSnapshot, getPremiumFlowToday } from "@/lib/snapdb";
 import FlowTape from "@/components/dashboard/FlowTape";
 
 function fmtPrice(val: number) {
@@ -83,14 +83,33 @@ function toEtDate(ts: number): string {
 }
 
 export default function DashboardPage() {
-  const { flow, reset: resetFlow } = useSpxFlow(true);
+  const { flow, reset: resetFlow, seed } = useSpxFlow(true);
   const lastPremiumSaveRef = useRef(0);
   const tapeSavedRef = useRef(0);
   const restSavedRef = useRef(0);
+  const seededRef = useRef(false);
+  const [seededNetPremium, setSeededNetPremium] = useState<number | null>(null);
+
+  // ── On mount: seed premium flow from last saved snapshot ─────────────────
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    getPremiumFlowToday().then(rows => {
+      if (!rows.length) return;
+      const last = rows[rows.length - 1];
+      seed({
+        netPremium: last.netPremium,
+        callPremium: last.callPremium,
+        putPremium: last.putPremium,
+      });
+      setSeededNetPremium(last.netPremium);
+    }).catch(() => {});
+  }, [seed]);
 
   const reset = useCallback(() => {
     tapeSavedRef.current = 0;
     restSavedRef.current = 0;
+    setSeededNetPremium(null);
     resetFlow();
   }, [resetFlow]);
 
@@ -159,7 +178,9 @@ export default function DashboardPage() {
     }).catch(() => {});
   }, [flow.tapeOrders, flow.restOrders]);
 
-  const netColor = flow.netPremiumFlow >= 0 ? "var(--accent)" : "var(--red)";
+  // Use live value once it's non-zero, otherwise fall back to seeded value from SQLite
+  const displayNetPremium = flow.netPremiumFlow !== 0 ? flow.netPremiumFlow : (seededNetPremium ?? 0);
+  const netColor = displayNetPremium >= 0 ? "var(--accent)" : "var(--red)";
 
   return (
     <div className="flex flex-col gap-3 h-full">
@@ -191,7 +212,7 @@ export default function DashboardPage() {
 
           {/* Net premium badge */}
           <div className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: "var(--border)", color: netColor }}>
-            NET {fmtPremium(flow.netPremiumFlow)}
+            NET {fmtPremium(displayNetPremium)}
           </div>
 
           <button
@@ -224,7 +245,7 @@ export default function DashboardPage() {
         <div className="px-4 py-3">
           <div className="text-xs uppercase tracking-wider mb-1" style={{ color: "var(--muted)" }}>NET Premium</div>
           <div className="text-base font-mono font-bold" style={{ color: netColor }}>
-            {fmtPremium(flow.netPremiumFlow)}
+            {fmtPremium(displayNetPremium)}
           </div>
         </div>
       </div>

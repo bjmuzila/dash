@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-06-15 (session 14) — TopBar SPX Price Fix + ES Front Month Rollover
+
+### `components/shared/TopBar.tsx`
+- **SPX showing `—`**: on-connect WS cache replay was sending compact array format `['Quote',[sym,...]]` which TopBar's object-format parser couldn't read. Fixed proxy to send proper object format.
+- **Added `"$SPX"` to WS symbol check** — dxFeed sometimes returns `eventSymbol: '$SPX'` instead of `'SPX'`; both now handled.
+- **After-hours SPX = ES bug**: spread formula was using `esPrev` as `esClose` fallback, making spread ≈ 0 → SPX displayed same as ES. Fixed to only apply spread when today's 4pm closes (`C.es`, `C.spx`) are available.
+- **Weekend close seed**: `loadTodayCloses` now accepts Friday's closes on weekends (checks `lastTradingDayStr()` not just today). On cold weekend load, fetches `savedDailyCloses` from proxy (`/api/prev-closes`) to populate `closesRef` so ES→SPX spread works.
+- **`saveTodayCloses`** accepts optional `date` param so server-sourced Friday closes are stored with the correct date.
+- **`__gexAppState.spotPrice`** write/read ordering fixed — fallback now reads before writing.
+
+### `Vanilla/proxy-tastytrade.js`
+- **ES front-month rollover (June → September)**: added `/ESU26` and `/NQU26` to `CORE_LIVE_SUBSCRIPTIONS` so proxy subscribes the active September contract directly.
+- **`getDxCacheAliases`**: added `/ESU26` and `/NQU26` as aliases so any event arriving under either symbol populates the shared cache key.
+- **`dxFallbackMap`** in quotes-batch: `/ES:XCME` now falls back to `/ESU26`, `/NQ:XCME` to `/NQU26` when continuous-contract cache is empty.
+- **On-connect cache replay**: Quote/Trade now sent as object format (with `eventType`/`eventSymbol`); added `$SPX`/`/ESU26`/`/NQU26` alias lookups.
+
+### `app/api/prev-closes/route.ts` *(new)*
+- Proxies `GET /proxy/api/tt/prev-closes` — exposes proxy's disk-persisted `savedDailyCloses` (ES/SPX/VIX 4pm closes) to the Next.js client.
+
+### `app/page.tsx`
+- Polls `window.__gexAppState.spotPrice` (written by TopBar) as fallback for GexChart `spotPrice` when page WS hasn't received an SPX tick yet.
+
+### Version
+- Bumped to `2026.6.15-v24`
+
+---
+
 ## 2026-06-15 (session 13) — Multi Greek Page: GO Button Fix + Proxy Speed
 
 ### `app/mult-greek/page.tsx`

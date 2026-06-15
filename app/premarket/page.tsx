@@ -56,8 +56,13 @@ const FIXED_FX_CRYPTO = [
   { sym: "BTC-USD",  label: "BITCOIN" },
 ];
 
+// Yahoo fallbacks for RTY/YM in case DXLink doesn't carry them
+const RTY_YAHOO = { sym: "^RUT",    label: "Russell 2000", wsKey: "/RTY:XCME" };
+const YM_YAHOO  = { sym: "YM=F",    label: "Dow Jones",    wsKey: "/YM:XCME"  };
+const US_FUTURES_YAHOO = [RTY_YAHOO, YM_YAHOO];
+
 const YAHOO_SYMS = [
-  ...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO,
+  ...US_FUTURES_YAHOO, ...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO,
 ];
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -99,7 +104,7 @@ function fmtPct(v: number | null): string {
 }
 
 function chgColor(v: number | null): string {
-  if (v == null) return "#3a5570";
+  if (v == null) return "#ffffff";
   return v >= 0 ? "#00e676" : "#ff4757";
 }
 
@@ -162,10 +167,10 @@ function TableShell({ children }: { children: React.ReactNode }) {
     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
       <thead>
         <tr style={{ borderBottom: "1px solid #0d1e2e" }}>
-          <th style={{ padding: "5px 10px", color: "#3a5570", fontSize: 10, textAlign: "left", letterSpacing: ".08em", width: "40%" }}>INSTRUMENT</th>
-          <th style={{ padding: "5px 10px", color: "#3a5570", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>PRICE</th>
-          <th style={{ padding: "5px 10px", color: "#3a5570", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>CHANGE</th>
-          <th style={{ padding: "5px 10px", color: "#3a5570", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>%</th>
+          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "left", letterSpacing: ".08em", width: "40%" }}>INSTRUMENT</th>
+          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>PRICE</th>
+          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>CHANGE</th>
+          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>%</th>
         </tr>
       </thead>
       <tbody>{children}</tbody>
@@ -202,8 +207,8 @@ function RVSigmaPanel({ spxPrice, spxPrev }: { spxPrice: number | null; spxPrev:
   return (
     <div style={{ background: "#060d15" }}>
       <div style={{ padding: "3px 10px", display: "flex", justifyContent: "flex-end", gap: 16, borderBottom: "1px solid #0d1e2e" }}>
-        <span style={{ color: "#3a5570", fontSize: 10, letterSpacing: ".06em" }}>SPX</span>
-        <span style={{ color: "#3a5570", fontSize: 10, letterSpacing: ".06em" }}>ES EQUIV.</span>
+        <span style={{ color: "#ffffff", fontSize: 10, letterSpacing: ".06em" }}>SPX</span>
+        <span style={{ color: "#ffffff", fontSize: 10, letterSpacing: ".06em" }}>ES EQUIV.</span>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <tbody>
@@ -219,7 +224,7 @@ function RVSigmaPanel({ spxPrice, spxPrev }: { spxPrice: number | null; spxPrev:
               <tr key={label} style={{ borderBottom: "1px solid #08111a" }}>
                 <td style={{ padding: "5px 10px", fontSize: 11, color: labelColor, fontWeight: isClose ? 700 : 500 }}>{label}</td>
                 <td style={{ padding: "5px 10px", fontSize: 11, color: "#e8edf5", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{valueStr}</td>
-                <td style={{ padding: "5px 10px", fontSize: 11, color: "#7a9ab8", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{esEquiv}</td>
+                <td style={{ padding: "5px 10px", fontSize: 11, color: "#e8edf5", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{esEquiv}</td>
               </tr>
             );
           })}
@@ -252,25 +257,25 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
         {/* Left col */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".1em", marginBottom: 3 }}>EXPECTED OVERNIGHT ACTION</div>
+            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>EXPECTED OVERNIGHT ACTION</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#ff4757" : "#e8edf5" }}>
               {esPct == null ? "—" : esPct > 0 ? `Gap Up ~${esPct.toFixed(2)}%` : esPct < 0 ? `Gap Down ~${(esPct).toFixed(2)}%` : "Flat Open"}
             </div>
           </div>
 
           <div>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".1em", marginBottom: 4 }}>INVENTORY</div>
+            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 4 }}>INVENTORY</div>
             <div style={{ display: "grid", gridTemplateColumns: "80px 80px 80px", gap: 4, marginBottom: 4 }}>
               {["POSTURE","DELTA","VOLUME"].map(h => (
-                <div key={h} style={{ fontSize: 9, color: "#2a4a6a", letterSpacing: ".06em" }}>{h}</div>
+                <div key={h} style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".06em" }}>{h}</div>
               ))}
             </div>
             {[["Overall","—","—","avg"],["Large (>5 lot)","—","—",""],["Small","—","—",""]].map(([name, posture, delta, vol]) => (
               <div key={name} style={{ display: "grid", gridTemplateColumns: "80px 80px 80px auto", gap: 4, marginBottom: 2 }}>
-                <span style={{ fontSize: 11, color: "#7a9ab8" }}>{name}</span>
-                <span style={{ fontSize: 11, color: "#3a5570" }}>{posture}</span>
-                <span style={{ fontSize: 11, color: "#3a5570" }}>{delta}</span>
-                <span style={{ fontSize: 11, color: "#3a5570" }}>{vol}</span>
+                <span style={{ fontSize: 11, color: "#e8edf5" }}>{name}</span>
+                <span style={{ fontSize: 11, color: "#ffffff" }}>{posture}</span>
+                <span style={{ fontSize: 11, color: "#ffffff" }}>{delta}</span>
+                <span style={{ fontSize: 11, color: "#ffffff" }}>{vol}</span>
               </div>
             ))}
           </div>
@@ -279,20 +284,20 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
         {/* Right col */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT SENTIMENT</div>
+            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT SENTIMENT</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#ff4757" : "#e8edf5" }}>
               {sentiment}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT RANGE</div>
+            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT RANGE</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
               {overnightRange}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".1em", marginBottom: 3 }}>PROFILE SHAPE</div>
-            <div style={{ fontSize: 13, color: "#3a5570" }}>—</div>
+            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>PROFILE SHAPE</div>
+            <div style={{ fontSize: 13, color: "#ffffff" }}>—</div>
           </div>
         </div>
       </div>
@@ -475,9 +480,14 @@ export default function PremarketPage() {
     return () => clearInterval(id);
   }, []);
 
-  // Merge: Yahoo fills Europe/Asia; DXLink fills everything else
+  // Merge: DXLink takes priority; Yahoo fills gaps
   const allQuotes: QuoteMap = { ...quotes };
-  YAHOO_SYMS.forEach(({ sym }) => {
+  // Yahoo fallbacks for RTY/YM — only use if DXLink has no price
+  US_FUTURES_YAHOO.forEach(({ sym, wsKey }) => {
+    if (!allQuotes[wsKey]?.price && yahooQuotes[sym]) allQuotes[wsKey] = yahooQuotes[sym];
+  });
+  // Yahoo is authoritative for Europe/Asia/commodities/etc
+  [...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO].forEach(({ sym }) => {
     if (yahooQuotes[sym]) allQuotes[sym] = yahooQuotes[sym];
   });
 
@@ -509,7 +519,7 @@ export default function PremarketPage() {
           <h1 style={{ color: "#00e5ff", fontSize: 13, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", margin: 0 }}>
             Premarket Positioning
           </h1>
-          <span style={{ fontSize: 11, color: "#3a5570" }}>As of {dateStr} · 7:00 AM central</span>
+          <span style={{ fontSize: 11, color: "#ffffff" }}>As of {dateStr} · 7:00 AM central</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span
@@ -525,7 +535,7 @@ export default function PremarketPage() {
           >
             {wsLive ? "● LIVE" : "● CONNECTING"}
           </span>
-          {ts && <span style={{ fontSize: 10, color: "#1e3050", fontVariantNumeric: "tabular-nums" }}>{ts}</span>}
+          {ts && <span style={{ fontSize: 10, color: "#ffffff", fontVariantNumeric: "tabular-nums" }}>{ts}</span>}
           <BoxSnapBtn targetRef={pageRef} label="📷" />
           <BoxDiscordBtn targetRef={pageRef} message={`📊 Premarket Positioning — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
         </div>

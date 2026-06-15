@@ -900,6 +900,7 @@ export default function InsightsPage() {
   const esCandleMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
   const activeExpiryRef = useRef("");
   const historicalCandlesRef = useRef<EsCandleRecord[]>([]);
+  const initialExpirySetRef = useRef(false);
 
   const lastEsCandleSaveRef = useRef(0);
 
@@ -1211,8 +1212,12 @@ export default function InsightsPage() {
   useEffect(() => {
     if (!selectedExpiry) return;
     activeExpiryRef.current = selectedExpiry;
-    setHistory([]);
-    setLatest(null);
+    // Only wipe history when user actively switches expiry; not on initial load
+    if (initialExpirySetRef.current) {
+      setHistory([]);
+      setLatest(null);
+    }
+    initialExpirySetRef.current = true;
     doRefresh();
     const t = setInterval(() => doRefresh(), 30_000);
     return () => clearInterval(t);

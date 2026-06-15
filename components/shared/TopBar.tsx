@@ -358,16 +358,16 @@ export default function TopBar() {
       spxDisplay  = L.spxPrice;
       spxBaseline = L.spxPrev || 0;
     } else {
-      // After hours — convert ES to implied SPX only when we have today's 4pm closes
-      // (localStorage todayCloses, set at 4pm ET). Without those, show last known SPX directly.
-      const esClose  = C.es  || 0;   // today's 4pm ES close only (not esPrev — different day)
-      const spxClose = C.spx || 0;   // today's 4pm SPX close only
+      // After hours — convert ES to implied SPX using today's 4pm closes (closesRef),
+      // or fall back to prev-close values from dxLink Summary (esPrev/spxPrev) if unavailable.
+      const esClose  = C.es  || L.esPrev  || 0;
+      const spxClose = C.spx || L.spxPrev || 0;
       if (esPrice > 0 && esClose > 0 && spxClose > 0) {
         const spread = esClose - spxClose;
         spxDisplay  = esPrice - spread;
         spxBaseline = spxClose;
       } else if (L.spxPrice > 0) {
-        // No today's closes available (weekend / pre-4pm) — show last known SPX price directly
+        // No close data at all — show last known SPX price directly
         spxDisplay  = L.spxPrice;
         spxBaseline = L.spxPrev || 0;
       }
