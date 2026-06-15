@@ -43,8 +43,19 @@ export async function getDb(): Promise<Database> {
   });
 
   if (fs.existsSync(DB_PATH)) {
-    const fileBuffer = fs.readFileSync(DB_PATH);
-    _db = new SQL.Database(fileBuffer);
+    try {
+      const fileBuffer = fs.readFileSync(DB_PATH);
+      _db = new SQL.Database(fileBuffer);
+      // Quick integrity check
+      _db.run("SELECT 1");
+    } catch (e) {
+      console.error("[db] Corrupted DB file, starting fresh:", String(e));
+      // Rename corrupted file for forensics, start clean
+      try {
+        fs.renameSync(DB_PATH, DB_PATH + ".corrupted." + Date.now());
+      } catch (_) {}
+      _db = new SQL.Database();
+    }
   } else {
     _db = new SQL.Database();
   }
@@ -150,7 +161,15 @@ export function persistDb(): void {
   if (!_db) return;
   const data = _db.export();
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  fs.writeFileSync(DB_PATH, Buffer.from(data));
+  // Write atomically: temp file → rename, so a crash mid-write never corrupts the live DB
+  const tmp = DB_PATH + ".tmp";
+  try {
+    fs.writeFileSync(tmp, Buffer.from(data));
+    fs.renameSync(tmp, DB_PATH);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
