@@ -16,6 +16,7 @@
   const ES_STREAM_SYMBOL = '/ES:XCME';
   const NQ_STREAM_SYMBOL = '/NQ:XCME';
   const MAX_SEEN_SPX_TRADES = 20000;
+  const MAX_LAST_TRADE_SYMBOLS = 5000;
   const WS_URL = (window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/ws/dxlink';
   const LS_KEY = 'spxFlow_v1';
 
@@ -624,6 +625,12 @@
             } else if (symbol.startsWith('/NQ')) {
               state.nqPrice = price;
               state.lastTradeBySymbol[symbol] = price;
+            }
+            // Cap lastTradeBySymbol to prevent unbounded memory growth
+            if (Object.keys(state.lastTradeBySymbol).length > MAX_LAST_TRADE_SYMBOLS) {
+              const keys = Object.keys(state.lastTradeBySymbol);
+              const toRemove = keys.slice(0, Math.floor(keys.length * 0.1));
+              toRemove.forEach(k => delete state.lastTradeBySymbol[k]);
             }
           });
         }
