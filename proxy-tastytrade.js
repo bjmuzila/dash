@@ -866,6 +866,152 @@ const historyDailyInFlight = new Map(); // symbol -> Promise<payload>
 let spx0dteEnsurePromise = null;
 let putCallCache = { ratio: 0, date: '', source: '', ts: 0 };
 
+// ─── Server-side SPX 0DTE Flow Accumulator ───────────────────────────────────
+// Accumulates premium flow from dxLink Trade events regardless of browser state.
+// Posts to Next.js API (localhost:3002) every 30s for premium snapshots,
+// and batches individual flow calls every 10s.
+const spxFlow = {
+  callPremium: 0,
+  putPremium: 0,
+  netPremium: 0,
+  seenKeys: new Set(),
+  pendingCalls: [],       // batched individual flow orders
+  lastPremiumPost: 0,     // ms timestamp of last premium snapshot POST
+  lastCallsPost: 0,       // ms timestamp of last flow calls POST
+};
+
+function spxFlowCurrentSession() {
+  const mins = getEtMinutes();
+  return (mins >= 570 && mins < 1020) ? 'rth' : 'ext';
+}
+
+function spxFlow0DTEExpiry() {
+  const { compact } = todayYmd();
+  const etMins = getEtMinutes();
+  if (etMins >= 960) {
+    // After 4pm ET: tomorrow's 0DTE
+    const d = new Date();
+    const etStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
+    const next = new Date(etStr + 'T12:00:00');
+    do { next.setDate(next.getDate() + 1); } while (next.getDay() === 0 || next.getDay() === 6);
+    const yy = String(next.getFullYear()).slice(2);
+    const mm = String(next.getMonth() + 1).padStart(2, '0');
+    const dd = String(next.getDate()).padStart(2, '0');
+    return `${yy}${mm}${dd}`;
+  }
+  return compact;
+}
+
+function spxFlowProcessTrade(sym, price, size, time, aggressorSide) {
+  if (!isSpxwSymbol(sym)) return;
+  const expiry = optionExpirationCompact(sym);
+  if (!expiry || expiry !== spxFlow0DTEExpiry()) return;
+  if (!price || !size) return;
+
+  // Dedup by sym|price|size|time
+  const key = `${sym}|${price}|${size}|${time}`;
+  if (spxFlow.seenKeys.has(key)) return;
+  spxFlow.seenKeys.add(key);
+  // Trim seen set to avoid unbounded growth
+  if (spxFlow.seenKeys.size > 50000) spxFlow.seenKeys.clear();
+
+  // Determine direction from quote cache, then aggressorSide fallback
+  const quote = dxQuoteCache[sym] || {};
+  let dir = 0;
+  if (quote.bidPrice > 0 && quote.askPrice > 0) {
+    if (price >= quote.askPrice) dir = 1;
+    else if (price <= quote.bidPrice) dir = -1;
+  }
+  if (dir === 0 && aggressorSide) {
+    if (aggressorSide === 'BUY') dir = 1;
+    else if (aggressorSide === 'SELL') dir = -1;
+  }
+  if (dir === 0) return; // can't determine aggressor, skip
+
+  const optType = /\d{6}C/.test(sym) ? 'C' : 'P';
+  const side = dir > 0 ? 'buy' : 'sell';
+  const premium = price * size * 100;
+  const isBull = (optType === 'C' && side === 'buy') || (optType === 'P' && side === 'sell');
+
+  // Accumulate running totals
+  if (optType === 'C') {
+    spxFlow.callPremium += dir > 0 ? premium : -premium;
+    spxFlow.netPremium  += dir > 0 ? premium : -premium;
+  } else {
+    spxFlow.putPremium  += dir > 0 ? premium : -premium;
+    spxFlow.netPremium  -= dir > 0 ? premium : -premium;
+  }
+
+  // Parse strike from symbol
+  const strikeM = sym.match(/[CP](\d+(?:\.\d+)?)$/);
+  const strike = strikeM ? (strikeM[1].length === 8 ? Number(strikeM[1]) / 1000 : Number(strikeM[1])) : 0;
+
+  // Spot price for OTM check
+  const spot = dxTradeCache['SPX']?.price || dxTradeCache['$SPX']?.price || 0;
+  const isOtm = spot > 0 ? (optType === 'C' ? strike > spot : strike < spot) : false;
+
+  const date = dbEtDate(Number(time) || Date.now());
+  spxFlow.pendingCalls.push({
+    ts: Number(time) || Date.now(),
+    date,
+    source: 'tape',
+    symbol: sym,
+    underlying: 'SPX',
+    expiration: (() => { const m = sym.match(/(\d{6})[CP]/); return m ? `20${m[1].slice(0,2)}-${m[1].slice(2,4)}-${m[1].slice(4,6)}` : null; })(),
+    strike,
+    option_type: optType,
+    side,
+    action: optType === 'C' ? (side === 'buy' ? 'BUY CALL' : 'SELL CALL') : (side === 'buy' ? 'BUY PUT' : 'SELL PUT'),
+    price,
+    size,
+    premium,
+    is_otm: isOtm ? 1 : 0,
+  });
+}
+
+async function spxFlowFlushPremium() {
+  const now = Date.now();
+  if (now - spxFlow.lastPremiumPost < 30000) return;
+  if (spxFlow.callPremium === 0 && spxFlow.putPremium === 0) return;
+  spxFlow.lastPremiumPost = now;
+  const spot = dxTradeCache['SPX']?.price || dxTradeCache['$SPX']?.price || 0;
+  try {
+    await fetch('http://localhost:3002/api/snapshots/premium', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timestamp: now,
+        callPremium: spxFlow.callPremium,
+        putPremium: spxFlow.putPremium,
+        netPremium: spxFlow.netPremium,
+        spxPrice: spot,
+      }),
+    });
+  } catch (_) {}
+}
+
+async function spxFlowFlushCalls() {
+  const now = Date.now();
+  if (now - spxFlow.lastCallsPost < 10000) return;
+  if (!spxFlow.pendingCalls.length) return;
+  spxFlow.lastCallsPost = now;
+  const batch = spxFlow.pendingCalls.splice(0);
+  try {
+    await fetch('http://localhost:3002/api/flow/calls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(batch),
+    });
+  } catch (_) {
+    // Put them back on failure so we don't lose data
+    spxFlow.pendingCalls.unshift(...batch);
+    if (spxFlow.pendingCalls.length > 5000) spxFlow.pendingCalls.splice(0, spxFlow.pendingCalls.length - 5000);
+  }
+}
+
+// Schedule periodic flushes
+setInterval(() => { spxFlowFlushPremium().catch(() => {}); spxFlowFlushCalls().catch(() => {}); }, 10000);
+
 // ─── MotiveWave GEX Level Export ──────────────────────────────────────────────
 const GEX_CSV_PATH = path.join(__dirname, 'gex_levels.csv');
 let gexLevelCache = { callWall: 0, putWall: 0, zeroGamma: 0, spot: 0, esSpot: 0, basis: 0, ts: 0 };
@@ -2609,6 +2755,10 @@ function connectDxLink() {
                 getDxCacheAliases(sym, key).forEach(alias => { dxTradeCache[alias] = entry; });
                 tradeFields.forEach((f, j) => entry[f] = rows[base + j]);
                 if (/(NDX|SPX|VIX)/.test(sym)) {
+                }
+                // Server-side SPX 0DTE flow accumulation
+                if (isSpxwSymbol(sym)) {
+                  spxFlowProcessTrade(sym, entry.price, entry.size, entry.time || Date.now());
                 }
                 cacheTradeAsFiveMinuteCandle(key, entry.price, entry.size);
               } else if (eventType === 'TimeAndSale') {
