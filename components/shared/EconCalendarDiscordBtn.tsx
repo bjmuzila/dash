@@ -49,6 +49,35 @@ function includeTemplateEvent(ev: CalEvent): boolean {
   return ev.impact === "President" || ev.impact === "Medium" || (ev.impact === "High" && ev.country === "USD");
 }
 
+const HEADLINE_PRIORITY_RULES: RegExp[] = [
+  /\b(nonfarm payroll|nfp|unemployment rate|average hourly earnings|hourly earnings)\b/i,
+  /\b(cpi|consumer price index)\b/i,
+  /\b(fomc|fed rate decision|federal funds rate|powell|dot plot|rate decision)\b/i,
+  /\b(gdp|gross domestic product)\b/i,
+  /\b(ppi|producer price index)\b/i,
+  /\bism manufacturing|manufacturing pmi\b/i,
+  /\bism services|services pmi|non-manufacturing pmi\b/i,
+  /\b(retail sales)\b/i,
+  /\b(adp)\b/i,
+  /\b(initial jobless claims|jobless claims)\b/i,
+  /\b(pce|personal consumption expenditures)\b/i,
+  /\b(durable goods)\b/i,
+  /\b(industrial production)\b/i,
+  /\b(housing starts|building permits)\b/i,
+  /\b(existing home sales)\b/i,
+  /\b(jolts|job openings)\b/i,
+  /\b(consumer confidence|michigan sentiment|consumer sentiment)\b/i,
+  /\b(factory orders)\b/i,
+  /\b(trade balance)\b/i,
+  /\b(ecb|boe|bank of england|central bank|global cpi|global gdp|global pmi)\b/i,
+];
+
+function headlinePriorityIndex(ev: CalEvent): number {
+  const haystack = `${ev.title} ${ev.country} ${ev.impact}`.toLowerCase();
+  const idx = HEADLINE_PRIORITY_RULES.findIndex((rule) => rule.test(haystack));
+  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+}
+
 // ── Build the snapshot HTML (matches snapshot-template-example.html CSS) ──────
 
 function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""): string {
@@ -58,10 +87,16 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""):
   // Sort by time
   todayEvents.sort((a, b) => a.time.localeCompare(b.time));
 
-  // Pick the headline: highest impact High USD first, else first event
-  const headlineEv = todayEvents.find(isHighPriority) ?? todayEvents[0];
+  const rankedEvents = [...todayEvents].sort((a, b) => {
+    const priDiff = headlinePriorityIndex(a) - headlinePriorityIndex(b);
+    if (priDiff !== 0) return priDiff;
+    if (isHighPriority(a) !== isHighPriority(b)) return isHighPriority(a) ? -1 : 1;
+    return a.time.localeCompare(b.time);
+  });
+
+  const headlineEv = rankedEvents[0];
   const additionalEvents = headlineEv
-    ? todayEvents.filter(e => e !== headlineEv)
+    ? rankedEvents.filter(e => e !== headlineEv)
     : [];
 
   const formattedQuote = (() => {

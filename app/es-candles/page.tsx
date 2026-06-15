@@ -99,63 +99,33 @@ export default function EsCandlesPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void loadCandles();
-  }, [loadCandles]);
-
-  useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ? `${process.env.NEXT_PUBLIC_WS_URL}/ws/dxlink`
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
-    const ws = new WebSocket(wsUrl);
-    const feedTypes = { "/ES{=5m}": ["Candle"], "/ES:XCME{=5m}": ["Candle"] } as Record<string, string[]>;
-
-    ws.onopen = () => {
-      setStatus("live");
-      try {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: ["/ES{=5m}", "/ES:XCME{=5m}"],
-          feedTypesBySymbol: feedTypes,
-        }));
-      } catch {}
-      fetch("/api/proxy/dxlink-subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbols: ["/ES{=5m}", "/ES:XCME{=5m}"],
-          feedTypesBySymbol: feedTypes,
-        }),
-      }).catch(() => {});
-    };
-
-    ws.onmessage = async (e) => {
-      try {
-        const msg = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
-        const items = Array.isArray(msg?.data) ? msg.data : [];
-        if (msg?.type !== "FEED_DATA" || !items.length) return;
+  const fetchLiveCandles = useCallback(async () => {
+    try {
+      const symbols = ["/ES{=5m}", "/ES:XCME{=5m}", "/ES"];
+      for (const symbol of symbols) {
+        const res = await fetch(`/api/dxlink/candles?symbol=${encodeURIComponent(symbol)}&count=300`, { cache: "no-store" });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const candles = Array.isArray(json.candles) ? json.candles : [];
+        if (!candles.length) continue;
 
         const nextMap = new Map(rowMapRef.current);
-        let changed = false;
-
-        for (const raw of items) {
-          const candle = raw as Record<string, unknown>;
-          if (String(candle.eventType ?? "") !== "Candle") continue;
-          const sym = String(candle.eventSymbol ?? "/ES");
-          const ts = Number(candle.time ?? candle.eventTime ?? 0);
-          const open = Number(candle.open ?? 0);
-          const high = Number(candle.high ?? 0);
-          const low = Number(candle.low ?? 0);
-          const close = Number(candle.close ?? 0);
-          const volume = Number(candle.volume ?? 0);
+        for (const raw of candles) {
+          const item = raw as Record<string, unknown>;
+          const ts = Number(item.datetime ?? item.time ?? 0);
+          const open = Number(item.open ?? 0);
+          const high = Number(item.high ?? 0);
+          const low = Number(item.low ?? 0);
+          const close = Number(item.close ?? 0);
+          const volume = Number(item.volume ?? 0);
           if (!(ts > 0) || !(open > 0) || !(high > 0) || !(low > 0) || !(close > 0)) continue;
           const slotKey = etSlotKey(ts);
-          const row: Candle = {
+          nextMap.set(slotKey, {
             timestamp: ts,
             date: slotKey.slice(0, 10),
             slotKey,
             time: slotKey.slice(11),
-            symbol: sym,
+            symbol,
             intervalMinutes: 5,
             source: "dxlink",
             open,
@@ -163,38 +133,54 @@ export default function EsCandlesPage() {
             low,
             close,
             volume,
-            avgVolume: Number(candle.avgVolume ?? 0),
-          };
-          nextMap.set(row.slotKey, row);
-          changed = true;
+            avgVolume: Number(item.avgVolume ?? 0),
+          });
         }
 
-        if (!changed) return;
         const sorted = sortCandles([...nextMap.values()]);
         rowMapRef.current = nextMap;
         setRows(sorted);
-
-        const now = Date.now();
-        if (now - lastSaveRef.current >= 5000) {
-          lastSaveRef.current = now;
-          fetch("/api/snapshots/candles", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(sorted.filter((row) => Number(row.volume || 0) > 0)),
-          }).catch(() => {});
-        }
-      } catch {
-        // keep live view resilient
+        setStatus("live");
+        return;
       }
-    };
-
-    ws.onerror = () => setStatus("err");
-    ws.onclose = () => setStatus("idle");
-    return () => ws.close();
+    } catch {
+      // keep trying silently
+    }
   }, []);
 
   useEffect(() => {
-    const id = setInterval(() => void loadCandles(), 30_000);
+    void loadCandles();
+  }, [loadCandles]);
+
+  useEffect(() => {
+    let active = true;
+    const tick = async () => {
+      await fetchLiveCandles();
+      if (!active) return;
+      const now = Date.now();
+      if (now - lastSaveRef.current >= 5000) {
+        lastSaveRef.current = now;
+        const snapshot = sortCandles([...rowMapRef.current.values()]).filter((row) => Number(row.volume || 0) > 0);
+        if (snapshot.length) {
+          fetch("/api/snapshots/candles", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(snapshot),
+          }).catch(() => {});
+        }
+      }
+    };
+
+    void tick();
+    const id = setInterval(() => { void tick(); }, 15_000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => void loadCandles(), 60_000);
     return () => clearInterval(id);
   }, [loadCandles]);
 
