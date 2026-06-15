@@ -3718,11 +3718,19 @@ async function fetchStockGEX(sym){
 // Economic events — loaded dynamically from Next.js API. Fallback to empty array.
 let ECON_EVENTS = [];
 
+// Deduplicate econ calendar requests
+let econCalendarPromise = null;
+
 (async function loadEconEvents() {
   try {
-    const res = await fetch('/api/econ-calendar');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    // Reuse same promise if already in-flight
+    if (!econCalendarPromise) {
+      econCalendarPromise = fetch('/api/econ-calendar').then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      });
+    }
+    const data = await econCalendarPromise;
     if (Array.isArray(data)) {
       ECON_EVENTS.push(...data);
       // Re-render if calendar already initialized

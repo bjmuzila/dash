@@ -2975,6 +2975,27 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── GET /api/econ-calendar ─────────────────────────────────────────────
+  // Returns economic calendar events (Trump calendar)
+  if (req.method === 'GET' && p === '/api/econ-calendar') {
+    try {
+      const filePath = path.join(__dirname, 'data', 'trump_calendar_latest.json');
+      const data = require('fs').readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(data);
+      const events = (parsed.events || []).map(evt => ({
+        date: evt.date || '',
+        time: evt.time || '00:00',
+        name: evt.details || evt.type || evt.daily_text || 'Event',
+        period: '',
+        noTime: !evt.time
+      }));
+      return sendJSON(res, 200, events);
+    } catch (err) {
+      console.warn('[EconCalendar] Failed to load:', err.message);
+      return sendJSON(res, 200, []); // Return empty array on error, don't fail
+    }
+  }
+
   if (req.method === 'GET' && p.startsWith('/proxy/api/yahoo/')) {
     const ticker = decodeURIComponent(p.slice('/proxy/api/yahoo/'.length));
     const period1 = u.searchParams.get('period1') || Math.floor(Date.now() / 1000) - 86400 * 3;
