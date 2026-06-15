@@ -68,6 +68,7 @@ function buildChain(structs: StrikeStruct[], live: Record<string, LiveEntry>, sp
 export default function OverviewPage() {
   const [chain, setChain]             = useState<ChainRow[]>([]);
   const [spotPrice, setSpotPrice]     = useState(0);
+  const [esLivePrice, setEsLivePrice] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [wsStatus, setWsStatus]       = useState<"connecting"|"live"|"err"|"idle">("connecting");
 
@@ -375,6 +376,15 @@ export default function OverviewPage() {
     return () => { cancelled = true; };
   }, [selectedExpiry]);
 
+  // Poll window.__gexAppState.esPrice (written by TopBar dxLink WS) every second
+  useEffect(() => {
+    const t = setInterval(() => {
+      const p = (window as unknown as { __gexAppState?: { esPrice?: number } }).__gexAppState?.esPrice;
+      if (p && p > 0) setEsLivePrice(p);
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const summary = computeGexSummary(chain, spotPrice);
 
   // Keep window.__gexAppState in sync
@@ -448,6 +458,7 @@ export default function OverviewPage() {
               spotPrice={spotPrice}
               flipPoint={gexProfile?.flipPoint ?? summary.gexFlip}
               gexProfile={gexProfile}
+              expiry={selectedExpiry}
               mode={gexMode}
               dataMode={dataMode}
               chartMode={chartMode}
@@ -510,7 +521,7 @@ export default function OverviewPage() {
 
           {/* ES Stats Ladder */}
           <div style={{ flex: "0 0 220px", minWidth: 180, maxWidth: 240, display: "flex", flexDirection: "column", overflow: "hidden", borderRight: "1px solid var(--overview-border)", background: "var(--overview-bg)" }}>
-            <EsStatsLadder esSpot={spotPrice} />
+            <EsStatsLadder esSpot={esLivePrice || spotPrice} />
           </div>
 
           {/* Signal Feed / Snapshot — tabbed */}

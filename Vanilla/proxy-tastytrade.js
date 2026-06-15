@@ -4179,30 +4179,55 @@ const server = http.createServer(async (req, res) => {
     const sym = normalizeRestSymbol(decodeURIComponent(expMatch[1]));
     try {
       const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(sym)}/nested`);
-      if (s1 !== 200 || !d1?.data?.items?.length) {
-        return sendJSON(res, s1, d1);
-      }
       const byDate = new Map();
-      const roots = d1.data.items || [];
-      roots.forEach(chainObj => {
-        const rootSymbol = chainObj['root-symbol'] || sym;
-        (chainObj.expirations || []).forEach(e => {
-          const expDate = e['expiration-date'];
-          if (!expDate) return;
-          const existing = byDate.get(expDate) || {};
-          const rootLooksMonthly = rootSymbol === sym && !/W$/i.test(rootSymbol);
-          const incomingType = e['expiration-type'] || (rootLooksMonthly ? 'Monthly' : 'Weekly');
-          byDate.set(expDate, {
-            'expiration-date': expDate,
-            'expiration-type': existing['expiration-type'] === 'Monthly' || incomingType === 'Monthly' ? 'Monthly' : incomingType,
-            'strike-count': Math.max(existing['strike-count'] || 0, (e.strikes || []).length),
-            'root-symbol': existing['root-symbol'] || rootSymbol
+
+      if (s1 === 200 && d1?.data?.items?.length) {
+        // Primary: parse from TT nested response
+        const roots = d1.data.items || [];
+        roots.forEach(chainObj => {
+          const rootSymbol = chainObj['root-symbol'] || sym;
+          (chainObj.expirations || []).forEach(e => {
+            const expDate = e['expiration-date'];
+            if (!expDate) return;
+            const existing = byDate.get(expDate) || {};
+            const rootLooksMonthly = rootSymbol === sym && !/W$/i.test(rootSymbol);
+            const incomingType = e['expiration-type'] || (rootLooksMonthly ? 'Monthly' : 'Weekly');
+            byDate.set(expDate, {
+              'expiration-date': expDate,
+              'expiration-type': existing['expiration-type'] === 'Monthly' || incomingType === 'Monthly' ? 'Monthly' : incomingType,
+              'strike-count': Math.max(existing['strike-count'] || 0, (e.strikes || []).length),
+              'root-symbol': existing['root-symbol'] || rootSymbol
+            });
           });
         });
-      });
-      const expirations = [...byDate.values()].sort((a, b) => a['expiration-date'].localeCompare(b['expiration-date']));
-      const preferredRoot = roots.find(c => c['root-symbol'] === 'SPXW')?.['root-symbol'] || roots[0]?.['root-symbol'] || sym;
-      return sendJSON(res, 200, { data: { items: expirations, symbol: sym, rootSymbol: preferredRoot } });
+        const expirations = [...byDate.values()].sort((a, b) => a['expiration-date'].localeCompare(b['expiration-date']));
+        const preferredRoot = d1.data.items.find(c => c['root-symbol'] === 'SPXW')?.['root-symbol'] || d1.data.items[0]?.['root-symbol'] || sym;
+        return sendJSON(res, 200, { data: { items: expirations, symbol: sym, rootSymbol: preferredRoot } });
+      }
+
+      // Fallback: derive expirations from chains_cache (works when TT API is down)
+      log(`[expirations] TT nested failed (${s1}), trying chains_cache fallback`);
+      const cachedFallback = getChainsFromCache(sym, '');
+      if (cachedFallback && cachedFallback.length) {
+        const today = new Date().toISOString().slice(0, 10);
+        cachedFallback.forEach(expGroup => {
+          const expDate = expGroup['expiration-date'];
+          if (!expDate || expDate < today) return;
+          if (!byDate.has(expDate)) {
+            byDate.set(expDate, {
+              'expiration-date': expDate,
+              'expiration-type': expGroup['expiration-type'] || 'Weekly',
+              'strike-count': (expGroup.strikes || []).length,
+              'root-symbol': expGroup['root-symbol'] || sym
+            });
+          }
+        });
+        if (byDate.size) {
+          const expirations = [...byDate.values()].sort((a, b) => a['expiration-date'].localeCompare(b['expiration-date']));
+          return sendJSON(res, 200, { data: { items: expirations, symbol: sym, rootSymbol: sym, fromCache: true } });
+        }
+      }
+      return sendJSON(res, s1 || 503, d1 || { error: 'No expiration data available' });
     } catch (e) {
       log('expirations error:', e.message);
       return sendJSON(res, 500, { error: e.message });

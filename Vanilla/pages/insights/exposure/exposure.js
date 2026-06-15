@@ -444,6 +444,44 @@ function utcMsToEtMinutes(ms) {
   return d.getHours() * 60 + d.getMinutes();
 }
 
+// ── Two-session model ─────────────────────────────────────────────────────────
+// Day   session: 9:30am ET → 5:00pm ET  (570 → 1020 min)
+// Night session: 5:00pm ET → 9:30am ET  (1020 → 570+1440 min, wraps midnight)
+const DAY_OPEN   = 9 * 60 + 30;  // 570
+const DAY_CLOSE  = 17 * 60;      // 1020
+const NIGHT_OPEN = 17 * 60;      // 1020
+const NIGHT_CLOSE = 9 * 60 + 30; // 570 (next day)
+
+function getActiveSession() {
+  const etMins = etMinutesOf(getNowEt());
+  const isDay = etMins >= DAY_OPEN && etMins < DAY_CLOSE;
+  if (isDay) {
+    return {
+      label:    'DAY',
+      open:     DAY_OPEN,
+      close:    DAY_CLOSE,
+      span:     DAY_CLOSE - DAY_OPEN,       // 450 min
+      elapsed:  Math.max(1, Math.min(etMins, DAY_CLOSE) - DAY_OPEN),
+      // For sparkline x-axis wrap: night spans midnight so treat linearly
+      wraps:    false
+    };
+  }
+  // Night: etMins >= 1020 (17:00+) OR etMins < 570 (before 9:30)
+  // Normalise etMins so 17:00 = 0, 9:30 next day = 930
+  const nightElapsed = etMins >= NIGHT_OPEN
+    ? etMins - NIGHT_OPEN
+    : (1440 - NIGHT_OPEN) + etMins;
+  const nightSpan = (1440 - NIGHT_OPEN) + NIGHT_CLOSE; // 930 min
+  return {
+    label:    'NIGHT',
+    open:     NIGHT_OPEN,
+    close:    NIGHT_CLOSE,
+    span:     nightSpan,
+    elapsed:  Math.max(1, nightElapsed),
+    wraps:    true
+  };
+}
+
 // ── Live intraday volume samples ─────────────────────────────────────────────
 // Stores (etMin, cumVol) samples every ~30s. Used to draw the cumulative curve.
 // Simple array of { min, cum } sorted by min. Max 200 points (~100 min coverage).
@@ -527,16 +565,15 @@ async function updateRelativeVolumeCard(when) {
   // Feed into live bucket accumulator
   if (dayVolume > 0) tickRvolFromLiveVolume(dayVolume);
 
-  // 2. Session timing — all in ET
+  // 2. Session timing — two sessions: Day 9:30→17:00, Night 17:00→9:30
   const etNow = getNowEt();
-  const etMins = etMinutesOf(etNow);
-  const SESSION_OPEN_MIN  = 9 * 60 + 30;  // 9:30 ET
-  const SESSION_CLOSE_MIN = 16 * 60;       // 16:00 ET
-  const sessionTotalMins  = SESSION_CLOSE_MIN - SESSION_OPEN_MIN; // 390 min
-  const elapsedMins = Math.max(1, Math.min(etMins, SESSION_CLOSE_MIN) - SESSION_OPEN_MIN);
-  const pace    = Math.max(0.001, elapsedMins / sessionTotalMins);
+  const sess  = getActiveSession();
+  const SESSION_OPEN_MIN = sess.open;
+  const elapsedMins = sess.elapsed;
+  const pace    = Math.max(0.001, elapsedMins / sess.span);
   const pctVal  = Math.max(0, Math.min(100, Math.round(pace * 100)));
   const estTime = etNow.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' ET';
+  const sessLabel = sess.label === 'DAY' ? 'RTH 9:30–17:00 ET' : 'NIGHT 17:00–9:30 ET';
 
   // 3. Historical avg: sum prior-day candles from DB up to the same elapsed minutes
   let histAvgAtPace = 0;
@@ -548,7 +585,16 @@ async function updateRelativeVolumeCard(when) {
       for (const r of hist) {
         if (r.date === todayStr) continue;
         const slotMins = utcMsToEtMinutes(Number(r.timestamp || 0));
-        if (slotMins < SESSION_OPEN_MIN || slotMins > SESSION_OPEN_MIN + elapsedMins) continue;
+        // For day session: slotMins in [open, open+elapsed]
+        // For night session: slot wraps midnight, check normalised elapsed
+        let inWindow = false;
+        if (!sess.wraps) {
+          inWindow = slotMins >= SESSION_OPEN_MIN && slotMins <= SESSION_OPEN_MIN + elapsedMins;
+        } else {
+          const normalised = slotMins >= NIGHT_OPEN ? slotMins - NIGHT_OPEN : (1440 - NIGHT_OPEN) + slotMins;
+          inWindow = normalised <= elapsedMins;
+        }
+        if (!inWindow) continue;
         byDay[r.date] = (byDay[r.date] || 0) + Number(r.volume || 0);
       }
       const dayVols = Object.values(byDay).filter(v => v > 0);
@@ -572,10 +618,10 @@ async function updateRelativeVolumeCard(when) {
   const paceBar       = document.getElementById('rvol-pace-bar');
 
   if (valueEl) valueEl.innerHTML = `<span>${rvolStr}</span><span style="font-size:10px;font-family:system-ui,sans-serif;color:#ffd0d0;background:rgba(255,91,91,.14);border:1px solid rgba(255,91,91,.45);padding:3px 8px;border-radius:4px;font-weight:800;letter-spacing:.08em;text-transform:uppercase">${dayVolume > 0 ? 'ACTIVE' : 'WAITING'}</span>`;
-  if (descEl)        descEl.textContent        = dayVolume > 0 ? `ES session volume tracking live. Updated ${when}.` : 'Waiting on ES volume data from dxLink.';
+  if (descEl)        descEl.textContent        = dayVolume > 0 ? `${sessLabel} — ES volume live. Updated ${when}.` : `${sessLabel} — Waiting on ES volume.`;
   if (todayVolEl)    todayVolEl.textContent    = dayVolume > 0 ? dayVolume.toLocaleString() : '—';
   if (expectedAvgEl) expectedAvgEl.textContent = expectedAvg > 0 ? expectedAvg.toLocaleString() : '—';
-  if (paceEl)        paceEl.textContent        = `${pctVal}%`;
+  if (paceEl)        paceEl.textContent        = `${pctVal}% (${sessLabel})`;
   if (timeEl)        timeEl.textContent        = when;
   if (liveClock)     liveClock.textContent     = estTime;
   if (pacePct)       pacePct.textContent       = `${pctVal}%`;
@@ -603,23 +649,36 @@ async function drawRelativeVolumeSparkline() {
   }
   ctx.clearRect(0, 0, width, height);
 
-  const SESSION_START = 9 * 60 + 30;  // 9:30 ET in minutes
-  const SESSION_END   = 16 * 60;       // 16:00 ET in minutes
-  const SESSION_SPAN  = SESSION_END - SESSION_START; // 390 min
+  // Use active session window (day or night)
+  const _sess       = getActiveSession();
+  const SESSION_START = _sess.open;
+  const SESSION_SPAN  = _sess.span;
   const todayStr = getTodayEtStr();
+  const nowEtMin = etMinutesOf(getNowEt());
+
+  // Normalise a raw ET-minutes value to session-relative offset (0 = session open)
+  function toSessionOffset(etMin) {
+    if (!_sess.wraps) return etMin - SESSION_START;
+    return etMin >= NIGHT_OPEN ? etMin - NIGHT_OPEN : (1440 - NIGHT_OPEN) + etMin;
+  }
 
   // ── 1. Today's curve from live samples ───────────────────────────────────
-  // __rvolSamples: [{min, cum}] collected every ~30s by tickRvolFromLiveVolume
-  const liveSamples = (window.__rvolSamples || [])
-    .filter(s => s.min >= SESSION_START && s.min <= SESSION_END)
-    .sort((a, b) => a.min - b.min);
+  // Filter samples that belong to the current session window
+  const rawSamples = (window.__rvolSamples || [])
+    .filter(s => {
+      const off = toSessionOffset(s.min);
+      return off >= 0 && off <= SESSION_SPAN;
+    })
+    .sort((a, b) => toSessionOffset(a.min) - toSessionOffset(b.min));
+
+  const nowOff = toSessionOffset(nowEtMin);
+  // Remap mins to session-relative offsets for the chart
+  const liveSamples = rawSamples.map(s => ({ min: toSessionOffset(s.min), cum: s.cum }));
 
   // Always anchor at session open with 0 volume
-  const nowEtMin = etMinutesOf(getNowEt());
-  const todayCumulative = [{ min: SESSION_START, cum: 0 }, ...liveSamples];
-  // Extend to current minute if we have data
-  if (liveSamples.length > 0 && nowEtMin > liveSamples[liveSamples.length - 1].min) {
-    todayCumulative.push({ min: nowEtMin, cum: liveSamples[liveSamples.length - 1].cum });
+  const todayCumulative = [{ min: 0, cum: 0 }, ...liveSamples];
+  if (liveSamples.length > 0 && nowOff > liveSamples[liveSamples.length - 1].min) {
+    todayCumulative.push({ min: nowOff, cum: liveSamples[liveSamples.length - 1].cum });
   }
 
   // ── 2. Historical avg from DB (prior days, 15m candles) ──────────────────
@@ -631,10 +690,12 @@ async function drawRelativeVolumeSparkline() {
       for (const r of hist) {
         if (r.date === todayStr) continue;
         const slotMin = _slotMinFromRecord(r);
-        if (slotMin === null || slotMin < SESSION_START || slotMin > SESSION_END) continue;
+        if (slotMin === null) continue;
+        const off = toSessionOffset(slotMin);
+        if (off < 0 || off > SESSION_SPAN) continue;
         const date = r.date;
         if (!dayVolumeMap[date]) dayVolumeMap[date] = {};
-        dayVolumeMap[date][slotMin] = Number(r.volume || 0);
+        dayVolumeMap[date][off] = Number(r.volume || 0);
       }
       for (const [, slotVols] of Object.entries(dayVolumeMap)) {
         const slots = Object.keys(slotVols).map(Number).sort((a, b) => a - b);
@@ -666,11 +727,41 @@ async function drawRelativeVolumeSparkline() {
   const allCums = [...todayCumulative.map(p => p.cum), ...avgCumulative.map(p => p.cum)];
   const maxCum = Math.max(1, ...allCums);
 
-  // x = wall-clock (session minutes), y = cumulative volume — correct for this chart
-  const toXY = (minVal, cumVal) => ({
-    x: pad.left + ((Math.min(SESSION_END, Math.max(SESSION_START, minVal)) - SESSION_START) / SESSION_SPAN) * chartW,
+  // x = session-relative offset (already remapped to 0..SESSION_SPAN), y = cumulative volume
+  const toXY = (offVal, cumVal) => ({
+    x: pad.left + (Math.max(0, Math.min(SESSION_SPAN, offVal)) / SESSION_SPAN) * chartW,
     y: pad.top  + (1 - cumVal / maxCum) * chartH
   });
+
+  // Update x-axis labels to match active session
+  {
+    function etMinToLabel(etMin) {
+      const h = Math.floor(etMin / 60) % 24;
+      const m = etMin % 60;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const hh = ((h + 11) % 12 + 1);
+      return `${hh}:${String(m).padStart(2,'0')} ${ampm}`;
+    }
+    const lblL = document.getElementById('rvol-xlabel-left');
+    const lblM = document.getElementById('rvol-xlabel-mid');
+    const lblR = document.getElementById('rvol-xlabel-right');
+    if (lblL && lblM && lblR) {
+      if (!_sess.wraps) {
+        // Day: 9:30 → midpoint → 17:00
+        const mid = _sess.open + Math.round(_sess.span / 2);
+        lblL.textContent = etMinToLabel(_sess.open);
+        lblM.textContent = etMinToLabel(mid);
+        lblR.textContent = etMinToLabel(_sess.close);
+      } else {
+        // Night: 17:00 → midnight(ish) → 09:30
+        const nightSpanHalf = Math.round(_sess.span / 2);
+        const midRaw = (_sess.open + nightSpanHalf) % 1440;
+        lblL.textContent = etMinToLabel(_sess.open);
+        lblM.textContent = etMinToLabel(midRaw);
+        lblR.textContent = etMinToLabel(_sess.close);
+      }
+    }
+  }
 
   function drawLine(points, color, dashed, lineWidth) {
     if (points.length < 2) return;

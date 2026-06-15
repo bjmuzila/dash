@@ -114,6 +114,7 @@ export default function GexChart({
   spotPrice,
   flipPoint,
   gexProfile,
+  expiry,
   mode       = "net",
   dataMode   = "oi-vol",
   showOI     = false,
@@ -238,12 +239,7 @@ export default function GexChart({
       }
     }
 
-    // ── Zero line (dashed) ──
-    ctx.strokeStyle = "rgba(80,110,140,0.5)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(PAD_L, yZero); ctx.lineTo(PAD_L + cW, yZero); ctx.stroke();
-    ctx.setLineDash([]);
+    // zero line removed
 
     // ── Clip to chart area ──
     ctx.save();
@@ -321,81 +317,49 @@ export default function GexChart({
 
     // ── GEX Flip: BS profile curve + gamma-zero vertical line ──
     if (showFlipCurve) {
-      // ── A: Profile curve ──
+      // ── Profile curve (smooth quadratic bezier) ──
+      const drawSmoothCurve = (pts: { x: number; y: number }[]) => {
+        if (pts.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const mx = (pts[i].x + pts[i + 1].x) / 2;
+          const my = (pts[i].y + pts[i + 1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+        }
+        ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+        ctx.stroke();
+      };
+
+      ctx.strokeStyle = "#00e5ff";
+      ctx.lineWidth   = 1.8;
+      ctx.setLineDash([]);
+
       if (gexProfile && gexProfile.levels.length > 1) {
-        // Map profile levels to canvas X using visible strike range
         const profMin = data[0].strike, profMax = data[data.length - 1].strike;
         const strikeRange = profMax - profMin || 1;
-        // Scale profile Y to match bar Y scale (both in raw $ units, profile in $B)
         const barsMaxB = (netMax * 1.10) / yScaleRef.current;
-        const visibleVals = gexProfile.levels
-          .filter((lvl) => lvl >= profMin && lvl <= profMax)
-          .map((_, ii) => {
-            const realIdx = gexProfile.levels.findIndex((l) => l >= profMin) + ii;
-            return Math.abs(gexProfile.values[realIdx] ?? 0);
-          });
-        const profMaxAbs = Math.max(...visibleVals, 1e-9) * 1e9; // $B → raw
+        const visibleVals: number[] = [];
+        for (let i = 0; i < gexProfile.levels.length; i++) {
+          if (gexProfile.levels[i] >= profMin && gexProfile.levels[i] <= profMax)
+            visibleVals.push(Math.abs(gexProfile.values[i]));
+        }
+        const profMaxAbs = Math.max(...visibleVals, 1e-9) * 1e9;
         const profScale  = barsMaxB / profMaxAbs;
-
-        ctx.strokeStyle = "#00e5ff";
-        ctx.lineWidth   = 1.5;
-        ctx.setLineDash([2, 3]);
-        ctx.beginPath();
-        let started = false;
+        const pts: { x: number; y: number }[] = [];
         for (let i = 0; i < gexProfile.levels.length; i++) {
           const lvl = gexProfile.levels[i];
           if (lvl < profMin || lvl > profMax) continue;
-          const px = PAD_L + ((lvl - profMin) / strikeRange) * cW;
-          const py = clamp(yFor(gexProfile.values[i] * 1e9 * profScale), PAD_T, PAD_T + cH);
-          started ? ctx.lineTo(px, py) : (ctx.moveTo(px, py), (started = true));
+          pts.push({
+            x: PAD_L + ((lvl - profMin) / strikeRange) * cW,
+            y: clamp(yFor(gexProfile.values[i] * 1e9 * profScale), PAD_T, PAD_T + cH),
+          });
         }
-        ctx.stroke();
-        ctx.setLineDash([]);
+        drawSmoothCurve(pts);
       } else {
-        // Fallback: per-strike net GEX profile
-        const gVals = data.map(r => getNet(r));
-        ctx.strokeStyle = "#00e5ff";
-        ctx.lineWidth   = 1.5;
-        ctx.setLineDash([2, 3]);
-        ctx.beginPath();
-        gVals.forEach((v, i) => i === 0 ? ctx.moveTo(xAt(i), yFor(v)) : ctx.lineTo(xAt(i), yFor(v)));
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
-      // ── B: Gamma-zero vertical line ──
-      const fp = flipPoint;
-      let flipX: number | null = null;
-      if (fp != null && fp > 0) {
-        const fi = data.findIndex(r => r.strike >= fp);
-        if (fi === 0) {
-          flipX = xAt(0);
-        } else if (fi > 0) {
-          const prev = data[fi - 1], curr = data[fi];
-          const span = curr.strike - prev.strike;
-          flipX = xAt(fi - 1) + (span > 0 ? (fp - prev.strike) / span : 0) * gap;
-        } else if (data.length && fp >= data[data.length - 1].strike) {
-          flipX = xAt(data.length - 1);
-        }
-      } else {
-        for (let i = 0; i < data.length - 1; i++) {
-          const a = getNet(data[i]), b = getNet(data[i + 1]);
-          if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
-            flipX = xAt(i) + (Math.abs(a) / (Math.abs(a) + Math.abs(b))) * gap;
-            break;
-          }
-        }
-      }
-      if (flipX !== null) {
-        ctx.save();
-        ctx.strokeStyle = "#faad14";
-        ctx.lineWidth   = 1.5;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath(); ctx.moveTo(flipX, PAD_T); ctx.lineTo(flipX, PAD_T + cH); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = "#faad14"; ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
-        ctx.fillText("γ=0", clamp(flipX, PAD_L + 14, PAD_L + cW - 14), PAD_T + 10);
-        ctx.restore();
+        // Fallback: per-strike smooth curve
+        const pts = data.map((r, i) => ({ x: xAt(i), y: clamp(yFor(getNet(r)), PAD_T, PAD_T + cH) }));
+        drawSmoothCurve(pts);
       }
     }
 
@@ -476,7 +440,7 @@ export default function GexChart({
       ? [["#29b6f6", "Call GEX"], ["#ffb300", "Put GEX"]]
       : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
     if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
-    if (showFlipCurve) legend.push(["#00e5ff", gexProfile ? "Profile" : "GEX"], ["#faad14", "γ=0"]);
+    if (showFlipCurve) legend.push(["#00e5ff", gexProfile ? "Profile" : "GEX curve"]);
     legend.forEach(([col, lbl], i) => {
       const lx = PAD_L + i * 72;
       ctx.fillStyle = col;        ctx.fillRect(lx, 5, 8, 7);
@@ -499,7 +463,7 @@ export default function GexChart({
     return () => ro.disconnect();
   }, [draw]);
 
-  // Reset viewport on new chain data
+  // Reset viewport only when expiry changes (not on every live WS chain update)
   useEffect(() => {
     if (!chain.length) return;
     const { rows, step } = densify(chain, spotPrice);
@@ -507,7 +471,7 @@ export default function GexChart({
     vpRef.current    = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
     draw();
-  }, [chain]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [expiry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
   useEffect(() => {

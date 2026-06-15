@@ -94,7 +94,7 @@ export default function DashboardPage() {
     resetFlow();
   }, [resetFlow]);
 
-  // ── Save premium flow to IndexedDB every 30s when connected ──────────────
+  // ── Save premium flow to SQLite every 30s when connected ─────────────────
   useEffect(() => {
     if (!flow.connected) return;
     const now = Date.now();

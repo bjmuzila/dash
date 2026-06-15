@@ -964,7 +964,7 @@ export default function InsightsPage() {
 
     loadExpirations().catch(() => {});
 
-    // Load ES candles from IndexedDB + compute historical averages
+    // Load ES candles from SQLite + compute historical averages
     Promise.all([
       queryEsCandlesToday(),
       queryEsCandlesHistorical(20), // past 20 trading days
@@ -982,7 +982,7 @@ export default function InsightsPage() {
       }
     }).catch(() => {});
 
-    // Load greeks history from IndexedDB
+    // Load greeks history from SQLite
     queryGreeksToday().then(rows => {
       if (rows.length) {
         const greeksRecords: GreeksRecord[] = rows.map(r => ({

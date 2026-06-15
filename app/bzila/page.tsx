@@ -86,26 +86,29 @@ function normalizeGexRows(rows: unknown[]): GexRow[] {
     .sort((a, b) => a.strike - b.strike);
 }
 
-// Persist today's GEX history locally (vanilla used IndexedDB via window.DB)
-const HIST_KEY = "bzila-gex-history";
+// ── GEX history via SQLite API ────────────────────────────────────────────────
 
-function loadHistory(): GexHistPoint[] {
+function todayET(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+async function loadHistory(): Promise<GexHistPoint[]> {
   try {
-    const raw = localStorage.getItem(HIST_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as { date: string; points: GexHistPoint[] };
-    const today = new Date().toISOString().slice(0, 10);
-    return parsed.date === today && Array.isArray(parsed.points) ? parsed.points : [];
+    const date = todayET();
+    const res  = await fetch(`/api/snapshots/bzila-gex-history?date=${date}`);
+    const json = await res.json();
+    return Array.isArray(json.rows) ? (json.rows as GexHistPoint[]) : [];
   } catch { return []; }
 }
 
-function saveHistory(points: GexHistPoint[]) {
+async function saveHistoryPoint(point: GexHistPoint): Promise<void> {
   try {
-    localStorage.setItem(HIST_KEY, JSON.stringify({
-      date: new Date().toISOString().slice(0, 10),
-      points: points.slice(-720),
-    }));
-  } catch { /* storage full / unavailable */ }
+    await fetch("/api/snapshots/bzila-gex-history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(point),
+    });
+  } catch { /* offline */ }
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -252,11 +255,12 @@ export default function BzilaPage() {
 
   spotRef.current = flow.spxPrice || flow.esPrice || 0;
 
-  // Hydrate today's history
+  // Hydrate today's history from SQLite on mount
   useEffect(() => {
-    const pts = loadHistory();
-    historyRef.current = pts;
-    setGexHistory(pts);
+    loadHistory().then(pts => {
+      historyRef.current = pts;
+      setGexHistory(pts);
+    }).catch(() => {});
   }, []);
 
   // Poll GEX rows every 5s; snapshot history every 30s (mirrors vanilla cadence)
@@ -283,7 +287,7 @@ export default function BzilaPage() {
           const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
           historyRef.current = [...historyRef.current, point].filter((p) => p.ts >= dayStart.getTime());
           lastPersistRef.current = now;
-          saveHistory(historyRef.current);
+          saveHistoryPoint(point); // persist new point to SQLite
           setGexHistory(historyRef.current);
         }
       } catch { /* proxy offline */ }

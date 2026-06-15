@@ -74,6 +74,10 @@ const SYMBOLS = [
   "META","MSFT","NVDA","TSLA","COIN","HOOD","IWM","NDX","NFLX","SMH","PLTR",
 ];
 
+const DISPLAY_LABEL: Record<string, string> = {
+  ESM: "ESU", NQM: "NQU", ESM6: "ESU", NQM6: "NQU",
+};
+
 const API_SYMBOL: Record<string, string> = {
   ESM: "/ES:XCME", NQM: "/NQ:XCME", SPX: "$SPX", NDX: "$NDX",
 };
@@ -1107,7 +1111,7 @@ export default function EstimatedMoves() {
                       <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#3a5570" }}>Loading...</td></tr>
                     ) : rows.map((row) => (
                       <tr key={row.ticker} title={row.error || ""} style={{ textAlign: "center", borderBottom: "1px solid #121b2a", opacity: row.error ? 0.55 : 1 }}>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{row.ticker}</td>
+                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</td>
                         <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#cbd5e1" }}>{fmtPrice(row.ticker, row.close)}</td>
                         <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#7ab8ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
                         <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#e8c060" }}>{fmtEm(row.em)}</td>
@@ -1136,8 +1140,8 @@ export default function EstimatedMoves() {
                     <thead>
                       <tr style={{ color: "#00e5ff", textTransform: "uppercase", letterSpacing: ".1em", fontSize: 13 }}>
                         <th style={{ width: "26%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>Info</th>
-                        <th style={{ width: "37%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>ESM6</th>
-                        <th style={{ width: "37%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>NQM6</th>
+                        <th style={{ width: "37%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>ESU</th>
+                        <th style={{ width: "37%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>NQU</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1211,7 +1215,7 @@ export default function EstimatedMoves() {
 
             {rows.slice(0, 13).filter((row) => !row.error).map((row) => (
               <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #0d1825" }}>
-                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{row.ticker}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#ff4757", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
@@ -1223,7 +1227,7 @@ export default function EstimatedMoves() {
 
             {rows.slice(13).filter((row) => !row.error).map((row) => (
               <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #0d1825" }}>
-                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{row.ticker}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#ff4757", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
@@ -1239,8 +1243,8 @@ export default function EstimatedMoves() {
               <thead>
                 <tr style={{ color: "#00e5ff", textTransform: "uppercase", letterSpacing: ".1em", fontSize: 12 }}>
                   <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>Info</th>
-                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>ESM6</th>
-                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>NQM6</th>
+                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>ESU</th>
+                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>NQU</th>
                 </tr>
               </thead>
               <tbody>
