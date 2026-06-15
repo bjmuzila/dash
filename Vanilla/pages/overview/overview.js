@@ -454,10 +454,12 @@ function dxSubscribe(symbols, opts = {}) {
   }
   const arr = Array.isArray(symbols) ? symbols : [symbols];
   arr.forEach(s => _dxQuoteSubSymbols.add(s));
-  const sock = getDXQuoteSocket();
-  if (sock.readyState === WebSocket.OPEN) {
-    sock.send(JSON.stringify({ type: 'subscribe', symbols: arr, ...opts }));
-  }
+  // Use REST POST instead of WebSocket (WS subscriptions are disabled on server)
+  fetch('/proxy/dxlink/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbols: arr, ...opts })
+  }).catch(e => console.warn('[dxSubscribe] REST POST failed:', e.message));
 }
 // Expose to window so other modules (e.g. exposure.js) can subscribe
 window.dxSubscribe = dxSubscribe;
@@ -11562,7 +11564,7 @@ if (false) {}
   window.startQuotesFeed = function startQuotesFeed() {
     if (window._quotesInterval) clearInterval(window._quotesInterval);
     getDXQuoteSocket();
-    dxSubscribe(['SPX','VIX','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ES:XCME','/NQ:XCME']);
+    dxSubscribe(['SPX','SPY','VIX','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ES:XCME','/NQ:XCME']);
     // Seed the panel once; after that the dxLink websocket drives updates.
     setTimeout(() => window.fetchQuotes(), 1500);
     window._quotesInterval = null;
