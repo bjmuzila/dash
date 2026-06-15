@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-06-15 (session 15) — GEX Chart Zero Line + Countdown Timer + Page Cleanup
+
+### `components/dashboard/GexChart.tsx`
+- **Zero line restored**: re-enabled zero-crossing line and shading that was previously removed
+- **GEX flip line auto-compute**: if `flipPoint` prop or `gexProfile.flipPoint` is null, now computes from zero-crossing position to display "GEX FLIP" marker automatically
+
+### `components/shared/QuotesPanel.tsx`
+- **30-second countdown timer**: added `countdown` state tracking next Greeks/price update
+- **Display**: shows time + countdown (e.g., "12:14:07 30s") in quotes header
+- **Color coding**: countdown turns orange at 5s, red at 0s
+- **Auto-reset**: timer resets every 30s even if no data arrives, maintains continuous countdown
+
+### `app/insights/page.tsx`
+- **Fixed page loading hang**: moved `mountedRef` declaration to component level (was being declared twice, causing initialization order issues)
+- **WebSocket cleanup**: added `mountedRef` checks in WS onopen/onmessage/onerror to prevent updates after unmount
+- **Greeks throttling**: ensured 30-second fetch interval (no change to existing logic, just cleanup)
+
+### `components/shared/TopBar.tsx`
+- **Navigation cleanup**: removed "Dashboard", "ES Candles", and "Bzila Flow" from NAV_ITEMS
+- Removed href: `/dashboard`, `/es-candles`, `/bzila`
+
+### Cleanup
+- Pages to manually delete:
+  - `app/dashboard/page.tsx`
+  - `app/es-candles/page.tsx`
+  - `app/bzila/page.tsx`
+
+### Version
+- Bumped to `2026.6.15-v44`
+
+---
+
 ## 2026-06-15 (session 14) — TopBar SPX Price Fix + ES Front Month Rollover
 
 ### `components/shared/TopBar.tsx`

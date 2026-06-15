@@ -490,6 +490,12 @@ window.refreshEstimatedMoves = async function(){
   const body=document.getElementById('em-table-body');
   if(body) body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:#3a5570">Loading...</td></tr>';
   try{
+    // Prefetch expirations and render drawer on first run only
+    if (!EM.knownExpirations.length) {
+      await EM.prefetchExpirations();
+      EM.renderDrawer();
+    }
+
     // Always clear the direct chain cache so stale IV=0 results don't persist across refreshes
     EM._directChainCache = {};
     // Also clear quote cache to ensure fresh price data on refresh
@@ -565,8 +571,7 @@ window.init_database = async function(){
   EM.setStatus('Ready','#5a7a99');
   const body=document.getElementById('em-table-body');
   if(body) body.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#3a5570">Click Start to load estimated moves</td></tr>';
-  await EM.prefetchExpirations();
-  EM.renderDrawer();
+  // Defer prefetchExpirations and renderDrawer until user clicks START to avoid blocking on page load
 };
 
 window.captureEMSnapshot = async function(){

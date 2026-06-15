@@ -992,10 +992,8 @@
       mgSetContractMode(_contractMode);
       updateCacheBadge();
       if (!_autoSaveTimer) _autoSaveTimer = setInterval(saveAllCaches, 60000);
-      fetchExpirations(function() {
-        // auto-load the default (0DTE) expiry on first open
-        if (_activeExpiry) loadAll(_activeExpiry);
-      });
+      // Defer fetchExpirations until user interaction to avoid blocking on page load
+      // fetchExpirations will be called when user clicks load or changes settings
     };
 
     window['init_mult-greek'] = window.mgInit;

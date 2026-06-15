@@ -1064,7 +1064,7 @@
         connectDxLink();
       });
 
-      if (!_expirations.length) fetchExpirations();
+      // Defer fetchExpirations until user selects a ticker to avoid blocking on page load
       var bodyEl = el('chain-body');
       if (bodyEl && !bodyEl._userScrollBound) {
         bodyEl._userScrollBound = true;
