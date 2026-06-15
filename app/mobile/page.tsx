@@ -386,6 +386,21 @@ export default function MobileGexPage() {
     }
   }, [summary.gexFlip, spotPrice, selectedExpiry]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Clear all refs
+      liveRef.current = {};
+      structsRef.current = [];
+      spotRef.current = 0;
+      subSymsRef.current = [];
+      if (renderTimer.current) clearTimeout(renderTimer.current);
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
+
   const wsDot = wsStatus === "live" ? "#00e676" : wsStatus === "err" ? "#ef4444" : "#faad14";
 
   return (

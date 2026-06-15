@@ -147,6 +147,14 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
     }
   });
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (bodyRef.current) bodyRef.current.innerHTML = '';
+      initializedRef.current = false;
+    };
+  }, []);
+
   if (!rows.length) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 12, color: "#3a5570" }}>

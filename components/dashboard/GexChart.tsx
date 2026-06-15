@@ -510,6 +510,23 @@ export default function GexChart({
     return () => ro.disconnect();
   }, [draw]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      const canvas = canvasRef.current;
+      const container = containerRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      if (container) container.innerHTML = '';
+      // Clear refs
+      vpRef.current = { start: null, count: 61 };
+      yScaleRef.current = 1;
+      dragRef.current = null;
+    };
+  }, []);
+
   // Reset viewport only when expiry changes (not on every live WS chain update)
   useEffect(() => {
     if (!chain.length) return;
