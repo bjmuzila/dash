@@ -5485,12 +5485,18 @@ server.listen(PORT, async () => {
 
   // ── Init SQLite DB ───────────────────────────────────────────────────────────
   try {
+    log('[DB] Initializing SQLite database at:', DB_FILE);
     initDB();
+    log('[DB] ✓ SQLite initialized successfully');
     scheduleNightlyClear();
   } catch (e) {
-    log('[DB] SQLite init failed (better-sqlite3 not installed?). Run: npm install better-sqlite3');
-    log('[DB] Error:', e.message);
+    log('[DB] ✗ SQLite init failed:', e.message);
+    log('[DB] Stack:', e.stack);
+    if (e.message.includes('better-sqlite3')) {
+      log('[DB] Install: npm install better-sqlite3');
+    }
     // Non-fatal — proxy continues with JSON fallback
+    db = null;
   }
 
   // Fetch Trump calendar at startup + schedule daily 7am ET refresh

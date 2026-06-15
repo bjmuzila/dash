@@ -38,8 +38,9 @@ export async function getDb(): Promise<Database> {
     process.cwd(),
     "node_modules/sql.js/dist/sql-wasm.wasm"
   );
+  const wasmBuf = fs.readFileSync(wasmPath);
   const SQL = await initSqlJs({
-    locateFile: () => wasmPath,
+    wasmBinary: wasmBuf,
   });
 
   if (fs.existsSync(DB_PATH)) {

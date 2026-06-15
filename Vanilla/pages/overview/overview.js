@@ -8652,29 +8652,42 @@ window.renderBuySellHistoryChart = renderBuySellHistoryChart;
 async function loadESStats() {
   try {
     const resp = await fetch('/proxy/api/es-stats');
-    if (resp.ok) {
-      const data = await resp.json();
+    const raw = await resp.text();
+    console.log('[ES Stats] Raw response:', raw);
+
+    if (resp.ok && raw && raw !== 'null') {
+      const data = JSON.parse(raw);
       if (data && typeof data === 'object') {
+        // Map database columns to cache keys
         window.esStatsCache = {
           'NO LONG': data.no_long,
           'UP': data.up,
           'MID': data.mid,
           'DOWN': data.down,
-          'NO SHORT': data.no_short,
-          'VAH': data.vah,
-          'VPOC': data.vpoc,
-          'VAL': data.val
+          'NO SHORT': data.no_short
         };
-        console.log('[ES Stats] Loaded from backend:', window.esStatsCache);
+        console.log('[ES Stats] Populated cache:', window.esStatsCache);
+        // Force re-render if page is already loaded
+        if (typeof renderESStatsSummary === 'function') {
+          renderESStatsSummary();
+        }
+        return true;
       }
+    } else {
+      console.warn('[ES Stats] No data from endpoint:', resp.status);
     }
   } catch (e) {
-    console.warn('[ES Stats] Failed to load:', e.message);
+    console.error('[ES Stats] Failed to load:', e.message);
   }
+  return false;
 }
 
 window.init_overview = function init_overview(){
-  loadESStats().catch(() => {});
+  loadESStats().then(() => {
+    if (typeof renderESStatsSummary === 'function') {
+      renderESStatsSummary();
+    }
+  }).catch(() => {});
   setTimeout(() => {
     try { initOvEvents(); } catch(e) {}
     try { drawOverviewChart(); } catch(e) {}

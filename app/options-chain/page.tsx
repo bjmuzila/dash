@@ -550,12 +550,15 @@ export default function OptionsChainPage() {
       list.sort((a, b) => a.daysTo - b.daysTo);
       setExpirations(list);
       const dte0 = list.find(e => e.daysTo === 0) ?? list[0];
-      if (dte0) setSelectedExpiry(dte0.date);
+      if (dte0) {
+        setSelectedExpiry(dte0.date);
+        await loadChain(t, dte0.date);
+      }
       setStatus({ state: "idle", msg: "READY" });
     } catch {
       setStatus({ state: "err", msg: "EXPIRY ERR" });
     }
-  }, []);
+  }, [loadChain]);
 
   // Load chain
   const loadChain = useCallback(async (t: string, expDate: string) => {
@@ -651,7 +654,9 @@ export default function OptionsChainPage() {
   useEffect(() => { setRenderTick(t => t + 1); }, [rangePercent]);
 
   // Auto-fetch expirations for default ticker on mount
-  useEffect(() => { fetchExpirations("SPX"); }, [fetchExpirations]);
+  useEffect(() => {
+    fetchExpirations("SPX");
+  }, [fetchExpirations]);
 
   // Handle ticker input change → reload expirations
   const handleTickerChange = useCallback((val: string) => {
