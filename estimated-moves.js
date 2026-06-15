@@ -21,7 +21,8 @@ EM.getProxyBase = function(){
   const queryProxy = new URLSearchParams(location.search).get('proxy');
   if (queryProxy) return queryProxy.replace(/\/$/, '');
   if (window.EM_PROXY_BASE) return String(window.EM_PROXY_BASE).replace(/\/$/, '');
-  return `${location.protocol}//${location.hostname}:3001`;
+  // Routes through Next.js API catch-all (/api/[...proxy]/route.ts)
+  return '/api';
 };
 
 EM.proxyUrl = function(path){

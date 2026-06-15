@@ -163,14 +163,15 @@ window.QuotesPanel = {
     // Load previous closes
     await this.loadPrevCloses();
 
-    // Subscribe to symbols
-    await this.subscribeSymbols();
+    // Subscribe to symbols (non-blocking)
+    this.subscribeSymbols().catch(e => console.warn('[Quotes] Subscription init failed:', e.message));
 
     // Render initial quotes
     this.render();
 
     // Auto-refresh every 30 seconds
     setInterval(() => {
+      console.log('[Quotes] Auto-refreshing quotes...');
       this.render();
     }, 30000);
   },

@@ -1261,24 +1261,8 @@ function startSnapshotUpdates() {
 (function() {
   console.log('[SNAPSHOT-INIT] Starting snapshot initialization');
 
-  // Load immediately
-  loadSnapshotData();
+  // Only start the update loop, don't load immediately to preserve snapshot timer
   startSnapshotUpdates();
-
-  // Also try when page fully loads
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-      console.log('[SNAPSHOT-INIT] DOMContentLoaded fired');
-      loadSnapshotData();
-    });
-  } else {
-    console.log('[SNAPSHOT-INIT] Page already loaded');
-  }
-
-  // Also retry every 2 seconds to catch data when it arrives
-  setInterval(() => {
-    loadSnapshotData();
-  }, 2000);
 })();
 
 function stopSnapshotUpdates() {
@@ -1288,13 +1272,12 @@ function stopSnapshotUpdates() {
   }
 }
 
-// Start updates on page load
+// Initialize active feed tab and update interval on page load
 window.addEventListener('load', () => {
   if (!window._activeFeedTab) {
     const snapshotBody = document.getElementById('feed-snapshot-body');
     window._activeFeedTab = snapshotBody && snapshotBody.style.display !== 'none' ? 'snapshot' : 'signal';
   }
-  loadSnapshotData();
   startSnapshotUpdates();
 });
 </script>
