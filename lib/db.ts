@@ -23,9 +23,16 @@ function resolveDbPath(): string {
 const DB_PATH = resolveDbPath();
 
 let _db: Database | null = null;
+let _tablesEnsured = false;
 
 export async function getDb(): Promise<Database> {
-  if (_db) return _db;
+  if (_db) {
+    if (!_tablesEnsured) {
+      _tablesEnsured = true;
+      await ensureAllTables(_db);
+    }
+    return _db;
+  }
 
   const wasmPath = path.resolve(
     process.cwd(),
@@ -39,11 +46,90 @@ export async function getDb(): Promise<Database> {
     const fileBuffer = fs.readFileSync(DB_PATH);
     _db = new SQL.Database(fileBuffer);
   } else {
-    // First run on fresh disk — create empty DB
     _db = new SQL.Database();
   }
 
+  _tablesEnsured = true;
+  await ensureAllTables(_db);
+
   return _db;
+}
+
+function ensureAllTables(db: Database): void {
+  // flow_calls
+  db.run(`CREATE TABLE IF NOT EXISTS flow_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, date TEXT NOT NULL,
+    source TEXT NOT NULL, symbol TEXT NOT NULL, underlying TEXT, expiration TEXT,
+    strike REAL, option_type TEXT, side TEXT, action TEXT, price REAL,
+    size INTEGER, premium REAL, is_otm INTEGER DEFAULT 0
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_flow_calls_date ON flow_calls(date)");
+
+  // mvc_snapshots
+  db.run(`CREATE TABLE IF NOT EXISTS mvc_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    day TEXT, time TEXT, strikeOIVol REAL, mvcValueOIVol REAL, pctOI_Vol REAL,
+    volumeOIVol REAL, totalNetGEX_OI REAL, strikeVolOnly REAL, mvcValueVolOnly REAL,
+    pctVol_Only REAL, volumeVolOnly REAL, totalNetGEX_Vol REAL, spxPrice REAL,
+    esPrice REAL, netDEXStrike REAL, totalNetDEX_OI REAL, totalNetDEX_Vol REAL,
+    totalAbsNetGEX REAL, gexFlip REAL, triggerType TEXT, expiration TEXT
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_mvc_date ON mvc_snapshots(date)");
+
+  // premium_flow
+  db.run(`CREATE TABLE IF NOT EXISTS premium_flow (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    time TEXT, callPremium REAL, putPremium REAL, netPremium REAL, spxPrice REAL
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_pf_date ON premium_flow(date)");
+
+  // greeks_ts
+  db.run(`CREATE TABLE IF NOT EXISTS greeks_ts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    time TEXT, ticker TEXT, price REAL, gexRaw REAL, dexRaw REAL, chexRaw REAL, vexRaw REAL,
+    gex REAL, dex REAL, chex REAL, vex REAL, buyScore REAL, sellScore REAL
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_greeks_date ON greeks_ts(date)");
+
+  // es_candles
+  db.run(`CREATE TABLE IF NOT EXISTS es_candles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    slotKey TEXT NOT NULL UNIQUE, time TEXT, symbol TEXT, intervalMinutes INTEGER,
+    source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, avgVolume REAL
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles(slotKey)");
+
+  // bzila_snapshots
+  db.run(`CREATE TABLE IF NOT EXISTS bzila_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    time TEXT, ticker TEXT, session TEXT DEFAULT 'rth', orders TEXT, stats TEXT
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_bs_date ON bzila_snapshots(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bs_ts ON bzila_snapshots(timestamp)");
+  try { db.run("ALTER TABLE bzila_snapshots ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
+
+  // bzila_gex_history
+  db.run(`CREATE TABLE IF NOT EXISTS bzila_gex_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    call REAL, put REAL, net REAL, spot REAL
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_bgh_date ON bzila_gex_history(date)");
+
+  // expirations_cache
+  db.run(`CREATE TABLE IF NOT EXISTS expirations_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL UNIQUE,
+    timestamp INTEGER NOT NULL, expirations TEXT, raw TEXT
+  )`);
+
+  // snapshots (estimated moves)
+  db.run(`CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    time TEXT NOT NULL, period TEXT NOT NULL DEFAULT 'weekly', tableHtml TEXT NOT NULL,
+    expirations TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  persistDb();
 }
 
 /** Write in-memory DB back to disk (call after every mutation) */
