@@ -55,7 +55,7 @@ export async function getDb(): Promise<Database> {
         const fileBuffer = fs.readFileSync(DB_PATH);
         _db = new SQL.Database(fileBuffer);
         // Quick integrity check
-        _db.run("SELECT 1");
+        (_db as NonNullable<typeof _db>).run("SELECT 1");
       } catch (e) {
         console.error("[db] Corrupted DB file, starting fresh:", String(e));
         // Rename corrupted file for forensics, start clean
@@ -178,7 +178,7 @@ function ensureAllTables(db: Database): void {
 /** Write in-memory DB back to disk (call after every mutation) */
 export function persistDb(): void {
   if (!_db) return;
-  const data = _db.export();
+  const data = (_db as NonNullable<typeof _db>).export();
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   // Write atomically: temp file → rename, so a crash mid-write never corrupts the live DB
   const tmp = DB_PATH + ".tmp";
