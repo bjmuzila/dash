@@ -6,6 +6,7 @@ import SnapButton from "./SnapButton";
 
 const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
+  { label: "Premarket",     href: "/premarket" },
   { label: "Dashboard",     href: "/dashboard" },
   { label: "Database",      href: "/database" },
   { label: "Insights",      href: "/insights" },
