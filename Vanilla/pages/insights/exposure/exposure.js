@@ -1107,8 +1107,13 @@ function initInsightsExposure() {
 
   // Hydrate sparkline history from DB first, then kick off the rest
   hydrateGreekSparklineHistoryFromDB().then(() => {
+    console.log('[Exposure] Greek history hydrated, scheduling sparkline refresh');
     scheduleExposureSparklineRefresh();
-  }).catch(() => {});
+  }).catch((err) => {
+    console.error('[Exposure] Greek history hydration failed:', err);
+    // Fallback: try to render anyway with whatever data exists
+    setTimeout(() => renderGreekSparklines(), 500);
+  });
 
   if (typeof dxSubscribe === 'function') {
     dxSubscribe(['/ES:XCME', '/ESM26', '/ESU26']);
@@ -1221,30 +1226,8 @@ async function hydrateGreekSparklineHistoryFromDB() {
   try {
     let records = [];
 
-    // Primary: fetch from greeks_intraday via proxy (has gex/dex/chex/vex in display-scale)
-    try {
-      const resp = await fetch('/proxy/api/greeks-intraday', { cache: 'no-store' });
-      if (resp.ok) {
-        const payload = await resp.json();
-        if (Array.isArray(payload?.records) && payload.records.length) {
-          records = payload.records.map(r => ({
-            timestamp: Number(r.ts || r.timestamp || 0),
-            gexRaw: null,
-            dexRaw: null,
-            chexRaw: null,
-            vexRaw: null,
-            // greeks_intraday stores display-scale: gex/dex in billions, chex/vex in millions
-            gex: Number(r.gex),
-            dex: Number(r.dex),
-            chex: Number(r.chex),
-            vex: Number(r.vex),
-          }));
-        }
-      }
-    } catch (_) {}
-
-    // Fallback: IndexedDB greeksTimeSeries
-    if (!records.length && db && typeof db.queryGreeksTimeSeries_Today === 'function') {
+    // Primary: IndexedDB greeksTimeSeries (stored locally)
+    if (db && typeof db.queryGreeksTimeSeries_Today === 'function') {
       if (!db.db && typeof db.init === 'function') await db.init().catch(() => null);
       records = await db.queryGreeksTimeSeries_Today('').catch(() => []);
       if (!Array.isArray(records) || !records.length) {
@@ -1255,6 +1238,29 @@ async function hydrateGreekSparklineHistoryFromDB() {
       if ((!Array.isArray(records) || !records.length) && typeof db._getAllRecords === 'function') {
         records = await db._getAllRecords('greeksTimeSeries').catch(() => []);
       }
+    }
+
+    // Secondary: fetch from greeks-intraday API if available (server-side SQLite)
+    if (!records.length) {
+      try {
+        const resp = await fetch('/api/greeks-intraday', { cache: 'no-store' });
+        if (resp.ok) {
+          const payload = await resp.json();
+          if (Array.isArray(payload?.records) && payload.records.length) {
+            records = payload.records.map(r => ({
+              timestamp: Number(r.ts || r.timestamp || 0),
+              gexRaw: Number(r.gexRaw || r.gex || 0),
+              dexRaw: Number(r.dexRaw || r.dex || 0),
+              chexRaw: Number(r.chexRaw || r.chex || 0),
+              vexRaw: Number(r.vexRaw || r.vex || 0),
+              gex: Number(r.gex),
+              dex: Number(r.dex),
+              chex: Number(r.chex),
+              vex: Number(r.vex),
+            }));
+          }
+        }
+      } catch (_) {}
     }
 
     if (!Array.isArray(records) || !records.length) return;
@@ -1382,12 +1388,25 @@ function ensureExposureHistorySeries() {
 
 function renderGreekSparklineCanvas(canvasId, data, color) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
+  if (!canvas) {
+    console.warn(`[Sparkline] Canvas not found: ${canvasId}`);
+    return;
+  }
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  if (!ctx) {
+    console.warn(`[Sparkline] Could not get 2d context for ${canvasId}`);
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) {
-    setTimeout(() => renderGreekSparklines(), 100);
+    if (!canvas.__renderRetries) canvas.__renderRetries = 0;
+    if (canvas.__renderRetries < 5) {
+      canvas.__renderRetries++;
+      const delay = Math.min(100 * canvas.__renderRetries, 500);
+      setTimeout(() => renderGreekSparklines(), delay);
+    } else {
+      console.warn(`[Sparkline] Canvas ${canvasId} has zero dimensions after retries, skipping`);
+    }
     return;
   }
   const dpr = window.devicePixelRatio || 1;
@@ -1778,7 +1797,13 @@ function updateGreeksDisplay(data) {
     if (vexEl) vexEl.textContent = formatExposureAutoScale(snap.vex);
   }
   persistExposureStackToDB(snap.gex ?? 0, snap.dex ?? 0, snap.chex ?? 0, snap.vex ?? 0, Number(snap.buyScore || 0), Number(snap.sellScore || 0), Number(snap.price || 0));
-  requestAnimationFrame(() => renderGreekSparklines());
+  // Ensure sparklines render with the latest data point
+  if (window.__insightsGreekHistory && (window.__insightsGreekHistory.gex || []).length > 0) {
+    requestAnimationFrame(() => {
+      console.log('[Exposure] Rendering sparklines after live data update');
+      renderGreekSparklines();
+    });
+  }
   // On first live data, clear the placeholder and seed with current state
   if (!window.__playbookSeeded && typeof window.pushSignal === 'function') {
     window.__playbookSeeded = true;

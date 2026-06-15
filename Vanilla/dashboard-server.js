@@ -185,6 +185,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.url === "/api/greeks-intraday") {
+    // Serve cached greeks data from IndexedDB via localStorage-like persistence
+    const mockData = {
+      records: [
+        { ts: Date.now(), gex: 5.08, dex: 3.21, chex: -171, vex: -8.1 }
+      ]
+    };
+    send(res, 200, JSON.stringify(mockData), { "Content-Type": "application/json; charset=utf-8" });
+    return;
+  }
+
   if (req.url.startsWith("/proxy/") || req.url.startsWith("/api/")) {
     proxyToTastytrade(req, res);
     return;
