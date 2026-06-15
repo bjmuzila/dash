@@ -11,19 +11,22 @@ const US_FUTURES = [
   { sym: "/YM:XCME",  label: "Dow Jones",   wsKey: "/YM:XCME" },
 ];
 
+// Europe & Asia — scraped from Yahoo Finance (delayed), keyed by Yahoo symbol
 const EUROPE = [
-  { sym: "/FDAX:XEUR", label: "German DAX",    wsKey: "/FDAX:XEUR" },
-  { sym: "/FESX:XEUR", label: "Euro Stoxx 50",  wsKey: "/FESX:XEUR" },
-  { sym: "/FSTX:XEUR", label: "Euro Stoxx 600", wsKey: "/FSTX:XEUR" },
-  { sym: "/FCE:XMON",  label: "CAC 40",         wsKey: "/FCE:XMON" },
-  { sym: "/UKX:IFLL",  label: "FTSE 100",       wsKey: "/UKX:IFLL" },
+  { sym: "^GDAXI",  label: "German DAX" },
+  { sym: "^STOXX50E", label: "Euro Stoxx 50" },
+  { sym: "^STOXX",  label: "Euro Stoxx 600" },
+  { sym: "^FCHI",   label: "CAC 40" },
+  { sym: "^FTSE",   label: "FTSE 100" },
 ];
 
 const ASIA = [
-  { sym: "/NKD:XCME",  label: "Nikkei 225", wsKey: "/NKD:XCME" },
-  { sym: "000001.SS",  label: "SSE Comp",   wsKey: "000001.SS" },
-  { sym: "/HSI:HKEX",  label: "Hang Seng",  wsKey: "/HSI:HKEX" },
+  { sym: "^N225",   label: "Nikkei 225" },
+  { sym: "000001.SS", label: "SSE Comp" },
+  { sym: "^HSI",    label: "Hang Seng" },
 ];
+
+const YAHOO_SYMS = [...EUROPE, ...ASIA];
 
 const COMMODITIES = [
   { sym: "/CL:XNYM", label: "Crude Oil",   wsKey: "/CL:XNYM" },
@@ -312,6 +315,7 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
 export default function PremarketPage() {
   const wsLiveRef = useRef<Record<string, LiveRec>>({});
   const [quotes, setQuotes] = useState<QuoteMap>({});
+  const [yahooQuotes, setYahooQuotes] = useState<QuoteMap>({});
   const [ts, setTs] = useState("");
   const [wsLive, setWsLive] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -462,6 +466,30 @@ export default function PremarketPage() {
     return () => wsRef.current?.close();
   }, []);
 
+  // ── Yahoo Finance polling for Europe / Asia (60s interval) ─────────────────
+  useEffect(() => {
+    const syms = YAHOO_SYMS.map(s => s.sym).join(",");
+
+    async function poll() {
+      try {
+        const r = await fetch(`/api/yahoo-quotes?symbols=${encodeURIComponent(syms)}`);
+        if (!r.ok) return;
+        const data: Record<string, { price: number | null; change: number | null; pct: number | null }> = await r.json();
+        setYahooQuotes(data);
+      } catch (_) {}
+    }
+
+    poll();
+    const id = setInterval(poll, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Merge: Yahoo fills Europe/Asia; DXLink fills everything else
+  const allQuotes: QuoteMap = { ...quotes };
+  YAHOO_SYMS.forEach(({ sym }) => {
+    if (yahooQuotes[sym]) allQuotes[sym] = yahooQuotes[sym];
+  });
+
   const spxRow = quotes[SPX_SYM];
   const spxPrice = spxRow?.price ?? null;
   const spxPrev = wsLiveRef.current[SPX_SYM]?.prevClose ?? null;
@@ -524,15 +552,15 @@ export default function PremarketPage() {
             <TableShell>
               <SectionHeader title="US Futures" />
               {US_FUTURES.map(({ sym, label }) => (
-                <QuoteRowEl key={sym} label={label} row={quotes[sym]} />
+                <QuoteRowEl key={sym} label={label} row={allQuotes[sym]} />
               ))}
               <SectionHeader title="Europe" />
               {EUROPE.map(({ sym, label }) => (
-                <QuoteRowEl key={sym} label={label} row={quotes[sym]} />
+                <QuoteRowEl key={sym} label={label} row={allQuotes[sym]} />
               ))}
               <SectionHeader title="Asia" />
               {ASIA.map(({ sym, label }) => (
-                <QuoteRowEl key={sym} label={label} row={quotes[sym]} />
+                <QuoteRowEl key={sym} label={label} row={allQuotes[sym]} />
               ))}
             </TableShell>
           </div>
@@ -551,15 +579,15 @@ export default function PremarketPage() {
             <TableShell>
               <SectionHeader title="Commodities" />
               {COMMODITIES.map(({ sym, label }) => (
-                <QuoteRowEl key={sym} label={label} row={quotes[sym]} />
+                <QuoteRowEl key={sym} label={label} row={allQuotes[sym]} />
               ))}
               <SectionHeader title="Risk Assets" />
               {RISK_ASSETS.map(({ sym, label }) => (
-                <QuoteRowEl key={sym} label={label} row={quotes[sym]} />
+                <QuoteRowEl key={sym} label={label} row={allQuotes[sym]} />
               ))}
               <SectionHeader title="Fixed Income / FX / Crypto" />
               {FIXED_FX_CRYPTO.map(({ sym, label }) => (
-                <QuoteRowEl key={sym} label={label} row={quotes[sym]} />
+                <QuoteRowEl key={sym} label={label} row={allQuotes[sym]} />
               ))}
             </TableShell>
           </div>

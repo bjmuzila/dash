@@ -198,6 +198,20 @@ export default function TopBar() {
             if (prev  > 0 && live.current.vixPrev  === 0) live.current.vixPrev  = prev;
           }
         });
+
+        // Fallback: if SPX price still 0 (e.g. weekend with empty dxLink cache), hit TT REST directly
+        if (live.current.spxPrice === 0) {
+          try {
+            const spxR = await fetch("/api/proxy/tt/quote/SPX");
+            if (spxR.ok) {
+              const spxD = await spxR.json();
+              const mm = spxD?.data?.items?.[0] ?? {};
+              const p = parseFloat(String(mm["last-price"] || mm["close-price"] || mm["mark-price"] || mm["last"] || mm["mark"] || 0));
+              if (p > 100) live.current.spxPrice = p;
+            }
+          } catch (_) {}
+        }
+
         pushPrices();
       } catch (_) {}
     }
@@ -298,12 +312,6 @@ export default function TopBar() {
       window.__gexAppState.esPrice = esPrice;
     }
 
-    // Expose live SPX price so GexChart and other pages can sync to the same price
-    if (typeof window !== "undefined") {
-      if (!window.__gexAppState) window.__gexAppState = { chain: [], spotPrice: 0, esPrice: 0, expiration: "", gexFlip: null };
-      if (L.spxPrice > 0) window.__gexAppState.spotPrice = L.spxPrice;
-    }
-
     // ── SPX ──
     // RTH: use live $SPX quote directly, baseline = prev-close
     // After hours: implied from ES using spread, baseline = today's SPX close
@@ -311,8 +319,14 @@ export default function TopBar() {
     let spxBaseline = 0;
 
     // Fallback: if TopBar WS hasn't received a live SPX tick yet, check page.tsx's WS state
-    if (L.spxPrice === 0 && typeof window !== "undefined" && window.__gexAppState?.spotPrice) {
-      L.spxPrice = window.__gexAppState.spotPrice;
+    if (L.spxPrice === 0 && typeof window !== "undefined" && (window.__gexAppState?.spotPrice ?? 0) > 100) {
+      L.spxPrice = window.__gexAppState!.spotPrice!;
+    }
+
+    // Expose live SPX price so GexChart and other pages can sync to the same price
+    if (typeof window !== "undefined") {
+      if (!window.__gexAppState) window.__gexAppState = { chain: [], spotPrice: 0, esPrice: 0, expiration: "", gexFlip: null };
+      if (L.spxPrice > 0) window.__gexAppState.spotPrice = L.spxPrice;
     }
 
     if (isRTH()) {
