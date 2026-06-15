@@ -47,7 +47,41 @@ export default function QuotesPanel() {
 
         await this.loadPrevCloses();
         this.render();
-        setInterval(() => this.loadPrevCloses(), 60000);
+        // Poll % change every 30 seconds
+        setInterval(() => this.updateChanges(), 30000);
+      },
+
+      async updateChanges() {
+        try {
+          const quotes = await this.fetchQuotes();
+          if (!quotes) return;
+
+          // Update only the change cells
+          quotes.forEach((q: any) => {
+            if (!q || !q.symbol) return;
+            const changeEl = document.querySelector(`[data-symbol="${q.symbol}"] .quote-change`);
+            if (!changeEl) return;
+
+            const change = this.calculateChange(q.symbol, q.last) || (() => {
+              const pct = this.pctFromQuote(q);
+              if (pct == null) return null;
+              return {
+                change: '',
+                changePercent: Math.abs(pct).toFixed(2),
+                up: pct >= 0,
+                down: pct < 0
+              };
+            })();
+
+            if (change) {
+              const arrow = change.up ? '▲' : '▼';
+              changeEl.className = `quote-change ${change.up ? 'up' : 'down'}`;
+              changeEl.innerHTML = `<span class="quote-change-arrow">${arrow}</span><span>${change.up ? '+' : ''}${change.changePercent}%</span>`;
+            }
+          });
+        } catch (e) {
+          console.warn('[Quotes] Failed to update changes:', e);
+        }
       },
 
       async loadPrevCloses() {
@@ -145,7 +179,7 @@ export default function QuotesPanel() {
             : '—';
 
           rows += `
-            <div class="quote-row">
+            <div class="quote-row" data-symbol="${q.symbol}">
               <div class="quote-symbol">${q.symbol}</div>
               <div class="quote-price">${this.formatPrice(q.last)}</div>
               <div class="quote-change ${changeClass}">

@@ -2161,24 +2161,11 @@ function broadcast(msg) {
   if (now - lastBroadcast < BROADCAST_THROTTLE_MS) return;
   lastBroadcast = now;
 
-  // Extract symbol from message for subscription filtering
-  let symbol = null;
-  if (msg.data && Array.isArray(msg.data) && msg.data.length > 0) {
-    // Compact format: msg.data[1][0] is first symbol
-    if (Array.isArray(msg.data[1])) {
-      symbol = msg.data[1][0];
-    }
-  } else if (msg.eventSymbol) {
-    symbol = msg.eventSymbol;
-  } else if (msg.data && Array.isArray(msg.data)) {
-    // Object format: msg.data[0].eventSymbol
-    symbol = msg.data[0]?.eventSymbol;
-  }
-
+  // TODO: Extract symbol and filter by subscription
+  // For now: broadcast to all clients to keep pages from blocking
   const s = typeof msg === 'string' ? msg : JSON.stringify(msg);
   dxClients.forEach(ws => {
-    // Only send to clients subscribed to this symbol
-    if (ws.readyState === WebSocket.OPEN && subscriptionFilter.shouldBroadcast(symbol, ws.id)) {
+    if (ws.readyState === WebSocket.OPEN) {
       ws.send(s);
     }
   });
@@ -3158,7 +3145,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Save ES 15m candle
+  // ES Candles disabled
   if (req.method === 'POST' && p === '/api/candles/es15m') {
+    return sendJSON(res, 503, { error: 'ES Candles disabled' });
+  }
+  if (false && req.method === 'POST' && p === '/api/candles/es15m') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
@@ -3179,8 +3170,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Get ES 15m candles by date
+  // Get ES 15m candles by date — disabled
   if (req.method === 'GET' && p === '/api/candles/es15m/date') {
+    return sendJSON(res, 503, { error: 'ES Candles disabled' });
+  }
+  if (false && req.method === 'GET' && p === '/api/candles/es15m/date') {
     try {
       if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
       const date = u.searchParams.get('date') || dbEtDate();
