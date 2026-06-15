@@ -452,6 +452,7 @@ export default function BzilaPage() {
   const lastKnownNetRef = useRef<Record<number, number>>({});
   const aggregateHistoryRef = useRef<GexHistPoint[]>([]);
   const strikeHistoryRowsRef = useRef<BzilaStrikeHistoryRow[]>([]);
+  const priceFallbackRef = useRef({ spx: 0, es: 0 });
 
   const isStacked = viewportWidth < 1240;
   const isMobile = viewportWidth < 860;
@@ -538,6 +539,8 @@ export default function BzilaPage() {
     ? { text: "LIVE", bg: "#065f46", fg: "#6ee7b7" }
     : { text: "CONNECTING", bg: "#7f1d1d", fg: "#fca5a5" };
 
+  priceFallbackRef.current = { spx: flow.spxPrice, es: flow.esPrice };
+
   useEffect(() => {
     let alive = true;
 
@@ -548,7 +551,7 @@ export default function BzilaPage() {
         if (!res.ok) return;
         const data = await res.json();
         const rows = normalizeChainRows(data?.chain ?? []);
-        const spot = Number(data?.spotPrice ?? flow.spxPrice ?? flow.esPrice ?? 0);
+        const spot = Number(data?.spotPrice ?? priceFallbackRef.current.spx ?? priceFallbackRef.current.es ?? 0);
         if (!alive || !rows.length || !(spot > 0)) return;
 
         const selectedRows = selectTrackedRows(rows, spot, lastKnownNetRef.current);
@@ -624,7 +627,7 @@ export default function BzilaPage() {
       alive = false;
       window.clearInterval(id);
     };
-  }, [flow.esPrice, flow.spxPrice]);
+  }, []);
 
   const drawAggregateChart = useCallback(() => {
     const canvas = aggregateCanvasRef.current;
