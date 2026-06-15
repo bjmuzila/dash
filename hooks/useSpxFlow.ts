@@ -98,6 +98,7 @@ const INITIAL_STATE: SpxFlowState = {
 };
 
 const FLOW_AGGREGATE_WINDOW_MS = 500;
+const DEDUP_MAX_SIZE = 10000;
 const REST_WATCHLIST = ["SPY", "QQQ", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"] as const;
 
 // ── ET helpers ────────────────────────────────────────────────────────────────
@@ -502,10 +503,11 @@ export function useSpxFlow(enabled = true) {
             const size = Number(item.size ?? 0);
             if (!price || !size) return;
 
-            // Dedup
+            // Dedup with size cap to prevent unbounded memory growth
             const key = `${sym}|${item.sequence ?? ""}|${price}|${size}|${item.time}`;
             if (s.seenKeys.has(key)) return;
             s.seenKeys.add(key);
+            if (s.seenKeys.size > DEDUP_MAX_SIZE) s.seenKeys.clear();
 
             // Aggressor direction
             const quote = s.optionQuotes[sym];
