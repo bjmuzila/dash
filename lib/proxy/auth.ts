@@ -1,8 +1,8 @@
 import * as fs from 'fs';
-import { CONFIG, accessToken, refreshToken, setTokens } from './config';
+import { CONFIG, accessToken, refreshToken, tokenExpiry, setTokens } from './config';
 
 export async function ensureToken(): Promise<boolean> {
-  if (accessToken && Date.now() < CONFIG.tokenExpiry) {
+  if (accessToken && Date.now() < tokenExpiry) {
     return true;
   }
 
