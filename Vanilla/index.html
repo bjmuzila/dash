@@ -1369,36 +1369,92 @@ async function gexTakeSnapshot(triggerType = 'manual') {
 async function loadPersistedDataFromSQLite() {
   try {
     console.log('[Init] Loading persisted data from SQLite...');
+    window.AppState = window.AppState || {};
+
+    const today = new Date().toISOString().split('T')[0];
+    let loadedCount = 0;
 
     // Load MVC snapshots
-    const mvcResp = await fetch(window.location.origin + '/api/mvc/all?limit=50');
-    if (mvcResp.ok) {
-      const mvcSnapshots = await mvcResp.json();
-      console.log('[Init] Loaded', mvcSnapshots.length, 'MVC snapshots from SQLite');
-      window.AppState = window.AppState || {};
-      window.AppState.mvcSnapshots = mvcSnapshots;
-    }
+    try {
+      const mvcResp = await fetch(window.location.origin + '/api/mvc/all?limit=50');
+      if (mvcResp.ok) {
+        window.AppState.mvcSnapshots = await mvcResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.mvcSnapshots.length, 'MVC snapshots');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] MVC snapshots load failed:', e.message); }
 
     // Load today's buy/sell scores
-    const today = new Date().toISOString().split('T')[0];
-    const bssResp = await fetch(window.location.origin + '/api/buy_sell/date?date=' + today);
-    if (bssResp.ok) {
-      const bssScores = await bssResp.json();
-      console.log('[Init] Loaded', bssScores.length, 'buy/sell scores for today');
-      window.AppState = window.AppState || {};
-      window.AppState.buySellScores = bssScores;
-    }
+    try {
+      const bssResp = await fetch(window.location.origin + '/api/buy_sell/date?date=' + today);
+      if (bssResp.ok) {
+        window.AppState.buySellScores = await bssResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.buySellScores.length, 'buy/sell scores');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] Buy/sell scores load failed:', e.message); }
 
     // Load today's GEX levels
-    const gexResp = await fetch(window.location.origin + '/api/gex/levels?date=' + today);
-    if (gexResp.ok) {
-      const gexLevels = await gexResp.json();
-      console.log('[Init] Loaded', gexLevels.length, 'GEX levels for today');
-      window.AppState = window.AppState || {};
-      window.AppState.gexLevels = gexLevels;
-    }
+    try {
+      const gexResp = await fetch(window.location.origin + '/api/gex/levels?date=' + today);
+      if (gexResp.ok) {
+        window.AppState.gexLevels = await gexResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.gexLevels.length, 'GEX levels');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] GEX levels load failed:', e.message); }
 
-    console.log('[Init] ✓ SQLite data loaded successfully');
+    // Load premium flow for today
+    try {
+      const pfResp = await fetch(window.location.origin + '/api/premium_flow/date?date=' + today);
+      if (pfResp.ok) {
+        window.AppState.premiumFlow = await pfResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.premiumFlow.length, 'premium flow records');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] Premium flow load failed:', e.message); }
+
+    // Load greeks time series for today
+    try {
+      const greekResp = await fetch(window.location.origin + '/api/greeks/timeseries/date?date=' + today + '&ticker=SPXW');
+      if (greekResp.ok) {
+        window.AppState.greeksTimeSeries = await greekResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.greeksTimeSeries.length, 'greeks time series');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] Greeks time series load failed:', e.message); }
+
+    // Load GEX top3 for today
+    try {
+      const top3Resp = await fetch(window.location.origin + '/api/gex/top3/date?date=' + today + '&ticker=SPXW');
+      if (top3Resp.ok) {
+        window.AppState.gexTop3 = await top3Resp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.gexTop3.length, 'GEX top3 records');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] GEX top3 load failed:', e.message); }
+
+    // Load Bzila snapshots for today
+    try {
+      const bzilaResp = await fetch(window.location.origin + '/api/bzila/snapshot/date?date=' + today + '&ticker=SPX');
+      if (bzilaResp.ok) {
+        window.AppState.bzilaSnapshots = await bzilaResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.bzilaSnapshots.length, 'Bzila snapshots');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] Bzila snapshots load failed:', e.message); }
+
+    // Load ES candles for today
+    try {
+      const candlesResp = await fetch(window.location.origin + '/api/candles/es15m/date?date=' + today);
+      if (candlesResp.ok) {
+        window.AppState.esCandles = await candlesResp.json();
+        console.log('[Init] ✓ Loaded', window.AppState.esCandles.length, 'ES 15m candles');
+        loadedCount++;
+      }
+    } catch (e) { console.warn('[Init] ES candles load failed:', e.message); }
+
+    console.log(`[Init] ✓ SQLite data recovery complete (${loadedCount}/8 data types loaded)`);
   } catch (e) {
     console.warn('[Init] Failed to load SQLite data:', e.message);
   }

@@ -2909,6 +2909,259 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Save premium flow
+  if (req.method === 'POST' && p === '/api/premium_flow/save') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, ticker, callFlow, putFlow, netFlow } = data;
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+        db.prepare(`
+          INSERT INTO premium_flow (timestamp, date, ticker, data)
+          VALUES (?, ?, ?, ?)
+        `).run(timestamp, date, ticker, JSON.stringify(data));
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get premium flow by date
+  if (req.method === 'GET' && p === '/api/premium_flow/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const date = u.searchParams.get('date') || dbEtDate();
+      const rows = db.prepare(`
+        SELECT * FROM premium_flow WHERE date = ? ORDER BY timestamp ASC
+      `).all(date);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Get premium flow by time range
+  if (req.method === 'GET' && p === '/api/premium_flow/range') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const minTs = parseInt(u.searchParams.get('minTs') || '0', 10);
+      const maxTs = parseInt(u.searchParams.get('maxTs') || Date.now(), 10);
+      const rows = db.prepare(`
+        SELECT * FROM premium_flow WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC
+      `).all(minTs, maxTs);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save greeks time series
+  if (req.method === 'POST' && p === '/api/greeks/timeseries') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, ticker, gex, dex, chex, vex, buyPct, spot } = data;
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+        db.prepare(`
+          INSERT INTO greeks_time_series (timestamp, date, ticker, data)
+          VALUES (?, ?, ?, ?)
+        `).run(timestamp, date, ticker, JSON.stringify(data));
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get greeks time series by date
+  if (req.method === 'GET' && p === '/api/greeks/timeseries/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const date = u.searchParams.get('date') || dbEtDate();
+      const ticker = u.searchParams.get('ticker') || 'SPXW';
+      const rows = db.prepare(`
+        SELECT * FROM greeks_time_series WHERE date = ? AND ticker = ? ORDER BY timestamp ASC
+      `).all(date, ticker);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Get greeks time series by range
+  if (req.method === 'GET' && p === '/api/greeks/timeseries/range') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const minTs = parseInt(u.searchParams.get('minTs') || '0', 10);
+      const maxTs = parseInt(u.searchParams.get('maxTs') || Date.now(), 10);
+      const rows = db.prepare(`
+        SELECT * FROM greeks_time_series WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC
+      `).all(minTs, maxTs);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save chain snapshot
+  if (req.method === 'POST' && p === '/api/chain/snapshot') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, symbol, chainData } = data;
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+        db.prepare(`
+          INSERT INTO chain_snapshots (timestamp, date, symbol, data)
+          VALUES (?, ?, ?, ?)
+        `).run(timestamp, date, symbol, JSON.stringify(chainData || data));
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get chain snapshots by date
+  if (req.method === 'GET' && p === '/api/chain/snapshot/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const date = u.searchParams.get('date') || dbEtDate();
+      const symbol = u.searchParams.get('symbol') || 'SPX';
+      const rows = db.prepare(`
+        SELECT * FROM chain_snapshots WHERE date = ? AND symbol = ? ORDER BY timestamp DESC LIMIT 10
+      `).all(date, symbol);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save GEX top 3
+  if (req.method === 'POST' && p === '/api/gex/top3') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, ticker, top3Data } = data;
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+        db.prepare(`
+          INSERT INTO gex_top3 (timestamp, date, ticker, data)
+          VALUES (?, ?, ?, ?)
+        `).run(timestamp, date, ticker, JSON.stringify(top3Data || data));
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get GEX top 3 by date
+  if (req.method === 'GET' && p === '/api/gex/top3/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const date = u.searchParams.get('date') || dbEtDate();
+      const ticker = u.searchParams.get('ticker') || 'SPXW';
+      const rows = db.prepare(`
+        SELECT * FROM gex_top3 WHERE date = ? AND ticker = ? ORDER BY timestamp DESC LIMIT 5
+      `).all(date, ticker);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save Bzila snapshot
+  if (req.method === 'POST' && p === '/api/bzila/snapshot') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, ticker, bzilaData } = data;
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+        db.prepare(`
+          INSERT INTO bzila_live_snapshots (timestamp, date, ticker, data)
+          VALUES (?, ?, ?, ?)
+        `).run(timestamp, date, ticker, JSON.stringify(bzilaData || data));
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get Bzila snapshots by date
+  if (req.method === 'GET' && p === '/api/bzila/snapshot/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const date = u.searchParams.get('date') || dbEtDate();
+      const ticker = u.searchParams.get('ticker') || 'SPX';
+      const rows = db.prepare(`
+        SELECT * FROM bzila_live_snapshots WHERE date = ? AND ticker = ? ORDER BY timestamp DESC LIMIT 10
+      `).all(date, ticker);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save ES 15m candle
+  if (req.method === 'POST' && p === '/api/candles/es15m') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, slot_key, candleData } = data;
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+        db.prepare(`
+          INSERT INTO es_15m_candles (timestamp, date, slot_key, data)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(slot_key) DO UPDATE SET data=excluded.data
+        `).run(timestamp, date, slot_key, JSON.stringify(candleData || data));
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get ES 15m candles by date
+  if (req.method === 'GET' && p === '/api/candles/es15m/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+      const date = u.searchParams.get('date') || dbEtDate();
+      const rows = db.prepare(`
+        SELECT * FROM es_15m_candles WHERE date = ? ORDER BY timestamp ASC
+      `).all(date);
+      sendJSON(res, 200, rows.map(r => ({ ...r, data: JSON.parse(r.data) })));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
   // ── SCHWAB PROXY ROUTES ───────────────────────────────────────
   if (p.startsWith('/proxy/schwab/')) {
     if (!schwabAccessToken) return sendJSON(res, 401, { error: 'Schwab not connected' });

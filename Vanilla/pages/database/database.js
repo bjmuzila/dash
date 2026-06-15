@@ -903,57 +903,86 @@ window.DB = {
   // INTERNAL QUERY METHODS — SQLite via REST API
   // ========================================================================
   async _insert(storeName, record) {
-    // Map IndexedDB store names to SQLite table names
-    const tableMap = {
-      'mvc': 'mvc',
-      'premiumFlow': 'premium_flow',
-      'chainSnapshots': 'chain_snapshots',
-      'greeksHistory': 'greeks_history',
-      'multiStockFlow': 'multi_stock_flow',
-      'greeksTimeSeries': 'greeks_time_series',
-      'bigTrades': 'big_trades',
-      'es15mCandles': 'es_15m_candles',
-      'gexTop3': 'gex_top3',
-      'bzilaLiveSnapshots': 'bzila_live_snapshots'
+    // Route to correct SQLite endpoint based on store name
+    const endpoints = {
+      'mvc': '/api/mvc/save',
+      'premiumFlow': '/api/premium_flow/save',
+      'chainSnapshots': '/api/chain/snapshot',
+      'greeksHistory': null, // greeks_history (not exposed yet)
+      'multiStockFlow': null, // multi_stock_flow (not exposed yet)
+      'greeksTimeSeries': '/api/greeks/timeseries',
+      'bigTrades': null, // big_trades (not exposed yet)
+      'es15mCandles': '/api/candles/es15m',
+      'gexTop3': '/api/gex/top3',
+      'bzilaLiveSnapshots': '/api/bzila/snapshot'
     };
 
-    const table = tableMap[storeName];
-    if (!table) {
-      // Fall back to IndexedDB for unrecognized stores
-      return this._withReopen(() => new Promise((resolve, reject) => {
-        const tx = this.db.transaction(storeName, 'readwrite');
-        const store = tx.objectStore(storeName);
-        const request = store.add(record);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      }));
+    const endpoint = endpoints[storeName];
+    if (!endpoint) {
+      // Fall back to IndexedDB for stores without endpoints
+      return this._indexedDBInsert(storeName, record);
     }
 
     try {
-      const response = await fetch('/proxy/api/db/insert', {
+      const response = await fetch(window.location.origin + endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ table, data: record })
+        body: JSON.stringify(record)
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      console.log(`[Sync] Saved to SQLite: ${storeName}`);
       return record.id || Date.now();
     } catch (err) {
-      console.warn(`[DB] SQLite write failed for ${table}, falling back to IndexedDB:`, err);
-      // Graceful fallback
-      return this._withReopen(() => new Promise((resolve, reject) => {
-        if (!this.db.objectStoreNames.contains(storeName)) { resolve(0); return; }
-        const tx = this.db.transaction(storeName, 'readwrite');
-        const store = tx.objectStore(storeName);
-        const request = store.add(record);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      }));
+      console.warn(`[DB] SQLite write failed for ${storeName}, falling back to IndexedDB:`, err.message);
+      // Graceful fallback to IndexedDB
+      return this._indexedDBInsert(storeName, record);
     }
   },
 
-  async _getAllRecords(storeName) {
+  async _indexedDBInsert(storeName, record) {
     return this._withReopen(() => new Promise((resolve, reject) => {
-      if (!this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
+      if (!this.db || !this.db.objectStoreNames.contains(storeName)) { resolve(0); return; }
+      const tx = this.db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      const request = store.add(record);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    }));
+  },
+
+  async _getAllRecords(storeName) {
+    const endpoints = {
+      'mvc': '/api/mvc/all',
+      'premiumFlow': null,
+      'chainSnapshots': null,
+      'greeksTimeSeries': null,
+      'es15mCandles': '/api/candles/es15m/date',
+      'gexTop3': null,
+      'bzilaLiveSnapshots': null
+    };
+
+    const endpoint = endpoints[storeName];
+    if (endpoint) {
+      try {
+        const date = new Date().toISOString().split('T')[0];
+        const resp = await fetch(window.location.origin + endpoint + '?date=' + date);
+        if (resp.ok) {
+          const records = await resp.json();
+          console.log(`[Sync] Loaded ${records.length} records for ${storeName} from SQLite`);
+          return records;
+        }
+      } catch (e) {
+        console.warn(`[DB] SQLite read failed for ${storeName}:`, e.message);
+      }
+    }
+
+    // Fall back to IndexedDB
+    return this._indexedDBGetAll(storeName);
+  },
+
+  async _indexedDBGetAll(storeName) {
+    return this._withReopen(() => new Promise((resolve, reject) => {
+      if (!this.db || !this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
       const tx = this.db.transaction(storeName, 'readonly');
       const store = tx.objectStore(storeName);
       const request = store.getAll();
@@ -963,62 +992,81 @@ window.DB = {
   },
 
   async _queryByIndex(storeName, indexName, value) {
-    // Map IndexedDB store names to SQLite table + field
-    const tableMap = {
-      'mvc': { table: 'mvc', field: 'date' },
-      'premiumFlow': { table: 'premium_flow', field: 'ticker' },
-      'chainSnapshots': { table: 'chain_snapshots', field: 'date' },
-      'greeksHistory': { table: 'greeks_history', field: 'strike' },
-      'multiStockFlow': { table: 'multi_stock_flow', field: 'stock' },
-      'greeksTimeSeries': { table: 'greeks_time_series', field: 'ticker' },
-      'bigTrades': { table: 'big_trades', field: 'ticker' },
-      'es15mCandles': { table: 'es_15m_candles', field: 'slot_key' },
-      'gexTop3': { table: 'gex_top3', field: 'ticker' },
-      'bzilaLiveSnapshots': { table: 'bzila_live_snapshots', field: 'ticker' }
+    // Route to SQLite endpoints for common queries
+    const endpoints = {
+      'buySellScores': { path: '/api/buy_sell/date', param: 'date' },
+      'premiumFlow': { path: '/api/premium_flow/date', param: 'date' },
+      'gexTop3': { path: '/api/gex/top3/date', param: 'date' },
+      'bzilaLiveSnapshots': { path: '/api/bzila/snapshot/date', param: 'date' },
+      'greeksTimeSeries': { path: '/api/greeks/timeseries/date', param: 'date' },
+      'es15mCandles': { path: '/api/candles/es15m/date', param: 'date' },
+      'chainSnapshots': { path: '/api/chain/snapshot/date', param: 'date' }
     };
 
-    const schema = tableMap[storeName];
-    if (!schema) {
-      // Unrecognized store, use IndexedDB
-      return this._withReopen(() => new Promise((resolve, reject) => {
-        if (!this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
-        const tx = this.db.transaction(storeName, 'readonly');
-        const store = tx.objectStore(storeName);
-        if (!store.indexNames.contains(indexName)) { resolve([]); return; }
-        const request = store.index(indexName).getAll(value);
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
-      }));
+    const endpoint = endpoints[storeName];
+    if (endpoint && indexName === 'date') {
+      try {
+        const url = `${window.location.origin}${endpoint.path}?${endpoint.param}=${encodeURIComponent(value)}`;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const records = await resp.json();
+          console.log(`[Sync] Loaded ${records.length} records for ${storeName}/${indexName}/${value} from SQLite`);
+          return records;
+        }
+      } catch (e) {
+        console.warn(`[DB] SQLite query failed for ${storeName}, falling back to IndexedDB:`, e.message);
+      }
     }
 
-    try {
-      const url = `/proxy/api/db/query?table=${schema.table}&${schema.field}=${encodeURIComponent(value)}&limit=10000`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json();
-      return result.data || [];
-    } catch (err) {
-      console.warn(`[DB] SQLite query failed for ${storeName}, falling back to IndexedDB:`, err);
-      // Fallback to IndexedDB
-      return this._withReopen(() => new Promise((resolve, reject) => {
-        if (!this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
-        const tx = this.db.transaction(storeName, 'readonly');
-        const store = tx.objectStore(storeName);
-        if (!store.indexNames.contains(indexName)) { resolve([]); return; }
-        const request = store.index(indexName).getAll(value);
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
-      }));
-    }
+    // Fall back to IndexedDB
+    return this._indexedDBQueryByIndex(storeName, indexName, value);
   },
 
-  async _queryByRange(storeName, indexName, minValue, maxValue) {
+  async _indexedDBQueryByIndex(storeName, indexName, value) {
     return this._withReopen(() => new Promise((resolve, reject) => {
-      if (!this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
+      if (!this.db || !this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
       const tx = this.db.transaction(storeName, 'readonly');
       const store = tx.objectStore(storeName);
       if (!store.indexNames.contains(indexName)) { resolve([]); return; }
-      const range = IDBKeyRange.lowerBound(minValue, true);
+      const request = store.index(indexName).getAll(value);
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    }));
+  },
+
+  async _queryByRange(storeName, indexName, minValue, maxValue = Date.now()) {
+    // Route to SQLite endpoints for time range queries
+    const endpoints = {
+      'premiumFlow': '/api/premium_flow/range',
+      'greeksTimeSeries': '/api/greeks/timeseries/range'
+    };
+
+    const endpoint = endpoints[storeName];
+    if (endpoint && indexName === 'timestamp') {
+      try {
+        const url = `${window.location.origin}${endpoint}?minTs=${minValue}&maxTs=${maxValue}`;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const records = await resp.json();
+          console.log(`[Sync] Loaded ${records.length} records for ${storeName} range from SQLite`);
+          return records;
+        }
+      } catch (e) {
+        console.warn(`[DB] SQLite range query failed for ${storeName}:`, e.message);
+      }
+    }
+
+    // Fall back to IndexedDB
+    return this._indexedDBQueryByRange(storeName, indexName, minValue, maxValue);
+  },
+
+  async _indexedDBQueryByRange(storeName, indexName, minValue, maxValue = Date.now()) {
+    return this._withReopen(() => new Promise((resolve, reject) => {
+      if (!this.db || !this.db.objectStoreNames.contains(storeName)) { resolve([]); return; }
+      const tx = this.db.transaction(storeName, 'readonly');
+      const store = tx.objectStore(storeName);
+      if (!store.indexNames.contains(indexName)) { resolve([]); return; }
+      const range = IDBKeyRange.bound(minValue, maxValue, true, false);
       const request = store.index(indexName).getAll(range);
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
