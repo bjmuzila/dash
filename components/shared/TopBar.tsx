@@ -46,6 +46,7 @@ const TOPBAR_PILL_PADDING = "6px 12px";
 const TOPBAR_LABEL_SIZE = 10;
 const TOPBAR_VALUE_SIZE = 16;
 const TOPBAR_CHANGE_SIZE = 12;
+const ES_DISPLAY_LABEL = "ESU";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function fmt(v: number, decimals = 2) {
@@ -473,7 +474,7 @@ export default function TopBar() {
         {/* ES | SPX */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, padding: TOPBAR_PILL_PADDING, border: "1px solid #1e3050", borderRadius: 999, background: "rgba(7,16,27,.8)" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-            <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700 }}>ES</span>
+            <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700 }}>{ES_DISPLAY_LABEL}</span>
             <span style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
               {es.price > 0 ? fmt(es.price) : "—"}
             </span>

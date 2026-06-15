@@ -35,6 +35,10 @@ interface TrackedStrikeRow extends ChainGexRow {
   change15s: number;
 }
 
+interface ColoredTrackedStrikeRow extends TrackedStrikeRow {
+  color: string;
+}
+
 interface BzilaStrikeHistoryRow {
   id?: number;
   timestamp: number;
@@ -356,15 +360,73 @@ function StatTile({ label, value, color, sub }: { label: string; value: string; 
   );
 }
 
-function StrikeBucketCard({
+function StrikeBucketChart({
   title,
   accent,
   rows,
+  points,
+  mode,
+  hiddenStrikes,
+  onToggleStrike,
 }: {
   title: string;
   accent: string;
-  rows: TrackedStrikeRow[];
+  rows: ColoredTrackedStrikeRow[];
+  points: StrikeChartPoint[];
+  mode: StrikeMode;
+  hiddenStrikes: number[];
+  onToggleStrike: (strike: number) => void;
 }) {
+  const key = mode === "rolling" ? "values" : "changes";
+  const visibleRows = rows.filter((row) => !hiddenStrikes.includes(row.strike));
+  const values = points.flatMap((point) =>
+    visibleRows
+      .map((row) => point[key][row.strike])
+      .filter((value): value is number => Number.isFinite(value))
+  );
+
+  const chart = useMemo(() => {
+    const width = 520;
+    const height = 220;
+    const pad = { l: 12, r: 72, t: 16, b: 28 };
+    const plotW = width - pad.l - pad.r;
+    const plotH = height - pad.t - pad.b;
+
+    if (!points.length || !visibleRows.length || !values.length) {
+      return null;
+    }
+
+    const min = Math.min(...values, 0);
+    const max = Math.max(...values, 0);
+    const range = Math.max(Math.abs(max - min), 1);
+    const top = max + range * 0.12;
+    const bottom = min - range * 0.12;
+    const xAt = (index: number) => pad.l + (points.length === 1 ? plotW / 2 : (plotW * index) / (points.length - 1));
+    const yAt = (value: number) => pad.t + ((top - value) / Math.max(top - bottom, 1)) * plotH;
+    const yTicks = [top, (top + bottom) / 2, 0, bottom];
+    const tickCount = Math.min(points.length, 4);
+    const step = Math.max(1, Math.floor(points.length / Math.max(1, tickCount - 1)));
+
+    const series = visibleRows.map((row) => {
+      const coords = points
+        .map((point, index) => {
+          const value = point[key][row.strike];
+          return Number.isFinite(value) ? { x: xAt(index), y: yAt(value), value } : null;
+        })
+        .filter((entry): entry is { x: number; y: number; value: number } => Boolean(entry));
+
+      if (!coords.length) return null;
+
+      return {
+        row,
+        path: coords.map((coord, index) => `${index === 0 ? "M" : "L"} ${coord.x} ${coord.y}`).join(" "),
+        last: coords[coords.length - 1],
+      };
+    }).filter((entry): entry is { row: ColoredTrackedStrikeRow; path: string; last: { x: number; y: number; value: number } } => Boolean(entry));
+
+    return { width, height, pad, plotW, plotH, xAt, yAt, yTicks, step, top, bottom, series };
+  }, [key, points, values, visibleRows]);
+
   return (
     <div
       style={{
@@ -391,39 +453,104 @@ function StrikeBucketCard({
           <div style={{ ...cardLabel, marginBottom: 2 }}>{title}</div>
           <div style={{ color: accent, fontSize: 12, fontWeight: 700 }}>{rows.length} tracked</div>
         </div>
-        <div style={{ color: "#64748b", fontSize: 10 }}>Net GEX / 15s</div>
+        <div style={{ color: "#64748b", fontSize: 10 }}>{mode === "rolling" ? "Rolling net GEX" : "15s net GEX change"}</div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", overflow: "auto" }}>
+      <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 10 }}>
         {rows.length === 0 ? (
-          <div style={{ padding: 12, color: "#64748b", fontSize: 11 }}>Waiting for strike selection...</div>
+          <div style={{ color: "#64748b", fontSize: 11 }}>Waiting for strike selection...</div>
+        ) : !chart ? (
+          <div style={{ color: "#64748b", fontSize: 11 }}>
+            {visibleRows.length ? "Waiting for chart history..." : "All strikes hidden. Click a legend item to show one again."}
+          </div>
         ) : (
-          rows
-            .slice()
-            .sort((a, b) => a.rankIndex - b.rankIndex)
-            .map((row, index) => (
-              <div
-                key={`${row.bucket}-${row.strike}`}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "28px 72px 1fr 92px",
-                  gap: 8,
-                  alignItems: "center",
-                  padding: "8px 12px",
-                  borderTop: index === 0 ? "none" : `1px solid ${CARD_BORDER}`,
-                  fontFamily: "monospace",
-                  fontSize: 11,
-                }}
-              >
-                <span style={{ color: "#64748b" }}>#{row.rankIndex}</span>
-                <span style={{ color: "#e2e8f0", fontWeight: 700 }}>{fmtPrice(row.strike)}</span>
-                <span style={{ color: row.netGEX >= 0 ? "#22c55e" : "#f97316", textAlign: "right", fontWeight: 700 }}>
-                  {fmtSignedMoney(row.netGEX)}
-                </span>
-                <span style={{ color: row.change15s >= 0 ? "#38bdf8" : "#fda4af", textAlign: "right" }}>
-                  {fmtSignedMoney(row.change15s)}
-                </span>
-              </div>
-            ))
+          <>
+            <div style={{ position: "relative", height: 220, border: `1px solid ${CARD_BORDER}`, borderRadius: 8, overflow: "hidden", background: "#09111b" }}>
+              <svg viewBox={`0 0 ${chart.width} ${chart.height}`} style={{ width: "100%", height: "100%", display: "block" }}>
+                <rect x="0" y="0" width={chart.width} height={chart.height} fill="#09111b" />
+                {[0, 1, 2, 3, 4].map((tick) => {
+                  const y = chart.pad.t + (chart.plotH * tick) / 4;
+                  return <line key={tick} x1={chart.pad.l} y1={y} x2={chart.width - chart.pad.r} y2={y} stroke="#162130" strokeWidth="1" />;
+                })}
+                <line
+                  x1={chart.pad.l}
+                  y1={chart.yAt(0)}
+                  x2={chart.width - chart.pad.r}
+                  y2={chart.yAt(0)}
+                  stroke="#334155"
+                  strokeWidth="1"
+                />
+
+                {chart.series.map((entry) => (
+                  <g key={`${entry.row.bucket}-${entry.row.strike}`}>
+                    <path d={entry.path} fill="none" stroke={entry.row.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    <circle cx={entry.last.x} cy={entry.last.y} r="2.5" fill={entry.row.color} />
+                  </g>
+                ))}
+
+                {chart.yTicks.map((value, index) => (
+                  <text
+                    key={index}
+                    x={chart.width - chart.pad.r + 8}
+                    y={chart.yAt(value)}
+                    fill="#94a3b8"
+                    fontSize="10"
+                    fontFamily="monospace"
+                    dominantBaseline="middle"
+                  >
+                    {fmtSignedMoney(value)}
+                  </text>
+                ))}
+
+                {points.map((point, index) => {
+                  if (index % chart.step !== 0 && index !== points.length - 1) return null;
+                  return (
+                    <text
+                      key={point.ts}
+                      x={chart.xAt(index)}
+                      y={chart.height - 8}
+                      fill="#94a3b8"
+                      fontSize="10"
+                      fontFamily="monospace"
+                      textAnchor="middle"
+                    >
+                      {new Date(point.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </text>
+                  );
+                })}
+              </svg>
+            </div>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {rows.map((row) => {
+                const hidden = hiddenStrikes.includes(row.strike);
+                return (
+                  <button
+                    key={`${row.bucket}-${row.strike}`}
+                    onClick={() => onToggleStrike(row.strike)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      border: `1px solid ${hidden ? "#243244" : row.color}`,
+                      background: hidden ? "#0a1018" : "rgba(15,23,42,0.95)",
+                      color: hidden ? "#64748b" : "#e2e8f0",
+                      borderRadius: 999,
+                      padding: "5px 8px",
+                      cursor: "pointer",
+                      fontSize: 10,
+                      fontFamily: "monospace",
+                      opacity: hidden ? 0.55 : 1,
+                    }}
+                    title={hidden ? "Show strike" : "Hide strike"}
+                  >
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: row.color, display: "inline-block" }} />
+                    <span>{fmtPrice(row.strike)}</span>
+                    <span style={{ color: row.netGEX >= 0 ? "#22c55e" : "#f97316" }}>{fmtSignedMoney(row.netGEX)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -444,6 +571,10 @@ export default function BzilaPage() {
   const [strikeTooltip, setStrikeTooltip] = useState<{ x: number; y: number; point: StrikeChartPoint } | null>(null);
   const [aggregateTooltip, setAggregateTooltip] = useState<{ x: number; y: number; point: GexHistPoint } | null>(null);
   const [shotState, setShotState] = useState<Record<string, string>>({});
+  const [hiddenBucketStrikes, setHiddenBucketStrikes] = useState<Record<StrikeBucket, number[]>>({
+    above: [],
+    below: [],
+  });
 
   const layoutRef = useRef<HTMLDivElement>(null);
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -498,15 +629,6 @@ export default function BzilaPage() {
 
   const latestStoredTrackedRows = useMemo(() => extractLatestTrackedRows(strikeHistoryRows), [strikeHistoryRows]);
   const displayTrackedRows = trackedRows.length ? trackedRows : latestStoredTrackedRows;
-  const aboveRows = useMemo(
-    () => displayTrackedRows.filter((row) => row.bucket === "above").sort((a, b) => a.rankIndex - b.rankIndex),
-    [displayTrackedRows]
-  );
-  const belowRows = useMemo(
-    () => displayTrackedRows.filter((row) => row.bucket === "below").sort((a, b) => a.rankIndex - b.rankIndex),
-    [displayTrackedRows]
-  );
-
   const strikePoints = useMemo(() => {
     const points = groupStrikeHistory(strikeHistoryRows);
     if (displayTrackedRows.length && lastLiveTs > (points[points.length - 1]?.ts ?? 0)) {
@@ -531,6 +653,24 @@ export default function BzilaPage() {
     [displayTrackedRows]
   );
 
+  const coloredTrackedRows = useMemo<ColoredTrackedStrikeRow[]>(
+    () =>
+      displayTrackedRows.map((row) => ({
+        ...row,
+        color: STRIKE_COLORS[(row.rankIndex - 1) + (row.bucket === "below" ? 10 : 0)] ?? "#38bdf8",
+      })),
+    [displayTrackedRows]
+  );
+
+  const aboveRows = useMemo(
+    () => coloredTrackedRows.filter((row) => row.bucket === "above").sort((a, b) => a.rankIndex - b.rankIndex),
+    [coloredTrackedRows]
+  );
+  const belowRows = useMemo(
+    () => coloredTrackedRows.filter((row) => row.bucket === "below").sort((a, b) => a.rankIndex - b.rankIndex),
+    [coloredTrackedRows]
+  );
+
   const currentSpot = lastLiveSpot || strikePoints[strikePoints.length - 1]?.spot || flow.spxPrice || flow.esPrice || 0;
   const totalCallGEX = allRows.reduce((sum, row) => sum + row.callGEX, 0);
   const totalPutGEX = allRows.reduce((sum, row) => sum + row.putGEX, 0);
@@ -540,6 +680,13 @@ export default function BzilaPage() {
     : { text: "CONNECTING", bg: "#7f1d1d", fg: "#fca5a5" };
 
   priceFallbackRef.current = { spx: flow.spxPrice, es: flow.esPrice };
+
+  useEffect(() => {
+    setHiddenBucketStrikes((current) => ({
+      above: current.above.filter((strike) => aboveRows.some((row) => row.strike === strike)),
+      below: current.below.filter((strike) => belowRows.some((row) => row.strike === strike)),
+    }));
+  }, [aboveRows, belowRows]);
 
   useEffect(() => {
     let alive = true;
@@ -1053,6 +1200,19 @@ export default function BzilaPage() {
     return state === "loading" ? "..." : state === "ok" ? "OK" : state === "err" ? "ERR" : normal;
   };
 
+  const toggleBucketStrike = useCallback((bucket: StrikeBucket, strike: number) => {
+    setHiddenBucketStrikes((current) => {
+      const bucketStrikes = current[bucket];
+      const nextBucketStrikes = bucketStrikes.includes(strike)
+        ? bucketStrikes.filter((value) => value !== strike)
+        : [...bucketStrikes, strike];
+      return {
+        ...current,
+        [bucket]: nextBucketStrikes,
+      };
+    });
+  }, []);
+
   const shotBtnStyle = (color: string): CSSProperties => ({
     fontSize: 9,
     padding: "2px 8px",
@@ -1343,8 +1503,24 @@ export default function BzilaPage() {
                 minHeight: 0,
               }}
             >
-              <StrikeBucketCard title="Above Spot" accent="#38bdf8" rows={aboveRows} />
-              <StrikeBucketCard title="Below Spot" accent="#f97316" rows={belowRows} />
+              <StrikeBucketChart
+                title="Above Spot"
+                accent="#38bdf8"
+                rows={aboveRows}
+                points={strikePoints}
+                mode={mode}
+                hiddenStrikes={hiddenBucketStrikes.above}
+                onToggleStrike={(strike) => toggleBucketStrike("above", strike)}
+              />
+              <StrikeBucketChart
+                title="Below Spot"
+                accent="#f97316"
+                rows={belowRows}
+                points={strikePoints}
+                mode={mode}
+                hiddenStrikes={hiddenBucketStrikes.below}
+                onToggleStrike={(strike) => toggleBucketStrike("below", strike)}
+              />
             </div>
           </div>
         </div>
