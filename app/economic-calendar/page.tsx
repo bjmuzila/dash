@@ -71,7 +71,7 @@ export default function EconomicCalendarPage() {
   const [lastRefresh,  setLastRefresh]  = useState<string | null>(null);
   const [quote,        setQuote]        = useState<string | null>(null);
   const [search,       setSearch]       = useState("");
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all"]));
   const [dropOpen,     setDropOpen]     = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 
@@ -148,7 +148,7 @@ export default function EconomicCalendarPage() {
               {today}
             </span>
           )}
-          <span style={{ fontSize: 10, color: "#3a5570" }}>USA only · incl. Trump</span>
+          <span style={{ fontSize: 10, color: "#3a5570" }}>All countries · filterable</span>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

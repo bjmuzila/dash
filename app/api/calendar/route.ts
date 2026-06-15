@@ -124,9 +124,7 @@ export async function GET() {
 
     const raw: FFEvent[] = await econRes.json();
 
-    // USD-only economic events
     const econEvents: CalEvent[] = raw
-      .filter(ev => ev.country === "USD")
       .map(ev => {
         const { date, time, time_formatted } = toET(ev.date);
         return {
@@ -144,7 +142,7 @@ export async function GET() {
 
     const events: CalEvent[] = [...econEvents, ...trumpEvents];
 
-    console.log(`[calendar] loaded ${econEvents.length} USD econ + ${trumpEvents.length} Trump events`);
+    console.log(`[calendar] loaded ${econEvents.length} econ events across all countries + ${trumpEvents.length} Trump events`);
     return NextResponse.json({ events }, {
       headers: { "Cache-Control": "s-maxage=1800, stale-while-revalidate=3600" },
     });

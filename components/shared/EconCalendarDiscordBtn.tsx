@@ -10,8 +10,6 @@
 
 import { useState, useCallback } from "react";
 
-type BtnState = "idle" | "busy" | "ok" | "err";
-
 interface CalEvent {
   date: string;
   time: string;
@@ -23,6 +21,8 @@ interface CalEvent {
   previous?: string;
   actual?: string;
 }
+
+type TemplateBtnState = "idle" | "busy" | "ok" | "err";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -111,7 +111,7 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .layout-busy .main-card{width:min(800px,calc(100% - 120px))}
 .layout-busy .row-time,.layout-busy .row-label{font-size:20px}
 .empty-note{color:rgba(255,255,255,0.35);text-align:center;font-size:14px;padding:16px}
-.logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;gap:0;opacity:0.9}
+.logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:90px;height:90px;object-fit:contain}
 </style></head><body>
 <div class="snapshot ${layoutClass}" id="root">
@@ -141,8 +141,7 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
   </div>
   ${logoDataUrl ? `
   <div class="logo-wrap">
-    <img src="${logoDataUrl}" alt="BzilaTrades" />
-    <span class="logo-text">BzilaTrades</span>
+    <img src="${logoDataUrl}" alt="Logo" />
   </div>` : ""}
 </div>
 </body></html>`;
@@ -197,6 +196,39 @@ async function postToDiscord(imageBase64: string): Promise<void> {
   if (!res.ok) throw new Error(`Discord ${res.status}`);
 }
 
+async function copyImageToClipboard(imageBase64: string): Promise<void> {
+  const base64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: "image/png" });
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+}
+
+async function buildCalendarTemplateImage(): Promise<string> {
+  const [calRes, quoteRes, logoRes] = await Promise.all([
+    fetch("/api/calendar"),
+    fetch("/api/calendar-quote").catch(() => null),
+    fetch("/bzilatrades-logo.png").catch(() => null),
+  ]);
+  const calJson = calRes.ok ? await calRes.json() : {};
+  const quoteJson = quoteRes?.ok ? await quoteRes.json() : {};
+
+  const events: CalEvent[] = calJson.events ?? [];
+  const quote: string = quoteJson.quote ?? "";
+
+  let logoDataUrl = "";
+  if (logoRes?.ok) {
+    const blob = await logoRes.blob();
+    logoDataUrl = await new Promise<string>(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  const html = buildSnapshotHTML(events, quote, logoDataUrl);
+  return renderAndCapture(html);
+}
+
 // ── Discord icon ──────────────────────────────────────────────────────────────
 
 function IconDiscord({ size = 11 }: { size?: number }) {
@@ -210,37 +242,13 @@ function IconDiscord({ size = 11 }: { size?: number }) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function EconCalendarDiscordBtn() {
-  const [s, set] = useState<BtnState>("idle");
+  const [s, set] = useState<TemplateBtnState>("idle");
 
   const run = useCallback(async () => {
     if (s === "busy") return;
     set("busy");
     try {
-      // Fetch calendar data, quote, and logo in parallel
-      const [calRes, quoteRes, logoRes] = await Promise.all([
-        fetch("/api/calendar"),
-        fetch("/api/calendar-quote").catch(() => null),
-        fetch("/bzilatrades-logo.png").catch(() => null),
-      ]);
-      const calJson = calRes.ok ? await calRes.json() : {};
-      const quoteJson = quoteRes?.ok ? await quoteRes.json() : {};
-
-      const events: CalEvent[] = calJson.events ?? [];
-      const quote: string = quoteJson.quote ?? "";
-
-      // Inline logo as base64 so it renders inside the iframe
-      let logoDataUrl = "";
-      if (logoRes?.ok) {
-        const blob = await logoRes.blob();
-        logoDataUrl = await new Promise<string>(resolve => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(blob);
-        });
-      }
-
-      const html = buildSnapshotHTML(events, quote, logoDataUrl);
-      const img  = await renderAndCapture(html);
+      const img = await buildCalendarTemplateImage();
       await postToDiscord(img);
       set("ok");
     } catch (e) {
@@ -273,6 +281,54 @@ export default function EconCalendarDiscordBtn() {
       }}
     >
       <IconDiscord />
+      {label}
+    </button>
+  );
+}
+
+export function EconCalendarTemplateCopyBtn() {
+  const [s, set] = useState<TemplateBtnState>("idle");
+
+  const run = useCallback(async () => {
+    if (s === "busy") return;
+    set("busy");
+    try {
+      const img = await buildCalendarTemplateImage();
+      await copyImageToClipboard(img);
+      set("ok");
+    } catch (e) {
+      console.error("[EconCalendarTemplateCopyBtn]", e);
+      set("err");
+    } finally {
+      setTimeout(() => set("idle"), 1800);
+    }
+  }, [s]);
+
+  const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
+  const label = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📷";
+
+  return (
+    <button
+      onClick={run}
+      disabled={s === "busy"}
+      title="Copy the economic calendar template to clipboard"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "2px 5px",
+        border: `1px solid ${color}40`,
+        borderRadius: 2,
+        background: "rgba(255,255,255,0.04)",
+        color,
+        cursor: s === "busy" ? "default" : "pointer",
+        fontSize: 13,
+        fontWeight: 700,
+        fontFamily: "inherit",
+        flexShrink: 0,
+        transition: "color .15s, border-color .15s",
+      }}
+    >
       {label}
     </button>
   );

@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { BoxSnapBtn } from "@/components/shared/DataBox";
-import EconCalendarDiscordBtn from "@/components/shared/EconCalendarDiscordBtn";
+import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 
 interface CalEvent {
   date: string;
@@ -91,7 +90,7 @@ export default function EconCalendarPanel() {
   const [error,         setError]         = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "trump"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -336,7 +335,7 @@ export default function EconCalendarPanel() {
         <button onClick={trigger} style={{ ...btnStyle }}>
           {btnLabel}
         </button>
-        <BoxSnapBtn targetRef={containerRef} label="📷" />
+        <EconCalendarTemplateCopyBtn />
         <EconCalendarDiscordBtn />
       </div>
 
