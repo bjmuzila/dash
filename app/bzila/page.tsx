@@ -615,7 +615,10 @@ function StrikeBucketChart({
 
 export default function BzilaPage() {
   const { flow } = useSpxFlow(true);
+  const initialCycle = useMemo(() => getSessionCycle(), []);
   const [mode, setMode] = useState<StrikeMode>("rolling");
+  const [selectedSession, setSelectedSession] = useState<BzilaSession>(initialCycle.activeSession);
+  const [sessionCycle, setSessionCycle] = useState<SessionCycle>(initialCycle);
   const [viewportWidth, setViewportWidth] = useState(1440);
   const [allRows, setAllRows] = useState<ChainGexRow[]>([]);
   const [trackedRows, setTrackedRows] = useState<TrackedStrikeRow[]>([]);
@@ -640,9 +643,17 @@ export default function BzilaPage() {
   const aggregateHistoryRef = useRef<GexHistPoint[]>([]);
   const strikeHistoryRowsRef = useRef<BzilaStrikeHistoryRow[]>([]);
   const priceFallbackRef = useRef({ spx: 0, es: 0 });
+  const liveSessionRef = useRef<{ session: BzilaSession; date: string }>({
+    session: initialCycle.activeSession,
+    date: initialCycle.sessionDates[initialCycle.activeSession],
+  });
 
   const isStacked = viewportWidth < 1240;
   const isMobile = viewportWidth < 860;
+  const selectedSessionDate = sessionCycle.sessionDates[selectedSession];
+  const viewingActiveSession =
+    selectedSession === sessionCycle.activeSession &&
+    selectedSessionDate === sessionCycle.sessionDates[sessionCycle.activeSession];
 
   useEffect(() => {
     const syncSize = () => setViewportWidth(window.innerWidth);
