@@ -626,8 +626,8 @@ const queuedSubscriptionKeys = new Set();
 const activeAutoSubscriptionKeys = new Set();
 const activeCandleSubscriptionKeys = new Set();
 const SUBSCRIPTION_BATCH_SIZE = 500;    // large batches for fast drain
-const SUBSCRIPTION_BATCH_DELAY_BASE = 500;   // 500ms between batches
-const SUBSCRIPTION_BATCH_DELAY_MAX = 2000;   // 2 second max backoff
+const SUBSCRIPTION_BATCH_DELAY_BASE = 800;   // 800ms between batches (increased from 500ms)
+const SUBSCRIPTION_BATCH_DELAY_MAX = 5000;   // 5 second max backoff (increased from 2000ms)
 let subscriptionBatchDelay = SUBSCRIPTION_BATCH_DELAY_BASE;
 let subscriptionErrorCount = 0;
 let pendingNewSubscriptions = false;  // Track if there are new subscriptions to send
@@ -1525,14 +1525,28 @@ function saveTokenFile(t) {
 
 function isExpired() { return !accessToken || Date.now() >= (tokenExpiry - 60_000); }
 
-function httpsRequest(opts, body) {
+function httpsRequest(opts, body, retries = 0) {
   return new Promise((resolve, reject) => {
     const req = https.request(opts, res => {
       let raw = '';
       res.on('data', c => raw += c);
       res.on('end', () => {
-        try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); }
-        catch { resolve({ status: res.statusCode, data: raw }); }
+        try {
+          const parsed = JSON.parse(raw);
+          // Handle 429 (rate limit) with exponential backoff
+          if (res.statusCode === 429 && retries < 3) {
+            const delay = Math.pow(2, retries) * 1000; // 1s, 2s, 4s
+            log(`[429] Rate limited. Retrying after ${delay}ms (attempt ${retries + 1}/3)`);
+            setTimeout(() => {
+              httpsRequest(opts, body, retries + 1).then(resolve).catch(reject);
+            }, delay);
+          } else {
+            resolve({ status: res.statusCode, data: parsed });
+          }
+        }
+        catch {
+          resolve({ status: res.statusCode, data: raw });
+        }
       });
     });
     req.on('error', reject);
