@@ -1061,7 +1061,7 @@ export default function InsightsPage() {
   // ── WebSocket: live GREEKS_INTRADAY broadcast + history on connect ────────
   const wsRef = useRef<WebSocket | null>(null);
   useEffect(() => {
-    if (!DXLINK_WS_URL) return;
+    if (!DXLINK_WS_URL || !mountedRef.current) return;
     const ws = new WebSocket(DXLINK_WS_URL);
     wsRef.current = ws;
     const esFeedTypes = ["/ESU26", "/ES:XCME", "/ES"].reduce((acc, sym) => {
@@ -1071,23 +1071,28 @@ export default function InsightsPage() {
 
     ws.onopen = () => {
       try {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: ["/ESU26", "/ES:XCME", "/ES"],
-          feedTypesBySymbol: esFeedTypes,
-        }));
+        if (mountedRef.current) {
+          ws.send(JSON.stringify({
+            type: "subscribe",
+            symbols: ["/ESU26", "/ES:XCME", "/ES"],
+            feedTypesBySymbol: esFeedTypes,
+          }));
+        }
       } catch { /* silent */ }
-      fetch("/api/proxy/dxlink-subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbols: ["/ESU26", "/ES:XCME", "/ES"],
-          feedTypesBySymbol: esFeedTypes,
-        }),
-      }).catch(() => {});
+      if (mountedRef.current) {
+        fetch("/api/proxy/dxlink-subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbols: ["/ESU26", "/ES:XCME", "/ES"],
+            feedTypesBySymbol: esFeedTypes,
+          }),
+        }).catch(() => {});
+      }
     };
 
     ws.onmessage = (e) => {
+      if (!mountedRef.current) return;
       try {
         const msg = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
         if (msg?.type === "FEED_DATA" && Array.isArray(msg.data)) {
@@ -1144,7 +1149,17 @@ export default function InsightsPage() {
       } catch { /* silent */ }
     };
 
-    return () => { ws.close(); wsRef.current = null; };
+    ws.onerror = () => { if (mountedRef.current && ws) ws.close(); };
+
+    return () => {
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.close();
+      }
+      wsRef.current = null;
+    };
   }, [applySnapshot]);
 
   useEffect(() => {
@@ -1218,8 +1233,14 @@ export default function InsightsPage() {
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
+  // Track mounted state to prevent updates after unmount
+  const mountedRef = useRef(true);
   useEffect(() => {
-    if (!selectedExpiry) return;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedExpiry || !mountedRef.current) return;
     activeExpiryRef.current = selectedExpiry;
     // Only wipe history when user actively switches expiry; not on initial load
     if (initialExpirySetRef.current) {
@@ -1228,7 +1249,11 @@ export default function InsightsPage() {
     }
     initialExpirySetRef.current = true;
     doRefresh();
-    const t = setInterval(() => doRefresh(), 30_000);
+
+    // Greek updates every 30s only
+    const t = setInterval(() => {
+      if (mountedRef.current) doRefresh();
+    }, 30_000);
     return () => clearInterval(t);
   }, [doRefresh, selectedExpiry]);
 

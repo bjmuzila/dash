@@ -242,8 +242,17 @@ export default function Sidebar({
       className="flex flex-col w-44 shrink-0 border-r"
       style={{ borderColor, background: "#05080d", overflow: "hidden", height: "100%" }}
     >
-      {/* Header row: collapse button */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "4px 6px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+      {/* Header row: overview link + collapse button */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 6px", borderBottom: "1px solid var(--border)", flexShrink: 0, gap: 4 }}>
+        <a
+          href="/"
+          aria-label="Go to Overview"
+          style={{ background: "none", border: "none", color: "#00e5ff", cursor: "pointer", padding: "2px 6px", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none", fontSize: 10, fontWeight: 700, letterSpacing: ".06em", transition: "opacity 0.2s" }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.7")}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+        >
+          OVERVIEW
+        </a>
         <button
           onClick={onClose}
           aria-label="Collapse sidebar"

@@ -65,7 +65,9 @@ export default function QuotesPanel() {
   const wsLiveRef = useRef<Record<string, { lastPrice: number; prevClose: number; pctFeed: number; bidPrice: number; askPrice: number }>>({});
   const [rows, setRows] = useState<Record<string, number | null>>({});
   const [ts, setTs] = useState("");
+  const [countdown, setCountdown] = useState(30);
   const wsRef = useRef<WebSocket | null>(null);
+  const lastUpdateRef = useRef(Date.now());
 
   // ── dxlink WS for all symbols ───────────────────────────────────────────────
   useEffect(() => {
@@ -147,6 +149,8 @@ export default function QuotesPanel() {
 
             const now = new Date();
             setTs(`${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`);
+            lastUpdateRef.current = Date.now();
+            setCountdown(30);
           } catch (_) {}
         };
       } catch (_) {}
@@ -227,6 +231,15 @@ export default function QuotesPanel() {
     subscribeEquities();
   }, []);
 
+  // 30-second countdown timer
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - lastUpdateRef.current) / 1000);
+      setCountdown(Math.max(0, 30 - elapsed));
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
+
   const sortedRows = ALL_SYMBOLS
     .map(({ sym, label }) => ({ sym, label, pct: rows[sym] ?? null }))
     .sort((a, b) => {
@@ -243,7 +256,10 @@ export default function QuotesPanel() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", borderBottom: "1px solid #0d1825", flexShrink: 0 }}>
         <span style={{ fontSize: 9, color: "#4a6a84", fontWeight: 700, letterSpacing: ".12em" }}>QUOTES</span>
-        <span style={{ fontSize: 9, color: ts ? "#1e3050" : "#29b6f6", fontVariantNumeric: "tabular-nums" }}>{ts || "LIVE"}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 8, fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ color: ts ? "#1e3050" : "#29b6f6" }}>{ts || "LIVE"}</span>
+          <span style={{ color: countdown > 10 ? "#2a5a8a" : countdown > 5 ? "#f97316" : "#ef4444", fontWeight: 700 }}>{countdown}s</span>
+        </div>
       </div>
 
       {/* Rows — fill all available space */}

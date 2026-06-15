@@ -216,7 +216,19 @@ export default function GexChart({
         break;
       }
     }
-    // zero-crossing shading removed (kept black background)
+    // ── Zero-crossing shading ──
+    if (zeroCrossX !== null) {
+      ctx.fillStyle = "rgba(255, 179, 0, 0.08)";
+      ctx.fillRect(zeroCrossX, PAD_T, 3, cH);
+    }
+
+    // ── Zero line ──
+    ctx.strokeStyle = "rgba(40, 70, 100, 0.6)";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(PAD_L, yZero);
+    ctx.lineTo(PAD_L + cW, yZero);
+    ctx.stroke();
 
     // ── Grid lines (horizontal only, no border) ──
     const step = getNiceStep(maxG);
