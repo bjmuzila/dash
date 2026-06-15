@@ -10,14 +10,12 @@ import { ensureToken, ttFetch } from '@/lib/proxy/auth';
  *   GET /api/tt/option-marks?symbols=.SPX250117C5900
  */
 
-export async function GET(
-  request: NextRequest,
-  props: { params: Promise<{ params: string[] }> }
-) {
-  const { params } = await props;
+export async function GET(request: NextRequest) {
   try {
-    const path = '/' + params.params.join('/');
-    const url = new URL(request.nextUrl.search, `http://api.tastyworks.com${path}`);
+    // Extract path from URL
+    const url = new URL(request.url);
+    const pathMatch = url.pathname.match(/^\/api\/tt\/(.*)$/);
+    const path = pathMatch ? '/' + pathMatch[1] : '/';
 
     // Ensure we have a valid token
     const hasToken = await ensureToken();
@@ -39,13 +37,13 @@ export async function GET(
   }
 }
 
-export async function POST(
-  request: NextRequest,
-  props: { params: Promise<{ params: string[] }> }
-) {
-  const { params } = await props;
+export async function POST(request: NextRequest) {
   try {
-    const path = '/' + params.params.join('/');
+    // Extract path from URL
+    const url = new URL(request.url);
+    const pathMatch = url.pathname.match(/^\/api\/tt\/(.*)$/);
+    const path = pathMatch ? '/' + pathMatch[1] : '/';
+
     const body = await request.json();
 
     // Ensure we have a valid token

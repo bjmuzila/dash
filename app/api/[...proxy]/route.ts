@@ -9,13 +9,9 @@ import { ensureToken, ttFetch } from '@/lib/proxy/auth';
  *   /api/tt/* -> TastyTrade API proxy
  */
 
-export async function GET(
-  request: NextRequest,
-  props: { params: Promise<{ proxy: string[] }> }
-) {
-  const { params } = await props;
-  const pathArray = params.proxy || [];
-  const path = '/' + pathArray.join('/');
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace('/api', '');
 
   // Handle proxy/api/tt/* paths - route to TastyTrade
   if (path.startsWith('/proxy/api/tt/')) {
@@ -52,13 +48,9 @@ export async function GET(
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-export async function POST(
-  request: NextRequest,
-  props: { params: Promise<{ proxy: string[] }> }
-) {
-  const { params } = await props;
-  const pathArray = params.proxy || [];
-  const path = '/' + pathArray.join('/');
+export async function POST(request: NextRequest) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace('/api', '');
 
   try {
     const body = await request.json();
@@ -97,13 +89,9 @@ export async function POST(
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  props: { params: Promise<{ proxy: string[] }> }
-) {
-  const { params } = await props;
-  const pathArray = params.proxy || [];
-  const path = '/' + pathArray.join('/');
+export async function DELETE(request: NextRequest) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace('/api', '');
 
   try {
     if (path.startsWith('/proxy/')) {
