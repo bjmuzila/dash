@@ -18,7 +18,8 @@ export async function GET() {
   try {
     const db = await getDb();
     db.run(CREATE_TABLE);
-    const results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
+    let results = db.exec("SELECT * FROM es_stats WHERE expiration = 'WEEKLY' LIMIT 1");
+    if (!results.length) results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
     if (!results.length) return NextResponse.json(null);
     const { columns, values } = results[0];
     const row = Object.fromEntries(columns.map((col, i) => [col, values[0][i]]));

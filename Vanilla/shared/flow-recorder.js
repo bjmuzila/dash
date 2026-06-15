@@ -207,7 +207,7 @@
     const ws = new WebSocket((window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/ws/dxlink');
     state.ws = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'subscribe', symbols: ['/ESM26', 'SPX'], spxSubscribe: true }));
+      ws.send(JSON.stringify({ type: 'subscribe', symbols: ['/ESU26', 'SPX'], spxSubscribe: true }));
     };
     ws.onmessage = event => {
       try {

@@ -244,7 +244,7 @@ const FuturesFlowDashboard = () => {
   useEffect(() => {
     const fetchInitialPrices = async () => {
       try {
-        const resp = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?future[]=/ESM26&future[]=/NQM26');
+        const resp = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?future[]=/ESU26&future[]=/NQM26');
         if (resp.ok) {
           const data = await resp.json();
           const items = data?.data?.items || [];
@@ -274,7 +274,7 @@ const FuturesFlowDashboard = () => {
       // Subscribe to ES and NQ time & sales (Trade feed)
       ws.send(JSON.stringify({
         type: 'subscribe',
-        symbols: ['/ESM26', '/NQM26']
+        symbols: ['/ESU26', '/NQM26']
       }));
     };
 

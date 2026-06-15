@@ -89,7 +89,7 @@ export default function EconCalendarPanel() {
   const [error,         setError]         = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 

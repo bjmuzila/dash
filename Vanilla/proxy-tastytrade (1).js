@@ -1375,7 +1375,7 @@ function normalizeRequestedCandleSymbols(sym) {
   if (/^\/?ES/.test(base)) {
     out.add(`/ES:XCME${suffix}`);
     out.add(`/ES${suffix}`);
-    out.add(`/ESM26${suffix}`);
+    out.add(`/ESU26${suffix}`);
   }
   if (/^\/?NQ/.test(base)) {
     out.add(`/NQ:XCME${suffix}`);
@@ -2599,8 +2599,8 @@ const server = http.createServer(async (req, res) => {
     const candidates = [
       symbol,
       ...normalizeRequestedCandleSymbols(symbol),
-      symbol.replace('/ESM26', '/ES').replace('/NQM26', '/NQM6'),
-      symbol.replace('/ES', '/ESM26').replace('/NQM6', '/NQM26'),
+      symbol.replace('/ESU26', '/ES').replace('/NQM26', '/NQM6'),
+      symbol.replace('/ES', '/ESU26').replace('/NQM6', '/NQM26'),
       symbol.replace(/^\/ES[^{}]*/, '/ES:XCME'),
       symbol.replace(/^\/NQ[^{}]*/, '/NQ:XCME'),
     ];

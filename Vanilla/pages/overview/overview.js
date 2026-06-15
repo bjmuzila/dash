@@ -174,7 +174,7 @@ let _initialGreeksReceived = false;  // true after first dxLink Greeks batch arr
 let _pendingFinishGEXDate = null;    // set if finishGEXCompute was called before Greeks arrived
 let _subscriptionsLocked = false;    // Prevent re-subscribing on refresh
 
-// DX quote cache keyed by bare symbol (e.g. 'SPX', 'VIX', '/ESM26')
+// DX quote cache keyed by bare symbol (e.g. 'SPX', 'VIX', '/ESU26')
 // Exposed on window so other page modules (e.g. exposure.js) can read it
 const dxQuoteCache = window.dxQuoteCache = {};
 const dxSummaryCache = window.dxSummaryCache = {};
@@ -222,7 +222,7 @@ function getDXQuoteSocket() {
               handleDXLinkQuote(dxQuoteCache[sym]);
             }
             // Live ES price update
-            if (sym === '/ES:XCME' || sym === '/ESM26' || sym === '/ES') {
+            if (sym === '/ES:XCME' || sym === '/ESU26' || sym === '/ES') {
               const cached = dxQuoteCache[sym] || {};
               const bid = parseFloat(cached.bidPrice || cached.bid || 0);
               const ask = parseFloat(cached.askPrice || cached.ask || 0);
@@ -371,10 +371,10 @@ let _cachedPrevCloses = {};
 function renderQuotesFromDXCache() {
   const prevCloses = _cachedPrevCloses;
   const dxKeyMap = {
-    '/ESM26': ['/ES:XCME', '/ESM26', '/ES'],
+    '/ESU26': ['/ES:XCME', '/ESU26', '/ES'],
     '/NQM26': ['/NQ:XCME', '/NQM26', '/NQ']
   };
-  const dxSymList = ['SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
+  const dxSymList = ['SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESU26','/NQM26'];
   const data = {};
   dxSymList.forEach(sym => {
     let q = dxQuoteCache[sym] || {};
@@ -425,7 +425,7 @@ function renderQuotesFromDXCache() {
     data[sym] = entry;
     if (sym === 'SPX')          { data['$SPX'] = entry; if (prev > 0) spxPrevClose = prev; }
     if (sym === 'VIX')          { data['$VIX'] = entry; data['$VIX.X'] = entry; }
-    if (sym.startsWith('/ES'))  { data['/ESM26'] = entry; esPrice = price; if (prev > 0) esPrevClose = prev; if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose; updateESPriceDisplay(); }
+    if (sym.startsWith('/ES'))  { data['/ESU26'] = entry; esPrice = price; if (prev > 0) esPrevClose = prev; if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose; updateESPriceDisplay(); }
     if (sym.startsWith('/NQ'))  { data['/NQM26'] = entry; }
   });
   if (Object.keys(data).length > 0) {
@@ -2379,7 +2379,7 @@ async function fetchESPrice(){
   return;
   try{
     // ES/NQ quotes from dxLink cache
-    const esMeta=dxQuoteCache['/ESM26']||dxQuoteCache['/ES']||{};
+    const esMeta=dxQuoteCache['/ESU26']||dxQuoteCache['/ES']||{};
     const entry={lastPrice:esMeta.lastPrice||0};
     if(entry)esPrice=entry.quote?.lastPrice??entry.quote?.mark??entry.lastPrice??entry.mark??0;
     if(!esPrice&&spotPrice>0)esPrice=spotPrice/10;
@@ -3908,7 +3908,7 @@ border:1px solid rgba(255,255,255,0.08);box-shadow:0 30px 80px rgba(0,0,0,0.45);
     </div>
   </div>`;
   if(quoteText){
-    html+=`<div style="margin:34px auto 18px;text-align:center;font-family:Georgia,'Times New Roman',serif;font-size:32px;font-style:italic;text-shadow:0 3px 14px rgba(0,0,0,0.7);padding:0 36px;max-width:1120px">${quoteText}</div>`;
+    html+=`<div style="margin:34px auto 18px;text-align:center;font-family:Georgia,'Times New Roman',serif;font-size:64px;font-style:italic;text-shadow:0 3px 14px rgba(0,0,0,0.7);padding:0 36px;max-width:1120px">${quoteText}</div>`;
   }
   html+=`<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:20px;margin-top:10px">`;
   html+=`<div style="width:${compactLayout?'920px':busyLayout?'800px':'860px'};max-width:calc(100% - 80px);margin:0 auto;border:3px solid rgba(255,214,104,0.9);border-radius:14px;padding:${compactLayout?'30px 28px 28px':'26px 28px 22px'};background:rgba(20,39,68,0.56);box-shadow:0 0 0 2px rgba(255,214,104,0.08),0 0 24px rgba(255,214,104,0.24),inset 0 0 24px rgba(255,255,255,0.05);position:relative;z-index:1">
@@ -5171,8 +5171,8 @@ async function shareHeatmapShot(platform){
 
 
 // ── LIVE QUOTES ────────────────────────────────────────────────────
-const QUOTE_SYMBOLS = ['$VIX.X','/ESM26','/NQM26','$SPX','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
-const QUOTE_LABELS  = {'$VIX.X':'VIX','/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+const QUOTE_SYMBOLS = ['$VIX.X','/ESU26','/NQM26','$SPX','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+const QUOTE_LABELS  = {'$VIX.X':'VIX','/ESU26':'ES','/NQM26':'NQ','$SPX':'SPX','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
 // dedup: // dedup: quotesData/quotesInterval/quotesExpiry already declared above
 
 function populateQuotesExpiryDropdown(){
@@ -5272,13 +5272,13 @@ async function fetchQuotes(){
     if (Object.keys(prevCloses).length) _cachedPrevCloses = prevCloses;
 
     // For dxLink: get live prices from WebSocket cache (dxQuoteCache)
-    const dxSymList = ['SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESM26','/NQM26'];
+    const dxSymList = ['SPX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESU26','/NQM26'];
     dxSubscribe(dxSymList);
     if (!dxlinkConnected) await new Promise(r => setTimeout(r, 300));
 
     // Map dxFeed symbol variants to cache lookup keys
     const dxKeyMap = {
-      '/ESM26': ['/ES:XCME', '/ESM26', '/ES'],
+      '/ESU26': ['/ES:XCME', '/ESU26', '/ES'],
       '/NQM26': ['/NQ:XCME', '/NQM26', '/NQ']
     };
 
@@ -5347,7 +5347,7 @@ async function fetchQuotes(){
       data[sym] = entry;
       if (sym === 'SPX') { data['$SPX'] = entry; if (prev > 0) spxPrevClose = prev; }
       if (sym === 'VIX') { data['$VIX'] = entry; data['$VIX.X'] = entry; }
-      if (sym.startsWith('/ES')) { data['/ESM26'] = entry; esPrice = price; if (prev > 0) esPrevClose = prev; if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose; updateESPriceDisplay(); }
+      if (sym.startsWith('/ES')) { data['/ESU26'] = entry; esPrice = price; if (prev > 0) esPrevClose = prev; if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose; updateESPriceDisplay(); }
       if (sym.startsWith('/NQ')) { data['/NQM26'] = entry; }
     });
     if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose;
@@ -5415,7 +5415,7 @@ function renderQuotes(){
     if(vcEl){vcEl.textContent=vcArrow+Math.abs(vc).toFixed(2)+'%';vcEl.style.color=vcColor;}
   }
   // Also update esPrevClose from ES quote if available
-  const esQuote = quotesData['/ESM26'];
+  const esQuote = quotesData['/ESU26'];
   if(esQuote){
     const q = esQuote.quote || esQuote;
     const netChg = q.netChange ?? 0;
@@ -11418,8 +11418,8 @@ if (false) {}
   window.setMode = function(){};
 
   // ── Quotes panel — TastyTrade market-metrics per symbol ──────────────
-  window.QUOTE_SYMBOLS = ['$VIX.X','/ESM26','/NQM26','$SPX','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
-  window.QUOTE_LABELS  = {'$VIX.X':'VIX','/ESM26':'ES','/NQM26':'NQ','$SPX':'SPX','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
+  window.QUOTE_SYMBOLS = ['$VIX.X','/ESU26','/NQM26','$SPX','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'];
+  window.QUOTE_LABELS  = {'$VIX.X':'VIX','/ESU26':'ES','/NQM26':'NQ','$SPX':'SPX','QQQ':'QQQ','SMH':'SMH','AAPL':'AAPL','AMD':'AMD','AMZN':'AMZN','GOOGL':'GOOGL','META':'META','MSFT':'MSFT','NVDA':'NVDA','TSLA':'TSLA'};
 
   window.fetchQuotes = async function fetchQuotes() {
     try {
@@ -11460,8 +11460,8 @@ if (false) {}
         const rootSym = sym.split(':')[0];
         if (rootSym === 'SPX' || rootSym === '$SPX') { data['$SPX'] = entry; data['SPX'] = entry; if(prev>0) spxPrevClose=prev; }
         if (rootSym === 'VIX' || rootSym === '$VIX' || rootSym === '$VIX.X') { data['$VIX'] = entry; data['$VIX.X'] = entry; data['VIX'] = entry; }
-        // Futures: TT may return /ESM26, /ESM26:XCME, or a root month variant; alias to the dashboard keys.
-        if (rootSym.startsWith('/ES')) { data['/ESM26'] = entry; esPrice = price; if(prev>0) esPrevClose=prev; if(esPrevClose>0&&spxPrevClose>0) esBasis=esPrevClose-spxPrevClose; updateESPriceDisplay(); }
+        // Futures: TT may return /ESU26, /ESU26:XCME, or a root month variant; alias to the dashboard keys.
+        if (rootSym.startsWith('/ES')) { data['/ESU26'] = entry; esPrice = price; if(prev>0) esPrevClose=prev; if(esPrevClose>0&&spxPrevClose>0) esBasis=esPrevClose-spxPrevClose; updateESPriceDisplay(); }
         if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
       });
       if(esPrevClose>0&&spxPrevClose>0) esBasis=esPrevClose-spxPrevClose;
@@ -11471,7 +11471,7 @@ if (false) {}
       renderQuotes();
 
       // ── Update ES price in topbar and stats ladder ──────────────────
-      const esEntry = data['/ESM26'] || data['/ESM6'] || null;
+      const esEntry = data['/ESU26'] || data['/ESM6'] || null;
       if (esEntry) {
         const q = esEntry.quote || esEntry;
         const price = q.lastPrice || q.mark || q.last || 0;

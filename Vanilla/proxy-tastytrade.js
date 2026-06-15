@@ -805,7 +805,7 @@ loadDailyCloses();
 // ─── Live prev-close cache (auto-refreshed daily, no manual updates needed) ───
 const livePrevCloses = {
   VIX:  0,   // ^VIX
-  ES:   0,   // /ESM26
+  ES:   0,   // /ESU26
   SPX:  0,   // $SPX
   NQ:   0,   // /NQM26
   date: '',  // ET date string for which these closes were fetched
@@ -837,7 +837,7 @@ async function refreshLivePrevCloses() {
       return 0;
     };
 
-    let es  = getDX('/ES:XCME', '/ESM26', '/ESM6');
+    let es  = getDX('/ES:XCME', '/ESU26', '/ESM6');
     let nq  = getDX('/NQ:XCME', '/NQM26', '/NQM6');
     let vix = getDX('VIX', '$VIX', '$VIX.X');
     // SPX: after close use last trade price; dxSummaryCache rarely has dayClosePrice for indices
@@ -875,7 +875,7 @@ async function refreshLivePrevCloses() {
       // Primary fallback: TT REST market-data (authenticated, accurate, once-daily is fine)
       const [ttSpx, ttEs, ttVix, ttNq] = await Promise.all([
         spx ? Promise.resolve(spx) : fetchTTDailyClose('SPX'),
-        es  ? Promise.resolve(es)  : fetchTTDailyClose('/ESM26'),
+        es  ? Promise.resolve(es)  : fetchTTDailyClose('/ESU26'),
         vix ? Promise.resolve(vix) : fetchTTDailyClose('VIX'),
         nq  ? Promise.resolve(nq)  : fetchTTDailyClose('/NQM26'),
       ]);
@@ -1801,7 +1801,7 @@ function getDxCacheAliases(symbol, normalized) {
   const raw = String(symbol || '').trim();
   if (/^\/ES(:XCME)?$|^\/ESM(\d+)?$/i.test(raw)) {
     aliases.add('/ES:XCME');
-    aliases.add('/ESM26');
+    aliases.add('/ESU26');
     aliases.add('/ES');
   } else if (/^\/NQ(:XCME)?$|^\/NQM(\d+)?$/i.test(raw)) {
     aliases.add('/NQ:XCME');
@@ -2303,7 +2303,7 @@ function normalizeRequestedCandleSymbols(sym) {
   if (/^\/?ES/.test(base)) {
     out.add(`/ES:XCME${suffix}`);
     out.add(`/ES${suffix}`);
-    out.add(`/ESM26${suffix}`);
+    out.add(`/ESU26${suffix}`);
   }
   if (/^\/?NQ/.test(base)) {
     out.add(`/NQ:XCME${suffix}`);
@@ -3065,7 +3065,7 @@ const server = http.createServer(async (req, res) => {
     }
     const etMins = getEtMinutes();
     const debug = {
-      esSummary: dxSummaryCache['/ES:XCME'] || dxSummaryCache['/ESM26'] || dxSummaryCache['/ESM6'] || null,
+      esSummary: dxSummaryCache['/ES:XCME'] || dxSummaryCache['/ESU26'] || dxSummaryCache['/ESM6'] || null,
       esSummaryKeys: Object.keys(dxSummaryCache).filter(k => k.includes('ES')).slice(0,10),
       esBasisCache,
       savedDailyCloses,
@@ -3955,8 +3955,8 @@ const server = http.createServer(async (req, res) => {
     const candidates = [
       symbol,
       ...normalizeRequestedCandleSymbols(symbol),
-      symbol.replace('/ESM26', '/ES').replace('/NQM26', '/NQM6'),
-      symbol.replace('/ES', '/ESM26').replace('/NQM6', '/NQM26'),
+      symbol.replace('/ESU26', '/ES').replace('/NQM26', '/NQM6'),
+      symbol.replace('/ES', '/ESU26').replace('/NQM6', '/NQM26'),
       symbol.replace(/^\/ES[^{}]*/, '/ES:XCME'),
       symbol.replace(/^\/NQ[^{}]*/, '/NQ:XCME'),
     ];
