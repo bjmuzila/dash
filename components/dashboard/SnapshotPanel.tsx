@@ -375,7 +375,7 @@ export default function SnapshotPanel() {
 
     async function persist() {
       if (cancelled) return;
-      if (!persistedPayload.orders.length) return;
+      if (!persistedPayload.stats.bullVol && !persistedPayload.stats.bearVol && !persistedPayload.orders.length) return;
       const now = Date.now();
       if (now - lastPersistRef.current < 5000) return;
       try {

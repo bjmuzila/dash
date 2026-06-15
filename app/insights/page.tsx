@@ -158,6 +158,36 @@ function daysTo(dateStr: string): number {
   return Math.round((new Date(dateStr).getTime() - new Date(todayETStr()).getTime()) / 86400000);
 }
 
+function buildExpiryList(payload: unknown): Expiry[] {
+  const list: Expiry[] = [];
+  const seen = new Set<string>();
+  const json = payload as {
+    expirations?: unknown;
+    data?: { items?: Array<Record<string, unknown>> };
+  };
+
+  const addDate = (dateLike: unknown, expTypeLike?: unknown) => {
+    const date = String(dateLike ?? "");
+    if (!date || seen.has(date)) return;
+    seen.add(date);
+    const dte = daysTo(date);
+    const expType = String(expTypeLike ?? "").toLowerCase();
+    const keep = dte <= 7 || expType === "weekly" || expType === "monthly" || new Date(date).getDay() === 5;
+    if (!keep) return;
+    list.push({ date, daysTo: dte, label: `${dte}DTE ${date.slice(5)}` });
+  };
+
+  if (Array.isArray(json?.expirations)) {
+    json.expirations.forEach((date) => addDate(date));
+  }
+
+  (json?.data?.items ?? []).forEach((item) => {
+    addDate(item["expiration-date"], item["expiration-type"]);
+  });
+
+  return list.sort((a, b) => a.daysTo - b.daysTo);
+}
+
 function sortCandles(rows: EsCandleRecord[]) {
   return [...rows].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
 }
@@ -179,8 +209,10 @@ function computeHistoricalAvg(historicalCandles: EsCandleRecord[], slotKey: stri
   return matching.reduce((sum, row) => sum + Number(row.volume || 0), 0) / matching.length;
 }
 
-function computeExposureSnapshot(chain: ChainResponse, ts = Date.now()): GreeksRecord {
-  const spot = Number(chain.data?.underlyingPrice ?? 0);
+function computeExposureSnapshot(chain: ChainResponse, fallbackSpot?: number, ts = Date.now()): GreeksRecord {
+  const chainSpot = Number(chain.data?.underlyingPrice ?? 0);
+  const backupSpot = Number(fallbackSpot ?? 0);
+  const spot = chainSpot > 0 ? chainSpot : (backupSpot > 0 ? backupSpot : 0);
   const totals = { gex: 0, dex: 0, chex: 0, vex: 0 };
 
   for (const group of chain.data?.items ?? []) {
@@ -910,51 +942,26 @@ export default function InsightsPage() {
       // Try cache first
       const cached = await queryExpirationCache("SPX");
       if (cached) {
-        const json = cached as { data?: { items?: Array<Record<string, unknown>> } };
-        const items = json.data?.items ?? [];
-        const seen = new Set<string>();
-        const list: Expiry[] = [];
-        items.forEach((item: Record<string, unknown>) => {
-          const date = String(item["expiration-date"] ?? "");
-          if (!date || seen.has(date)) return;
-          seen.add(date);
-          const dte = daysTo(date);
-          const expType = String(item["expiration-type"] ?? "").toLowerCase();
-          const keep = dte <= 7 || expType === "weekly" || expType === "monthly" || new Date(date).getDay() === 5;
-          if (!keep) return;
-          list.push({ date, daysTo: dte, label: `${dte}DTE ${date.slice(5)}` });
-        });
-        list.sort((a, b) => a.daysTo - b.daysTo);
-        setExpirations(list);
-        const defaultExpiry = list.find((exp) => exp.daysTo === 0) ?? list[0];
-        if (defaultExpiry) {
-          setSelectedExpiry(defaultExpiry.date);
-          activeExpiryRef.current = defaultExpiry.date;
+        const list = buildExpiryList(cached);
+        if (list.length) {
+          setExpirations(list);
+          const defaultExpiry = list.find((exp) => exp.daysTo === 0) ?? list[0];
+          if (defaultExpiry) {
+            setSelectedExpiry(defaultExpiry.date);
+            activeExpiryRef.current = defaultExpiry.date;
+          }
+          return;
         }
-        return;
       }
 
       // Fall back to API if cache miss/stale
-      fetch("/api/expirations?ticker=SPX")
+      fetch("/api/gex/expirations")
         .then((r) => r.json())
         .then((json) => {
           // Cache the response
           saveExpirationCache("SPX", [], json).catch(() => {});
 
-          const items = json.data?.items ?? [];
-          const seen = new Set<string>();
-          const list: Expiry[] = [];
-          items.forEach((item: Record<string, unknown>) => {
-            const date = String(item["expiration-date"] ?? "");
-            if (!date || seen.has(date)) return;
-            seen.add(date);
-            const dte = daysTo(date);
-            const expType = String(item["expiration-type"] ?? "").toLowerCase();
-            const keep = dte <= 7 || expType === "weekly" || expType === "monthly" || new Date(date).getDay() === 5;
-            if (!keep) return;
-            list.push({ date, daysTo: dte, label: `${dte}DTE ${date.slice(5)}` });
-          });
-          list.sort((a, b) => a.daysTo - b.daysTo);
+          const list = buildExpiryList(json);
           setExpirations(list);
           const defaultExpiry = list.find((exp) => exp.daysTo === 0) ?? list[0];
           if (defaultExpiry) {
@@ -1157,13 +1164,13 @@ export default function InsightsPage() {
     return () => clearInterval(id);
   }, []);
 
-  const fetchExposure = useCallback(async (expiry: string) => {
+  const fetchExposure = useCallback(async (expiry: string, fallbackSpot?: number) => {
     if (!expiry) return;
     try {
       const r = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`, { cache: "no-store" });
       if (!r.ok) return;
       const data = await r.json();
-      const snap = computeExposureSnapshot(data as ChainResponse);
+      const snap = computeExposureSnapshot(data as ChainResponse, fallbackSpot);
       applySnapshot(snap);
     } catch { /* silent */ }
   }, [applySnapshot]);
@@ -1202,9 +1209,11 @@ export default function InsightsPage() {
       fetch("/api/insights/gex").then(r => r.json()),
       fetch("/api/insights/vix").then(r => r.json()),
     ]);
-    if (gexRes.status === "fulfilled") setGex(gexRes.value?.data ?? gexRes.value ?? null);
+    const nextGex = gexRes.status === "fulfilled" ? (gexRes.value?.data ?? gexRes.value ?? null) : null;
+    if (gexRes.status === "fulfilled") setGex(nextGex);
     if (vixRes.status === "fulfilled") setVix(vixRes.value?.data ?? vixRes.value ?? null);
-    await fetchExposure(activeExpiryRef.current || selectedExpiry);
+    const fallbackSpot = Number(nextGex?.spx_spot ?? nextGex?.spot ?? 0);
+    await fetchExposure(activeExpiryRef.current || selectedExpiry, fallbackSpot > 0 ? fallbackSpot : undefined);
   }, [fetchExposure, selectedExpiry]);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);

@@ -111,9 +111,8 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .layout-busy .main-card{width:min(800px,calc(100% - 120px))}
 .layout-busy .row-time,.layout-busy .row-label{font-size:20px}
 .empty-note{color:rgba(255,255,255,0.35);text-align:center;font-size:14px;padding:16px}
-.logo-wrap{position:absolute;bottom:20px;right:24px;display:flex;align-items:center;gap:10px;opacity:0.85}
-.logo-wrap img{width:36px;height:36px;border-radius:8px;object-fit:contain}
-.logo-text{font-size:14px;font-weight:800;letter-spacing:0.1em;color:#b8c2d6;text-transform:uppercase}
+.logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;gap:0;opacity:0.9}
+.logo-wrap img{width:90px;height:90px;object-fit:contain}
 </style></head><body>
 <div class="snapshot ${layoutClass}" id="root">
   <div class="topbar">

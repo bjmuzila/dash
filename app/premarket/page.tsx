@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 
 // ── Symbol definitions ───────────────────────────────────────────────────────
 
@@ -463,22 +464,23 @@ export default function PremarketPage() {
   }, []);
 
   // ── Yahoo Finance polling for Europe / Asia (60s interval) ─────────────────
-  useEffect(() => {
+  const pollYahoo = useCallback(async () => {
     const syms = YAHOO_SYMS.map(s => s.sym).join(",");
-
-    async function poll() {
-      try {
-        const r = await fetch(`/api/yahoo-quotes?symbols=${encodeURIComponent(syms)}`);
-        if (!r.ok) return;
-        const data: Record<string, { price: number | null; change: number | null; pct: number | null }> = await r.json();
-        setYahooQuotes(data);
-      } catch (_) {}
-    }
-
-    poll();
-    const id = setInterval(poll, 60_000);
-    return () => clearInterval(id);
+    try {
+      const r = await fetch(`/api/yahoo-quotes?symbols=${encodeURIComponent(syms)}`);
+      if (!r.ok) return;
+      const data: Record<string, { price: number | null; change: number | null; pct: number | null }> = await r.json();
+      setYahooQuotes(data);
+    } catch (_) {}
   }, []);
+
+  const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(pollYahoo);
+
+  useEffect(() => {
+    pollYahoo();
+    const id = setInterval(pollYahoo, 60_000);
+    return () => clearInterval(id);
+  }, [pollYahoo]);
 
   // Merge: DXLink takes priority; Yahoo fills gaps
   const allQuotes: QuoteMap = { ...quotes };
@@ -536,6 +538,7 @@ export default function PremarketPage() {
             {wsLive ? "● LIVE" : "● CONNECTING"}
           </span>
           {ts && <span style={{ fontSize: 10, color: "#ffffff", fontVariantNumeric: "tabular-nums" }}>{ts}</span>}
+          <button onClick={trigger} style={{ ...btnStyle }}>{btnLabel}</button>
           <BoxSnapBtn targetRef={pageRef} label="📷" />
           <BoxDiscordBtn targetRef={pageRef} message={`📊 Premarket Positioning — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
         </div>

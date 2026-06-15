@@ -234,7 +234,7 @@ function computeTotals(
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
-  ticker, strikes, liveData, spot, contractMode, intensity,
+  ticker, strikes, liveData, spot, contractMode, intensity, movePercent,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -242,6 +242,7 @@ function TickerPanel({
   spot: number;
   contractMode: "oivol" | "vol";
   intensity: number;
+  movePercent: number;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -279,9 +280,17 @@ function TickerPanel({
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "#111822", borderBottom: "1px solid #2a4060", flexShrink: 0 }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: "#00e5ff", letterSpacing: "0.1em", fontFamily: "Arial" }}>{ticker}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#00e5ff", fontFamily: "monospace" }}>
-          {spot > 0 ? spot.toFixed(2) : "--"}
-        </span>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 10, fontFamily: "monospace", color: "#94a3b8" }}>
+          {spot > 0 && (
+            <>
+              <span style={{ color: "#00e5ff", fontWeight: 700 }}>{spot.toFixed(2)}</span>
+              <span style={{ color: "#64748b" }}>
+                {movePercent}%: {((spot * movePercent) / 100).toFixed(2)}
+              </span>
+            </>
+          )}
+          {spot === 0 && <span style={{ color: "#475569" }}>--</span>}
+        </div>
       </div>
 
       {/* Column headers */}
@@ -375,7 +384,8 @@ export default function MultGreekPage() {
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
-  const [intensity, setIntensity] = useState(0.4);
+  const [intensity, setIntensity] = useState(1.75);
+  const [movePercent, setMovePercent] = useState(10);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>({ state: "idle", msg: "READY" });
   const [lastUpdate, setLastUpdate] = useState("");
 
@@ -665,7 +675,7 @@ export default function MultGreekPage() {
         {/* Intensity slider */}
         <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
         <input
-          type="range" min={0.01} max={3} step={0.01}
+          type="range" min={0.5} max={3} step={0.01}
           value={intensity}
           onChange={e => setIntensity(Number(e.target.value))}
           style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
@@ -673,6 +683,25 @@ export default function MultGreekPage() {
         <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
           {intensity.toFixed(2)}x
         </span>
+
+        <span style={{ color: "#1e3050" }}>|</span>
+
+        {/* Move % selector */}
+        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Move %</span>
+        <select
+          value={movePercent}
+          onChange={e => setMovePercent(Number(e.target.value))}
+          style={{
+            background: "#0a1220", color: "#e4e4e7", border: "1px solid #1e3050",
+            borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer",
+            fontFamily: "monospace",
+          }}
+        >
+          <option value={5}>5%</option>
+          <option value={10}>10%</option>
+          <option value={15}>15%</option>
+          <option value={20}>20%</option>
+        </select>
 
         {/* Refresh / Snap / Discord */}
         <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>{btnLabel}</button>
@@ -695,6 +724,7 @@ export default function MultGreekPage() {
             spot={spots[ticker]}
             contractMode={contractMode}
             intensity={intensity}
+            movePercent={movePercent}
           />
         ))}
       </div>
