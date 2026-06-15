@@ -7,6 +7,7 @@ import GexHeatmap from "@/components/dashboard/GexHeatmap";
 import EsStatsLadder from "@/components/dashboard/EsStatsLadder";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
+import DataBox from "@/components/shared/DataBox";
 import { computeGexSummary } from "@/lib/math/gex";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { queryExpirationCache, saveExpirationCache } from "@/lib/snapdb";
@@ -362,7 +363,7 @@ export default function OverviewPage() {
     if (selectedExpiry) await loadStructure(selectedExpiry);
   }, [selectedExpiry, loadStructure]);
 
-  const { trigger: hmRefresh, label: hmBtnLabel, style: hmBtnStyle } = useRefreshButton(handleRefresh);
+  const { trigger: hmRefresh } = useRefreshButton(handleRefresh);
 
   // Fetch GEX profile (BS spot-sweep) from server — needs IV/DTE not in WS stream
   useEffect(() => {
@@ -414,32 +415,41 @@ export default function OverviewPage() {
       <div ref={splitContainerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
         {/* TOP: Chart + toolbar */}
-        <div style={{ display: "flex", flexDirection: "column", flex: `0 0 ${splitPct}%`, minHeight: 80, overflow: "hidden" }}>
-          <GexToolbar
-            gexMode={gexMode}
-            dataMode={dataMode}
-            chartMode={chartMode}
-            showOI={showOI}
-            showDex={showDex}
-            showFlipCurve={showFlipCurve}
-            flipPoint={gexProfile?.flipPoint ?? summary.gexFlip}
-            callWall={summary.callWall}
-            putWall={summary.putWall}
-            netGex={summary.totalNetGEXFormatted}
-            expirations={expirations}
-            selectedExpiry={selectedExpiry}
-            onExpiry={handleExpiry}
-            onGexMode={setGexMode}
-            onDataMode={setDataMode}
-            onChartMode={setChartMode}
-            onToggleOI={() => setShowOI(p => !p)}
-            onToggleDex={() => setShowDex(p => !p)}
-            onToggleFlip={() => setShowFlipCurve(p => !p)}
-            onRefresh={handleRefresh}
-            chartOpen={gexToolbarOpen}
-            onToggleChart={() => setGexToolbarOpen(p => !p)}
-          />
-          <div style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--overview-bg)" }}>
+        <DataBox
+          title="GEX CHART"
+          onRefresh={handleRefresh}
+          showSnap
+          showDiscord
+          style={{ flex: `0 0 ${splitPct}%`, minHeight: 80, overflow: "hidden" }}
+          headerStyle={{ background: "var(--overview-header-bg)", borderBottomColor: "var(--overview-border)" }}
+          headerExtra={
+            <GexToolbar
+              gexMode={gexMode}
+              dataMode={dataMode}
+              chartMode={chartMode}
+              showOI={showOI}
+              showDex={showDex}
+              showFlipCurve={showFlipCurve}
+              flipPoint={gexProfile?.flipPoint ?? summary.gexFlip}
+              callWall={summary.callWall}
+              putWall={summary.putWall}
+              netGex={summary.totalNetGEXFormatted}
+              expirations={expirations}
+              selectedExpiry={selectedExpiry}
+              onExpiry={handleExpiry}
+              onGexMode={setGexMode}
+              onDataMode={setDataMode}
+              onChartMode={setChartMode}
+              onToggleOI={() => setShowOI(p => !p)}
+              onToggleDex={() => setShowDex(p => !p)}
+              onToggleFlip={() => setShowFlipCurve(p => !p)}
+              onRefresh={handleRefresh}
+              chartOpen={gexToolbarOpen}
+              onToggleChart={() => setGexToolbarOpen(p => !p)}
+            />
+          }
+        >
+          <div style={{ flex: 1, height: "100%", position: "relative", background: "var(--overview-bg)" }}>
             {chain.length === 0 && (
               <div style={{
                 position: "absolute", inset: 0, display: "flex", flexDirection: "column",
@@ -467,7 +477,7 @@ export default function OverviewPage() {
               showFlipCurve={showFlipCurve}
             />
           </div>
-        </div>
+        </DataBox>
 
         {/* ── Drag handle ── */}
         <div
@@ -515,9 +525,14 @@ export default function OverviewPage() {
         <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 60, overflow: "hidden", background: "var(--overview-bg)" }}>
 
           {/* Economic Calendar */}
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", borderRight: "1px solid var(--overview-border)", overflow: "hidden", background: "var(--overview-bg)" }}>
+          <DataBox
+            title="ECON CALENDAR"
+            showDiscord
+            style={{ flex: 1, borderRight: "1px solid var(--overview-border)", background: "var(--overview-bg)" }}
+            headerStyle={{ background: "var(--overview-header-bg)", borderBottomColor: "var(--overview-border)" }}
+          >
             <EconCalendarPanel />
-          </div>
+          </DataBox>
 
           {/* ES Stats Ladder */}
           <div style={{ flex: "0 0 220px", minWidth: 180, maxWidth: 240, display: "flex", flexDirection: "column", overflow: "hidden", borderRight: "1px solid var(--overview-border)", background: "var(--overview-bg)" }}>
@@ -562,11 +577,17 @@ export default function OverviewPage() {
       </div>
 
       {/* ══ RIGHT: Full-height Heatmap ══ */}
-      <div style={{ width: heatmapOpen ? 530 : 0, minWidth: heatmapOpen ? 160 : 0, maxWidth: 900, flexShrink: 0, display: "flex", flexDirection: "column", background: "var(--overview-bg)", overflow: "hidden", transition: "width 0.2s ease" }}>
-
-        {/* Heatmap header */}
-        <div style={{ display: "flex", flexDirection: "column", background: "var(--overview-control-bg)", borderBottom: "1px solid var(--overview-border)", flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", minHeight: 26 }}>
+      <DataBox
+        title="GEX HEATMAP"
+        onRefresh={hmRefresh}
+        showSnap
+        showDiscord
+        showClose
+        onClose={() => setHeatmapOpen(false)}
+        style={{ width: heatmapOpen ? 530 : 0, minWidth: heatmapOpen ? 160 : 0, maxWidth: 900, flexShrink: 0, background: "var(--overview-bg)", overflow: "hidden", transition: "width 0.2s ease" }}
+        headerStyle={{ background: "var(--overview-control-bg)", borderBottomColor: "var(--overview-border)" }}
+        headerExtra={
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
             {/* Collapse heatmap panel */}
             <button
               onClick={() => setHeatmapOpen(v => !v)}
@@ -589,35 +610,27 @@ export default function OverviewPage() {
                 <polyline points="9 7 15 12 9 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
               </svg>
             </button>
-            <span style={{ fontSize: 9, color: "#3a5570", textTransform: "uppercase", fontWeight: 700, letterSpacing: ".1em" }}>GEX Heatmap</span>
+            {toolbarOpen && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                <input
+                  type="range" min={0.1} max={3.0} step={0.1}
+                  value={heatmapIntensity}
+                  onChange={e => setHeatmapIntensity(Number(e.target.value))}
+                  style={{ flex: 1, height: 3, accentColor: "#00e5ff", minWidth: 40 }}
+                />
+                <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "inherit" }}>
+                  {heatmapIntensity.toFixed(2)}x
+                </span>
+              </div>
+            )}
             {!toolbarOpen && (
-              <span style={{ marginLeft: "auto", fontSize: 10, color: "#00e5ff", fontWeight: 700 }}>{heatmapIntensity.toFixed(2)}x</span>
+              <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700 }}>{heatmapIntensity.toFixed(2)}x</span>
             )}
           </div>
-          {toolbarOpen && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px 6px" }}>
-              <span style={{ fontSize: 10, color: "#fff", textTransform: "uppercase", fontWeight: 700, flexShrink: 0 }}>Intensity</span>
-              <input
-                type="range" min={0.1} max={3.0} step={0.1}
-                value={heatmapIntensity}
-                onChange={e => setHeatmapIntensity(Number(e.target.value))}
-                style={{ flex: 1, height: 3, accentColor: "#00e5ff" }}
-              />
-              <span style={{ fontSize: 11, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "inherit" }}>
-                {heatmapIntensity.toFixed(2)}x
-              </span>
-              <button onClick={hmRefresh} style={{ ...hmBtnStyle }}>
-                {hmBtnLabel}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Heatmap body */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={heatmapIntensity} window={20} />
-        </div>
-      </div>
+        }
+      >
+        <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={heatmapIntensity} window={20} />
+      </DataBox>
 
       {/* Collapsed heatmap — slim re-open tab, no border */}
       {!heatmapOpen && (
