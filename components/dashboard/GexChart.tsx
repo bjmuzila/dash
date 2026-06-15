@@ -331,6 +331,44 @@ export default function GexChart({
       });
       ctx.stroke();
       ctx.setLineDash([]);
+
+      // ── Gamma zero / flip point vertical line ──
+      // Prefer the passed-in flipPoint prop; fall back to interpolating zero-crossing from visible data
+      let flipX: number | null = null;
+      if (flipPoint != null && flipPoint > 0) {
+        // Map flipPoint strike → canvas X (same interpolation as spot line)
+        const fi = data.findIndex(r => r.strike >= flipPoint);
+        if (fi === 0) {
+          flipX = xAt(0);
+        } else if (fi > 0) {
+          const prev = data[fi - 1], curr = data[fi];
+          const span = curr.strike - prev.strike;
+          flipX = xAt(fi - 1) + (span > 0 ? (flipPoint - prev.strike) / span : 0) * gap;
+        } else if (data.length && flipPoint >= data[data.length - 1].strike) {
+          flipX = xAt(data.length - 1);
+        }
+      } else {
+        // Fallback: interpolate zero-crossing from visible net GEX values
+        for (let i = 0; i < data.length - 1; i++) {
+          const a = getNet(data[i]), b = getNet(data[i + 1]);
+          if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
+            flipX = xAt(i) + (Math.abs(a) / (Math.abs(a) + Math.abs(b))) * gap;
+            break;
+          }
+        }
+      }
+      if (flipX !== null) {
+        ctx.save();
+        ctx.strokeStyle = "#faad14";
+        ctx.lineWidth   = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(flipX, PAD_T); ctx.lineTo(flipX, PAD_T + cH); ctx.stroke();
+        ctx.setLineDash([]);
+        // Label
+        ctx.fillStyle = "#faad14"; ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+        ctx.fillText("γ=0", clamp(flipX, PAD_L + 14, PAD_L + cW - 14), PAD_T + 10);
+        ctx.restore();
+      }
     }
 
     ctx.restore(); // end clip
@@ -410,7 +448,7 @@ export default function GexChart({
       ? [["#29b6f6", "Call GEX"], ["#ffb300", "Put GEX"]]
       : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
     if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
-    if (showFlipCurve) legend.push(["#00e5ff", "Profile"]);
+    if (showFlipCurve) legend.push(["#00e5ff", "GEX curve"], ["#faad14", "γ=0"]);
     legend.forEach(([col, lbl], i) => {
       const lx = PAD_L + i * 72;
       ctx.fillStyle = col;        ctx.fillRect(lx, 5, 8, 7);

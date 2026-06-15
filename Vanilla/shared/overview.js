@@ -588,7 +588,10 @@ function getStoredClosePair(date = new Date()) {
     '2026-06-05': { es: 7400.25, spx: 7383.73 },
     '2026-06-08': { es: 7400.25, spx: 7383.73 },
     '2026-06-10': { es: 7276.00, spx: 7266.99 },
-    '2026-06-11': { es: 7276.00, spx: 7266.99 }
+    '2026-06-11': { es: 7276.00, spx: 7266.99 },
+    '2026-06-12': { es: 7509.00, spx: 7490.68 },
+    '2026-06-13': { es: 7570.25, spx: 7552.81 },
+    '2026-06-14': { es: 7499.75, spx: 7431.45 }
   };
   try {
     const stored = JSON.parse(localStorage.getItem('todayCloses'));
@@ -602,7 +605,7 @@ function getStoredClosePair(date = new Date()) {
 function persistTodayClosePair() {
   const { day, mins } = getEtClockParts();
   const isWeekday = !['Sat', 'Sun'].includes(day);
-  if (!isWeekday || mins < 945 || mins > 960) return;
+  if (!isWeekday || mins < 958 || mins > 975) return;
   if (!(esPrice > 0) || !(spotPrice > 0)) return;
   try {
     localStorage.setItem('todayCloses', JSON.stringify({
@@ -1410,8 +1413,8 @@ function updateSPXDisplay(quote) {
   const { day, mins } = getEtClockParts();
   const isWeekday = !['Sat', 'Sun'].includes(day);
   const spxOpen = isWeekday && mins >= 570 && mins < 960;
-  const quoteLast = num(quote.lastPrice, quote.last, quote.mark, quote.price, quote.mid);
-  const quotePrev = num(quote.closePrice, quote.previousClose, quote.prevClose, quote.close, quote.priorClose);
+  const quoteLast = num(quote.mark, quote.lastPrice, quote.last, quote.price, quote.mid);
+  const quotePrev = num(quote['prev-close'], quote.closePrice, quote.previousClose, quote.prevClose, quote.close, quote.priorClose);
   const hasMeaningfulPrice = quoteLast > 0 || quotePrev > 0 || spotPrice > 0;
   const hasMeaningfulChange = Number.isFinite(parseFloat(quote.change)) || Number.isFinite(parseFloat(quote.changePercent)) || Number.isFinite(parseFloat(quote.netChange)) || Number.isFinite(parseFloat(quote.netPercentChange));
   if (!hasMeaningfulPrice && !hasMeaningfulChange) return;
@@ -4251,7 +4254,18 @@ function renderChart(){
   const canvas=document.getElementById('gex-chart');
   if(!canvas)return;
   const tooltip=document.getElementById('chart-tooltip');
-  if(gexChart){gexChart.destroy();gexChart=null;}
+  // Preserve zoom state across re-renders
+  let savedZoomState = null;
+  if(gexChart){
+    try { savedZoomState = gexChart.getZoomLevel ? { level: gexChart.getZoomLevel() } : null; } catch(_){}
+    try {
+      const yScale = gexChart.scales?.y;
+      if(yScale && (yScale.min !== yScale._originalMin || yScale.max !== yScale._originalMax)) {
+        savedZoomState = { yMin: yScale.min, yMax: yScale.max };
+      }
+    } catch(_){}
+    gexChart.destroy();gexChart=null;
+  }
   const barH=Math.max(300,data.length*22);canvas.style.height=barH+'px';
   gexChart=new Chart(canvas.getContext('2d'),{
     type:'bar',data:{labels,datasets:[{data:values,backgroundColor:bgC,borderColor:bdC,borderWidth:1,borderRadius:1,borderSkipped:false}]},
@@ -4311,6 +4325,10 @@ function renderChart(){
     }
   });
   if(canvas)canvas.addEventListener('mouseleave',()=>{if(tooltip)tooltip.style.display='none';});
+  // Restore zoom state if user had zoomed in before re-render
+  if(savedZoomState && savedZoomState.yMin !== undefined && gexChart) {
+    try { gexChart.zoomScale('y', { min: savedZoomState.yMin, max: savedZoomState.yMax }, 'none'); } catch(_){}
+  }
 }
 
 function renderHeatmap(){

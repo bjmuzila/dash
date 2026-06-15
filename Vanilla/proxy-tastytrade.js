@@ -1791,19 +1791,19 @@ function normalizeRestSymbol(symbol) {
 function normalizeDxCacheSymbol(symbol) {
   const s = String(symbol || '').trim();
   if (!s) return s;
-  if (/^\/ES(:XCME)?$|^\/ESM(\d+)?$/i.test(s)) return '/ES:XCME';
-  if (/^\/NQ(:XCME)?$|^\/NQM(\d+)?$/i.test(s)) return '/NQ:XCME';
+  if (/^\/ES(:XCME)?$|^\/ES[A-Z](\d+)?$/i.test(s)) return '/ES:XCME';
+  if (/^\/NQ(:XCME)?$|^\/NQ[A-Z](\d+)?$/i.test(s)) return '/NQ:XCME';
   return s;
 }
 
 function getDxCacheAliases(symbol, normalized) {
   const aliases = new Set([normalized]);
   const raw = String(symbol || '').trim();
-  if (/^\/ES(:XCME)?$|^\/ESM(\d+)?$/i.test(raw)) {
+  if (/^\/ES(:XCME)?$|^\/ES[A-Z](\d+)?$/i.test(raw)) {
     aliases.add('/ES:XCME');
     aliases.add('/ESU26');
     aliases.add('/ES');
-  } else if (/^\/NQ(:XCME)?$|^\/NQM(\d+)?$/i.test(raw)) {
+  } else if (/^\/NQ(:XCME)?$|^\/NQ[A-Z](\d+)?$/i.test(raw)) {
     aliases.add('/NQ:XCME');
     aliases.add('/NQM26');
     aliases.add('/NQ');
