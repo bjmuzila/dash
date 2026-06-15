@@ -177,7 +177,7 @@ export default function GexToolbar({
         <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: TOOLBAR_FONT_SIZE, fontFamily: "inherit" }}>
           {callWall  != null && <span><span style={{ color: "#3a5570" }}>CW </span><span style={{ color: "#22c55e", fontWeight: 700 }}>{callWall.toLocaleString()}</span></span>}
           {putWall   != null && <span><span style={{ color: "#3a5570" }}>PW </span><span style={{ color: "#f97316", fontWeight: 700 }}>{putWall.toLocaleString()}</span></span>}
-          {flipPoint != null && <span><span style={{ color: "#3a5570" }}>Flip </span><span style={{ color: "#faad14", fontWeight: 700 }}>{flipPoint.toFixed(0)}</span></span>}
+          {flipPoint != null && flipPoint > 0 && <span><span style={{ color: "#3a5570" }}>Flip </span><span style={{ color: "#faad14", fontWeight: 700 }}>{flipPoint.toFixed(0)}</span></span>}
           {netGex && <span><span style={{ color: "#3a5570" }}>GEX </span><span style={{ color: "#00e5ff", fontWeight: 700 }}>{netGex}</span></span>}
         </div>
 

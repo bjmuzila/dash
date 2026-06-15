@@ -371,7 +371,7 @@ export default function GexChart({
 
       // ── Gamma flip marker ──
       const flip = flipPoint ?? gexProfile?.flipPoint ?? null;
-      if (flip != null && Number.isFinite(flip)) {
+      if (flip != null && Number.isFinite(flip) && flip > 0) {
         const leftIdx = data.findIndex(r => r.strike >= flip);
         let flipX: number | null = null;
         if (leftIdx === 0) {

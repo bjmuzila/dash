@@ -147,10 +147,14 @@ export function findGEXFlip(chain: ChainRow[], spotPrice?: number): number | nul
   if (!crossings.length) return null;
 
   // Return the crossing closest to spot (or the first if no spot provided)
-  if (spotPrice == null || !Number.isFinite(spotPrice)) return crossings[0];
-  return crossings.reduce((best, c) =>
+  const best = (spotPrice == null || !Number.isFinite(spotPrice))
+    ? crossings[0]
+    : crossings.reduce((best, c) =>
     Math.abs(c - spotPrice) < Math.abs(best - spotPrice) ? c : best
-  );
+    );
+
+  // A zero/negative flip point is almost always a bad fallback, not a real strike.
+  return Number.isFinite(best) && best > 0 ? best : null;
 }
 
 export function findCallWall(chain: ChainRow[]): number | undefined {

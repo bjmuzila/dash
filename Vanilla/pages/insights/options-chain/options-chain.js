@@ -509,8 +509,8 @@
               gamma: safeFloat(item.call.gamma),
               theta: safeFloat(item.call.theta),
               vega:  safeFloat(item.call.vega),
-              oi:    safeInt(item.call['open-interest'] ?? item.call.openInterest ?? item.call['openInterest']) ?? 0,
-              vol:   safeInt(item.call.volume) ?? 0,
+              oi:    (safeInt(item.call['open-interest']) !== null ? safeInt(item.call['open-interest']) : (safeInt(item.call.openInterest) !== null ? safeInt(item.call.openInterest) : (safeInt(item.call['openInterest']) !== null ? safeInt(item.call['openInterest']) : 0))),
+              vol:   safeInt(item.call.volume) !== null ? safeInt(item.call.volume) : 0,
               size:  null
             };
           }
@@ -526,8 +526,8 @@
               gamma: safeFloat(item.put.gamma),
               theta: safeFloat(item.put.theta),
               vega:  safeFloat(item.put.vega),
-              oi:    safeInt(item.put['open-interest'] ?? item.put.openInterest ?? item.put['openInterest']) ?? 0,
-              vol:   safeInt(item.put.volume) ?? 0,
+              oi:    (safeInt(item.put['open-interest']) !== null ? safeInt(item.put['open-interest']) : (safeInt(item.put.openInterest) !== null ? safeInt(item.put.openInterest) : (safeInt(item.put['openInterest']) !== null ? safeInt(item.put['openInterest']) : 0))),
+              vol:   safeInt(item.put.volume) !== null ? safeInt(item.put.volume) : 0,
               size:  null
             };
           }

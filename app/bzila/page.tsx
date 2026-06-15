@@ -247,6 +247,34 @@ function normalizeChainRows(rows: unknown[]): ChainGexRow[] {
     .sort((a, b) => a.strike - b.strike);
 }
 
+async function loadGexChain(expiry?: string): Promise<{ rows: ChainGexRow[]; spot: number }> {
+  const url = expiry
+    ? `/api/gex?expiry=${encodeURIComponent(expiry)}`
+    : `/api/gex`;
+
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return { rows: [], spot: 0 };
+
+  const data = await res.json();
+  const chainRows = Array.isArray(data?.chain)
+    ? data.chain
+    : Array.isArray(data?.data?.chain)
+      ? data.data.chain
+      : Array.isArray(data?.data?.items)
+        ? data.data.items
+        : [];
+
+  const spot = Number(
+    data?.spotPrice
+      ?? data?.data?.spotPrice
+      ?? data?.data?.underlyingPrice
+      ?? data?.underlyingPrice
+      ?? 0
+  );
+
+  return { rows: normalizeChainRows(chainRows), spot };
+}
+
 function selectTrackedRows(rows: ChainGexRow[], spot: number, lastKnownNet: Record<number, number>): TrackedStrikeRow[] {
   const selectBucket = (bucket: StrikeBucket, filterFn: (row: ChainGexRow) => boolean) =>
     rows
@@ -811,11 +839,10 @@ export default function BzilaPage() {
 
       const targetExpiry = getTargetExpiryIso();
       try {
-        const res = await fetch(`/api/gex?expiry=${encodeURIComponent(targetExpiry)}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        const rows = normalizeChainRows(data?.chain ?? []);
-        const spot = Number(data?.spotPrice ?? priceFallbackRef.current.spx ?? priceFallbackRef.current.es ?? 0);
+        const primary = await loadGexChain(targetExpiry);
+        const fallback = primary.rows.length && primary.spot > 0 ? primary : await loadGexChain();
+        const rows = fallback.rows.length ? fallback.rows : primary.rows;
+        const spot = Number((fallback.spot || primary.spot) ?? priceFallbackRef.current.spx ?? priceFallbackRef.current.es ?? 0);
         if (!alive || !rows.length || !(spot > 0)) return;
 
         const selectedRows = selectTrackedRows(rows, spot, lastKnownNetRef.current);
