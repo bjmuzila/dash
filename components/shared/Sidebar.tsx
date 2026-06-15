@@ -20,10 +20,12 @@ function ChevronBox({ direction = "right", size = 22 }: { direction?: "left" | "
 }
 
 // ── Collapsed ticker ────────────────────────────────────────────────────────
+const ES_DISPLAY_SYMBOL = "/ESU26";
+const NQ_DISPLAY_SYMBOL = "/NQU26";
 const WS_SYMBOLS = [
   { sym: "VIX",      label: "VIX" },
-  { sym: "/ES:XCME", label: "ESU" },
-  { sym: "/NQ:XCME", label: "NQ" },
+  { sym: ES_DISPLAY_SYMBOL, label: "ESU" },
+  { sym: NQ_DISPLAY_SYMBOL, label: "NQU" },
   { sym: "SPX",      label: "SPX" },
   { sym: "SPCX",     label: "SPCX" },
   { sym: "QQQ",      label: "QQQ" },
@@ -68,7 +70,8 @@ function CollapsedTicker() {
             const msg = JSON.parse(ev.data);
             if (msg.type !== "FEED_DATA") return;
             (msg.data || []).forEach((e: Record<string, unknown>) => {
-              const sym = String(e.eventSymbol || "");
+              const rawSym = String(e.eventSymbol || "");
+              const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
               if (!WS_SYMBOLS.find(s => s.sym === sym)) return;
               if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
               const rec = wsLiveRef.current[sym];
@@ -109,13 +112,14 @@ function CollapsedTicker() {
     // Seed prevClose from REST on mount
     async function seedPrevCloses() {
       try {
-        const syms = WS_SYMBOLS.map(s => s.sym).join(",");
+        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "NVDA", "AAPL", "TSLA", "META", "MSFT", "AMD", "AMZN", "GOOGL", ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (!r.ok) return;
         const d = await r.json();
         const items: Array<Record<string, unknown>> = d?.data?.items || [];
         items.forEach(q => {
-          const sym = String(q.symbol || "");
+          const rawSym = String(q.symbol || "");
+          const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
           const prev = Number(q["prev-close"] ?? 0);
           if (prev > 0) {
             if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };

@@ -47,6 +47,10 @@ const TOPBAR_LABEL_SIZE = 10;
 const TOPBAR_VALUE_SIZE = 16;
 const TOPBAR_CHANGE_SIZE = 12;
 const ES_DISPLAY_LABEL = "ESU";
+const ES_DISPLAY_SYMBOL = "/ESU26";
+const NQ_DISPLAY_SYMBOL = "/NQU26";
+const ES_FEED_SYMBOLS = [ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME"];
+const NQ_FEED_SYMBOLS = [NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function fmt(v: number, decimals = 2) {
@@ -185,7 +189,8 @@ export default function TopBar() {
         if (tc) closesRef.current = { es: tc.es, spx: tc.spx };
 
         // Fetch quotes-batch to get mark prices + prev-close
-        const r = await fetch("/api/quotes-batch");
+        const symbols = ["SPX", "VIX", ...ES_FEED_SYMBOLS, ...NQ_FEED_SYMBOLS].join(",");
+        const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(symbols)}`);
         if (!r.ok) return;
         const d = await r.json();
         const items: Array<Record<string, unknown>> = d?.data?.items || [];
@@ -247,7 +252,7 @@ export default function TopBar() {
 
   // ── WS dxlink ──
   useEffect(() => {
-    const SYMS = ["/ES:XCME", "SPX", "VIX"];
+    const SYMS = [...ES_FEED_SYMBOLS, "SPX", "$SPX", "VIX"];
 
     function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -284,7 +289,7 @@ export default function TopBar() {
                 return isFinite(v) && v > 0 ? v : 0;
               };
 
-              if (sym === "/ES:XCME") {
+              if (sym.startsWith("/ES")) {
                 if (eType === "Trade"   && n("price"))               live.current.esPrice = n("price");
                 if (eType === "Quote"   && n("bidPrice") && n("askPrice"))
                   live.current.esPrice = (n("bidPrice") + n("askPrice")) / 2;

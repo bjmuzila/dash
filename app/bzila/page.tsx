@@ -665,26 +665,30 @@ export default function BzilaPage() {
   useEffect(() => {
     let alive = true;
 
-    Promise.all([loadAggregateHistory(), loadStrikeHistory()])
+    Promise.all([loadAggregateHistory(selectedSessionDate, selectedSession), loadStrikeHistory(selectedSessionDate, selectedSession)])
       .then(([aggregateRows, strikeRows]) => {
         if (!alive) return;
         aggregateHistoryRef.current = aggregateRows;
         strikeHistoryRowsRef.current = strikeRows;
+        setAggregateHistory(aggregateRows);
+        setStrikeHistoryRows(strikeRows);
+        setAllRows([]);
         lastPersistRef.current = Math.max(
           aggregateRows[aggregateRows.length - 1]?.ts ?? 0,
           strikeRows[strikeRows.length - 1]?.timestamp ?? 0,
           0
         );
         lastKnownNetRef.current = buildLastKnownNetMap(strikeRows);
-        setAggregateHistory(aggregateRows);
-        setStrikeHistoryRows(strikeRows);
 
         const latestTracked = extractLatestTrackedRows(strikeRows);
-        if (latestTracked.length) setTrackedRows(latestTracked);
+        setTrackedRows(latestTracked);
         const latestStrikeRow = strikeRows[strikeRows.length - 1];
         if (latestStrikeRow) {
           setLastLiveSpot(latestStrikeRow.spot);
           setExpiry(latestStrikeRow.expiry);
+          setLastLiveTs(latestStrikeRow.timestamp);
+        } else {
+          setLastLiveTs(0);
         }
       })
       .catch(() => {});
@@ -692,15 +696,17 @@ export default function BzilaPage() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [selectedSession, selectedSessionDate]);
 
   const latestStoredTrackedRows = useMemo(() => extractLatestTrackedRows(strikeHistoryRows), [strikeHistoryRows]);
   const displayTrackedRows = trackedRows.length ? trackedRows : latestStoredTrackedRows;
   const strikePoints = useMemo(() => {
     const points = groupStrikeHistory(strikeHistoryRows);
-    if (displayTrackedRows.length && lastLiveTs > (points[points.length - 1]?.ts ?? 0)) {
+    if (viewingActiveSession && displayTrackedRows.length && lastLiveTs > (points[points.length - 1]?.ts ?? 0)) {
       points.push({
         ts: lastLiveTs,
+        date: selectedSessionDate,
+        session: selectedSession,
         spot: lastLiveSpot,
         expiry,
         values: Object.fromEntries(displayTrackedRows.map((row) => [row.strike, row.netGEX])),
@@ -708,7 +714,7 @@ export default function BzilaPage() {
       });
     }
     return points;
-  }, [displayTrackedRows, expiry, lastLiveSpot, lastLiveTs, strikeHistoryRows]);
+  }, [displayTrackedRows, expiry, lastLiveSpot, lastLiveTs, selectedSession, selectedSessionDate, strikeHistoryRows, viewingActiveSession]);
 
   const trackedStrikeOrder = useMemo(
     () =>
@@ -759,6 +765,32 @@ export default function BzilaPage() {
     let alive = true;
 
     const refresh = async () => {
+      const cycle = getSessionCycle();
+      const liveSession = cycle.activeSession;
+      const liveDate = cycle.sessionDates[liveSession];
+      setSessionCycle((current) =>
+        current.activeSession === cycle.activeSession &&
+        current.sessionDates.rth === cycle.sessionDates.rth &&
+        current.sessionDates.ext === cycle.sessionDates.ext
+          ? current
+          : cycle
+      );
+
+      if (liveSessionRef.current.session !== liveSession || liveSessionRef.current.date !== liveDate) {
+        liveSessionRef.current = { session: liveSession, date: liveDate };
+        lastPersistRef.current = 0;
+        lastKnownNetRef.current = {};
+        if (selectedSession === liveSession) {
+          aggregateHistoryRef.current = [];
+          strikeHistoryRowsRef.current = [];
+          setAggregateHistory([]);
+          setStrikeHistoryRows([]);
+          setTrackedRows([]);
+          setAllRows([]);
+          setLastLiveTs(0);
+        }
+      }
+
       const targetExpiry = getTargetExpiryIso();
       try {
         const res = await fetch(`/api/gex?expiry=${encodeURIComponent(targetExpiry)}`, { cache: "no-store" });
@@ -771,11 +803,13 @@ export default function BzilaPage() {
         const selectedRows = selectTrackedRows(rows, spot, lastKnownNetRef.current);
         const now = Date.now();
 
-        setAllRows(rows);
-        setTrackedRows(selectedRows);
-        setExpiry(targetExpiry);
-        setLastLiveSpot(spot);
-        setLastLiveTs(now);
+        if (selectedSession === liveSession) {
+          setAllRows(rows);
+          setTrackedRows(selectedRows);
+          setExpiry(targetExpiry);
+          setLastLiveSpot(spot);
+          setLastLiveTs(now);
+        }
 
         const shouldPersist =
           now - lastPersistRef.current >= SAMPLE_MS ||
@@ -784,10 +818,10 @@ export default function BzilaPage() {
 
         if (!shouldPersist) return;
 
-        const date = todayET();
-        const dayCutoff = startOfTodayETMs();
         const aggregatePoint: GexHistPoint = {
           ts: now,
+          date: liveDate,
+          session: liveSession,
           call: rows.reduce((sum, row) => sum + row.callGEX, 0),
           put: rows.reduce((sum, row) => sum + row.putGEX, 0),
           net: rows.reduce((sum, row) => sum + row.netGEX, 0),
@@ -796,7 +830,8 @@ export default function BzilaPage() {
 
         const strikePayload: BzilaStrikeHistoryRow[] = selectedRows.map((row) => ({
           timestamp: now,
-          date,
+          date: liveDate,
+          session: liveSession,
           expiry: targetExpiry,
           spot,
           strike: row.strike,
@@ -809,7 +844,10 @@ export default function BzilaPage() {
         }));
 
         try {
-          await Promise.all([saveAggregatePoint(aggregatePoint), saveStrikeRows(strikePayload)]);
+          await Promise.all([
+            saveAggregatePoint(aggregatePoint, liveDate, liveSession),
+            saveStrikeRows(strikePayload),
+          ]);
         } catch {
           // Keep the live chart moving even if persistence is temporarily unavailable.
         }
@@ -820,13 +858,15 @@ export default function BzilaPage() {
           ...Object.fromEntries(selectedRows.map((row) => [row.strike, row.netGEX])),
         };
 
-        const nextAggregateHistory = [...aggregateHistoryRef.current, aggregatePoint].filter((point) => point.ts >= dayCutoff);
-        const nextStrikeHistoryRows = [...strikeHistoryRowsRef.current, ...strikePayload].filter((row) => row.timestamp >= dayCutoff);
+        const nextAggregateHistory = [...aggregateHistoryRef.current, aggregatePoint];
+        const nextStrikeHistoryRows = [...strikeHistoryRowsRef.current, ...strikePayload];
 
         aggregateHistoryRef.current = nextAggregateHistory;
         strikeHistoryRowsRef.current = nextStrikeHistoryRows;
-        setAggregateHistory(nextAggregateHistory);
-        setStrikeHistoryRows(nextStrikeHistoryRows);
+        if (selectedSession === liveSession) {
+          setAggregateHistory(nextAggregateHistory);
+          setStrikeHistoryRows(nextStrikeHistoryRows);
+        }
       } catch {
         // Ignore transient fetch failures; the next poll can recover.
       }
@@ -841,7 +881,7 @@ export default function BzilaPage() {
       alive = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [selectedSession]);
 
   const drawAggregateChart = useCallback(() => {
     const canvas = aggregateCanvasRef.current;

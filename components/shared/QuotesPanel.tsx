@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 
 // All symbols — indices/futures always streamed, equities subscribed on mount
+const ES_DISPLAY_SYMBOL = "/ESU26";
+const NQ_DISPLAY_SYMBOL = "/NQU26";
 const WS_SYMBOLS: Array<{ sym: string; label: string }> = [
   { sym: "VIX",      label: "VIX" },
-  { sym: "/ES:XCME", label: "ESU" },
-  { sym: "/NQ:XCME", label: "NQ" },
+  { sym: ES_DISPLAY_SYMBOL, label: "ESU" },
+  { sym: NQ_DISPLAY_SYMBOL, label: "NQU" },
   { sym: "SPX",      label: "SPX" },
   { sym: "SPCX",     label: "SPCX" },
   { sym: "QQQ",      label: "QQQ" },
@@ -66,7 +68,8 @@ export default function QuotesPanel() {
             const events: unknown[] = msg.data || [];
 
             const normalize = (raw: string): string => {
-              // Proxy sends /ES:XCME and /NQ:XCME — keep as-is, they match WS_SYMBOLS
+              if (raw.startsWith("/ES")) return ES_DISPLAY_SYMBOL;
+              if (raw.startsWith("/NQ")) return NQ_DISPLAY_SYMBOL;
               return raw;
             };
 
@@ -123,13 +126,14 @@ export default function QuotesPanel() {
     // Seed prevClose for WS symbols from REST on mount so sane() check passes immediately
     async function seedPrevCloses() {
       try {
-        const syms = WS_SYMBOLS.map(s => s.sym).join(",");
+        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA", ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (!r.ok) return;
         const d = await r.json();
         const items: Array<Record<string, unknown>> = d?.data?.items || [];
         items.forEach(q => {
-          const sym = String(q.symbol || "");
+          const rawSym = String(q.symbol || "");
+          const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
           const prev = Number(q["prev-close"] ?? 0);
           if (prev > 0) {
             if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
@@ -148,7 +152,7 @@ export default function QuotesPanel() {
     async function subscribeEquities() {
       try {
         // Seed current prices from REST first so panel isn't empty on load
-        const syms = REST_SYMBOLS.map(s => s.sym).join(",");
+          const syms = [...REST_SYMBOLS.map(s => s.sym), ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (r.ok) {
           const d = await r.json();
@@ -156,7 +160,8 @@ export default function QuotesPanel() {
           setRows(prev => {
             const next = { ...prev };
             items.forEach(q => {
-              const sym = String(q.symbol || "");
+              const rawSym = String(q.symbol || "");
+              const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
               if (!REST_SYMBOLS.find(s => s.sym === sym)) return;
               const last = Number(q.last ?? 0);
               const prev2 = Number(q["prev-close"] ?? 0);
