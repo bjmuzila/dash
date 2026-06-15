@@ -4744,6 +4744,38 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── POST /proxy/cache/refresh  ──────────────────────────────────────────────
+  // Clear all option chain caches (in-memory + SQLite)
+  if (req.method === 'POST' && p === '/proxy/cache/refresh') {
+    try {
+      const symbolsCleared = [];
+
+      // Clear in-memory cache
+      for (const [key] of chainCache.entries()) {
+        symbolsCleared.push(key);
+        chainCache.delete(key);
+      }
+
+      // Clear SQLite chains_cache
+      if (db) {
+        db.prepare('DELETE FROM chains_cache').run();
+        log('[CACHE REFRESH] SQLite chains_cache cleared');
+      }
+
+      log(`[CACHE REFRESH] Cleared ${symbolsCleared.length} in-memory entries and database`);
+      return sendJSON(res, 200, {
+        ok: true,
+        message: 'Cache refreshed',
+        timestamp: Date.now(),
+        entriesCleared: symbolsCleared.length,
+        symbols: symbolsCleared.slice(0, 20) // Return first 20 for logging
+      });
+    } catch (e) {
+      console.error('[CACHE REFRESH ERROR]', e.message);
+      return sendJSON(res, 500, { ok: false, error: e.message });
+    }
+  }
+
   sendJSON(res, 404, { error:'Unknown route', path:p });
 });
 

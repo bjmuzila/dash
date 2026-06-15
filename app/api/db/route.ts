@@ -50,6 +50,14 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Filter flow_calls by size >= 100
+    if (table === "flow_calls") {
+      rows = rows.filter(r => {
+        const size = typeof r === "object" && r !== null && "size" in r ? (r as Record<string, unknown>).size : 0;
+        return typeof size === "number" && size >= 100;
+      });
+    }
+
     return NextResponse.json({ table, count: rows.length, rows });
   } catch (err) {
     console.error("[/api/db]", err);

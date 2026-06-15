@@ -22,12 +22,19 @@ function fmtCell(v: unknown, key?: string): string {
   if (v == null) return "-";
   if (typeof v === "number") {
     if (!Number.isFinite(v)) return "-";
-    if (key === "esPrice" || key === "spxPrice" || key === "price") {
+    // Price fields - no abbreviation, format with decimals
+    if (key === "esPrice" || key === "spxPrice" || key === "price" || key === "underlying" ||
+        key === "open" || key === "high" || key === "low" || key === "close" || key === "spot") {
       return v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     }
-    if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(3) + "B";
-    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(3) + "M";
-    if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + "K";
+    // Timestamp fields - format as HH:MM:SS
+    if (key === "ts" || key?.includes("time")) {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      }
+    }
+    // No abbreviations - write out full numbers
     return Number.isInteger(v) ? v.toString() : v.toFixed(4);
   }
   if (typeof v === "object") {
@@ -38,7 +45,7 @@ function fmtCell(v: unknown, key?: string): string {
   // Detect 13-digit unix ms timestamps
   if (/^\d{13}$/.test(s)) {
     const d = new Date(Number(s));
-    return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+    return d.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
   return s.length > 80 ? s.slice(0, 80) + "…" : s;
 }
@@ -110,7 +117,23 @@ export default function DatabasePage() {
       const res  = await fetch(`/api/db?${params}`);
       const json = await res.json();
       if (json.error) throw new Error(json.error + (json.detail ? `: ${json.detail}` : ""));
-      const data = (json.rows ?? []) as Record<string, unknown>[];
+      let data = (json.rows ?? []) as Record<string, unknown>[];
+
+      // Parse JSON fields for bzila_snapshots
+      if (t === "bzila_snapshots") {
+        data = data.map(r => {
+          try {
+            return {
+              ...r,
+              orders: typeof r.orders === "string" ? JSON.parse(r.orders) : r.orders,
+              stats: typeof r.stats === "string" ? JSON.parse(r.stats) : r.stats,
+            };
+          } catch {
+            return r; // Keep original if parsing fails
+          }
+        });
+      }
+
       setRows(data);
       setCount(data.length);
       if (data.length > 0) {
