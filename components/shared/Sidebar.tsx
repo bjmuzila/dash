@@ -112,7 +112,7 @@ function CollapsedTicker() {
     // Seed prevClose from REST on mount
     async function seedPrevCloses() {
       try {
-        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "NVDA", "AAPL", "TSLA", "META", "MSFT", "AMD", "AMZN", "GOOGL", ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"].join(",");
+        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "NVDA", "AAPL", "TSLA", "META", "MSFT", "AMD", "AMZN", "GOOGL", ES_DISPLAY_SYMBOL, "/ESU26", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (!r.ok) return;
         const d = await r.json();

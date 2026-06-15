@@ -104,7 +104,7 @@ async function computeEM(
 ): Promise<{ ticker: string; close: number; em: number; up: number; down: number; expiration: string } | null> {
   try {
     const quoteSymbol = isFuture
-      ? (ticker === "/ES" ? "/ESU6" : "/NQU6")
+      ? (ticker === "/ES" ? "/ESU26" : "/NQU26")
       : ticker;
     const indexSymbol = isFuture
       ? (ticker === "/ES" ? "SPX" : "NDX")

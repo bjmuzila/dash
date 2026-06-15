@@ -496,7 +496,7 @@ export default function PremarketPage() {
   const spxRow = quotes[SPX_SYM];
   const spxPrice = spxRow?.price ?? null;
   const spxPrev = wsLiveRef.current[SPX_SYM]?.prevClose ?? null;
-  const esRow   = quotes["/ES:XCME"];
+  const esRow   = quotes["/ESU26"] ?? quotes["/ES:XCME"];
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });

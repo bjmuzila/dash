@@ -157,7 +157,7 @@ export default function QuotesPanel() {
     // Seed prevClose for WS symbols from REST on mount so sane() check passes immediately
     async function seedPrevCloses() {
       try {
-        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA", ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"].join(",");
+        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA", ES_DISPLAY_SYMBOL, "/ESU26", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (!r.ok) return;
         const d = await r.json();
@@ -188,7 +188,7 @@ export default function QuotesPanel() {
     async function subscribeEquities() {
       try {
         // Seed current prices from REST first so panel isn't empty on load
-          const syms = [...REST_SYMBOLS.map(s => s.sym), ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU6", "/NQ:XCME"].join(",");
+          const syms = [...REST_SYMBOLS.map(s => s.sym), ES_DISPLAY_SYMBOL, "/ESU26", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (r.ok) {
           const d = await r.json();

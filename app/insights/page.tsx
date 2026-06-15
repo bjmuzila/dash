@@ -1065,7 +1065,7 @@ export default function InsightsPage() {
     if (!DXLINK_WS_URL) return;
     const ws = new WebSocket(DXLINK_WS_URL);
     wsRef.current = ws;
-    const esFeedTypes = ["/ES:XCME", "/ES"].reduce((acc, sym) => {
+    const esFeedTypes = ["/ESU26", "/ES:XCME", "/ES"].reduce((acc, sym) => {
       acc[sym] = ["Quote", "Trade", "TradeETH", "TimeAndSale", "Summary"];
       return acc;
     }, {} as Record<string, string[]>);
@@ -1074,7 +1074,7 @@ export default function InsightsPage() {
       try {
         ws.send(JSON.stringify({
           type: "subscribe",
-          symbols: ["/ES:XCME", "/ES"],
+          symbols: ["/ESU26", "/ES:XCME", "/ES"],
           feedTypesBySymbol: esFeedTypes,
         }));
       } catch { /* silent */ }
@@ -1082,7 +1082,7 @@ export default function InsightsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          symbols: ["/ES:XCME", "/ES"],
+          symbols: ["/ESU26", "/ES:XCME", "/ES"],
           feedTypesBySymbol: esFeedTypes,
         }),
       }).catch(() => {});

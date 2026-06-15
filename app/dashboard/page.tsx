@@ -215,13 +215,6 @@ export default function DashboardPage() {
             NET {fmtPremium(displayNetPremium)}
           </div>
 
-          <button
-            onClick={reset}
-            className="text-xs px-3 py-1 rounded border transition-colors hover:bg-[var(--border)]"
-            style={{ borderColor: "var(--border)", color: "var(--muted)" }}
-          >
-            ↺ Reset
-          </button>
         </div>
       </div>
 

@@ -86,8 +86,8 @@ const FUTURE_PROXY: Record<string, string> = { ESM: "SPX", NQM: "NDX" };
 const QUOTE_SYMBOLS = Array.from(new Set([
   ...SYMBOLS,
   ...Object.values(API_SYMBOL),
-  "/ESM6",
-  "/NQM6",
+  "/ESU26",
+  "/NQU26",
   "VIX",
 ]));
 
@@ -359,8 +359,8 @@ async function fetchAllQuotes(engine: EMEngine) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   items.forEach((q: any) => { map[q.symbol] = q; });
   const aliases: Record<string, string[]> = {
-    ESM: ["/ESM6", "/ES:XCME", "/ES"],
-    NQM: ["/NQM6", "/NQ:XCME", "/NQ"],
+    ESM: ["/ESU26", "/ESM6", "/ES:XCME", "/ES"],
+    NQM: ["/NQU26", "/NQM6", "/NQ:XCME", "/NQ"],
     SPX: ["$SPX"], NDX: ["$NDX"], SPY: ["SPY"], QQQ: ["QQQ"],
   };
   Object.entries(aliases).forEach(([key, list]) => {
