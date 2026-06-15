@@ -1325,7 +1325,31 @@ async function gexTakeSnapshot(triggerType = 'manual') {
   try {
     await window.DB.saveMVCSnapshot(mvcOIVol, mvcVolOnly, spxPrice, esPrice, expiration, triggerType, totalNetGEX, netDexStrike, totalNetDEX_OI, gexFlip);
     console.log(`✓ MVC snapshot saved [${triggerType}]`);
-    
+
+    // ALSO save GEX levels to SQLite
+    const now = new Date();
+    const callWall = window._esLevels?.callWall || window._levels?.callWall || 0;
+    const putWall = window._esLevels?.putWall || window._levels?.putWall || 0;
+    const zeroGamma = window._esLevels?.flip || window._levels?.flip || gexFlip || 0;
+
+    try {
+      await fetch(window.location.origin + '/api/gex/levels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ts: now.getTime(),
+          date: now.toISOString().split('T')[0],
+          call_wall: callWall,
+          put_wall: putWall,
+          zero_gamma: zeroGamma,
+          spot: esPrice,
+          es_spot: esPrice
+        })
+      }).catch(e => console.warn('[Sync] GEX levels save to SQLite failed:', e.message));
+    } catch (e) {
+      console.warn('[Sync] GEX levels sync error:', e.message);
+    }
+
     // Show toast only for manual snaps
     if (triggerType === 'manual') {
       const toast = document.createElement('div');
@@ -1337,13 +1361,53 @@ async function gexTakeSnapshot(triggerType = 'manual') {
   } catch (err) {
     console.error('✗ Failed to save MVC snapshot:', err);
   }
-  
+
   window.EventBus.emit('gex-snapshot', { esPrice, spxPrice, totalNetGEX, selectedDTE });
 }
 
+// Load persisted data from SQLite backend on startup
+async function loadPersistedDataFromSQLite() {
+  try {
+    console.log('[Init] Loading persisted data from SQLite...');
+
+    // Load MVC snapshots
+    const mvcResp = await fetch(window.location.origin + '/api/mvc/all?limit=50');
+    if (mvcResp.ok) {
+      const mvcSnapshots = await mvcResp.json();
+      console.log('[Init] Loaded', mvcSnapshots.length, 'MVC snapshots from SQLite');
+      window.AppState = window.AppState || {};
+      window.AppState.mvcSnapshots = mvcSnapshots;
+    }
+
+    // Load today's buy/sell scores
+    const today = new Date().toISOString().split('T')[0];
+    const bssResp = await fetch(window.location.origin + '/api/buy_sell/date?date=' + today);
+    if (bssResp.ok) {
+      const bssScores = await bssResp.json();
+      console.log('[Init] Loaded', bssScores.length, 'buy/sell scores for today');
+      window.AppState = window.AppState || {};
+      window.AppState.buySellScores = bssScores;
+    }
+
+    // Load today's GEX levels
+    const gexResp = await fetch(window.location.origin + '/api/gex/levels?date=' + today);
+    if (gexResp.ok) {
+      const gexLevels = await gexResp.json();
+      console.log('[Init] Loaded', gexLevels.length, 'GEX levels for today');
+      window.AppState = window.AppState || {};
+      window.AppState.gexLevels = gexLevels;
+    }
+
+    console.log('[Init] ✓ SQLite data loaded successfully');
+  } catch (e) {
+    console.warn('[Init] Failed to load SQLite data:', e.message);
+  }
+}
+
 // Load overview page on startup - defined here, called at end of script
-function initDashboard() {
+async function initDashboard() {
   console.log('App initialized');
+  await loadPersistedDataFromSQLite();
   loadPage('overview');
   schwabStatusPoll();
   setInterval(schwabStatusPoll, 30000);

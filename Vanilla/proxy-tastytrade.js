@@ -2761,6 +2761,154 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ── DATA PERSISTENCE ROUTES (SQLite sync) ────────────────────
+
+  // Save MVC snapshot
+  if (req.method === 'POST' && p === '/api/mvc/save') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { timestamp, date, triggerType, mvcOIVol, mvcVolOnly, currentPrice, spxPrice, expiration, totalNetGEX, netDexStrike, totalNetDEX_OI, gexFlip } = data;
+
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+
+        const dataJson = JSON.stringify({ mvcOIVol, mvcVolOnly, currentPrice, spxPrice, expiration, totalNetGEX, netDexStrike, totalNetDEX_OI, gexFlip });
+        db.prepare(`
+          INSERT INTO mvc (timestamp, date, triggerType, data)
+          VALUES (?, ?, ?, ?)
+        `).run(timestamp, date, triggerType, dataJson);
+
+        log('[DB] MVC snapshot saved:', { date, triggerType, strike: mvcOIVol?.strike });
+        sendJSON(res, 200, { ok: true, id: 'saved' });
+      } catch (e) {
+        log('[DB] MVC save error:', e.message);
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get all MVC snapshots
+  if (req.method === 'GET' && p === '/api/mvc/all') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+
+      const limit = parseInt(u.searchParams.get('limit') || '100', 10);
+      const rows = db.prepare(`
+        SELECT id, timestamp, date, triggerType, data FROM mvc
+        ORDER BY timestamp DESC LIMIT ?
+      `).all(limit);
+
+      const result = rows.map(r => ({
+        id: r.id,
+        timestamp: r.timestamp,
+        date: r.date,
+        triggerType: r.triggerType,
+        ...JSON.parse(r.data)
+      }));
+
+      log('[DB] MVC query:', result.length, 'records');
+      sendJSON(res, 200, result);
+    } catch (e) {
+      log('[DB] MVC query error:', e.message);
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save buy/sell score
+  if (req.method === 'POST' && p === '/api/buy_sell/save') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { ts, date, time, slot_key, spx_price, side, score, buy_pct, sell_pct, gex, dex, chex, vex } = data;
+
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+
+        db.prepare(`
+          INSERT INTO buy_sell_scores (ts, date, time, slot_key, spx_price, side, score, buy_pct, sell_pct, gex, dex, chex, vex)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(slot_key) DO UPDATE SET score=excluded.score, buy_pct=excluded.buy_pct, sell_pct=excluded.sell_pct, gex=excluded.gex, dex=excluded.dex, chex=excluded.chex, vex=excluded.vex
+        `).run(ts, date, time, slot_key, spx_price, side, score, buy_pct, sell_pct, gex, dex, chex, vex);
+
+        log('[DB] Buy/sell score saved:', { date, time, side, score });
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        log('[DB] Buy/sell save error:', e.message);
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get buy/sell scores by date
+  if (req.method === 'GET' && p === '/api/buy_sell/date') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+
+      const date = u.searchParams.get('date') || dbEtDate();
+      const rows = db.prepare(`
+        SELECT * FROM buy_sell_scores WHERE date = ? ORDER BY ts DESC
+      `).all(date);
+
+      log('[DB] Buy/sell query for', date, ':', rows.length, 'records');
+      sendJSON(res, 200, rows);
+    } catch (e) {
+      log('[DB] Buy/sell query error:', e.message);
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Save GEX levels
+  if (req.method === 'POST' && p === '/api/gex/levels') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { ts, date, call_wall, put_wall, zero_gamma, spot, es_spot } = data;
+
+        if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+
+        db.prepare(`
+          INSERT INTO gex_levels (ts, date, call_wall, put_wall, zero_gamma, spot, es_spot)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(ts, date, call_wall, put_wall, zero_gamma, spot, es_spot);
+
+        log('[DB] GEX levels saved:', { call_wall, put_wall, zero_gamma });
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        log('[DB] GEX levels save error:', e.message);
+        sendJSON(res, 400, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // Get latest GEX levels
+  if (req.method === 'GET' && p === '/api/gex/levels') {
+    try {
+      if (!db) return sendJSON(res, 503, { error: 'Database not ready' });
+
+      const date = u.searchParams.get('date') || dbEtDate();
+      const rows = db.prepare(`
+        SELECT * FROM gex_levels WHERE date = ? ORDER BY ts DESC LIMIT 10
+      `).all(date);
+
+      log('[DB] GEX levels query for', date, ':', rows.length, 'records');
+      sendJSON(res, 200, rows);
+    } catch (e) {
+      log('[DB] GEX levels query error:', e.message);
+      sendJSON(res, 400, { error: e.message });
+    }
+    return;
+  }
+
   // ── SCHWAB PROXY ROUTES ───────────────────────────────────────
   if (p.startsWith('/proxy/schwab/')) {
     if (!schwabAccessToken) return sendJSON(res, 401, { error: 'Schwab not connected' });

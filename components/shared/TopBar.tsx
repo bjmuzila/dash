@@ -59,6 +59,12 @@ function fmt(v: number, decimals = 2) {
   return v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+function fmtEsQuarter(v: number) {
+  if (!v || !isFinite(v)) return "—";
+  const rounded = Math.round(v * 4) / 4;
+  return rounded.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function fmtChg(price: number, baseline: number) {
   if (!price || !baseline) return null;
   // Sanity check: baseline must be within 20% of price to be valid
@@ -467,7 +473,7 @@ export default function TopBar() {
           <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
             <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700 }}>{ES_DISPLAY_LABEL}</span>
             <span style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
-              {es.price > 0 ? fmt(es.price) : "—"}
+              {es.price > 0 ? fmtEsQuarter(es.price) : "—"}
             </span>
             {esChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, fontWeight: 600, color: esChg.up ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{esChg.text}</span>}
           </div>

@@ -254,6 +254,31 @@ window.DB = {
     };
 
     const result = await this._insert('mvc', record);
+
+    // SYNC TO SQLite backend
+    try {
+      await fetch(window.location.origin + '/api/mvc/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          timestamp: record.timestamp,
+          date: record.date,
+          triggerType: record.triggerType,
+          mvcOIVol: mvcOIVol,
+          mvcVolOnly: mvcVolOnly,
+          currentPrice: record.esPrice,
+          spxPrice: record.spxPrice,
+          expiration: record.expiration,
+          totalNetGEX: totalNetGEX,
+          netDexStrike: netDexStrike,
+          totalNetDEX_OI: totalNetDEX_OI,
+          gexFlip: record.gexFlip
+        })
+      }).catch(e => console.warn('[Sync] MVC save to SQLite failed:', e.message));
+    } catch (e) {
+      console.warn('[Sync] MVC sync error:', e.message);
+    }
+
     if (typeof window.updateSnapshotCount === 'function') window.updateSnapshotCount();
     if (typeof window.loadGexPeaks === 'function') window.loadGexPeaks();
     return result;
@@ -404,7 +429,8 @@ window.DB = {
       buyPct: Number(score.buyPct || 0),
       sellPct: Number(score.sellPct || 0)
     };
-    return this._withReopen(() => new Promise((resolve, reject) => {
+
+    const result = await this._withReopen(() => new Promise((resolve, reject) => {
       const tx = this.db.transaction('buySellScores', 'readwrite');
       const store = tx.objectStore('buySellScores');
       const getReq = store.index('slotKey').get(record.slotKey);
@@ -416,6 +442,33 @@ window.DB = {
         req.onsuccess = () => resolve(req.result);
       };
     }));
+
+    // SYNC TO SQLite backend
+    try {
+      await fetch(window.location.origin + '/api/buy_sell/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ts: record.timestamp,
+          date: record.date,
+          time: record.time,
+          slot_key: record.slotKey,
+          spx_price: record.spxPrice,
+          side: record.side,
+          score: record.score,
+          buy_pct: record.buyPct,
+          sell_pct: record.sellPct,
+          gex: score.gex || 0,
+          dex: score.dex || 0,
+          chex: score.chex || 0,
+          vex: score.vex || 0
+        })
+      }).catch(e => console.warn('[Sync] Buy/sell save to SQLite failed:', e.message));
+    } catch (e) {
+      console.warn('[Sync] Buy/sell sync error:', e.message);
+    }
+
+    return result;
   },
 
   async queryBuySellScores_Today() {
