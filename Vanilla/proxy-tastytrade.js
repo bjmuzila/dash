@@ -2151,6 +2151,9 @@ let lastBroadcast = 0;
 const BROADCAST_THROTTLE_MS = 250;
 
 function broadcast(msg) {
+  // Skip broadcast if no clients connected — prevents server-side bleed
+  if (dxClients.size === 0) return;
+
   // Throttle broadcasts to 250ms intervals to prevent firehosing
   const now = Date.now();
   if (now - lastBroadcast < BROADCAST_THROTTLE_MS) return;
