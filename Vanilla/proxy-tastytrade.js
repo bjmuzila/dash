@@ -3612,41 +3612,54 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: 0, symbol: sym }, context: 'cache' });
     }
 
-    const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(sym)}/nested`);
-    if (s1 !== 200 || !d1?.data?.items?.length) {
-      return sendJSON(res, s1, d1);
-    }
+    // Known root symbols — skip /nested round-trip when expiration is explicit
+    const KNOWN_ROOT: Record<string, string> = { SPX: 'SPXW', SPXW: 'SPXW', SPY: 'SPY', QQQ: 'QQQ' };
 
-    // TT nested chain: items = array of chain objects, each with expirations[]
-    // Prefer SPXW (weeklys) for SPX to get 0DTE and 5-point strike density
-    const chainObj = d1.data.items.find(c => c['root-symbol'] === 'SPXW') || d1.data.items[0];
-    const rootSymbol = chainObj['root-symbol'] || sym;
-    const expirations = chainObj.expirations || [];
-    log('chains root-symbol:', rootSymbol, 'expirations:', expirations.length);
+    let rootSymbol;
+    let targetExps;
 
-    // Step 2: fetch full option chain for root symbol to get strikes+OI+greeks
-    // Filter to requested expiration or nearest few
-    let targetExps = expirations.map(e => e['expiration-date']).filter(Boolean).sort();
-    if (exp) targetExps = targetExps.filter(e => e === exp);
-    else {
-      // FIXED (2026-06-12): Ensure 0DTE is included when no explicit expiration is passed
-      // Previous behavior skipped 0DTE if not in top 2, causing QQQ to show no data
+    if (exp && KNOWN_ROOT[sym.toUpperCase()]) {
+      // Fast path: skip /nested, go straight to the chain fetch
+      rootSymbol = KNOWN_ROOT[sym.toUpperCase()];
+      targetExps = [exp];
+      log('chains fast-path: rootSymbol=' + rootSymbol + ' exp=' + exp);
+    } else {
+      const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(sym)}/nested`);
+      if (s1 !== 200 || !d1?.data?.items?.length) {
+        return sendJSON(res, s1, d1);
+      }
+      // TT nested chain: items = array of chain objects, each with expirations[]
+      // Prefer SPXW (weeklys) for SPX to get 0DTE and 5-point strike density
+      const chainObj = d1.data.items.find(c => c['root-symbol'] === 'SPXW') || d1.data.items[0];
+      rootSymbol = chainObj['root-symbol'] || sym;
+      const expirations = chainObj.expirations || [];
+      log('chains root-symbol:', rootSymbol, 'expirations:', expirations.length);
+
+      targetExps = expirations.map(e => e['expiration-date']).filter(Boolean).sort();
+      // No explicit exp — pick nearest few
       const todayDate = todayYmd().ymd;
       const hasTodayExpiry = targetExps.some(d => d === todayDate);
       if (hasTodayExpiry) {
-        // Prioritize 0DTE, then add up to 2 more nearby expirations
         targetExps = [todayDate, ...targetExps.filter(d => d !== todayDate).slice(0, 2)];
       } else {
-        // No 0DTE today, just fetch 3 nearest expirations
         targetExps = targetExps.slice(0, 3);
       }
     }
 
-    // Fetch underlying price first so chain requests are centered on ATM
-    const quotePrice = await fetchUnderlyingLast(sym).catch(() => 0);
-    // For non-index tickers use their own dxLink cache entry; fall back to SPX only for SPX/SPXW
+    // Fetch underlying price AND chain data in parallel
     const isSpxFamily = /^SPX[W]?$/i.test(sym);
     const dxSpotKey = isSpxFamily ? 'SPX' : sym.toUpperCase();
+
+    const [quotePriceResult, ...chainResponses] = await Promise.all([
+      fetchUnderlyingLast(sym).catch(() => 0),
+      ...targetExps.map(expDate => (
+        ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`)
+          .then(result => ({ expDate, ...result }))
+          .catch(error => ({ expDate, status: 500, data: null, error }))
+      )),
+    ]);
+
+    const quotePrice = quotePriceResult;
     // SPX in dxFeed is keyed as '$SPX' — check both
     const dxCacheEntry = dxQuoteCache[dxSpotKey] || dxQuoteCache['$' + dxSpotKey] || dxQuoteCache[sym] || {};
     const dxSpotPrice = firstFiniteNumber(dxCacheEntry.last, dxCacheEntry.bidPrice, dxCacheEntry.askPrice,
@@ -3654,13 +3667,6 @@ const server = http.createServer(async (req, res) => {
     // Use quote first, fallback to dxLink spot, then hardcoded
     let underlyingPrice = firstFiniteNumber(quotePrice, dxSpotPrice, isSpxFamily ? 5800 : 0);
     log('chains: quotePrice=' + quotePrice + ', dxSpot=' + dxSpotPrice + ', final underlyingPrice=' + underlyingPrice);
-
-    // Fetch full chain — TT returns all strikes for the expiry
-    const chainResponses = await Promise.all(targetExps.map(expDate => (
-      ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`)
-        .then(result => ({ expDate, ...result }))
-        .catch(error => ({ expDate, status: 500, data: null, error }))
-    )));
 
     let allOptions = [];
     for (const { status: s2, data: d2 } of chainResponses) {
@@ -4492,11 +4498,20 @@ const server = http.createServer(async (req, res) => {
   // Returns today's intraday GEX/DEX/CHEX/VEX history — reads SQLite first,
   // falls back to in-memory array if DB not ready
   if (req.method === 'GET' && p === '/proxy/api/greeks-intraday') {
-    const date = u.searchParams.get('date') || dbEtDate();
+    const requestedDate = u.searchParams.get('date') || dbEtDate();
+    let date = requestedDate;
     let records = [];
     if (db) {
       try {
-        const rows = stmts().queryGreeksByDate.all(date);
+        let rows = stmts().queryGreeksByDate.all(date);
+        // If no records for today (weekend / market closed), fall back to most recent date
+        if (!rows.length && !u.searchParams.get('date')) {
+          const latestRow = db.prepare('SELECT DISTINCT date FROM greeks_intraday ORDER BY date DESC LIMIT 1').get();
+          if (latestRow?.date && latestRow.date !== date) {
+            date = latestRow.date;
+            rows = stmts().queryGreeksByDate.all(date);
+          }
+        }
         records = rows.map(r => ({
           ts: r.ts, time: r.time,
           gex: r.gex, dex: r.dex, chex: r.chex, vex: r.vex,
@@ -4507,7 +4522,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     // Merge in-memory ring buffer for any points not yet committed
-    if (records.length < intradayGreeksHistory.length) {
+    if (date === requestedDate && records.length < intradayGreeksHistory.length) {
       const lastDbTs = records.length ? records[records.length - 1].ts : 0;
       const fresh = intradayGreeksHistory.filter(r => r.ts > lastDbTs);
       records = [...records, ...fresh];
@@ -5098,15 +5113,17 @@ server.listen(PORT, async () => {
         weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false
       }).formatToParts(now);
       const etMap = Object.fromEntries(etParts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
-      const etWeekday = etMap.weekday; // 'Sun','Mon',...
-      if (etWeekday === 'Sun' || etWeekday === 'Sat') return;
+      // 24/7 two-session model: Day 9:30–17:00 ET, Night 17:00–9:30 ET (incl weekends)
+      // No weekday/weekend gate — ES futures trade nearly 24h
       const etHour = parseInt(etMap.hour, 10);
       const etMin  = parseInt(etMap.minute, 10);
       const etTime = etHour * 60 + etMin;
-      if (etTime < 9 * 60 || etTime > 16 * 60) return;
-
+      // Only skip the dead window: Sun 17:00 → Sun market-open equiv (market truly closed)
+      // Actually just allow everything — dxLink will have no price if truly closed
       const spot = firstFiniteNumber(
         dxTradeCache['SPX']?.price,
+        dxTradeCache['/ESU26']?.price,
+        dxTradeCache['/ES:XCME']?.price,
         dxTradeCache['/ESM6']?.price,
         gexLevelCache.spot, 0
       );

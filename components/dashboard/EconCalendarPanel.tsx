@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { BoxSnapBtn } from "@/components/shared/DataBox";
+import EconCalendarDiscordBtn from "@/components/shared/EconCalendarDiscordBtn";
 
 interface CalEvent {
   date: string;
@@ -335,8 +336,8 @@ export default function EconCalendarPanel() {
         <button onClick={trigger} style={{ ...btnStyle }}>
           {btnLabel}
         </button>
-        <BoxSnapBtn    targetRef={containerRef} label="Econ Calendar" />
-        <BoxDiscordBtn targetRef={containerRef} label="Econ Calendar" />
+        <BoxSnapBtn targetRef={containerRef} label="Econ Calendar" />
+        <EconCalendarDiscordBtn />
       </div>
 
       {/* Quote */}
