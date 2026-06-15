@@ -22,6 +22,7 @@ const { URL }   = require('url');
 const { spawn }  = require('child_process');
 const WebSocket = require('ws');
 const Database  = require('better-sqlite3');
+const SubscriptionFilter = require('./subscription-filter');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const PORT           = parseInt(process.env.PORT || '3001', 10);
@@ -788,8 +789,9 @@ async function sendSubscriptionsRateLimited() {
   }
 }
 
-const dxClients     = new Set();
-const subscriptions = new Set();
+const dxClients           = new Set();
+const subscriptionFilter  = new SubscriptionFilter();  // Per-client subscription tracking
+const subscriptions       = new Set();
 const subscriptionTypesBySymbol = new Map();
 const candleSubscriptions = new Set();  // separate set for candle symbols
 const dxCandleCache = {};
@@ -2159,8 +2161,27 @@ function broadcast(msg) {
   if (now - lastBroadcast < BROADCAST_THROTTLE_MS) return;
   lastBroadcast = now;
 
+  // Extract symbol from message for subscription filtering
+  let symbol = null;
+  if (msg.data && Array.isArray(msg.data) && msg.data.length > 0) {
+    // Compact format: msg.data[1][0] is first symbol
+    if (Array.isArray(msg.data[1])) {
+      symbol = msg.data[1][0];
+    }
+  } else if (msg.eventSymbol) {
+    symbol = msg.eventSymbol;
+  } else if (msg.data && Array.isArray(msg.data)) {
+    // Object format: msg.data[0].eventSymbol
+    symbol = msg.data[0]?.eventSymbol;
+  }
+
   const s = typeof msg === 'string' ? msg : JSON.stringify(msg);
-  dxClients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(s); });
+  dxClients.forEach(ws => {
+    // Only send to clients subscribed to this symbol
+    if (ws.readyState === WebSocket.OPEN && subscriptionFilter.shouldBroadcast(symbol, ws.id)) {
+      ws.send(s);
+    }
+  });
 }
 
 async function ensureDxLinkReady() {
@@ -5218,7 +5239,13 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocket.Server({ server, path:'/ws/dxlink' });
 
 wss.on('connection', ws => {
+  ws.id = `ws-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   dxClients.add(ws);
+  subscriptionFilter.registerClient(ws.id);
+
+  // Auto-subscribe client to core symbols on connect
+  subscriptionFilter.addClientSubscription(ws.id, ['SPX', 'VIX', '/ES:XCME', '/NQ:XCME', 'QQQ']);
+
   let subscriptionDebounceTimer = null;
 
   if (!dxSocket || dxSocket.readyState === WebSocket.CLOSED) {
@@ -5279,9 +5306,9 @@ wss.on('connection', ws => {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'subscribe' && Array.isArray(msg.symbols)) {
-        // DISABLED: WebSocket subscriptions cause massive queuing on refresh
-        // All subscriptions must come via REST POST /proxy/dxlink/subscribe instead
-        log(`[WS] Browser subscribe IGNORED (${msg.symbols.length} symbols) — use REST POST instead`);
+        // ENABLED: WebSocket subscriptions now tracked per-client
+        subscriptionFilter.addClientSubscription(ws.id, msg.symbols);
+        log(`[WS] Client ${ws.id.slice(0,12)} subscribed to ${msg.symbols.length} symbols`);
         return;
       }
     } catch(e) {
@@ -5290,6 +5317,7 @@ wss.on('connection', ws => {
   });
   ws.on('close', () => {
     dxClients.delete(ws);
+    subscriptionFilter.removeClient(ws.id);
     if (dxClients.size === 0 && dxSocket) { clearInterval(keepAliveInterval); dxSocket.close(); dxSocket = null; }
   });
   ws.on('error', e => console.error('[WS] Browser error:', e.message));
