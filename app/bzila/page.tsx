@@ -500,10 +500,17 @@ function StrikeBucketChart({
     const step = Math.max(1, Math.floor(points.length / Math.max(1, tickCount - 1)));
 
     const series = visibleRows.map((row) => {
+      // Keep a strike's last known value across gaps so the time series stays readable
+      // even when that strike falls out of the current top-10 snapshot for a few samples.
+      let lastValue: number | null = null;
       const coords = points
         .map((point, index) => {
-          const value = point[key][row.strike];
-          return Number.isFinite(value) ? { x: xAt(index), y: yAt(value), value } : null;
+          const nextValue = point[key][row.strike];
+          if (Number.isFinite(nextValue)) {
+            lastValue = nextValue;
+          }
+          if (!Number.isFinite(lastValue)) return null;
+          return { x: xAt(index), y: yAt(lastValue), value: lastValue };
         })
         .filter((entry): entry is { x: number; y: number; value: number } => Boolean(entry));
 
