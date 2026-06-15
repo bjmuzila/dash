@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { label: "Premarket",     href: "/premarket" },
   { label: "Dashboard",     href: "/dashboard" },
   { label: "Database",      href: "/database" },
+  { label: "ES Candles",    href: "/es-candles" },
   { label: "Insights",      href: "/insights" },
   { label: "Est. Move",     href: "/estimated-move" },
   { label: "Options Chain", href: "/options-chain" },
