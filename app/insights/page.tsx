@@ -774,7 +774,7 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
   });
 
   return (
-    <section style={{ border: "1px solid rgba(255,72,72,.32)", background: "linear-gradient(180deg,rgba(120,0,0,.10),rgba(0,0,0,.32))", borderRadius: 12, padding: 18, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+    <section className="greek-card" style={{ border: "1px solid rgba(255,72,72,.32)", background: "linear-gradient(180deg,rgba(120,0,0,.10),rgba(0,0,0,.32))", borderRadius: 12, padding: 18, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
         <div>
           <div style={{ fontSize: 14, color: "#ff5b5b", fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase" }}>Relative Volume</div>
@@ -1319,7 +1319,7 @@ export default function InsightsPage() {
 
         {/* ── EXPOSURE TAB ─────────────────────────────────────────────────── */}
         {tab === "exposure" && (
-          <div ref={exposureRef} id="exposure-board" style={{ maxWidth: 1100, width: "100%", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+          <div ref={exposureRef} id="exposure-board" style={{ maxWidth: 1480, width: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
             {/* Title row */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
               <div>
@@ -1332,8 +1332,20 @@ export default function InsightsPage() {
               </div>
             </div>
 
-            {/* 2-col grid — collapses to 1-col on narrow screens */}
+            {/* 3-col grid on desktop, 2-col on tablet, 1-col on mobile */}
             <style>{`
+              #exposure-board .exposure-grid {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 10px;
+                align-items: stretch;
+              }
+              #exposure-board .greek-card {
+                min-height: 260px;
+              }
+              @media (max-width: 1180px) {
+                #exposure-board .exposure-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+              }
               @media (max-width: 640px) {
                 #exposure-board .exposure-grid { grid-template-columns: 1fr !important; }
                 #exposure-board .greek-card { min-height: 160px !important; height: auto !important; }
@@ -1344,7 +1356,7 @@ export default function InsightsPage() {
                 #exposure-board .greek-card .greek-subtitle { font-size: 9px !important; }
               }
             `}</style>
-            <div className="exposure-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, flex: 1, minHeight: 0, gridAutoRows: "minmax(0, 1fr)" }}>
+            <div className="exposure-grid" style={{ minHeight: 0, gridAutoRows: "minmax(260px, auto)" }}>
 
               {/* GEX */}
               <GreekCard
@@ -1416,24 +1428,14 @@ export default function InsightsPage() {
                 <div style={{ height: 4, background: "rgba(255,255,255,.12)", borderRadius: 999, overflow: "hidden", marginBottom: 12 }}>
                   <div style={{ height: "100%", width: `${buyPct}%`, background: "linear-gradient(90deg,#00e676,#ff4d57,#ff4d57)", transition: "width .4s" }} />
                 </div>
-                <div style={{ border: "1px solid rgba(0,230,118,.2)", borderRadius: 6, padding: "10px 10px 6px", background: "rgba(0,0,0,.18)", flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexShrink: 0 }}>
-                    <div style={{ fontSize: 10, color: "#00e5ff", fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase" }}>Playbook Feed</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00e676", display: "inline-block" }} />
-                      <span style={{ fontSize: 9, color: "#c9d7db", textTransform: "uppercase", letterSpacing: ".06em" }}>Live</span>
-                    </div>
-                  </div>
-                  <div style={{ overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 0 }}>
-                    {signals.length === 0
-                      ? <div style={{ fontSize: 12, color: "#4a6070", padding: "4px 0" }}>Waiting for live exposure data…</div>
-                      : signals.map((s, i) => (
-                        <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 6, opacity: Math.max(0.28, 1 - i * 0.18), padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,.04)" }}>
-                          <span style={{ color: s.color, fontSize: 11, fontWeight: 800, fontFamily: "monospace", whiteSpace: "nowrap", paddingTop: 1, flexShrink: 0 }}>{s.time}</span>
-                          <span style={{ fontSize: 12, color: i === 0 ? "#eef7ff" : "#d7e6e8", lineHeight: 1.45, fontWeight: i === 0 ? 700 : 400 }}>{s.text}</span>
-                        </div>
-                      ))
-                    }
+                <div style={{ marginTop: "auto", border: "1px solid rgba(0,230,118,.2)", borderRadius: 6, padding: "10px 12px", background: "rgba(0,0,0,.18)" }}>
+                  <div style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 6 }}>Pressure Read</div>
+                  <div style={{ fontSize: 12, color: "#d7e6e8", lineHeight: 1.55 }}>
+                    {buyPct >= 55
+                      ? "Dealer positioning is leaning toward buy-side support. Watch for dips to attract hedging demand."
+                      : buyPct <= 45
+                        ? "Dealer positioning is leaning toward sell-side pressure. Failed bounces can stay heavy."
+                        : "Dealer positioning is balanced. Expect more two-way trade until gamma or delta shifts."}
                   </div>
                 </div>
               </section>
@@ -1471,12 +1473,35 @@ export default function InsightsPage() {
                     <div style={{ fontSize: 9, color: "#9fb3c8", marginTop: 3 }}>{regime?.dexMsg}</div>
                   </div>
                 </div>
-                {regime && (
-                  <div style={{ marginTop: 10, border: "1px solid rgba(0,180,200,.15)", borderRadius: 6, padding: "8px 10px", background: "rgba(0,0,0,.18)" }}>
-                    <div style={{ fontSize: 9, color: "#00e5ff", fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 4 }}>Regime Description</div>
-                    <div style={{ fontSize: 11, color: "#9fb3c8", lineHeight: 1.5 }}>{regime.desc}</div>
+              </section>
+
+              {/* Regime Description + Playbook Feed */}
+              <section className="greek-card" style={{ border: "1px solid rgba(0,229,255,.24)", background: "linear-gradient(180deg,rgba(0,26,38,.56),rgba(0,0,0,.3))", borderRadius: 8, padding: 14, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+                <div style={{ fontSize: 10, color: "#00e5ff", fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", marginBottom: 10 }}>Regime Description</div>
+                <div style={{ border: "1px solid rgba(0,229,255,.18)", borderRadius: 6, padding: "10px 12px", background: "rgba(0,0,0,.18)", marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 900, color: regime ? regime.badge : "#eef7ff", marginBottom: 5 }}>{regime ? regime.title : "Waiting for regime data"}</div>
+                  <div style={{ fontSize: 11, color: "#9fb3c8", lineHeight: 1.55 }}>
+                    {regime?.desc ?? "As live exposure updates come in, the current dealer regime summary will appear here."}
                   </div>
-                )}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexShrink: 0 }}>
+                  <div style={{ fontSize: 10, color: "#00e5ff", fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase" }}>Playbook Feed</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00e676", display: "inline-block" }} />
+                    <span style={{ fontSize: 9, color: "#c9d7db", textTransform: "uppercase", letterSpacing: ".06em" }}>Live</span>
+                  </div>
+                </div>
+                <div style={{ border: "1px solid rgba(0,229,255,.16)", borderRadius: 6, padding: "4px 10px", background: "rgba(0,0,0,.18)", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 0 }}>
+                  {signals.length === 0
+                    ? <div style={{ fontSize: 12, color: "#4a6070", padding: "8px 0" }}>Waiting for live exposure data…</div>
+                    : signals.map((s, i) => (
+                      <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 6, opacity: Math.max(0.28, 1 - i * 0.18), padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,.04)" }}>
+                        <span style={{ color: s.color, fontSize: 11, fontWeight: 800, fontFamily: "monospace", whiteSpace: "nowrap", paddingTop: 1, flexShrink: 0 }}>{s.time}</span>
+                        <span style={{ fontSize: 12, color: i === 0 ? "#eef7ff" : "#d7e6e8", lineHeight: 1.45, fontWeight: i === 0 ? 700 : 400 }}>{s.text}</span>
+                      </div>
+                    ))
+                  }
+                </div>
               </section>
 
             </div>{/* end grid */}

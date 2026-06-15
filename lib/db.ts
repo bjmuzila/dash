@@ -697,3 +697,84 @@ export async function getBzilaGexHistory(date: string): Promise<BzilaGexPoint[]>
     [date]
   );
 }
+
+// Bzila Strike GEX History (top 10 above / below spot snapshots)
+
+export interface BzilaStrikeGexRecord {
+  id?: number;
+  timestamp: number;
+  date: string;
+  expiry: string;
+  spot: number;
+  strike: number;
+  bucket: "above" | "below";
+  rank_index: number;
+  call_gex: number;
+  put_gex: number;
+  net_gex: number;
+  net_gex_change: number;
+}
+
+export async function ensureBzilaStrikeGexTable(): Promise<void> {
+  const db = await getDb();
+  db.run(`
+    CREATE TABLE IF NOT EXISTS bzila_strike_gex_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      expiry TEXT,
+      spot REAL,
+      strike REAL NOT NULL,
+      bucket TEXT NOT NULL,
+      rank_index INTEGER NOT NULL,
+      call_gex REAL,
+      put_gex REAL,
+      net_gex REAL,
+      net_gex_change REAL
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_date ON bzila_strike_gex_history(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_ts ON bzila_strike_gex_history(timestamp)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_strike ON bzila_strike_gex_history(strike)");
+}
+
+export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, \"id\">[]): Promise<void> {
+  if (!rows.length) return;
+  const db = await getDb();
+  await ensureBzilaStrikeGexTable();
+  for (const row of rows) {
+    db.run(
+      `INSERT INTO bzila_strike_gex_history
+       (timestamp, date, expiry, spot, strike, bucket, rank_index, call_gex, put_gex, net_gex, net_gex_change)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.timestamp,
+        row.date,
+        row.expiry,
+        row.spot,
+        row.strike,
+        row.bucket,
+        row.rank_index,
+        row.call_gex,
+        row.put_gex,
+        row.net_gex,
+        row.net_gex_change,
+      ]
+    );
+  }
+  persistDb();
+}
+
+export async function getBzilaStrikeGexHistory(date?: string, limit = 5000): Promise<BzilaStrikeGexRecord[]> {
+  await ensureBzilaStrikeGexTable();
+  if (date) {
+    return queryAll<BzilaStrikeGexRecord>(
+      "SELECT * FROM bzila_strike_gex_history WHERE date = ? ORDER BY timestamp ASC, bucket ASC, rank_index ASC LIMIT ?",
+      [date, limit]
+    );
+  }
+  return queryAll<BzilaStrikeGexRecord>(
+    "SELECT * FROM bzila_strike_gex_history ORDER BY timestamp DESC, bucket ASC, rank_index ASC LIMIT ?",
+    [limit]
+  );
+}

@@ -158,6 +158,7 @@ function computeRows(
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol",
+  movePercent: number = 10,
 ): ComputedResult {
   let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
   let atmStrike = 0;
@@ -168,6 +169,23 @@ function computeRows(
       if (d < minDist) { minDist = d; atmIdx = i; }
     });
     atmStrike = rows[atmIdx].strike;
+
+    // Filter strikes within move % range
+    const moveAmount = (spot * movePercent) / 100;
+    const lowerBound = spot - moveAmount;
+    const upperBound = spot + moveAmount;
+    rows = rows.filter(r => r.strike >= lowerBound && r.strike <= upperBound);
+
+    // Re-find ATM in filtered rows
+    atmIdx = 0;
+    minDist = Infinity;
+    rows.forEach((r, i) => {
+      const d = Math.abs(r.strike - spot);
+      if (d < minDist) { minDist = d; atmIdx = i; }
+    });
+    if (rows.length) atmStrike = rows[atmIdx].strike;
+
+    // Center view on ATM
     let start = Math.max(0, atmIdx - STRIKES_PER_SIDE);
     let end   = Math.min(rows.length, atmIdx + STRIKES_PER_SIDE + 1);
     const want = STRIKES_PER_SIDE * 2 + 1;
@@ -215,10 +233,18 @@ function computeTotals(
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol",
+  movePercent: number = 10,
 ): Record<NetCol, number> {
   const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
   const volOnly = contractMode === "vol";
-  strikes.forEach(r => {
+
+  // Filter strikes within move % range
+  const moveAmount = (spot * movePercent) / 100;
+  const lowerBound = spot - moveAmount;
+  const upperBound = spot + moveAmount;
+  const filteredStrikes = strikes.filter(r => r.strike >= lowerBound && r.strike <= upperBound);
+
+  filteredStrikes.forEach(r => {
     const cd = liveData[r.callSym ?? ""] || {};
     const pd = liveData[r.putSym  ?? ""] || {};
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
@@ -248,11 +274,11 @@ function TickerPanel({
   const userScrolledRef = useRef(false);
 
   const computed = strikes.length
-    ? computeRows(strikes, liveData, spot, contractMode)
+    ? computeRows(strikes, liveData, spot, contractMode, movePercent)
     : null;
 
   const totals = strikes.length && spot > 0
-    ? computeTotals(strikes, liveData, spot, contractMode)
+    ? computeTotals(strikes, liveData, spot, contractMode, movePercent)
     : null;
 
   // Auto-scroll to ATM

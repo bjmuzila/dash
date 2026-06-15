@@ -9,6 +9,7 @@ const TABLES = [
   { id: "es_candles",        label: "ES Candles" },
   { id: "bzila_snapshots",   label: "Bzila Snaps" },
   { id: "bzila_gex_history", label: "GEX History" },
+  { id: "bzila_strike_gex_history", label: "Bzila Strikes" },
   { id: "flow_calls",        label: "Flow Calls" },
   { id: "snapshots",         label: "EM Snapshots" },
   { id: "trades",            label: "Trades" },

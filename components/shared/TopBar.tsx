@@ -502,7 +502,6 @@ export default function TopBar() {
 
         {/* Right: logo + actions + TT LIVE + dropdown */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <SnapButton mode="share" />
           <SnapButton mode="save" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/bzilatrades-logo.png" alt="BzilaTrades" style={{ height: 42, width: "auto", objectFit: "contain" }} />
