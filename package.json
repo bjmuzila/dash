@@ -7,10 +7,9 @@
                    ],
     "scripts":  {
                     "dev":  "next dev --port 3002",
-                    "dev:with-proxy":  "concurrently \"node proxy-tastytrade.js\" \"next dev --port 3002\"",
+                    "dev:full":  "node server-with-proxy.js",
                     "build":  "next build",
-                    "start":  "next start --port 3002",
-                    "start:with-proxy":  "concurrently \"node proxy-tastytrade.js\" \"next start --port 3002\""
+                    "start":  "node server-with-proxy.js"
                 },
     "dependencies":  {
                          "clsx":  "^2.1.1",

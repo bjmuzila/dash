@@ -31,16 +31,16 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Handle proxy/api/* paths - forward to proxy base
+  // Handle proxy/api/* paths - forward to proxy server on 3001
   if (path.startsWith('/proxy/')) {
     try {
-      const proxyPath = path.replace('/proxy', '');
-      const url = `http://localhost:3001${proxyPath}${request.nextUrl.search}`;
-      const response = await fetch(url, { method: 'GET' });
-      const data = await response.json();
+      const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
+      console.log('[PROXY] GET', proxyUrl);
+      const response = await fetch(proxyUrl, { method: 'GET' });
+      const data = await response.json().catch(() => response.text());
       return NextResponse.json(data, { status: response.status });
     } catch (error) {
-      console.error('[API] Proxy error:', error);
+      console.error('[PROXY] Error:', error);
       return NextResponse.json({ error: (error as Error).message }, { status: 500 });
     }
   }
@@ -71,16 +71,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(data, { status: response.status });
     }
 
-    // Forward to proxy
+    // Forward to proxy server on 3001
     if (path.startsWith('/proxy/')) {
-      const proxyPath = path.replace('/proxy', '');
-      const url = `http://localhost:3001${proxyPath}${request.nextUrl.search}`;
-      const response = await fetch(url, {
+      const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
+      console.log('[PROXY] POST', proxyUrl);
+      const response = await fetch(proxyUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => response.text());
       return NextResponse.json(data, { status: response.status });
     }
   } catch (error) {
@@ -95,14 +95,14 @@ export async function DELETE(request: NextRequest) {
 
   try {
     if (path.startsWith('/proxy/')) {
-      const proxyPath = path.replace('/proxy', '');
-      const url = `http://localhost:3001${proxyPath}${request.nextUrl.search}`;
-      const response = await fetch(url, { method: 'DELETE' });
-      const data = await response.json();
+      const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
+      console.log('[PROXY] DELETE', proxyUrl);
+      const response = await fetch(proxyUrl, { method: 'DELETE' });
+      const data = await response.json().catch(() => response.text());
       return NextResponse.json(data, { status: response.status });
     }
   } catch (error) {
-    console.error('[API] DELETE error:', error);
+    console.error('[PROXY] DELETE error:', error);
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 }
