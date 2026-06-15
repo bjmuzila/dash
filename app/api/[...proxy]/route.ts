@@ -11,8 +11,9 @@ import { ensureToken, ttFetch } from '@/lib/proxy/auth';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { proxy: string[] } }
+  props: { params: Promise<{ proxy: string[] }> }
 ) {
+  const { params } = await props;
   const pathArray = params.proxy || [];
   const path = '/' + pathArray.join('/');
 
@@ -53,8 +54,9 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { proxy: string[] } }
+  props: { params: Promise<{ proxy: string[] }> }
 ) {
+  const { params } = await props;
   const pathArray = params.proxy || [];
   const path = '/' + pathArray.join('/');
 
@@ -97,8 +99,9 @@ export async function POST(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { proxy: string[] } }
+  props: { params: Promise<{ proxy: string[] }> }
 ) {
+  const { params } = await props;
   const pathArray = params.proxy || [];
   const path = '/' + pathArray.join('/');
 
