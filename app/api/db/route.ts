@@ -40,12 +40,12 @@ export async function GET(req: NextRequest) {
       }
     } else if (date && meta.dateCol) {
       rows = await queryAll(
-        `SELECT * FROM "${table}" WHERE ${meta.dateCol} = ? ORDER BY rowid DESC LIMIT ?`,
+        `SELECT * FROM "${table}" WHERE ${meta.dateCol} = ? ORDER BY id DESC LIMIT ?`,
         [date, limit]
       );
     } else {
       rows = await queryAll(
-        `SELECT * FROM "${table}" ORDER BY rowid DESC LIMIT ?`,
+        `SELECT * FROM "${table}" ORDER BY id DESC LIMIT ?`,
         [limit]
       );
     }
