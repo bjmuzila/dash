@@ -17,12 +17,20 @@ const CREATE_TABLE = `
 export async function GET() {
   try {
     const db = await getDb();
-    db.run(CREATE_TABLE);
+    try {
+      db.run(CREATE_TABLE);
+    } catch (e) {
+      // Table creation might fail if it already exists, that's ok
+      console.debug("[/api/es-stats] table creation note:", e);
+    }
+
     let results = db.exec("SELECT * FROM es_stats WHERE expiration = 'WEEKLY' LIMIT 1");
     if (!results.length) results = db.exec("SELECT * FROM es_stats ORDER BY id DESC LIMIT 1");
     if (!results.length) return NextResponse.json(null);
+
     const { columns, values } = results[0];
     if (!values.length || !values[0]) return NextResponse.json(null);
+
     const row = Object.fromEntries(columns.map((col, i) => [col, values[0][i]]));
     return NextResponse.json(row);
   } catch (err) {

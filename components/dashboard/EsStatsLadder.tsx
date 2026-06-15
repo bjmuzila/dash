@@ -149,7 +149,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
           </div>
         )}
         {err && !loading && (
-          <div style={{ padding: 8, fontSize: 10, color: "#ef4444" }}>⚠ {err}</div>
+          <div style={{ padding: 8, fontSize: 10, color: "#ef4444", whiteSpace: "pre-wrap", overflowWrap: "break-word" }}>⚠ {err}</div>
         )}
 
         {entries.map((entry, i) => {
