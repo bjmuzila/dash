@@ -1012,6 +1012,26 @@ async function spxFlowFlushCalls() {
 // Schedule periodic flushes
 setInterval(() => { spxFlowFlushPremium().catch(() => {}); spxFlowFlushCalls().catch(() => {}); }, 10000);
 
+// Reset accumulator at RTH open (9:30 ET) and EXT open (17:00 ET) each day
+let _spxFlowLastSession = spxFlowCurrentSession();
+setInterval(() => {
+  const sess = spxFlowCurrentSession();
+  if (sess !== _spxFlowLastSession) {
+    // Flush before reset
+    spxFlowFlushPremium().catch(() => {});
+    spxFlowFlushCalls().catch(() => {});
+    spxFlow.callPremium = 0;
+    spxFlow.putPremium  = 0;
+    spxFlow.netPremium  = 0;
+    spxFlow.seenKeys.clear();
+    spxFlow.pendingCalls.length = 0;
+    spxFlow.lastPremiumPost = 0;
+    spxFlow.lastCallsPost   = 0;
+    _spxFlowLastSession = sess;
+    log('[spxFlow] Session changed to', sess, '— accumulators reset');
+  }
+}, 30000);
+
 // ─── MotiveWave GEX Level Export ──────────────────────────────────────────────
 const GEX_CSV_PATH = path.join(__dirname, 'gex_levels.csv');
 let gexLevelCache = { callWall: 0, putWall: 0, zeroGamma: 0, spot: 0, esSpot: 0, basis: 0, ts: 0 };
@@ -2766,6 +2786,10 @@ function connectDxLink() {
                 const entry = dxTradeCache[key] || {};
                 getDxCacheAliases(sym, key).forEach(alias => { dxTradeCache[alias] = entry; });
                 timeAndSaleFields.forEach((f, j) => entry[f] = rows[base + j]);
+                // Server-side SPX 0DTE flow accumulation (TimeAndSale has aggressorSide)
+                if (isSpxwSymbol(sym)) {
+                  spxFlowProcessTrade(sym, entry.price, entry.size, entry.time || Date.now(), entry.aggressorSide);
+                }
                 cacheTradeAsFiveMinuteCandle(key, entry.price, entry.size);
               }
             }
