@@ -336,7 +336,7 @@ export default function EconCalendarPanel() {
         <button onClick={trigger} style={{ ...btnStyle }}>
           {btnLabel}
         </button>
-        <BoxSnapBtn targetRef={containerRef} label="Econ Calendar" />
+        <BoxSnapBtn targetRef={containerRef} label="📷" />
         <EconCalendarDiscordBtn />
       </div>
 

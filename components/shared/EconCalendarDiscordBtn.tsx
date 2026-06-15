@@ -47,7 +47,7 @@ function isHighPriority(ev: CalEvent): boolean {
 
 // ── Build the snapshot HTML (matches snapshot-template-example.html CSS) ──────
 
-function buildSnapshotHTML(events: CalEvent[], quote: string): string {
+function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""): string {
   const today = etToday();
   const todayEvents = events.filter(e => e.date === today);
 
@@ -111,6 +111,9 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .layout-busy .main-card{width:min(800px,calc(100% - 120px))}
 .layout-busy .row-time,.layout-busy .row-label{font-size:20px}
 .empty-note{color:rgba(255,255,255,0.35);text-align:center;font-size:14px;padding:16px}
+.logo-wrap{position:absolute;bottom:20px;right:24px;display:flex;align-items:center;gap:10px;opacity:0.85}
+.logo-wrap img{width:36px;height:36px;border-radius:8px;object-fit:contain}
+.logo-text{font-size:14px;font-weight:800;letter-spacing:0.1em;color:#b8c2d6;text-transform:uppercase}
 </style></head><body>
 <div class="snapshot ${layoutClass}" id="root">
   <div class="topbar">
@@ -137,6 +140,11 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
       <div class="rows">${eventRowsHTML}</div>
     </div>` : ""}
   </div>
+  ${logoDataUrl ? `
+  <div class="logo-wrap">
+    <img src="${logoDataUrl}" alt="BzilaTrades" />
+    <span class="logo-text">BzilaTrades</span>
+  </div>` : ""}
 </div>
 </body></html>`;
 }
@@ -209,10 +217,11 @@ export default function EconCalendarDiscordBtn() {
     if (s === "busy") return;
     set("busy");
     try {
-      // Fetch calendar data + quote in parallel
-      const [calRes, quoteRes] = await Promise.all([
+      // Fetch calendar data, quote, and logo in parallel
+      const [calRes, quoteRes, logoRes] = await Promise.all([
         fetch("/api/calendar"),
         fetch("/api/calendar-quote").catch(() => null),
+        fetch("/bzilatrades-logo.png").catch(() => null),
       ]);
       const calJson = calRes.ok ? await calRes.json() : {};
       const quoteJson = quoteRes?.ok ? await quoteRes.json() : {};
@@ -220,7 +229,18 @@ export default function EconCalendarDiscordBtn() {
       const events: CalEvent[] = calJson.events ?? [];
       const quote: string = quoteJson.quote ?? "";
 
-      const html = buildSnapshotHTML(events, quote);
+      // Inline logo as base64 so it renders inside the iframe
+      let logoDataUrl = "";
+      if (logoRes?.ok) {
+        const blob = await logoRes.blob();
+        logoDataUrl = await new Promise<string>(resolve => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      const html = buildSnapshotHTML(events, quote, logoDataUrl);
       const img  = await renderAndCapture(html);
       await postToDiscord(img);
       set("ok");

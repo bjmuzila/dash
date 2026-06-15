@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSpxFlow, type FlowOrder } from "@/hooks/useSpxFlow";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
@@ -225,7 +225,8 @@ function hydrateOrder(order: BzilaLiveSnapshotOrder): FlowOrder | null {
 }
 
 export default function SnapshotPanel() {
-  const { flow, reset, seed } = useSpxFlow(true);
+  const { flow, seed } = useSpxFlow(true);
+  const [, setNow] = useState(0);
   const accumRef = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef<Set<string>>(new Set());
@@ -271,13 +272,10 @@ export default function SnapshotPanel() {
     }).catch(() => {});
   }, [seed]);
 
+  // Refresh just triggers a re-render — does NOT clear accumulated data
   const doRefresh = useCallback(async () => {
-    accumRef.current = {};
-    seenRef.current = new Set();
-    sessionRef.current = getSnapshotSessionKey();
-    reset();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }, [reset]);
+    setNow(Date.now());
+  }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
