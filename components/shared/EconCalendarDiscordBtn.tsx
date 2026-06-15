@@ -314,12 +314,12 @@ export default function EconCalendarDiscordBtn() {
         background: "rgba(255,255,255,0.04)",
         color,
         cursor: s === "busy" ? "default" : "pointer",
-        fontSize: 9, fontWeight: 700, letterSpacing: ".08em",
+        fontSize: 0, fontWeight: 700, letterSpacing: ".08em",
         fontFamily: "inherit", flexShrink: 0,
         transition: "color .15s, border-color .15s",
       }}
     >
-      {label}
+      {s === "busy" ? "?" : s === "ok" ? "?" : s === "err" ? "?" : <IconDiscord />}
     </button>
   );
 }
@@ -367,7 +367,7 @@ export function EconCalendarTemplateCopyBtn() {
         transition: "color .15s, border-color .15s",
       }}
     >
-      {label}
+      {s === "busy" ? "?" : s === "ok" ? "?" : s === "err" ? "?" : <IconDiscord />}
     </button>
   );
 }
