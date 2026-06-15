@@ -233,10 +233,16 @@ export default function QuotesPanel() {
 
   // 30-second countdown timer
   useEffect(() => {
+    lastUpdateRef.current = Date.now(); // Reset on mount
     const interval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - lastUpdateRef.current) / 1000);
-      setCountdown(Math.max(0, 30 - elapsed));
-    }, 500);
+      const remaining = Math.max(0, 30 - elapsed);
+      setCountdown(remaining);
+      // Reset countdown every 30s even if no data (maintains timer)
+      if (remaining === 0) {
+        lastUpdateRef.current = Date.now();
+      }
+    }, 250);
     return () => clearInterval(interval);
   }, []);
 

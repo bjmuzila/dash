@@ -935,6 +935,7 @@ export default function InsightsPage() {
   const activeExpiryRef = useRef("");
   const historicalCandlesRef = useRef<EsCandleRecord[]>([]);
   const initialExpirySetRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const lastEsCandleSaveRef = useRef(0);
 
@@ -1234,7 +1235,6 @@ export default function InsightsPage() {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
   // Track mounted state to prevent updates after unmount
-  const mountedRef = useRef(true);
   useEffect(() => {
     return () => { mountedRef.current = false; };
   }, []);

@@ -382,7 +382,14 @@ export default function GexChart({
       }
 
       // ── Gamma flip marker ──
-      const flip = flipPoint ?? gexProfile?.flipPoint ?? null;
+      let flip = flipPoint ?? gexProfile?.flipPoint ?? null;
+      // Compute flip from zero crossing if not provided
+      if ((flip == null || !Number.isFinite(flip) || flip <= 0) && zeroCrossX !== null) {
+        // Reverse-engineer strike from zeroCrossX position
+        const frac = (zeroCrossX - PAD_L) / cW;
+        const strikeRange = data[data.length - 1].strike - data[0].strike;
+        flip = data[0].strike + frac * strikeRange;
+      }
       if (flip != null && Number.isFinite(flip) && flip > 0) {
         const leftIdx = data.findIndex(r => r.strike >= flip);
         let flipX: number | null = null;
