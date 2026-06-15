@@ -783,8 +783,8 @@ async function refreshLivePrevCloses() {
       return 0;
     };
 
-    let es  = getDX('/ES:XCME', '/ESM26', '/ESM6');
-    let nq  = getDX('/NQ:XCME', '/NQM26', '/NQM6');
+    let es  = getDX('/ES:XCME', '/ESU26', '/ESU6', '/ESM26', '/ESM6');
+    let nq  = getDX('/NQ:XCME', '/NQU26', '/NQU6', '/NQM26', '/NQM6');
     let vix = getDX('VIX', '$VIX', '$VIX.X');
     // SPX: after close use last trade price; dxSummaryCache rarely has dayClosePrice for indices
     let spx = useToday
@@ -1731,21 +1731,27 @@ function normalizeRestSymbol(symbol) {
 function normalizeDxCacheSymbol(symbol) {
   const s = String(symbol || '').trim();
   if (!s) return s;
-  if (/^\/ES(:XCME)?$|^\/ESM(\d+)?$/i.test(s)) return '/ES:XCME';
-  if (/^\/NQ(:XCME)?$|^\/NQM(\d+)?$/i.test(s)) return '/NQ:XCME';
+  if (/^\/ES(:XCME)?$|^\/ES[MU](\d+)?$/i.test(s)) return '/ES:XCME';
+  if (/^\/NQ(:XCME)?$|^\/NQ[MU](\d+)?$/i.test(s)) return '/NQ:XCME';
   return s;
 }
 
 function getDxCacheAliases(symbol, normalized) {
   const aliases = new Set([normalized]);
   const raw = String(symbol || '').trim();
-  if (/^\/ES(:XCME)?$|^\/ESM(\d+)?$/i.test(raw)) {
+  if (/^\/ES(:XCME)?$|^\/ES[MU](\d+)?$/i.test(raw)) {
     aliases.add('/ES:XCME');
     aliases.add('/ESM26');
+    aliases.add('/ESU26');
+    aliases.add('/ESM6');
+    aliases.add('/ESU6');
     aliases.add('/ES');
-  } else if (/^\/NQ(:XCME)?$|^\/NQM(\d+)?$/i.test(raw)) {
+  } else if (/^\/NQ(:XCME)?$|^\/NQ[MU](\d+)?$/i.test(raw)) {
     aliases.add('/NQ:XCME');
     aliases.add('/NQM26');
+    aliases.add('/NQU26');
+    aliases.add('/NQM6');
+    aliases.add('/NQU6');
     aliases.add('/NQ');
   }
   return [...aliases].filter(Boolean);
@@ -2243,10 +2249,14 @@ function normalizeRequestedCandleSymbols(sym) {
   if (/^\/?ES/.test(base)) {
     out.add(`/ES:XCME${suffix}`);
     out.add(`/ES${suffix}`);
+    out.add(`/ESU6${suffix}`);
+    out.add(`/ESU26${suffix}`);
     out.add(`/ESM26${suffix}`);
   }
   if (/^\/?NQ/.test(base)) {
     out.add(`/NQ:XCME${suffix}`);
+    out.add(`/NQU6${suffix}`);
+    out.add(`/NQU26${suffix}`);
     out.add(`/NQM6${suffix}`);
     out.add(`/NQM26${suffix}`);
   }
@@ -2989,9 +2999,9 @@ const server = http.createServer(async (req, res) => {
         : firstFiniteNumber(dxTradeCache[sym]?.price, s.prevDayClosePrice, marketDataPrevCloseCache[sym], 0);
     };
     const spxFinal = spx || getClose('SPX') || getClose('$SPX');
-    const esFinal  = es  || getClose('/ES:XCME') || getClose('/ESM6');
+    const esFinal  = es  || getClose('/ES:XCME') || getClose('/ESU6') || getClose('/ESM6');
     const ndxFinal = ndx || getClose('NDX') || getClose('$NDX');
-    const nqFinal  = nq  || getClose('/NQ:XCME') || getClose('/NQM6');
+    const nqFinal  = nq  || getClose('/NQ:XCME') || getClose('/NQU6') || getClose('/NQM6');
     const basis   = spxFinal > 0 && esFinal > 0 ? esFinal - spxFinal : firstFiniteNumber(esBasisCache.basis, 0);
     const nqBasis = ndxFinal > 0 && nqFinal > 0 ? nqFinal - ndxFinal : 0;
     return sendJSON(res, 200, { data: { spx: spxFinal, es: esFinal, ndx: ndxFinal, nq: nqFinal, basis, nqBasis, closeDate: closeDate.toISOString().slice(0,10) } });
@@ -3005,7 +3015,7 @@ const server = http.createServer(async (req, res) => {
     }
     const etMins = getEtMinutes();
     const debug = {
-      esSummary: dxSummaryCache['/ES:XCME'] || dxSummaryCache['/ESM26'] || dxSummaryCache['/ESM6'] || null,
+      esSummary: dxSummaryCache['/ES:XCME'] || dxSummaryCache['/ESU26'] || dxSummaryCache['/ESU6'] || dxSummaryCache['/ESM26'] || dxSummaryCache['/ESM6'] || null,
       esSummaryKeys: Object.keys(dxSummaryCache).filter(k => k.includes('ES')).slice(0,10),
       esBasisCache,
       savedDailyCloses,
@@ -3018,12 +3028,12 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /proxy/api/tt/debug-summary  ─────────────────────────────────────────
   if (req.method === 'GET' && p === '/proxy/api/tt/debug-summary') {
-    const target = ['SPX','$SPX','/ESM6','/ES:XCME','NDX','$NDX','/NQM6','/NQ:XCME'];
+    const target = ['SPX','$SPX','/ESU6','/ESM6','/ES:XCME','NDX','$NDX','/NQU6','/NQM6','/NQ:XCME'];
     const found = {};
     target.forEach(k => { if (dxSummaryCache[k]) found[k] = dxSummaryCache[k]; });
     const allKeys = Object.keys(dxSummaryCache).filter(k => /SPX|NDX|ES|NQ/.test(k) && !k.startsWith('.')).slice(0,20);
     const rawTrade = {};
-    ['SPX','$SPX','/ESM6','/ES:XCME','NDX','$NDX','/NQM6','/NQ:XCME'].forEach(k => { if (dxTradeCache[k]) rawTrade[k] = dxTradeCache[k]; });
+    ['SPX','$SPX','/ESU6','/ESM6','/ES:XCME','NDX','$NDX','/NQU6','/NQM6','/NQ:XCME'].forEach(k => { if (dxTradeCache[k]) rawTrade[k] = dxTradeCache[k]; });
     return sendJSON(res, 200, { data: found, allKeys, totalKeys: Object.keys(dxSummaryCache).length, rawTrade });
   }
 
@@ -3049,14 +3059,14 @@ const server = http.createServer(async (req, res) => {
   // ── GET /proxy/api/tt/gex  ────────────────────────────────────────────────────
   // Live GEX levels + total net GEX using same formula as computeAndCacheGexLevels
   if (req.method === 'GET' && p === '/proxy/api/tt/gex') {
-    let esSpot = firstFiniteNumber(dxTradeCache['/ESM6']?.price, dxTradeCache['/ES:XCME']?.price, dxTradeCache['/ES']?.price, gexLevelCache.esSpot, 0);
+    let esSpot = firstFiniteNumber(dxTradeCache['/ESU6']?.price, dxTradeCache['/ESM6']?.price, dxTradeCache['/ES:XCME']?.price, dxTradeCache['/ES']?.price, gexLevelCache.esSpot, 0);
 
     let spxSpot = firstFiniteNumber(gexLevelCache.spot, 0);
     const basis = firstFiniteNumber(esBasisCache.basis, gexLevelCache.basis, 0);
     const inMarketHours = isRegularEquitySessionEt();
 
     // Prefer dxLink cache. Only fall back to REST during market hours.
-    if (!(esSpot > 0) && inMarketHours) esSpot = await fetchUnderlyingLast('/ESM6').catch(() => 0);
+    if (!(esSpot > 0) && inMarketHours) esSpot = await fetchUnderlyingLast('/ESU6').catch(() => fetchUnderlyingLast('/ESM6').catch(() => 0));
     if (!(spxSpot > 0) && inMarketHours) spxSpot = await fetchUnderlyingLast('SPX').catch(() => 0);
     if (!(spxSpot > 0)) spxSpot = firstFiniteNumber(dxTradeCache['$SPX']?.price, dxQuoteCache['$SPX']?.last, dxQuoteCache['$SPX']?.mark, 0);
     if (!(esSpot > 0)) esSpot = firstFiniteNumber(dxTradeCache['/ES:XCME']?.price, dxQuoteCache['/ES:XCME']?.last, dxQuoteCache['/ES:XCME']?.mark, 0);
@@ -3338,8 +3348,8 @@ const server = http.createServer(async (req, res) => {
     if (symbol === 'SPX') parts = ['index[]=SPX'];
     else if (symbol === 'NDX') parts = ['index[]=NDX'];
     else if (symbol === 'VIX.X' || symbol === 'VIX') parts = ['index[]=VIX'];
-    else if (/^\/ES/i.test(symbol)) parts = ['future[]=' + encodeURIComponent('/ES')];
-    else if (/^\/NQ/i.test(symbol)) parts = ['future[]=' + encodeURIComponent('/NQM6')];
+    else if (/^\/ES/i.test(symbol)) parts = ['future[]=' + encodeURIComponent('/ESU6')];
+    else if (/^\/NQ/i.test(symbol)) parts = ['future[]=' + encodeURIComponent('/NQU6')];
     else parts = ['equity[]=' + encodeURIComponent(symbol)];
     const { status, data } = await ttGet(`/market-data/by-type?${parts.join('&')}`);
     const item = data?.data?.items?.[0] || {};
@@ -3889,7 +3899,9 @@ const server = http.createServer(async (req, res) => {
     const candidates = [
       symbol,
       ...normalizeRequestedCandleSymbols(symbol),
+      symbol.replace('/ESU26', '/ES').replace('/NQU26', '/NQU6'),
       symbol.replace('/ESM26', '/ES').replace('/NQM26', '/NQM6'),
+      symbol.replace('/ES', '/ESU26').replace('/NQ', '/NQU26'),
       symbol.replace('/ES', '/ESM26').replace('/NQM6', '/NQM26'),
       symbol.replace(/^\/ES[^{}]*/, '/ES:XCME'),
       symbol.replace(/^\/NQ[^{}]*/, '/NQ:XCME'),

@@ -738,7 +738,7 @@ export async function ensureBzilaStrikeGexTable(): Promise<void> {
   db.run("CREATE INDEX IF NOT EXISTS idx_bsg_strike ON bzila_strike_gex_history(strike)");
 }
 
-export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, \"id\">[]): Promise<void> {
+export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, "id">[]): Promise<void> {
   if (!rows.length) return;
   const db = await getDb();
   await ensureBzilaStrikeGexTable();

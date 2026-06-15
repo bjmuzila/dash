@@ -19,7 +19,11 @@ function todayET(): string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const rows = Array.isArray(body) ? body : Array.isArray(body?.rows) ? body.rows : [body];
+    const rows: Record<string, unknown>[] = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.rows)
+        ? body.rows
+        : [body];
 
     await insertBzilaStrikeGexRows(
       rows.map((row) => ({
