@@ -188,6 +188,10 @@ function buildExpiryList(payload: unknown): Expiry[] {
   return list.sort((a, b) => a.daysTo - b.daysTo);
 }
 
+function getPreferredExpiry(list: Expiry[]): Expiry | undefined {
+  return list.find((exp) => exp.daysTo === 0) ?? list[0];
+}
+
 function sortCandles(rows: EsCandleRecord[]) {
   return [...rows].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
 }
@@ -916,7 +920,6 @@ export default function InsightsPage() {
   const [tab, setTab]   = useState<InsightsTab>("exposure");
   const [gex, setGex]   = useState<GexData | null>(null);
   const [vix, setVix]   = useState<VixData | null>(null);
-  const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
 
   // Exposure state
@@ -944,8 +947,7 @@ export default function InsightsPage() {
       if (cached) {
         const list = buildExpiryList(cached);
         if (list.length) {
-          setExpirations(list);
-          const defaultExpiry = list.find((exp) => exp.daysTo === 0) ?? list[0];
+          const defaultExpiry = getPreferredExpiry(list);
           if (defaultExpiry) {
             setSelectedExpiry(defaultExpiry.date);
             activeExpiryRef.current = defaultExpiry.date;
@@ -962,8 +964,7 @@ export default function InsightsPage() {
           saveExpirationCache("SPX", [], json).catch(() => {});
 
           const list = buildExpiryList(json);
-          setExpirations(list);
-          const defaultExpiry = list.find((exp) => exp.daysTo === 0) ?? list[0];
+          const defaultExpiry = getPreferredExpiry(list);
           if (defaultExpiry) {
             setSelectedExpiry(defaultExpiry.date);
             activeExpiryRef.current = defaultExpiry.date;
@@ -1285,27 +1286,6 @@ export default function InsightsPage() {
             }}>{t.label}</button>
           ))}
         </div>
-        <select
-          value={selectedExpiry}
-          onChange={(e) => setSelectedExpiry(e.target.value)}
-          style={{
-            marginLeft: 4,
-            background: "#0a1220",
-            color: "#e4e4e7",
-            border: "1px solid #1e3050",
-            borderRadius: 4,
-            padding: "3px 8px",
-            fontSize: 11,
-            cursor: "pointer",
-            fontFamily: "monospace",
-          }}
-          title="Exposure Stack expiration"
-        >
-          <option value="">-- Expiry --</option>
-          {expirations.map((exp) => (
-            <option key={exp.date} value={exp.date}>{exp.label}</option>
-          ))}
-        </select>
         <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>{btnLabel}</button>
       </div>
 

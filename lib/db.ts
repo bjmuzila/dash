@@ -675,6 +675,7 @@ export interface BzilaGexPoint {
   id?: number;
   timestamp: number;
   date: string;
+  session?: string;
   call: number;
   put: number;
   net: number;
@@ -688,6 +689,7 @@ export async function ensureBzilaGexHistoryTable(): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp INTEGER NOT NULL,
       date TEXT NOT NULL,
+      session TEXT DEFAULT 'rth',
       call REAL,
       put REAL,
       net REAL,
@@ -695,20 +697,40 @@ export async function ensureBzilaGexHistoryTable(): Promise<void> {
     )
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_bgh_date ON bzila_gex_history(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bgh_session ON bzila_gex_history(session)");
+  try { db.run("ALTER TABLE bzila_gex_history ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
 }
 
 export async function insertBzilaGexPoint(r: Omit<BzilaGexPoint, "id">): Promise<void> {
   const db = await getDb();
   await ensureBzilaGexHistoryTable();
   db.run(
-    `INSERT INTO bzila_gex_history (timestamp,date,call,put,net,spot) VALUES (?,?,?,?,?,?)`,
-    [r.timestamp, r.date, r.call, r.put, r.net, r.spot]
+    `INSERT INTO bzila_gex_history (timestamp,date,session,call,put,net,spot) VALUES (?,?,?,?,?,?,?)`,
+    [r.timestamp, r.date, r.session ?? "rth", r.call, r.put, r.net, r.spot]
   );
   persistDb();
 }
 
-export async function getBzilaGexHistory(date: string): Promise<BzilaGexPoint[]> {
+export async function getBzilaGexHistory(date?: string, session?: string): Promise<BzilaGexPoint[]> {
   await ensureBzilaGexHistoryTable();
+  if (date && session) {
+    return queryAll<BzilaGexPoint>(
+      "SELECT * FROM bzila_gex_history WHERE date = ? AND session = ? ORDER BY timestamp ASC",
+      [date, session]
+    );
+  }
+  if (session) {
+    const latest = await queryOne<{ date: string }>(
+      "SELECT date FROM bzila_gex_history WHERE session = ? ORDER BY timestamp DESC LIMIT 1",
+      [session]
+    );
+    if (!latest?.date) return [];
+    return queryAll<BzilaGexPoint>(
+      "SELECT * FROM bzila_gex_history WHERE date = ? AND session = ? ORDER BY timestamp ASC",
+      [latest.date, session]
+    );
+  }
+  if (!date) return [];
   return queryAll<BzilaGexPoint>(
     "SELECT * FROM bzila_gex_history WHERE date = ? ORDER BY timestamp ASC",
     [date]
@@ -721,6 +743,7 @@ export interface BzilaStrikeGexRecord {
   id?: number;
   timestamp: number;
   date: string;
+  session?: string;
   expiry: string;
   spot: number;
   strike: number;
@@ -739,6 +762,7 @@ export async function ensureBzilaStrikeGexTable(): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp INTEGER NOT NULL,
       date TEXT NOT NULL,
+      session TEXT DEFAULT 'rth',
       expiry TEXT,
       spot REAL,
       strike REAL NOT NULL,
@@ -751,8 +775,10 @@ export async function ensureBzilaStrikeGexTable(): Promise<void> {
     )
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_bsg_date ON bzila_strike_gex_history(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_session ON bzila_strike_gex_history(session)");
   db.run("CREATE INDEX IF NOT EXISTS idx_bsg_ts ON bzila_strike_gex_history(timestamp)");
   db.run("CREATE INDEX IF NOT EXISTS idx_bsg_strike ON bzila_strike_gex_history(strike)");
+  try { db.run("ALTER TABLE bzila_strike_gex_history ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
 }
 
 export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, "id">[]): Promise<void> {
@@ -762,11 +788,12 @@ export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, 
   for (const row of rows) {
     db.run(
       `INSERT INTO bzila_strike_gex_history
-       (timestamp, date, expiry, spot, strike, bucket, rank_index, call_gex, put_gex, net_gex, net_gex_change)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (timestamp, date, session, expiry, spot, strike, bucket, rank_index, call_gex, put_gex, net_gex, net_gex_change)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         row.timestamp,
         row.date,
+        row.session ?? "rth",
         row.expiry,
         row.spot,
         row.strike,
@@ -782,8 +809,25 @@ export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, 
   persistDb();
 }
 
-export async function getBzilaStrikeGexHistory(date?: string, limit = 5000): Promise<BzilaStrikeGexRecord[]> {
+export async function getBzilaStrikeGexHistory(date?: string, session?: string, limit = 5000): Promise<BzilaStrikeGexRecord[]> {
   await ensureBzilaStrikeGexTable();
+  if (date && session) {
+    return queryAll<BzilaStrikeGexRecord>(
+      "SELECT * FROM bzila_strike_gex_history WHERE date = ? AND session = ? ORDER BY timestamp ASC, bucket ASC, rank_index ASC LIMIT ?",
+      [date, session, limit]
+    );
+  }
+  if (session) {
+    const latest = await queryOne<{ date: string }>(
+      "SELECT date FROM bzila_strike_gex_history WHERE session = ? ORDER BY timestamp DESC LIMIT 1",
+      [session]
+    );
+    if (!latest?.date) return [];
+    return queryAll<BzilaStrikeGexRecord>(
+      "SELECT * FROM bzila_strike_gex_history WHERE date = ? AND session = ? ORDER BY timestamp ASC, bucket ASC, rank_index ASC LIMIT ?",
+      [latest.date, session, limit]
+    );
+  }
   if (date) {
     return queryAll<BzilaStrikeGexRecord>(
       "SELECT * FROM bzila_strike_gex_history WHERE date = ? ORDER BY timestamp ASC, bucket ASC, rank_index ASC LIMIT ?",

@@ -13,9 +13,12 @@ import { useSpxFlow } from "@/hooks/useSpxFlow";
 
 type StrikeMode = "rolling" | "change";
 type StrikeBucket = "above" | "below";
+type BzilaSession = "rth" | "ext";
 
 interface GexHistPoint {
   ts: number;
+  date?: string;
+  session?: BzilaSession;
   call: number;
   put: number;
   net: number;
@@ -43,6 +46,7 @@ interface BzilaStrikeHistoryRow {
   id?: number;
   timestamp: number;
   date: string;
+  session?: BzilaSession;
   expiry: string;
   spot: number;
   strike: number;
@@ -56,10 +60,17 @@ interface BzilaStrikeHistoryRow {
 
 interface StrikeChartPoint {
   ts: number;
+  date?: string;
+  session?: BzilaSession;
   spot: number;
   expiry: string;
   values: Record<number, number>;
   changes: Record<number, number>;
+}
+
+interface SessionCycle {
+  activeSession: BzilaSession;
+  sessionDates: Record<BzilaSession, string>;
 }
 
 const REFRESH_MS = 5_000;
@@ -177,9 +188,42 @@ function todayET(): string {
   return `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
 }
 
+function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
 function startOfTodayETMs(): number {
   const et = getEtParts();
   return new Date(et.year, et.month - 1, et.day, 0, 0, 0, 0).getTime();
+}
+
+function getSessionCycle(date = new Date()): SessionCycle {
+  const et = getEtParts(date);
+  const today = `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
+  const previous = shiftIsoDate(today, -1);
+  const mins = et.hour * 60 + et.minute;
+
+  if (mins < 570) {
+    return {
+      activeSession: "ext",
+      sessionDates: { rth: previous, ext: previous },
+    };
+  }
+
+  if (mins < 1020) {
+    return {
+      activeSession: "rth",
+      sessionDates: { rth: today, ext: previous },
+    };
+  }
+
+  return {
+    activeSession: "ext",
+    sessionDates: { rth: today, ext: today },
+  };
 }
 
 function getTargetExpiryIso(): string {
@@ -256,6 +300,8 @@ function groupStrikeHistory(rows: BzilaStrikeHistoryRow[]): StrikeChartPoint[] {
     if (!point) {
       point = {
         ts: row.timestamp,
+        date: row.date,
+        session: row.session,
         spot: row.spot,
         expiry: row.expiry,
         values: {},
@@ -265,6 +311,8 @@ function groupStrikeHistory(rows: BzilaStrikeHistoryRow[]): StrikeChartPoint[] {
     }
 
     point.spot = row.spot || point.spot;
+    point.date = row.date || point.date;
+    point.session = row.session || point.session;
     point.expiry = row.expiry || point.expiry;
     point.values[row.strike] = row.net_gex;
     point.changes[row.strike] = row.net_gex_change;
@@ -293,13 +341,15 @@ function extractLatestTrackedRows(rows: BzilaStrikeHistoryRow[]): TrackedStrikeR
     });
 }
 
-async function loadAggregateHistory(): Promise<GexHistPoint[]> {
+async function loadAggregateHistory(date: string, session: BzilaSession): Promise<GexHistPoint[]> {
   try {
-    const res = await fetch(`/api/snapshots/bzila-gex-history?date=${todayET()}`, { cache: "no-store" });
+    const res = await fetch(`/api/snapshots/bzila-gex-history?date=${date}&session=${session}`, { cache: "no-store" });
     const json = await res.json();
     return Array.isArray(json.rows)
       ? (json.rows as Array<Record<string, unknown>>).map((row) => ({
           ts: Number(row.timestamp ?? row.ts ?? 0),
+          date: String(row.date ?? date),
+          session: (row.session === "ext" ? "ext" : "rth") as BzilaSession,
           call: Number(row.call ?? 0),
           put: Number(row.put ?? 0),
           net: Number(row.net ?? 0),
@@ -311,13 +361,14 @@ async function loadAggregateHistory(): Promise<GexHistPoint[]> {
   }
 }
 
-async function saveAggregatePoint(point: GexHistPoint): Promise<void> {
+async function saveAggregatePoint(point: GexHistPoint, date: string, session: BzilaSession): Promise<void> {
   await fetch("/api/snapshots/bzila-gex-history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       timestamp: point.ts,
-      date: todayET(),
+      date,
+      session,
       call: point.call,
       put: point.put,
       net: point.net,
@@ -326,11 +377,16 @@ async function saveAggregatePoint(point: GexHistPoint): Promise<void> {
   });
 }
 
-async function loadStrikeHistory(): Promise<BzilaStrikeHistoryRow[]> {
+async function loadStrikeHistory(date: string, session: BzilaSession): Promise<BzilaStrikeHistoryRow[]> {
   try {
-    const res = await fetch(`/api/snapshots/bzila-strikes?date=${todayET()}&limit=5000`, { cache: "no-store" });
+    const res = await fetch(`/api/snapshots/bzila-strikes?date=${date}&session=${session}&limit=5000`, { cache: "no-store" });
     const json = await res.json();
-    return Array.isArray(json.rows) ? (json.rows as BzilaStrikeHistoryRow[]) : [];
+    return Array.isArray(json.rows)
+      ? (json.rows as Array<Record<string, unknown>>).map((row) => ({
+          ...(row as BzilaStrikeHistoryRow),
+          session: (row.session === "ext" ? "ext" : "rth") as BzilaSession,
+        }))
+      : [];
   } catch {
     return [];
   }
