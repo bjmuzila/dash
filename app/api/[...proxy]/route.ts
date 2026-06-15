@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const path = url.pathname.replace('/api', '');
 
-  // Handle proxy/api/tt/* paths - route to TastyTrade with timeout
+  // Handle proxy/api/tt/* paths - route to TastyTrade
   if (path.startsWith('/proxy/api/tt/')) {
     try {
       const ttPath = path.replace('/proxy', ''); // /api/tt/...
@@ -22,13 +22,9 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-
-      const response = await ttFetch(ttPath + request.nextUrl.search);
-      clearTimeout(timeout);
-      const data = await response.json();
-      return NextResponse.json(data, { status: response.status });
+      const ttResponse = await ttFetch(ttPath + request.nextUrl.search);
+      const data = await ttResponse.json();
+      return NextResponse.json(data, { status: ttResponse.status });
     } catch (error) {
       console.error('[API] TastyTrade proxy error:', error);
       return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
@@ -85,12 +81,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
       }
 
-      const response = await ttFetch(ttPath + request.nextUrl.search, {
+      const ttResponse = await ttFetch(ttPath + request.nextUrl.search, {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      const data = await response.json();
-      return NextResponse.json(data, { status: response.status });
+      const data = await ttResponse.json();
+      return NextResponse.json(data, { status: ttResponse.status });
     }
 
     // Forward to proxy server on 3001
