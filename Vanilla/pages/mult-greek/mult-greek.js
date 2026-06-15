@@ -992,8 +992,8 @@
       mgSetContractMode(_contractMode);
       updateCacheBadge();
       if (!_autoSaveTimer) _autoSaveTimer = setInterval(saveAllCaches, 60000);
-      // Defer fetchExpirations until user interaction to avoid blocking on page load
-      // fetchExpirations will be called when user clicks load or changes settings
+      // Fetch expirations on init, but don't auto-load data (user clicks to load)
+      fetchExpirations();
     };
 
     window['init_mult-greek'] = window.mgInit;

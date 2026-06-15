@@ -42,7 +42,7 @@
     var _renderTimer  = null;
     var _priceMode    = 'mid';
     var _chainIntensity = 1.4;
-    var _rangePercent = 10;
+    var _rangePercent = 5;
     var _wsDataStartTime = null;
     var _minWaitForWsMs = 10000; // min ms to wait after first WS quote before rendering (10 seconds)
     var _loadToken = 0;
