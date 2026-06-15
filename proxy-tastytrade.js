@@ -859,6 +859,7 @@ const marketDataPrevCloseCache = {}; // symbol → prev-close from TastyTrade ma
 const dxSummaryCache = {};   // streamer-symbol → {openInterest, dayVolume}
 const dxQuoteCache   = {};   // streamer-symbol → {bid, ask, last}
 const dxTradeCache   = {};   // streamer-symbol → {price, dayVolume, size}
+const dxOpenInterestCache = {}; // streamer-symbol → last known non-zero open interest
 const marketDataSnapshotCache = {}; // symbol → { value, ts }
 const prevCloseFallbackCache = {}; // symbol -> { value, ts }
 const historyDailyCache = new Map(); // symbol -> { ts, payload }
@@ -2744,6 +2745,10 @@ function connectDxLink() {
                 const entry = {};
                 getDxCacheAliases(sym, key).forEach(alias => { dxSummaryCache[alias] = entry; });
                 summaryFields.forEach((f, j) => entry[f] = rows[base + j]);
+                const oi = Number(entry.openInterest ?? 0) || 0;
+                if (oi > 0) {
+                  getDxCacheAliases(sym, key).forEach(alias => { dxOpenInterestCache[alias] = oi; });
+                }
                 // Re-seed prevCloses once we have real dxLink data (runs at most once per session)
                 if (!refreshLivePrevCloses._seededFromDX && (sym === 'SPX' || sym === '$SPX' || sym === 'VIX') && entry.prevDayClosePrice > 0) {
                   refreshLivePrevCloses._seededFromDX = true;
@@ -3888,10 +3893,13 @@ const server = http.createServer(async (req, res) => {
       // OI: Priority chain (2026-06-11 fix)
       // 1. dxLink Summary (real-time updates)
       // 2. TastyTrade REST data (authoritative at fetch time)
-      // 3. Default to 0 (never use stale Yahoo/CBOE fallbacks)
+      // 3. Last known non-zero dxLink OI from cache
+      // 4. Default to 0 (never use stale Yahoo/CBOE fallbacks)
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
       const restOI  = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
-      const finalOI = liveOI || restOI;
+      const cachedOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
+      const finalOI = liveOI || restOI || cachedOI;
+      if (finalOI > 0 && !cachedOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
       const liveVol  = Number(trade.dayVolume ?? summary.dayVolume ?? 0) || 0;
