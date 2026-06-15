@@ -218,14 +218,34 @@ export default function OverviewPage() {
       const target = items.filter(i =>
         String(i["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10)
       );
-      const groups = target.length ? target : items;
+      // CRITICAL: only use target if it matches, never fallback to full items
+      if (!target.length) {
+        console.warn(`[GEX] No matching expiry for ${expiry}, skipping load`);
+        return;
+      }
+
+      // Check if 0DTE (today)
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const is0DTE = expiry.slice(0, 10) === today;
+      console.log(`[GEX] Loading ${is0DTE ? "0DTE (all strikes)" : "DTE (capped window)"}: ${expiry}`);
+
+      const groups = target;
 
       // Build strike structure map
       const structMap = new Map<number, StrikeStruct>();
       const allSyms: string[] = [];
 
       groups.forEach(group => {
-        const strikes = (group.strikes as Array<Record<string, unknown>>) ?? [];
+        let strikes = (group.strikes as Array<Record<string, unknown>>) ?? [];
+
+        // For non-0DTE: cap to ±50 strikes from ATM
+        if (!is0DTE && spot > 0) {
+          strikes = strikes.filter(st => {
+            const strike = parseFloat(String(st["strike-price"] ?? 0));
+            return Math.abs(strike - spot) <= 50;
+          });
+        }
+
         strikes.forEach(st => {
           const strike = parseFloat(String(st["strike-price"] ?? 0));
           if (!strike) return;
@@ -272,6 +292,8 @@ export default function OverviewPage() {
       const structs = [...structMap.values()].sort((a, b) => a.strike - b.strike);
       structsRef.current = structs;
       subSymsRef.current = allSyms;
+
+      console.log(`[GEX] Loaded ${structs.length} strikes, subscribing to ${allSyms.length} symbols`);
 
       // Subscribe new symbols to WS
       const ws = wsRef.current;
