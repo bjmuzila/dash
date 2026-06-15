@@ -1788,6 +1788,8 @@ async function ensureTodaySpxOptionSubscriptions() {
 
     syms.forEach(sym => addAutoSubscription(sym, ['Quote','Trade','TradeETH','Greeks','Summary']));
     log('SPX 0DTE subscribe:', syms.length, 'symbols for', expDate, 'around', underlyingPrice);
+    // Send subscriptions immediately after adding
+    await sendSubscriptionsRateLimited();
     return syms.length;
   })().finally(() => { spx0dteEnsurePromise = null; });
   return spx0dteEnsurePromise;
