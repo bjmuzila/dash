@@ -45,11 +45,15 @@ function isHighPriority(ev: CalEvent): boolean {
   return ev.impact === "High" && ev.country === "USD";
 }
 
+function includeTemplateEvent(ev: CalEvent): boolean {
+  return ev.impact === "President" || ev.impact === "Medium" || (ev.impact === "High" && ev.country === "USD");
+}
+
 // ── Build the snapshot HTML (matches snapshot-template-example.html CSS) ──────
 
 function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""): string {
   const today = etToday();
-  const todayEvents = events.filter(e => e.date === today);
+  const todayEvents = events.filter(e => e.date === today && includeTemplateEvent(e));
 
   // Sort by time
   todayEvents.sort((a, b) => a.time.localeCompare(b.time));

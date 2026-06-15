@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CandlestickSeries, HistogramSeries, ColorType, CrosshairMode, createChart } from "lightweight-charts";
+import type { UTCTimestamp, IChartApi, ISeriesApi, CandlestickData, HistogramData } from "lightweight-charts";
 
 type Candle = {
   timestamp: number;
@@ -64,12 +66,19 @@ function etSlotKey(ts: number) {
   return `${map.year}-${map.month}-${map.day}T${map.hour}:${minute}`;
 }
 
+function toChartTime(ts: number): UTCTimestamp {
+  return Math.floor(ts / 1000) as UTCTimestamp;
+}
+
 export default function EsCandlesPage() {
   const [rows, setRows] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const chartApiRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const rowMapRef = useRef<Map<string, Candle>>(new Map());
   const lastSaveRef = useRef(0);
 
@@ -193,75 +202,114 @@ export default function EsCandlesPage() {
   const maxVol = useMemo(() => Math.max(1, ...rows.map((r) => Number(r.volume || 0))), [rows]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let canceled = false;
+    const init = async () => {
+      const container = chartRef.current;
+      if (!container) return;
+      if (canceled) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const W = Math.max(1, Math.floor(rect.width * dpr));
-    const H = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== W || canvas.height !== H) {
-      canvas.width = W;
-      canvas.height = H;
-    }
-    ctx.clearRect(0, 0, W, H);
-    if (rows.length < 2) return;
+      container.innerHTML = "";
+      const chart = createChart(container, {
+        layout: {
+          background: { type: ColorType.Solid, color: "transparent" },
+          textColor: "rgba(255,255,255,.70)",
+          fontFamily: "Inter, system-ui, sans-serif",
+        },
+        grid: {
+          vertLines: { color: "rgba(255,255,255,.06)" },
+          horzLines: { color: "rgba(255,255,255,.06)" },
+        },
+        rightPriceScale: {
+          borderColor: "rgba(255,255,255,.10)",
+        },
+        timeScale: {
+          borderColor: "rgba(255,255,255,.10)",
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+        },
+        localization: {
+          priceFormatter: (price: number) => price.toFixed(2),
+          timeFormatter: (time: unknown) => {
+            if (typeof time === "number") {
+              return new Date(time * 1000).toLocaleTimeString("en-US", {
+                timeZone: "America/New_York",
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+            }
+            return "";
+          },
+        },
+      });
 
-    const pad = { left: 54 * dpr, right: 20 * dpr, top: 18 * dpr, bottom: 26 * dpr };
-    const chartW = W - pad.left - pad.right;
-    const chartH = H - pad.top - pad.bottom;
-    const highs = rows.map((r) => r.high);
-    const lows = rows.map((r) => r.low);
-    const max = Math.max(...highs);
-    const min = Math.min(...lows);
-    const range = Math.max(1, max - min);
-    const candleW = Math.max(2 * dpr, chartW / rows.length * 0.58);
+      const candleSeries = chart.addSeries(CandlestickSeries, {
+        wickUpColor: "#30d158",
+        upColor: "#30d158",
+        wickDownColor: "#ff5b5b",
+        downColor: "#ff5b5b",
+        borderVisible: false,
+      });
+      const volumeSeries = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: "volume" },
+        priceScaleId: "",
+        color: "rgba(255,255,255,.26)",
+      });
+      volumeSeries.priceScale().applyOptions({
+        scaleMargins: { top: 0.78, bottom: 0 },
+      });
 
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,.08)";
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = pad.top + (chartH * i) / 4;
-      ctx.beginPath();
-      ctx.moveTo(pad.left, y);
-      ctx.lineTo(pad.left + chartW, y);
-      ctx.stroke();
-    }
-    ctx.restore();
+      chartApiRef.current = chart;
+      candleSeriesRef.current = candleSeries;
+      volumeSeriesRef.current = volumeSeries;
 
-    rows.forEach((row, i) => {
-      const x = pad.left + (i / Math.max(1, rows.length - 1)) * chartW;
-      const yHigh = pad.top + (1 - (row.high - min) / range) * chartH;
-      const yLow = pad.top + (1 - (row.low - min) / range) * chartH;
-      const yOpen = pad.top + (1 - (row.open - min) / range) * chartH;
-      const yClose = pad.top + (1 - (row.close - min) / range) * chartH;
-      const up = row.close >= row.open;
-      const color = up ? "#30d158" : "#ff5b5b";
+      const ro = new ResizeObserver(() => {
+        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+      });
+      ro.observe(container);
+      chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
 
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.4 * dpr;
-      ctx.beginPath();
-      ctx.moveTo(x, yHigh);
-      ctx.lineTo(x, yLow);
-      ctx.stroke();
-      ctx.fillStyle = color;
-      const top = Math.min(yOpen, yClose);
-      const height = Math.max(1, Math.abs(yClose - yOpen));
-      ctx.fillRect(x - candleW / 2, top, candleW, height);
-      ctx.restore();
-    });
+      return () => ro.disconnect();
+    };
 
-    const volTop = H - 20 * dpr;
-    rows.forEach((row, i) => {
-      const x = pad.left + (i / Math.max(1, rows.length - 1)) * chartW;
-      const barH = Math.max(1, ((row.volume || 0) / maxVol) * 34 * dpr);
-      ctx.fillStyle = "rgba(255,255,255,.22)";
-      ctx.fillRect(x - candleW / 2, volTop - barH, candleW, barH);
-    });
-  }, [rows, maxVol]);
+    let cleanup: void | (() => void);
+    void init().then((fn) => { cleanup = fn; });
+
+    return () => {
+      canceled = true;
+      cleanup?.();
+      chartApiRef.current?.remove();
+      chartApiRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
+    const chart = chartApiRef.current;
+    if (!candleSeries || !volumeSeries || !chart) return;
+
+    const candleData: CandlestickData[] = rows.map((row) => ({
+      time: toChartTime(row.timestamp),
+      open: row.open,
+      high: row.high,
+      low: row.low,
+      close: row.close,
+    }));
+    const volumeData: HistogramData[] = rows.map((row) => ({
+      time: toChartTime(row.timestamp),
+      value: row.volume,
+      color: row.close >= row.open ? "rgba(48, 209, 88, .45)" : "rgba(255, 91, 91, .45)",
+    }));
+
+    candleSeries.setData(candleData);
+    volumeSeries.setData(volumeData);
+    chart.timeScale().fitContent();
+  }, [rows]);
 
   return (
     <div className="flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
@@ -300,7 +348,7 @@ export default function EsCandlesPage() {
 
       <div className="flex-1 px-4 pb-4">
         <div className="relative h-full min-h-[520px] overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "radial-gradient(circle at top, rgba(255,91,91,.12), rgba(6,8,13,.96) 50%)" }}>
-          <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+          <div ref={chartRef} className="absolute inset-0" />
           {error ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-red-300">{error}</div>
           ) : rows.length === 0 ? (
