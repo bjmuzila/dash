@@ -525,41 +525,6 @@ export default function OptionsChainPage() {
     return () => { ws.close(); };
   }, [scheduleRender]);
 
-  // Fetch expirations when ticker changes
-  const fetchExpirations = useCallback(async (t: string) => {
-    setStatus({ state: "loading", msg: "LOADING..." });
-    try {
-      const res = await fetch(`/api/expirations?ticker=${encodeURIComponent(t)}`);
-      const json = await res.json();
-      const items = json.data?.items ?? [];
-      const seen = new Set<string>();
-      const list: Expiry[] = [];
-      items.forEach((item: Record<string, unknown>) => {
-        const d = String(item["expiration-date"] ?? "");
-        if (!d || seen.has(d)) return;
-        seen.add(d);
-        const dt = daysTo(d);
-        const expType = String(item["expiration-type"] ?? "").toLowerCase();
-        const holidayExcl: Record<string, boolean> = { "2026-06-19": true };
-        const holidayIncl: Record<string, boolean> = { "2026-06-18": true };
-        if (holidayExcl[d] && !holidayIncl[d]) return;
-        const keep = dt <= 7 || holidayIncl[d] || expType === "weekly" || expType === "monthly" || new Date(d).getDay() === 5;
-        if (!keep) return;
-        list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}`, type: expType });
-      });
-      list.sort((a, b) => a.daysTo - b.daysTo);
-      setExpirations(list);
-      const dte0 = list.find(e => e.daysTo === 0) ?? list[0];
-      if (dte0) {
-        setSelectedExpiry(dte0.date);
-        await loadChain(t, dte0.date);
-      }
-      setStatus({ state: "idle", msg: "READY" });
-    } catch {
-      setStatus({ state: "err", msg: "EXPIRY ERR" });
-    }
-  }, [loadChain]);
-
   // Load chain
   const loadChain = useCallback(async (t: string, expDate: string) => {
     loadTokenRef.current += 1;
@@ -635,6 +600,41 @@ export default function OptionsChainPage() {
         setStatus({ state: "err", msg: "ERR: " + String(err).slice(0, 40) });
     }
   }, []);
+
+  // Fetch expirations when ticker changes
+  const fetchExpirations = useCallback(async (t: string) => {
+    setStatus({ state: "loading", msg: "LOADING..." });
+    try {
+      const res = await fetch(`/api/expirations?ticker=${encodeURIComponent(t)}`);
+      const json = await res.json();
+      const items = json.data?.items ?? [];
+      const seen = new Set<string>();
+      const list: Expiry[] = [];
+      items.forEach((item: Record<string, unknown>) => {
+        const d = String(item["expiration-date"] ?? "");
+        if (!d || seen.has(d)) return;
+        seen.add(d);
+        const dt = daysTo(d);
+        const expType = String(item["expiration-type"] ?? "").toLowerCase();
+        const holidayExcl: Record<string, boolean> = { "2026-06-19": true };
+        const holidayIncl: Record<string, boolean> = { "2026-06-18": true };
+        if (holidayExcl[d] && !holidayIncl[d]) return;
+        const keep = dt <= 7 || holidayIncl[d] || expType === "weekly" || expType === "monthly" || new Date(d).getDay() === 5;
+        if (!keep) return;
+        list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}`, type: expType });
+      });
+      list.sort((a, b) => a.daysTo - b.daysTo);
+      setExpirations(list);
+      const dte0 = list.find(e => e.daysTo === 0) ?? list[0];
+      if (dte0) {
+        setSelectedExpiry(dte0.date);
+        await loadChain(t, dte0.date);
+      }
+      setStatus({ state: "idle", msg: "READY" });
+    } catch {
+      setStatus({ state: "err", msg: "EXPIRY ERR" });
+    }
+  }, [loadChain]);
 
   const doGo = useCallback(() => {
     const t = ticker.trim().toUpperCase() || "SPX";
