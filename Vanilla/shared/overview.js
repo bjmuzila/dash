@@ -1499,7 +1499,11 @@ function handleDXLinkQuote(quote) {
 
     if (close > 0) esPrevClose = close;
     if (last <= 0 && close <= 0 && !Number.isFinite(parseFloat(quote.change)) && !Number.isFinite(parseFloat(quote.changePercent))) return;
-    updateSPXDisplay({
+    // For ES quotes off-hours: don't pass lastPrice — updateSPXDisplay should derive SPX via conversion
+    const isEsQuote = quote.eventSymbol !== 'SPX';
+    updateSPXDisplay(isEsQuote && !spxOpen ? {
+      closePrice: close > 0 ? close : spxPrevClose,
+    } : {
       lastPrice: last > 0 ? last : spotPrice,
       closePrice: close > 0 ? close : spxPrevClose,
       change: quote.change,
@@ -8385,9 +8389,8 @@ window.gexTakeSnapshot = async function gexTakeSnapshot() {
       rawChain.reduce((sum, row) => sum + Number(row?.volNetDEX || 0), 0),
       null,
       rawChain.reduce((sum, row) => sum + Number(row?.netVolGEX || 0), 0),
-      null,
       flipPoint
-    ).then(() => console.log(`✓ DB MVC saved [manual]: ${mvcOI.strike} @ ${price}`))
+    ).then(() => console.log(`✓ DB MVC saved [manual]: ${mvcOI.strike} @ ${price} flip=${flipPoint}`))
      .catch(e  => console.error('DB MVC save failed:', e));
   }
 };
@@ -8451,6 +8454,7 @@ async function gexAutoSnapshot() {
           { strike: mvcVol.strike, value: mvcVol.netVolGEX||0, volume: mvcVol.callVolume + mvcVol.putVolume },
           price,
           esPrice,
+          selectedExpiry || '—',
           label,
           rawChain.reduce((sum, row) => sum + Math.abs(Number(row?.netGEX || 0)), 0),
           topDexRow?.strike ?? null,

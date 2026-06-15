@@ -224,6 +224,16 @@ function initDB() {
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_15m_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slotkey ON es_15m_candles(slot_key);
 
+    CREATE TABLE IF NOT EXISTS es_5m_candles (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   INTEGER NOT NULL,
+      date        TEXT NOT NULL,
+      slot_key    TEXT NOT NULL UNIQUE,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_e5_date ON es_5m_candles(date);
+    CREATE INDEX IF NOT EXISTS idx_e5_slotkey ON es_5m_candles(slot_key);
+
     CREATE TABLE IF NOT EXISTS gex_top3 (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp   INTEGER NOT NULL,
@@ -425,7 +435,7 @@ function scheduleNightlyClear() {
       s.deleteOldGex.run(today);
 
       // Delete old records from new IndexedDB-replacement tables
-      const tablesToClean = ['mvc','premium_flow','chain_snapshots','multi_stock_flow','greeks_time_series','big_trades','es_15m_candles','gex_top3','bzila_live_snapshots'];
+      const tablesToClean = ['mvc','premium_flow','chain_snapshots','multi_stock_flow','greeks_time_series','big_trades','es_15m_candles','es_5m_candles','gex_top3','bzila_live_snapshots'];
       for (const tbl of tablesToClean) {
         try {
           db.prepare(`DELETE FROM ${tbl} WHERE date < ?`).run(today);
@@ -4570,6 +4580,7 @@ const server = http.createServer(async (req, res) => {
           'greeks_time_series': { cols: ['timestamp','date','ticker','data'] },
           'big_trades': { cols: ['timestamp','date','ticker','data'] },
           'es_15m_candles': { cols: ['timestamp','date','slot_key','data'] },
+          'es_5m_candles':  { cols: ['timestamp','date','slot_key','data'] },
           'gex_top3': { cols: ['timestamp','date','ticker','data'] },
           'bzila_live_snapshots': { cols: ['timestamp','date','ticker','data'] }
         };
@@ -4580,11 +4591,18 @@ const server = http.createServer(async (req, res) => {
         const cols = schema.cols.join(',');
         const placeholders = schema.cols.map(() => '?').join(',');
         const values = schema.cols.map(c => {
-          if (c === 'data' && typeof data[c] === 'object') return JSON.stringify(data[c]);
+          if (c === 'data') {
+            // If the record has a 'data' field use it; otherwise serialize the whole record as the blob
+            const blob = data[c] !== undefined ? data[c] : data;
+            return typeof blob === 'object' ? JSON.stringify(blob) : blob;
+          }
           return data[c];
         });
 
-        db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`).run(...values);
+        // Use INSERT OR REPLACE for tables with UNIQUE slot_key so upserts work correctly
+        const upsertTables = new Set(['es_15m_candles','es_5m_candles','buy_sell_scores']);
+        const verb = upsertTables.has(table) ? 'INSERT OR REPLACE' : 'INSERT';
+        db.prepare(`${verb} INTO ${table} (${cols}) VALUES (${placeholders})`).run(...values);
         return sendJSON(res, 200, { ok: true });
       } catch (e) {
         log('[DB API] Insert error:', e.message);
@@ -4617,10 +4635,16 @@ const server = http.createServer(async (req, res) => {
 
       const rows = db.prepare(query).all(...params);
 
-      // Parse JSON columns
+      // Parse JSON columns — merge blob fields directly onto the row so display code can read r.field
       const parsed = rows.map(r => {
         if (r.data && typeof r.data === 'string') {
-          try { r.data = JSON.parse(r.data); } catch (e) { }
+          try {
+            const blob = JSON.parse(r.data);
+            if (blob && typeof blob === 'object') {
+              return { ...blob, id: r.id, timestamp: r.timestamp, date: r.date };
+            }
+            r.data = blob;
+          } catch (e) { }
         }
         return r;
       });
@@ -4640,7 +4664,7 @@ const server = http.createServer(async (req, res) => {
       const days = parseInt(u.searchParams.get('days') || '7', 10);
       const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-      const tables = ['mvc','premium_flow','chain_snapshots','multi_stock_flow','greeks_time_series','big_trades','es_15m_candles','gex_top3','bzila_live_snapshots'];
+      const tables = ['mvc','premium_flow','chain_snapshots','multi_stock_flow','greeks_time_series','big_trades','es_15m_candles','es_5m_candles','gex_top3','bzila_live_snapshots'];
       let totalDeleted = 0;
 
       for (const tbl of tables) {

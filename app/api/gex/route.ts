@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { computeGexSummary } from "@/lib/math/gex";
+import { computeGEXProfile } from "@/lib/math/calculations";
 import type { ChainRow } from "@/lib/math/calculations";
 
 const PROXY = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
@@ -78,6 +79,9 @@ export async function GET(request: Request) {
         const putGamma   = Math.abs(Number(p.gamma ?? 0));
         const callDelta  = Number(c.delta ?? 0);
         const putDelta   = Number(p.delta ?? 0);
+        const callIV     = Number(c["implied-volatility"] ?? c.impliedVolatility ?? 0);
+        const putIV      = Number(p["implied-volatility"] ?? p.impliedVolatility ?? 0);
+        const dte        = Number(expGroup["days-to-expiration"] ?? expGroup.daysToExpiration ?? 0);
 
         const spot = spotPrice || strike; // fallback prevents zero
         const callGEX = callGamma * callOI  * spot * spot;
@@ -122,6 +126,7 @@ export async function GET(request: Request) {
             netVolGEX,
             netDEX,
             volNetDEX,
+            callIV,    putIV,    dte,
           });
         }
       }
@@ -148,6 +153,7 @@ export async function GET(request: Request) {
     } catch { /* non-fatal */ }
 
     const summary = computeGexSummary(chain, spotPrice);
+    const profile = computeGEXProfile(chain, spotPrice);
 
     return NextResponse.json({
       timestamp:  Date.now(),
@@ -155,9 +161,10 @@ export async function GET(request: Request) {
       expiration: expiry || null,
       callWall:   summary.callWall  ?? callWall,
       putWall:    summary.putWall   ?? putWall,
-      gexFlip:    summary.gexFlip   ?? gexFlip,
+      gexFlip:    profile?.flipPoint ?? summary.gexFlip ?? gexFlip,
       chain,
       summary,
+      profile,   // { levels: number[], values: number[], flipPoint: number|null }
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

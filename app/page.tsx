@@ -81,6 +81,7 @@ export default function OverviewPage() {
   const [showOI, setShowOI]               = useState(false);
   const [showDex, setShowDex]             = useState(false);
   const [showFlipCurve, setShowFlipCurve] = useState(false);
+  const [gexProfile, setGexProfile]       = useState<{ levels: number[]; values: number[]; flipPoint: number | null } | null>(null);
   const [feedTab, setFeedTab]             = useState<FeedTab>("snapshot");
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
@@ -362,6 +363,18 @@ export default function OverviewPage() {
 
   const { trigger: hmRefresh, label: hmBtnLabel, style: hmBtnStyle } = useRefreshButton(handleRefresh);
 
+  // Fetch GEX profile (BS spot-sweep) from server — needs IV/DTE not in WS stream
+  useEffect(() => {
+    if (!selectedExpiry) return;
+    let cancelled = false;
+    const url = `/api/gex${selectedExpiry ? `?expiry=${encodeURIComponent(selectedExpiry)}` : ""}`;
+    fetch(url, { cache: "no-store" })
+      .then(r => r.json())
+      .then(json => { if (!cancelled && json?.profile) setGexProfile(json.profile); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedExpiry]);
+
   const summary = computeGexSummary(chain, spotPrice);
 
   // Keep window.__gexAppState in sync
@@ -399,7 +412,7 @@ export default function OverviewPage() {
             showOI={showOI}
             showDex={showDex}
             showFlipCurve={showFlipCurve}
-            flipPoint={summary.gexFlip}
+            flipPoint={gexProfile?.flipPoint ?? summary.gexFlip}
             callWall={summary.callWall}
             putWall={summary.putWall}
             netGex={summary.totalNetGEXFormatted}
@@ -433,7 +446,8 @@ export default function OverviewPage() {
             <GexChart
               chain={chain}
               spotPrice={spotPrice}
-              flipPoint={summary.gexFlip}
+              flipPoint={gexProfile?.flipPoint ?? summary.gexFlip}
+              gexProfile={gexProfile}
               mode={gexMode}
               dataMode={dataMode}
               chartMode={chartMode}

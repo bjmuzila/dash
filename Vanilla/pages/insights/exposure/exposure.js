@@ -343,10 +343,10 @@ function refreshExposureStack() {
   }
   if (mainTitle) mainTitle.textContent = 'Exposure Stack';
   if (loading) loading.style.display = 'none';
-  if (gexValue) gexValue.textContent = formatExposureValue(values.gex, 'B');
-  if (dexValue) dexValue.textContent = formatExposureValue(values.dex, 'B');
-  if (chexValue) chexValue.textContent = formatExposureAutoScale(values.chex);
-  if (vexValue) vexValue.textContent = formatExposureAutoScale(values.vex);
+  if (gexValue && Number.isFinite(Number(values.gex))) gexValue.textContent = formatExposureValue(values.gex, 'B');
+  if (dexValue && Number.isFinite(Number(values.dex))) dexValue.textContent = formatExposureValue(values.dex, 'B');
+  if (chexValue && Number.isFinite(Number(values.chex))) chexValue.textContent = formatExposureAutoScale(values.chex);
+  if (vexValue && Number.isFinite(Number(values.vex))) vexValue.textContent = formatExposureAutoScale(values.vex);
   if (comboValue) comboValue.textContent = (Number.isFinite(Number(values.gex)) && Number.isFinite(Number(values.vex)))
     ? `${((Number(values.gex) + Number(values.vex)) / 1e9).toFixed(3)}B`
     : '--';
@@ -530,9 +530,9 @@ async function updateRelativeVolumeCard(when) {
   // 2. Session timing — all in ET
   const etNow = getNowEt();
   const etMins = etMinutesOf(etNow);
-  const SESSION_OPEN_MIN  = 9 * 60;   // 9:00 ET
-  const SESSION_CLOSE_MIN = 16 * 60;  // 16:00 ET
-  const sessionTotalMins  = SESSION_CLOSE_MIN - SESSION_OPEN_MIN; // 420 min
+  const SESSION_OPEN_MIN  = 9 * 60 + 30;  // 9:30 ET
+  const SESSION_CLOSE_MIN = 16 * 60;       // 16:00 ET
+  const sessionTotalMins  = SESSION_CLOSE_MIN - SESSION_OPEN_MIN; // 390 min
   const elapsedMins = Math.max(1, Math.min(etMins, SESSION_CLOSE_MIN) - SESSION_OPEN_MIN);
   const pace    = Math.max(0.001, elapsedMins / sessionTotalMins);
   const pctVal  = Math.max(0, Math.min(100, Math.round(pace * 100)));
@@ -603,9 +603,9 @@ async function drawRelativeVolumeSparkline() {
   }
   ctx.clearRect(0, 0, width, height);
 
-  const SESSION_START = 9 * 60;   // 9:00 ET in minutes
-  const SESSION_END   = 16 * 60;  // 16:00 ET in minutes
-  const SESSION_SPAN  = SESSION_END - SESSION_START; // 420 min
+  const SESSION_START = 9 * 60 + 30;  // 9:30 ET in minutes
+  const SESSION_END   = 16 * 60;       // 16:00 ET in minutes
+  const SESSION_SPAN  = SESSION_END - SESSION_START; // 390 min
   const todayStr = getTodayEtStr();
 
   // ── 1. Today's curve from live samples ───────────────────────────────────
@@ -839,37 +839,79 @@ async function shareExposure(platform) {
   }
 }
 
+async function _seedCandlesFromProxy(symbol, saveMethod, daysBack, retries = 2) {
+  if (!DB?.[saveMethod]) return false;
+  const start = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 5000));
+    try {
+      const resp = await fetch(`/proxy/api/dxlink/candles?symbol=${encodeURIComponent(symbol)}&start=${start}&count=1000`);
+      if (!resp.ok) continue;
+      const payload = await resp.json();
+      const candles = Array.isArray(payload?.candles) ? payload.candles : [];
+      if (!candles.length) continue;
+      for (const candle of candles) {
+        const ts = Number(candle?.datetime ?? candle?.time ?? candle?.timestamp);
+        if (!ts || !Number(candle?.volume)) continue;
+        const d = new Date(new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const slotKey = `${date}-${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        try { await DB[saveMethod]({ timestamp: ts, date, slotKey, open: Number(candle.open||0), high: Number(candle.high||0), low: Number(candle.low||0), close: Number(candle.close||0), volume: Number(candle.volume||0), symbol }); } catch (_) {}
+      }
+      return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
 function seedES15mCandlesInBackground() {
   if (window.__es15mSeeded) return;
   window.__es15mSeeded = true;
   (async () => {
     try {
-      if (!(await ensureDBReady()) || !DB?.queryES15mCandles || !DB?.saveES15mCandle) return;
-      // Try dxlink candles endpoint (may 503 if history channel not ready — retry once)
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (attempt > 0) await new Promise(r => setTimeout(r, 5000));
-        try {
-          const start = Date.now() - 10 * 24 * 60 * 60 * 1000;
-          const resp = await fetch(`/proxy/api/dxlink/candles?symbol=${encodeURIComponent('/ES{=15m}')}&start=${start}&count=480`);
-          if (!resp.ok) continue;
-          const payload = await resp.json();
-          const candles = Array.isArray(payload?.candles) ? payload.candles : [];
-          if (!candles.length) continue;
-          for (const candle of candles) {
-            const ts = Number(candle?.datetime ?? candle?.time ?? candle?.timestamp);
-            if (!ts || !Number(candle?.volume)) continue;
-            const d = new Date(new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York' }));
-            const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-            const slotKey = `${date}-${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-            try { await DB.saveES15mCandle({ timestamp: ts, date, slotKey, open: Number(candle.open||0), high: Number(candle.high||0), low: Number(candle.low||0), close: Number(candle.close||0), volume: Number(candle.volume||0) }); } catch (_) {}
-          }
-          const when = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          updateRelativeVolumeCard(when);
-          return; // success
-        } catch (_) {}
+      if (!(await ensureDBReady())) return;
+      const ok = await _seedCandlesFromProxy('/ES{=15m}', 'saveES15mCandle', 10);
+      if (ok) {
+        const when = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        updateRelativeVolumeCard(when);
       }
     } catch (_) {}
   })();
+}
+
+function seedES5mCandlesInBackground() {
+  if (window.__es5mSeeded) return;
+  window.__es5mSeeded = true;
+  (async () => {
+    try {
+      if (!(await ensureDBReady()) || !DB?.saveES5mCandle) return;
+      // 3 days of 5m candles for intraday RVOL detail
+      await _seedCandlesFromProxy('/ES{=5m}', 'saveES5mCandle', 3);
+    } catch (_) {}
+  })();
+}
+
+// Save a live 5m candle tick when a new 5m bar boundary is crossed
+if (!window.__es5mLiveTickBound) {
+  window.__es5mLiveTickBound = true;
+  window.__es5mLastBarSlot = '';
+  setInterval(() => {
+    try {
+      const etNow = getNowEt();
+      const etMins = etMinutesOf(etNow);
+      if (etMins < 9 * 60 + 30 || etMins > 16 * 60) return;
+      const vol = getLiveDayVolume();
+      if (!vol) return;
+      const barStartMin = Math.floor(etMins / 5) * 5;
+      const date = getTodayEtStr();
+      const slotKey = `${date}-${String(Math.floor(barStartMin/60)).padStart(2,'0')}:${String(barStartMin%60).padStart(2,'0')}`;
+      if (slotKey === window.__es5mLastBarSlot) return;
+      window.__es5mLastBarSlot = slotKey;
+      if (typeof DB !== 'undefined' && DB?.saveES5mCandle) {
+        DB.saveES5mCandle({ timestamp: Date.now(), date, slotKey, volume: vol, symbol: '/ES{=5m}' }).catch(() => {});
+      }
+    } catch (_) {}
+  }, 60000); // check every minute; writes once per 5m bar
 }
 
 function resetRvolIntradayBucketsIfNewDay() {
@@ -879,6 +921,70 @@ function resetRvolIntradayBucketsIfNewDay() {
     window.__rvolLastDayVol = 0;
     window.__rvolSampleDate = today;
   }
+}
+
+// ── Scheduled reset at 9:30am ET (market open) + 5:00pm ET (post-close) ──────
+// Clears sparkline history and RVOL samples so charts start fresh each session.
+function scheduleSessionResets() {
+  if (window.__sessionResetScheduled) return;
+  window.__sessionResetScheduled = true;
+
+  function msUntilEtTime(h, m) {
+    const now = getNowEt();
+    const target = new Date(now);
+    target.setHours(h, m, 0, 0);
+    let diff = target.getTime() - now.getTime();
+    if (diff <= 0) diff += 24 * 60 * 60 * 1000; // next day
+    return diff;
+  }
+
+  function doReset(label) {
+    // Clear sparkline history so it rebuilds from this point forward
+    window.__insightsGreekHistory = { gex: [], dex: [], chex: [], vex: [], gexvex: [] };
+    window.__insightsGreekHistoryLoading = false;
+    // Clear RVOL samples
+    window.__rvolSamples = [];
+    window.__rvolLastDayVol = 0;
+    window.__rvolSampleDate = getTodayEtStr();
+    // Clear session greek range so signals reset
+    window.__sessionGreekRange = null;
+    window.__lastGexBucket = undefined;
+    window.__lastChexBucket = undefined;
+    window.__lastVexBucket = undefined;
+    window.__lastDexInvBucket = undefined;
+    window.__lastComboRegime = undefined;
+    window.__lastNeutralAlert = null;
+    window.__lastPlaybookRegime = undefined;
+    window.__playbookSeeded = false;
+    // If 9:30am reset, re-hydrate from DB after a short delay (new data may already be in)
+    if (label === '9:30am') {
+      setTimeout(() => {
+        hydrateGreekSparklineHistoryFromDB().catch(() => {});
+      }, 5000);
+    }
+    renderGreekSparklines();
+    drawRelativeVolumeSparkline();
+  }
+
+  function schedule930() {
+    const ms = msUntilEtTime(9, 30);
+    setTimeout(() => {
+      doReset('9:30am');
+      // Reschedule for next day
+      setTimeout(schedule930, 100);
+    }, ms);
+  }
+
+  function schedule5pm() {
+    const ms = msUntilEtTime(17, 0);
+    setTimeout(() => {
+      doReset('5pm');
+      setTimeout(schedule5pm, 100);
+    }, ms);
+  }
+
+  schedule930();
+  schedule5pm();
 }
 
 function initInsightsExposure() {
@@ -900,6 +1006,9 @@ function initInsightsExposure() {
     window.__lastPlaybookRegime = undefined;
     window.__playbookSeeded = false;
   }
+
+  // Schedule 9:30am and 5pm ET sparkline resets
+  scheduleSessionResets();
 
   // Seed intraday buckets from live volume immediately on init
   const initVol = getLiveDayVolume();
@@ -926,6 +1035,7 @@ function initInsightsExposure() {
   setTimeout(refreshExposureStack, 0);
   scheduleExposureSparklineRefresh();
   setTimeout(seedES15mCandlesInBackground, 2000); // seed after card renders
+  setTimeout(seedES5mCandlesInBackground, 3500);  // seed 5m candles shortly after
   setTimeout(() => {
     const live = window.__liveExposureSnapshot;
     if (live && [live.gex, live.dex, live.chex, live.vex].every((v) => Number.isFinite(Number(v)))) {
@@ -1016,40 +1126,82 @@ function initInsightsExposure() {
 async function hydrateGreekSparklineHistoryFromDB() {
   if (window.__insightsGreekHistoryLoading) return;
   const db = getExposureDB();
-  if (!db || typeof db.queryGreeksTimeSeries_Today !== 'function') {
-    return;
-  }
   window.__insightsGreekHistoryLoading = true;
   try {
-    if (!db.db && typeof db.init === 'function') {
-      await db.init().catch(() => null);
-    }
-    let records = await db.queryGreeksTimeSeries_Today('').catch(() => []);
-    if (!Array.isArray(records) || !records.length) {
-      if (typeof db.queryGreeksTimeSeries_Hours === 'function') {
-        records = await db.queryGreeksTimeSeries_Hours(72, '').catch(() => []);
+    let records = [];
+
+    // Primary: fetch from greeks_intraday via proxy (has gex/dex/chex/vex in display-scale)
+    try {
+      const resp = await fetch('/proxy/api/greeks-intraday', { cache: 'no-store' });
+      if (resp.ok) {
+        const payload = await resp.json();
+        if (Array.isArray(payload?.records) && payload.records.length) {
+          records = payload.records.map(r => ({
+            timestamp: Number(r.ts || r.timestamp || 0),
+            gexRaw: null,
+            dexRaw: null,
+            chexRaw: null,
+            vexRaw: null,
+            // greeks_intraday stores display-scale: gex/dex in billions, chex/vex in millions
+            gex: Number(r.gex),
+            dex: Number(r.dex),
+            chex: Number(r.chex),
+            vex: Number(r.vex),
+          }));
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: IndexedDB greeksTimeSeries
+    if (!records.length && db && typeof db.queryGreeksTimeSeries_Today === 'function') {
+      if (!db.db && typeof db.init === 'function') await db.init().catch(() => null);
+      records = await db.queryGreeksTimeSeries_Today('').catch(() => []);
+      if (!Array.isArray(records) || !records.length) {
+        if (typeof db.queryGreeksTimeSeries_Hours === 'function') {
+          records = await db.queryGreeksTimeSeries_Hours(72, '').catch(() => []);
+        }
+      }
+      if ((!Array.isArray(records) || !records.length) && typeof db._getAllRecords === 'function') {
+        records = await db._getAllRecords('greeksTimeSeries').catch(() => []);
       }
     }
-    if ((!Array.isArray(records) || !records.length) && typeof db._getAllRecords === 'function') {
-      records = await db._getAllRecords('greeksTimeSeries').catch(() => []);
-    }
+
     if (!Array.isArray(records) || !records.length) return;
     const history = { gex: [], dex: [], chex: [], vex: [], gexvex: [] };
     const anchors = window.__liveExposureSnapshot || {};
     const lastValues = { gex: null, dex: null, chex: null, vex: null };
     records
       .slice()
-      .sort((a, b) => Number(a?.timestamp || 0) - Number(b?.timestamp || 0))
+      .sort((a, b) => Number(a?.timestamp || a?.ts || 0) - Number(b?.timestamp || b?.ts || 0))
       .forEach((record) => {
         const ts = Number(record?.timestamp || record?.ts || Date.now());
-        const gex = getExposureRecordValue(record, ['gexRaw'])
-          ?? pickGreekHistoryValue('gex', getExposureRecordValue(record, ['gex', 'netGEX', 'totalGEX']), lastValues.gex, anchors.gex);
-        const dex = getExposureRecordValue(record, ['dexRaw'])
-          ?? pickGreekHistoryValue('dex', getExposureRecordValue(record, ['dex', 'netDEX', 'totalDEX']), lastValues.dex, anchors.dex);
-        const chex = getExposureRecordValue(record, ['chexRaw'])
-          ?? pickGreekHistoryValue('chex', getExposureRecordValue(record, ['chex', 'netCHEX', 'totalCHEX']), lastValues.chex, anchors.chex);
-        const vex = getExposureRecordValue(record, ['vexRaw'])
-          ?? pickGreekHistoryValue('vex', getExposureRecordValue(record, ['vex', 'netVEX', 'totalVEX']), lastValues.vex, anchors.vex);
+        // gexRaw/dexRaw/chexRaw/vexRaw: already raw scale (from IndexedDB greeksTimeSeries)
+        // record.gex from greeks_intraday: display-scale billions (e.g. 5.08) → multiply by 1e9
+        // record.chex from greeks_intraday: display-scale millions (e.g. -171) → multiply by 1e6
+        let gex = getExposureRecordValue(record, ['gexRaw']);
+        if (gex === null) {
+          const v = getExposureRecordValue(record, ['gex', 'netGEX', 'totalGEX']);
+          if (v !== null) gex = Math.abs(v) < 1e6 ? v * 1e9 : v;
+        }
+        let dex = getExposureRecordValue(record, ['dexRaw']);
+        if (dex === null) {
+          const v = getExposureRecordValue(record, ['dex', 'netDEX', 'totalDEX']);
+          if (v !== null) dex = Math.abs(v) < 1e6 ? v * 1e9 : v;
+        }
+        let chex = getExposureRecordValue(record, ['chexRaw']);
+        if (chex === null) {
+          const v = getExposureRecordValue(record, ['chex', 'netCHEX', 'totalCHEX']);
+          if (v !== null) chex = Math.abs(v) < 1e4 ? v * 1e6 : v;
+        }
+        let vex = getExposureRecordValue(record, ['vexRaw']);
+        if (vex === null) {
+          const v = getExposureRecordValue(record, ['vex', 'netVEX', 'totalVEX']);
+          if (v !== null) vex = Math.abs(v) < 1e4 ? v * 1e6 : v;
+        }
+        if (gex === null) gex = pickGreekHistoryValue('gex', null, lastValues.gex, anchors.gex);
+        if (dex === null) dex = pickGreekHistoryValue('dex', null, lastValues.dex, anchors.dex);
+        if (chex === null) chex = pickGreekHistoryValue('chex', null, lastValues.chex, anchors.chex);
+        if (vex === null) vex = pickGreekHistoryValue('vex', null, lastValues.vex, anchors.vex);
         if (![gex, dex, chex, vex].every(Number.isFinite) || !Number.isFinite(ts)) return;
         lastValues.gex = gex;
         lastValues.dex = dex;
@@ -1106,12 +1258,12 @@ function seedMockGreekHistory() {
   if (window.__insightsGreekHistory && (window.__insightsGreekHistory.gex || []).length >= 4) {
     return;
   }
-  // Build timestamps anchored to today's session (9:00am ET → now), spaced 30 min apart
+  // Build timestamps anchored to today's session (9:30am ET → now), spaced 30 min apart
   // so the sparkline x-axis renders correctly against real wall clock
   const nowEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etOffsetMs = nowEt.getTime() - new Date().getTime();
   const sessionOpen = new Date(nowEt);
-  sessionOpen.setHours(9, 0, 0, 0);
+  sessionOpen.setHours(9, 30, 0, 0);
   const sessionOpenUtcMs = sessionOpen.getTime() - etOffsetMs;
   const STEP = 30 * 60 * 1000; // 30 min
   const mockVals = {
@@ -1517,19 +1669,20 @@ function updateGreeksDisplay(data) {
   }
 
   // Display using formatExposureValue which divides by 1e9/1e6 — raw values required
-  if (Number.isFinite(snap.gex)) {
+  // Only write non-null values to DOM to preserve any existing display values
+  if (Number.isFinite(snap.gex) && snap.gex !== 0) {
     const gexEl = getExposureValueEl('gex');
     if (gexEl) gexEl.textContent = formatExposureValue(snap.gex, 'B');
   }
-  if (Number.isFinite(snap.dex)) {
+  if (Number.isFinite(snap.dex) && snap.dex !== 0) {
     const dexEl = getExposureValueEl('dex');
     if (dexEl) dexEl.textContent = formatExposureValue(snap.dex, 'B');
   }
-  if (Number.isFinite(snap.chex)) {
+  if (Number.isFinite(snap.chex) && snap.chex !== 0) {
     const chexEl = getExposureValueEl('chex');
     if (chexEl) chexEl.textContent = formatExposureAutoScale(snap.chex);
   }
-  if (Number.isFinite(snap.vex)) {
+  if (Number.isFinite(snap.vex) && snap.vex !== 0) {
     const vexEl = getExposureValueEl('vex');
     if (vexEl) vexEl.textContent = formatExposureAutoScale(snap.vex);
   }

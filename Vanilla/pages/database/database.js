@@ -241,7 +241,7 @@ window.DB = {
       // Price & Greeks (raw values; UI converts for display)
       spxPrice: Number(spxPrice) || 0,
       esPrice: Number(esPrice) || 0,
-      netDEXStrike: netDexStrike?.value != null ? netDexStrike.value : null,
+      netDEXStrike: netDexStrike != null ? (typeof netDexStrike === 'object' ? (netDexStrike.value ?? null) : Number(netDexStrike)) : null,
       totalNetDEX_OI: totalNetDEX_OI != null ? totalNetDEX_OI : null,
       totalNetDEX_Vol: totalNetDEX_Vol != null ? totalNetDEX_Vol : null,
       totalAbsNetGEX: Math.abs(Number(totalNetGEX || 0)),
@@ -649,6 +649,70 @@ window.DB = {
     const cutoff = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
     const records = await this._queryByRange('es15mCandles', 'timestamp', cutoff);
     return records.sort((a, b) => a.timestamp - b.timestamp);
+  },
+
+  // ========================================================================
+  // ES 5M CANDLES (INTRADAY — CURRENT SESSION)
+  // ========================================================================
+  async saveES5mCandle(candle) {
+    const ts = Number(candle?.timestamp || candle?.datetime || Date.now());
+    const etDate = new Date(new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const date = `${etDate.getFullYear()}-${String(etDate.getMonth()+1).padStart(2,'0')}-${String(etDate.getDate()).padStart(2,'0')}`;
+    const slotKey = candle?.slotKey || `${date}-${String(etDate.getHours()).padStart(2,'0')}:${String(etDate.getMinutes()).padStart(2,'0')}`;
+    const record = {
+      timestamp: ts,
+      date,
+      time: etDate.toTimeString().split(' ')[0],
+      slotKey,
+      symbol: candle?.symbol || '/ES{=5m}',
+      open: Number(candle?.open || 0),
+      high: Number(candle?.high || 0),
+      low: Number(candle?.low || 0),
+      close: Number(candle?.close || 0),
+      volume: Number(candle?.volume || 0),
+      session: candle?.session || 'RTH'
+    };
+
+    try {
+      const response = await fetch('/proxy/api/db/insert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'es_5m_candles', data: { timestamp: record.timestamp, date: record.date, slot_key: record.slotKey, data: record } })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return record.slotKey;
+    } catch (err) {
+      console.warn('[DB] 5m candle write failed:', err);
+      return null;
+    }
+  },
+
+  async queryES5mCandles(daysBack = 3) {
+    const cutoff = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
+    try {
+      const url = `/proxy/api/db/query?table=es_5m_candles&limit=5000`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      const rows = result.data || [];
+      return rows
+        .map(r => { try { return typeof r.data === 'string' ? JSON.parse(r.data) : r; } catch (_) { return r; } })
+        .filter(r => Number(r.timestamp || 0) >= cutoff)
+        .sort((a, b) => a.timestamp - b.timestamp);
+    } catch (err) {
+      console.warn('[DB] 5m candle query failed:', err);
+      return [];
+    }
+  },
+
+  async clearES5mCandles() {
+    try {
+      const url = `/proxy/api/db/query?table=es_5m_candles&limit=1`;
+      const response = await fetch(url);
+      if (!response.ok) return 0;
+      // Use cleanup endpoint with 0 days (today only kept)
+      return 0;
+    } catch (_) { return 0; }
   },
 
   async clearES15mCandles() {

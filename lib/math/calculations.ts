@@ -21,6 +21,10 @@ export interface ChainRow {
   bid?: number;
   ask?: number;
   type?: "call" | "put";
+  // For GEX profile sweep (Black-Scholes gamma recomputed at each spot level)
+  callIV?: number;  // as decimal (0.20 = 20%)
+  putIV?:  number;
+  dte?:    number;  // days to expiration
 }
 
 export function densifyChainRows(chain: ChainRow[], step = 5): ChainRow[] {
@@ -169,6 +173,74 @@ export function formatGEX(value: number): string {
   if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
   if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
   return `${sign}$${(abs / 1e3).toFixed(2)}K`;
+}
+
+// ─── GEX Profile (spot-sweep model) ──────────────────────────────────────────
+// Recomputes dealer gamma exposure at 401 hypothetical spot levels using
+// Black-Scholes gamma. Requires callIV/putIV/dte fields on ChainRow.
+// Returns { levels, values } arrays for the profile curve (values in $B/1% move)
+// and the interpolated gamma-zero flip point.
+
+function bsGamma(S: number, K: number, vol: number, T: number): number {
+  if (T <= 0 || vol <= 0 || S <= 0 || K <= 0) return 0;
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + 0.5 * vol * vol * T) / (vol * sqrtT);
+  // norm.pdf(d1) = e^(-d1²/2) / sqrt(2π)
+  const pdf = Math.exp(-0.5 * d1 * d1) / Math.sqrt(2 * Math.PI);
+  return pdf / (S * vol * sqrtT);
+}
+
+export interface GEXProfile {
+  levels: number[];
+  values: number[];          // net GEX in $B per 1% move at each level
+  flipPoint: number | null;  // interpolated gamma-zero
+}
+
+export function computeGEXProfile(chain: ChainRow[], spot: number): GEXProfile | null {
+  // Need at least some rows with IV data
+  const rows = chain.filter(r =>
+    (r.callIV ?? 0) > 0 && (r.putIV ?? 0) > 0 &&
+    (r.callOI ?? 0) + (r.putOI ?? 0) > 0 &&
+    (r.dte ?? 0) >= 0
+  );
+  if (rows.length < 5) return null;
+
+  const lo = spot * 0.75, hi = spot * 1.25;
+  const N = 401;
+  const levels: number[] = Array.from({ length: N }, (_, i) => lo + (hi - lo) * (i / (N - 1)));
+  const values: number[] = [];
+
+  for (const S of levels) {
+    let net = 0;
+    for (const r of rows) {
+      const T = Math.max((r.dte ?? 0) / 365, 1 / 252);
+      const callG = bsGamma(S, r.strike, r.callIV!, T);
+      const putG  = bsGamma(S, r.strike, r.putIV!,  T);
+      // GEX = OI × 100 × S² × 0.01 × gamma  (= OI × S² × gamma)
+      net += (r.callOI ?? 0) * 100 * S * S * 0.01 * callG;
+      net -= (r.putOI  ?? 0) * 100 * S * S * 0.01 * putG;
+    }
+    values.push(net / 1e9);
+  }
+
+  // Interpolate gamma-zero closest to spot
+  let flipPoint: number | null = null;
+  const crossings: number[] = [];
+  for (let i = 0; i < values.length - 1; i++) {
+    const a = values[i], b = values[i + 1];
+    if (a === 0) { crossings.push(levels[i]); continue; }
+    if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+      crossings.push(levels[i] + (levels[i + 1] - levels[i]) * (Math.abs(a) / (Math.abs(a) + Math.abs(b))));
+    }
+  }
+  if (crossings.length) {
+    flipPoint = crossings.reduce((best, c) =>
+      Math.abs(c - spot) < Math.abs(best - spot) ? c : best
+    );
+    flipPoint = Math.round(flipPoint * 10) / 10;
+  }
+
+  return { levels, values, flipPoint };
 }
 
 export function formatStrike(strike: number): string {
