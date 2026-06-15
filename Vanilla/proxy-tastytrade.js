@@ -3613,7 +3613,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Known root symbols — skip /nested round-trip when expiration is explicit
-    const KNOWN_ROOT: Record<string, string> = { SPX: 'SPXW', SPXW: 'SPXW', SPY: 'SPY', QQQ: 'QQQ' };
+    const KNOWN_ROOT = { SPX: 'SPXW', SPXW: 'SPXW', SPY: 'SPY', QQQ: 'QQQ' };
 
     let rootSymbol;
     let targetExps;

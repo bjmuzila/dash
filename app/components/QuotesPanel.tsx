@@ -11,6 +11,31 @@ export default function QuotesPanel() {
       prevCloses: {},
       pageId: 'quotes-' + Date.now(),
 
+      quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
+        for (const key of keys) {
+          const value = Number(q[key]);
+          if (Number.isFinite(value)) return value;
+        }
+        return null;
+      },
+
+      pctFromQuote(q: Record<string, unknown>) {
+        const directPct = this.quoteNumber(q, 'percent-change', 'changePercent', 'netPercentChange', 'netPercentChangeInDouble', 'pctChange', 'dayPercentChange');
+        if (directPct != null && Math.abs(directPct) <= 20) return directPct;
+        const last = this.quoteNumber(q, 'last', 'lastPrice', 'mark', 'mark-price', 'price', 'close', 'closePrice');
+        const prev = this.quoteNumber(q, 'prev-close', 'prevClose', 'previousClose', 'prevDayClosePrice', 'close-price', 'closePrice');
+        if (last != null && prev != null && prev > 0) {
+          const pct = ((last - prev) / prev) * 100;
+          if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+        }
+        const change = this.quoteNumber(q, 'change', 'netChange', 'dayChange', 'tradeChange');
+        if (change != null && prev != null && prev > 0) {
+          const pct = (change / prev) * 100;
+          if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+        }
+        return null;
+      },
+
       async init() {
         console.log('[Quotes] Initializing');
         const searchInput = document.getElementById('quote-search');
@@ -97,7 +122,16 @@ export default function QuotesPanel() {
         quotes.forEach((q: any) => {
           if (!q || !q.symbol) return;
 
-          const change = this.calculateChange(q.symbol, q.last);
+          const change = this.calculateChange(q.symbol, q.last) || (() => {
+            const pct = this.pctFromQuote(q);
+            if (pct == null) return null;
+            return {
+              change: '',
+              changePercent: Math.abs(pct).toFixed(2),
+              up: pct >= 0,
+              down: pct < 0
+            };
+          })();
           const searchVal = (document.getElementById('quote-search') as any)?.value.toUpperCase() || '';
           const matches = searchVal === '' || q.symbol.toUpperCase().includes(searchVal);
 

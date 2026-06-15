@@ -32,6 +32,34 @@ interface LiveRec {
   pct: number | null;
 }
 
+function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = Number(q[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function pctFromQuote(q: Record<string, unknown>) {
+  const directPct = quoteNumber(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
+  if (directPct != null && Math.abs(directPct) <= 20) return directPct;
+
+  const last = quoteNumber(q, "last", "lastPrice", "mark", "mark-price", "price", "close", "closePrice");
+  const prev = quoteNumber(q, "prev-close", "prevClose", "previousClose", "prevDayClosePrice", "close-price", "closePrice");
+  if (last != null && prev != null && prev > 0) {
+    const pct = ((last - prev) / prev) * 100;
+    if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+  }
+
+  const change = quoteNumber(q, "change", "netChange", "dayChange", "tradeChange");
+  if (change != null && prev != null && prev > 0) {
+    const pct = (change / prev) * 100;
+    if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+  }
+
+  return null;
+}
+
 // ─── component ───────────────────────────────────────────────────────────────
 export default function QuotesPanel() {
   const wsLiveRef = useRef<Record<string, { lastPrice: number; prevClose: number; pctFeed: number; bidPrice: number; askPrice: number }>>({});
@@ -93,6 +121,9 @@ export default function QuotesPanel() {
                 if (pc > 0) rec.prevClose = pc;
                 if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
               }
+
+              const directPct = Number(e.dayPercentChange ?? e.changePercent ?? e["percent-change"] ?? e.netPercentChange ?? e.netPercentChangeInDouble ?? 0);
+              if (directPct !== 0 && Number.isFinite(directPct) && Math.abs(directPct) <= 20) rec.pctFeed = directPct;
             });
 
             // recompute WS rows
@@ -134,10 +165,15 @@ export default function QuotesPanel() {
         items.forEach(q => {
           const rawSym = String(q.symbol || "");
           const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
-          const prev = Number(q["prev-close"] ?? 0);
+          const prev = Number(q["prev-close"] ?? q.prevClose ?? q.previousClose ?? q.prevDayClosePrice ?? 0);
           if (prev > 0) {
             if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
             wsLiveRef.current[sym].prevClose = prev;
+          }
+          const pct = pctFromQuote(q);
+          if (pct != null) {
+            if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
+            wsLiveRef.current[sym].pctFeed = pct;
           }
         });
       } catch (_) {}
@@ -164,10 +200,13 @@ export default function QuotesPanel() {
               const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
               if (!REST_SYMBOLS.find(s => s.sym === sym)) return;
               const last = Number(q.last ?? 0);
-              const prev2 = Number(q["prev-close"] ?? 0);
-              if (last > 0 && prev2 > 0 && Math.abs(last - prev2) / prev2 < 0.20) {
-                const pct = ((last - prev2) / prev2) * 100;
+              const prev2 = Number(q["prev-close"] ?? q.prevClose ?? q.previousClose ?? q.prevDayClosePrice ?? 0);
+              const pct = pctFromQuote(q);
+              if (pct != null) {
                 next[sym] = pct;
+              } else if (last > 0 && prev2 > 0 && Math.abs(last - prev2) / prev2 < 0.20) {
+                const pct2 = ((last - prev2) / prev2) * 100;
+                next[sym] = pct2;
               }
             });
             return next;
