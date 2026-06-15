@@ -12,8 +12,9 @@ import { ensureToken, ttFetch } from '@/lib/proxy/auth';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { params: string[] } }
+  props: { params: Promise<{ params: string[] }> }
 ) {
+  const { params } = await props;
   try {
     const path = '/' + params.params.join('/');
     const url = new URL(request.nextUrl.search, `http://api.tastyworks.com${path}`);
@@ -40,8 +41,9 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { params: string[] } }
+  props: { params: Promise<{ params: string[] }> }
 ) {
+  const { params } = await props;
   try {
     const path = '/' + params.params.join('/');
     const body = await request.json();
