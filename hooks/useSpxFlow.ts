@@ -56,6 +56,21 @@ export interface SpxFlowState {
   bbr: number;
 }
 
+interface SeedFlowState {
+  callVol?: number;
+  putVol?: number;
+  buyVol?: number;
+  sellVol?: number;
+  bullVol?: number;
+  bearVol?: number;
+  netPremium?: number;
+  callPremium?: number;
+  putPremium?: number;
+  orders?: FlowOrder[];
+  tapeOrders?: FlowOrder[];
+  restOrders?: FlowOrder[];
+}
+
 const INITIAL_STATE: SpxFlowState = {
   connected: false,
   spxPrice: 0,
@@ -604,11 +619,7 @@ export function useSpxFlow(enabled = true) {
   }, [publish]);
 
   /** Seed cumulative counters from a previously-saved snapshot (e.g. IndexedDB on page load). */
-  const seed = useCallback((stats: {
-    callVol?: number; putVol?: number; buyVol?: number; sellVol?: number;
-    bullVol?: number; bearVol?: number; netPremium?: number;
-    callPremium?: number; putPremium?: number;
-  }) => {
+  const seed = useCallback((stats: SeedFlowState) => {
     const s = stateRef.current;
     if (stats.bullVol   != null && stats.bullVol   > s.cumulativeBullVol)   s.cumulativeBullVol   = stats.bullVol;
     if (stats.bearVol   != null && stats.bearVol   > s.cumulativeBearVol)   s.cumulativeBearVol   = stats.bearVol;
@@ -619,6 +630,15 @@ export function useSpxFlow(enabled = true) {
     if (stats.netPremium  != null && Math.abs(stats.netPremium)  > Math.abs(s.netPremiumFlow))  s.netPremiumFlow  = stats.netPremium;
     if (stats.callPremium != null && Math.abs(stats.callPremium) > Math.abs(s.callPremiumFlow)) s.callPremiumFlow = stats.callPremium;
     if (stats.putPremium  != null && Math.abs(stats.putPremium)  > Math.abs(s.putPremiumFlow))  s.putPremiumFlow  = stats.putPremium;
+    if (Array.isArray(stats.orders) && stats.orders.length > s.orders.length) {
+      s.orders = [...stats.orders];
+    }
+    if (Array.isArray(stats.tapeOrders) && stats.tapeOrders.length > s.tapeOrders.length) {
+      s.tapeOrders = [...stats.tapeOrders];
+    }
+    if (Array.isArray(stats.restOrders) && stats.restOrders.length > s.restOrders.length) {
+      s.restOrders = [...stats.restOrders];
+    }
     publish();
   }, [publish]);
 

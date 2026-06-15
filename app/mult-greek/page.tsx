@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -593,8 +594,10 @@ export default function MultGreekPage() {
   // Suppress unused warning
   void renderTick;
 
+  const pageRef = useRef<HTMLDivElement>(null);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", overflow: "hidden" }}>
+    <div ref={pageRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", overflow: "hidden" }}>
 
       {/* Toolbar */}
       <div style={{
@@ -671,8 +674,10 @@ export default function MultGreekPage() {
           {intensity.toFixed(2)}x
         </span>
 
-        {/* Refresh */}
+        {/* Refresh / Snap / Discord */}
         <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>{btnLabel}</button>
+        <BoxSnapBtn targetRef={pageRef} label="📷" />
+        <BoxDiscordBtn targetRef={pageRef} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
 
         {lastUpdate && (
           <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate} ET</span>

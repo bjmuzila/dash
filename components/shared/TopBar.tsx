@@ -98,14 +98,22 @@ function isCloseCapture() {
   return mins >= 960 && mins < 962;
 }
 
+function lastTradingDayStr(): string {
+  const d = etNow();
+  // Walk back to find the last weekday (Mon–Fri)
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return etDateStr(d);
+}
+
 function loadTodayCloses(): TodayCloses | null {
   try {
     const raw = localStorage.getItem("todayCloses");
     if (!raw) return null;
     const parsed: TodayCloses = JSON.parse(raw);
-    // Clear if stale — must match today's ET date
+    // Accept closes from today OR the last trading day (so weekends keep Friday's closes)
     const today = etDateStr(etNow());
-    if (parsed.date !== today) {
+    const lastTrading = lastTradingDayStr();
+    if (parsed.date !== today && parsed.date !== lastTrading) {
       localStorage.removeItem("todayCloses");
       return null;
     }
@@ -113,10 +121,10 @@ function loadTodayCloses(): TodayCloses | null {
   } catch (_) { return null; }
 }
 
-function saveTodayCloses(es: number, spx: number) {
+function saveTodayCloses(es: number, spx: number, date?: string) {
   try {
     localStorage.setItem("todayCloses", JSON.stringify({
-      es, spx, date: etDateStr(etNow()),
+      es, spx, date: date ?? etDateStr(etNow()),
     }));
   } catch (_) {}
 }
@@ -198,6 +206,23 @@ export default function TopBar() {
             if (prev  > 0 && live.current.vixPrev  === 0) live.current.vixPrev  = prev;
           }
         });
+
+        // Seed closesRef from server's savedDailyCloses (persisted to disk at 4pm Friday)
+        // This lets the ES→SPX spread work on weekends even without localStorage todayCloses
+        if (closesRef.current.es === 0 || closesRef.current.spx === 0) {
+          try {
+            const pcR = await fetch("/api/prev-closes");
+            if (pcR.ok) {
+              const pcD = await pcR.json();
+              const sc = pcD?.debug?.savedDailyCloses;
+              if (sc?.ES > 0 && sc?.SPX > 0) {
+                closesRef.current = { es: sc.ES, spx: sc.SPX };
+                // Save to localStorage using the server's date (e.g. 2026-06-13 for Friday)
+                saveTodayCloses(sc.ES, sc.SPX, sc.date || lastTradingDayStr());
+              }
+            }
+          } catch (_) {}
+        }
 
         // Fallback: if SPX price still 0 (e.g. weekend with empty dxLink cache), hit TT REST directly
         if (live.current.spxPrice === 0) {

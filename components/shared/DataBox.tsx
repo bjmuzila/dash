@@ -83,35 +83,39 @@ function IconX({ size = 10 }: { size?: number }) {
 
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
-/** Screenshot the target element and download as PNG */
+/** Screenshot the target element and download as PNG.
+ *  Pass label="📷" to render emoji-only (no text label). */
 export function BoxSnapBtn({ targetRef, label = "SNAP" }: { targetRef: RefObject<HTMLElement | null>; label?: string }) {
   const [s, set] = useState<BtnState>("idle");
+  const emojiOnly = label === "📷";
+  const filename = emojiOnly ? "snap" : label.toLowerCase().replace(/\s+/g, "-");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
       const img = await captureElement(targetRef.current);
       const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadImage(img, `${label.toLowerCase().replace(/\s+/g, "-")}-${ts}.png`);
+      downloadImage(img, `${filename}-${ts}.png`);
       set("ok");
     } catch { set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, label]);
+  }, [s, targetRef, filename]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
+  const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : emojiOnly ? "📷" : label;
   return (
     <button onClick={run} disabled={s === "busy"} title="Screenshot this panel"
-      style={{ ...BTN_BASE, color, borderColor: `${color}40` }}>
-      <IconCamera />
-      {s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : label}
+      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: emojiOnly ? "2px 5px" : "2px 7px", fontSize: emojiOnly ? 13 : 9 }}>
+      {emojiOnly ? btnContent : <><IconCamera />{btnContent}</>}
     </button>
   );
 }
 
-/** Screenshot the target element and send to Discord */
+/** Screenshot the target element and send to Discord.
+ *  Omit label (or pass label="") to render icon-only. */
 export function BoxDiscordBtn({
   targetRef,
-  label = "DISCORD",
+  label = "",
   message,
 }: {
   targetRef: RefObject<HTMLElement | null>;
@@ -120,13 +124,14 @@ export function BoxDiscordBtn({
   message?: string;
 }) {
   const [s, set] = useState<BtnState>("idle");
+  const iconOnly = !label;
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
       const img = await captureElement(targetRef.current);
       const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
-      const content = message ?? `📸 **${label}** — ${now} ET`;
+      const content = message ?? `📸 **${label || "Panel"}** — ${now} ET`;
       await postToDiscord(img, content);
       set("ok");
     } catch { set("err"); }
@@ -134,11 +139,12 @@ export function BoxDiscordBtn({
   }, [s, targetRef, label, message]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#7289da";
+  const statusText = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : null;
   return (
     <button onClick={run} disabled={s === "busy"} title="Send screenshot to Discord"
-      style={{ ...BTN_BASE, color, borderColor: `${color}40` }}>
-      <IconDiscord />
-      {s === "busy" ? "…" : s === "ok" ? "✓ SENT" : s === "err" ? "✕ ERR" : label}
+      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: iconOnly ? "2px 5px" : "2px 7px" }}>
+      {statusText ?? <IconDiscord size={iconOnly ? 14 : 11} />}
+      {!iconOnly && !statusText && <span style={{ fontSize: 9 }}>{label}</span>}
     </button>
   );
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useSpxFlow, type FlowOrder } from "@/hooks/useSpxFlow";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 function fmtVol(v = 0) {
   if (!Number.isFinite(v) || v <= 0) return "0";
@@ -194,9 +195,39 @@ function serializeOrder(order: FlowOrder): BzilaLiveSnapshotOrder {
   };
 }
 
+function hydrateOrder(order: BzilaLiveSnapshotOrder): FlowOrder | null {
+  const type = String(order.type || "").toUpperCase();
+  const side = String(order.side || "").toLowerCase();
+  const bucket = String(order.bucket || "").toLowerCase();
+  const action = String(order.action || "").toUpperCase();
+  if ((type !== "C" && type !== "P") || (side !== "buy" && side !== "sell")) return null;
+  if (bucket !== "bull" && bucket !== "bear" && bucket !== "neutral") return null;
+  if (
+    action !== "BUY CALL" &&
+    action !== "SELL CALL" &&
+    action !== "BUY PUT" &&
+    action !== "SELL PUT" &&
+    action !== "FLOW"
+  ) return null;
+  return {
+    ts: Number(order.ts || Date.now()),
+    symbol: String(order.symbol || ""),
+    strike: Number(order.strike || 0),
+    type,
+    side,
+    action,
+    bucket,
+    price: Number(order.price || 0),
+    size: Number(order.size || 0),
+    premium: Number(order.premium || 0),
+    isOtm: true,
+  };
+}
+
 export default function SnapshotPanel() {
   const { flow, reset, seed } = useSpxFlow(true);
   const accumRef = useRef<Record<string, number>>({});
+  const panelRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const sessionRef = useRef<string>(getSnapshotSessionKey());
   const lastPersistRef = useRef(0);
@@ -209,6 +240,9 @@ export default function SnapshotPanel() {
     getLatestBzilaSnapshotToday().then(snap => {
       if (!snap) return;
       const { stats, orders } = snap;
+      const hydratedOrders = orders
+        .map(hydrateOrder)
+        .filter((order): order is FlowOrder => Boolean(order));
       // Seed flow hook counters
       seed({
         callVol: stats.callVol,
@@ -220,9 +254,10 @@ export default function SnapshotPanel() {
         netPremium: stats.netPremium,
         callPremium: stats.callPremium,
         putPremium: stats.putPremium,
+        orders: hydratedOrders,
       });
       // Seed accumRef from saved orders
-      for (const order of orders) {
+      for (const order of hydratedOrders) {
         if (!order.strike) continue;
         const strike = String(order.strike);
         const type = order.type.toLowerCase();
@@ -231,6 +266,7 @@ export default function SnapshotPanel() {
         const spotPrice = stats.spxPrice || 5500;
         const gexDelta = order.size * spotPrice * (side === "buy" ? 1 : -1) * (type === "c" ? 1 : -1);
         accumRef.current[accumKey] = (accumRef.current[accumKey] ?? 0) + gexDelta;
+        seenRef.current.add(`${order.symbol}|${order.ts}|${order.price}|${order.size}|${order.side}`);
       }
     }).catch(() => {});
   }, [seed]);
@@ -362,7 +398,7 @@ export default function SnapshotPanel() {
   }, [persistedPayload]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
+    <div ref={panelRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
       <div style={{ padding: "5px 10px", background: "var(--overview-header-bg, #070c14)", borderBottom: "1px solid var(--overview-border, #1a2a3a)", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block", background: flow.connected ? "#00e676" : "#ef4444" }} />
         <span style={{ fontSize: 8, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
@@ -370,6 +406,8 @@ export default function SnapshotPanel() {
         <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>
           {btnLabel}
         </button>
+        <BoxSnapBtn targetRef={panelRef} label="📷" />
+        <BoxDiscordBtn targetRef={panelRef} message={`📊 Flow Snapshot — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>

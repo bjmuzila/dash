@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -679,9 +680,10 @@ export default function OptionsChainPage() {
   };
 
   const cols = colsCSS();
+  const pageRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", overflow: "hidden", fontFamily: "Arial, sans-serif" }}>
+    <div ref={pageRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", overflow: "hidden", fontFamily: "Arial, sans-serif" }}>
 
       {/* Toolbar */}
       <div style={{
@@ -784,8 +786,10 @@ export default function OptionsChainPage() {
           <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate}</span>
         </div>
 
-        {/* Refresh */}
+        {/* Refresh / Snap / Discord */}
         <button onClick={trigger} style={{ ...btnStyle }}>{btnLabel}</button>
+        <BoxSnapBtn targetRef={pageRef} label="📷" />
+        <BoxDiscordBtn targetRef={pageRef} message={`📊 Options Chain${activeTicker ? ` — ${activeTicker}` : ""}${activeExpiry ? ` ${activeExpiry}` : ""} — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </div>
 
       {/* Column headers */}

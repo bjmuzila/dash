@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, type EsCandleRecord } from "@/lib/snapdb";
 import IbLogic from "@/components/insights/IbLogic";
 
@@ -879,6 +880,7 @@ const TABS: { id: InsightsTab; label: string }[] = [
 ];
 
 export default function InsightsPage() {
+  const exposureRef = useRef<HTMLDivElement>(null);
   const [tab, setTab]   = useState<InsightsTab>("exposure");
   const [gex, setGex]   = useState<GexData | null>(null);
   const [vix, setVix]   = useState<VixData | null>(null);
@@ -1303,12 +1305,16 @@ export default function InsightsPage() {
 
         {/* ── EXPOSURE TAB ─────────────────────────────────────────────────── */}
         {tab === "exposure" && (
-          <div id="exposure-board" style={{ maxWidth: 1100, width: "100%", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+          <div ref={exposureRef} id="exposure-board" style={{ maxWidth: 1100, width: "100%", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
             {/* Title row */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Exposure Stack</div>
                 <div style={{ fontSize: 10, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>Last refresh: {lastRefresh}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <BoxSnapBtn targetRef={exposureRef} label="📷" />
+                <BoxDiscordBtn targetRef={exposureRef} message={`📊 Exposure Stack${selectedExpiry ? ` — ${selectedExpiry}` : ""} — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
               </div>
             </div>
 

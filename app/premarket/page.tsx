@@ -5,6 +5,7 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 // ── Symbol definitions ───────────────────────────────────────────────────────
 
+// DXLink (TT proxy) — only symbols confirmed to stream: index futures + SPX/VIX
 const US_FUTURES = [
   { sym: "/ES:XCME",  label: "S&P 500",     wsKey: "/ES:XCME" },
   { sym: "/NQ:XCME",  label: "Nasdaq 100",  wsKey: "/NQ:XCME" },
@@ -12,58 +13,52 @@ const US_FUTURES = [
   { sym: "/YM:XCME",  label: "Dow Jones",   wsKey: "/YM:XCME" },
 ];
 
-// Europe & Asia — scraped from Yahoo Finance (delayed), keyed by Yahoo symbol
+const SPX_SYM = "SPX";
+const ALL_WS = [
+  ...US_FUTURES,
+  { sym: SPX_SYM, label: "SPX", wsKey: SPX_SYM },
+  { sym: "VIX",   label: "VIX", wsKey: "VIX" },
+];
+
+// Yahoo Finance (delayed ~15min) — everything else
 const EUROPE = [
-  { sym: "^GDAXI",  label: "German DAX" },
+  { sym: "^GDAXI",    label: "German DAX" },
   { sym: "^STOXX50E", label: "Euro Stoxx 50" },
-  { sym: "^STOXX",  label: "Euro Stoxx 600" },
-  { sym: "^FCHI",   label: "CAC 40" },
-  { sym: "^FTSE",   label: "FTSE 100" },
+  { sym: "^STOXX",    label: "Euro Stoxx 600" },
+  { sym: "^FCHI",     label: "CAC 40" },
+  { sym: "^FTSE",     label: "FTSE 100" },
 ];
 
 const ASIA = [
-  { sym: "^N225",   label: "Nikkei 225" },
+  { sym: "^N225",     label: "Nikkei 225" },
   { sym: "000001.SS", label: "SSE Comp" },
-  { sym: "^HSI",    label: "Hang Seng" },
+  { sym: "^HSI",      label: "Hang Seng" },
 ];
 
-const YAHOO_SYMS = [...EUROPE, ...ASIA];
-
 const COMMODITIES = [
-  { sym: "/CL",  label: "Crude Oil",   wsKey: "/CL" },
-  { sym: "/HG",  label: "Copper",      wsKey: "/HG" },
-  { sym: "/NG",  label: "Natural Gas", wsKey: "/NG" },
+  { sym: "CL=F",  label: "Crude Oil" },
+  { sym: "HG=F",  label: "Copper" },
+  { sym: "NG=F",  label: "Natural Gas" },
 ];
 
 const RISK_ASSETS = [
-  { sym: "/GC",  label: "Gold",        wsKey: "/GC" },
-  { sym: "/VX",  label: "VIX Futures", wsKey: "/VX" },
+  { sym: "GC=F",  label: "Gold" },
+  { sym: "^VIX",  label: "VIX Futures" },
 ];
 
 const FIXED_FX_CRYPTO = [
-  { sym: "/ZN",        label: "10Y",     wsKey: "/ZN" },
-  { sym: "/ZB",        label: "30Y",     wsKey: "/ZB" },
-  { sym: "DX/Y:NYB",  label: "USD",     wsKey: "DX/Y:NYB" },
-  { sym: "6E/",        label: "EURO",    wsKey: "6E/" },
-  { sym: "6J/",        label: "YEN",     wsKey: "6J/" },
-  { sym: "6B/",        label: "POUND",   wsKey: "6B/" },
-  { sym: "/BTC",       label: "BITCOIN", wsKey: "/BTC" },
+  { sym: "ZN=F",   label: "10Y" },
+  { sym: "ZB=F",   label: "30Y" },
+  { sym: "DX-Y.NYB", label: "USD" },
+  { sym: "EURUSD=X", label: "EURO" },
+  { sym: "JPY=X",    label: "YEN" },
+  { sym: "GBPUSD=X", label: "POUND" },
+  { sym: "BTC-USD",  label: "BITCOIN" },
 ];
 
-// SPX is populated from DXLink as a key data point for RV sigma
-const SPX_SYM = "SPX";
-
-// All WS symbols
-const ALL_WS = [
-  ...US_FUTURES,
-  ...COMMODITIES,
-  ...RISK_ASSETS,
-  ...FIXED_FX_CRYPTO,
-  { sym: SPX_SYM, label: "SPX", wsKey: SPX_SYM },
+const YAHOO_SYMS = [
+  ...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO,
 ];
-
-// No equity-style symbols — all are futures/indices streamed directly via WS
-const EQUITY_SYMS: typeof RISK_ASSETS = [];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -314,12 +309,7 @@ export default function PremarketPage() {
   const [ts, setTs] = useState("");
   const [wsLive, setWsLive] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-
-  // Panel refs for snap/discord
-  const refPositioning  = useRef<HTMLDivElement>(null);
-  const refGlobalMarkets = useRef<HTMLDivElement>(null);
-  const refRVSigma      = useRef<HTMLDivElement>(null);
-  const refOtherMarkets = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
 
   // ── DXLink WebSocket ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -445,8 +435,8 @@ export default function PremarketPage() {
     }
     seedRest();
 
-    // Subscribe ALL symbols to proxy (only /ES and /NQ are pre-subscribed)
-    async function subscribeEquities() {
+    // Subscribe RTY/YM/VIX/SPX — ES/NQ are pre-subscribed by proxy
+    async function subscribeExtras() {
       try {
         await fetch(
           (process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com") +
@@ -455,14 +445,14 @@ export default function PremarketPage() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              symbols: ALL_WS.map(s => s.sym),
+              symbols: ["/RTY:XCME", "/YM:XCME", "SPX", "VIX"],
               feedTypes: ["Quote", "Trade", "Summary"],
             }),
           }
         );
       } catch (_) {}
     }
-    subscribeEquities();
+    subscribeExtras();
 
     return () => wsRef.current?.close();
   }, []);
@@ -501,6 +491,7 @@ export default function PremarketPage() {
 
   return (
     <div
+      ref={pageRef}
       style={{
         flex: 1,
         minHeight: 0,
@@ -535,6 +526,8 @@ export default function PremarketPage() {
             {wsLive ? "● LIVE" : "● CONNECTING"}
           </span>
           {ts && <span style={{ fontSize: 10, color: "#1e3050", fontVariantNumeric: "tabular-nums" }}>{ts}</span>}
+          <BoxSnapBtn targetRef={pageRef} label="📷" />
+          <BoxDiscordBtn targetRef={pageRef} message={`📊 Premarket Positioning — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
         </div>
       </div>
 
@@ -544,23 +537,17 @@ export default function PremarketPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
           {/* Premarket Positioning summary */}
-          <div ref={refPositioning} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
             <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Premarket Positioning</span>
-              <BoxSnapBtn    targetRef={refPositioning} label="Premarket Positioning" />
-              <span style={{ width: 4 }} />
-              <BoxDiscordBtn targetRef={refPositioning} label="Premarket Positioning" message={`📸 Premarket Positioning — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
             </div>
             <PositioningPanel esRow={esRow} spxRow={spxRow} />
           </div>
 
           {/* Global Markets – US Futures */}
-          <div ref={refGlobalMarkets} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
             <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Global Markets</span>
-              <BoxSnapBtn    targetRef={refGlobalMarkets} label="Global Markets" />
-              <span style={{ width: 4 }} />
-              <BoxDiscordBtn targetRef={refGlobalMarkets} label="Global Markets" message={`📸 Global Markets — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
             </div>
             <TableShell>
               <SectionHeader title="US Futures" />
@@ -583,12 +570,9 @@ export default function PremarketPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
           {/* RV Sigma */}
-          <div ref={refRVSigma} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
             <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Daily RV Sigma Levels</span>
-              <BoxSnapBtn    targetRef={refRVSigma} label="RV Sigma" />
-              <span style={{ width: 4 }} />
-              <BoxDiscordBtn targetRef={refRVSigma} label="RV Sigma" message={`📸 RV Sigma — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
             </div>
             <RVSigmaPanel spxPrice={spxPrice} spxPrev={spxPrev || null} />
           </div>
