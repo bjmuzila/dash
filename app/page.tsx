@@ -377,11 +377,16 @@ export default function OverviewPage() {
     return () => { cancelled = true; };
   }, [selectedExpiry]);
 
-  // Poll window.__gexAppState.esPrice (written by TopBar dxLink WS) every second
+  // Poll window.__gexAppState prices (written by TopBar dxLink WS) every second
   useEffect(() => {
     const t = setInterval(() => {
-      const p = (window as unknown as { __gexAppState?: { esPrice?: number } }).__gexAppState?.esPrice;
-      if (p && p > 0) setEsLivePrice(p);
+      const state = (window as unknown as { __gexAppState?: { esPrice?: number; spotPrice?: number } }).__gexAppState;
+      if (state?.esPrice && state.esPrice > 0) setEsLivePrice(state.esPrice);
+      // Sync spot price: if page WS has no SPX yet, use TopBar's price
+      if (state?.spotPrice && state.spotPrice > 100 && spotRef.current === 0) {
+        spotRef.current = state.spotPrice;
+        setSpotPrice(state.spotPrice);
+      }
     }, 1000);
     return () => clearInterval(t);
   }, []);

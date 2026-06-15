@@ -386,6 +386,7 @@ export default function MultGreekPage() {
   // WS ref
   const wsRef = useRef<WebSocket | null>(null);
   const loadTokenRef = useRef(0);
+  const activeExpiryRef = useRef<string | null>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [renderTick, setRenderTick] = useState(0);
 
@@ -429,15 +430,15 @@ export default function MultGreekPage() {
   }, []);
 
   // Fetch chain for all tickers
-  const loadAll = useCallback(async (expDate: string) => {
+  const loadAll = useCallback(async (expDate: string, bustCache = false) => {
     loadTokenRef.current += 1;
     const token = loadTokenRef.current;
     setStatus({ state: "loading", msg: "LOADING..." });
-    setActiveExpiry(expDate);
 
+    const bust = bustCache ? `&noCache=1` : "";
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
-        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all`)
+        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`)
           .then(r => r.json())
           .then(json => ({ ticker, json }))
       )
@@ -445,28 +446,39 @@ export default function MultGreekPage() {
 
     if (token !== loadTokenRef.current) return;
 
-    const newStrikes = { ...strikes };
-    const newSpots   = { ...spots };
+    const newStrikes: Partial<Record<Ticker, StrikeRow[]>> = {};
+    const newSpots: Partial<Record<Ticker, number>> = {};
 
     for (const result of results) {
       if (result.status !== "fulfilled") continue;
       const { ticker, json } = result.value as { ticker: Ticker; json: Record<string, unknown> };
+      if (json.error) continue; // proxy error — keep existing data for this ticker
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
+      if (!items.length) continue;
       const target = (items as { "expiration-date"?: string }[]).filter(i =>
         String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
       );
       const parsed = buildStrikes(target.length ? target : items as unknown[], liveDataRef.current);
-      newStrikes[ticker] = parsed;
+      if (parsed.length) newStrikes[ticker] = parsed;
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
 
-    setStrikes(newStrikes);
-    setSpots(newSpots);
+    activeExpiryRef.current = expDate;
+    setActiveExpiry(expDate);
+    setStrikes(prev => ({ ...prev, ...newStrikes }));
+    setSpots(prev => {
+      const merged = { ...prev };
+      (Object.keys(newSpots) as Ticker[]).forEach(tk => {
+        const v = newSpots[tk as Ticker];
+        if (v && v > 0) merged[tk as Ticker] = v;
+      });
+      return merged;
+    });
     setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "LIVE" : "CLOSED" });
     setRenderTick(t => t + 1);
     setLastUpdate(etTimeNow());
-  }, [strikes, spots]);
+  }, []);
 
   // Connect dxlink WS
   useEffect(() => {
@@ -549,9 +561,10 @@ export default function MultGreekPage() {
   }, [selectedExpiry]);
 
   const doRefresh = useCallback(async () => {
-    if (!activeExpiry) throw new Error("No expiry selected");
-    await loadAll(activeExpiry);
-  }, [activeExpiry, loadAll]);
+    const exp = activeExpiryRef.current;
+    if (!exp) throw new Error("No expiry selected");
+    await loadAll(exp, true); // bust proxy cache on manual refresh
+  }, [loadAll]);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 

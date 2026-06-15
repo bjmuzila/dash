@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-14 (session 11) — Options Chain Fixes + MD File Consolidation
+
+### `app/options-chain/page.tsx`
+- **Range % filter now works**: added `hasData()` check inside the range filter — empty dense-fill rows (no callTT/putTT/live data) are excluded, so ±3%/5%/10%/etc. now properly narrows the visible strikes
+- **Net greek columns show `--` instead of `+$0.00M`** for rows with no data: added `hasAnyData` guard; empty rows render `--` with transparent background instead of zeroed-out colored cells
+- Both fixes apply to the `filtered` useMemo and the row render in `ChainTable`
+
+### MD File Consolidation (`Vanilla/md files/`)
+- Moved `Vanilla/QUOTES_PANEL_README.md` → `Vanilla/md files/QUOTES_PANEL_README.md`
+- Moved `Vanilla/assets/ES_FUTURES_CANDLESTICK_MAP_HOWTO.md` → `Vanilla/md files/ES_FUTURES_CANDLESTICK_MAP_HOWTO.md`
+- Moved `COMPLETION_REPORT.md` (repo root) → `Vanilla/md files/COMPLETION_REPORT.md`
+
 ## 2026-06-14 (session 10) — ES Stats Ladder: Remove Google Sheets, Wire SQLite
 
 ### `EsStatsLadder.tsx` (`components/dashboard/EsStatsLadder.tsx`)

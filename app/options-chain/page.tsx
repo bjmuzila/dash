@@ -248,19 +248,20 @@ function ChainTable({
 
   // Filter strikes by range — include renderTick so re-runs when WS data arrives
   const filtered = useMemo(() => {
+    const hasData = (r: StrikeRow) => {
+      const cd = liveData[r.callSym] || r.callTT as LiveEntry || {};
+      const pd = liveData[r.putSym]  || r.putTT  as LiveEntry || {};
+      return (cd.bid ?? 0) > 0 || (cd.ask ?? 0) > 0 || (cd.last ?? 0) > 0 || (cd.oi ?? 0) > 0 || (cd.vol ?? 0) > 0
+          || (pd.bid ?? 0) > 0 || (pd.ask ?? 0) > 0 || (pd.last ?? 0) > 0 || (pd.oi ?? 0) > 0 || (pd.vol ?? 0) > 0;
+    };
     let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
     if (rangePercent === "all") {
-      const withData = rows.filter(r => {
-        const cd = liveData[r.callSym] || r.callTT as LiveEntry || {};
-        const pd = liveData[r.putSym]  || r.putTT  as LiveEntry || {};
-        return (cd.bid ?? 0) > 0 || (cd.ask ?? 0) > 0 || (cd.last ?? 0) > 0 || (cd.oi ?? 0) > 0 || (cd.vol ?? 0) > 0
-            || (pd.bid ?? 0) > 0 || (pd.ask ?? 0) > 0 || (pd.last ?? 0) > 0 || (pd.oi ?? 0) > 0 || (pd.vol ?? 0) > 0;
-      });
+      const withData = rows.filter(hasData);
       if (withData.length) rows = withData;
     } else if (spot > 0) {
       const lo = spot * (1 - rangePercent / 100);
       const hi = spot * (1 + rangePercent / 100);
-      const r2 = rows.filter(r => r.strike >= lo && r.strike <= hi);
+      const r2 = rows.filter(r => r.strike >= lo && r.strike <= hi && hasData(r));
       if (r2.length) rows = r2;
     }
     return rows;
@@ -322,6 +323,8 @@ function ChainTable({
         const netChex = (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * s * 100;
         const netVex  = ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * s * 100;
 
+        const hasAnyData = (cd.bid ?? 0) > 0 || (cd.ask ?? 0) > 0 || (cd.last ?? 0) > 0 || (cd.oi ?? 0) > 0 || (cd.vol ?? 0) > 0
+          || (pd.bid ?? 0) > 0 || (pd.ask ?? 0) > 0 || (pd.last ?? 0) > 0 || (pd.oi ?? 0) > 0 || (pd.vol ?? 0) > 0;
         const netVals = { gex: netGex, dex: netDex, chex: netChex, vex: netVex };
 
         const mid = (cd.bid != null && cd.ask != null && isFinite(Number(cd.bid)) && isFinite(Number(cd.ask)))
@@ -384,16 +387,19 @@ function ChainTable({
             ))}
 
             {/* Net greek cells */}
-            {NET_COLS.map(col => (
-              <div key={col} style={{
-                padding: "5px 8px", fontSize: 12, fontFamily: "monospace",
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                textAlign: "center", color: "#ffffff", fontWeight: 700,
-                background: metricBg(netVals[col as keyof typeof netVals], maxAbs[col as keyof typeof maxAbs], intensity),
-              }}>
-                {fmtMoney(netVals[col as keyof typeof netVals])}
-              </div>
-            ))}
+            {NET_COLS.map(col => {
+              const val = netVals[col as keyof typeof netVals];
+              return (
+                <div key={col} style={{
+                  padding: "5px 8px", fontSize: 12, fontFamily: "monospace",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  textAlign: "center", color: "#ffffff", fontWeight: 700,
+                  background: hasAnyData ? metricBg(val, maxAbs[col as keyof typeof maxAbs], intensity) : "transparent",
+                }}>
+                  {hasAnyData ? fmtMoney(val) : "--"}
+                </div>
+              );
+            })}
 
             {/* Strike */}
             <div style={{

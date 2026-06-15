@@ -5,45 +5,45 @@ import { useEffect, useRef, useState } from "react";
 // ── Symbol definitions ───────────────────────────────────────────────────────
 
 const US_FUTURES = [
-  { sym: "/ES:XCME",  label: "S&P 500",    wsKey: "/ES:XCME" },
+  { sym: "/ES:XCME",  label: "S&P 500",     wsKey: "/ES:XCME" },
   { sym: "/NQ:XCME",  label: "Nasdaq 100",  wsKey: "/NQ:XCME" },
   { sym: "/RTY:XCME", label: "Russell 2000", wsKey: "/RTY:XCME" },
-  { sym: "/YM:XCBT",  label: "Dow Jones",   wsKey: "/YM:XCBT" },
+  { sym: "/YM:XCME",  label: "Dow Jones",   wsKey: "/YM:XCME" },
 ];
 
 const EUROPE = [
-  { sym: "DAX:XETR",    label: "German DAX",    wsKey: "DAX:XETR" },
-  { sym: "SX5E:XEUR",   label: "Euro Stoxx 50",  wsKey: "SX5E:XEUR" },
-  { sym: "SXXP:XEUR",   label: "Euro Stoxx 600", wsKey: "SXXP:XEUR" },
-  { sym: "PX1:XPAR",    label: "CAC 40",         wsKey: "PX1:XPAR" },
-  { sym: "UKX:XLON",    label: "FTSE 100",       wsKey: "UKX:XLON" },
+  { sym: "/FDAX:XEUR", label: "German DAX",    wsKey: "/FDAX:XEUR" },
+  { sym: "/FESX:XEUR", label: "Euro Stoxx 50",  wsKey: "/FESX:XEUR" },
+  { sym: "/FSTX:XEUR", label: "Euro Stoxx 600", wsKey: "/FSTX:XEUR" },
+  { sym: "/FCE:XMON",  label: "CAC 40",         wsKey: "/FCE:XMON" },
+  { sym: "/UKX:IFLL",  label: "FTSE 100",       wsKey: "/UKX:IFLL" },
 ];
 
 const ASIA = [
-  { sym: "NI225:XOSE",  label: "Nikkei 225", wsKey: "NI225:XOSE" },
-  { sym: "SHCOMP:XSHG", label: "SSE Comp",   wsKey: "SHCOMP:XSHG" },
-  { sym: "HSI:XHKG",    label: "Hang Seng",  wsKey: "HSI:XHKG" },
+  { sym: "/NKD:XCME",  label: "Nikkei 225", wsKey: "/NKD:XCME" },
+  { sym: "000001.SS",  label: "SSE Comp",   wsKey: "000001.SS" },
+  { sym: "/HSI:HKEX",  label: "Hang Seng",  wsKey: "/HSI:HKEX" },
 ];
 
 const COMMODITIES = [
-  { sym: "/CL:NYMEX", label: "Crude Oil",  wsKey: "/CL:NYMEX" },
-  { sym: "/HG:COMEX", label: "Copper",     wsKey: "/HG:COMEX" },
-  { sym: "/NG:NYMEX", label: "Natural Gas", wsKey: "/NG:NYMEX" },
+  { sym: "/CL:XNYM", label: "Crude Oil",   wsKey: "/CL:XNYM" },
+  { sym: "/HG:XCEC", label: "Copper",      wsKey: "/HG:XCEC" },
+  { sym: "/NG:XNYM", label: "Natural Gas", wsKey: "/NG:XNYM" },
 ];
 
 const RISK_ASSETS = [
-  { sym: "GLD",       label: "Gold",        wsKey: "GLD" },
-  { sym: "VIX",       label: "VIX Futures", wsKey: "VIX" },
+  { sym: "/GC:XCEC", label: "Gold",        wsKey: "/GC:XCEC" },
+  { sym: "/VX:XCBF", label: "VIX Futures", wsKey: "/VX:XCBF" },
 ];
 
 const FIXED_FX_CRYPTO = [
-  { sym: "/ZN:XCBT",  label: "10Y",     wsKey: "/ZN:XCBT" },
-  { sym: "/ZB:XCBT",  label: "30Y",     wsKey: "/ZB:XCBT" },
-  { sym: "DX/Y:NYB",  label: "USD",     wsKey: "DX/Y:NYB" },
-  { sym: "EURUSD:FX", label: "EURO",    wsKey: "EURUSD:FX" },
-  { sym: "USDJPY:FX", label: "YEN",     wsKey: "USDJPY:FX" },
-  { sym: "GBPUSD:FX", label: "POUND",   wsKey: "GBPUSD:FX" },
-  { sym: "BTC/USD:CXERX", label: "BITCOIN", wsKey: "BTC/USD:CXERX" },
+  { sym: "/ZN:XCBT",   label: "10Y",     wsKey: "/ZN:XCBT" },
+  { sym: "/ZB:XCBT",   label: "30Y",     wsKey: "/ZB:XCBT" },
+  { sym: "DX/Y:NYB",   label: "USD",     wsKey: "DX/Y:NYB" },
+  { sym: "EURUSD:FX",  label: "EURO",    wsKey: "EURUSD:FX" },
+  { sym: "USDJPY:FX",  label: "YEN",     wsKey: "USDJPY:FX" },
+  { sym: "GBPUSD:FX",  label: "POUND",   wsKey: "GBPUSD:FX" },
+  { sym: "/BTC:XCME",  label: "BITCOIN", wsKey: "/BTC:XCME" },
 ];
 
 // SPX is populated from DXLink as a key data point for RV sigma
@@ -58,8 +58,8 @@ const ALL_WS = [
   { sym: SPX_SYM, label: "SPX", wsKey: SPX_SYM },
 ];
 
-// Equity-style symbols that need REST subscription
-const EQUITY_SYMS = RISK_ASSETS.filter(s => !s.sym.startsWith("/"));
+// No equity-style symbols — all are futures/indices streamed directly via WS
+const EQUITY_SYMS: typeof RISK_ASSETS = [];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

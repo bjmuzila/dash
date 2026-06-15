@@ -3572,6 +3572,8 @@ const server = http.createServer(async (req, res) => {
     const noSubscribe = u.searchParams.get('noSubscribe') === '1';
     // awaitDX=1: subscribe chain to dxLink and wait for live Greeks before responding
     const awaitDX = u.searchParams.get('awaitDX') === '1';
+    // noCache=1: bypass in-memory and SQLite chain cache (used by manual refresh)
+    const noCache = u.searchParams.get('noCache') === '1';
 
     // REMOVED: SPY block (2026-06-11) - allow SPY/QQQ chains to fetch and subscribe for OI real-time updates
     // SPY and QQQ need dxLink Summary events for openInterest to populate
@@ -3582,7 +3584,7 @@ const server = http.createServer(async (req, res) => {
 
     // CHECK CACHE (2026-06-12): Return cached chain data if fresh (<1hr for explicit exp, <10min for defaults)
     // This eliminates redundant TT API calls and massive subscription queues
-    const cachedItems = getChainsFromCache(sym, exp);
+    const cachedItems = noCache ? null : getChainsFromCache(sym, exp);
     if (cachedItems && !awaitDX) {
       // Still subscribe to symbols if not already subscribed (cache doesn't prevent live updates)
       const streamerSyms = noSubscribe ? [] : cachedItems
@@ -4739,13 +4741,23 @@ wss.on('connection', ws => {
   setTimeout(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
     ['SPX','VIX','/ES:XCME','/NQ:XCME','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'].forEach(sym => {
-      if (dxQuoteCache[sym]) {
-        const q = dxQuoteCache[sym];
-        ws.send(JSON.stringify({ type:'FEED_DATA', data:['Quote',[sym, q.bidPrice, q.askPrice, q.bidSize, q.askSize]] }));
+      // Also check $SPX alias for index quotes
+      const dxAlias = sym === 'SPX' ? '$SPX' : null;
+      const q = dxQuoteCache[sym] || (dxAlias ? dxQuoteCache[dxAlias] : null);
+      const t = dxTradeCache[sym] || (dxAlias ? dxTradeCache[dxAlias] : null);
+      if (q) {
+        // Send as object format so TopBar WS parser can read eventSymbol/eventType
+        ws.send(JSON.stringify({ type:'FEED_DATA', data:[{
+          eventType: 'Quote', eventSymbol: sym,
+          bidPrice: q.bidPrice || 0, askPrice: q.askPrice || 0,
+          bidSize: q.bidSize || 0, askSize: q.askSize || 0
+        }] }));
       }
-      if (dxTradeCache[sym]) {
-        const t = dxTradeCache[sym];
-        ws.send(JSON.stringify({ type:'FEED_DATA', data:['Trade',[sym, t.price, t.dayVolume, t.size]] }));
+      if (t) {
+        ws.send(JSON.stringify({ type:'FEED_DATA', data:[{
+          eventType: 'Trade', eventSymbol: sym,
+          price: t.price || 0, dayVolume: t.dayVolume || 0, size: t.size || 0
+        }] }));
       }
       // Replay Summary so browser has prevDayClosePrice immediately on connect
       // Send as object array (same format as live broadcast) so browser parses correctly
