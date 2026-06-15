@@ -183,21 +183,11 @@ function getEtParts(date = new Date()) {
   };
 }
 
-function todayET(): string {
-  const et = getEtParts();
-  return `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
-}
-
 function shiftIsoDate(isoDate: string, deltaDays: number): string {
   const [year, month, day] = isoDate.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
   date.setUTCDate(date.getUTCDate() + deltaDays);
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-}
-
-function startOfTodayETMs(): number {
-  const et = getEtParts();
-  return new Date(et.year, et.month - 1, et.day, 0, 0, 0, 0).getTime();
 }
 
 function getSessionCycle(date = new Date()): SessionCycle {
@@ -383,7 +373,17 @@ async function loadStrikeHistory(date: string, session: BzilaSession): Promise<B
     const json = await res.json();
     return Array.isArray(json.rows)
       ? (json.rows as Array<Record<string, unknown>>).map((row) => ({
-          ...(row as BzilaStrikeHistoryRow),
+          timestamp: Number(row.timestamp ?? 0),
+          date: String(row.date ?? date),
+          expiry: String(row.expiry ?? ""),
+          spot: Number(row.spot ?? 0),
+          strike: Number(row.strike ?? 0),
+          bucket: row.bucket === "below" ? "below" : "above",
+          rank_index: Number(row.rank_index ?? 0),
+          call_gex: Number(row.call_gex ?? 0),
+          put_gex: Number(row.put_gex ?? 0),
+          net_gex: Number(row.net_gex ?? 0),
+          net_gex_change: Number(row.net_gex_change ?? 0),
           session: (row.session === "ext" ? "ext" : "rth") as BzilaSession,
         }))
       : [];
@@ -414,6 +414,14 @@ function StatTile({ label, value, color, sub }: { label: string; value: string; 
       {sub ? <div style={{ marginTop: 4, color: "#64748b", fontSize: 10 }}>{sub}</div> : null}
     </div>
   );
+}
+
+function sessionTitle(session: BzilaSession): string {
+  return session === "rth" ? "RTH" : "EXT";
+}
+
+function sessionWindowLabel(session: BzilaSession): string {
+  return session === "rth" ? "09:30 ET - 17:00 ET" : "17:00 ET - 09:30 ET";
 }
 
 function StrikeBucketChart({
@@ -687,7 +695,13 @@ export default function BzilaPage() {
           setLastLiveSpot(latestStrikeRow.spot);
           setExpiry(latestStrikeRow.expiry);
           setLastLiveTs(latestStrikeRow.timestamp);
+        } else if (aggregateRows.length) {
+          setLastLiveSpot(Number(aggregateRows[aggregateRows.length - 1]?.spot ?? 0));
+          setExpiry("");
+          setLastLiveTs(Number(aggregateRows[aggregateRows.length - 1]?.ts ?? 0));
         } else {
+          setLastLiveSpot(0);
+          setExpiry("");
           setLastLiveTs(0);
         }
       })
@@ -745,9 +759,13 @@ export default function BzilaPage() {
   );
 
   const currentSpot = lastLiveSpot || strikePoints[strikePoints.length - 1]?.spot || flow.spxPrice || flow.esPrice || 0;
+  const latestAggregate = aggregateHistory[aggregateHistory.length - 1];
   const totalCallGEX = allRows.reduce((sum, row) => sum + row.callGEX, 0);
   const totalPutGEX = allRows.reduce((sum, row) => sum + row.putGEX, 0);
   const totalNetGEX = totalCallGEX - totalPutGEX;
+  const displayCallGex = viewingActiveSession && allRows.length ? totalCallGEX : Number(latestAggregate?.call ?? 0);
+  const displayPutGex = viewingActiveSession && allRows.length ? totalPutGEX : Number(latestAggregate?.put ?? 0);
+  const displayNetGex = viewingActiveSession && allRows.length ? totalNetGEX : Number(latestAggregate?.net ?? 0);
   const status = flow.connected
     ? { text: "LIVE", bg: "#065f46", fg: "#6ee7b7" }
     : { text: "CONNECTING", bg: "#7f1d1d", fg: "#fca5a5" };
@@ -1394,6 +1412,7 @@ export default function BzilaPage() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", color: "#94a3b8", fontSize: 11 }}>
+          <span>Session {sessionTitle(selectedSession)} {selectedSessionDate}</span>
           <span>Expiry {expiry || getTargetExpiryIso()}</span>
           <span>Spot {fmtPrice(currentSpot)}</span>
           <span>{displayTrackedRows.length} strikes tracked</span>
@@ -1441,6 +1460,30 @@ export default function BzilaPage() {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", background: "#08111b", borderRadius: 5, padding: 3, border: `1px solid ${CARD_BORDER}` }}>
+                  {(["rth", "ext"] as BzilaSession[]).map((session) => {
+                    const active = selectedSession === session;
+                    return (
+                      <button
+                        key={session}
+                        onClick={() => setSelectedSession(session)}
+                        style={{
+                          padding: "7px 10px",
+                          border: "none",
+                          borderRadius: 4,
+                          background: active ? "#102031" : "transparent",
+                          color: active ? "#e2e8f0" : "#64748b",
+                          cursor: "pointer",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                        title={`${sessionTitle(session)} | ${sessionWindowLabel(session)} | resets fresh at ${session === "rth" ? "09:30 ET" : "17:00 ET"}`}
+                      >
+                        {sessionTitle(session)}
+                      </button>
+                    );
+                  })}
+                </div>
                 <div style={{ display: "flex", background: "#08111b", borderRadius: 5, padding: 3, border: `1px solid ${CARD_BORDER}` }}>
                   <button
                     onClick={() => setMode("rolling")}
@@ -1503,10 +1546,15 @@ export default function BzilaPage() {
                 borderBottom: `1px solid ${PANEL_BORDER}`,
               }}
             >
-              <StatTile label="Call GEX" value={allRows.length ? fmtSignedMoney(totalCallGEX) : "-"} color="#22c55e" />
-              <StatTile label="Put GEX" value={allRows.length ? fmtSignedMoney(totalPutGEX) : "-"} color="#f97316" />
-              <StatTile label="Net GEX" value={allRows.length ? fmtSignedMoney(totalNetGEX) : "-"} color={totalNetGEX >= 0 ? "#22c55e" : "#f97316"} />
-              <StatTile label="Net Premium Flow" value={fmtSignedMoney(flow.netPremiumFlow)} color={flow.netPremiumFlow >= 0 ? "#22c55e" : "#f97316"} />
+              <StatTile label="Call GEX" value={aggregateHistory.length || allRows.length ? fmtSignedMoney(displayCallGex) : "-"} color="#22c55e" />
+              <StatTile label="Put GEX" value={aggregateHistory.length || allRows.length ? fmtSignedMoney(displayPutGex) : "-"} color="#f97316" />
+              <StatTile label="Net GEX" value={aggregateHistory.length || allRows.length ? fmtSignedMoney(displayNetGex) : "-"} color={displayNetGex >= 0 ? "#22c55e" : "#f97316"} />
+              <StatTile
+                label="Session Window"
+                value={sessionTitle(selectedSession)}
+                color={selectedSession === "rth" ? "#38bdf8" : "#f97316"}
+                sub={sessionWindowLabel(selectedSession)}
+              />
             </div>
 
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, minHeight: 0, flex: 1 }}>

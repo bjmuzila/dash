@@ -10,6 +10,7 @@ export async function POST(req: NextRequest) {
       await insertBzilaGexPoint({
         timestamp: Number(p.timestamp),
         date,
+        session: p.session === "ext" ? "ext" : "rth",
         call: Number(p.call ?? 0),
         put:  Number(p.put  ?? 0),
         net:  Number(p.net  ?? 0),
@@ -26,7 +27,8 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const date = searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
-    const rows = await getBzilaGexHistory(date);
+    const session = searchParams.get("session") ?? undefined;
+    const rows = await getBzilaGexHistory(date, session === "ext" ? "ext" : session === "rth" ? "rth" : undefined);
     return NextResponse.json({ rows });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

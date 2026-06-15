@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
       rows.map((row) => ({
         timestamp: Number(row.timestamp),
         date: String(row.date ?? todayET()),
+        session: row.session === "ext" ? "ext" : "rth",
         expiry: String(row.expiry ?? ""),
         spot: Number(row.spot ?? 0),
         strike: Number(row.strike ?? 0),
@@ -51,8 +52,13 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const date = searchParams.get("date") ?? todayET();
+    const session = searchParams.get("session") ?? undefined;
     const limit = Math.min(Number(searchParams.get("limit") ?? 5000), 10000);
-    const rows = await getBzilaStrikeGexHistory(date, limit);
+    const rows = await getBzilaStrikeGexHistory(
+      date,
+      session === "ext" ? "ext" : session === "rth" ? "rth" : undefined,
+      limit
+    );
     return NextResponse.json({ rows });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
