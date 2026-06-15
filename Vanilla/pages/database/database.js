@@ -1102,3 +1102,12 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 } // End of guard: if (typeof window.DB === 'undefined')
+
+// Prevent CommonJS bundlers from trying to export this as a module
+if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
+  try {
+    module.exports = undefined;
+  } catch (e) {
+    // Silently ignore if module is read-only or missing
+  }
+}

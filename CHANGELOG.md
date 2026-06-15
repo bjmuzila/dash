@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-15 (session 16) — Dashboard Consolidation + Performance Optimization
+
+### Performance & Architecture
+- **Unified server deployment**: Consolidated proxy server into single Node.js instance via `server-with-proxy.js` (spawns proxy as child process on port 3001, Next.js on 3002)
+- **Deferred API calls**: Removed blocking API calls from page initialization across `estimated-moves.js`, `options-chain.js`, `mult-greek.js`, `quotes.html` — all data now loads on user interaction
+- **Load time impact**: Pages now render immediately without waiting for batch API calls
+
+### API Route Fixes
+- **`app/api/[...proxy]/route.ts`**: Fixed TypeScript `response` type errors by explicitly typing as `Response` and renaming to `proxyResponse` to avoid type union issues in Promise.race
+- **GET/POST/DELETE handlers**: Consistent variable naming and proper error handling with fallback to remote proxy if local unavailable
+- **Timeout handling**: Added 3s timeout for local proxy calls before attempting remote fallback
+
+### Server & Configuration
+- **`server-with-proxy.js`**: Custom Node.js server that spawns vanilla proxy as child process; graceful error handling and logging; skips proxy startup on Render production (API routes handle routing instead)
+- **`lib/proxy/auth.ts`**: Token refresh logic with file persistence; TastyTrade API calls use in-process tokens
+- **`lib/proxy/config.ts`**: Configuration management for token state and refresh token environment variables
+
+### Package Updates
+- Updated `package.json` scripts: `start` now runs `node server-with-proxy.js` for unified deployment
+- Version bumped to `2026.6.15-v49`
+
+### User-Facing Changes
+- ✅ Dashboard loads instantly without initial API delays
+- ✅ Faster page transitions and interaction response
+- ✅ Maintained real-time WebSocket data streams (GEX, quotes, snapshots)
+
+---
+
 ## 2026-06-15 (session 15) — GEX Chart Zero Line + Countdown Timer + Page Cleanup
 
 ### `components/dashboard/GexChart.tsx`
