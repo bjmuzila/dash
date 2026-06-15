@@ -76,11 +76,9 @@ function IconX({ size = 10 }: { size?: number }) {
 
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
-/** Screenshot the target element and copy PNG to clipboard.
- *  Pass label="📷" to render emoji-only (no text label). */
-export function BoxSnapBtn({ targetRef, label = "SNAP" }: { targetRef: RefObject<HTMLElement | null>; label?: string }) {
+/** Screenshot the target element and copy PNG to clipboard. */
+export function BoxSnapBtn({ targetRef }: { targetRef: RefObject<HTMLElement | null>; label?: string }) {
   const [s, set] = useState<BtnState>("idle");
-  const emojiOnly = label === "📷";
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
@@ -97,20 +95,20 @@ export function BoxSnapBtn({ targetRef, label = "SNAP" }: { targetRef: RefObject
   }, [s, targetRef]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
-  const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : emojiOnly ? "📷" : label;
+  const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
   return (
     <button onClick={run} disabled={s === "busy"} title="Copy screenshot to clipboard"
-      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: emojiOnly ? "2px 5px" : "2px 7px", fontSize: emojiOnly ? 13 : 9 }}>
-      {emojiOnly ? btnContent : <><IconCamera />{btnContent}</>}
+      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 13 }}>
+      {btnContent}
     </button>
   );
 }
 
 /** Screenshot the target element and send to Discord.
- *  Omit label (or pass label="") to render icon-only. */
+ *  Renders emoji-only. */
 export function BoxDiscordBtn({
   targetRef,
-  label = "",
+  label,
   message,
 }: {
   targetRef: RefObject<HTMLElement | null>;
@@ -137,9 +135,8 @@ export function BoxDiscordBtn({
   const statusText = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : null;
   return (
     <button onClick={run} disabled={s === "busy"} title="Send screenshot to Discord"
-      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: iconOnly ? "2px 5px" : "2px 7px" }}>
-      {statusText ?? <IconDiscord size={iconOnly ? 14 : 11} />}
-      {!iconOnly && !statusText && <span style={{ fontSize: 9 }}>{label}</span>}
+      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 13 }}>
+      {statusText ?? "💬"}
     </button>
   );
 }
@@ -190,7 +187,6 @@ export default function DataBox({
     finally { setTimeout(() => setRefreshState("idle"), 1800); }
   }, [onRefresh, refreshState]);
 
-  const derivedLabel = snapLabel ?? title ?? "panel";
   const refreshColor = refreshState === "ok" ? "#00e676" : refreshState === "err" ? "#ef4444" : "#00e5ff";
 
   return (
@@ -217,8 +213,8 @@ export default function DataBox({
               {refreshState === "busy" ? "…" : refreshState === "ok" ? "✓" : refreshState === "err" ? "✕" : "↻"}
             </button>
           )}
-          {showSnap    && <BoxSnapBtn    targetRef={containerRef} label={derivedLabel} />}
-          {showDiscord && <BoxDiscordBtn targetRef={containerRef} label={derivedLabel} />}
+          {showSnap    && <BoxSnapBtn    targetRef={containerRef} />}
+          {showDiscord && <BoxDiscordBtn targetRef={containerRef} />}
           {showClose && onClose && (
             <button onClick={onClose} title="Close" style={{ ...BTN_BASE, padding: "2px 5px" }}>
               <IconX />

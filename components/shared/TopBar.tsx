@@ -334,7 +334,7 @@ export default function TopBar() {
     const L = live.current;
     const C = closesRef.current;
 
-    // ── ES ──
+    // -- ES --
     const esPrice = L.esPrice;
     const esPrev  = L.esPrev || 0;
     setEs({ price: esPrice, changeBaseline: esPrev });
@@ -344,9 +344,9 @@ export default function TopBar() {
       window.__gexAppState.esPrice = esPrice;
     }
 
-    // ── SPX ──
-    // RTH: use live $SPX quote directly, baseline = prev-close
-    // After hours: implied from ES using spread, baseline = today's SPX close
+    // -- SPX --
+    // Prefer ES-derived conversion whenever we have ES and SPX close data.
+    // Fall back to live $SPX only when the conversion inputs are missing.
     let spxDisplay  = 0;
     let spxBaseline = 0;
 
@@ -361,31 +361,23 @@ export default function TopBar() {
       if (L.spxPrice > 0) window.__gexAppState.spotPrice = L.spxPrice;
     }
 
-    if (isRTH()) {
+    const esClose  = C.es  || L.esPrev  || 0;
+    const spxClose = C.spx || L.spxPrev || 0;
+    if (esPrice > 0 && esClose > 0 && spxClose > 0) {
+      const spread = esClose - spxClose;
+      spxDisplay  = esPrice - spread;
+      spxBaseline = spxClose;
+    } else if (L.spxPrice > 0) {
       spxDisplay  = L.spxPrice;
       spxBaseline = L.spxPrev || 0;
-    } else {
-      // After hours — convert ES to implied SPX using today's 4pm closes (closesRef),
-      // or fall back to prev-close values from dxLink Summary (esPrev/spxPrev) if unavailable.
-      const esClose  = C.es  || L.esPrev  || 0;
-      const spxClose = C.spx || L.spxPrev || 0;
-      if (esPrice > 0 && esClose > 0 && spxClose > 0) {
-        const spread = esClose - spxClose;
-        spxDisplay  = esPrice - spread;
-        spxBaseline = spxClose;
-      } else if (L.spxPrice > 0) {
-        // No close data at all — show last known SPX price directly
-        spxDisplay  = L.spxPrice;
-        spxBaseline = L.spxPrev || 0;
-      }
     }
     setSpx({ price: spxDisplay, changeBaseline: spxBaseline });
 
-    // ── VIX ──
+    // -- VIX --
     setVix({ price: L.vixPrice, changeBaseline: L.vixPrev });
   }
 
-  // ── Row 2: GEX live via SSE ──
+  // -- Row 2: GEX live via SSE -- ──
   useEffect(() => {
     const es = new EventSource("/api/insights/gex/stream");
 
@@ -565,3 +557,4 @@ export default function TopBar() {
     </div>
   );
 }
+

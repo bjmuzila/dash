@@ -49,6 +49,7 @@ export interface SpxFlowState {
   orders: FlowOrder[];
   tapeOrders: FlowOrder[];
   restOrders: FlowOrder[];
+  restUnderlyingPrices: Record<string, number>;
   // Derived
   bullPct: number;
   bearPct: number;
@@ -69,6 +70,7 @@ interface SeedFlowState {
   orders?: FlowOrder[];
   tapeOrders?: FlowOrder[];
   restOrders?: FlowOrder[];
+  restUnderlyingPrices?: Record<string, number>;
 }
 
 const INITIAL_STATE: SpxFlowState = {
@@ -88,6 +90,7 @@ const INITIAL_STATE: SpxFlowState = {
   orders: [],
   tapeOrders: [],
   restOrders: [],
+  restUnderlyingPrices: {},
   bullPct: 0.5,
   bearPct: 0.5,
   pcr: 0,
@@ -213,6 +216,7 @@ interface ChainStrikeItem {
 interface ChainGroupItem {
   "expiration-date"?: string;
   strikes?: ChainStrikeItem[];
+  "underlying-price"?: number;
 }
 
 function normalizeFeedData(data: unknown[]): FeedItem[] {
@@ -273,6 +277,7 @@ export function useSpxFlow(enabled = true) {
     tapeOrders: [] as FlowOrder[],
     restOrders: [] as FlowOrder[],
     optionQuotes: {} as Record<string, { bid: number; ask: number }>,
+    restUnderlyingPrices: {} as Record<string, number>,
     seenKeys: new Set<string>(),
     orderAggregateMap: new Map<string, FlowAggregateEntry>(),
     tapeAggregateMap: new Map<string, FlowAggregateEntry>(),
@@ -373,6 +378,10 @@ export function useSpxFlow(enabled = true) {
 
     await Promise.all(REST_WATCHLIST.map(async (ticker) => {
       try {
+        if (!s.subscribedRestOptionSymbols.has(ticker)) {
+          s.subscribedRestOptionSymbols.add(ticker);
+          feedTypesBySymbol[ticker] = ["Quote", "Trade", "TimeAndSale"];
+        }
         const expRes = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
         if (!expRes.ok) return;
         const expJson = await expRes.json();
@@ -387,12 +396,27 @@ export function useSpxFlow(enabled = true) {
         if (!chainRes.ok) return;
         const chainJson = await chainRes.json();
         const groups = Array.isArray(chainJson?.data?.items) ? chainJson.data.items as ChainGroupItem[] : [];
+        const underlyingPrice = Number(
+          chainJson?.data?.["underlying-price"]
+          ?? chainJson?.data?.underlyingPrice
+          ?? chainJson?.data?.underlying_price
+          ?? groups[0]?.["underlying-price"]
+          ?? 0,
+        );
+        if (underlyingPrice > 0) s.restUnderlyingPrices[ticker] = underlyingPrice;
 
         for (const group of groups) {
           for (const strike of group.strikes ?? []) {
             for (const leg of [strike.call, strike.put]) {
               const streamer = String(leg?.["streamer-symbol"] ?? leg?.symbol ?? "");
               if (!streamer || s.subscribedRestOptionSymbols.has(streamer)) continue;
+              const optType = getOptionType(streamer);
+              const strikePrice = getOptionStrike(streamer);
+              const isOtm =
+                !!optType &&
+                !!strikePrice &&
+                (optType === "C" ? strikePrice > underlyingPrice : strikePrice < underlyingPrice);
+              if (!isOtm) continue;
               s.subscribedRestOptionSymbols.add(streamer);
               feedTypesBySymbol[streamer] = ["Quote", "Trade", "TimeAndSale"];
             }
@@ -456,6 +480,14 @@ export function useSpxFlow(enabled = true) {
             const bid = Number(item.bidPrice ?? 0);
             const ask = Number(item.askPrice ?? 0);
             if (bid > 0 && ask > 0) s.optionQuotes[sym] = { bid, ask };
+            return;
+          }
+
+          if (et === "Quote" && REST_WATCHLIST.includes(sym as (typeof REST_WATCHLIST)[number])) {
+            const bid = Number(item.bidPrice ?? 0);
+            const ask = Number(item.askPrice ?? 0);
+            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+            if (mid > 0) s.restUnderlyingPrices[sym] = mid;
             return;
           }
 
@@ -548,6 +580,8 @@ export function useSpxFlow(enabled = true) {
             if (!price || !size) return;
             const underlying = getOptionUnderlying(sym) ?? "";
             if (!REST_WATCHLIST.includes(underlying as (typeof REST_WATCHLIST)[number])) return;
+            const spotRef = s.restUnderlyingPrices[underlying];
+            if (!spotRef) return;
             const quote = s.optionQuotes[sym];
             let dir = 0;
             if (quote) {
@@ -561,6 +595,8 @@ export function useSpxFlow(enabled = true) {
             if (dir === 0) return;
             const side = dir > 0 ? "buy" : "sell";
             const optType = getOptionType(sym) ?? "C";
+            const isOtm = isOtmOption(sym, optType, spotRef);
+            if (!isOtm) return;
             const order: FlowOrder = {
               ts: Number(item.time ?? Date.now()),
               symbol: sym,
@@ -574,7 +610,7 @@ export function useSpxFlow(enabled = true) {
               price,
               size,
               premium: price * size * 100,
-              isOtm: false,
+              isOtm,
             };
             appendOrAggregateRestOrder(s.restOrders, s.restAggregateMap, order);
             publish();
@@ -611,6 +647,7 @@ export function useSpxFlow(enabled = true) {
     s.restOrders = [];
     s.seenKeys = new Set();
     s.optionQuotes = {};
+    s.restUnderlyingPrices = {};
     s.orderAggregateMap = new Map();
     s.tapeAggregateMap = new Map();
     s.restAggregateMap = new Map();

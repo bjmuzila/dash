@@ -112,9 +112,22 @@ function ensureAllTables(db: Database): void {
   // bzila_gex_history
   db.run(`CREATE TABLE IF NOT EXISTS bzila_gex_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
-    call REAL, put REAL, net REAL, spot REAL
+    session TEXT DEFAULT 'rth', call REAL, put REAL, net REAL, spot REAL
   )`);
   db.run("CREATE INDEX IF NOT EXISTS idx_bgh_date ON bzila_gex_history(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bgh_session ON bzila_gex_history(session)");
+  try { db.run("ALTER TABLE bzila_gex_history ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
+
+  // bzila_strike_gex_history
+  db.run(`CREATE TABLE IF NOT EXISTS bzila_strike_gex_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, date TEXT NOT NULL,
+    session TEXT DEFAULT 'rth', expiry TEXT, spot REAL, strike REAL, bucket TEXT,
+    rank_index INTEGER, call_gex REAL, put_gex REAL, net_gex REAL, net_gex_change REAL
+  )`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_date ON bzila_strike_gex_history(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_session ON bzila_strike_gex_history(session)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_bsg_ts ON bzila_strike_gex_history(timestamp)");
+  try { db.run("ALTER TABLE bzila_strike_gex_history ADD COLUMN session TEXT DEFAULT 'rth'"); } catch {}
 
   // expirations_cache
   db.run(`CREATE TABLE IF NOT EXISTS expirations_cache (

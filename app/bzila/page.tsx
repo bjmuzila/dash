@@ -1322,7 +1322,7 @@ export default function BzilaPage() {
 
   const btnText = (key: string, normal: string) => {
     const state = shotState[key];
-    return state === "loading" ? "..." : state === "ok" ? "OK" : state === "err" ? "ERR" : normal;
+    return state === "loading" ? "..." : state === "ok" ? "✓" : state === "err" ? "✕" : normal;
   };
 
   const toggleBucketStrike = useCallback((bucket: StrikeBucket, strike: number) => {
@@ -1526,14 +1526,14 @@ export default function BzilaPage() {
                     {btnText("copy", "COPY")}
                   </button>
                   <button onClick={() => share("x")} title="Copy and open X" style={shotBtnStyle("#00e5ff")}>
-                    X
+                    ✕
                   </button>
                   <button
                     onClick={() => share("discord")}
                     title="Post to Discord"
                     style={shotBtnStyle(shotState.discord === "ok" ? "#00e676" : shotState.discord === "err" ? "#ff4757" : "#7289da")}
                   >
-                    {btnText("discord", "DISCORD")}
+                    {btnText("discord", "💬")}
                   </button>
                 </div>
               </div>

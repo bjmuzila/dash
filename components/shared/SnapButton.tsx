@@ -181,9 +181,9 @@ export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
 
   const label =
     state === "saving" ? "..." :
-    state === "ok" ? (isSave ? "✓ SAVED" : "✓ SENT") :
-    state === "err" ? "✕ ERR" :
-    (isSave ? "⊕ SNAP GEX" : "📸 SHARE SNAP");
+    state === "ok" ? "✓" :
+    state === "err" ? "✕" :
+    (isSave ? "📸" : "💬");
 
   const color =
     state === "ok" ? "#00e676" :
@@ -204,8 +204,8 @@ export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
       onClick={handleClick}
       title={isSave ? "Save MVC snapshot to the database page" : "Capture the GEX screenshot and send it to Discord"}
       style={{
-        fontSize: isSave ? 10 : 11,
-        padding: isSave ? "5px 10px" : "5px 12px",
+        fontSize: 13,
+        padding: "5px 7px",
         background,
         border: `1px solid ${borderColor}`,
         color,

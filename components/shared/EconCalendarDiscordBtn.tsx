@@ -299,7 +299,7 @@ export default function EconCalendarDiscordBtn() {
   }, [s]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#7289da";
-  const label = s === "busy" ? "…" : s === "ok" ? "✓ SENT" : s === "err" ? "✕ ERR" : "DISCORD";
+  const label = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "💬";
 
   return (
     <button
@@ -307,8 +307,8 @@ export default function EconCalendarDiscordBtn() {
       disabled={s === "busy"}
       title="Share Economic Calendar snapshot to Discord"
       style={{
-        display: "inline-flex", alignItems: "center", gap: 3,
-        padding: "2px 7px",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        padding: "2px 5px",
         border: `1px solid ${color}40`,
         borderRadius: 2,
         background: "rgba(255,255,255,0.04)",
@@ -319,7 +319,6 @@ export default function EconCalendarDiscordBtn() {
         transition: "color .15s, border-color .15s",
       }}
     >
-      <IconDiscord />
       {label}
     </button>
   );
@@ -344,7 +343,7 @@ export function EconCalendarTemplateCopyBtn() {
   }, [s]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
-  const label = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📷";
+  const label = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
 
   return (
     <button
