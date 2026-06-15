@@ -164,7 +164,7 @@ export default function GexToolbar({
 
         <ToggleBtn label="OI Overlay" active={showOI}        onClick={onToggleOI} />
         <ToggleBtn label="Net DEX"    active={showDex}       onClick={onToggleDex} />
-        <ToggleBtn label="γ=0 / Flip"  active={showFlipCurve} onClick={onToggleFlip} />
+        <ToggleBtn label="GEX Flip"    active={showFlipCurve} onClick={onToggleFlip} />
         <SEP />
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: TOOLBAR_FONT_SIZE, fontFamily: "inherit" }}>

@@ -144,3 +144,71 @@ export async function deleteSnapshot(id: number): Promise<boolean> {
   persistDb();
   return true;
 }
+
+// ── Flow Calls (individual SPX 0DTE + REST tape entries) ─────────────────────
+
+export interface FlowCallRecord {
+  id?: number;
+  ts: number;
+  date: string;
+  source: "tape" | "rest";
+  symbol: string;
+  underlying?: string;
+  expiration?: string;
+  strike: number;
+  option_type: string;
+  side: string;
+  action: string;
+  price: number;
+  size: number;
+  premium: number;
+  is_otm: number; // 0 | 1
+}
+
+export async function ensureFlowCallsTable(): Promise<void> {
+  const db = await getDb();
+  db.run(`
+    CREATE TABLE IF NOT EXISTS flow_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      source TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      underlying TEXT,
+      expiration TEXT,
+      strike REAL,
+      option_type TEXT,
+      side TEXT,
+      action TEXT,
+      price REAL,
+      size INTEGER,
+      premium REAL,
+      is_otm INTEGER DEFAULT 0
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_flow_calls_date ON flow_calls(date)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_flow_calls_ts ON flow_calls(ts)");
+}
+
+export async function insertFlowCalls(calls: Omit<FlowCallRecord, "id">[]): Promise<void> {
+  if (!calls.length) return;
+  const db = await getDb();
+  await ensureFlowCallsTable();
+  for (const c of calls) {
+    db.run(
+      `INSERT INTO flow_calls (ts, date, source, symbol, underlying, expiration, strike, option_type, side, action, price, size, premium, is_otm)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [c.ts, c.date, c.source, c.symbol, c.underlying ?? null, c.expiration ?? null,
+       c.strike, c.option_type, c.side, c.action, c.price, c.size, c.premium, c.is_otm]
+    );
+  }
+  persistDb();
+}
+
+export async function getFlowCalls(date: string, limit = 500): Promise<FlowCallRecord[]> {
+  await ensureFlowCallsTable();
+  return queryAll<FlowCallRecord>(
+    "SELECT * FROM flow_calls WHERE date = ? ORDER BY ts DESC LIMIT ?",
+    [date, limit]
+  );
+}

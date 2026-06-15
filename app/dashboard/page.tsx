@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSpxFlow } from "@/hooks/useSpxFlow";
 import { savePremiumFlowSnapshot } from "@/lib/snapdb";
 import FlowTape from "@/components/dashboard/FlowTape";
@@ -78,9 +78,21 @@ function RestTape({ orders, connected }: { orders: { ts: number; symbol: string;
   );
 }
 
+function toEtDate(ts: number): string {
+  return new Date(ts).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
 export default function DashboardPage() {
-  const { flow, reset } = useSpxFlow(true);
+  const { flow, reset: resetFlow } = useSpxFlow(true);
   const lastPremiumSaveRef = useRef(0);
+  const tapeSavedRef = useRef(0);
+  const restSavedRef = useRef(0);
+
+  const reset = useCallback(() => {
+    tapeSavedRef.current = 0;
+    restSavedRef.current = 0;
+    resetFlow();
+  }, [resetFlow]);
 
   // ── Save premium flow to IndexedDB every 30s when connected ──────────────
   useEffect(() => {
@@ -95,6 +107,57 @@ export default function DashboardPage() {
       flow.spxPrice || flow.esPrice,
     ).catch(() => {});
   }, [flow.connected, flow.callPremiumFlow, flow.putPremiumFlow, flow.netPremiumFlow, flow.spxPrice, flow.esPrice]);
+
+  // ── Persist new individual flow calls to SQLite ───────────────────────────
+  useEffect(() => {
+    const newTape = flow.tapeOrders.slice(tapeSavedRef.current);
+    const newRest = flow.restOrders.slice(restSavedRef.current);
+    if (!newTape.length && !newRest.length) return;
+
+    const payload = [
+      ...newTape.map((o) => ({
+        ts: o.ts,
+        date: toEtDate(o.ts),
+        source: "tape" as const,
+        symbol: o.symbol,
+        underlying: o.underlying,
+        expiration: o.expiration,
+        strike: o.strike,
+        option_type: o.type,
+        side: o.side,
+        action: o.action,
+        price: o.price,
+        size: o.size,
+        premium: o.premium,
+        is_otm: o.isOtm ? 1 : 0,
+      })),
+      ...newRest.map((o) => ({
+        ts: o.ts,
+        date: toEtDate(o.ts),
+        source: "rest" as const,
+        symbol: o.symbol,
+        underlying: o.underlying,
+        expiration: o.expiration,
+        strike: o.strike,
+        option_type: o.type,
+        side: o.side,
+        action: o.action,
+        price: o.price,
+        size: o.size,
+        premium: o.premium,
+        is_otm: o.isOtm ? 1 : 0,
+      })),
+    ];
+
+    tapeSavedRef.current = flow.tapeOrders.length;
+    restSavedRef.current = flow.restOrders.length;
+
+    fetch("/api/flow/calls", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  }, [flow.tapeOrders, flow.restOrders]);
 
   const netColor = flow.netPremiumFlow >= 0 ? "var(--accent)" : "var(--red)";
 

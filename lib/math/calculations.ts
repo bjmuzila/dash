@@ -115,52 +115,37 @@ export function calculateCumulativeDEX(
 }
 
 export function findGEXFlip(chain: ChainRow[], spotPrice?: number): number | null {
-  const sorted = [...chain].sort((a, b) => a.strike - b.strike);
+  // Find the strike where net GEX profile crosses zero (gamma flip / gamma zero).
+  // Uses linear interpolation between adjacent strikes — equivalent to the
+  // spot-sweep model when per-strike gamma is approximately flat between strikes.
+  const sorted = [...chain]
+    .filter(r => Number.isFinite(r.netGEX))
+    .sort((a, b) => a.strike - b.strike);
   if (!sorted.length) return null;
 
-  let running = 0;
-  const cumulative = sorted.map((row) => {
-    running += Number(row.netGEX ?? 0);
-    return { strike: row.strike, cumGEX: running };
-  });
   const crossings: number[] = [];
 
-  for (let i = 0; i < cumulative.length - 1; i++) {
-    const current = cumulative[i];
-    const next = cumulative[i + 1];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i].netGEX!;
+    const b = sorted[i + 1].netGEX!;
 
-    if (!Number.isFinite(current.cumGEX) || !Number.isFinite(next.cumGEX)) continue;
-    if (current.cumGEX === 0) crossings.push(current.strike);
-    if (next.cumGEX === 0) crossings.push(next.strike);
+    if (a === 0) { crossings.push(sorted[i].strike); continue; }
+    if (b === 0) { crossings.push(sorted[i + 1].strike); continue; }
 
-    const hasSignChange =
-      (current.cumGEX < 0 && next.cumGEX > 0) ||
-      (current.cumGEX > 0 && next.cumGEX < 0);
-
-    if (!hasSignChange) continue;
-
-    const negPoint = current.cumGEX < 0 ? current : next;
-    const posPoint = current.cumGEX > 0 ? current : next;
-    const gammaSpan = posPoint.cumGEX - negPoint.cumGEX;
-    const strikeSpan = posPoint.strike - negPoint.strike;
-    if (gammaSpan === 0 || strikeSpan === 0) continue;
-
-    const zero =
-      negPoint.strike -
-      (negPoint.cumGEX * strikeSpan) / gammaSpan;
-
-    if (Number.isFinite(zero)) {
-      crossings.push(Math.round(zero * 100) / 100);
+    // Sign change → linear interpolation for sub-strike precision
+    if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+      const sA = sorted[i].strike, sB = sorted[i + 1].strike;
+      const zero = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+      if (Number.isFinite(zero)) crossings.push(Math.round(zero * 10) / 10);
     }
   }
 
   if (!crossings.length) return null;
 
-  const uniqueCrossings = [...new Set(crossings)];
-  if (spotPrice == null || !Number.isFinite(spotPrice)) return uniqueCrossings[0];
-
-  return uniqueCrossings.reduce((best, candidate) =>
-    Math.abs(candidate - spotPrice) < Math.abs(best - spotPrice) ? candidate : best
+  // Return the crossing closest to spot (or the first if no spot provided)
+  if (spotPrice == null || !Number.isFinite(spotPrice)) return crossings[0];
+  return crossings.reduce((best, c) =>
+    Math.abs(c - spotPrice) < Math.abs(best - spotPrice) ? c : best
   );
 }
 
