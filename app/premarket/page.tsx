@@ -578,12 +578,9 @@ export default function PremarketPage() {
           </div>
 
           {/* Commodities, Risk Assets, Fixed Income / FX / Crypto */}
-          <div ref={refOtherMarkets} style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
+          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
             <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Other Markets</span>
-              <BoxSnapBtn    targetRef={refOtherMarkets} label="Other Markets" />
-              <span style={{ width: 4 }} />
-              <BoxDiscordBtn targetRef={refOtherMarkets} label="Other Markets" message={`📸 Other Markets — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`} />
             </div>
             <TableShell>
               <SectionHeader title="Commodities" />
