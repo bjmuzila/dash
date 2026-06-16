@@ -4233,22 +4233,34 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Only subscribe the selected expiration's symbols — prevents dxLink flooding.
+    // SPX/SPY/QQQ 0DTE are handled by prewarm (200/100/100 cap) — skip re-subscribing.
+    // On-demand symbols (everything else) get subscribed here, capped at 200 per request.
+    const PREWARM_SYMS_FRESH = new Set(['SPX', 'SPXW', 'SPY', 'QQQ']);
+    const isPrewarmedFresh = PREWARM_SYMS_FRESH.has(sym.toUpperCase());
     const subscribeOptions = exp
       ? filteredOptions.filter(o => o['expiration-date'] === exp)
       : filteredOptions;
-    const streamerSyms = noSubscribe ? [] : subscribeOptions.map(o => o['streamer-symbol']).filter(Boolean);
+    let streamerSyms = noSubscribe || isPrewarmedFresh ? [] : subscribeOptions.map(o => o['streamer-symbol']).filter(Boolean);
+    // Cap on-demand subscriptions at 200 to prevent dxLink flooding
+    const ON_DEMAND_CAP = 200;
+    if (streamerSyms.length > ON_DEMAND_CAP) {
+      log('Cap: trimming on-demand streamer syms from', streamerSyms.length, 'to', ON_DEMAND_CAP, 'for', sym);
+      streamerSyms = streamerSyms.slice(0, ON_DEMAND_CAP);
+    }
     // Only subscribe symbols not already active — prevents re-flooding on every chain fetch
-    const newSyms = streamerSyms.filter(sym => !subscriptions.has(sym));
+    const newSyms = streamerSyms.filter(s => !subscriptions.has(s));
     if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
-      newSyms.forEach(sym => {
-        addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
-        queueAutoSubscription({ type: 'Quote',   symbol: sym });
-        queueAutoSubscription({ type: 'Greeks',  symbol: sym });
-        queueAutoSubscription({ type: 'Summary', symbol: sym });
-        queueAutoSubscription({ type: 'Trade',   symbol: sym });
+      newSyms.forEach(s => {
+        addAutoSubscription(s, ['Quote','Greeks','Summary','Trade']);
+        queueAutoSubscription({ type: 'Quote',   symbol: s });
+        queueAutoSubscription({ type: 'Greeks',  symbol: s });
+        queueAutoSubscription({ type: 'Summary', symbol: s });
+        queueAutoSubscription({ type: 'Trade',   symbol: s });
       });
       sendSubscriptionsRateLimited();
-      log('Subscribed', newSyms.length, 'NEW symbols (', streamerSyms.length - newSyms.length, 'already active) for expiry', exp || 'nearest');
+      log('Subscribed', newSyms.length, 'NEW on-demand symbols (', streamerSyms.length - newSyms.length, 'already active) for', sym, 'expiry', exp || 'nearest');
+    } else if (isPrewarmedFresh) {
+      log('Chain fetch for pre-warmed', sym, '— skipping subscribe (prewarm handles it)');
     } else if (streamerSyms.length) {
       log('Chain fetch: all', streamerSyms.length, 'symbols already subscribed, skipping queue');
     }
