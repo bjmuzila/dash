@@ -130,6 +130,8 @@ export async function GET(request: Request) {
           existing.volNetDEX!   += volNetDEX;
           existing.netVanna!    += netVanna;
           existing.netVolVanna! += netVolVanna;
+          // Keep minimum DTE so 0DTE filter correctly identifies nearest expiry
+          if (dte < (existing.dte ?? Infinity)) existing.dte = dte;
           // average greeks (weighted by OI)
           if (callOI > 0) existing.callGamma = callGamma;
           if (putOI  > 0) existing.putGamma  = putGamma;

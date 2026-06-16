@@ -193,13 +193,17 @@ export default function HomePage() {
 
     const spot = spx || 7554;
 
-    // Filter by DTE: 0DTE = dte <= 0 or dte === 1 (same-day); 1DTE = dte <= 1
+    // Filter by DTE — use minimum DTE seen per strike (chain merges expirations)
+    // Find the smallest nonzero DTE in the chain to anchor "0DTE"
+    const minDte = Math.min(...rawChain.map(r => r.dte).filter(d => d >= 0));
     const filtered = rawChain.filter(r => {
-      if (selectedExpiry === "0dte") return r.dte <= 1;
-      return r.dte <= 2; // 1DTE = include 0+1
+      if (selectedExpiry === "0dte") return r.dte <= Math.max(minDte, 0) + 0.5;
+      return r.dte <= Math.max(minDte, 0) + 1.5; // 1DTE = next expiry
     });
 
-    const source = filtered.length > 0 ? filtered : rawChain;
+    // Require meaningful data — fall back to full chain if filter leaves too few rows
+    const hasData = (rows: typeof rawChain) => rows.filter(r => Math.abs(r.netGEX) > 0).length >= 5;
+    const source = (filtered.length > 0 && hasData(filtered)) ? filtered : rawChain;
 
     // Find ATM: closest strike at or below spot (floor), ties go to lower strike
     const atmStrike = source.reduce((best, r) => {
@@ -277,11 +281,13 @@ export default function HomePage() {
   const chartBars = (() => {
     if (rawChain.length === 0) return null;
 
-    // Filter by expiry (same logic as heatmap)
-    const filtered = rawChain.filter(r =>
-      selectedExpiry === "0dte" ? r.dte <= 1 : r.dte <= 2
+    // Filter by expiry — anchor to the minimum DTE present in the chain
+    const minDteC = Math.min(...rawChain.map(r => r.dte).filter(d => d >= 0));
+    const filteredC = rawChain.filter(r =>
+      selectedExpiry === "0dte" ? r.dte <= Math.max(minDteC, 0) + 0.5 : r.dte <= Math.max(minDteC, 0) + 1.5
     );
-    const source = filtered.length > 0 ? filtered : rawChain;
+    const hasDataC = filteredC.filter(r => Math.abs(r.netGEX) > 0).length >= 5;
+    const source = (filteredC.length > 0 && hasDataC) ? filteredC : rawChain;
     const sorted = [...source].sort((a, b) => a.strike - b.strike);
 
     // Pick primary bar value based on chartMode
