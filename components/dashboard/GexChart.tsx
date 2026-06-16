@@ -286,7 +286,7 @@ export default function GexChart({
       }
     });
 
-    // ── OI overlay — smooth quadratic curves ──
+    // ── OI overlay — gradient fills only, no outline stroke ──
     if (showOI) {
       const maxOI = Math.max(...data.map(r => Math.max(r.callOI ?? 0, r.putOI ?? 0)), 1);
       const yOI   = (v: number) => PAD_T + cH * (1 - v / maxOI);

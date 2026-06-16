@@ -111,7 +111,18 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [showPageMenu, setShowPageMenu] = useState(false);
   const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
-  const [heatmapData, setHeatmapData] = useState<{ strike: string; netGex: string; volOnly: string; dex: string; vex: string; dwGex: string; type: string; rank?: number; rankColor?: string; atm?: boolean }[]>(HEATMAP_ROWS);
+  const [heatmapData, setHeatmapData] = useState<{ strike: string; netGex: string; volOnly: string; dex: string; gexVex: string; rollingNetGex: string; type: string; rank?: number; rankColor?: string; atm?: boolean }[]>(HEATMAP_ROWS.map((row) => ({
+    strike: row.strike,
+    netGex: row.netGex,
+    volOnly: row.volOnly,
+    dex: row.dex,
+    gexVex: row.vex,
+    rollingNetGex: "—",
+    type: row.type,
+    rank: row.rank,
+    rankColor: row.rankColor,
+    atm: row.atm,
+  })));
   const [gexMode, setGexMode] = useState<"net-gex" | "call-put">("net-gex");
   const [dataMode, setDataMode] = useState<"oi-vol" | "vol-only">("oi-vol");
   const [showOiOverlay, setShowOiOverlay] = useState(false);
@@ -261,13 +272,14 @@ export default function HomePage() {
       else if (displayGex < 0 && negRanks[r.strike]) type = "neg-red";
       else if (displayGex < 0) type = "neg";
 
+      const vannaValue = r.netVanna ?? r.netVolVanna ?? 0;
       return {
         strike: r.strike.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
         netGex: fmt(displayGex),
         volOnly: fmt(r.netVolGEX),
         dex: fmt(displayDex),
-        vex: r.netVanna != null && r.netVanna !== 0 ? fmt(r.netVanna) : (r.netVolVanna ? fmt(r.netVolVanna) : "—"),
-        dwGex: fmt(r.volNetDEX),
+        gexVex: fmt(displayGex + vannaValue),
+        rollingNetGex: "—",
         type,
         rank: rank ?? undefined,
         rankColor,
@@ -278,7 +290,7 @@ export default function HomePage() {
     // Drop strikes where ALL data is zero — truly empty strikes (not just OI=0)
     const nonEmpty = rows.filter(r =>
       r.type === "atm" ||
-      r.netGex !== "$0" || r.volOnly !== "$0" || r.dex !== "$0" || r.dwGex !== "$0" || r.vex !== "—"
+      r.netGex !== "$0" || r.volOnly !== "$0" || r.dex !== "$0" || r.gexVex !== "$0"
     );
 
     setHeatmapData(nonEmpty);
@@ -681,13 +693,11 @@ export default function HomePage() {
                                 points={`${firstX},${CHART_H} ${callPts} ${lastX},${CHART_H}`}
                                 fill="url(#oiCallGrad)"
                               />
-                              <polyline points={callPts} fill="none" stroke="#10B981" strokeWidth="1.5" opacity={0.9}/>
                               {/* Put OI — red fills from bottom */}
                               <polygon
                                 points={`${firstX},${CHART_H} ${putPts} ${lastX},${CHART_H}`}
                                 fill="url(#oiPutGrad)"
                               />
-                              <polyline points={putPts} fill="none" stroke="#EF4444" strokeWidth="1.5" opacity={0.9}/>
                             </g>
                           );
                         })()}
@@ -963,10 +973,11 @@ export default function HomePage() {
                 }
 
                 const COLS = [
-                  { key: "netGex",  label: "NET GEX" },
-                  { key: "dex",     label: "NET DEX" },
-                  { key: "dwGex",   label: "NET CHEX" },
-                  { key: "vex",     label: "NET VEX" },
+                  { key: "netGex", label: "NET GEX" },
+                  { key: "volOnly", label: "VOL ONLY GEX" },
+                  { key: "dex", label: "DEX" },
+                  { key: "gexVex", label: "GEX + VEX" },
+                  { key: "rollingNetGex", label: "30 MIN ROLLING NET GEX" },
                 ];
 
                 const colMaxes = COLS.map(c =>

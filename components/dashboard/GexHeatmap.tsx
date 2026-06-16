@@ -8,19 +8,20 @@ interface HeatmapRow {
   netGEX: number;
   netVolGEX: number;
   netDEX: number;
-  vex: number;
-  deltaWeightedGEX: number;
+  gexPlusVex: number;
+  rollingNetGEX: number | null;
 }
 
 const COLS = [
   { key: "netGEX", label: "NET GEX" },
   { key: "netVolGEX", label: "VOL ONLY GEX" },
   { key: "netDEX", label: "DEX" },
-  { key: "vex", label: "VEX" },
-  { key: "deltaWeightedGEX", label: "DELTA WEIGHTED GEX" },
+  { key: "gexPlusVex", label: "GEX + VEX" },
+  { key: "rollingNetGEX", label: "30 MIN ROLLING NET GEX" },
 ] as const;
 
-function fmtG(v: number): string {
+function fmtG(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "—";
   const a = Math.abs(v);
   const s = v >= 0 ? "" : "-";
   if (a >= 1e9) return s + "$" + (a / 1e9).toFixed(2) + "B";
@@ -42,14 +43,6 @@ interface Props {
   dataMode?: "oi-vol" | "vol-only";
   intensity?: number;
   window?: number;
-}
-
-function calculateDeltaWeightedGEX(row: ChainRow, spotPrice: number): number {
-  if (!spotPrice || spotPrice <= 0) return 0;
-  const spotSq = spotPrice * spotPrice;
-  const callVGEX = (row.callGamma ?? 0) * (row.callVolume ?? 0) * Math.abs(row.callDelta ?? 0) * spotSq;
-  const putVGEX = -((row.putGamma ?? 0) * (row.putVolume ?? 0) * Math.abs(row.putDelta ?? 0) * spotSq);
-  return callVGEX + putVGEX;
 }
 
 export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", intensity = 1.4, window: win = 20 }: Props) {
@@ -79,15 +72,16 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
       const callDelta = r.callDelta ?? 0;
       const putDelta = r.putDelta ?? 0;
       const netVolGEX = r.netVolGEX ?? ((callGamma * (r.callVolume ?? 0) - putGamma * (r.putVolume ?? 0)) * spotSq);
-      const deltaWeightedGEX = calculateDeltaWeightedGEX(r, spot);
+      const vannaValue = useVol ? (r.netVolVanna ?? r.netVanna ?? 0) : (r.netVanna ?? r.netVolVanna ?? 0);
+      const netGEX = r.netGEX ?? (callGamma * callPos * spotSq - putGamma * putPos * spotSq);
 
       return {
         strike: r.strike,
-        netGEX: r.netGEX ?? (callGamma * callPos * spotSq - putGamma * putPos * spotSq),
+        netGEX,
         netVolGEX,
         netDEX: (callDelta * callPos - Math.abs(putDelta) * putPos) * spot * 100,
-        vex: netVolGEX + deltaWeightedGEX,
-        deltaWeightedGEX,
+        gexPlusVex: netGEX + vannaValue,
+        rollingNetGEX: null,
       };
     })
     .sort((a, b) => b.strike - a.strike);
@@ -100,8 +94,8 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
     netGEX: robustMax(rows.map(r => r.netGEX)),
     netVolGEX: robustMax(rows.map(r => r.netVolGEX)),
     netDEX: robustMax(rows.map(r => r.netDEX)),
-    vex: robustMax(rows.map(r => r.vex)),
-    deltaWeightedGEX: robustMax(rows.map(r => r.deltaWeightedGEX)),
+    gexPlusVex: robustMax(rows.map(r => r.gexPlusVex)),
+    rollingNetGEX: 1,
   };
 
   const topRanksByCol = Object.fromEntries(
@@ -109,15 +103,15 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
       key,
       new Map(
         [...rows]
-          .sort((a, b) => Math.abs(b[key]) - Math.abs(a[key]))
+          .sort((a, b) => Math.abs((b[key] ?? 0) as number) - Math.abs((a[key] ?? 0) as number))
           .slice(0, 3)
           .map((row, idx) => [row.strike, idx + 1] as const)
       ),
     ])
   ) as Record<(typeof COLS)[number]["key"], Map<number, number>>;
 
-  function cellBg(key: keyof typeof maxMap, val: number, topRank: number): string {
-    if (!Number.isFinite(val) || Math.abs(val) < 1e-12) return "transparent";
+  function cellBg(key: keyof typeof maxMap, val: number | null, topRank: number): string {
+    if (val == null || !Number.isFinite(val) || Math.abs(val) < 1e-12) return "transparent";
     const m = maxMap[key] || 1;
     const raw = (Math.abs(val) / m) * intensity;
     const boost = topRank === 1 ? 0.34 : topRank === 2 ? 0.22 : topRank === 3 ? 0.12 : 0;
@@ -189,12 +183,12 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
         {rows.map(row => {
           const isATM = row.strike === atm?.strike;
           const rank = rankAbove.get(row.strike) ?? rankBelow.get(row.strike);
-          const vals: Record<(typeof COLS)[number]["key"], number> = {
+          const vals: Record<(typeof COLS)[number]["key"], number | null> = {
             netGEX: row.netGEX,
             netVolGEX: row.netVolGEX,
             netDEX: row.netDEX,
-            vex: row.vex,
-            deltaWeightedGEX: row.deltaWeightedGEX,
+            gexPlusVex: row.gexPlusVex,
+            rollingNetGEX: row.rollingNetGEX,
           };
 
           return (
