@@ -909,15 +909,23 @@ export default function HomePage() {
                   return (neg ? -1 : 1) * n * mult;
                 }
 
-                // Cell bg: intensity-only, cyan for pos, red for neg
-                function cellBg(val: number, colMax: number): string {
+                // Cell bg: rank-boosted intensity
+                function cellBg(val: number, colMax: number, ci: number): string {
                   if (val === 0) return "transparent";
-                  const ratio = Math.min(Math.abs(val) / colMax, 1);
-                  // Curve: square-root so mid-range values still get visible color
-                  const op = Math.pow(ratio, 0.55) * intensity * 0.92;
+                  const abs = Math.abs(val);
+                  const ratio = Math.min(abs / colMax, 1);
+                  // Check rank within this column
+                  const top3 = colTop3[ci];
+                  const rank = top3.indexOf(abs) + 1; // 1,2,3 or 0 if not in top3
+                  // Top-3 get a guaranteed high floor, scaled by rank
+                  let op: number;
+                  if (rank === 1)      op = Math.max(0.82, intensity * 0.92);
+                  else if (rank === 2) op = Math.max(0.60, intensity * 0.78);
+                  else if (rank === 3) op = Math.max(0.40, intensity * 0.62);
+                  else                 op = Math.pow(ratio, 0.65) * intensity * 0.55;
                   return val > 0
-                    ? `rgba(32,178,220,${op.toFixed(3)})`
-                    : `rgba(220,50,60,${op.toFixed(3)})`;
+                    ? `rgba(32,178,220,${Math.min(op, 0.95).toFixed(3)})`
+                    : `rgba(220,50,60,${Math.min(op, 0.95).toFixed(3)})`;
                 }
 
                 const COLS = [
@@ -929,6 +937,15 @@ export default function HomePage() {
 
                 const colMaxes = COLS.map(c =>
                   Math.max(...heatmapData.map(r => Math.abs(parseVal(r[c.key as keyof typeof r] as string))), 1)
+                );
+
+                // Per-column top-3 absolute values for rank-floor boosting
+                const colTop3 = COLS.map(c =>
+                  heatmapData
+                    .map(r => Math.abs(parseVal(r[c.key as keyof typeof r] as string)))
+                    .filter(v => v > 0)
+                    .sort((a, b) => b - a)
+                    .slice(0, 3)
                 );
 
                 const totals = COLS.map(c =>
@@ -972,13 +989,17 @@ export default function HomePage() {
                       return (
                         <div key={row.strike} style={{
                           display: "grid", gridTemplateColumns: gridCols,
-                          borderBottom: "1px solid rgba(255,255,255,0.03)",
-                          background: isAtm ? "rgba(255,179,0,0.05)" : "transparent",
+                          borderBottom: isAtm ? "none" : "1px solid rgba(255,255,255,0.03)",
+                          background: "transparent",
+                          outline: isAtm ? "1px solid rgba(41,182,246,0.7)" : "none",
+                          outlineOffset: isAtm ? "-1px" : undefined,
+                          position: "relative",
+                          zIndex: isAtm ? 2 : undefined,
                         }}>
                           {/* Strike */}
                           <div style={{
                             ...cellStyle, textAlign: "left", fontWeight: 700,
-                            color: isAtm ? "#ffb300" : "#8da8c2",
+                            color: isAtm ? "#29b6f6" : "#8da8c2",
                           }}>
                             {row.strike}
                           </div>
@@ -986,7 +1007,7 @@ export default function HomePage() {
                           {COLS.map((c, ci) => {
                             const raw = row[c.key as keyof typeof row] as string;
                             const val = parseVal(raw);
-                            const bg = isAtm ? "transparent" : cellBg(val, colMaxes[ci]);
+                            const bg = isAtm ? "transparent" : cellBg(val, colMaxes[ci], ci);
                             const textColor = isAtm
                               ? (val >= 0 ? "#22c55e" : "#ef4444")
                               : bg === "transparent"
