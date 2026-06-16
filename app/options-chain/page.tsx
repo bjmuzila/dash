@@ -104,7 +104,7 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
 }
 
 function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
-  const seed = tickerSeed(ticker) + expirySeed(expiry) + refreshSeed * 17;
+  const seed = tickerSeed(ticker) + expirySeed(expiry) + Math.floor(refreshSeed) * 17;
   const baseSpot = ticker === "SPX" ? 6050 : ticker === "QQQ" ? 530 : ticker === "SMH" ? 290 : 100 + (seed % 240);
   const step = baseSpot > 1000 ? 5 : baseSpot > 300 ? 2.5 : 1;
   const count = 41;
@@ -134,6 +134,25 @@ function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
   return { rows, spot: center };
 }
 
+interface LiveEntry {
+  iv?: number | null;
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  oi?: number;
+  vol?: number;
+  bid?: number;
+  ask?: number;
+  _ws?: boolean;
+}
+
+interface StrikeRow {
+  strike: number;
+  callSym: string | null;
+  putSym: string | null;
+}
+
 export default function OptionsChainPage() {
   const expiries = useMemo(() => buildExpiries(), []);
   const [tickerInput, setTickerInput] = useState("SPX");
@@ -144,6 +163,125 @@ export default function OptionsChainPage() {
   const [intensity, setIntensity] = useState(0.4);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const pageRef = useRef<HTMLDivElement>(null);
+
+  // Live WS data ref + batched subscription
+  const liveDataRef = useRef<Record<string, LiveEntry>>({});
+  const wsRef = useRef<WebSocket | null>(null);
+  const loadTokenRef = useRef(0);
+  const pageIdRef = useRef(`options-chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+
+  // Build strikes from chain JSON
+  const buildStrikes = (expGroups: unknown[]): StrikeRow[] => {
+    const map: Record<string, StrikeRow> = {};
+    (expGroups as { strikes?: unknown[] }[]).forEach(expGroup => {
+      (expGroup.strikes || []).forEach((item: unknown) => {
+        const it = item as Record<string, unknown>;
+        const strike = parseFloat(String(it["strike-price"] || 0));
+        if (!strike) return;
+        const key = strike.toFixed(2);
+        if (!map[key]) map[key] = { strike, callSym: null, putSym: null };
+        const r = map[key];
+        for (const side of ["call", "put"] as const) {
+          const o = it[side] as Record<string, unknown> | undefined;
+          if (!o) continue;
+          const sym = String(o["streamer-symbol"] || o.symbol || "");
+          if (side === "call") r.callSym = sym; else r.putSym = sym;
+          if (sym && !(liveDataRef.current[sym]?._ws)) {
+            liveDataRef.current[sym] = {
+              iv:    parseFloat(String(o["implied-volatility"])) || undefined,
+              delta: parseFloat(String(o.delta)) || undefined,
+              gamma: parseFloat(String(o.gamma)) || undefined,
+              theta: parseFloat(String(o.theta)) || undefined,
+              vega:  parseFloat(String(o.vega))  || undefined,
+              oi:    parseInt(String(o["open-interest"] || o.openInterest || 0), 10) || 0,
+              vol:   parseInt(String(o.volume || 0), 10) || 0,
+            };
+          }
+        }
+      });
+    });
+    return Object.values(map).sort((a, b) => a.strike - b.strike);
+  };
+
+  // Load chain + batch subscribe symbols
+  const loadChain = async (ticker: string, expDate: string, bustCache = false) => {
+    loadTokenRef.current += 1;
+    const token = loadTokenRef.current;
+    const pageId = pageIdRef.current;
+    const bust = bustCache ? `&noCache=1` : "";
+
+    try {
+      const res = await fetch(
+        `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}${bust}`
+      );
+      const json = await res.json();
+      if (token !== loadTokenRef.current) return;
+
+      const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
+      if (!items.length) return;
+
+      const target = (items as { "expiration-date"?: string }[]).filter(i =>
+        String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
+      );
+      const strikes = buildStrikes(target.length ? target : items as unknown[]);
+
+      // Batch subscribe all symbols at once
+      const allSymbols = new Set<string>();
+      strikes.forEach(row => {
+        if (row.callSym) allSymbols.add(row.callSym);
+        if (row.putSym) allSymbols.add(row.putSym);
+      });
+
+      if (allSymbols.size > 0) {
+        fetch("/api/proxy/subscription-ready", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pageId, symbols: [...allSymbols], timeout: 6000, threshold: 0.5 }),
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.error(`[OptionsChain] Load failed for ${ticker}:`, err);
+    }
+  };
+
+  // Connect WS for live updates
+  useEffect(() => {
+    const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const ws = new WebSocket(`${wsBase}/ws/dxlink`);
+    wsRef.current = ws;
+
+    ws.onmessage = (e) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type !== "FEED_DATA") return;
+      const data = msg.data as unknown[];
+      if (!Array.isArray(data)) return;
+      data.forEach(ev => {
+        const event = ev as Record<string, unknown>;
+        const sym = String(event.eventSymbol ?? "");
+        if (!sym) return;
+        if (!liveDataRef.current[sym]) liveDataRef.current[sym] = {};
+        const d = liveDataRef.current[sym];
+        d._ws = true;
+        const t = event.eventType;
+        if (t === "Greeks") {
+          if (event.volatility != null) d.iv    = event.volatility as number;
+          if (event.delta      != null) d.delta = event.delta as number;
+          if (event.gamma      != null) d.gamma = event.gamma as number;
+          if (event.theta      != null) d.theta = event.theta as number;
+          if (event.vega       != null) d.vega  = event.vega as number;
+        } else if (t === "Summary") {
+          if (event.openInterest != null) d.oi = event.openInterest as number;
+          if (event.dayVolume    != null) d.vol = event.dayVolume as number;
+        } else if (t === "Trade") {
+          if (event.dayVolume != null && (event.dayVolume as number) > 0) d.vol = event.dayVolume as number;
+        }
+      });
+      setRefreshSeed(s => s + 0.01); // trigger re-render without full refresh
+    };
+
+    return () => { ws.close(); };
+  }, []);
 
   useEffect(() => {
     setLastUpdate(
@@ -158,10 +296,18 @@ export default function OptionsChainPage() {
   }, [activeTicker, selectedExpiry, displayPercent, refreshSeed]);
 
   const doRefresh = async () => {
+    await loadChain(activeTicker, selectedExpiry, true);
     setRefreshSeed((value) => value + 1);
   };
 
   const { trigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(doRefresh);
+
+  // Auto-load on ticker/expiry change
+  useEffect(() => {
+    if (activeTicker && selectedExpiry) {
+      loadChain(activeTicker, selectedExpiry);
+    }
+  }, [activeTicker, selectedExpiry]);
 
   const { rows, spot } = useMemo(
     () => buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed),
