@@ -387,12 +387,9 @@ export default function HomePage() {
       }));
     })() : null;
 
-    // Peak label
-    const peakLabel = (() => {
-      if (callWall) return `${callWall.toLocaleString()}`;
-      const ppb = peakPosBar as { x: number; y: number; strike: number } | null;
-      return ppb ? `${ppb.strike.toLocaleString()}` : null;
-    })();
+    // Peak label — always use the actual peak bar's strike so label matches position
+    const ppb = peakPosBar as { x: number; y: number; strike: number } | null;
+    const peakLabel = ppb ? ppb.strike.toLocaleString() : null;
 
     return {
       bars,
@@ -902,19 +899,9 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Grid heatmap — matches mult-greek UI */}
+              {/* Grid heatmap */}
               {(() => {
-                // metricBg: rank-based cell background matching mult-greek
-                function metricBg(isPos: boolean, rank: number | undefined, ratio: number): string {
-                  if (rank === 1) return isPos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
-                  if (rank === 2) return isPos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
-                  if (rank === 3) return isPos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
-                  const op = Math.max(0.04, ratio * 0.18);
-                  return isPos ? `rgba(41,182,246,${op.toFixed(3)})` : `rgba(255,71,87,${op.toFixed(3)})`;
-                }
-
-                // Parse formatted string back to float for ratio calc
-                function parseGex(s: string): number {
+                function parseVal(s: string): number {
                   if (!s || s === "—") return 0;
                   const neg = s.startsWith("-");
                   const n = parseFloat(s.replace(/[^0-9.]/g, ""));
@@ -922,25 +909,33 @@ export default function HomePage() {
                   return (neg ? -1 : 1) * n * mult;
                 }
 
+                // Cell bg: intensity-only, cyan for pos, red for neg
+                function cellBg(val: number, colMax: number): string {
+                  if (val === 0) return "transparent";
+                  const ratio = Math.min(Math.abs(val) / colMax, 1);
+                  // Curve: square-root so mid-range values still get visible color
+                  const op = Math.pow(ratio, 0.55) * intensity * 0.92;
+                  return val > 0
+                    ? `rgba(32,178,220,${op.toFixed(3)})`
+                    : `rgba(220,50,60,${op.toFixed(3)})`;
+                }
+
                 const COLS = [
-                  { key: "netGex",  label: "Net GEX" },
-                  { key: "volOnly", label: "Vol GEX" },
-                  { key: "dex",     label: "DEX" },
-                  { key: "vex",     label: "Vanna" },
-                  { key: "dwGex",   label: "Δ·GEX" },
+                  { key: "netGex",  label: "NET GEX" },
+                  { key: "dex",     label: "NET DEX" },
+                  { key: "dwGex",   label: "NET CHEX" },
+                  { key: "vex",     label: "NET VEX" },
                 ];
 
-                // Compute abs max per column for ratio
                 const colMaxes = COLS.map(c =>
-                  Math.max(...heatmapData.map(r => Math.abs(parseGex(r[c.key as keyof typeof r] as string))), 1)
+                  Math.max(...heatmapData.map(r => Math.abs(parseVal(r[c.key as keyof typeof r] as string))), 1)
                 );
 
-                // TOTAL row — sum all numeric cols
                 const totals = COLS.map(c =>
-                  heatmapData.reduce((s, r) => s + parseGex(r[c.key as keyof typeof r] as string), 0)
+                  heatmapData.reduce((s, r) => s + parseVal(r[c.key as keyof typeof r] as string), 0)
                 );
 
-                const fmtN = (v: number) => {
+                const fmtTotal = (v: number) => {
                   const a = Math.abs(v);
                   const sign = v < 0 ? "-" : "+";
                   if (a >= 1e9) return `${sign}$${(a/1e9).toFixed(2)}B`;
@@ -949,24 +944,24 @@ export default function HomePage() {
                   return `${sign}$${a.toFixed(0)}`;
                 };
 
-                const gridCols = `64px repeat(${COLS.length}, 1fr)`;
+                const gridCols = `60px repeat(${COLS.length}, 1fr)`;
+                const hdrStyle: React.CSSProperties = { padding: "5px 8px", fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "right" };
+                const cellStyle: React.CSSProperties = { padding: "3px 8px", fontSize: 10, fontFamily: "monospace", textAlign: "right" };
 
                 return (
-                  <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent", background: "#0d1117" }}>
-                    {/* Sticky header */}
-                    <div style={{ display: "grid", gridTemplateColumns: gridCols, position: "sticky", top: 0, zIndex: 10, background: "#0d1117", borderBottom: "1px solid #1e3050" }}>
-                      <div style={{ padding: "4px 6px", fontSize: 9, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.1em" }}>Strike</div>
-                      {COLS.map(c => (
-                        <div key={c.key} style={{ padding: "4px 6px", fontSize: 9, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.1em", textAlign: "right" }}>{c.label}</div>
-                      ))}
+                  <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.04) transparent", background: "#0a0e17" }}>
+                    {/* Header */}
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, position: "sticky", top: 0, zIndex: 10, background: "#0a0e17", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ ...hdrStyle, textAlign: "left" }}>STRIKE</div>
+                      {COLS.map(c => <div key={c.key} style={hdrStyle}>{c.label}</div>)}
                     </div>
 
                     {/* TOTAL row */}
-                    <div style={{ display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid #1e3050", background: "rgba(167,139,250,0.06)" }}>
-                      <div style={{ padding: "3px 6px", fontSize: 9, fontWeight: 800, color: "#a78bfa", fontFamily: "monospace" }}>TOTAL</div>
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)" }}>
+                      <div style={{ ...cellStyle, textAlign: "left", color: "#8da8c2", fontWeight: 700, fontSize: 9 }}>TOTAL</div>
                       {totals.map((v, ci) => (
-                        <div key={ci} style={{ padding: "3px 6px", fontSize: 9, fontFamily: "monospace", textAlign: "right", fontWeight: 700, color: v >= 0 ? "#22c55e" : "#ef4444" }}>
-                          {fmtN(v)}
+                        <div key={ci} style={{ ...cellStyle, fontWeight: 700, color: v >= 0 ? "#22c55e" : "#ef4444" }}>
+                          {fmtTotal(v)}
                         </div>
                       ))}
                     </div>
@@ -974,50 +969,31 @@ export default function HomePage() {
                     {/* Data rows */}
                     {heatmapData.map((row) => {
                       const isAtm = row.type === "atm";
-                      const isPosTop = row.type === "pos-top";
-                      const isNegTop = row.type === "neg-top";
-                      const isPosStrong = row.type === "pos-strong";
-                      const isNegRed = row.type === "neg-red";
-                      const isPos = isPosTop || isPosStrong || (!isNegTop && !isNegRed && row.type === "neutral" && parseGex(row.netGex) >= 0);
-
-                      const rowBg = isAtm
-                        ? "rgba(255,179,0,0.07)"
-                        : "transparent";
-
                       return (
                         <div key={row.strike} style={{
                           display: "grid", gridTemplateColumns: gridCols,
-                          background: rowBg,
-                          borderBottom: isAtm ? "1px solid rgba(255,179,0,0.25)" : "1px solid rgba(30,48,80,0.4)",
+                          borderBottom: "1px solid rgba(255,255,255,0.03)",
+                          background: isAtm ? "rgba(255,179,0,0.05)" : "transparent",
                         }}>
-                          {/* Strike cell */}
+                          {/* Strike */}
                           <div style={{
-                            padding: "3px 6px", fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                            ...cellStyle, textAlign: "left", fontWeight: 700,
                             color: isAtm ? "#ffb300" : "#8da8c2",
-                            display: "flex", alignItems: "center", gap: 3,
                           }}>
                             {row.strike}
-                            {isAtm && <span style={{ fontSize: 7, fontWeight: 900, color: "#ffb300", letterSpacing: "0.06em" }}>ATM</span>}
                           </div>
-
-                          {/* Data cells */}
+                          {/* Value cells */}
                           {COLS.map((c, ci) => {
                             const raw = row[c.key as keyof typeof row] as string;
-                            const val = parseGex(raw);
-                            const colIsPos = val >= 0;
-                            const ratio = Math.abs(val) / colMaxes[ci];
-                            const bg = raw === "—" ? "transparent" : metricBg(colIsPos, row.rank, ratio);
-                            const isRank1 = row.rank === 1;
-
+                            const val = parseVal(raw);
+                            const bg = isAtm ? "transparent" : cellBg(val, colMaxes[ci]);
+                            const textColor = isAtm
+                              ? (val >= 0 ? "#22c55e" : "#ef4444")
+                              : bg === "transparent"
+                                ? (val >= 0 ? "#22c55e" : "#ef4444")
+                                : "#ffffff";
                             return (
-                              <div key={c.key} style={{
-                                padding: "3px 6px", fontSize: 10, fontFamily: "monospace", textAlign: "right",
-                                background: bg,
-                                color: isAtm ? "#ffb300" : colIsPos ? "#22c55e" : "#ef4444",
-                                fontWeight: isRank1 ? 700 : 400,
-                                outline: isRank1 ? "1px solid rgba(41,182,246,0.9)" : "none",
-                                outlineOffset: "-1px",
-                              }}>
+                              <div key={c.key} style={{ ...cellStyle, background: bg, color: textColor }}>
                                 {raw}
                               </div>
                             );
