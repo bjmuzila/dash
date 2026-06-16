@@ -490,39 +490,29 @@ export default function OptionsChainPage() {
   const maxByColumn = useMemo(() => {
     const base: Record<Lowercase<ChainColumn>, number> = {
       strike: 1,
-      gex: 1,
-      dex: 1,
-      chex: 1,
-      vex: 1,
-      premium: 1,
+      greek: 1,
       volume: 1,
       oi: 1,
     };
 
     visibleRows.forEach((row) => {
-      base.gex = Math.max(base.gex, Math.abs(row.gex));
-      base.dex = Math.max(base.dex, Math.abs(row.dex));
-      base.chex = Math.max(base.chex, Math.abs(row.chex));
-      base.vex = Math.max(base.vex, Math.abs(row.vex));
-      base.premium = Math.max(base.premium, Math.abs(row.premium));
+      const greekVal = row[greekMode as keyof MockRow] as number;
+      base.greek = Math.max(base.greek, Math.abs(greekVal));
       base.volume = Math.max(base.volume, Math.abs(row.volume));
       base.oi = Math.max(base.oi, Math.abs(row.oi));
     });
 
     return base;
-  }, [visibleRows]);
+  }, [visibleRows, greekMode]);
 
   const top3ByColumn = useMemo(() => {
+    const greekValues = visibleRows.map((row) => Math.abs(row[greekMode as keyof MockRow] as number)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3);
     return {
-      gex: visibleRows.map((row) => Math.abs(row.gex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
-      dex: visibleRows.map((row) => Math.abs(row.dex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
-      chex: visibleRows.map((row) => Math.abs(row.chex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
-      vex: visibleRows.map((row) => Math.abs(row.vex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
-      premium: visibleRows.map((row) => Math.abs(row.premium)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      greek: greekValues,
       volume: visibleRows.map((row) => Math.abs(row.volume)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
       oi: visibleRows.map((row) => Math.abs(row.oi)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
     };
-  }, [visibleRows]);
+  }, [visibleRows, greekMode]);
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
@@ -798,7 +788,7 @@ export default function OptionsChainPage() {
                       fontFamily: "monospace",
                       textAlign: "right",
                       color: "#ffffff",
-                      background: cell.key === "greek" ? metricBg(cell.value, maxByColumn[greekMode], intensity, top3ByColumn[greekMode]) : "transparent",
+                      background: cell.key === "greek" ? metricBg(cell.value, maxByColumn.greek, intensity, top3ByColumn.greek) : "transparent",
                       fontWeight: 700,
                     }}
                   >
