@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import * as XLSX from "xlsx";
 
 const TABLES = [
   { id: "mvc_snapshots",     label: "MVC Snapshots" },
@@ -164,16 +165,37 @@ export default function DatabasePage() {
   const exportExcel = useCallback(() => {
     if (!rows.length || !cols.length) return;
     const label = TABLES.find(t => t.id === tab)?.label ?? tab;
-    const xml  = buildExcel(label, cols, rows);
-    const blob = new Blob([xml], { type: "application/vnd.ms-excel" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `${tab}-${dateFilter || "all"}.xls`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+
+    // Convert rows to export format
+    const exportData = rows.map(row => {
+      const obj: Record<string, unknown> = {};
+      cols.forEach(c => {
+        const v = row[c];
+        // Convert values for Excel
+        if (v == null) {
+          obj[c] = "";
+        } else if (typeof v === "number") {
+          obj[c] = Number.isFinite(v) ? v : "";
+        } else if (typeof v === "object") {
+          obj[c] = JSON.stringify(v);
+        } else {
+          obj[c] = String(v);
+        }
+      });
+      return obj;
+    });
+
+    // Create workbook and sheet
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, label);
+
+    // Set column widths for readability
+    const wscols = cols.map(() => ({ wch: 18 }));
+    ws["!cols"] = wscols;
+
+    // Download
+    XLSX.writeFile(wb, `${tab}-${dateFilter || "all"}.xlsx`);
   }, [tab, rows, cols, dateFilter]);
 
   return (

@@ -1,6 +1,6 @@
 {
     "name": "bzila-dashboard",
-    "version": "2026.6.16-v49",
+    "version": "2026.6.16-v50",
     "private": true,
     "workspaces": [],
     "scripts": {
@@ -22,7 +22,8 @@
         "puppeteer": "^24.0.0",
         "react": "^19",
         "react-dom": "^19",
-        "tailwind-merge": "^2.3.0"
+        "tailwind-merge": "^2.3.0",
+        "xlsx": "^0.18.5"
     },
     "devDependencies": {
         "@types/node": "^20",
