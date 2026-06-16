@@ -997,49 +997,87 @@ export default function HomePage() {
           {/* RIGHT COLUMN */}
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
 
-            {/* Single-line ticker bar */}
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 12, marginBottom: 12, position: "relative" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "nowrap", overflow: "hidden" }}>
-                {/* SPX / GEX label + clock */}
-                <span style={{ fontSize: 13, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
-                  SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
-                </span>
-                <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0 }}>
-                  {etTime}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "nowrap", overflow: "hidden" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
+                    SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
+                  </span>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0 }}>
+                    {etTime}
+                  </div>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                    {vix > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: C.red }}>{spxChg < 0 ? "+" : "-"}{Math.abs(vix * 0.05).toFixed(2)} ({spxChg < 0 ? "+" : "-"}{(Math.abs(vix * 0.05) / vix * 100).toFixed(2)}%)</span>}
+                  </div>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
+                    {esFut > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: esChg >= 0 ? C.green : C.red }}>{esChg >= 0 ? "+" : ""}{esChg.toFixed(2)} ({esChgPct >= 0 ? "+" : ""}{esChgPct.toFixed(2)}%)</span>}
+                  </div>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
+                    {spx > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: spxChg >= 0 ? C.green : C.red }}>{spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)</span>}
+                  </div>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
-                {/* VIX */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                  <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
-                  {vix > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: C.red }}>{spxChg < 0 ? "+" : "-"}{Math.abs(vix * 0.05).toFixed(2)} ({spxChg < 0 ? "+" : "-"}{(Math.abs(vix * 0.05) / vix * 100).toFixed(2)}%)</span>}
-                </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
-                {/* ESU — price only, no % */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                  <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
-                </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
-                {/* SPX */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                  <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
-                  {spx > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: spxChg >= 0 ? C.green : C.red }}>{spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)</span>}
-                </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
-                {/* CW / PW / FLIP */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                  <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>CW</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.cyan }}>{callWall ? callWall.toLocaleString() : "—"}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                  <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>PW</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.orange }}>{putWall ? putWall.toLocaleString() : "—"}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                  <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>FLIP</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{gexFlip ? gexFlip.toLocaleString() : "—"}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>CW</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.cyan }}>{callWall ? callWall.toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>PW</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.orange }}>{putWall ? putWall.toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>Flip</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{gexFlip ? gexFlip.toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <button
+                      onClick={() => { handleMvcSnapshot().catch(() => {}); }}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: 6,
+                        border: `1px solid ${mvcSaving === "ok" ? "rgba(0,230,118,.35)" : mvcSaving === "err" ? "rgba(255,71,87,.35)" : "rgba(0,229,255,.25)"}`,
+                        background: "linear-gradient(180deg,rgba(0,229,255,.12),rgba(0,229,255,.04))",
+                        color: mvcSaving === "ok" ? "#00e676" : mvcSaving === "err" ? "#ff4757" : C.cyan,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        cursor: mvcSaving === "saving" ? "default" : "pointer",
+                      }}
+                    >
+                      {mvcSaving === "saving" ? "Saving" : mvcSaving === "ok" ? "Saved" : mvcSaving === "err" ? "Error" : "MVC Snapshot"}
+                    </button>
+                    <Link
+                      href="/database"
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: 6,
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(255,255,255,0.04)",
+                        color: "#fff",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        textDecoration: "none",
+                      }}
+                    >
+                      MVC Database
+                    </Link>
+                  </div>
                 </div>
               </div>
             </div>
