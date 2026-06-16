@@ -21,7 +21,9 @@ const QUOTE_PANEL_TICKERS = [
 ];
 
 const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
-const CHAIN_COLUMNS = ["Strike", "Gex", "Dex", "Chex", "Vex", "Premium", "Volume", "OI"] as const;
+const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
+type GreekMode = typeof GREEK_MODES[number];
+const CHAIN_COLUMNS = ["Strike", "Greek", "Volume", "OI"] as const;
 
 type ChainColumn = (typeof CHAIN_COLUMNS)[number];
 
@@ -247,6 +249,7 @@ export default function OptionsChainPage() {
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const [useRealData, setUseRealData] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0); // 0-100
+  const [greekMode, setGreekMode] = useState<GreekMode>("gex");
   const pageRef = useRef<HTMLDivElement>(null);
 
   // Live WS data ref + batched subscription
@@ -476,7 +479,7 @@ export default function OptionsChainPage() {
       start = Math.max(0, end - targetCount);
     }
 
-    return rows.slice(start, end).sort((a, b) => b.strike - a.strike);
+    return rows.slice(start, end).sort((a, b) => a.strike - b.strike); // High to low
   }, [autoDisplayPercent, nearestStrike, rows]);
 
   const maxByColumn = useMemo(() => {
@@ -666,6 +669,31 @@ export default function OptionsChainPage() {
           {intensity.toFixed(2)}x
         </span>
 
+        <span style={{ color: "#1e3050" }}>|</span>
+
+        <div style={{ display: "flex", gap: 2, background: "#070c14", borderRadius: 4, padding: 2 }}>
+          {GREEK_MODES.map(m => (
+            <button
+              key={m}
+              onClick={() => setGreekMode(m)}
+              style={{
+                padding: "2px 8px",
+                fontSize: 9,
+                fontWeight: 800,
+                borderRadius: 3,
+                border: "none",
+                cursor: "pointer",
+                fontFamily: "Arial",
+                textTransform: "uppercase",
+                background: greekMode === m ? "rgba(0,229,255,.15)" : "transparent",
+                color: greekMode === m ? "#00e5ff" : "#64748b",
+              }}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
           <span style={{ fontSize: 11, color: "#e4e4e7", fontWeight: 700 }}>
             {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot.toFixed(2)}</span>
@@ -686,23 +714,23 @@ export default function OptionsChainPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "120px repeat(7, minmax(100px, 1fr))",
+          gridTemplateColumns: "80px repeat(3, minmax(80px, 1fr))",
           background: "#0a0f18",
           borderBottom: "2px solid #1e3050",
           flexShrink: 0,
-          fontSize: 10,
+          fontSize: 9,
           fontWeight: 800,
           letterSpacing: "0.1em",
           textTransform: "uppercase",
         }}
       >
-        {CHAIN_COLUMNS.map((column, index) => (
+        {["Strike", greekMode.toUpperCase(), "Volume", "OI"].map((column, index) => (
           <div
             key={column}
             style={{
-              padding: "7px 10px",
+              padding: "5px 8px",
               textAlign: index === 0 ? "left" : "right",
-              color: index === 0 ? "#e4e4e7" : column === "Premium" ? "#ffb300" : "#a78bfa",
+              color: index === 0 ? "#e4e4e7" : "#a78bfa",
             }}
           >
             {column}
@@ -724,12 +752,9 @@ export default function OptionsChainPage() {
             ? { background: "rgba(255,179,0,.07)", borderTop: "1px solid rgba(255,179,0,.25)", borderBottom: "1px solid rgba(255,179,0,.25)" }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
 
-          const numericCells: Array<{ key: Exclude<Lowercase<ChainColumn>, "strike">; value: number; text: string }> = [
-            { key: "gex", value: row.gex, text: fmtMoney(row.gex) },
-            { key: "dex", value: row.dex, text: fmtMoney(row.dex) },
-            { key: "chex", value: row.chex, text: fmtMoney(row.chex) },
-            { key: "vex", value: row.vex, text: fmtMoney(row.vex) },
-            { key: "premium", value: row.premium, text: fmtMoney(row.premium) },
+          const greekValue = row[greekMode];
+          const numericCells: Array<{ key: string; value: number; text: string }> = [
+            { key: "greek", value: greekValue, text: fmtMoney(greekValue) },
             { key: "volume", value: row.volume, text: fmtInt(row.volume) },
             { key: "oi", value: row.oi, text: fmtInt(row.oi) },
           ];
@@ -739,15 +764,15 @@ export default function OptionsChainPage() {
               key={row.strike}
               style={{
                 display: "grid",
-                gridTemplateColumns: "120px repeat(7, minmax(100px, 1fr))",
+                gridTemplateColumns: "80px repeat(3, minmax(80px, 1fr))",
                 ...rowStyle,
               }}
             >
               <div
                 style={{
-                  padding: "8px 10px",
-                  fontSize: 13,
-                  fontWeight: 800,
+                  padding: "4px 6px",
+                  fontSize: 11,
+                  fontWeight: 700,
                   fontFamily: "monospace",
                   textAlign: "left",
                   color: isATM ? "#ffb300" : "#e4e4e7",
@@ -759,17 +784,16 @@ export default function OptionsChainPage() {
               </div>
 
               {numericCells.map((cell) => {
-                const greekCell = cell.key === "gex" || cell.key === "dex" || cell.key === "chex" || cell.key === "vex";
                 return (
                   <div
                     key={cell.key}
                     style={{
-                      padding: "8px 10px",
-                      fontSize: 12,
+                      padding: "4px 6px",
+                      fontSize: 11,
                       fontFamily: "monospace",
                       textAlign: "right",
-                      color: cell.key === "premium" ? "#ffe08a" : "#ffffff",
-                      background: greekCell ? metricBg(cell.value, maxByColumn[cell.key], intensity, top3ByColumn[cell.key]) : "transparent",
+                      color: "#ffffff",
+                      background: cell.key === "greek" ? metricBg(cell.value, maxByColumn[greekMode], intensity, top3ByColumn[greekMode]) : "transparent",
                       fontWeight: 700,
                     }}
                   >

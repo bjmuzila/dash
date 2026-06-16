@@ -41,17 +41,21 @@ export default function RecipesPage() {
   );
 
   const handleImport = async () => {
-    if (!importUrl.trim()) return;
+    const input = importUrl.trim();
+    if (!input) return;
 
     setLoading(true);
     try {
       const response = await fetch('/api/recipes/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: importUrl }),
+        body: JSON.stringify({ text: input, url: input.startsWith('http') ? input : undefined }),
       });
 
-      if (!response.ok) throw new Error('Import failed');
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Import failed');
+      }
 
       const imported = await response.json();
       setRecipes([imported, ...recipes]);
@@ -59,7 +63,7 @@ export default function RecipesPage() {
       setShowImporter(false);
     } catch (error) {
       console.error('Import error:', error);
-      alert('Failed to import recipe');
+      alert(error instanceof Error ? error.message : 'Failed to import recipe');
     } finally {
       setLoading(false);
     }

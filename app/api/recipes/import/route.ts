@@ -57,58 +57,88 @@ async function ensureRecipesTable() {
 }
 
 async function structureRecipeText(text: string): Promise<StructuredRecipe> {
-  // Basic fallback parsing - no external AI needed
-  const lines = text.split('\n').filter((l: string) => l.trim());
+  // Parse recipe from pasted text
+  const lines = text.split('\n');
 
   let title = 'Recipe';
   let ingredients: string[] = [];
   let instructions: string[] = [];
+  let prepTime: string | undefined;
+  let cookTime: string | undefined;
+  let servings: string | undefined;
 
-  // Try to extract title from first line
-  if (lines.length > 0) {
-    title = lines[0].replace(/^#+\s*/, '').trim();
-  }
-
-  // Simple heuristic: look for ingredient/instruction sections
   let inIngredients = false;
   let inInstructions = false;
+  let currentSection = '';
 
   for (const line of lines) {
-    const lower = line.toLowerCase();
+    const trimmed = line.trim();
+    if (!trimmed) continue;
 
-    if (lower.includes('ingredient')) {
+    const lower = trimmed.toLowerCase();
+
+    // Detect section headers
+    if (lower.match(/^(ingredient|ingredient list|ingredients)/)) {
       inIngredients = true;
       inInstructions = false;
+      currentSection = 'ingredients';
       continue;
     }
-    if (lower.includes('instruction') || lower.includes('direction') || lower.includes('step')) {
-      inInstructions = true;
+    if (lower.match(/^(instruction|direction|step|method|procedure|how to make|directions)/)) {
       inIngredients = false;
+      inInstructions = true;
+      currentSection = 'instructions';
       continue;
     }
 
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
+    // Extract metadata
+    if (lower.includes('prep time') || lower.includes('preparation time')) {
+      prepTime = trimmed.split(':').pop()?.trim();
+      continue;
+    }
+    if (lower.includes('cook time') || lower.includes('cooking time')) {
+      cookTime = trimmed.split(':').pop()?.trim();
+      continue;
+    }
+    if (lower.includes('servings') || lower.includes('serves')) {
+      servings = trimmed.split(':').pop()?.trim();
+      continue;
+    }
 
-    if (inIngredients && trimmed.length > 2) {
+    // Extract title (assume first non-metadata line)
+    if (!title || title === 'Recipe') {
+      if (!lower.includes('time') && !lower.includes('serv')) {
+        title = trimmed.replace(/^#+\s*/, '');
+        continue;
+      }
+    }
+
+    // Add to sections
+    if (inIngredients && trimmed.length > 2 && !lower.includes('ingredient')) {
       ingredients.push(trimmed);
-    } else if (inInstructions && trimmed.length > 2) {
+    } else if (inInstructions && trimmed.length > 2 && !lower.includes('instruction') && !lower.includes('step')) {
       instructions.push(trimmed);
     }
   }
 
-  // If we didn't find structured sections, just use all lines
-  if (ingredients.length === 0) {
-    ingredients = lines.slice(1, Math.min(15, lines.length));
-  }
-  if (instructions.length === 0 && lines.length > 15) {
-    instructions = lines.slice(15, Math.min(30, lines.length));
+  // Fallback: if no sections found, split roughly in half
+  if (ingredients.length === 0 && instructions.length === 0) {
+    const nonHeaderLines = lines
+      .filter((l) => l.trim() && !l.trim().match(/^#+/))
+      .slice(1);
+
+    const mid = Math.ceil(nonHeaderLines.length / 2);
+    ingredients = nonHeaderLines.slice(0, mid).filter((l) => l.trim());
+    instructions = nonHeaderLines.slice(mid).filter((l) => l.trim());
   }
 
   return {
     title: title || 'Recipe',
     ingredients: ingredients.slice(0, 50),
     instructions: instructions.slice(0, 50),
+    prepTime,
+    cookTime,
+    servings,
     tags: ['imported'],
   };
 }
