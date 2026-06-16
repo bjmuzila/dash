@@ -250,7 +250,7 @@ const PERSONAL_MENU = [
   { label: "Trading",            href: "/trading" },
   { label: "Logs",               href: "/logs" },
   { label: "Todo",               href: "", comingSoon: true },
-  { label: "Recipes",            href: "", comingSoon: true },
+  { label: "Recipes",            href: "/recipes" },
   { label: "Budget",             href: "", comingSoon: true },
 ];
 
