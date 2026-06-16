@@ -112,12 +112,14 @@ export default function HomePage() {
   const [showPageMenu, setShowPageMenu] = useState(false);
   const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
   const [heatmapData, setHeatmapData] = useState<{ strike: string; netGex: string; volOnly: string; dex: string; vex: string; dwGex: string; type: string; rank?: number; rankColor?: string; atm?: boolean }[]>(HEATMAP_ROWS);
-  const [chartMode, setChartMode] = useState<"net-gex" | "call-put" | "oi-vol" | "vol-only" | "oi-overlay" | "net-dex" | "gex-flip">("net-gex");
-  const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("1dte");
+  const [chartMode, setChartMode] = useState<"net-gex" | "call-put" | "oi-vol" | "vol-only" | "oi-overlay" | "net-dex" | "gex-flip">("oi-vol");
+  const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("0dte");
   const [intensity, setIntensity] = useState(0.4);
   const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
+  const [panOffset, setPanOffset] = useState(0); // strike offset for drag-pan
   const [hoverBar, setHoverBar] = useState<{ x: number; y: number; strike: number; val: number; isPos: boolean } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const dragRef = useRef<{ startX: number; startPan: number } | null>(null);
   const prevSpxRef = useRef(0);
 
   useEffect(() => {
@@ -284,20 +286,21 @@ export default function HomePage() {
     const vals = sorted.map(r => getVal(r));
     const maxAbs = Math.max(...vals.map(Math.abs), 1);
 
-    // Trim to ~40 strikes centered on spot
+    // Trim to zoomHalf strikes each side of ATM, with drag pan offset
     const spot = spx || sorted[Math.floor(sorted.length / 2)]?.strike || 7500;
     const atmIdx = sorted.reduce((bi, r, i) => Math.abs(r.strike - spot) < Math.abs(sorted[bi].strike - spot) ? i : bi, 0);
     const half = zoomHalf;
-    const start = Math.max(0, atmIdx - half);
-    const end = Math.min(sorted.length - 1, atmIdx + half);
+    const centerIdx = Math.max(half, Math.min(sorted.length - 1 - half, atmIdx + panOffset));
+    const start = Math.max(0, centerIdx - half);
+    const end = Math.min(sorted.length - 1, centerIdx + half);
     const slice = sorted.slice(start, end + 1);
     const sliceVals = vals.slice(start, end + 1);
 
     const CHART_W = 800;
-    const CHART_H = 300;
-    const ZERO_Y = CHART_H / 2; // zero line at midpoint
-    const barW = Math.max(10, Math.floor(CHART_W / (slice.length + 2)) - 2);
-    const spacing = Math.floor(CHART_W / (slice.length + 1));
+    const CHART_H = 400; // match SVG viewBox height
+    const ZERO_Y = CHART_H / 2;
+    const BAR_W = 14; // fixed bar width regardless of zoom
+    const spacing = CHART_W / (slice.length + 1);
 
     // Find peak pos bar for label
     let peakPosBar: { x: number; y: number; strike: number } | null = null as { x: number; y: number; strike: number } | null;
@@ -305,9 +308,9 @@ export default function HomePage() {
 
     const bars = slice.map((r, i) => {
       const v = sliceVals[i];
-      const x = spacing * (i + 0.5);
+      const x = spacing * (i + 1);
       const heightPct = Math.abs(v) / maxAbs;
-      const barH = Math.max(2, heightPct * (CHART_H / 2 - 20));
+      const barH = Math.max(2, heightPct * (CHART_H / 2 - 24));
       const isPos = v >= 0;
       const y = isPos ? ZERO_Y - barH : ZERO_Y;
       const fill = isPos ? "url(#cyanBarGrad)" : "url(#goldBarGrad)";
@@ -321,7 +324,7 @@ export default function HomePage() {
         peakPosBar = { x, y, strike: r.strike };
       }
 
-      return { x, y, barH, barW, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos, val: v };
+      return { x, y, barH, barW: BAR_W, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos, val: v };
     });
 
     // Peak label based on chartMode
@@ -401,7 +404,22 @@ export default function HomePage() {
                 setZoomHalf(prev => Math.max(5, Math.min(80, prev + (e.deltaY > 0 ? 5 : -5))));
               };
 
-              const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+              const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+                dragRef.current = { startX: e.clientX, startPan: panOffset };
+              };
+
+              const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+                // Drag pan
+                if (dragRef.current && e.buttons === 1) {
+                  const dx = e.clientX - dragRef.current.startX;
+                  const svgW = svgRef.current?.getBoundingClientRect().width ?? CHART_W;
+                  const strikesPerPx = (zoomHalf * 2) / svgW;
+                  const newPan = dragRef.current.startPan - Math.round(dx * strikesPerPx);
+                  setPanOffset(Math.max(-60, Math.min(60, newPan)));
+                  setHoverBar(null);
+                  return;
+                }
+                // Hover tooltip
                 if (!chartBars || !svgRef.current) return;
                 const rect = svgRef.current.getBoundingClientRect();
                 const svgX = ((e.clientX - rect.left) / rect.width) * CHART_W;
@@ -411,12 +429,14 @@ export default function HomePage() {
                   const d = Math.abs(b.x - svgX);
                   if (d < minDist) { minDist = d; closest = b; }
                 }
-                if (closest && minDist < (CHART_W / chartBars.bars.length)) {
+                if (closest && minDist < 30) {
                   setHoverBar({ x: closest.x, y: closest.y, strike: closest.strike, val: closest.val, isPos: closest.isPos });
                 } else {
                   setHoverBar(null);
                 }
               };
+
+              const handleMouseUp = () => { dragRef.current = null; };
 
               return (
               <div style={{
@@ -431,15 +451,15 @@ export default function HomePage() {
                     Net GEX
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    <button onClick={() => setSelectedExpiry("0dte")} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE {d0}</button>
-                    <button onClick={() => setSelectedExpiry("1dte")} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>1DTE {d1}</button>
+                    <button onClick={() => { setSelectedExpiry("0dte"); setPanOffset(0); }} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE {d0}</button>
+                    <button onClick={() => { setSelectedExpiry("1dte"); setPanOffset(0); }} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>1DTE {d1}</button>
                     <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
                     {(["net-gex","call-put","oi-vol","vol-only"] as const).map(m => (
-                      <button key={m} onClick={() => setChartMode(m)} style={{ color: chartMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: chartMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
+                      <button key={m} onClick={() => { setChartMode(m); setPanOffset(0); }} style={{ color: chartMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: chartMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
                     ))}
                     <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
                     {(["oi-overlay","net-dex","gex-flip"] as const).map(m => (
-                      <button key={m} onClick={() => setChartMode(m)} style={{ color: chartMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: chartMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+{m.replace("-"," ")}</button>
+                      <button key={m} onClick={() => { setChartMode(m); setPanOffset(0); }} style={{ color: chartMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: chartMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+{m.replace("-"," ")}</button>
                     ))}
                   </div>
                 </div>
@@ -453,7 +473,7 @@ export default function HomePage() {
                     <span style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308" }}>
                       <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block" }} />- GEX
                     </span>
-                    <span style={{ color: "#3a5570" }}>Scroll to zoom ({zoomHalf*2} strikes)</span>
+                    <span style={{ color: "#3a5570" }}>Drag to pan · Scroll to zoom ({zoomHalf*2} strikes)</span>
                   </div>
                   <span style={{ color: "#fff" }}>Units in $B</span>
                 </div>
@@ -485,9 +505,11 @@ export default function HomePage() {
                     ref={svgRef}
                     viewBox={`0 0 ${CHART_W} ${CHART_H}`}
                     preserveAspectRatio="none"
-                    style={{ width: "100%", height: "100%", paddingRight: 48, paddingBottom: 24, boxSizing: "border-box", cursor: "crosshair" }}
-                    onMouseMove={handleSvgMouseMove}
-                    onMouseLeave={() => setHoverBar(null)}
+                    style={{ width: "100%", height: "100%", paddingRight: 48, paddingBottom: 24, boxSizing: "border-box", cursor: dragRef.current ? "grabbing" : "grab", userSelect: "none" }}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={() => { dragRef.current = null; setHoverBar(null); }}
                   >
                     <defs>
                       <linearGradient id="cyanBarGrad" x1="0" y1="1" x2="0" y2="0">
@@ -722,7 +744,7 @@ export default function HomePage() {
                   <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "6px 8px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff" }}>{h}</th>
+                        <th key={h} style={{ padding: "4px 8px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff", ...(i === 0 ? { minWidth: 90, width: 90 } : {}) }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -766,13 +788,11 @@ export default function HomePage() {
 
                         if (colIdx === 0) {
                           return (
-                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : "#fff" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                {val}
-                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
-                                {row.rank && (
-                                  <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>
-                                )}
+                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : "#fff", minWidth: 90, maxWidth: 90, width: 90 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                                <span style={{ minWidth: 44 }}>{val}</span>
+                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 9, letterSpacing: "0.08em", flexShrink: 0 }}>ATM</span>}
+                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 4px", borderRadius: 3, fontSize: 8, fontWeight: 700, flexShrink: 0 }}>#{row.rank}</span>}
                               </div>
                             </td>
                           );
