@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-06-16 (session 22) — Task #7 Steps 1-2: GEX Toolbar Live Data Wiring
+
+### `components/dashboard/GexToolbar.tsx`
+- Added toolbar state management: `selectedExpiry` (0DTE/1DTE) and `chartMode` (net-gex, call-gex, put-gex, call-put, oi-vol, bid-ask-vol)
+- Refactored DTE button group + chart mode selector from static UI to interactive state
+- DTE buttons now toggle `selectedExpiry` state and highlight active selection (cyan when selected, muted otherwise)
+- Chart mode dropdown wired to `chartMode` state with visual feedback
+- Prop interface updated: `onExpiryChange` and `onChartModeChange` callbacks passed from parent
+- All button clicks now trigger state updates (ready for heatmap/chart filtering in next steps)
+
+### `app/page.tsx`
+- Added `selectedExpiry` and `chartMode` state to Overview page root
+- Passed states + callbacks down to `GexToolbar` for toolbar button wiring
+- Prepared data pipe for downstream components (heatmap row filtering, GEX chart bar rendering)
+
+### Task Progress
+✅ Step 1: Add toolbar state to manage DTE selection and chart mode
+✅ Step 2: Make DTE and chart mode buttons clickable with state updates
+⏳ Step 3-6: Filter heatmap rows, render GEX bars, update labels, wire chart updates (next session)
+
+### Version
+- Bumped to `2026.6.16-v73`
+
+---
+
+## 2026-06-16 (session 21) — Heatmap Vol Fallback + Proxy dxLink Throttle Fix (v47)
+
+### `app/home/page.tsx`
+- **Heatmap OI=0 fallback**: When proxy returns `netGEX=0` due to missing OI (dxLink throttling), display falls back to `netVolGEX` (volume-based GEX) for NET GEX column and `volNetDEX` for NET DEX column — options with volume but no OI now show real values instead of `$0`
+- **VEX fallback**: Also falls back to `netVolVanna` when `netVanna=0`
+- **Rank badges**: `effGex()` helper uses vol-fallback when ranking top pos/neg strikes, so badges appear even when OI=0
+- **`nonEmpty` filter**: Extended to include rows where `volOnly !== "$0"` — previously hid valid strikes that had volume data but zero OI
+
+### `Vanilla/proxy-tastytrade.js`
+- **Cache-hit path**: SPX/SPY/QQQ flagged as pre-warmed symbols — cache hits for these skip all re-subscription (prewarm at startup already handles their dxLink subscriptions), eliminating thousands of duplicate subscription requests per chain fetch
+- **Fresh-fetch path**: SPX/SPY/QQQ also skip subscribing on fresh fetches (prewarm handles it); all other on-demand symbols capped at 200 streamer symbols per request
+- **Root cause fixed**: Was flooding dxLink with 6700+ subscription requests on every `/proxy/api/tt/chains/SPX?range=all` hit, causing `BAD_ACTION "Your subscription rate is too high"` errors and stalling REST monitors for SPX/VIX/ES feeds
+
+## 2026-06-16 (session 21) — Quotes Panel WS Refactor + by-type Batch API
+
+### `Vanilla/shared/quotes-manager.js`
+- Replaced per-symbol equity REST loop with single `GET /proxy/api/tt/market-data/by-type?equity=...` batch call
+- Populates `state.prevCloses` inline from `prev-close` field in batch response — eliminates separate prevclose fetch for equities
+- Updated auto-init symbol list: removed `SRM`, added `SPY`, `TSLA`, `SMH`, `SPCX`
+
+### `proxy-tastytrade.js`
+- Added all 14 equity quote symbols (`SPY`, `QQQ`, `AAPL`, `AMD`, `AMZN`, `GOOGL`, `META`, `MSFT`, `NVDA`, `SPCX`, `TSLA`, `SMH`) to `CORE_LIVE_SUBSCRIPTIONS` — now subscribed at boot via DXLink regardless of page state
+
+### `Vanilla/pages/quotes/quotes.html`
+- Rewrote `QuotesPanel` to read from `QuotesManager.getQuote()` / `getChange()` (DXLink cache) instead of polling `quotes-batch` REST
+- Removed separate `loadPrevCloses`, `fetchQuotes`, and `subscribeSymbols` methods
+- Re-renders every 5 seconds from WS cache — no more 30s REST poll
+
 ## 2026-06-15 (session 20) — Bzila Home Page + Greeks Fix + Keepalive Infrastructure
 
 ### `app/home/page.tsx` *(new)*

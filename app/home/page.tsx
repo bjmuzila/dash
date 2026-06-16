@@ -112,7 +112,11 @@ export default function HomePage() {
   const [showPageMenu, setShowPageMenu] = useState(false);
   const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
   const [heatmapData, setHeatmapData] = useState<{ strike: string; netGex: string; volOnly: string; dex: string; vex: string; dwGex: string; type: string; rank?: number; rankColor?: string; atm?: boolean }[]>(HEATMAP_ROWS);
-  const [chartMode, setChartMode] = useState<"net-gex" | "call-put" | "oi-vol" | "vol-only" | "oi-overlay" | "net-dex" | "gex-flip">("oi-vol");
+  const [gexMode, setGexMode] = useState<"net-gex" | "call-put">("net-gex");
+  const [dataMode, setDataMode] = useState<"oi-vol" | "vol-only">("oi-vol");
+  const [showOiOverlay, setShowOiOverlay] = useState(false);
+  const [showNetDex, setShowNetDex] = useState(false);
+  const [showGexFlip, setShowGexFlip] = useState(false);
   const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("0dte");
   const [intensity, setIntensity] = useState(0.4);
   const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
@@ -290,22 +294,31 @@ export default function HomePage() {
     // Use full merged chain — DTE per-strike is unreliable after cross-expiry merge
     const source = rawChain;
     const sorted = [...source].sort((a, b) => a.strike - b.strike);
-
-    // Pick primary bar value based on chartMode
-    // net-gex    → netGEX (OI-weighted gamma)
-    // call-put   → callGEX vs putGEX as separate bars (handled below)
-    // oi-vol     → netGEX + netVolGEX combined (OI + Volume)
-    // vol-only   → netVolGEX (volume-weighted gamma only)
-    // oi-overlay → netGEX bars + OI bars from bottom as overlay
-    // net-dex    → netGEX bars + netDEX curve overlay
-    // gex-flip   → netGEX bars + gamma zero profile line
-    const getVal = (r: typeof sorted[0]) => {
-      if (chartMode === "vol-only") return r.netVolGEX;
-      if (chartMode === "oi-vol") return r.netGEX + r.netVolGEX;
-      // call-put: use callGEX for positive bars, putGEX (negated) for negative — handled via callVal/putVal
-      if (chartMode === "call-put") return r.callGEX + r.putGEX; // putGEX is already negative
-      return r.netGEX; // net-gex, oi-overlay, net-dex, gex-flip base bars
-    };
+    // Base chart uses one GEX mode plus one data mode, with optional overlays.
+    const getSpot = (r: typeof sorted[0]) => r.spotPrice || spx || r.strike;
+    const getCallVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.callGamma ?? 0) * (r.callVolume ?? 0) * getSpot(r) * getSpot(r)
+        : (r.callGEX ?? 0)
+    );
+    const getPutVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? -Math.abs((r.putGamma ?? 0) * (r.putVolume ?? 0) * getSpot(r) * getSpot(r))
+        : (r.putGEX ?? 0)
+    );
+    const getNetVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.netVolGEX ?? 0)
+        : (r.netGEX ?? 0)
+    );
+    const getDexVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.volNetDEX ?? 0)
+        : (r.netDEX ?? 0)
+    );
+    const getVal = (r: typeof sorted[0]) => (
+      gexMode === "call-put" ? getCallVal(r) + getPutVal(r) : getNetVal(r)
+    );
 
     const vals = sorted.map(r => getVal(r));
     const maxAbs = Math.max(...vals.map(Math.abs), 1);
@@ -332,7 +345,7 @@ export default function HomePage() {
     let peakPosVal = 0;
 
     // For call-put mode, build two bar arrays (call=cyan above zero, put=gold below zero)
-    const isCallPut = chartMode === "call-put";
+    const isCallPut = gexMode === "call-put";
     const callPutBars: { x: number; callH: number; putH: number; barW: number; strike: number; callVal: number; putVal: number }[] = [];
 
     const bars = slice.map((r, i) => {
@@ -340,9 +353,11 @@ export default function HomePage() {
       const x = spacing * (i + 1);
 
       if (isCallPut) {
-        const callH = Math.max(2, (Math.abs(r.callGEX) / maxAbs) * (CHART_H / 2 - 24));
-        const putH  = Math.max(2, (Math.abs(r.putGEX)  / maxAbs) * (CHART_H / 2 - 24));
-        callPutBars.push({ x, callH, putH, barW: BAR_W, strike: r.strike, callVal: r.callGEX, putVal: r.putGEX });
+        const callVal = getCallVal(r);
+        const putVal = getPutVal(r);
+        const callH = Math.max(2, (Math.abs(callVal) / maxAbs) * (CHART_H / 2 - 24));
+        const putH  = Math.max(2, (Math.abs(putVal)  / maxAbs) * (CHART_H / 2 - 24));
+        callPutBars.push({ x, callH, putH, barW: BAR_W, strike: r.strike, callVal, putVal });
       }
 
       const heightPct = Math.abs(v) / maxAbs;
@@ -368,7 +383,7 @@ export default function HomePage() {
     const oiCallMax = Math.max(...slice.map(r => r.callOI), 1);
     const oiPutMax  = Math.max(...slice.map(r => r.putOI),  1);
     const OI_MAX_H  = CHART_H * 0.42; // max bar height from bottom
-    const oiBars = chartMode === "oi-overlay" ? slice.map((r, i) => {
+    const oiBars = showOiOverlay ? slice.map((r, i) => {
       const x = spacing * (i + 1);
       const callH = Math.max(1, (r.callOI / oiCallMax) * OI_MAX_H);
       const putH  = Math.max(1, (r.putOI  / oiPutMax)  * OI_MAX_H);
@@ -376,21 +391,20 @@ export default function HomePage() {
     }) : null;
 
     // Net DEX — smooth cubic-bezier curve overlay, scaled to chart half-height
-    const dexMaxAbs = Math.max(...slice.map(r => Math.abs(r.netDEX)), 1);
-    const dexPoints = (chartMode === "net-dex") ? slice.map((r, i) => ({
+    const dexMaxAbs = Math.max(...slice.map(r => Math.abs(getDexVal(r))), 1);
+    const dexPoints = showNetDex ? slice.map((r, i) => ({
       x: spacing * (i + 1),
-      y: ZERO_Y - (r.netDEX / dexMaxAbs) * (CHART_H / 2 - 24),
+      y: ZERO_Y - (getDexVal(r) / dexMaxAbs) * (CHART_H / 2 - 24),
     })) : null;
 
     // GEX Flip / Gamma-zero profile — continuous line chart of cumulative netGEX
     // Positive = above zero line (cyan area), negative = below (gold area)
-    const gexFlipPoints = (chartMode === "gex-flip") ? (() => {
-      // Use the raw netGEX values to draw a profile line
-      const flipMaxAbs = Math.max(...slice.map(r => Math.abs(r.netGEX)), 1);
+    const gexFlipPoints = showGexFlip ? (() => {
+      const flipMaxAbs = Math.max(...slice.map(r => Math.abs(getNetVal(r))), 1);
       return slice.map((r, i) => ({
         x: spacing * (i + 1),
-        y: ZERO_Y - (r.netGEX / flipMaxAbs) * (CHART_H / 2 - 24),
-        isPos: r.netGEX >= 0,
+        y: ZERO_Y - (getNetVal(r) / flipMaxAbs) * (CHART_H / 2 - 24),
+        isPos: getNetVal(r) >= 0,
       }));
     })() : null;
 
@@ -526,12 +540,16 @@ export default function HomePage() {
                     <button onClick={() => { setSelectedExpiry("0dte"); setPanOffset(0); }} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE {d0}</button>
                     <button onClick={() => { setSelectedExpiry("1dte"); setPanOffset(0); }} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>1DTE {d1}</button>
                     <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
-                    {(["net-gex","call-put","oi-vol","vol-only"] as const).map(m => (
-                      <button key={m} onClick={() => { setChartMode(m); setPanOffset(0); }} style={{ color: chartMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: chartMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
+                    {(["net-gex","call-put"] as const).map(m => (
+                      <button key={m} onClick={() => { setGexMode(m); setPanOffset(0); }} style={{ color: gexMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: gexMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
                     ))}
                     <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
-                    {(["oi-overlay","net-dex","gex-flip"] as const).map(m => (
-                      <button key={m} onClick={() => { setChartMode(m); setPanOffset(0); }} style={{ color: chartMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: chartMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+{m.replace("-"," ")}</button>
+                    {(["oi-vol","vol-only"] as const).map(m => (
+                      <button key={m} onClick={() => { setDataMode(m); setPanOffset(0); }} style={{ color: dataMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: dataMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
+                    ))}
+                    <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
+                    {([{ key: "oi-overlay", label: "+oi overlay", active: showOiOverlay, onClick: () => setShowOiOverlay(v => !v) }, { key: "net-dex", label: "+net dex", active: showNetDex, onClick: () => setShowNetDex(v => !v) }, { key: "gex-flip", label: "+gex flip", active: showGexFlip, onClick: () => setShowGexFlip(v => !v) }] as const).map(({ key, label, active, onClick }) => (
+                      <button key={key} onClick={() => { onClick(); setPanOffset(0); }} style={{ color: active ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: active ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{label}</button>
                     ))}
                   </div>
                 </div>
@@ -1129,3 +1147,6 @@ export default function HomePage() {
     </div>
   );
 }
+
+
+
