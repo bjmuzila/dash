@@ -48,15 +48,16 @@ const PAGES = {
   'multi-greek':    '/mult-greek',
 };
 
-// Extra wait per page (ms) — charts need more time to render
+// Extra wait per page (ms) after networkidle2
 const PAGE_WAIT = {
-  'gex-chart':         6000,
-  'heatmap':           6000,
-  'snapshot-flow':     5000,
-  'spx-flow':          5000,
-  'mvc':               5000,
-  'economic-calendar': 3000,
-  'default':           4000,
+  'gex-chart':      3000,
+  'heatmap':        3000,
+  'snapshot-flow':  3000,
+  'spx-flow':       3000,
+  'mvc':            3000,
+  'exposure-stack': 3000,
+  'multi-greek':    3000,
+  'default':        3000,
 };
 
 // ── Screenshot ─────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ client.on('interactionCreate', async interaction => {
   // /screenshot
   if (commandName === 'screenshot') {
     const pageKey = interaction.options.getString('page', true);
-    await interaction.deferReply();
+    try { await interaction.deferReply(); } catch { return; }
     try {
       const file = await takeScreenshot(pageKey);
       const label = pageKey.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -141,7 +142,7 @@ client.on('interactionCreate', async interaction => {
 
   // /gex
   if (commandName === 'gex') {
-    await interaction.deferReply();
+    try { await interaction.deferReply(); } catch { return; }
     try {
       const csv = await fetchGexCsv();
       const rows = parseGexCsv(csv);
@@ -160,7 +161,7 @@ client.on('interactionCreate', async interaction => {
 
   // /snapshot
   if (commandName === 'snapshot') {
-    await interaction.deferReply();
+    try { await interaction.deferReply(); } catch { return; }
     try {
       const [file, csv] = await Promise.all([
         takeScreenshot('gex-chart'),

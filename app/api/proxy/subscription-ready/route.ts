@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const PROXY = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
+const PROXY = process.env.PROXY_URL ?? (process.env.RENDER ? "https://vanila-8zn1.onrender.com" : "http://localhost:3001");
 
 export async function POST(request: Request) {
   try {
