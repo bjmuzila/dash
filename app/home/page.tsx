@@ -90,7 +90,7 @@ function Sparkline({ values, color = "#00e5ff", accent = "#a78bfa" }: { values: 
 
 // ── Ring progress ─────────────────────────────────────────────────────────────
 function Ring({ pct, size = 96, stroke = 7, color = "#00b4ff", trail = "rgba(255,255,255,0.06)", children }: {
-  pct: number; size?: number; stroke?: number; color?: string; trail?: string; children?: React.ReactNode;
+  pct: number; size?: number; stroke?: number; color?: string; accent?: string; trail?: string; children?: React.ReactNode;
 }) {
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-15 (session 19) — TypeScript Type Fix: StrikeRow LiveEntry
+
+### `app/options-chain/page.tsx`
+- **Fixed TypeScript build error**: `StrikeRow` interface was typed `callTT`/`putTT` as `Record<string, unknown> | null`, but `normalizeSide()` returns `LiveEntry`
+- Changed both fields to `LiveEntry | null` to match the actual return type
+- Build now succeeds without errors
+
+### Version
+- Bumped to `2026.6.15-v72`
+
+---
+
 ## 2026-06-15 (session 18) — Migrate sql.js → PostgreSQL (Render)
 
 ### Database (`lib/db.ts`)
