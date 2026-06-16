@@ -1,914 +1,453 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+const QUOTE_PANEL_TICKERS = [
+  "VIX",
+  "SPX",
+  "SPCX",
+  "QQQ",
+  "SMH",
+  "AAPL",
+  "AMD",
+  "AMZN",
+  "GOOGL",
+  "META",
+  "MSFT",
+  "NVDA",
+  "TSLA",
+];
 
-const TICKER_LIST = [
-  "AAPL","ABNB","AFRM","AMD","AMZN","ARM","ASTS","AVGO","BA","BABA",
-  "BYND","CCJ","CHWY","CMG","COIN","COST","CRCL","CRM","CRWD","CRWV",
-  "CWVX","DJT","ETHA","FBL","FDX","FIG","GME","GOOGL","GS","HIMZ",
-  "HIMS","HOOD","IBIT","INTC","IREN","IWM","LAC","LLY","LLYX","MA",
-  "MARA","MCD","META","MRK","MRNA","MSFU","MSFT","MU","NDX","NFLX",
-  "NIO","NKE","NNE","NOK","NVDA","NVDX","NXE","OKLO","OPEN","OSCR",
-  "OXY","PDD","PFE","PLTR","PONY","PTON","QQQ","QBTS","QUBT","RBLX",
-  "RGTI","RIOT","RIVN","RKLB","ROKU","RSP","SE","SLV","SMCI","SMH",
-  "SNDK","SNOW","SOFI","SOUN","SOXL","SPX","SPY","TGT","TQQQ","TSM",
-  "TTD","TSLA","TSLL","U","UNH","UPS","UPST","UUUU","V","XPEV","XYZ",
-].sort();
+const DISPLAY_PERCENTS = [10, 20, 30, 40, 50, 100] as const;
+const CHAIN_COLUMNS = ["Strike", "Gex", "Dex", "Chex", "Vex", "Premium", "Volume", "OI"] as const;
 
-const CALL_COLS = ["symbol","oi","vol","bid","ask","last","mid","iv","delta"] as const;
-const PUT_COLS  = ["delta","iv","mid","last","bid","ask","vol","oi","symbol"] as const;
-const NET_COLS  = ["gex","dex","chex","vex"] as const;
+type ChainColumn = (typeof CHAIN_COLUMNS)[number];
 
-const COL_W: Record<string, string> = {
-  symbol:"96px", oi:"70px", vol:"88px", bid:"62px", ask:"62px",
-  last:"62px", mid:"62px", iv:"62px", delta:"60px",
-  gex:"88px", dex:"88px", chex:"88px", vex:"88px",
-};
-
-const COL_LABELS: Record<string, string> = {
-  symbol:"Symbol", oi:"OI", vol:"Vol", bid:"Bid", ask:"Ask",
-  last:"Last", mid:"Mid", iv:"IV", delta:"Δ",
-  gex:"NET GEX", dex:"NET DEX", chex:"NET CHEX", vex:"NET VEX",
-};
-
-function colsCSS(): string {
-  const p = [...CALL_COLS.map(c => COL_W[c]), ...NET_COLS.map(c => COL_W[c]), "72px", ...PUT_COLS.map(c => COL_W[c])];
-  return p.join(" ");
-}
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface LiveEntry {
-  bid?: number | null;
-  ask?: number | null;
-  last?: number | null;
-  iv?: number | null;
-  delta?: number | null;
-  gamma?: number | null;
-  theta?: number | null;
-  vega?: number | null;
-  oi?: number;
-  vol?: number;
-  size?: number | null;
-  _ws?: boolean;
-}
-
-interface StrikeRow {
+type MockRow = {
   strike: number;
-  callSym: string;
-  putSym: string;
-  callTT: LiveEntry | null;
-  putTT: LiveEntry | null;
+  gex: number;
+  dex: number;
+  chex: number;
+  vex: number;
+  premium: number;
+  volume: number;
+  oi: number;
+};
+
+function etToday(): Date {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
 
-interface Expiry {
-  date: string;
-  daysTo: number;
-  label: string;
-  type: string;
+function etDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+function buildExpiries() {
+  const today = etToday();
+  const list: Array<{ value: string; label: string }> = [];
 
-function todayETStr(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date());
-  const m: Record<string, string> = {};
-  parts.forEach(p => { m[p.type] = p.value; });
-  return `${m.year}-${m.month}-${m.day}`;
+  for (let offset = 0; offset < 12; offset += 1) {
+    const date = new Date(today);
+    date.setDate(today.getDate() + offset);
+    const value = etDateKey(date);
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    list.push({ value, label: `${offset}DTE  ${mm}-${dd}` });
+  }
+
+  return list;
 }
 
-function daysTo(dateStr: string): number {
-  return Math.round((new Date(dateStr).getTime() - new Date(todayETStr()).getTime()) / 86400000);
+function tickerSeed(input: string) {
+  return input
+    .toUpperCase()
+    .split("")
+    .reduce((sum, ch, index) => sum + ch.charCodeAt(0) * (index + 3), 0);
 }
 
-function etTimeNow(): string {
-  return new Date().toLocaleTimeString("en-US", {
-    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  });
+function expirySeed(input: string) {
+  return input.replaceAll("-", "").split("").reduce((sum, ch, index) => sum + Number(ch) * (index + 1), 0);
 }
 
-function fp(v: number | null | undefined, d = 2): string {
-  const n = parseFloat(String(v ?? ""));
-  return isFinite(n) ? n.toFixed(d) : "--";
+function fmtMoney(value: number) {
+  const sign = value >= 0 ? "+" : "-";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
 }
 
-function fpPct(v: number | null | undefined): string {
-  const n = parseFloat(String(v ?? ""));
-  return isFinite(n) ? (n * 100).toFixed(1) + "%" : "--";
+function fmtInt(value: number) {
+  return Math.round(value).toLocaleString("en-US");
 }
 
-function fmtDelta(v: number | null | undefined): string {
-  const n = parseFloat(String(v ?? ""));
-  return isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(3) : "--";
-}
-
-function fmtWhole(v: number | null | undefined): string {
-  const n = parseFloat(String(v ?? ""));
-  return isFinite(n) ? Math.round(n).toLocaleString("en-US") : "--";
-}
-
-function fmtMoney(v: number): string {
-  if (!isFinite(v)) return "--";
-  const s = v >= 0 ? "+" : "-";
-  const a = Math.abs(v);
-  return s + "$" + (a / 1e6).toFixed(2) + "M";
-}
-
-function metricBg(value: number, maxValue: number, intensity: number): string {
-  const n = value || 0;
-  if (!n) return "transparent";
-  const ratio = Math.min(Math.abs(n) / Math.max(maxValue, 1) * (0.35 + intensity * 0.65), 1);
+function metricBg(value: number, maxValue: number, intensity: number) {
+  if (!value) return "transparent";
+  const ratio = Math.min((Math.abs(value) / Math.max(maxValue, 1)) * (0.35 + intensity * 0.65), 1);
   const alpha = 0.08 + Math.pow(ratio, 1.45) * 0.82;
-  return n >= 0
+  return value >= 0
     ? `rgba(0,229,255,${alpha.toFixed(2)})`
     : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
-function normalizeSide(raw: Record<string, unknown>): LiveEntry {
-  function sf(v: unknown): number | null { const n = parseFloat(String(v)); return isFinite(n) ? n : null; }
-  function si(v: unknown): number { const n = parseInt(String(v), 10); return isFinite(n) ? n : 0; }
-  return {
-    bid:   sf(raw.bid),
-    ask:   sf(raw.ask),
-    last:  sf(raw.last),
-    iv:    sf(raw["implied-volatility"] ?? raw.iv),
-    delta: sf(raw.delta),
-    gamma: sf(raw.gamma),
-    theta: sf(raw.theta),
-    vega:  sf(raw.vega),
-    oi:    si(raw["open-interest"] ?? raw.openInterest ?? 0),
-    vol:   si(raw.volume ?? raw.vol ?? 0),
-    size:  null,
-  };
-}
+function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
+  const seed = tickerSeed(ticker) + expirySeed(expiry) + refreshSeed * 17;
+  const baseSpot = ticker === "SPX" ? 6050 : ticker === "QQQ" ? 530 : ticker === "SMH" ? 290 : 100 + (seed % 240);
+  const step = baseSpot > 1000 ? 5 : baseSpot > 300 ? 2.5 : 1;
+  const count = 41;
+  const center = Math.round(baseSpot / step) * step;
+  const start = center - step * Math.floor(count / 2);
 
-function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeRow[] {
-  const map: Record<string, StrikeRow> = {};
+  const rows: MockRow[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const strike = Number((start + step * index).toFixed(step % 1 === 0 ? 0 : 2));
+    const distance = index - Math.floor(count / 2);
+    const wave = Math.sin((seed + index * 11) / 7.5);
+    const alt = Math.cos((seed + index * 9) / 5.25);
+    const decay = 1 - Math.min(Math.abs(distance) / 24, 0.82);
 
-  // First pass: collect all strikes
-  (expGroups as { strikes?: unknown[] }[]).forEach(expGroup => {
-    (expGroup.strikes || []).forEach((item: unknown) => {
-      const it = item as Record<string, unknown>;
-      const strike = parseFloat(String(it["strike-price"] || 0));
-      if (!strike) return;
-      const key = strike.toFixed(2);
-      if (!map[key]) map[key] = { strike, callSym: "", putSym: "", callTT: null, putTT: null };
+    rows.push({
+      strike,
+      gex: Math.round((wave * 5.2 + alt * 2.4) * 1_100_000 * decay),
+      dex: Math.round((Math.cos((seed + index * 13) / 8.2) * 4.6 - distance * 0.11) * 760_000 * decay),
+      chex: Math.round((Math.sin((seed + index * 5) / 4.1) * 3.2 + distance * 0.08) * 420_000 * decay),
+      vex: Math.round((Math.cos((seed + index * 7) / 6.4) * 2.6 - Math.sin(index / 3)) * 360_000 * decay),
+      premium: Math.round((850_000 + Math.abs(wave) * 2_400_000 + Math.abs(distance) * 31_000) * decay),
+      volume: Math.round((1_100 + Math.abs(alt) * 6_400 + Math.abs(distance) * 120) * decay),
+      oi: Math.round((3_000 + Math.abs(wave + alt) * 18_000 + Math.abs(distance) * 180) * decay),
     });
-  });
-
-  // Second pass: fill data
-  (expGroups as { strikes?: unknown[] }[]).forEach(expGroup => {
-    (expGroup.strikes || []).forEach((item: unknown) => {
-      const it = item as Record<string, unknown>;
-      const strike = parseFloat(String(it["strike-price"] || 0));
-      if (!strike) return;
-      const key = strike.toFixed(2);
-      if (!map[key]) return;
-      const r = map[key];
-
-      const call = it.call as Record<string, unknown> | undefined;
-      const put  = it.put  as Record<string, unknown> | undefined;
-
-      if (call) {
-        const normalized = normalizeSide(call);
-        r.callTT  = normalized; // store normalized so fallback reads correct field names
-        r.callSym = String(call["streamer-symbol"] || call.symbol || "");
-        if (r.callSym) liveData[r.callSym] = { ...normalized };
-      }
-      if (put) {
-        const normalized = normalizeSide(put);
-        r.putTT  = normalized;
-        r.putSym = String(put["streamer-symbol"] || put.symbol || "");
-        if (r.putSym) liveData[r.putSym] = { ...normalized };
-      }
-    });
-  });
-
-  const rows = Object.values(map).sort((a, b) => a.strike - b.strike);
-  if (!rows.length) return rows;
-
-  const step = 5;
-  const byStrike = new Map(rows.map(r => [r.strike.toFixed(2), r] as const));
-  const minStrike = rows[0].strike;
-  const maxStrike = rows[rows.length - 1].strike;
-  const start = Math.floor(minStrike / step) * step;
-  const end = Math.ceil(maxStrike / step) * step;
-
-  const dense: StrikeRow[] = [];
-  for (let strike = start; strike <= end; strike += step) {
-    const key = strike.toFixed(2);
-    const existing = byStrike.get(key);
-    if (existing) {
-      dense.push(existing);
-      continue;
-    }
-    dense.push({ strike, callSym: "", putSym: "", callTT: null, putTT: null });
   }
 
-  return dense;
+  return { rows, spot: center };
 }
-
-// ── Chain Table ───────────────────────────────────────────────────────────────
-
-function ChainTable({
-  strikes, liveData, spot, intensity, rangePercent, renderTick,
-}: {
-  strikes: StrikeRow[];
-  liveData: Record<string, LiveEntry>;
-  spot: number;
-  intensity: number;
-  rangePercent: number | "all";
-  renderTick: number;
-}) {
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const autoCenterBlockedRef = useRef(false);
-
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (!body) return;
-    const block = () => { autoCenterBlockedRef.current = true; };
-    ["wheel","touchstart","pointerdown","mousedown","scroll"].forEach(t =>
-      body.addEventListener(t, block, { passive: true })
-    );
-    return () => {
-      ["wheel","touchstart","pointerdown","mousedown","scroll"].forEach(t =>
-        body.removeEventListener(t, block)
-      );
-    };
-  }, []);
-
-  const cols = colsCSS();
-
-  const atmStrike = useMemo(() => {
-    if (spot <= 0 || !strikes.length) return 0;
-    return strikes.reduce((best, r) =>
-      Math.abs(r.strike - spot) < Math.abs(best - spot) ? r.strike : best, strikes[0].strike
-    );
-  }, [strikes, spot]);
-
-  // Filter strikes by range — include renderTick so re-runs when WS data arrives
-  const filtered = useMemo(() => {
-    const hasData = (r: StrikeRow) => {
-      const cd = liveData[r.callSym] || r.callTT as LiveEntry || {};
-      const pd = liveData[r.putSym]  || r.putTT  as LiveEntry || {};
-      return (cd.bid ?? 0) > 0 || (cd.ask ?? 0) > 0 || (cd.last ?? 0) > 0 || (cd.oi ?? 0) > 0 || (cd.vol ?? 0) > 0
-          || (pd.bid ?? 0) > 0 || (pd.ask ?? 0) > 0 || (pd.last ?? 0) > 0 || (pd.oi ?? 0) > 0 || (pd.vol ?? 0) > 0;
-    };
-    let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
-    if (rangePercent === "all") {
-      const withData = rows.filter(hasData);
-      if (withData.length) rows = withData;
-    } else if (spot > 0) {
-      const lo = spot * (1 - rangePercent / 100);
-      const hi = spot * (1 + rangePercent / 100);
-      const r2 = rows.filter(r => r.strike >= lo && r.strike <= hi && hasData(r));
-      if (r2.length) rows = r2;
-    }
-    return rows;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strikes, spot, rangePercent, renderTick]);
-
-  // Compute maxAbs for net columns
-  const maxAbs = useMemo(() => {
-    const m = { gex: 1, dex: 1, chex: 1, vex: 1 };
-    filtered.forEach(row => {
-      const cd = { ...(liveData[row.callSym] || {}), ...(liveData[row.callSym]?.bid == null ? (row.callTT as LiveEntry || {}) : {}) };
-      const pd = { ...(liveData[row.putSym]  || {}), ...(liveData[row.putSym]?.bid == null  ? (row.putTT  as LiveEntry || {}) : {}) };
-      const cc = (parseFloat(String(cd.oi ?? 0)) || 0) + (parseFloat(String(cd.vol ?? 0)) || 0);
-      const pc = (parseFloat(String(pd.oi ?? 0)) || 0) + (parseFloat(String(pd.vol ?? 0)) || 0);
-      const s = spot;
-      const gex  = Math.abs(((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * s * s * 0.01 * 100);
-      const dex  = Math.abs((Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * s * 100);
-      const chex = Math.abs((-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * s * 100);
-      const vex  = Math.abs(((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * s * 100);
-      if (gex  > m.gex)  m.gex  = gex;
-      if (dex  > m.dex)  m.dex  = dex;
-      if (chex > m.chex) m.chex = chex;
-      if (vex  > m.vex)  m.vex  = vex;
-    });
-    return m;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, spot, renderTick]);
-
-  // Auto-scroll to ATM on first load
-  useEffect(() => {
-    if (!bodyRef.current || !atmStrike || autoCenterBlockedRef.current) return;
-    const el = bodyRef.current.querySelector(`[data-strike="${atmStrike}"]`) as HTMLElement | null;
-    if (el) el.scrollIntoView({ block: "center" });
-  }, [atmStrike]);
-
-  if (!strikes.length) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 120, fontSize: 12, color: "#475569", fontFamily: "Arial" }}>
-      Select a ticker + expiry and click GO
-    </div>
-  );
-
-  return (
-    <div ref={bodyRef} style={{ flex: 1, overflowY: "auto", overflowX: "auto", minHeight: 0 }}>
-      {filtered.map(row => {
-        const isATM = row.strike === atmStrike;
-        let cd = { ...(liveData[row.callSym] || {}) };
-        let pd = { ...(liveData[row.putSym]  || {}) };
-        // Fall back to REST snapshot if live data missing
-        if (!cd.bid && !cd.ask && !cd.last && !cd.vol && !cd.oi && row.callTT)
-          cd = { ...cd, ...(row.callTT as LiveEntry) };
-        if (!pd.bid && !pd.ask && !pd.last && !pd.vol && !pd.oi && row.putTT)
-          pd = { ...pd, ...(row.putTT as LiveEntry) };
-
-        const s = spot;
-        const cc = (parseFloat(String(cd.oi ?? 0)) || 0) + (parseFloat(String(cd.vol ?? 0)) || 0);
-        const pc = (parseFloat(String(pd.oi ?? 0)) || 0) + (parseFloat(String(pd.vol ?? 0)) || 0);
-        const netGex  = ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * s * s * 0.01 * 100;
-        const netDex  = (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * s * 100;
-        const netChex = (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * s * 100;
-        const netVex  = ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * s * 100;
-
-        const hasAnyData = (cd.bid ?? 0) > 0 || (cd.ask ?? 0) > 0 || (cd.last ?? 0) > 0 || (cd.oi ?? 0) > 0 || (cd.vol ?? 0) > 0
-          || (pd.bid ?? 0) > 0 || (pd.ask ?? 0) > 0 || (pd.last ?? 0) > 0 || (pd.oi ?? 0) > 0 || (pd.vol ?? 0) > 0;
-        const netVals = { gex: netGex, dex: netDex, chex: netChex, vex: netVex };
-
-        const mid = (cd.bid != null && cd.ask != null && isFinite(Number(cd.bid)) && isFinite(Number(cd.ask)))
-          ? ((Number(cd.bid) + Number(cd.ask)) / 2) : null;
-        const putMid = (pd.bid != null && pd.ask != null && isFinite(Number(pd.bid)) && isFinite(Number(pd.ask)))
-          ? ((Number(pd.bid) + Number(pd.ask)) / 2) : null;
-
-        const callData: Record<string, string | undefined> = {
-          symbol: (Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)) + " C",
-          oi: fmtWhole(cd.oi), vol: fmtWhole(cd.vol),
-          bid: fp(cd.bid), ask: fp(cd.ask), last: fp(cd.last),
-          mid: fp(mid), iv: fpPct(cd.iv), delta: fmtDelta(cd.delta),
-        };
-        const putData: Record<string, string | undefined> = {
-          symbol: (Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)) + " P",
-          oi: fmtWhole(pd.oi), vol: fmtWhole(pd.vol),
-          bid: fp(pd.bid), ask: fp(pd.ask), last: fp(pd.last),
-          mid: fp(putMid), iv: fpPct(pd.iv), delta: fmtDelta(pd.delta),
-        };
-
-        function callColor(col: string): string {
-          if (col === "symbol") return "#4db8ff";
-          if (col === "bid") return "#f87171";
-          if (col === "ask") return "#4ade80";
-          if (col === "iv") return "#7278ca";
-          if (col === "delta") return (parseFloat(String(cd.delta ?? "0")) >= 0) ? "#00e676" : "#ff4757";
-          if (col === "oi") return "#94a3b8";
-          return "#e4e4e7";
-        }
-        function putColor(col: string): string {
-          if (col === "symbol") return "#ff7c88";
-          if (col === "bid") return "#f87171";
-          if (col === "ask") return "#4ade80";
-          if (col === "iv") return "#7278ca";
-          if (col === "delta") return (parseFloat(String(pd.delta ?? "0")) >= 0) ? "#00e676" : "#ff4757";
-          if (col === "oi") return "#94a3b8";
-          return "#e4e4e7";
-        }
-
-        const rowBg = isATM
-          ? { background: "rgba(255,179,0,.07)", borderTop: "1px solid rgba(255,179,0,.25)", borderBottom: "1px solid rgba(255,179,0,.25)" }
-          : { borderBottom: "1px solid rgba(30,48,80,.35)" };
-
-        return (
-          <div
-            key={row.strike}
-            data-strike={row.strike}
-            style={{ display: "grid", gridTemplateColumns: cols, ...rowBg }}
-          >
-            {/* Call cells */}
-            {CALL_COLS.map(col => (
-              <div key={col} style={{
-                padding: "5px 8px", fontSize: 13, fontFamily: "monospace",
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                textAlign: col === "symbol" ? "left" : "right",
-                color: callColor(col),
-              }}>
-                {callData[col] ?? "--"}
-              </div>
-            ))}
-
-            {/* Net greek cells */}
-            {NET_COLS.map(col => {
-              const val = netVals[col as keyof typeof netVals];
-              return (
-                <div key={col} style={{
-                  padding: "5px 8px", fontSize: 12, fontFamily: "monospace",
-                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                  textAlign: "center", color: "#ffffff", fontWeight: 700,
-                  background: hasAnyData ? metricBg(val, maxAbs[col as keyof typeof maxAbs], intensity) : "transparent",
-                }}>
-                  {hasAnyData ? fmtMoney(val) : "--"}
-                </div>
-              );
-            })}
-
-            {/* Strike */}
-            <div style={{
-              padding: "4px 6px", fontSize: 13, fontWeight: 800, fontFamily: "monospace",
-              textAlign: "center",
-              color: isATM ? "#ffb300" : "#94a3b8",
-              borderLeft: "1px solid rgba(255,255,255,.06)",
-              borderRight: "1px solid rgba(255,255,255,.06)",
-              background: isATM ? "rgba(255,179,0,.12)" : "transparent",
-            }}>
-              {Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)}
-            </div>
-
-            {/* Put cells */}
-            {PUT_COLS.map(col => (
-              <div key={col} style={{
-                padding: "5px 8px", fontSize: 13, fontFamily: "monospace",
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                textAlign: "right",
-                color: putColor(col),
-              }}>
-                {putData[col] ?? "--"}
-              </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function OptionsChainPage() {
-  const [ticker, setTicker]     = useState("SPX");
+  const expiries = useMemo(() => buildExpiries(), []);
+  const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
-  const [expirations, setExpirations]   = useState<Expiry[]>([]);
-  const [selectedExpiry, setSelectedExpiry] = useState("");
-  const [activeExpiry, setActiveExpiry]     = useState("");
-  const [strikes, setStrikes]   = useState<StrikeRow[]>([]);
-  const [spot, setSpot]         = useState(0);
-  const [intensity, setIntensity] = useState(0.4);
-  const [rangePercent, setRangePercent] = useState<number | "all">(10);
-  const rangePercentRef = useRef<number | "all">(10);
-  const [status, setStatus]     = useState<{ state: "live"|"loading"|"err"|"idle"; msg: string }>({ state: "idle", msg: "--" });
+  const [selectedExpiry, setSelectedExpiry] = useState(expiries[0]?.value ?? "");
+  const [displayPercent, setDisplayPercent] = useState<number>(10);
+  const [refreshSeed, setRefreshSeed] = useState(0);
+  const [intensity, setIntensity] = useState(1.4);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
-  const [renderTick, setRenderTick] = useState(0);
-
-  const liveDataRef  = useRef<Record<string, LiveEntry>>({});
-  const wsRef        = useRef<WebSocket | null>(null);
-  const subSymsRef   = useRef<string[]>([]);
-  const pageIdRef    = useRef(`options-chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  const loadTokenRef = useRef(0);
-  const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const keepaliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const restRefreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const scheduleRender = useCallback(() => {
-    if (renderTimerRef.current) return;
-    renderTimerRef.current = setTimeout(() => {
-      renderTimerRef.current = null;
-      setRenderTick(t => t + 1);
-      setLastUpdate(etTimeNow());
-    }, 120);
-  }, []);
-
-  // WS connection
-  useEffect(() => {
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
-    const ws = new WebSocket(`${wsBase}/ws/dxlink`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setStatus({ state: "live", msg: "LIVE" });
-      const syms = subSymsRef.current;
-      if (syms.length) {
-        const feedTypes = syms.reduce((acc, s) => { acc[s] = ["Quote","Greeks","Summary","Trade"]; return acc; }, {} as Record<string, string[]>);
-        try { ws.send(JSON.stringify({ type: "subscribe", symbols: syms, feedTypesBySymbol: feedTypes })); } catch {}
-      }
-    };
-
-    ws.onmessage = (e) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type !== "FEED_DATA") return;
-      const data = msg.data as unknown[];
-      if (!Array.isArray(data)) return;
-      let changed = false;
-      data.forEach(ev => {
-        const event = ev as Record<string, unknown>;
-        const sym = String(event.eventSymbol ?? "");
-        if (!sym) return;
-        if (!liveDataRef.current[sym]) liveDataRef.current[sym] = {};
-        const d = liveDataRef.current[sym];
-        d._ws = true;
-        const t = event.eventType;
-        if (t === "Quote") {
-          if (event.bidPrice  != null) d.bid  = event.bidPrice as number;
-          if (event.askPrice  != null) d.ask  = event.askPrice as number;
-          if (event.lastPrice != null) d.last = event.lastPrice as number;
-          changed = true;
-        } else if (t === "Greeks") {
-          if (event.volatility != null) d.iv    = event.volatility as number;
-          if (event.delta      != null) d.delta = event.delta as number;
-          if (event.gamma      != null) d.gamma = event.gamma as number;
-          if (event.theta      != null) d.theta = event.theta as number;
-          if (event.vega       != null) d.vega  = event.vega as number;
-          changed = true;
-        } else if (t === "Summary") {
-          if (event.openInterest != null) d.oi  = event.openInterest as number;
-          if (event["open-interest"] != null) d.oi = event["open-interest"] as number;
-          if (event.dayVolume    != null) d.vol = event.dayVolume as number;
-          changed = true;
-        } else if (t === "Trade") {
-          if (event.dayVolume != null && (event.dayVolume as number) > 0) d.vol  = event.dayVolume as number;
-          if (event.price     != null && (event.price as number)     > 0) d.last = event.price as number;
-          changed = true;
-        }
-      });
-      if (changed) scheduleRender();
-    };
-
-    ws.onclose = () => setStatus({ state: "idle", msg: "DISCONNECTED" });
-    ws.onerror = () => setStatus({ state: "err",  msg: "WS ERR" });
-
-    return () => { ws.close(); };
-  }, [scheduleRender]);
-
-  // Keepalive — ping Render every 8 min to prevent cold starts
-  useEffect(() => {
-    const ping = () => fetch("/api/keepalive").catch(() => {});
-    ping(); // ping immediately on mount
-    keepaliveTimerRef.current = setInterval(ping, 8 * 60 * 1000);
-    return () => {
-      if (keepaliveTimerRef.current) clearInterval(keepaliveTimerRef.current);
-    };
-  }, []);
-
-  // Load chain
-  const loadChain = useCallback(async (t: string, expDate: string) => {
-    loadTokenRef.current += 1;
-    const token = loadTokenRef.current;
-    setStatus({ state: "loading", msg: "LOADING..." });
-    setStrikes([]);
-
-    try {
-      const pageId = pageIdRef.current;
-      const rangeParam = rangePercentRef.current || '10';
-      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(t)}&expiration=${encodeURIComponent(expDate)}&range=${encodeURIComponent(rangeParam)}&pageId=${encodeURIComponent(pageId)}`);
-      if (token !== loadTokenRef.current) return;
-      const json = await res.json();
-
-      const items = json.data?.items ?? [];
-      let target = items.filter((i: Record<string, unknown>) =>
-        String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
-      );
-      if (!target.length) target = items;
-
-      // Clear old sub symbols from live data
-      subSymsRef.current.forEach(sym => { delete liveDataRef.current[sym]; });
-
-      const parsed = buildStrikes(target, liveDataRef.current);
-      const rawSpot = parseFloat(String(json.data?.underlyingPrice ?? 0));
-      if (isFinite(rawSpot) && rawSpot > 10) setSpot(rawSpot);
-
-      const syms: string[] = [];
-      parsed.forEach(r => {
-        if (r.callSym) syms.push(r.callSym);
-        if (r.putSym)  syms.push(r.putSym);
-      });
-      subSymsRef.current = syms;
-
-      // Subscribe via WS
-      if (wsRef.current?.readyState === 1 && syms.length) {
-        const feedTypes = syms.reduce((acc, s) => { acc[s] = ["Quote","Greeks","Summary","Trade"]; return acc; }, {} as Record<string, string[]>);
-        try { wsRef.current.send(JSON.stringify({ type: "subscribe", symbols: syms, feedTypesBySymbol: feedTypes })); } catch {}
-      }
-
-      setStrikes(parsed);
-      setActiveExpiry(expDate);
-      setActiveTicker(t);
-      setRenderTick(n => n + 1);
-      setLastUpdate(etTimeNow());
-
-      // Wait for subscription-ready
-      if (syms.length) {
-        try {
-          await fetch("/api/proxy/subscription-ready", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pageId, symbols: syms, timeout: 10000, threshold: 0.5 }),
-          });
-        } catch {}
-      }
-
-      if (token === loadTokenRef.current) {
-        setStatus({ state: "live", msg: "LIVE" });
-        setRenderTick(n => n + 1);
-      }
-    } catch (err) {
-      if (token === loadTokenRef.current)
-        setStatus({ state: "err", msg: "ERR: " + String(err).slice(0, 40) });
-    }
-  }, []);
-
-  // Fetch expirations when ticker changes
-  const fetchExpirations = useCallback(async (t: string) => {
-    setStatus({ state: "loading", msg: "LOADING..." });
-    try {
-      const res = await fetch(`/api/expirations?ticker=${encodeURIComponent(t)}`);
-      const json = await res.json();
-      const items = json.data?.items ?? [];
-      const seen = new Set<string>();
-      const list: Expiry[] = [];
-      items.forEach((item: Record<string, unknown>) => {
-        const d = String(item["expiration-date"] ?? "");
-        if (!d || seen.has(d)) return;
-        seen.add(d);
-        const dt = daysTo(d);
-        const expType = String(item["expiration-type"] ?? "").toLowerCase();
-        const holidayExcl: Record<string, boolean> = { "2026-06-19": true };
-        const holidayIncl: Record<string, boolean> = { "2026-06-18": true };
-        if (holidayExcl[d] && !holidayIncl[d]) return;
-        const keep = dt <= 7 || holidayIncl[d] || expType === "weekly" || expType === "monthly" || new Date(d).getDay() === 5;
-        if (!keep) return;
-        list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}`, type: expType });
-      });
-      list.sort((a, b) => a.daysTo - b.daysTo);
-      setExpirations(list);
-      const dte0 = list.find(e => e.daysTo === 0) ?? list[0];
-      if (dte0) {
-        setSelectedExpiry(dte0.date);
-        await loadChain(t, dte0.date);
-      }
-      setStatus({ state: "idle", msg: "READY" });
-    } catch {
-      setStatus({ state: "err", msg: "EXPIRY ERR" });
-    }
-  }, [loadChain]);
-
-  const doGo = useCallback(() => {
-    const t = ticker.trim().toUpperCase() || "SPX";
-    const e = selectedExpiry;
-    if (!e) { setStatus({ state: "err", msg: "SELECT EXPIRY" }); return; }
-    if (t !== activeTicker || !expirations.length) {
-      fetchExpirations(t).then(() => {
-        // expiry will be auto-selected; user should click GO again, or we auto-load
-        loadChain(t, e);
-      });
-    } else {
-      loadChain(t, e);
-    }
-  }, [ticker, selectedExpiry, activeTicker, expirations.length, fetchExpirations, loadChain]);
-
-  // Bump renderTick when rangePercent changes so ChainTable filtered useMemo re-runs
-  useEffect(() => {
-    rangePercentRef.current = rangePercent;
-    setRenderTick(t => t + 1);
-  }, [rangePercent]);
-
-  // Auto-fetch expirations for default ticker on mount
-  useEffect(() => {
-    fetchExpirations("SPX");
-  }, [fetchExpirations]);
-
-  // Handle ticker input change → reload expirations
-  const handleTickerChange = useCallback((val: string) => {
-    const v = val.toUpperCase();
-    setTicker(v);
-    if (v.length >= 1) {
-      // Debounce: don't fetch until user stops typing or selects from list
-    }
-  }, []);
-
-  const handleTickerConfirm = useCallback(() => {
-    const t = ticker.trim().toUpperCase();
-    if (!t || t === activeTicker) return;
-    fetchExpirations(t);
-  }, [ticker, activeTicker, fetchExpirations]);
-
-  // Silent REST re-baseline — refreshes Greeks from REST without clearing the table
-  const silentRestRefresh = useCallback(async () => {
-    if (!activeTicker || !activeExpiry) return;
-    try {
-      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(activeTicker)}&expiration=${encodeURIComponent(activeExpiry)}&range=all&noSubscribe=1`);
-      const json = await res.json();
-      const items = json.data?.items ?? [];
-      let target = items.filter((i: Record<string, unknown>) =>
-        String(i["expiration-date"] ?? "").slice(0, 10) === activeExpiry.slice(0, 10)
-      );
-      if (!target.length) target = items;
-
-      // Re-normalize and update liveData entries in place — WS fields win if they exist
-      (target as { strikes?: unknown[] }[]).forEach(expGroup => {
-        (expGroup.strikes || []).forEach((item: unknown) => {
-          const it = item as Record<string, unknown>;
-          const call = it.call as Record<string, unknown> | undefined;
-          const put  = it.put  as Record<string, unknown> | undefined;
-          if (call) {
-            const sym = String(call["streamer-symbol"] || call.symbol || "");
-            if (sym && liveDataRef.current[sym]) {
-              const norm = normalizeSide(call);
-              // Only update Greeks fields — leave WS bid/ask/last/vol/oi untouched if populated
-              const d = liveDataRef.current[sym];
-              if (norm.iv    != null && !d._ws) d.iv    = norm.iv;
-              if (norm.delta != null && !d._ws) d.delta = norm.delta;
-              if (norm.gamma != null && !d._ws) d.gamma = norm.gamma;
-              if (norm.theta != null && !d._ws) d.theta = norm.theta;
-              if (norm.vega  != null && !d._ws) d.vega  = norm.vega;
-            }
-          }
-          if (put) {
-            const sym = String(put["streamer-symbol"] || put.symbol || "");
-            if (sym && liveDataRef.current[sym]) {
-              const norm = normalizeSide(put);
-              const d = liveDataRef.current[sym];
-              if (norm.iv    != null && !d._ws) d.iv    = norm.iv;
-              if (norm.delta != null && !d._ws) d.delta = norm.delta;
-              if (norm.gamma != null && !d._ws) d.gamma = norm.gamma;
-              if (norm.theta != null && !d._ws) d.theta = norm.theta;
-              if (norm.vega  != null && !d._ws) d.vega  = norm.vega;
-            }
-          }
-        });
-      });
-
-      const rawSpot = parseFloat(String(json.data?.underlyingPrice ?? 0));
-      if (isFinite(rawSpot) && rawSpot > 10) setSpot(rawSpot);
-      setRenderTick(n => n + 1);
-      setLastUpdate(etTimeNow());
-    } catch {}
-  }, [activeTicker, activeExpiry]);
-
-  // Periodic REST re-baseline every 5 minutes
-  useEffect(() => {
-    if (restRefreshTimerRef.current) clearInterval(restRefreshTimerRef.current);
-    if (!activeTicker || !activeExpiry) return;
-    restRefreshTimerRef.current = setInterval(silentRestRefresh, 5 * 60 * 1000);
-    return () => {
-      if (restRefreshTimerRef.current) clearInterval(restRefreshTimerRef.current);
-    };
-  }, [activeTicker, activeExpiry, silentRestRefresh]);
-
-  const doRefresh = useCallback(async () => {
-    if (!activeTicker || !activeExpiry) throw new Error("no chain loaded");
-    await loadChain(activeTicker, activeExpiry);
-  }, [activeTicker, activeExpiry, loadChain]);
-
-  const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
-
-  const statusColors: Record<string, string> = {
-    live: "#00e676", loading: "#ffb300", err: "#ff4757", idle: "#475569",
-  };
-
-  const cols = colsCSS();
   const pageRef = useRef<HTMLDivElement>(null);
 
-  return (
-    <div ref={pageRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", overflow: "hidden", fontFamily: "Arial, sans-serif" }}>
+  useEffect(() => {
+    setLastUpdate(
+      new Date().toLocaleTimeString("en-US", {
+        timeZone: "America/New_York",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }),
+    );
+  }, [activeTicker, selectedExpiry, displayPercent, refreshSeed]);
 
-      {/* Toolbar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8,
-        padding: "6px 12px", background: "#0a0e14",
-        borderBottom: "1px solid #1e3050", flexShrink: 0, flexWrap: "wrap",
-      }}>
+  const doRefresh = async () => {
+    setRefreshSeed((value) => value + 1);
+  };
+
+  const { trigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(doRefresh);
+
+  const { rows, spot } = useMemo(
+    () => buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed),
+    [activeTicker, expiries, refreshSeed, selectedExpiry],
+  );
+
+  const nearestStrike = useMemo(() => {
+    if (!rows.length) return 0;
+    return rows.reduce((best, row) => (
+      Math.abs(row.strike - spot) < Math.abs(best - spot) ? row.strike : best
+    ), rows[0].strike);
+  }, [rows, spot]);
+
+  const totalRows = rows.length;
+  const autoDisplayPercent = useMemo(() => {
+    const requestedCount = Math.max(1, Math.round(totalRows * (displayPercent / 100)));
+    if (displayPercent === 10 && requestedCount < 10) return 20;
+    return displayPercent;
+  }, [displayPercent, totalRows]);
+
+  const visibleRows = useMemo(() => {
+    if (!rows.length) return [];
+    if (autoDisplayPercent >= 100) return rows;
+
+    const targetCount = Math.min(
+      rows.length,
+      Math.max(10, Math.round(rows.length * (autoDisplayPercent / 100))),
+    );
+    const atmIndex = rows.findIndex((row) => row.strike === nearestStrike);
+    const half = Math.floor(targetCount / 2);
+    let start = Math.max(0, atmIndex - half);
+    let end = Math.min(rows.length, start + targetCount);
+
+    if (end - start < targetCount) {
+      start = Math.max(0, end - targetCount);
+    }
+
+    return rows.slice(start, end).sort((a, b) => b.strike - a.strike);
+  }, [autoDisplayPercent, nearestStrike, rows]);
+
+  const maxByColumn = useMemo(() => {
+    const base: Record<Lowercase<ChainColumn>, number> = {
+      strike: 1,
+      gex: 1,
+      dex: 1,
+      chex: 1,
+      vex: 1,
+      premium: 1,
+      volume: 1,
+      oi: 1,
+    };
+
+    visibleRows.forEach((row) => {
+      base.gex = Math.max(base.gex, Math.abs(row.gex));
+      base.dex = Math.max(base.dex, Math.abs(row.dex));
+      base.chex = Math.max(base.chex, Math.abs(row.chex));
+      base.vex = Math.max(base.vex, Math.abs(row.vex));
+      base.premium = Math.max(base.premium, Math.abs(row.premium));
+      base.volume = Math.max(base.volume, Math.abs(row.volume));
+      base.oi = Math.max(base.oi, Math.abs(row.oi));
+    });
+
+    return base;
+  }, [visibleRows]);
+
+  const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
+
+  return (
+    <div
+      ref={pageRef}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        background: "#05080d",
+        overflow: "hidden",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 12px",
+          background: "#0a0e14",
+          borderBottom: "1px solid #1e3050",
+          flexShrink: 0,
+          flexWrap: "wrap",
+        }}
+      >
         <span style={{ fontSize: 11, fontWeight: 800, color: "#00e5ff", letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
         </span>
 
-        {/* Ticker input */}
         <input
-          list="chain-ticker-list"
-          value={ticker}
-          onChange={e => handleTickerChange(e.target.value)}
-          onBlur={handleTickerConfirm}
-          onKeyDown={e => e.key === "Enter" && handleTickerConfirm()}
+          list="options-chain-tickers"
+          value={tickerInput}
+          onChange={(event) => setTickerInput(event.target.value.toUpperCase())}
+          onBlur={() => setActiveTicker((tickerInput || "SPX").toUpperCase())}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") setActiveTicker((tickerInput || "SPX").toUpperCase());
+          }}
           autoComplete="off"
           spellCheck={false}
           style={{
-            fontSize: 10, fontWeight: 800, padding: "4px 8px",
-            border: "1px solid rgba(0,229,255,.4)", borderRadius: 4,
-            background: "#0a0e14", color: "#00e5ff", fontFamily: "Arial",
-            outline: "none", width: 72, textTransform: "uppercase",
+            fontSize: 10,
+            fontWeight: 800,
+            padding: "4px 8px",
+            border: "1px solid rgba(0,229,255,.4)",
+            borderRadius: 4,
+            background: "#0a0e14",
+            color: "#00e5ff",
+            fontFamily: "Arial",
+            outline: "none",
+            width: 88,
+            textTransform: "uppercase",
           }}
         />
-        <datalist id="chain-ticker-list">
-          {TICKER_LIST.map(t => <option key={t} value={t} />)}
+        <datalist id="options-chain-tickers">
+          {QUOTE_PANEL_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
         </datalist>
 
-        {/* Expiry select */}
         <select
           value={selectedExpiry}
-          onChange={e => setSelectedExpiry(e.target.value)}
+          onChange={(event) => setSelectedExpiry(event.target.value)}
           style={{
-            fontSize: 10, fontWeight: 800, padding: "4px 8px",
-            border: "1px solid rgba(255,255,255,.18)", borderRadius: 4,
-            background: "#0a0e14", color: "#e4e4e7",
-            cursor: "pointer", fontFamily: "Arial", outline: "none",
+            fontSize: 10,
+            fontWeight: 800,
+            padding: "4px 8px",
+            border: "1px solid rgba(255,255,255,.18)",
+            borderRadius: 4,
+            background: "#0a0e14",
+            color: "#e4e4e7",
+            cursor: "pointer",
+            fontFamily: "Arial",
+            outline: "none",
           }}
         >
-          <option value="">-- Expiry --</option>
-          {expirations.map(exp => (
-            <option key={exp.date} value={exp.date}>{exp.label}</option>
+          {expiries.map((expiry) => (
+            <option key={expiry.value} value={expiry.value}>{expiry.label}</option>
           ))}
         </select>
 
-        {/* GO */}
-        <button
-          onClick={doGo}
-          style={{
-            fontSize: 10, fontWeight: 800, padding: "4px 14px",
-            border: "1px solid rgba(0,229,255,.6)", borderRadius: 4,
-            background: "rgba(0,229,255,.15)", color: "#00e5ff",
-            cursor: "pointer", letterSpacing: "0.06em",
-          }}
-        >
-          GO
-        </button>
-
-        {/* Range */}
         <select
-          value={String(rangePercent)}
-          onChange={e => setRangePercent(e.target.value === "all" ? "all" : parseFloat(e.target.value))}
+          value={String(displayPercent)}
+          onChange={(event) => setDisplayPercent(Number(event.target.value))}
           style={{
-            fontSize: 10, fontWeight: 800, padding: "4px 8px",
-            border: "1px solid rgba(0,229,255,.3)", borderRadius: 4,
-            background: "#0a0e14", color: "#00e5ff",
-            cursor: "pointer", fontFamily: "Arial", outline: "none",
+            fontSize: 10,
+            fontWeight: 800,
+            padding: "4px 8px",
+            border: "1px solid rgba(0,229,255,.3)",
+            borderRadius: 4,
+            background: "#0a0e14",
+            color: "#00e5ff",
+            cursor: "pointer",
+            fontFamily: "Arial",
+            outline: "none",
           }}
         >
-          {["3","5","10","15","20"].map(v => <option key={v} value={v}>±{v}%</option>)}
-          <option value="all">All</option>
+          {DISPLAY_PERCENTS.map((percent) => (
+            <option key={percent} value={percent}>{percent === 100 ? "All strikes" : `${percent}% of strikes`}</option>
+          ))}
         </select>
+
+        {autoPercentNote ? (
+          <span style={{ fontSize: 9, fontWeight: 800, color: "#ffb300", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            {autoPercentNote}
+          </span>
+        ) : null}
 
         <div style={{ flex: 1 }} />
 
-        {/* Intensity */}
-        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>Intensity</span>
+        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          Intensity
+        </span>
         <input
-          type="range" min={0.2} max={3} step={0.01}
+          type="range"
+          min={0.2}
+          max={3}
+          step={0.01}
           value={intensity}
-          onChange={e => setIntensity(Number(e.target.value))}
+          onChange={(event) => setIntensity(Number(event.target.value))}
           style={{ width: 100, accentColor: "#00e5ff", cursor: "pointer" }}
         />
         <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, textAlign: "right", fontFamily: "monospace" }}>
           {intensity.toFixed(2)}x
         </span>
 
-        {/* Status / spot */}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
-          {activeTicker && spot > 0 && (
-            <span style={{ fontSize: 11, color: "#e4e4e7", fontWeight: 700 }}>
-              {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot.toFixed(2)}</span>
-            </span>
-          )}
-          <div style={{ width: 7, height: 7, borderRadius: "50%", background: statusColors[status.state] ?? "#475569", transition: "background .3s" }} />
-          <span style={{ fontSize: 9, color: statusColors[status.state], fontWeight: 800, letterSpacing: "0.08em" }}>{status.msg}</span>
+          <span style={{ fontSize: 11, color: "#e4e4e7", fontWeight: 700 }}>
+            {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot.toFixed(2)}</span>
+          </span>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e676" }} />
+          <span style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: "0.08em" }}>UI PREVIEW</span>
           <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate}</span>
         </div>
 
-        {/* Refresh / Snap / Discord */}
-        <button onClick={trigger} style={{ ...btnStyle }}>{btnLabel}</button>
-        <BoxSnapBtn targetRef={pageRef} label="📷" />
-        <BoxDiscordBtn targetRef={pageRef} message={`📊 Options Chain${activeTicker ? ` — ${activeTicker}` : ""}${activeExpiry ? ` ${activeExpiry}` : ""} — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        <button onClick={trigger} style={refreshStyle}>{refreshLabel}</button>
+        <BoxSnapBtn targetRef={pageRef} />
+        <BoxDiscordBtn
+          targetRef={pageRef}
+          message={`📊 Options Chain — ${activeTicker} ${selectedExpiry} — UI Preview`}
+        />
       </div>
 
-      {/* Column headers */}
-      {strikes.length > 0 && (
-        <div style={{
-          display: "grid", gridTemplateColumns: cols,
-          background: "#0a0f18", borderBottom: "2px solid #1e3050",
-          flexShrink: 0, fontSize: 10, fontWeight: 800,
-          letterSpacing: "0.1em", textTransform: "uppercase",
-        }}>
-          {CALL_COLS.map(c => (
-            <div key={c} style={{ padding: "5px 6px", textAlign: c === "symbol" ? "left" : "right", color: "#2298cf" }}>
-              {COL_LABELS[c]}
-            </div>
-          ))}
-          {NET_COLS.map(c => (
-            <div key={c} style={{ padding: "5px 6px", textAlign: "center", color: "#a78bfa" }}>
-              {COL_LABELS[c]}
-            </div>
-          ))}
-          <div style={{ padding: "5px 6px", textAlign: "center", color: "#e4e4e7" }}>Strike</div>
-          {PUT_COLS.map(c => (
-            <div key={c} style={{ padding: "5px 6px", textAlign: "right", color: "#ff7c88" }}>
-              {COL_LABELS[c]}
-            </div>
-          ))}
-        </div>
-      )}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "120px repeat(7, minmax(100px, 1fr))",
+          background: "#0a0f18",
+          borderBottom: "2px solid #1e3050",
+          flexShrink: 0,
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+        }}
+      >
+        {CHAIN_COLUMNS.map((column, index) => (
+          <div
+            key={column}
+            style={{
+              padding: "7px 10px",
+              textAlign: index === 0 ? "left" : "right",
+              color: index === 0 ? "#e4e4e7" : column === "Premium" ? "#ffb300" : "#a78bfa",
+            }}
+          >
+            {column}
+          </div>
+        ))}
+      </div>
 
-      {/* Chain body */}
-      <ChainTable
-        strikes={strikes}
-        liveData={liveDataRef.current}
-        spot={spot}
-        intensity={intensity}
-        rangePercent={rangePercent}
-        renderTick={renderTick}
-      />
+      <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+        {visibleRows.map((row) => {
+          const isATM = row.strike === nearestStrike;
+          const rowStyle = isATM
+            ? { background: "rgba(255,179,0,.07)", borderTop: "1px solid rgba(255,179,0,.25)", borderBottom: "1px solid rgba(255,179,0,.25)" }
+            : { borderBottom: "1px solid rgba(30,48,80,.35)" };
+
+          const numericCells: Array<{ key: Exclude<Lowercase<ChainColumn>, "strike">; value: number; text: string }> = [
+            { key: "gex", value: row.gex, text: fmtMoney(row.gex) },
+            { key: "dex", value: row.dex, text: fmtMoney(row.dex) },
+            { key: "chex", value: row.chex, text: fmtMoney(row.chex) },
+            { key: "vex", value: row.vex, text: fmtMoney(row.vex) },
+            { key: "premium", value: row.premium, text: fmtMoney(row.premium) },
+            { key: "volume", value: row.volume, text: fmtInt(row.volume) },
+            { key: "oi", value: row.oi, text: fmtInt(row.oi) },
+          ];
+
+          return (
+            <div
+              key={row.strike}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "120px repeat(7, minmax(100px, 1fr))",
+                ...rowStyle,
+              }}
+            >
+              <div
+                style={{
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  fontFamily: "monospace",
+                  textAlign: "left",
+                  color: isATM ? "#ffb300" : "#e4e4e7",
+                  background: isATM ? "rgba(255,179,0,.12)" : "transparent",
+                  borderRight: "1px solid rgba(255,255,255,.06)",
+                }}
+              >
+                {Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)}
+              </div>
+
+              {numericCells.map((cell) => (
+                <div
+                  key={cell.key}
+                  style={{
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    fontFamily: "monospace",
+                    textAlign: "right",
+                    color: cell.key === "premium" ? "#ffe08a" : "#ffffff",
+                    background: metricBg(cell.value, maxByColumn[cell.key], intensity),
+                    fontWeight: 700,
+                  }}
+                >
+                  {cell.text}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
