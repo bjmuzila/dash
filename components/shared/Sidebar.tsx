@@ -203,7 +203,7 @@ export default function Sidebar({
 
   return (
     <nav style={{
-      width: 140,
+      width: 110,
       flexShrink: 0,
       display: "flex",
       flexDirection: "column",

@@ -192,9 +192,6 @@ export default function HomePage() {
     if (rawChain.length === 0) return;
 
     const spot = spx || 7554;
-    const atmStrike = rawChain.reduce((best, r) =>
-      Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best
-    ).strike;
 
     // Filter by DTE: 0DTE = dte <= 0 or dte === 1 (same-day); 1DTE = dte <= 1
     const filtered = rawChain.filter(r => {
@@ -203,6 +200,11 @@ export default function HomePage() {
     });
 
     const source = filtered.length > 0 ? filtered : rawChain;
+
+    // Find ATM from the filtered source so it always exists in the window
+    const atmStrike = source.reduce((best, r) =>
+      Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best
+    ).strike;
 
     // Sort descending (highest strike first) for display
     const sortedAll = [...source].sort((a, b) => b.strike - a.strike);
@@ -299,8 +301,9 @@ export default function HomePage() {
     const CHART_W = 800;
     const CHART_H = 400; // match SVG viewBox height
     const ZERO_Y = CHART_H / 2;
-    const BAR_W = 14; // fixed bar width regardless of zoom
     const spacing = CHART_W / (slice.length + 1);
+    // Bar width: fill ~80% of spacing, never overlap (cap at spacing-1), min 2px
+    const BAR_W = Math.max(2, Math.min(spacing * 0.8, spacing - 1));
 
     // Find peak pos bar for label
     let peakPosBar: { x: number; y: number; strike: number } | null = null as { x: number; y: number; strike: number } | null;
@@ -740,11 +743,19 @@ export default function HomePage() {
 
               {/* Table */}
               <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
-                <table style={{ width: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse" }}>
+                <table style={{ width: "100%", textAlign: "right", fontSize: 10, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: 80 }} />
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "18%" }} />
+                  </colgroup>
                   <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "4px 8px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff", ...(i === 0 ? { minWidth: 90, width: 90 } : {}) }}>{h}</th>
+                        <th key={h} style={{ padding: "3px 6px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff", overflow: "hidden", textOverflow: "ellipsis" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -784,11 +795,11 @@ export default function HomePage() {
                       const cellVal = (val: string, colIdx: number) => {
                         const isNegVal = val.startsWith("-");
                         const isPosVal = !isNegVal && val !== "—";
-                        const base: React.CSSProperties = { padding: "4px 8px", textAlign: colIdx === 0 ? "left" : "right" };
+                        const base: React.CSSProperties = { padding: "3px 6px", textAlign: colIdx === 0 ? "left" : "right", overflow: "hidden", textOverflow: "ellipsis" };
 
                         if (colIdx === 0) {
                           return (
-                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : "#fff", minWidth: 90, maxWidth: 90, width: 90 }}>
+                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
                                 <span style={{ minWidth: 44 }}>{val}</span>
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 9, letterSpacing: "0.08em", flexShrink: 0 }}>ATM</span>}
