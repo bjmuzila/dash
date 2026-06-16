@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
       try {
         proxyResponse = await Promise.race([
           fetch(localProxyUrl, { method: 'GET' }),
-          new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+          new Promise<Response>((_: unknown, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
         ]);
       } catch (localErr) {
         if (remoteProxyUrl) {
