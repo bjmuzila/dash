@@ -53,8 +53,9 @@ class Subscriber {
   private subscribers: Set<SubscriberCallback> = new Set();
   private wsRef: WebSocket | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
+  private maxReconnectAttempts = 20; // keep retrying indefinitely
+  private reconnectDelay = 2000;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   private constructor() {
     this.state = {
@@ -83,10 +84,20 @@ class Subscriber {
    * Initialize the subscriber: start WS connection, fetch initial chain
    */
   async init(): Promise<void> {
-    // Fetch initial chain data
+    // Already initialized — don't re-init the singleton
+    if (this.wsRef !== null || this.state.isConnected) return;
     await this.fetchChain();
-    // Connect to WebSocket for live updates
     this.connectWebSocket();
+    // Heartbeat: reconnect if WS goes stale
+    if (!this.heartbeatTimer) {
+      this.heartbeatTimer = setInterval(() => {
+        const s = this.wsRef?.readyState;
+        if (s !== WebSocket.OPEN && s !== WebSocket.CONNECTING) {
+          this.reconnectAttempts = 0; // reset so we retry
+          this.connectWebSocket();
+        }
+      }, 10000);
+    }
   }
 
   /**
@@ -131,18 +142,21 @@ class Subscriber {
         this.reconnectAttempts = 0;
         this.publish();
 
-        // Subscribe to market data
+        // Subscribe to market data — all ES/NQ aliases so we catch whatever the relay emits
+        const coreSymbols = [
+          '$SPX', 'SPX',
+          '/ESU26', '/ESU6', '/ES:XCME', '/ES',
+          '/NQU26', '/NQU6', '/NQ:XCME',
+          'VIX',
+        ];
         this.wsRef?.send(
           JSON.stringify({
-            type: 'subscribe',
-            symbols: ['$SPX', 'SPX', '/ESU26', '/ES:XCME', 'VIX'],
-            feedTypesBySymbol: {
-              '$SPX': ['Quote', 'Trade', 'Summary'],
-              'SPX': ['Quote', 'Trade', 'Summary'],
-              '/ESU26': ['Quote', 'Trade'],
-              '/ES:XCME': ['Quote', 'Trade'],
-              'VIX': ['Quote', 'Trade'],
-            },
+            type: 'FEED_SUBSCRIPTION',
+            add: coreSymbols.flatMap(s => [
+              { type: 'Quote',   symbol: s },
+              { type: 'Trade',   symbol: s },
+              { type: 'Summary', symbol: s },
+            ]),
           })
         );
       };
@@ -172,18 +186,11 @@ class Subscriber {
    * Attempt to reconnect to WebSocket
    */
   private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[Subscriber] Max reconnect attempts reached');
-      return;
-    }
-
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    // Cap backoff at 30s, keep retrying forever
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, Math.min(this.reconnectAttempts - 1, 4)), 30000);
     console.log(`[Subscriber] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-
-    setTimeout(() => {
-      this.connectWebSocket();
-    }, delay);
+    setTimeout(() => { this.connectWebSocket(); }, delay);
   }
 
   /**
@@ -198,22 +205,28 @@ class Subscriber {
         const sym = String(ev.eventSymbol ?? '');
         const t = ev.eventType;
 
-        if ((sym === '$SPX' || sym === 'SPX') && t === 'Quote') {
-          const bid = Number(ev.bidPrice ?? 0);
-          const ask = Number(ev.askPrice ?? 0);
-          const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+        const isSpx = sym === '$SPX' || sym === 'SPX' || sym === 'SPX:XCIS';
+        const isEs  = sym.startsWith('/ES');
+        const isNq  = sym.startsWith('/NQ');
+        const isVix = sym === 'VIX' || sym === 'VIX:XCIS' || sym === '$VIX';
+
+        if (isSpx && (t === 'Quote' || t === 'Trade')) {
+          const bid  = Number(ev.bidPrice  ?? 0);
+          const ask  = Number(ev.askPrice  ?? 0);
+          const last = Number((ev as Record<string, unknown>).price ?? (ev as Record<string, unknown>).lastPrice ?? 0);
+          const mid  = bid > 0 && ask > 0 ? (bid + ask) / 2 : last;
 
           if (mid > 100) {
             this.state.spotPrice = mid;
-            // Trigger chain refresh on SPX quote
             this.fetchChain();
           }
         }
 
-        if ((sym === '/ESU26' || sym === '/ES:XCME') && t === 'Quote') {
-          const bid = Number(ev.bidPrice ?? 0);
-          const ask = Number(ev.askPrice ?? 0);
-          const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+        if (isEs && (t === 'Quote' || t === 'Trade')) {
+          const bid  = Number(ev.bidPrice  ?? 0);
+          const ask  = Number(ev.askPrice  ?? 0);
+          const last = Number((ev as Record<string, unknown>).price ?? (ev as Record<string, unknown>).lastPrice ?? 0);
+          const mid  = bid > 0 && ask > 0 ? (bid + ask) / 2 : last;
 
           if (mid > 100) {
             this.state.esFutures = mid;
@@ -221,8 +234,10 @@ class Subscriber {
           }
         }
 
-        if (sym === 'VIX' && t === 'Quote') {
-          const v = Number(ev.bidPrice ?? ev.lastPrice ?? 0);
+        if (isVix && (t === 'Quote' || t === 'Trade')) {
+          const bid  = Number(ev.bidPrice  ?? 0);
+          const last = Number((ev as Record<string, unknown>).price ?? (ev as Record<string, unknown>).lastPrice ?? 0);
+          const v    = bid > 0 ? bid : last;
           if (v > 0) {
             this.state.vix = v;
             this.publish();
@@ -296,14 +311,12 @@ class Subscriber {
   }
 
   /**
-   * Disconnect and cleanup
+   * Disconnect and cleanup — only call on full app shutdown.
+   * Components should use the unsubscribe fn returned by subscribe() instead.
    */
   disconnect(): void {
-    if (this.wsRef) {
-      this.wsRef.close();
-      this.wsRef = null;
-    }
-    this.subscribers.clear();
+    // No-op: singleton WS stays alive across component unmounts
+    // to prevent reconnect churn when navigating between pages.
   }
 }
 
