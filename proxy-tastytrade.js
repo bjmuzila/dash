@@ -3947,7 +3947,7 @@ const server = http.createServer(async (req, res) => {
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
       const cachedDxOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
       const finalOI = cachedMergedOI || liveOI || cachedDxOI;
-      if (finalOI > 0 && !cachedOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
+      if (finalOI > 0 && !cachedDxOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
       const liveVol  = Number(trade.dayVolume ?? summary.dayVolume ?? 0) || 0;
