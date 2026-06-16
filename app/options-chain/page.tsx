@@ -416,6 +416,14 @@ export default function OptionsChainPage() {
     loadChain(ticker, selectedExpiry);
   }, [tickerInput, selectedExpiry, loadChain]);
 
+  // Auto-load SPX on mount
+  useEffect(() => {
+    const defaultExpiry = selectedExpiry || expiries[0]?.value;
+    if (defaultExpiry) {
+      loadChain("SPX", defaultExpiry);
+    }
+  }, []);
+
   const [underlyingPrice, setUnderlyingPrice] = useState(0);
 
   const { rows, spot } = useMemo(() => {
