@@ -33,6 +33,10 @@ interface StrikeStruct {
   putGamma?:  number;
 }
 
+function todayET(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
 /** Build ChainRow[] by merging strike structure with live WS data. */
 function buildChain(structs: StrikeStruct[], live: Record<string, LiveEntry>, spot: number): ChainRow[] {
   return structs.map(s => {
@@ -86,6 +90,7 @@ export default function OverviewPage() {
   const [gexProfile, setGexProfile]       = useState<{ levels: number[]; values: number[]; flipPoint: number | null } | null>(null);
   const [feedTab, setFeedTab]             = useState<FeedTab>("snapshot");
   const [heatmapIntensity, setHeatmapIntensity] = useState(0.4);
+  const [rollingNetGexByStrike, setRollingNetGexByStrike] = useState<Record<number, number>>({});
   const [heatmapOpen, setHeatmapOpen] = useState(true);
   const [toolbarOpen, setToolbarOpen] = useState(true);
   const [gexToolbarOpen, setGexToolbarOpen] = useState(true);
@@ -102,6 +107,8 @@ export default function OverviewPage() {
   const wsRef      = useRef<WebSocket | null>(null);
   const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subSymsRef  = useRef<string[]>([]);
+  const pageIdRef   = useRef(`overview-gex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const lastHeatmapSaveRef = useRef(0);
 
   // Throttled render — rebuilds chain from live data, at most every 200ms
   const scheduleRender = useCallback(() => {
@@ -205,7 +212,8 @@ export default function OverviewPage() {
   // ── Load chain structure (strike list + symbols) for expiry ─────────────────
   const loadStructure = useCallback(async (expiry: string) => {
     try {
-      const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&awaitDX=1`;
+      const pageId = pageIdRef.current;
+      const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&pageId=${encodeURIComponent(pageId)}`;
       const res = await fetch(url);
       if (!res.ok) return;
       const json = await res.json();
@@ -305,6 +313,14 @@ export default function OverviewPage() {
         try { ws.send(JSON.stringify({ type: "subscribe", symbols: allSyms, feedTypesBySymbol: feedTypes })); } catch {}
       }
 
+      if (allSyms.length) {
+        fetch("/api/proxy/subscription-ready", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pageId, symbols: allSyms, timeout: 5000, threshold: 0.5 }),
+        }).catch(() => {});
+      }
+
       // Render immediately with REST data, then WS updates will flow in
       scheduleRender();
 
@@ -400,6 +416,84 @@ export default function OverviewPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [selectedExpiry]);
+
+  useEffect(() => {
+    if (!selectedExpiry) {
+      setRollingNetGexByStrike({});
+      return;
+    }
+
+    let cancelled = false;
+    const loadRolling = async () => {
+      try {
+        const res = await fetch(
+          `/api/snapshots/option-strike-gex-history?date=${encodeURIComponent(todayET())}&expiry=${encodeURIComponent(selectedExpiry)}&minutes=30`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        const nextMap = Object.fromEntries(
+          ((json?.rows as Array<{ strike: number; rolling_net_gex: number }>) ?? []).map((row) => [
+            Number(row.strike),
+            Number(row.rolling_net_gex ?? 0),
+          ])
+        ) as Record<number, number>;
+        if (!cancelled) setRollingNetGexByStrike(nextMap);
+      } catch {
+        if (!cancelled) setRollingNetGexByStrike({});
+      }
+    };
+
+    loadRolling().catch(() => {});
+    const timer = setInterval(() => { loadRolling().catch(() => {}); }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [selectedExpiry]);
+
+  useEffect(() => {
+    if (!selectedExpiry || chain.length === 0 || spotPrice <= 0) return;
+    const now = Date.now();
+    if (now - lastHeatmapSaveRef.current < 60_000) return;
+
+    const rows = chain
+      .filter((row) => Number.isFinite(row.strike) && Number.isFinite(row.netGEX))
+      .map((row) => ({
+        timestamp: now,
+        date: todayET(),
+        expiry: selectedExpiry,
+        spot: spotPrice,
+        strike: row.strike,
+        net_gex: Number(row.netGEX ?? 0),
+      }));
+
+    if (!rows.length) return;
+    lastHeatmapSaveRef.current = now;
+
+    fetch("/api/snapshots/option-strike-gex-history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rows),
+    })
+      .then(async () => {
+        const res = await fetch(
+          `/api/snapshots/option-strike-gex-history?date=${encodeURIComponent(todayET())}&expiry=${encodeURIComponent(selectedExpiry)}&minutes=30`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        setRollingNetGexByStrike(
+          Object.fromEntries(
+            ((json?.rows as Array<{ strike: number; rolling_net_gex: number }>) ?? []).map((row) => [
+              Number(row.strike),
+              Number(row.rolling_net_gex ?? 0),
+            ])
+          ) as Record<number, number>
+        );
+      })
+      .catch(() => {});
+  }, [chain, spotPrice, selectedExpiry]);
 
   // Poll window.__gexAppState prices (written by TopBar dxLink WS) every second
   useEffect(() => {
@@ -670,7 +764,15 @@ export default function OverviewPage() {
 
         {/* Heatmap body */}
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={heatmapIntensity} window={20} />
+          <GexHeatmap
+            chain={chain}
+            spotPrice={spotPrice}
+            expiry={selectedExpiry}
+            dataMode={dataMode}
+            intensity={heatmapIntensity}
+            window={20}
+            rollingNetGexByStrike={rollingNetGexByStrike}
+          />
         </div>
       </div>
 

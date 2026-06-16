@@ -457,6 +457,7 @@ export default function OptionsChainPage() {
   const liveDataRef  = useRef<Record<string, LiveEntry>>({});
   const wsRef        = useRef<WebSocket | null>(null);
   const subSymsRef   = useRef<string[]>([]);
+  const pageIdRef    = useRef(`options-chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const loadTokenRef = useRef(0);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keepaliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -551,7 +552,7 @@ export default function OptionsChainPage() {
     setStrikes([]);
 
     try {
-      const pageId = `options-chain-${Date.now()}`;
+      const pageId = pageIdRef.current;
       const rangeParam = rangePercentRef.current || '10';
       const res = await fetch(`/api/chains?ticker=${encodeURIComponent(t)}&expiration=${encodeURIComponent(expDate)}&range=${encodeURIComponent(rangeParam)}&pageId=${encodeURIComponent(pageId)}`);
       if (token !== loadTokenRef.current) return;
@@ -581,16 +582,6 @@ export default function OptionsChainPage() {
       if (wsRef.current?.readyState === 1 && syms.length) {
         const feedTypes = syms.reduce((acc, s) => { acc[s] = ["Quote","Greeks","Summary","Trade"]; return acc; }, {} as Record<string, string[]>);
         try { wsRef.current.send(JSON.stringify({ type: "subscribe", symbols: syms, feedTypesBySymbol: feedTypes })); } catch {}
-      }
-
-      // Also POST to subscribe endpoint (handles non-SPXW symbols)
-      if (syms.length) {
-        const feedTypes = syms.reduce((acc, s) => { acc[s] = ["Quote","Greeks","Summary","Trade"]; return acc; }, {} as Record<string, string[]>);
-        fetch("/api/proxy/dxlink-subscribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbols: syms, feedTypesBySymbol: feedTypes }),
-        }).catch(() => {});
       }
 
       setStrikes(parsed);
@@ -699,7 +690,7 @@ export default function OptionsChainPage() {
   const silentRestRefresh = useCallback(async () => {
     if (!activeTicker || !activeExpiry) return;
     try {
-      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(activeTicker)}&expiration=${encodeURIComponent(activeExpiry)}&range=all`);
+      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(activeTicker)}&expiration=${encodeURIComponent(activeExpiry)}&range=all&noSubscribe=1`);
       const json = await res.json();
       const items = json.data?.items ?? [];
       let target = items.filter((i: Record<string, unknown>) =>

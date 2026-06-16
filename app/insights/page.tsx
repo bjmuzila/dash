@@ -1183,7 +1183,7 @@ export default function InsightsPage() {
   const fetchExposure = useCallback(async (expiry: string, fallbackSpot?: number) => {
     if (!expiry) return;
     try {
-      const r = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`, { cache: "no-store" });
+      const r = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" });
       if (!r.ok) return;
       const data = await r.json();
       const snap = computeExposureSnapshot(data as ChainResponse, fallbackSpot);

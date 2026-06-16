@@ -664,6 +664,33 @@ function queueAutoSubscription(item) {
   subscriptionQueue.push(item);
 }
 
+function removeAutoSubscription(sym, reason = 'release') {
+  if (!sym || isCoreLiveSubscription(sym)) return false;
+  const types = subscriptionTypesBySymbol.get(sym);
+  if (!subscriptions.has(sym) && !types) return false;
+
+  subscriptions.delete(sym);
+  subscriptionTypesBySymbol.delete(sym);
+  subscriptionCreatedAt.delete(sym);
+
+  if (types) {
+    types.forEach(type => {
+      const key = `${type}:${sym}`;
+      activeAutoSubscriptionKeys.delete(key);
+      queuedSubscriptionKeys.delete(key);
+    });
+  }
+
+  for (let i = subscriptionQueue.length - 1; i >= 0; i--) {
+    if (subscriptionQueue[i]?.symbol === sym) {
+      subscriptionQueue.splice(i, 1);
+    }
+  }
+
+  log(`[SUBSCRIPTIONS] Released ${sym} (${reason})`);
+  return true;
+}
+
 function defaultAutoTypesForSymbol(sym) {
   if (/\{type=optstat\}$/i.test(String(sym || ''))) return ['Message', 'Configuration'];
   if (/^\/(ES|NQ)/.test(sym)) return ['Quote','Trade','TradeETH','Summary'];
@@ -790,22 +817,9 @@ async function pruneIdleSubscriptions() {
     const age = now - createdAt;
     if (age > IDLE_SUBSCRIPTION_MAX_AGE_MS) {
       log(`[PRUNE] Removing idle subscription: ${sym} (${Math.round(age/1000)}s old)`);
-
-      subscriptions.delete(sym);
-      subscriptionTypesBySymbol.delete(sym);
-      subscriptionCreatedAt.delete(sym);
-
-      // Also remove from active/queued keys
-      const types = subscriptionTypesBySymbol.get(sym);
-      if (types) {
-        types.forEach(type => {
-          const key = `${type}:${sym}`;
-          activeAutoSubscriptionKeys.delete(key);
-          queuedSubscriptionKeys.delete(key);
-        });
+      if (removeAutoSubscription(sym, 'idle-prune')) {
+        removed++;
       }
-
-      removed++;
     }
   }
 
@@ -2590,8 +2604,28 @@ function sleep(ms) {
 // Simplified: Just dedup subscriptions, return immediately (don't wait for cache)
 // Pages get whatever's in REST response, live data arrives via WebSocket
 const subscriptionManager = {
-  activeSubscriptions: new Set(),
+  pageOwnedSubscriptions: new Map(),
   pageRequests: new Map(),
+
+  releaseSymbols(symbols, reason = 'page-release') {
+    if (!symbols || symbols.size === 0) return 0;
+
+    let removed = 0;
+    symbols.forEach(sym => {
+      const currentCount = this.pageOwnedSubscriptions.get(sym) || 0;
+      if (currentCount > 1) {
+        this.pageOwnedSubscriptions.set(sym, currentCount - 1);
+        return;
+      }
+
+      this.pageOwnedSubscriptions.delete(sym);
+      if (removeAutoSubscription(sym, reason)) {
+        removed++;
+      }
+    });
+
+    return removed;
+  },
 
   /**
    * Register a page's interest in symbols
@@ -2602,27 +2636,44 @@ const subscriptionManager = {
       return { ready: true, count: 0, total: 0 };
     }
 
+    const uniqueSymbols = [...new Set(symbols.filter(Boolean))];
+    const nextSymbols = new Set(uniqueSymbols);
+    const previous = this.pageRequests.get(pageId)?.symbols || new Set();
+    const addedSymbols = uniqueSymbols.filter(sym => !previous.has(sym));
+    const removedSymbols = new Set([...previous].filter(sym => !nextSymbols.has(sym)));
+
+    if (removedSymbols.size > 0) {
+      const removed = this.releaseSymbols(removedSymbols, `page-refresh:${pageId}`);
+      if (removed > 0) {
+        log(`[SubscriptionMgr] Released ${removed} stale subscriptions for page ${pageId}`);
+      }
+    }
+
     // Register page
     this.pageRequests.set(pageId, {
-      symbols: new Set(symbols),
+      symbols: nextSymbols,
       requested: Date.now()
     });
 
     // Subscribe only NEW symbols to dxLink
-    const newSymbols = symbols.filter(sym => !this.activeSubscriptions.has(sym));
+    const newSymbols = addedSymbols.filter(sym => !this.pageOwnedSubscriptions.has(sym) && !subscriptions.has(sym));
     if (newSymbols.length > 0) {
       log(`[SubscriptionMgr] Adding ${newSymbols.length} new subscriptions for page ${pageId}`);
       newSymbols.forEach(sym => {
-        this.activeSubscriptions.add(sym);
         addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
       });
       sendSubscriptionsRateLimited();
     }
 
+    addedSymbols.forEach(sym => {
+      const currentCount = this.pageOwnedSubscriptions.get(sym) || 0;
+      this.pageOwnedSubscriptions.set(sym, currentCount + 1);
+    });
+
     // Return immediately - don't wait for cache
     // Pages will get live updates via WebSocket as data arrives
-    log(`[SubscriptionMgr] Subscription registered: ${symbols.length} symbols (${newSymbols.length} new)`);
-    return { ready: true, count: symbols.length, total: symbols.length };
+    log(`[SubscriptionMgr] Subscription registered: ${uniqueSymbols.length} symbols (${newSymbols.length} new)`);
+    return { ready: true, count: uniqueSymbols.length, total: uniqueSymbols.length, newCount: newSymbols.length };
   },
 
   cleanup() {
@@ -2633,6 +2684,7 @@ const subscriptionManager = {
     for (const [pageId, data] of this.pageRequests) {
       if (now - data.requested > timeout) {
         log(`[SubscriptionMgr] Cleanup: Removing stale page ${pageId}`);
+        this.releaseSymbols(data.symbols, `page-timeout:${pageId}`);
         this.pageRequests.delete(pageId);
         removed++;
       }
@@ -3857,7 +3909,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && p.startsWith('/proxy/api/tt/chains/')) {
     let sym = decodeURIComponent(p.slice('/proxy/api/tt/chains/'.length).split('?')[0]);
     sym = sym.replace(/^\$/, '');
+    const pageId = u.searchParams.get('pageId') || '';
     const noSubscribe = u.searchParams.get('noSubscribe') === '1';
+    const allowAutoSubscribe = !pageId;
     // awaitDX=1: subscribe chain to dxLink and wait for live Greeks before responding
     const awaitDX = u.searchParams.get('awaitDX') === '1';
 
@@ -3878,7 +3932,7 @@ const server = http.createServer(async (req, res) => {
         .flatMap(strike => [strike.call?.['streamer-symbol'], strike.put?.['streamer-symbol']])
         .filter(Boolean);
       const newSyms = streamerSyms.filter(sym => !subscriptions.has(sym));
-      if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
+      if (allowAutoSubscribe && newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
         newSyms.forEach(sym => {
           addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
           queueAutoSubscription({ type: 'Quote',   symbol: sym });
@@ -4013,7 +4067,7 @@ const server = http.createServer(async (req, res) => {
     const streamerSyms = noSubscribe ? [] : subscribeOptions.map(o => o['streamer-symbol']).filter(Boolean);
     // Only subscribe symbols not already active — prevents re-flooding on every chain fetch
     const newSyms = streamerSyms.filter(sym => !subscriptions.has(sym));
-    if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
+    if (allowAutoSubscribe && newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
       newSyms.forEach(sym => {
         addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
         queueAutoSubscription({ type: 'Quote',   symbol: sym });
@@ -4023,6 +4077,8 @@ const server = http.createServer(async (req, res) => {
       });
       sendSubscriptionsRateLimited();
       log('Subscribed', newSyms.length, 'NEW symbols (', streamerSyms.length - newSyms.length, 'already active) for expiry', exp || 'nearest');
+    } else if (!allowAutoSubscribe && streamerSyms.length) {
+      log('Chain fetch deferred page-scoped subscriptions for', streamerSyms.length, 'symbols | pageId:', pageId);
     } else if (streamerSyms.length) {
       log('Chain fetch: all', streamerSyms.length, 'symbols already subscribed, skipping queue');
     }
@@ -4278,7 +4334,7 @@ const server = http.createServer(async (req, res) => {
           sendJSON(res, 200, {
             ready: true,
             symbols: symbols.length,
-            newSubscriptions: result.count,
+            newSubscriptions: result.newCount ?? result.count,
             message: `Subscribed to ${symbols.length} symbols. Live data arrives via WebSocket.`
           });
         }).catch(e => {

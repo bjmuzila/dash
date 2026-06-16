@@ -46,8 +46,8 @@ export async function GET(request: Request) {
     // Use the full chains endpoint — it fetches TT REST OI + live dxLink greeks.
     // gex-chain only reads dxGreeksCache (subscription-only, often sparse).
     const chainUrl = expiry
-      ? `${PROXY}/proxy/api/tt/chains/SPX?expiration=${encodeURIComponent(expiry)}&range=all`
-      : `${PROXY}/proxy/api/tt/chains/SPX?range=all`;
+      ? `${PROXY}/proxy/api/tt/chains/SPX?expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`
+      : `${PROXY}/proxy/api/tt/chains/SPX?range=all&noSubscribe=1`;
 
     const res = await fetch(chainUrl, {
       cache: "no-store",

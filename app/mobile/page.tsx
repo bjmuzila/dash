@@ -81,6 +81,7 @@ export default function MobileGexPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subSymsRef = useRef<string[]>([]);
+  const pageIdRef = useRef(`mobile-gex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   const scheduleRender = useCallback(() => {
     if (renderTimer.current) return;
@@ -190,7 +191,8 @@ export default function MobileGexPage() {
   const loadStructure = useCallback(
     async (expiry: string) => {
       try {
-        const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&awaitDX=1`;
+        const pageId = pageIdRef.current;
+        const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&pageId=${encodeURIComponent(pageId)}`;
         const res = await fetch(url);
         if (!res.ok) return;
         const json = await res.json();
@@ -290,6 +292,14 @@ export default function MobileGexPage() {
           try {
             ws.send(JSON.stringify({ type: "subscribe", symbols: allSyms, feedTypesBySymbol: feedTypes }));
           } catch {}
+        }
+
+        if (allSyms.length) {
+          fetch("/api/proxy/subscription-ready", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pageId, symbols: allSyms, timeout: 5000, threshold: 0.5 }),
+          }).catch(() => {});
         }
 
         scheduleRender();

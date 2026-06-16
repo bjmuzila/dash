@@ -393,7 +393,7 @@ export function useSpxFlow(enabled = true) {
           ?? expirations[0]?.["expiration-date"];
         if (!selectedExpiry) return;
 
-        const chainRes = await fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(selectedExpiry)}&range=all`, { cache: "no-store" });
+        const chainRes = await fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(selectedExpiry)}&range=all&noSubscribe=1`, { cache: "no-store" });
         if (!chainRes.ok) return;
         const chainJson = await chainRes.json();
         const groups = Array.isArray(chainJson?.data?.items) ? chainJson.data.items as ChainGroupItem[] : [];

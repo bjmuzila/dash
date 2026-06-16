@@ -28,6 +28,12 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
+function fmtExpiryDate(value: string) {
+  const d = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 const BarChart2 = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -129,6 +135,7 @@ export default function HomePage() {
   const [showNetDex, setShowNetDex] = useState(false);
   const [showGexFlip, setShowGexFlip] = useState(false);
   const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("0dte");
+  const [expiryMap, setExpiryMap] = useState<{ "0dte": string; "1dte": string }>({ "0dte": "", "1dte": "" });
   const [intensity, setIntensity] = useState(0.4);
   const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
   const [panOffset, setPanOffset] = useState(0); // strike offset for drag-pan
@@ -165,9 +172,6 @@ export default function HomePage() {
       setPutWall(state.putWall);
       setGexFlip(state.gexFlip);
 
-      if (state.chain.length > 0) {
-        setRawChain(state.chain);
-      }
     });
 
     return () => {
@@ -201,6 +205,68 @@ export default function HomePage() {
     const t = setInterval(fetchQuotes, 30_000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchExpirations = async () => {
+      try {
+        const res = await fetch("/api/gex/expirations", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const exps = Array.isArray(json?.expirations) ? json.expirations as string[] : [];
+        if (!exps.length) return;
+
+        const today = etNow();
+        today.setHours(0, 0, 0, 0);
+        const sorted = [...exps].sort((a, b) => a.localeCompare(b));
+        const upcoming = sorted.filter((exp) => {
+          const d = new Date(`${exp}T00:00:00`);
+          d.setHours(0, 0, 0, 0);
+          return d.getTime() >= today.getTime();
+        });
+        const zero = upcoming[0] ?? sorted[0] ?? "";
+        const one = upcoming[1] ?? upcoming[0] ?? sorted[1] ?? sorted[0] ?? "";
+        if (!cancelled) setExpiryMap({ "0dte": zero, "1dte": one });
+      } catch {
+        // no-op
+      }
+    };
+
+    fetchExpirations().catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    if (!actualExpiry) return;
+    let cancelled = false;
+
+    const fetchExpiryChain = async () => {
+      try {
+        const res = await fetch(`/api/gex?expiry=${encodeURIComponent(actualExpiry)}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const nextChain = Array.isArray(json?.chain) ? json.chain : [];
+        if (nextChain.length) setRawChain(nextChain);
+        if (Number(json?.spotPrice ?? 0) > 100) setSpx(Number(json.spotPrice));
+        if (Number(json?.summary?.totalNetGEX ?? 0) !== 0) setNetGex(Number(json.summary.totalNetGEX));
+        setCallWall(json?.callWall ?? null);
+        setPutWall(json?.putWall ?? null);
+        setGexFlip(json?.gexFlip ?? null);
+      } catch {
+        // no-op
+      }
+    };
+
+    fetchExpiryChain().catch(() => {});
+    const t = setInterval(() => { fetchExpiryChain().catch(() => {}); }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [expiryMap, selectedExpiry]);
 
   // ── Task #7 Step 3 + Task #9: Filter heatmap by expiry, apply live colors ────
   useEffect(() => {
@@ -482,10 +548,8 @@ export default function HomePage() {
             {/* GEX CHART */}
             {(() => {
               // Dynamic DTE date labels
-              const etNowDate = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-              const fmt = (d: Date) => `${d.getMonth()+1}/${d.getDate()}`;
-              const d0 = fmt(etNowDate);
-              const d1 = (() => { const t = new Date(etNowDate); t.setDate(t.getDate()+1); return fmt(t); })();
+              const d0 = expiryMap["0dte"] ? fmtExpiryDate(expiryMap["0dte"]) : "--/--";
+              const d1 = expiryMap["1dte"] ? fmtExpiryDate(expiryMap["1dte"]) : "--/--";
 
               const CHART_W = 800, CHART_H = 400;
               const ZERO_Y = CHART_H / 2;
@@ -570,10 +634,10 @@ export default function HomePage() {
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "monospace", marginBottom: 6, padding: "0 8px", flexShrink: 0 }}>
                   <div style={{ display: "flex", gap: 16 }}>
                     <span style={{ display: "flex", alignItems: "center", gap: 6, color: C.cyan }}>
-                      <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: 2, display: "inline-block" }} />+ GEX
+                      <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: 2, display: "inline-block" }} />{gexMode === "call-put" ? "Call GEX" : "+ GEX"}
                     </span>
                     <span style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308" }}>
-                      <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block" }} />- GEX
+                      <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block" }} />{gexMode === "call-put" ? "Put GEX" : "- GEX"}
                     </span>
                     <span style={{ color: "#3a5570" }}>Drag to pan · Scroll to zoom ({zoomHalf*2} strikes)</span>
                   </div>
@@ -652,11 +716,11 @@ export default function HomePage() {
                     {/* Live bars */}
                     {chartBars ? (
                       <>
-                        {/* Call-Put mode: cyan above zero, gold below zero, side by side */}
+                        {/* Call-Put mode: full-width bars mirrored around zero */}
                         {chartBars.callPutBars ? chartBars.callPutBars.map((b, i) => (
                           <g key={`cp-${i}`}>
-                            <rect x={b.x - b.barW / 2} y={ZERO_Y - b.callH} width={b.barW / 2 - 1} height={b.callH} fill="url(#cyanBarGrad)" opacity={0.9}/>
-                            <rect x={b.x} y={ZERO_Y} width={b.barW / 2 - 1} height={b.putH} fill="url(#goldBarGrad)" opacity={0.9}/>
+                            <rect x={b.x - b.barW / 2} y={ZERO_Y - b.callH} width={b.barW} height={b.callH} fill="url(#cyanBarGrad)" opacity={0.92}/>
+                            <rect x={b.x - b.barW / 2} y={ZERO_Y} width={b.barW} height={b.putH} fill="url(#goldBarGrad)" opacity={0.92}/>
                           </g>
                         )) : chartBars.bars.map((b, i) => (
                           <rect

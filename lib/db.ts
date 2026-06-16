@@ -95,6 +95,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_bsg_session ON bzila_strike_gex_history(session);
     CREATE INDEX IF NOT EXISTS idx_bsg_ts ON bzila_strike_gex_history(timestamp);
 
+    CREATE TABLE IF NOT EXISTS option_strike_gex_history (
+      id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
+      expiry TEXT NOT NULL, spot REAL, strike REAL NOT NULL, net_gex REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
+    CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
+    CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);
+
     CREATE TABLE IF NOT EXISTS trades (
       id SERIAL PRIMARY KEY, timestamp TEXT NOT NULL,
       symbol TEXT, side TEXT, qty REAL, price REAL, data TEXT
@@ -614,6 +622,16 @@ export interface BzilaStrikeGexRecord {
   net_gex_change: number;
 }
 
+export interface OptionStrikeGexRecord {
+  id?: number;
+  timestamp: number;
+  date: string;
+  expiry: string;
+  spot: number;
+  strike: number;
+  net_gex: number;
+}
+
 export async function ensureBzilaStrikeGexTable(): Promise<void> { /* handled in ensureAllTables */ }
 
 export async function insertBzilaStrikeGexRows(rows: Omit<BzilaStrikeGexRecord, "id">[]): Promise<void> {
@@ -658,4 +676,41 @@ export async function getBzilaStrikeGexHistory(date?: string, session?: string, 
     "SELECT * FROM bzila_strike_gex_history ORDER BY timestamp DESC, bucket ASC, rank_index ASC LIMIT ?",
     [limit]
   );
+}
+
+export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord, "id">[]): Promise<void> {
+  if (!rows.length) return;
+  const pool = await getDb();
+  for (const row of rows) {
+    await pool.query(
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [row.timestamp, row.date, row.expiry, row.spot, row.strike, row.net_gex]
+    );
+  }
+}
+
+export async function getOptionStrikeRollingNetGex(
+  date: string,
+  expiry: string,
+  sinceTimestamp: number
+): Promise<Array<{ strike: number; rolling_net_gex: number; points: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT strike,
+            AVG(net_gex) AS rolling_net_gex,
+            COUNT(*)::int AS points
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND expiry = $2
+        AND timestamp >= $3
+      GROUP BY strike
+      ORDER BY strike ASC`,
+    [date, expiry, sinceTimestamp]
+  );
+  return result.rows.map((row) => ({
+    strike: Number(row.strike ?? 0),
+    rolling_net_gex: Number(row.rolling_net_gex ?? 0),
+    points: Number(row.points ?? 0),
+  }));
 }

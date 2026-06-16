@@ -40,12 +40,22 @@ function robustMax(vals: number[], pct = 0.95): number {
 interface Props {
   chain: ChainRow[];
   spotPrice: number;
+  expiry?: string;
   dataMode?: "oi-vol" | "vol-only";
   intensity?: number;
   window?: number;
+  rollingNetGexByStrike?: Record<number, number>;
 }
 
-export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", intensity = 1.4, window: win = 20 }: Props) {
+export default function GexHeatmap({
+  chain,
+  spotPrice,
+  expiry,
+  dataMode = "oi-vol",
+  intensity = 1.4,
+  window: win = 20,
+  rollingNetGexByStrike = {},
+}: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const useVol = dataMode === "vol-only";
@@ -81,7 +91,7 @@ export default function GexHeatmap({ chain, spotPrice, dataMode = "oi-vol", inte
         netVolGEX,
         netDEX: (callDelta * callPos - Math.abs(putDelta) * putPos) * spot * 100,
         gexPlusVex: netGEX + vannaValue,
-        rollingNetGEX: null,
+        rollingNetGEX: rollingNetGexByStrike[r.strike] ?? null,
       };
     })
     .sort((a, b) => b.strike - a.strike);

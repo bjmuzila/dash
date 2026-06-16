@@ -425,6 +425,7 @@ export default function MultGreekPage() {
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pageIdRef = useRef(`mult-greek-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const [renderTick, setRenderTick] = useState(0);
 
   const scheduleRender = useCallback(() => {
@@ -471,11 +472,12 @@ export default function MultGreekPage() {
     loadTokenRef.current += 1;
     const token = loadTokenRef.current;
     setStatus({ state: "loading", msg: "LOADING..." });
+    const pageId = pageIdRef.current;
 
     const bust = bustCache ? `&noCache=1` : "";
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
-        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`)
+        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}${bust}`)
           .then(async r => {
             const json = await r.json();
             return { ticker, json, ok: r.ok, status: r.status };
@@ -487,6 +489,7 @@ export default function MultGreekPage() {
 
     const newStrikes: Partial<Record<Ticker, StrikeRow[]>> = {};
     const newSpots: Partial<Record<Ticker, number>> = {};
+    const allSymbols = new Set<string>();
     let successCount = 0;
     const errStatuses: number[] = [];
 
@@ -504,9 +507,21 @@ export default function MultGreekPage() {
         String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
       );
       const parsed = buildStrikes(target.length ? target : items as unknown[], liveDataRef.current);
+      parsed.forEach(row => {
+        if (row.callSym) allSymbols.add(row.callSym);
+        if (row.putSym) allSymbols.add(row.putSym);
+      });
       if (parsed.length) { newStrikes[ticker] = parsed; successCount++; }
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
+    }
+
+    if (allSymbols.size > 0) {
+      fetch("/api/proxy/subscription-ready", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId, symbols: [...allSymbols], timeout: 6000, threshold: 0.5 }),
+      }).catch(() => {});
     }
 
     activeExpiryRef.current = expDate;
