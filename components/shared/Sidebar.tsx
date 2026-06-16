@@ -39,13 +39,15 @@ const ES_ALIASES = ["/ESU26", "/ESU6", "/ES:XCME", "/ES"];
 const NQ_ALIASES = ["/NQU26", "/NQU6", "/NQ:XCME", "/NQ"];
 
 const QUOTE_SYMBOLS = [
+  { sym: "SPCX",             label: "SPCX" },
+  { sym: "SPY",              label: "SPY" },
+  { sym: "QQQ",              label: "QQQ" },
   { sym: "AMD",              label: "AMD" },
   { sym: "META",             label: "META" },
   { sym: "SMH",              label: "SMH" },
   { sym: "NVDA",             label: "NVDA" },
   { sym: "AMZN",             label: "AMZN" },
   { sym: NQ_DISPLAY_SYMBOL,  label: "NQU" },
-  { sym: "QQQ",              label: "QQQ" },
   { sym: "GOOGL",            label: "GOOGL" },
   { sym: "MSFT",             label: "MSFT" },
   { sym: "AAPL",             label: "AAPL" },
@@ -57,6 +59,8 @@ const WS_ALL_SYMBOLS = [
   { sym: ES_DISPLAY_SYMBOL, label: "ESU" },
   { sym: NQ_DISPLAY_SYMBOL, label: "NQU" },
   { sym: "SPX",             label: "SPX" },
+  { sym: "SPCX",            label: "SPCX" },
+  { sym: "SPY",             label: "SPY" },
   { sym: "QQQ",             label: "QQQ" },
   { sym: "SMH",             label: "SMH" },
   { sym: "NVDA",            label: "NVDA" },
@@ -438,11 +442,19 @@ export default function Sidebar({
         {/* Avatar circle */}
         <div style={{
           width: 32, height: 32, borderRadius: "50%",
-          background: "radial-gradient(circle at 35% 35%, #00e5ff, #0066cc)",
+          overflow: "hidden",
+          background: "#0b1220",
           boxShadow: "0 0 12px rgba(0,229,255,0.35)",
           cursor: "pointer",
           flexShrink: 0,
-        }} />
+          border: "1px solid rgba(0,229,255,0.35)",
+        }}>
+          <img
+            src="/sidebar-logo.jpg"
+            alt="Logo"
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          />
+        </div>
       </div>
     </nav>
   );
