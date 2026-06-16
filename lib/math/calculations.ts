@@ -18,6 +18,9 @@ export interface ChainRow {
   netVolGEX?: number;
   netDEX?: number;
   volNetDEX?: number;
+  // Vanna (dDelta/dIV) exposure — OI-weighted and volume-weighted
+  netVanna?: number;
+  netVolVanna?: number;
   bid?: number;
   ask?: number;
   type?: "call" | "put";

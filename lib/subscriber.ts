@@ -17,6 +17,8 @@ export interface ChainRow {
   netVolGEX: number;
   netDEX: number;
   volNetDEX: number;
+  netVanna?: number;
+  netVolVanna?: number;
   callIV: number;
   putIV: number;
   dte: number;

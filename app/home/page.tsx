@@ -201,10 +201,17 @@ export default function HomePage() {
 
     const source = filtered.length > 0 ? filtered : rawChain;
 
-    // Find ATM from the filtered source so it always exists in the window
-    const atmStrike = source.reduce((best, r) =>
-      Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best
-    ).strike;
+    // Find ATM: closest strike at or below spot (floor), ties go to lower strike
+    const atmStrike = source.reduce((best, r) => {
+      const dBest = spot - best.strike; // positive = best is below spot
+      const dR    = spot - r.strike;
+      // Prefer strike just below or at spot; among equal distance pick the lower one
+      const absBest = Math.abs(dBest);
+      const absR    = Math.abs(dR);
+      if (absR < absBest) return r;
+      if (absR === absBest) return r.strike < best.strike ? r : best; // pick lower
+      return best;
+    }).strike;
 
     // Sort descending (highest strike first) for display
     const sortedAll = [...source].sort((a, b) => b.strike - a.strike);
@@ -251,7 +258,7 @@ export default function HomePage() {
         netGex: fmt(r.netGEX),
         volOnly: fmt(r.netVolGEX),
         dex: fmt(r.netDEX),
-        vex: "—",
+        vex: r.netVanna != null && r.netVanna !== 0 ? fmt(r.netVanna) : "—",
         dwGex: fmt(r.volNetDEX),
         type,
         rank: rank ?? undefined,
@@ -912,6 +919,7 @@ export default function HomePage() {
                   { key: "netGex",  label: "Net GEX" },
                   { key: "volOnly", label: "Vol GEX" },
                   { key: "dex",     label: "DEX" },
+                  { key: "vex",     label: "Vanna" },
                   { key: "dwGex",   label: "Δ·GEX" },
                 ];
 

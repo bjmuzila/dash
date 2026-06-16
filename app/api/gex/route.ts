@@ -101,6 +101,15 @@ export async function GET(request: Request) {
         const volNetDEX = (callDelta * callVolume * spot * 100) -
                           (Math.abs(putDelta) * putVolume * spot * 100);
 
+        // Vanna = dDelta/dIV ≈ delta*(1-delta)/IV per contract, scaled by spot*100 notional
+        // For puts: use |putDelta|*(1-|putDelta|)/putIV (puts flip sign vs calls)
+        const sqrtT      = Math.sqrt(Math.max(dte, 0.5) / 365);
+        const callVanna1 = callIV > 0 ? callDelta * (1 - callDelta) * sqrtT / callIV : 0;
+        const putVanna1  = putIV  > 0 ? Math.abs(putDelta) * (1 - Math.abs(putDelta)) * sqrtT / putIV : 0;
+        const VANNA_SCALE = spot * 100;
+        const netVanna    = (callVanna1 * callOI    - putVanna1 * putOI)    * VANNA_SCALE;
+        const netVolVanna = (callVanna1 * callVolume - putVanna1 * putVolume) * VANNA_SCALE;
+
         // Per-expiration row for profile sweep (IV + DTE must stay per-expiration)
         if ((callIV > 0 || putIV > 0) && (callOI > 0 || putOI > 0)) {
           profileRows.push({ strike, callOI, putOI, callIV, putIV, dte });
@@ -109,16 +118,18 @@ export async function GET(request: Request) {
         // Merge expirations: accumulate OI/volume across dates for same strike
         const existing = strikeMap.get(strike);
         if (existing) {
-          existing.callOI!     += callOI;
-          existing.putOI!      += putOI;
-          existing.callVolume! += callVolume;
-          existing.putVolume!  += putVolume;
-          existing.callGEX!    += callGEX;
-          existing.putGEX!     += putGEX;
-          existing.netGEX!     += netGEX;
-          existing.netVolGEX!  += netVolGEX;
-          existing.netDEX!     += netDEX;
-          existing.volNetDEX!  += volNetDEX;
+          existing.callOI!      += callOI;
+          existing.putOI!       += putOI;
+          existing.callVolume!  += callVolume;
+          existing.putVolume!   += putVolume;
+          existing.callGEX!     += callGEX;
+          existing.putGEX!      += putGEX;
+          existing.netGEX!      += netGEX;
+          existing.netVolGEX!   += netVolGEX;
+          existing.netDEX!      += netDEX;
+          existing.volNetDEX!   += volNetDEX;
+          existing.netVanna!    += netVanna;
+          existing.netVolVanna! += netVolVanna;
           // average greeks (weighted by OI)
           if (callOI > 0) existing.callGamma = callGamma;
           if (putOI  > 0) existing.putGamma  = putGamma;
@@ -137,6 +148,8 @@ export async function GET(request: Request) {
             netVolGEX,
             netDEX,
             volNetDEX,
+            netVanna,
+            netVolVanna,
             callIV,    putIV,    dte,
           });
         }
