@@ -567,6 +567,11 @@ let subscriptionBatchDelay = SUBSCRIPTION_BATCH_DELAY_BASE;
 let subscriptionErrorCount = 0;
 let pendingNewSubscriptions = false;  // Track if there are new subscriptions to send
 
+// ─── Subscription Lifecycle Tracking ─────────────────────────────────────
+const subscriptionCreatedAt = new Map(); // symbol → creation timestamp
+const IDLE_SUBSCRIPTION_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+const PRUNE_INTERVAL_MS = 10 * 60 * 1000; // Check every 10 minutes
+
 const CORE_LIVE_SUBSCRIPTIONS = new Set([
   'SPX',
   'VIX',
@@ -647,6 +652,12 @@ function addAutoSubscription(sym, types = null) {
   if (!sym) return;
   const isNew = !subscriptions.has(sym);
   subscriptions.add(sym);
+
+  // Track creation time for idle pruning
+  if (isNew) {
+    subscriptionCreatedAt.set(sym, Date.now());
+  }
+
   const current = subscriptionTypesBySymbol.get(sym) || new Set();
   const incoming = types || defaultAutoTypesForSymbol(sym);
   incoming.forEach(type => {
@@ -728,6 +739,52 @@ async function sendSubscriptionsRateLimited() {
   } finally {
     subscriptionSending = false;
   }
+}
+
+async function pruneIdleSubscriptions() {
+  const now = Date.now();
+  let removed = 0;
+
+  for (const sym of [...subscriptions]) {
+    // Never prune core subscriptions
+    if (isCoreLiveSubscription(sym)) continue;
+
+    const createdAt = subscriptionCreatedAt.get(sym);
+    if (!createdAt) continue; // Skip if no timestamp
+
+    const age = now - createdAt;
+    if (age > IDLE_SUBSCRIPTION_MAX_AGE_MS) {
+      log(`[PRUNE] Removing idle subscription: ${sym} (${Math.round(age/1000)}s old)`);
+
+      subscriptions.delete(sym);
+      subscriptionTypesBySymbol.delete(sym);
+      subscriptionCreatedAt.delete(sym);
+
+      // Also remove from active/queued keys
+      const types = subscriptionTypesBySymbol.get(sym);
+      if (types) {
+        types.forEach(type => {
+          const key = `${type}:${sym}`;
+          activeAutoSubscriptionKeys.delete(key);
+          queuedSubscriptionKeys.delete(key);
+        });
+      }
+
+      removed++;
+    }
+  }
+
+  if (removed > 0) {
+    log(`[PRUNE] Session total: removed ${removed} idle subscriptions (total remaining: ${subscriptions.size})`);
+  }
+}
+
+let pruneTimer = null;
+
+function startSubscriptionPruning() {
+  if (pruneTimer) return; // Already running
+  pruneTimer = setInterval(pruneIdleSubscriptions, PRUNE_INTERVAL_MS);
+  log('[PRUNE] Idle subscription pruning started (interval: ' + (PRUNE_INTERVAL_MS/1000) + 's)');
 }
 
 const dxClients     = new Set();
@@ -874,6 +931,27 @@ const historyDailyCache = new Map(); // symbol -> { ts, payload }
 const historyDailyInFlight = new Map(); // symbol -> Promise<payload>
 let spx0dteEnsurePromise = null;
 let putCallCache = { ratio: 0, date: '', source: '', ts: 0 };
+
+// ─── Cache TTL Management ─────────────────────────────────────────────────
+const CACHE_MAX_AGE_MS = 60000; // 1 minute max age
+const CACHE_PRUNE_INTERVAL_MS = 30000; // Check every 30s
+
+function pruneStaleQuoteCache() {
+  const now = Date.now();
+  let pruned = 0;
+
+  for (const key of Object.keys(dxQuoteCache)) {
+    const entry = dxQuoteCache[key];
+    if (entry && entry.timestamp && now - entry.timestamp > CACHE_MAX_AGE_MS) {
+      delete dxQuoteCache[key];
+      pruned++;
+    }
+  }
+
+  if (pruned > 0) {
+    log(`[CACHE] Pruned ${pruned} stale quotes (max age: ${CACHE_MAX_AGE_MS}ms)`);
+  }
+}
 
 // ─── Server-side SPX 0DTE Flow Accumulator ───────────────────────────────────
 // Accumulates premium flow from dxLink Trade events regardless of browser state.
@@ -1214,8 +1292,8 @@ function computeAndCacheGexLevels(underlyingPrice, esBasis = esBasisCache.basis)
   if (!(spot > 0)) return;
 
   strikes.forEach(r => {
-    r.callGEX = r.callGamma * r.callOI * 100 * spot;
-    r.putGEX  = r.putGamma  * r.putOI  * 100 * spot;
+    r.callGEX = r.callGamma * r.callOI * spot * spot;
+    r.putGEX  = r.putGamma  * r.putOI  * spot * spot;
     r.netGEX  = r.callGEX - r.putGEX;
   });
 

@@ -366,8 +366,9 @@
 
       var pageId = 'options-chain-' + Date.now();
       var baseUrl = '/proxy/api/tt/chains/' + encodeURIComponent(_activeTicker) + '?expiration=' + expDate + '&pageId=' + encodeURIComponent(pageId);
+      var rangeParam = _rangePercent === 'all' ? 'all' : String(_rangePercent);
 
-      function startFetch() { fetch(baseUrl + '&range=all')
+      function startFetch() { fetch(baseUrl + '&range=' + rangeParam)
         .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP '+r.status); })
         .then(function(json) {
           if (token !== _pendingToken) return;

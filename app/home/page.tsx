@@ -648,7 +648,7 @@ export default function HomePage() {
                         if ((isPosTop || isPosStrong) && !isNegV && (colIdx === 1 || colIdx === 3)) {
                           cellBg = "rgba(14,116,144,0.30)";
                           cellBorder = "1px solid rgba(0,240,255,0.20)";
-                          cellColor = isPosTop ? "#fff" : C.cyan;
+                          cellColor = isPosTop ? "#fff" : "#00D9FF";
                           cellFw = 700;
                         }
                         if (isNegRed && isNegV && (colIdx === 1 || colIdx === 3)) {
