@@ -3874,8 +3874,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     // NOTE (2026-06-11): TastyTrade REST /option-chains returns openInterest=0 for all options
-    // Real OI comes from dxLink Summary events (populated in real-time)
-    // See debug logs above for confirmation: restOI=0, liveOI=7367+ from dxLink
+    // Real OI comes from market-data endpoint (daily snapshot, typically 6:30-8am ET)
+    // Build OI cache from market-data for streamer symbols
+    const oiCache = {};
+    const symbolsForOI = filteredOptions
+      .map(o => o['streamer-symbol'])
+      .filter(Boolean)
+      .slice(0, 100); // market-data has limits, batch in 100s
+
+    if (symbolsForOI.length > 0) {
+      const qs = symbolsForOI.map(s => `symbol[]=${encodeURIComponent(s)}`).join('&');
+      const { status: s3, data: d3 } = await ttGet(`/market-data?${qs}`);
+      if (s3 === 200 && d3?.data?.items) {
+        d3.data.items.forEach(item => {
+          const sym = item.symbol || '';
+          const oi = Number(item['open-interest'] ?? item.openInterest ?? 0) || 0;
+          if (oi > 0) oiCache[sym] = oi;
+        });
+        log('Fetched OI for', Object.keys(oiCache).length, 'symbols from market-data');
+      }
+    }
 
     for (const opt of filteredOptions) {
       const expDate = opt['expiration-date'] || '';
@@ -3897,15 +3915,15 @@ const server = http.createServer(async (req, res) => {
       const liveVega  = finiteNumber(greeks.vega, opt.vega, opt['vega']);
       const liveIv    = greeks.volatility > 0 ? greeks.volatility : firstFiniteNumber(opt['implied-volatility'], opt['iv']);
 
-      // OI: Priority chain (2026-06-11 fix)
-      // 1. dxLink Summary (real-time updates)
-      // 2. TastyTrade REST data (authoritative at fetch time)
+      // OI: Priority chain (2026-06-15 fix)
+      // 1. market-data endpoint (daily snapshot from TT, most accurate)
+      // 2. dxLink Summary cache (historical, may not update daily)
       // 3. Last known non-zero dxLink OI from cache
-      // 4. Default to 0 (never use stale Yahoo/CBOE fallbacks)
+      // 4. Default to 0
+      const marketDataOI = Number(oiCache[streamerSym] ?? 0) || 0;
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
-      const restOI  = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
       const cachedOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
-      const finalOI = liveOI || restOI || cachedOI;
+      const finalOI = marketDataOI || liveOI || cachedOI;
       if (finalOI > 0 && !cachedOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;

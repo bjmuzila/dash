@@ -976,14 +976,18 @@
       if (!Array.isArray(data)) return;
       if (!_wsDataStartTime) _wsDataStartTime = Date.now();
       var changed = false;
+      var summaryCount = 0;
       data.forEach(function(ev) {
         if (!ev || !ev.eventSymbol) return;
         var t = ev.eventType;
         if (t === 'Quote')   { applyQuote(ev);   changed = true; }
         if (t === 'Greeks')  { applyGreeks(ev);  changed = true; }
-        if (t === 'Summary') { applySummary(ev); changed = true; }
+        if (t === 'Summary') { applySummary(ev); changed = true; summaryCount++; }
         if (t === 'Trade')   { applyTrade(ev);   changed = true; }
       });
+      if (summaryCount > 0 && summaryCount % 50 === 0) {
+        console.log('[Chain] Received', summaryCount, 'Summary events');
+      }
       if (changed) scheduleRender();
     }
 
@@ -1012,10 +1016,18 @@
       var sym = ev.eventSymbol;
       if (!_liveData[sym]) _liveData[sym] = {};
       var d = _liveData[sym];
-      if (ev.openInterest != null) d.oi  = ev.openInterest;
-      else if (ev['open-interest'] != null) d.oi = ev['open-interest'];
-      else if (ev.open_interest != null) d.oi = ev.open_interest;
-      if (ev.dayVolume    != null) d.vol = ev.dayVolume;
+      var prevOI = d.oi || 0;
+      var newOI = ev.openInterest || ev['open-interest'] || ev.open_interest || 0;
+      if (newOI > 0 && newOI !== prevOI) {
+        d.oi = newOI;
+        // Only log significant changes
+        if (Math.abs(newOI - prevOI) > Math.max(prevOI * 0.05, 100)) {
+          console.log('[Chain OI]', sym, ':', prevOI, '→', newOI);
+        }
+      }
+      if (ev.dayVolume != null) {
+        d.vol = ev.dayVolume;
+      }
     }
 
     function applyTrade(ev) {
