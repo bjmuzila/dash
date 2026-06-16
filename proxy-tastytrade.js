@@ -3981,8 +3981,12 @@ const server = http.createServer(async (req, res) => {
   // Live data arrives via WebSocket /ws/dxlink
   if (req.method === 'POST' && p === '/proxy/api/subscription-ready') {
     let body = '';
-    req.on('data', c => body += c);
-    req.on('end', async () => {
+    req.on('data', c => { if (body.length < 10000) body += c; });
+    req.on('error', e => {
+      log('[subscription-ready] Request error:', e.message);
+      if (!res.writableEnded) sendJSON(res, 400, { error: 'Bad request' });
+    });
+    req.on('end', () => {
       try {
         const parsed = JSON.parse(body);
         const { pageId, symbols } = parsed;
@@ -3991,17 +3995,20 @@ const server = http.createServer(async (req, res) => {
           return sendJSON(res, 400, { error: 'pageId and symbols required' });
         }
 
-        const result = await subscriptionManager.request(pageId, symbols);
-
-        return sendJSON(res, 200, {
-          ready: true,
-          symbols: symbols.length,
-          newSubscriptions: result.count,
-          message: `Subscribed to ${symbols.length} symbols. Live data arrives via WebSocket.`
+        subscriptionManager.request(pageId, symbols).then(result => {
+          sendJSON(res, 200, {
+            ready: true,
+            symbols: symbols.length,
+            newSubscriptions: result.count,
+            message: `Subscribed to ${symbols.length} symbols. Live data arrives via WebSocket.`
+          });
+        }).catch(e => {
+          log('[subscription-ready] Request error:', e.message);
+          if (!res.writableEnded) sendJSON(res, 500, { error: e.message });
         });
       } catch (e) {
-        log('[subscription-ready] Error:', e.message);
-        return sendJSON(res, 500, { error: e.message });
+        log('[subscription-ready] Parse error:', e.message);
+        if (!res.writableEnded) sendJSON(res, 500, { error: e.message });
       }
     });
     return;

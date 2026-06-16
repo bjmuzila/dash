@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-06-15 (session 20) — Bzila Home Page + Greeks Fix + Keepalive Infrastructure
+
+### `app/home/page.tsx` *(new)*
+- New personal trading dashboard landing page at `/home`
+- Greeting header (Good Morning/Afternoon/Evening, Bzila) with live SPX sparkline
+- Date/time card with ET clock, market open/closed badge, live SPX price + % change, ES futures price
+- Performance ring (win rate donut, trade counts)
+- Session timer with dual-arc ring counting down to 16:00 ET
+- Market bias card pulling net GEX from `/api/gex` with sparkline decoration
+- Today's Focus interactive checklist (click to toggle done/pending)
+- Weekly P&L bar chart with day labels
+- Trading Tools 2×3 grid linking to existing pages (Heatmap, Opt Flow, Ladder, Quotes, Levels, Snapshot)
+- All in existing dark theme (`#05080d`, `#00e5ff`, `#0a0e14`)
+
+### `app/options-chain/page.tsx`
+- Added `normalizeSide()` to map hyphenated TT REST field names (`implied-volatility`, `open-interest`) to normalized JS names (`iv`, `oi`, `delta`, `gamma`, `theta`, `vega`)
+- Fixed `buildStrikes()` to store normalized `LiveEntry` as `callTT`/`putTT` — Greeks were blank before because raw TT objects had wrong field names
+- Added keepalive ping on mount + every 8 min to `/api/keepalive`
+- Added `silentRestRefresh` — re-baselines Greeks from REST every 5 min for symbols without live WS data (`!d._ws`)
+
+### `app/api/keepalive/route.ts` *(new)*
+- Lightweight GET that pings `${PROXY}/proxy/api/health` to prevent Render cold starts
+
+### `vercel.json` *(new)*
+- Vercel cron every 10 min hitting `/api/keepalive` for server-side keepalive
+
+### `Vanilla/proxy-tastytrade.js`
+- Added `subscriptionLastSeen` Map + `touchSubscription()` + `pruneIdleSubscriptions()` — prunes option symbols idle >30 min every 10 min
+- Added `GET /proxy/api/health` endpoint returning dxLink state, authorization status, subscription count, browser client count
+- `touchSubscription(sym)` called in `POST /proxy/dxlink/subscribe` handler
+
+### TypeScript Fix (`app/home/page.tsx`)
+- Added `accent?: string` to `Ring` component prop signature to resolve build error
+
+### Version
+- Bumped through `2026.6.15-v70` → `v71` → `v72`
+
+---
+
+
 ## 2026-06-15 (session 19) — TypeScript Type Fix: StrikeRow LiveEntry
 
 ### `app/options-chain/page.tsx`

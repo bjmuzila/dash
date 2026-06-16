@@ -437,6 +437,7 @@
             setStatus('loading', 'SUBSCRIBING...');
 
             // Wait for subscription manager to report ready
+            var subscriptionReady = false;
             fetch('/proxy/api/subscription-ready', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -447,18 +448,31 @@
                 threshold: 0.5
               })
             })
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              return r.json();
+            })
             .then(function(readyData) {
               if (token !== _pendingToken) return;
+              subscriptionReady = true;
               console.log('[ChainOptions] subscription ready:', readyData);
               stopWaitCountdown();
               finalizeLoad(preStrikes, token, readyData.ready ? 'LIVE' : 'LIVE (Partial)');
             })
             .catch(function(e) {
               if (token !== _pendingToken) return;
-              console.warn('[ChainOptions] subscription-ready failed:', e);
-              stopWaitCountdown();
-              finalizeLoad(preStrikes, token, 'LIVE (Error)');
+              console.warn('[ChainOptions] subscription-ready failed:', e.message || e);
+              // Fall back to waiting min time if server fails
+              if (!subscriptionReady) {
+                var checkFallback = function() {
+                  if (token !== _pendingToken) return;
+                  var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
+                  if (_wsDataStartTime && elapsed >= _minWaitForWsMs) { finalizeLoad(preStrikes, token, 'LIVE (Fallback)'); }
+                  else if (elapsed >= _minWaitForWsMs) { finalizeLoad(preStrikes, token, 'LIVE (Static Fallback)'); }
+                  else { setTimeout(checkFallback, 50); }
+                };
+                setTimeout(checkFallback, 50);
+              }
             });
           }
         })
