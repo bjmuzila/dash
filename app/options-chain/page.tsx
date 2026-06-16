@@ -115,6 +115,9 @@ function buildExpiries() {
   let daysAdded = 0;
   let offset = 0;
 
+  // Day abbreviations
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
   // Find next 12 trading days
   while (daysAdded < 12 && offset < 30) {
     const date = new Date(today);
@@ -122,9 +125,10 @@ function buildExpiries() {
 
     if (isTradingDay(date)) {
       const value = etDateKey(date);
+      const dayName = dayNames[date.getDay()];
       const mm = String(date.getMonth() + 1).padStart(2, "0");
       const dd = String(date.getDate()).padStart(2, "0");
-      list.push({ value, label: `${daysAdded}DTE  ${mm}-${dd}` });
+      list.push({ value, label: `${dayName}, ${mm}-${dd}` });
       daysAdded++;
     }
 

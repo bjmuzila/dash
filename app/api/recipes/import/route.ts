@@ -168,7 +168,7 @@ Text: ${text}`;
         return JSON.parse(jsonMatch[0]);
       }
     }
-  } catch (_) {}
+  } catch (_: unknown) {}
 
   // Fallback: basic parsing
   return {
