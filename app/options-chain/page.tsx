@@ -61,8 +61,8 @@ interface StrikeRow {
   strike: number;
   callSym: string;
   putSym: string;
-  callTT: Record<string, unknown> | null;
-  putTT: Record<string, unknown> | null;
+  callTT: LiveEntry | null;
+  putTT: LiveEntry | null;
 }
 
 interface Expiry {
