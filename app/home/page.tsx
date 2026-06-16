@@ -49,9 +49,15 @@ function pickDashboardExpiries(
   });
 
   const liquid = unique.filter((item) => item.strikeCount >= 20);
-  const source = liquid.length >= 2 ? liquid : unique;
-  const zero = source[0]?.date ?? unique[0]?.date ?? "";
-  const one = source.find((item) => item.date !== zero)?.date ?? unique.find((item) => item.date !== zero)?.date ?? zero;
+  const zeroSource = liquid[0] ?? unique[0];
+  const zero = zeroSource?.date ?? "";
+  const zeroStrikeCount = zeroSource?.strikeCount ?? 0;
+  const later = unique.filter((item) => item.date > zero);
+  const liquidLater = later.filter((item) => item.strikeCount >= Math.max(20, Math.floor(zeroStrikeCount * 0.35)));
+  const rankedLater = (liquidLater.length ? liquidLater : later)
+    .slice(0, 5)
+    .sort((a, b) => (b.strikeCount - a.strikeCount) || a.date.localeCompare(b.date));
+  const one = rankedLater[0]?.date ?? later[0]?.date ?? zero;
   return { "0dte": zero, "1dte": one };
 }
 
@@ -761,18 +767,6 @@ export default function HomePage() {
       }));
     })() : null;
 
-    const gexFlipMarker = (() => {
-      if (gexFlip == null || !Number.isFinite(gexFlip)) return null;
-      const nearest = bars.reduce((best, bar) =>
-        Math.abs(bar.strike - gexFlip) < Math.abs(best.strike - gexFlip) ? bar : best
-      , bars[0]);
-      if (!nearest) return null;
-      return {
-        x: nearest.x,
-        strike: gexFlip,
-      };
-    })();
-
     // Peak label — always use the actual peak bar's strike so label matches position
     const peakLabel = peakPosBar ? peakPosBar.strike.toLocaleString() : null;
 
@@ -782,7 +776,6 @@ export default function HomePage() {
       oiBars,
       dexPoints,
       gexFlipPoints,
-      gexFlipMarker,
       peakPosBar,
       peakLabel,
       spot,
@@ -1124,24 +1117,6 @@ export default function HomePage() {
                               {/* Zero line reference */}
                               <line x1={firstX} y1={ZERO_Y} x2={lastX} y2={ZERO_Y}
                                 stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4"/>
-                              {chartBars.gexFlipMarker && (
-                                <g>
-                                  <line
-                                    x1={chartBars.gexFlipMarker.x}
-                                    y1={0}
-                                    x2={chartBars.gexFlipMarker.x}
-                                    y2={CHART_H}
-                                    stroke="#F97316"
-                                    strokeWidth="1.5"
-                                    strokeDasharray="5 4"
-                                    opacity={0.85}
-                                  />
-                                  <rect x={chartBars.gexFlipMarker.x - 24} y={18} width={48} height={14} fill="rgba(249,115,22,0.18)" rx="2" />
-                                  <text x={chartBars.gexFlipMarker.x} y={28} textAnchor="middle" fontSize="10" fontFamily="monospace" fill="#F97316" fontWeight="700">
-                                    G0 {chartBars.gexFlipMarker.strike.toFixed(0)}
-                                  </text>
-                                </g>
-                              )}
                             </g>
                           );
                         })()}

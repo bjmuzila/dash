@@ -38,6 +38,11 @@ interface ProxyChainResponse {
   };
 }
 
+function normalizeFlipPoint(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -182,13 +187,18 @@ export async function GET(request: Request) {
     // Use per-expiration rows for profile sweep so each row has its correct DTE
     const profile = computeGEXProfile(profileRows.length >= 5 ? profileRows : chain, spotPrice);
 
+    const resolvedGexFlip =
+      normalizeFlipPoint(profile?.flipPoint) ??
+      normalizeFlipPoint(summary.gexFlip) ??
+      normalizeFlipPoint(gexFlip);
+
     return NextResponse.json({
       timestamp:  Date.now(),
       spotPrice,
       expiration: expiry || null,
       callWall:   summary.callWall  ?? callWall,
       putWall:    summary.putWall   ?? putWall,
-      gexFlip:    profile?.flipPoint ?? summary.gexFlip ?? gexFlip,
+      gexFlip:    resolvedGexFlip,
       chain,
       summary,
       profile,   // { levels: number[], values: number[], flipPoint: number|null }
