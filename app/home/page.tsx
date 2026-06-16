@@ -6,6 +6,8 @@ import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import Subscriber, { type SubscriberState } from "@/lib/subscriber";
 import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function etNow() {
@@ -147,7 +149,11 @@ export default function HomePage() {
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<{ startX: number; startPan: number } | null>(null);
   const prevSpxRef = useRef(0);
+  const gexChartRef = useRef<HTMLDivElement>(null);
+  const heatmapRef = useRef<HTMLDivElement>(null);
+  const spxFlowRef = useRef<HTMLDivElement>(null);
   const [mvcSaving, setMvcSaving] = useState<"idle" | "saving" | "ok" | "err">("idle");
+  const [spxFlowRenderTick, setSpxFlowRenderTick] = useState(0);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -237,6 +243,93 @@ export default function HomePage() {
       setTimeout(() => setMvcSaving("idle"), 2000);
     }
   }, [mvcSaving]);
+
+  const refreshGexPanels = useCallback(async () => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    const requests: Promise<Response>[] = [
+      fetch("/api/quotes-batch?symbols=SPX,VIX,/ESU26", { cache: "no-store" }),
+    ];
+
+    if (actualExpiry) {
+      requests.unshift(fetch(`/api/gex?expiry=${encodeURIComponent(actualExpiry)}`, { cache: "no-store" }));
+    }
+
+    const responses = await Promise.all(requests);
+    let updated = false;
+
+    const gexRes = actualExpiry ? responses[0] : null;
+    const quotesRes = responses[actualExpiry ? 1 : 0];
+
+    if (gexRes?.ok) {
+      const json = await gexRes.json();
+      const nextChain = Array.isArray(json?.chain) ? json.chain : [];
+      if (nextChain.length) {
+        setRawChain(nextChain);
+      }
+      if (Number(json?.spotPrice ?? 0) > 100) setSpx(Number(json.spotPrice));
+      if (Number(json?.summary?.totalNetGEX ?? 0) !== 0) setNetGex(Number(json.summary.totalNetGEX));
+      setCallWall(json?.callWall ?? null);
+      setPutWall(json?.putWall ?? null);
+      setGexFlip(json?.gexFlip ?? null);
+      updated = true;
+    }
+
+    if (quotesRes?.ok) {
+      const json = await quotesRes.json();
+      const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
+      const spxQuote = items.find((item) => String(item.symbol ?? "") === "SPX");
+      const esQuote = items.find((item) => String(item.symbol ?? "") === "/ESU26");
+      const vixQuote = items.find((item) => String(item.symbol ?? "") === "VIX");
+
+      if (spxQuote) {
+        const last = Number(spxQuote.last ?? spxQuote.mark ?? 0);
+        const prev = Number(spxQuote["prev-close"] ?? spxQuote["day-close"] ?? 0);
+        if (last > 100) {
+          setSpx(last);
+        }
+        if (last > 100 && prev > 0) {
+          const change = last - prev;
+          setSpxChg(change);
+          setSpxChgPct((change / prev) * 100);
+        }
+      }
+
+      if (esQuote) {
+        const last = Number(esQuote.last ?? esQuote.mark ?? 0);
+        const prev = Number(esQuote["prev-close"] ?? esQuote["day-close"] ?? 0);
+        if (last > 100) {
+          setEsFut(last);
+        }
+        if (last > 100 && prev > 0) {
+          const change = last - prev;
+          setEsChg(change);
+          setEsChgPct((change / prev) * 100);
+        }
+      }
+
+      if (vixQuote) {
+        const last = Number(vixQuote.last ?? vixQuote.mark ?? 0);
+        if (last > 0) {
+          setVix(last);
+        }
+      }
+
+      updated = true;
+    }
+
+    if (!updated) {
+      throw new Error("Refresh failed");
+    }
+  }, [expiryMap, selectedExpiry]);
+
+  const refreshSpxFlowPanel = useCallback(async () => {
+    setSpxFlowRenderTick((tick) => tick + 1);
+    await Promise.resolve();
+  }, []);
+
+  const chartRefresh = useRefreshButton(refreshGexPanels);
+  const heatmapRefresh = useRefreshButton(refreshGexPanels);
+  const spxFlowRefresh = useRefreshButton(refreshSpxFlowPanel);
 
   useEffect(() => {
     const fetchQuotes = async () => {
@@ -673,11 +766,14 @@ export default function HomePage() {
               const handleMouseUp = () => { dragRef.current = null; };
 
               return (
-              <div style={{
-                background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-                borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
-                height: 520, flexShrink: 0,
-              }}>
+              <div
+                ref={gexChartRef}
+                style={{
+                  background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
+                  borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
+                  height: 520, flexShrink: 0,
+                }}
+              >
                 {/* Chart Header */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em", flexShrink: 0 }}>
@@ -699,6 +795,15 @@ export default function HomePage() {
                     {([{ key: "oi-overlay", label: "+oi overlay", active: showOiOverlay, onClick: () => setShowOiOverlay(v => !v) }, { key: "net-dex", label: "+net dex", active: showNetDex, onClick: () => setShowNetDex(v => !v) }, { key: "gex-flip", label: "+gex flip", active: showGexFlip, onClick: () => setShowGexFlip(v => !v) }] as const).map(({ key, label, active, onClick }) => (
                       <button key={key} onClick={() => { onClick(); setPanOffset(0); }} style={{ color: active ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: active ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{label}</button>
                     ))}
+                    <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
+                    <button onClick={chartRefresh.trigger} style={{ ...chartRefresh.style, fontSize: 10, padding: "4px 8px", borderRadius: 4 }}>
+                      {chartRefresh.label}
+                    </button>
+                    <BoxSnapBtn targetRef={gexChartRef} />
+                    <BoxDiscordBtn
+                      targetRef={gexChartRef}
+                      message={`📸 GEX Chart — ${selectedExpiry.toUpperCase()}${expiryMap[selectedExpiry] ? ` ${fmtExpiryDate(expiryMap[selectedExpiry])}` : ""} — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`}
+                    />
                   </div>
                 </div>
 
@@ -985,9 +1090,29 @@ export default function HomePage() {
                   </div>
                 )}
                 {activeTab === "spxflow" && (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
+                  <div ref={spxFlowRef} key={spxFlowRenderTick} style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                        <span style={{ color: C.cyan }}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                        </span>
+                        SPX Flow
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button onClick={spxFlowRefresh.trigger} style={{ ...spxFlowRefresh.style, fontSize: 10, padding: "4px 8px", borderRadius: 4 }}>
+                          {spxFlowRefresh.label}
+                        </button>
+                        <BoxSnapBtn targetRef={spxFlowRef} />
+                        <BoxDiscordBtn
+                          targetRef={spxFlowRef}
+                          message={`📊 SPX Flow — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1083,10 +1208,13 @@ export default function HomePage() {
             </div>
 
             {/* Heatmap */}
-            <div style={{
-              background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden",
-            }}>
+            <div
+              ref={heatmapRef}
+              style={{
+                background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
+                borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden",
+              }}
+            >
               {/* Heatmap header */}
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1094,13 +1222,15 @@ export default function HomePage() {
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     LIVE GEX HEATMAP
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff" }}>
-                    {/* camera icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                    {/* message icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    {/* x icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#fff" }}>
+                    <button onClick={heatmapRefresh.trigger} style={{ ...heatmapRefresh.style, fontSize: 10, padding: "4px 8px", borderRadius: 4 }}>
+                      {heatmapRefresh.label}
+                    </button>
+                    <BoxSnapBtn targetRef={heatmapRef} />
+                    <BoxDiscordBtn
+                      targetRef={heatmapRef}
+                      message={`📸 GEX Heatmap — ${selectedExpiry.toUpperCase()}${expiryMap[selectedExpiry] ? ` ${fmtExpiryDate(expiryMap[selectedExpiry])}` : ""} — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`}
+                    />
                   </div>
                 </div>
                 {/* Intensity slider */}

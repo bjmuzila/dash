@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
 // Forwards a multipart Discord webhook post through the local proxy,
-// mirroring the vanilla site's /proxy/api/webhooks/... path.
+// using the proxy's .env-backed Discord relay.
 const PROXY_WEBHOOK_URL =
-  `${process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com"}/proxy/api/webhooks/1466249857122570454/REDACTED`;
+  `${process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com"}/proxy/api/discord-webhook`;
 
 export async function POST(request: Request) {
   try {
