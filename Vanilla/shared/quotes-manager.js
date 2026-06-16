@@ -152,23 +152,28 @@ window.QuotesManager = (function() {
       }
 
       if (equities.length > 0) {
-        for (const symbol of equities) {
-          try {
-            const response = await fetch('/proxy/api/instruments/equities/' + symbol);
-            if (response.ok) {
-              const data = await response.json();
-              if (data) {
-                updateQuote({
-                  symbol: symbol,
-                  bid: data.bid || data.bidPrice,
-                  ask: data.ask || data.askPrice,
-                  last: data.last || data.lastPrice || data.price
-                });
+        try {
+          const params = new URLSearchParams({ equity: equities.join(',') });
+          const response = await fetch('/proxy/api/tt/market-data/by-type?' + params);
+          if (response.ok) {
+            const data = await response.json();
+            const items = data?.data?.items || [];
+            items.forEach(q => {
+              if (!q?.symbol) return;
+              updateQuote({
+                symbol: q.symbol,
+                bid: parseFloat(q.bid),
+                ask: parseFloat(q.ask),
+                last: parseFloat(q.last)
+              });
+              // Use prev-close from response directly
+              if (q['prev-close']) {
+                state.prevCloses[q.symbol] = parseFloat(q['prev-close']);
               }
-            }
-          } catch (e) {
-            console.warn('[QM] Equity fetch error for ' + symbol);
+            });
           }
+        } catch (e) {
+          console.warn('[QM] Equity batch fetch error:', e.message);
         }
       }
     } catch (e) {
@@ -214,13 +219,13 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
       console.log('[QM] Auto-init');
-      window.QuotesManager.init(['/ES', '/NQ', 'SPX', 'VIX', 'QQQ', 'SRM', 'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA']);
+      window.QuotesManager.init(['/ES', '/NQ', 'SPX', 'VIX', 'SPY', 'QQQ', 'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'SPCX', 'TSLA', 'SMH']);
     }, 500);
   });
 } else {
   setTimeout(() => {
     console.log('[QM] Auto-init (ready)');
-    window.QuotesManager.init(['/ES', '/NQ', 'SPX', 'VIX', 'QQQ', 'SRM', 'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA']);
+    window.QuotesManager.init(['/ES', '/NQ', 'SPX', 'VIX', 'SPY', 'QQQ', 'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'SPCX', 'TSLA', 'SMH']);
   }, 500);
 }
 

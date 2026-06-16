@@ -320,8 +320,8 @@ export default function HomePage() {
     // Bar width: fill ~80% of spacing, never overlap (cap at spacing-1), min 2px
     const BAR_W = Math.max(2, Math.min(spacing * 0.8, spacing - 1));
 
-    // Find peak pos bar for label
-    let peakPosBar: { x: number; y: number; strike: number } | null = null as { x: number; y: number; strike: number } | null;
+    // Find peak bar (highest absolute GEX, pos or neg) for label
+    let peakPosBar: { x: number; y: number; barH: number; strike: number; isPos: boolean } | null = null as { x: number; y: number; barH: number; strike: number; isPos: boolean } | null;
     let peakPosVal = 0;
 
     // For call-put mode, build two bar arrays (call=cyan above zero, put=gold below zero)
@@ -348,9 +348,9 @@ export default function HomePage() {
         : "drop-shadow(0 0 6px rgba(234,179,8,0.5))";
       const highlight = Math.abs(v) > maxAbs * 0.5;
 
-      if (isPos && Math.abs(v) > peakPosVal) {
+      if (Math.abs(v) > peakPosVal) {
         peakPosVal = Math.abs(v);
-        peakPosBar = { x, y, strike: r.strike };
+        peakPosBar = { x, y, barH, strike: r.strike, isPos };
       }
 
       return { x, y, barH, barW: BAR_W, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos, val: v };
@@ -388,8 +388,7 @@ export default function HomePage() {
     })() : null;
 
     // Peak label — always use the actual peak bar's strike so label matches position
-    const ppb = peakPosBar as { x: number; y: number; strike: number } | null;
-    const peakLabel = ppb ? ppb.strike.toLocaleString() : null;
+    const peakLabel = peakPosBar ? peakPosBar.strike.toLocaleString() : null;
 
     return {
       bars,
@@ -397,7 +396,7 @@ export default function HomePage() {
       oiBars,
       dexPoints,
       gexFlipPoints,
-      peakPosBar: peakPosBar as { x: number; y: number; strike: number } | null,
+      peakPosBar,
       peakLabel,
       spot,
       ZERO_Y,
@@ -730,14 +729,24 @@ export default function HomePage() {
                           );
                         })()}
 
-                        {/* Peak label */}
+                        {/* Peak label — at tip of tallest absolute bar */}
                         {(() => {
                           const pb = chartBars.peakPosBar;
                           if (!pb || !chartBars.peakLabel) return null;
+                          // tip: top of pos bar = pb.y; bottom of neg bar = pb.y + pb.barH
+                          const tipY = pb.isPos
+                            ? pb.y               // top edge of positive bar
+                            : pb.y + pb.barH;    // bottom edge of negative bar
+                          const labelY = pb.isPos
+                            ? Math.max(16, tipY - 4)       // above bar tip
+                            : Math.min(CHART_H - 4, tipY + 18); // below bar tip
+                          const rectY = pb.isPos
+                            ? Math.max(2, tipY - 18)
+                            : Math.min(CHART_H - 16, tipY + 4);
                           return (
                             <>
-                              <rect x={pb.x - 22} y={Math.max(2, pb.y - 18)} width={44} height={14} fill="url(#strikeGradCyan)" rx="2"/>
-                              <text x={pb.x} y={Math.max(12, pb.y - 7)} textAnchor="middle" fontSize="10" fontFamily="monospace" fill={C.cyan} fontWeight="700">{chartBars.peakLabel}</text>
+                              <rect x={pb.x - 22} y={rectY} width={44} height={14} fill="url(#strikeGradCyan)" rx="2"/>
+                              <text x={pb.x} y={labelY} textAnchor="middle" fontSize="10" fontFamily="monospace" fill={C.cyan} fontWeight="700">{chartBars.peakLabel}</text>
                             </>
                           );
                         })()}
@@ -961,9 +970,9 @@ export default function HomePage() {
                   return `${sign}$${a.toFixed(0)}`;
                 };
 
-                const gridCols = `60px repeat(${COLS.length}, 1fr)`;
-                const hdrStyle: React.CSSProperties = { padding: "5px 8px", fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "right" };
-                const cellStyle: React.CSSProperties = { padding: "3px 8px", fontSize: 10, fontFamily: "monospace", textAlign: "right" };
+                const gridCols = `44px repeat(${COLS.length}, 1fr)`;
+                const hdrStyle: React.CSSProperties = { padding: "5px 4px", fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "right" };
+                const cellStyle: React.CSSProperties = { padding: "3px 4px", fontSize: 10, fontFamily: "monospace", textAlign: "right" };
 
                 return (
                   <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.04) transparent", background: "#0a0e17" }}>
@@ -975,9 +984,9 @@ export default function HomePage() {
 
                     {/* TOTAL row */}
                     <div style={{ display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)" }}>
-                      <div style={{ ...cellStyle, textAlign: "left", color: "#8da8c2", fontWeight: 700, fontSize: 9 }}>TOTAL</div>
+                      <div style={{ ...cellStyle, textAlign: "left", color: "#fff", fontWeight: 700, fontSize: 9 }}>TOTAL</div>
                       {totals.map((v, ci) => (
-                        <div key={ci} style={{ ...cellStyle, fontWeight: 700, color: v >= 0 ? "#22c55e" : "#ef4444" }}>
+                        <div key={ci} style={{ ...cellStyle, fontWeight: 700, color: "#fff" }}>
                           {fmtTotal(v)}
                         </div>
                       ))}
@@ -999,7 +1008,7 @@ export default function HomePage() {
                           {/* Strike */}
                           <div style={{
                             ...cellStyle, textAlign: "left", fontWeight: 700,
-                            color: isAtm ? "#29b6f6" : "#8da8c2",
+                            color: isAtm ? "#29b6f6" : "#fff",
                           }}>
                             {row.strike}
                           </div>
@@ -1008,13 +1017,8 @@ export default function HomePage() {
                             const raw = row[c.key as keyof typeof row] as string;
                             const val = parseVal(raw);
                             const bg = isAtm ? "transparent" : cellBg(val, colMaxes[ci], ci);
-                            const textColor = isAtm
-                              ? (val >= 0 ? "#22c55e" : "#ef4444")
-                              : bg === "transparent"
-                                ? (val >= 0 ? "#22c55e" : "#ef4444")
-                                : "#ffffff";
                             return (
-                              <div key={c.key} style={{ ...cellStyle, background: bg, color: textColor }}>
+                              <div key={c.key} style={{ ...cellStyle, background: bg, color: "#fff" }}>
                                 {raw}
                               </div>
                             );

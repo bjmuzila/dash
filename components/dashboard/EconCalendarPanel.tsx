@@ -90,7 +90,7 @@ export default function EconCalendarPanel() {
   const [error,         setError]         = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "medium", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -342,7 +342,7 @@ export default function EconCalendarPanel() {
       {/* Quote */}
       {quote && (
         <div style={{ padding: "5px 10px", borderBottom: "1px solid #0d1f30", background: "var(--overview-header-bg, #070c14)", flexShrink: 0 }}>
-          <p style={{ margin: 0, fontSize: 10, fontStyle: "italic", color: "#fff", lineHeight: 1.5, textAlign: "center" }}>
+          <p style={{ margin: 0, fontSize: 13, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "center" }}>
             &ldquo;{quote}&rdquo;
           </p>
         </div>
