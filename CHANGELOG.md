@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-06-15 (session 18) — Migrate sql.js → PostgreSQL (Render)
+
+### Database (`lib/db.ts`)
+- Replaced sql.js (WASM/SQLite) with `pg` Pool connecting via `DATABASE_URL`
+- Rewrote `getDb()` to return a pg Pool instead of a sql.js Database instance
+- Rewrote all table creation as a single `ensureAllTables()` using Postgres DDL (`SERIAL PRIMARY KEY`, `BIGINT`, `TIMESTAMPTZ`, `GREATEST`/`LEAST`)
+- Rewrote `queryAll()` to convert `?` placeholders to `$1,$2,...` for pg
+- Rewrote all insert/upsert functions to use `pool.query()` with `RETURNING id` instead of `last_insert_rowid()`
+- `persistDb()` is now a no-op (pg writes are immediate)
+- SSL configured to skip cert verification for non-localhost connections
+
+### API Routes
+- `app/api/es-stats/route.ts` — replaced `db.run()`/`db.exec()` with `pool.query()`
+- `app/api/snapshots/route.ts` — replaced sql.js exec pattern with pg queries
+- `app/api/snapshots/[id]/route.ts` — replaced sql.js exec pattern with pg queries
+- `app/api/debug/route.ts` — rewrote to use pg; lists tables via `pg_tables`
+- `app/api/debug/write-test/route.ts` — rewrote to use pg
+- `app/api/db/route.ts` — replaced `ORDER BY rowid DESC` with `ORDER BY id DESC` (rowid is SQLite-only)
+
+### Config
+- `next.config.ts` — removed `serverExternalPackages: ["sql.js"]`
+- `package.json` — replaced `sql.js@^1.12.0` + `@types/sql.js` with `pg@^8.11.3` + `@types/pg`
+- `.env.local` — replaced `DB_PATH` with `DATABASE_URL` (Render internal Postgres URL)
+
+### Version
+- Bumped through `2026.6.15-v67` → `v68` → `v69`
+
+---
+
 ## 2026-06-15 (session 17) — Database Page Fixes + Options Chain Auto-Load
 
 ### Database Page (`app/database/page.tsx`)

@@ -130,6 +130,24 @@ function metricBg(value: number, maxValue: number, intensity: number): string {
     : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
+function normalizeSide(raw: Record<string, unknown>): LiveEntry {
+  function sf(v: unknown): number | null { const n = parseFloat(String(v)); return isFinite(n) ? n : null; }
+  function si(v: unknown): number { const n = parseInt(String(v), 10); return isFinite(n) ? n : 0; }
+  return {
+    bid:   sf(raw.bid),
+    ask:   sf(raw.ask),
+    last:  sf(raw.last),
+    iv:    sf(raw["implied-volatility"] ?? raw.iv),
+    delta: sf(raw.delta),
+    gamma: sf(raw.gamma),
+    theta: sf(raw.theta),
+    vega:  sf(raw.vega),
+    oi:    si(raw["open-interest"] ?? raw.openInterest ?? 0),
+    vol:   si(raw.volume ?? raw.vol ?? 0),
+    size:  null,
+  };
+}
+
 function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeRow[] {
   const map: Record<string, StrikeRow> = {};
 
@@ -154,33 +172,20 @@ function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>)
       if (!map[key]) return;
       const r = map[key];
 
-      function sf(v: unknown): number | null { const n = parseFloat(String(v)); return isFinite(n) ? n : null; }
-      function si(v: unknown): number { const n = parseInt(String(v), 10); return isFinite(n) ? n : 0; }
-
       const call = it.call as Record<string, unknown> | undefined;
       const put  = it.put  as Record<string, unknown> | undefined;
 
       if (call) {
-        r.callTT  = call;
+        const normalized = normalizeSide(call);
+        r.callTT  = normalized; // store normalized so fallback reads correct field names
         r.callSym = String(call["streamer-symbol"] || call.symbol || "");
-        if (r.callSym) liveData[r.callSym] = {
-          bid: sf(call.bid), ask: sf(call.ask), last: sf(call.last),
-          iv: sf(call["implied-volatility"]), delta: sf(call.delta),
-          gamma: sf(call.gamma), theta: sf(call.theta), vega: sf(call.vega),
-          oi: si(call["open-interest"] ?? call.openInterest ?? 0),
-          vol: si(call.volume ?? 0), size: null,
-        };
+        if (r.callSym) liveData[r.callSym] = { ...normalized };
       }
       if (put) {
-        r.putTT  = put;
+        const normalized = normalizeSide(put);
+        r.putTT  = normalized;
         r.putSym = String(put["streamer-symbol"] || put.symbol || "");
-        if (r.putSym) liveData[r.putSym] = {
-          bid: sf(put.bid), ask: sf(put.ask), last: sf(put.last),
-          iv: sf(put["implied-volatility"]), delta: sf(put.delta),
-          gamma: sf(put.gamma), theta: sf(put.theta), vega: sf(put.vega),
-          oi: si(put["open-interest"] ?? put.openInterest ?? 0),
-          vol: si(put.volume ?? 0), size: null,
-        };
+        if (r.putSym) liveData[r.putSym] = { ...normalized };
       }
     });
   });
@@ -453,6 +458,8 @@ export default function OptionsChainPage() {
   const subSymsRef   = useRef<string[]>([]);
   const loadTokenRef = useRef(0);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keepaliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restRefreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const scheduleRender = useCallback(() => {
     if (renderTimerRef.current) return;
@@ -524,6 +531,16 @@ export default function OptionsChainPage() {
 
     return () => { ws.close(); };
   }, [scheduleRender]);
+
+  // Keepalive — ping Render every 8 min to prevent cold starts
+  useEffect(() => {
+    const ping = () => fetch("/api/keepalive").catch(() => {});
+    ping(); // ping immediately on mount
+    keepaliveTimerRef.current = setInterval(ping, 8 * 60 * 1000);
+    return () => {
+      if (keepaliveTimerRef.current) clearInterval(keepaliveTimerRef.current);
+    };
+  }, []);
 
   // Load chain
   const loadChain = useCallback(async (t: string, expDate: string) => {
@@ -672,6 +689,69 @@ export default function OptionsChainPage() {
     if (!t || t === activeTicker) return;
     fetchExpirations(t);
   }, [ticker, activeTicker, fetchExpirations]);
+
+  // Silent REST re-baseline — refreshes Greeks from REST without clearing the table
+  const silentRestRefresh = useCallback(async () => {
+    if (!activeTicker || !activeExpiry) return;
+    try {
+      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(activeTicker)}&expiration=${encodeURIComponent(activeExpiry)}&range=all`);
+      const json = await res.json();
+      const items = json.data?.items ?? [];
+      let target = items.filter((i: Record<string, unknown>) =>
+        String(i["expiration-date"] ?? "").slice(0, 10) === activeExpiry.slice(0, 10)
+      );
+      if (!target.length) target = items;
+
+      // Re-normalize and update liveData entries in place — WS fields win if they exist
+      (target as { strikes?: unknown[] }[]).forEach(expGroup => {
+        (expGroup.strikes || []).forEach((item: unknown) => {
+          const it = item as Record<string, unknown>;
+          const call = it.call as Record<string, unknown> | undefined;
+          const put  = it.put  as Record<string, unknown> | undefined;
+          if (call) {
+            const sym = String(call["streamer-symbol"] || call.symbol || "");
+            if (sym && liveDataRef.current[sym]) {
+              const norm = normalizeSide(call);
+              // Only update Greeks fields — leave WS bid/ask/last/vol/oi untouched if populated
+              const d = liveDataRef.current[sym];
+              if (norm.iv    != null && !d._ws) d.iv    = norm.iv;
+              if (norm.delta != null && !d._ws) d.delta = norm.delta;
+              if (norm.gamma != null && !d._ws) d.gamma = norm.gamma;
+              if (norm.theta != null && !d._ws) d.theta = norm.theta;
+              if (norm.vega  != null && !d._ws) d.vega  = norm.vega;
+            }
+          }
+          if (put) {
+            const sym = String(put["streamer-symbol"] || put.symbol || "");
+            if (sym && liveDataRef.current[sym]) {
+              const norm = normalizeSide(put);
+              const d = liveDataRef.current[sym];
+              if (norm.iv    != null && !d._ws) d.iv    = norm.iv;
+              if (norm.delta != null && !d._ws) d.delta = norm.delta;
+              if (norm.gamma != null && !d._ws) d.gamma = norm.gamma;
+              if (norm.theta != null && !d._ws) d.theta = norm.theta;
+              if (norm.vega  != null && !d._ws) d.vega  = norm.vega;
+            }
+          }
+        });
+      });
+
+      const rawSpot = parseFloat(String(json.data?.underlyingPrice ?? 0));
+      if (isFinite(rawSpot) && rawSpot > 10) setSpot(rawSpot);
+      setRenderTick(n => n + 1);
+      setLastUpdate(etTimeNow());
+    } catch {}
+  }, [activeTicker, activeExpiry]);
+
+  // Periodic REST re-baseline every 5 minutes
+  useEffect(() => {
+    if (restRefreshTimerRef.current) clearInterval(restRefreshTimerRef.current);
+    if (!activeTicker || !activeExpiry) return;
+    restRefreshTimerRef.current = setInterval(silentRestRefresh, 5 * 60 * 1000);
+    return () => {
+      if (restRefreshTimerRef.current) clearInterval(restRefreshTimerRef.current);
+    };
+  }, [activeTicker, activeExpiry, silentRestRefresh]);
 
   const doRefresh = useCallback(async () => {
     if (!activeTicker || !activeExpiry) throw new Error("no chain loaded");

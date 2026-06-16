@@ -796,6 +796,50 @@ const subscriptionTypesBySymbol = new Map();
 const candleSubscriptions = new Set();  // separate set for candle symbols
 const dxCandleCache = {};
 
+// ─── Subscription TTL (prune idle option symbols after 30 min) ───────────────
+const subscriptionLastSeen = new Map(); // symbol → timestamp of last subscribe request
+const SUBSCRIPTION_TTL_MS  = 30 * 60 * 1000; // 30 minutes
+
+function touchSubscription(sym) {
+  subscriptionLastSeen.set(sym, Date.now());
+}
+
+function pruneIdleSubscriptions() {
+  const now = Date.now();
+  const pruned = [];
+  for (const sym of subscriptions) {
+    // Never prune core live symbols or non-option symbols
+    if (CORE_LIVE_SUBSCRIPTIONS.has(sym)) continue;
+    if (!sym.includes('C') && !sym.includes('P')) continue; // rough option check
+    const last = subscriptionLastSeen.get(sym) || 0;
+    if (now - last < SUBSCRIPTION_TTL_MS) continue;
+    subscriptions.delete(sym);
+    subscriptionTypesBySymbol.delete(sym);
+    subscriptionLastSeen.delete(sym);
+    activeAutoSubscriptionKeys.forEach(k => { if (k.endsWith(`:${sym}`)) activeAutoSubscriptionKeys.delete(k); });
+    pruned.push(sym);
+  }
+  if (pruned.length) {
+    log(`[PRUNE] Removed ${pruned.length} idle option subscriptions`);
+    // Send unsubscribe to dxLink
+    if (dxSocket && dxSocket.readyState === WebSocket.OPEN) {
+      try {
+        dxSocket.send(JSON.stringify({
+          type: 'FEED_SUBSCRIPTION',
+          channel: DX_CHANNEL,
+          reset: false,
+          remove: pruned.map(sym => ({ type: 'Quote', symbol: sym })),
+        }));
+      } catch (e) {
+        log('[PRUNE] unsubscribe send error:', e.message);
+      }
+    }
+  }
+}
+
+// Run prune every 10 minutes
+setInterval(pruneIdleSubscriptions, 10 * 60 * 1000);
+
 // ─── Persistent daily closes (survives proxy restarts) ───────────────────────
 // Saved to data/daily-closes.json whenever dxLink streams a close after 4pm ET
 let savedDailyCloses = { date: '', ES: 0, SPX: 0, VIX: 0 };
@@ -4327,6 +4371,7 @@ const server = http.createServer(async (req, res) => {
               ? ['Message', 'Configuration']
               : requestedTypes;
             addAutoSubscription(sym, optstatTypes);
+            touchSubscription(sym); // refresh TTL on every subscribe request
           }));
           await ensureDxLinkReady();
           sendSubscriptions();
@@ -4412,6 +4457,18 @@ const server = http.createServer(async (req, res) => {
       subscribed: TOP10_SYMBOLS,
       cacheAfter3s: result,
       note: 'Check proxy console for full dump. Non-null fields = data arrived.'
+    });
+  }
+
+  // ── GET /proxy/api/health — lightweight keepalive ping ──────────────────────
+  if (req.method === 'GET' && p === '/proxy/api/health') {
+    return sendJSON(res, 200, {
+      ok: true,
+      ts: Date.now(),
+      dxState: dxSocket ? ['CONNECTING','OPEN','CLOSING','CLOSED'][dxSocket.readyState] : 'null',
+      dxAuthorized,
+      subscriptions: subscriptions.size,
+      browserClients: dxClients.size,
     });
   }
 
