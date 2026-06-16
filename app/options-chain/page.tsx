@@ -314,6 +314,12 @@ export default function OptionsChainPage() {
       const strikes = buildStrikes(target.length ? target : items as unknown[]);
       strikeRowsRef.current = strikes;
 
+      // Extract underlying price from API response
+      const underlyingPrice = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
+      if (underlyingPrice > 0) {
+        setUnderlyingPrice(underlyingPrice);
+      }
+
       setLoadProgress(50); // Subscribing to symbols
       // Batch subscribe all symbols at once
       const allSymbols = new Set<string>();
@@ -409,14 +415,16 @@ export default function OptionsChainPage() {
     loadChain(ticker, selectedExpiry);
   }, [tickerInput, selectedExpiry, loadChain]);
 
+  const [underlyingPrice, setUnderlyingPrice] = useState(0);
+
   const { rows, spot } = useMemo(() => {
     const strikes = strikeRowsRef.current;
     if (!strikes.length) {
       return buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed);
     }
 
-    // Use real strikes immediately, even if live data hasn't arrived yet
-    const atmStrike = strikes.length ? strikes[Math.floor(strikes.length / 2)].strike : 100;
+    // Use underlying price from chain data, fallback to middle strike
+    const atmStrike = underlyingPrice > 0 ? underlyingPrice : (strikes.length ? strikes[Math.floor(strikes.length / 2)].strike : 100);
     const realRows: MockRow[] = strikes.map(r => {
       const cd = liveDataRef.current[r.callSym ?? ""] || {};
       const pd = liveDataRef.current[r.putSym ?? ""] || {};
@@ -435,7 +443,7 @@ export default function OptionsChainPage() {
     });
 
     return { rows: realRows, spot: atmStrike };
-  }, [activeTicker, expiries, refreshSeed, selectedExpiry]);
+  }, [activeTicker, expiries, refreshSeed, selectedExpiry, underlyingPrice]);
 
   const nearestStrike = useMemo(() => {
     if (!rows.length) return 0;
