@@ -141,128 +141,26 @@
 </div>
 
 <script>
-// Quotes Management
 window.QuotesPanel = {
-  // Edit this list to add/remove symbols from the quotes panel
   symbols: ['/ES', '/NQ', 'SPX', 'SPCX', 'VIX', 'SPY', 'QQQ', 'SMH', 'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'TSLA'],
-  quotes: {},
-  prevCloses: {},
-  pageId: 'quotes-' + Date.now(),
 
-  async init() {
-    console.log('[Quotes] Initializing quotes panel');
-
-    // Set up search
+  init() {
     const searchInput = document.getElementById('quote-search');
-    if (searchInput) {
-      searchInput.addEventListener('input', (e) => {
-        this.filterQuotes(e.target.value);
+    if (searchInput) searchInput.addEventListener('input', () => this.renderFromCache());
+
+    // Wait for QuotesManager then start 5s render loop
+    const start = () => {
+      this.renderFromCache();
+      setInterval(() => this.renderFromCache(), 5000);
+    };
+
+    if (window.QuotesManager) {
+      start();
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(start, 600); // after QM auto-init
       });
     }
-
-    // Load previous closes
-    await this.loadPrevCloses();
-
-    // Subscribe to symbols (non-blocking)
-    this.subscribeSymbols().catch(e => console.warn('[Quotes] Subscription init failed:', e.message));
-
-    // Render initial quotes
-    this.render();
-
-    // Auto-refresh every 30 seconds
-    setInterval(() => {
-      console.log('[Quotes] Auto-refreshing quotes...');
-      this.render();
-    }, 30000);
-  },
-
-  async loadPrevCloses() {
-    try {
-      console.log('[Quotes] Loading previous closes...');
-      const response = await fetch('/proxy/api/spx-prevclose');
-      console.log('[Quotes] prevclose response status:', response.status);
-
-      if (!response.ok) {
-        console.warn('[Quotes] prevclose API returned:', response.status);
-        return;
-      }
-
-      const data = await response.json();
-      console.log('[Quotes] prevclose data:', data);
-
-      if (data && typeof data === 'object') {
-        // Map API response to symbols
-        if (data.prevClose !== undefined) {
-          this.prevCloses = {
-            '/ES': data.prevClose,
-            '/NQ': data.prevClose
-          };
-        } else {
-          this.prevCloses = { ...data };
-        }
-        console.log('[Quotes] Processed previous closes:', this.prevCloses);
-      }
-    } catch (e) {
-      console.error('[Quotes] Failed to load previous closes:', e.message);
-    }
-  },
-
-  async subscribeSymbols() {
-    try {
-      // Use subscription manager to ensure symbols are loaded
-      const result = await SubscriptionManagerClient.subscribeAndWait(
-        this.pageId,
-        this.symbols,
-        { timeout: 3000, threshold: 0.5 }
-      );
-      console.log('[Quotes] Subscription result:', result);
-    } catch (e) {
-      console.warn('[Quotes] Subscription failed:', e.message);
-    }
-  },
-
-  async fetchQuotes() {
-    try {
-      const symbolsParam = this.symbols.join(',');
-      const url = '/proxy/api/tt/quotes-batch?symbols=' + encodeURIComponent(symbolsParam);
-      console.log('[Quotes] Fetching:', url);
-
-      const response = await fetch(url);
-      console.log('[Quotes] Response status:', response.status);
-
-      if (!response.ok) {
-        console.warn('[Quotes] API returned:', response.status);
-        return [];
-      }
-
-      const data = await response.json();
-      console.log('[Quotes] Data received:', data);
-
-      if (!Array.isArray(data)) {
-        console.warn('[Quotes] Data is not array:', typeof data, data);
-        return [];
-      }
-
-      return data;
-    } catch (e) {
-      console.error('[Quotes] Fetch failed:', e.message);
-      return [];
-    }
-  },
-
-  calculateChange(symbol, lastPrice) {
-    const prevClose = this.prevCloses[symbol];
-    if (!prevClose || prevClose === 0) return null;
-
-    const change = lastPrice - prevClose;
-    const changePercent = (change / prevClose) * 100;
-
-    return {
-      change: change.toFixed(2),
-      changePercent: changePercent.toFixed(2),
-      up: change > 0,
-      down: change < 0
-    };
   },
 
   formatPrice(price) {
@@ -270,66 +168,51 @@ window.QuotesPanel = {
     return parseFloat(price).toFixed(2);
   },
 
-  render() {
+  renderFromCache() {
     const container = document.getElementById('quotes-container');
-    if (!container) return;
+    if (!container || !window.QuotesManager) return;
 
-    // Fetch and render quotes
-    this.fetchQuotes().then(quotes => {
-      if (!quotes || quotes.length === 0) {
-        container.innerHTML = '<div class="quotes-empty">No quotes available</div>';
-        return;
-      }
+    const searchVal = document.getElementById('quote-search')?.value.toUpperCase() || '';
+    let rows = '';
+    let visibleCount = 0;
 
-      let rows = '';
-      let visibleCount = 0;
-      const searchVal = document.getElementById('quote-search')?.value.toUpperCase() || '';
+    this.symbols.forEach(sym => {
+      const matches = searchVal === '' || sym.toUpperCase().includes(searchVal);
+      if (!matches) return;
 
-      quotes.forEach(q => {
-        if (!q || !q.symbol) return;
+      const q = window.QuotesManager.getQuote(sym);
+      const changeData = window.QuotesManager.getChange(sym);
+      visibleCount++;
 
-        const matches = searchVal === '' || q.symbol.toUpperCase().includes(searchVal);
-        if (!matches) return;
-        visibleCount++;
+      const last = q?.last ? this.formatPrice(q.last) : '—';
+      const bid  = q?.bid  ? this.formatPrice(q.bid)  : '—';
+      const ask  = q?.ask  ? this.formatPrice(q.ask)  : '—';
 
-        const change = this.calculateChange(q.symbol, q.last);
-        const changeClass = change ? (change.up ? 'up' : 'down') : '';
-        const arrow = change ? (change.up ? '▲' : '▼') : '';
-        const changeDisplay = change
-          ? `<span class="${arrow ? 'quote-change-arrow' : ''}">${arrow}</span><span>${change.up ? '+' : ''}${change.changePercent}%</span>`
-          : '—';
+      const changeClass = changeData ? (changeData.up ? 'up' : 'down') : '';
+      const changeDisplay = changeData
+        ? `<span class="quote-change-arrow">${changeData.icon}</span><span>${changeData.up ? '+' : ''}${changeData.changePercent}%</span>`
+        : '—';
 
-        rows += `
-          <div class="quote-row">
-            <div class="quote-symbol">${q.symbol}</div>
-            <div class="quote-price">${this.formatPrice(q.last)}</div>
-            <div class="quote-change ${changeClass}">
-              ${changeDisplay}
-            </div>
-            <div class="quote-bid-ask">
-              <span>B: ${this.formatPrice(q.bid)}</span>
-              <span>A: ${this.formatPrice(q.ask)}</span>
-            </div>
+      rows += `
+        <div class="quote-row">
+          <div class="quote-symbol">${sym}</div>
+          <div class="quote-price">${last}</div>
+          <div class="quote-change ${changeClass}">${changeDisplay}</div>
+          <div class="quote-bid-ask">
+            <span>B: ${bid}</span>
+            <span>A: ${ask}</span>
           </div>
-        `;
-      });
-
-      const headerHtml = '<div class="quotes-header"><div>SYMBOL</div><div>PRICE</div><div>CHANGE</div><div>BID / ASK</div></div>';
-
-      if (visibleCount === 0) {
-        container.innerHTML = headerHtml + '<div class="quotes-empty">No matches found</div>';
-      } else {
-        container.innerHTML = headerHtml + rows;
-      }
+        </div>
+      `;
     });
-  },
 
-  filterQuotes(searchTerm) {
-    this.render();
+    const headerHtml = '<div class="quotes-header"><div>SYMBOL</div><div>PRICE</div><div>CHANGE</div><div>BID / ASK</div></div>';
+    container.innerHTML = visibleCount === 0
+      ? headerHtml + '<div class="quotes-empty">No matches found</div>'
+      : headerHtml + rows;
   }
 };
 
-// Wait for DOM ready and APIs
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => window.QuotesPanel.init());
 } else {
@@ -337,6 +220,6 @@ if (document.readyState === 'loading') {
 }
 
 function reloadQuotes() {
-  window.QuotesPanel.render();
+  window.QuotesPanel.renderFromCache();
 }
 </script>

@@ -4100,22 +4100,30 @@ const server = http.createServer(async (req, res) => {
     // This eliminates redundant TT API calls and massive subscription queues
     const cachedItems = noCache ? null : getChainsFromCache(sym, exp);
     if (cachedItems && !awaitDX) {
-      // Still subscribe to symbols if not already subscribed (cache doesn't prevent live updates)
-      const streamerSyms = noSubscribe ? [] : cachedItems
-        .flatMap(eg => eg.strikes || [])
-        .flatMap(strike => [strike.call?.['streamer-symbol'], strike.put?.['streamer-symbol']])
-        .filter(Boolean);
-      const newSyms = streamerSyms.filter(sym => !subscriptions.has(sym));
-      if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
-        newSyms.forEach(sym => {
-          addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
-          queueAutoSubscription({ type: 'Quote',   symbol: sym });
-          queueAutoSubscription({ type: 'Greeks',  symbol: sym });
-          queueAutoSubscription({ type: 'Summary', symbol: sym });
-          queueAutoSubscription({ type: 'Trade',   symbol: sym });
-        });
-        sendSubscriptionsRateLimited();
-        log('Subscribed', newSyms.length, 'NEW symbols from CACHED chain');
+      // SPX/SPY/QQQ 0DTE are pre-warmed at startup — skip re-subscribing from cache
+      // to avoid flooding dxLink with thousands of duplicate subscription requests.
+      // Other symbols (on-demand) may subscribe their symbols from cache.
+      const PREWARM_SYMS = new Set(['SPX', 'SPXW', 'SPY', 'QQQ']);
+      const isPrewarmed = PREWARM_SYMS.has(sym.toUpperCase());
+      if (!isPrewarmed && !noSubscribe) {
+        const streamerSyms = cachedItems
+          .flatMap(eg => eg.strikes || [])
+          .flatMap(strike => [strike.call?.['streamer-symbol'], strike.put?.['streamer-symbol']])
+          .filter(Boolean);
+        const newSyms = streamerSyms.filter(s => !subscriptions.has(s));
+        if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
+          newSyms.forEach(s => {
+            addAutoSubscription(s, ['Quote','Greeks','Summary','Trade']);
+            queueAutoSubscription({ type: 'Quote',   symbol: s });
+            queueAutoSubscription({ type: 'Greeks',  symbol: s });
+            queueAutoSubscription({ type: 'Summary', symbol: s });
+            queueAutoSubscription({ type: 'Trade',   symbol: s });
+          });
+          sendSubscriptionsRateLimited();
+          log('Subscribed', newSyms.length, 'NEW on-demand symbols from CACHED chain for', sym);
+        }
+      } else if (isPrewarmed) {
+        log('Cache hit for pre-warmed symbol', sym, '— skipping re-subscribe (already handled by prewarm)');
       }
       return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: 0, symbol: sym }, context: 'cache' });
     }

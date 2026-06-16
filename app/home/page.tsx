@@ -220,10 +220,11 @@ export default function HomePage() {
     const winEnd = Math.min(sortedAll.length - 1, atmIdx + 20);
     const sorted = sortedAll.slice(winStart, winEnd + 1);
 
-    // Find top pos/neg for rank badges
-    const sorted_by_abs_gex = [...sorted].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX));
-    const topPos = sorted_by_abs_gex.filter(r => r.netGEX > 0).slice(0, 5).map(r => r.strike);
-    const topNeg = sorted_by_abs_gex.filter(r => r.netGEX < 0).slice(0, 5).map(r => r.strike);
+    // Find top pos/neg for rank badges — use vol fallback when OI=0
+    const effGex = (r: typeof sorted[0]) => r.netGEX !== 0 ? r.netGEX : r.netVolGEX;
+    const sorted_by_abs_gex = [...sorted].sort((a, b) => Math.abs(effGex(b)) - Math.abs(effGex(a)));
+    const topPos = sorted_by_abs_gex.filter(r => effGex(r) > 0).slice(0, 5).map(r => r.strike);
+    const topNeg = sorted_by_abs_gex.filter(r => effGex(r) < 0).slice(0, 5).map(r => r.strike);
     const posRanks = Object.fromEntries(topPos.map((s, i) => [s, i + 1]));
     const negRanks = Object.fromEntries(topNeg.map((s, i) => [s, i + 1]));
 
@@ -238,6 +239,11 @@ export default function HomePage() {
 
     const rows = sorted.map(r => {
       const isAtm = r.strike === atmStrike;
+
+      // When OI=0 (proxy throttle issue), fall back to volume-based GEX so rows aren't blank
+      const displayGex = r.netGEX !== 0 ? r.netGEX : r.netVolGEX;
+      const displayDex = r.netDEX  !== 0 ? r.netDEX  : r.volNetDEX;
+
       const isPosTop = posRanks[r.strike] === 1;
       const isNegTop = negRanks[r.strike] === 1;
       const rank = posRanks[r.strike] ?? negRanks[r.strike];
@@ -247,16 +253,16 @@ export default function HomePage() {
       if (isAtm) type = "atm";
       else if (isPosTop) type = "pos-top";
       else if (isNegTop) type = "neg-top";
-      else if (r.netGEX > 0 && posRanks[r.strike]) type = "pos-strong";
-      else if (r.netGEX < 0 && negRanks[r.strike]) type = "neg-red";
-      else if (r.netGEX < 0) type = "neg";
+      else if (displayGex > 0 && posRanks[r.strike]) type = "pos-strong";
+      else if (displayGex < 0 && negRanks[r.strike]) type = "neg-red";
+      else if (displayGex < 0) type = "neg";
 
       return {
         strike: r.strike.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
-        netGex: fmt(r.netGEX),
+        netGex: fmt(displayGex),
         volOnly: fmt(r.netVolGEX),
-        dex: fmt(r.netDEX),
-        vex: r.netVanna != null && r.netVanna !== 0 ? fmt(r.netVanna) : "—",
+        dex: fmt(displayDex),
+        vex: r.netVanna != null && r.netVanna !== 0 ? fmt(r.netVanna) : (r.netVolVanna ? fmt(r.netVolVanna) : "—"),
         dwGex: fmt(r.volNetDEX),
         type,
         rank: rank ?? undefined,
@@ -265,10 +271,10 @@ export default function HomePage() {
       };
     });
 
-    // Drop strikes where every metric is zero — no listed options at that strike
+    // Drop strikes where ALL data is zero — truly empty strikes (not just OI=0)
     const nonEmpty = rows.filter(r =>
       r.type === "atm" ||
-      r.netGex !== "$0" || r.dex !== "$0" || r.dwGex !== "$0" || r.vex !== "—"
+      r.netGex !== "$0" || r.volOnly !== "$0" || r.dex !== "$0" || r.dwGex !== "$0" || r.vex !== "—"
     );
 
     setHeatmapData(nonEmpty);
