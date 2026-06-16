@@ -56,6 +56,8 @@ class Subscriber {
   private maxReconnectAttempts = 20; // keep retrying indefinitely
   private reconnectDelay = 2000;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastChainFetch = 0;
+  private readonly CHAIN_THROTTLE_MS = 20000; // max one chain fetch per 20s
 
   private constructor() {
     this.state = {
@@ -85,19 +87,19 @@ class Subscriber {
    */
   async init(): Promise<void> {
     // Already initialized — don't re-init the singleton
-    if (this.wsRef !== null || this.state.isConnected) return;
+    if (this.heartbeatTimer !== null) return;
     await this.fetchChain();
     this.connectWebSocket();
-    // Heartbeat: reconnect if WS goes stale
-    if (!this.heartbeatTimer) {
-      this.heartbeatTimer = setInterval(() => {
-        const s = this.wsRef?.readyState;
-        if (s !== WebSocket.OPEN && s !== WebSocket.CONNECTING) {
-          this.reconnectAttempts = 0; // reset so we retry
-          this.connectWebSocket();
-        }
-      }, 10000);
-    }
+    // Heartbeat: reconnect stale WS + poll chain every 30s as fallback
+    this.heartbeatTimer = setInterval(() => {
+      const s = this.wsRef?.readyState;
+      if (s !== WebSocket.OPEN && s !== WebSocket.CONNECTING) {
+        this.reconnectAttempts = 0;
+        this.connectWebSocket();
+      }
+      // Always poll chain so prices update even if WS is slow
+      this.fetchChain();
+    }, 30000);
   }
 
   /**
@@ -127,9 +129,14 @@ class Subscriber {
    * Connect to WebSocket for live market data
    */
   private connectWebSocket(): void {
-    const wsUrl = typeof window !== 'undefined'
-      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/dxlink`
-      : '';
+    if (typeof window === 'undefined') return;
+
+    // NEXT_PUBLIC_WS_URL is set in .env.local for dev (ws://localhost:3001).
+    // On Render it's not set, so fall back to the known proxy host.
+    const envUrl = (process.env.NEXT_PUBLIC_WS_URL ?? '').trim();
+    const wsUrl = envUrl
+      ? (envUrl.startsWith('ws') ? envUrl : `wss://${envUrl}`)
+      : 'wss://vanila-8zn1.onrender.com/ws/dxlink';
 
     if (!wsUrl) return;
 
@@ -218,7 +225,12 @@ class Subscriber {
 
           if (mid > 100) {
             this.state.spotPrice = mid;
-            this.fetchChain();
+            this.publish();
+            // Throttle chain refresh — at most once per 20s
+            if (Date.now() - this.lastChainFetch > this.CHAIN_THROTTLE_MS) {
+              this.lastChainFetch = Date.now();
+              this.fetchChain();
+            }
           }
         }
 
