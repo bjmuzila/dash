@@ -33,7 +33,6 @@ type MockRow = {
   dex: number;
   chex: number;
   vex: number;
-  premium: number;
   volume: number;
   oi: number;
 };
@@ -210,7 +209,6 @@ function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
       dex: Math.round((Math.cos((seed + index * 13) / 8.2) * 4.6 - distance * 0.11) * 760_000 * decay),
       chex: Math.round((Math.sin((seed + index * 5) / 4.1) * 3.2 + distance * 0.08) * 420_000 * decay),
       vex: Math.round((Math.cos((seed + index * 7) / 6.4) * 2.6 - Math.sin(index / 3)) * 360_000 * decay),
-      premium: Math.round((850_000 + Math.abs(wave) * 2_400_000 + Math.abs(distance) * 31_000) * decay),
       volume: Math.round((1_100 + Math.abs(alt) * 6_400 + Math.abs(distance) * 120) * decay),
       oi: Math.round((3_000 + Math.abs(wave + alt) * 18_000 + Math.abs(distance) * 180) * decay),
     });
@@ -439,7 +437,6 @@ export default function OptionsChainPage() {
         dex: cc > 0 || pc > 0 ? (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * atmStrike * 100 : 0,
         chex: cc > 0 || pc > 0 ? (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * atmStrike * 100 : 0,
         vex: cc > 0 || pc > 0 ? ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * atmStrike * 100 : 0,
-        premium: Math.round(((cd.bid ?? 0) + (cd.ask ?? 0)) / 2 * 100) || 0,
         volume: (cd.vol ?? 0) + (pd.vol ?? 0),
         oi: (cd.oi ?? 0) + (pd.oi ?? 0),
       };
