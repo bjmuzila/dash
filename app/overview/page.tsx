@@ -763,7 +763,7 @@ export default function OverviewPage() {
         </div>
 
         {/* Heatmap body */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <GexHeatmap
             chain={chain}
             spotPrice={spotPrice}
