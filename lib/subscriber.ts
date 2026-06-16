@@ -88,18 +88,52 @@ class Subscriber {
   async init(): Promise<void> {
     // Already initialized — don't re-init the singleton
     if (this.heartbeatTimer !== null) return;
-    await this.fetchChain();
+    // Fetch quotes first so top bar shows live prices immediately
+    await Promise.all([this.fetchQuotes(), this.fetchChain()]);
     this.connectWebSocket();
-    // Heartbeat: reconnect stale WS + poll chain every 30s as fallback
+    // Poll quotes every 15s and chain every 30s regardless of WS
     this.heartbeatTimer = setInterval(() => {
+      this.fetchQuotes();
       const s = this.wsRef?.readyState;
       if (s !== WebSocket.OPEN && s !== WebSocket.CONNECTING) {
         this.reconnectAttempts = 0;
         this.connectWebSocket();
       }
-      // Always poll chain so prices update even if WS is slow
-      this.fetchChain();
-    }, 30000);
+    }, 15000);
+    // Chain poll every 30s
+    setInterval(() => this.fetchChain(), 30000);
+  }
+
+  /**
+   * Fetch SPX, VIX, ES prices from quotes-batch REST endpoint
+   */
+  private async fetchQuotes(): Promise<void> {
+    try {
+      const res = await fetch('/api/quotes-batch?symbols=SPX,VIX,/ESU26', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const items: Array<Record<string, unknown>> = data?.data?.items ?? [];
+      let changed = false;
+      for (const q of items) {
+        const sym = String(q.symbol ?? '');
+        const last = Number(q.last ?? q.mark ?? 0);
+        const prev = Number(q['prev-close'] ?? q['day-close'] ?? 0);
+        const pct  = prev > 0 ? ((last - prev) / prev) * 100 : 0;
+        if (sym === 'SPX' && last > 100) {
+          this.state.spotPrice = last;
+          changed = true;
+        }
+        if (sym === 'VIX' && last > 0) {
+          this.state.vix = last;
+          changed = true;
+        }
+        if (sym === '/ESU26' && last > 100) {
+          this.state.esFutures = last;
+          changed = true;
+        }
+      }
+      if (changed) this.publish();
+    } catch (_) {}
   }
 
   /**
@@ -112,7 +146,8 @@ class Subscriber {
       const data = await res.json();
 
       this.state.chain = data.chain || [];
-      this.state.spotPrice = data.spotPrice || 0;
+      // Only overwrite spotPrice if proxy returned a valid value
+      if (data.spotPrice > 100) this.state.spotPrice = data.spotPrice;
       this.state.netGex = data.summary?.totalNetGEX || 0;
       this.state.callWall = data.callWall ?? null;
       this.state.putWall = data.putWall ?? null;

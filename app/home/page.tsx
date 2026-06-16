@@ -586,6 +586,17 @@ export default function HomePage() {
                     ))}
                     {/* Zero line */}
                     <line x1="0" y1={ZERO_Y} x2={CHART_W} y2={ZERO_Y} stroke="rgba(255,255,255,0.2)" strokeWidth="2"/>
+                    {/* Spot price vertical line */}
+                    {chartBars?.spot != null && (() => {
+                      const spotBar = chartBars.bars.find(b => b.strike === chartBars.spot) ?? chartBars.bars.reduce((best, b) => Math.abs(b.strike - chartBars.spot) < Math.abs(best.strike - chartBars.spot) ? b : best, chartBars.bars[0]);
+                      if (!spotBar) return null;
+                      return (
+                        <g>
+                          <line x1={spotBar.x} y1={0} x2={spotBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="6 4"/>
+                          <text x={spotBar.x + 4} y={14} fill="rgba(255,255,255,0.35)" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
+                        </g>
+                      );
+                    })()}
                     {/* Hover highlight */}
                     {hoverBar && (
                       <line x1={hoverBar.x} y1={0} x2={hoverBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4"/>
