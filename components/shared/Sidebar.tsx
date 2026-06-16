@@ -178,6 +178,22 @@ function useLiveQuotes() {
   return pcts;
 }
 
+// ── Page selector menu items ──────────────────────────────────────────────────
+const PAGE_MENU = [
+  { label: "Overview",      href: "/overview" },
+  { label: "Premarket",     href: "/premarket" },
+  { label: "Database",      href: "/database" },
+  { label: "Insights",      href: "/insights" },
+  { label: "Est. Move",     href: "/estimated-move" },
+  { label: "Options Chain", href: "/options-chain" },
+  { label: "Multi Greek",   href: "/mult-greek" },
+  { label: "Trading",       href: "/trading" },
+  { label: "Logs",          href: "/logs" },
+  { label: "Personal",      href: "/personal" },
+  { label: "Legacy",        href: "/legacy" },
+  { label: "Econ Calendar", href: "/expiry-calendar" },
+];
+
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 export default function Sidebar({
   onClose,
@@ -192,12 +208,8 @@ export default function Sidebar({
 }) {
   const pathname = usePathname();
   const pcts = useLiveQuotes();
-
-  const navItems = [
-    { href: "/home",             icon: <HomeIcon />,     label: "Home" },
-    { href: "/overview",         icon: <GridIcon />,     label: "Overview" },
-    { href: "/expiry-calendar",  icon: <CalendarIcon />, label: "Calendar" },
-  ];
+  const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const gridBtnRef = useRef<HTMLButtonElement>(null);
 
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
 
@@ -215,35 +227,106 @@ export default function Sidebar({
     }}>
 
       {/* ── Nav icons ── */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0 8px" }}>
-        {navItems.map(({ href, icon, label }) => {
-          const active = isActive(href);
-          return (
-            <a
-              key={href}
-              href={href}
-              title={label}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 40,
-                height: 40,
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0 8px", position: "relative" }}>
+
+        {/* Home */}
+        <a href="/home" title="Home" style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: 40, height: 40, borderRadius: 10, textDecoration: "none", transition: "all 0.15s",
+          background: isActive("/home") ? "rgba(0,229,255,0.12)" : "transparent",
+          border: isActive("/home") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+          color: isActive("/home") ? "#00e5ff" : "#3a5570",
+          boxShadow: isActive("/home") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+        }}>
+          <HomeIcon />
+        </a>
+
+        {/* Grid — page selector popout */}
+        <div style={{ position: "relative" }}>
+          <button
+            ref={gridBtnRef}
+            title="Pages"
+            onClick={() => setPageMenuOpen(p => !p)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 40, height: 40, borderRadius: 10, cursor: "pointer",
+              background: pageMenuOpen ? "rgba(0,229,255,0.12)" : "transparent",
+              border: pageMenuOpen ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+              color: pageMenuOpen ? "#00e5ff" : "#3a5570",
+              boxShadow: pageMenuOpen ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+              transition: "all 0.15s",
+            }}
+          >
+            <GridIcon />
+          </button>
+
+          {/* Popout menu */}
+          {pageMenuOpen && (
+            <>
+              {/* backdrop to close */}
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                onClick={() => setPageMenuOpen(false)}
+              />
+              <div style={{
+                position: "absolute",
+                left: "calc(100% + 8px)",
+                top: 0,
+                zIndex: 999,
+                background: "#0a0e18",
+                border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
-                background: active ? "rgba(0,229,255,0.12)" : "transparent",
-                border: active ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-                color: active ? "#00e5ff" : "#3a5570",
-                textDecoration: "none",
-                transition: "all 0.15s",
-                boxShadow: active ? "0 0 12px rgba(0,229,255,0.18)" : "none",
-              }}
-              onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = "#00e5ff"; }}
-              onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = "#3a5570"; }}
-            >
-              {icon}
-            </a>
-          );
-        })}
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
+                minWidth: 160,
+                overflow: "hidden",
+                backdropFilter: "blur(16px)",
+              }}>
+                {/* header */}
+                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                  Pages
+                </div>
+                {PAGE_MENU.map(({ label, href }) => {
+                  const active = pathname === href;
+                  return (
+                    <a
+                      key={href}
+                      href={href}
+                      onClick={() => setPageMenuOpen(false)}
+                      style={{
+                        display: "block",
+                        padding: "7px 14px",
+                        fontSize: 12,
+                        fontWeight: active ? 700 : 500,
+                        color: active ? "#00e5ff" : "#8da8c2",
+                        textDecoration: "none",
+                        background: active ? "rgba(0,229,255,0.08)" : "transparent",
+                        borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
+                        transition: "all 0.1s",
+                        letterSpacing: "0.02em",
+                      }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#8da8c2"; } }}
+                    >
+                      {label}
+                    </a>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Calendar */}
+        <a href="/expiry-calendar" title="Calendar" style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: 40, height: 40, borderRadius: 10, textDecoration: "none", transition: "all 0.15s",
+          background: isActive("/expiry-calendar") ? "rgba(0,229,255,0.12)" : "transparent",
+          border: isActive("/expiry-calendar") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+          color: isActive("/expiry-calendar") ? "#00e5ff" : "#3a5570",
+          boxShadow: isActive("/expiry-calendar") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+        }}>
+          <CalendarIcon />
+        </a>
       </div>
 
       {/* divider */}
