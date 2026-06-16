@@ -136,6 +136,7 @@ const HEATMAP_ROWS = [
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function HomePage() {
+  const shellRef = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(new Date());
   const [sidebarQuotes, setSidebarQuotes] = useState(DEFAULT_QUOTES);
   const [spx, setSpx] = useState(7554.29);
@@ -186,11 +187,36 @@ export default function HomePage() {
   const spxFlowRef = useRef<HTMLDivElement>(null);
   const [mvcSaving, setMvcSaving] = useState<"idle" | "saving" | "ok" | "err">("idle");
   const [spxFlowRenderTick, setSpxFlowRenderTick] = useState(0);
+  const [viewportScale, setViewportScale] = useState(1);
   const lastRollingPersistRef = useRef<{ expiry: string; stamp: number }>({ expiry: "", stamp: 0 });
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!shellRef.current || typeof ResizeObserver === "undefined") return;
+
+    const BASE_WIDTH = 1680;
+    const BASE_HEIGHT = 980;
+    const MIN_SCALE = 0.78;
+
+    const updateScale = () => {
+      const rect = shellRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const nextScale = Math.min(
+        1,
+        Math.max(MIN_SCALE, Math.min(rect.width / BASE_WIDTH, rect.height / BASE_HEIGHT))
+      );
+      setViewportScale((current) => Math.abs(current - nextScale) < 0.01 ? current : nextScale);
+    };
+
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(shellRef.current);
+    updateScale();
+
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -877,8 +903,8 @@ export default function HomePage() {
   };
 
   return (
-    <div style={{
-      height: "100%", width: "100%", overflow: "hidden",
+    <div ref={shellRef} style={{
+      height: "100%", width: "100%", overflow: "auto",
       background: C.bg,
       backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)",
       fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
@@ -888,10 +914,23 @@ export default function HomePage() {
     }}>
 
       {/* ── MAIN ──────────────────────────────────────────────────────────── */}
+      <div
+        style={{
+          width: `${100 / viewportScale}%`,
+          height: `${100 / viewportScale}%`,
+          minWidth: viewportScale < 1 ? 1680 : "100%",
+          minHeight: viewportScale < 1 ? 980 : "100%",
+          transform: `scale(${viewportScale})`,
+          transformOrigin: "top left",
+          transition: "transform 0.18s ease-out",
+          display: "flex",
+          flex: 1,
+        }}
+      >
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
 
         {/* ── BODY ──────────────────────────────────────────────────────────── */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "clamp(14px, 2vw, 24px)", gap: "clamp(16px, 2vw, 32px)", minHeight: 0, overflow: "hidden" }}>
 
           {/* LEFT COLUMN */}
           <div style={{ width: "55%", display: "flex", flexDirection: "column", gap: 0, minWidth: 0, height: "100%", overflow: "hidden" }}>
@@ -1240,10 +1279,10 @@ export default function HomePage() {
             {/* TABS */}
             <div style={{
               background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: 24,
+              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: "clamp(14px, 2vw, 24px)",
             }}>
               {/* Tab headers */}
-              <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0, overflowX: "auto", overflowY: "hidden" }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
@@ -1257,6 +1296,8 @@ export default function HomePage() {
                     borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent",
                     marginBottom: -1,
                     transition: "color 0.15s",
+                    flexShrink: 0,
+                    whiteSpace: "nowrap",
                   }}>
                     {tab.icon}{tab.label}
                   </button>
@@ -1264,14 +1305,14 @@ export default function HomePage() {
               </div>
 
               {/* Tab content */}
-              <div style={{ flex: 1, overflowY: "auto", padding: 24, scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: activeTab === "spxflow" ? 24 : 0, minHeight: 0, scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
                 {activeTab === "calendar" && (
-                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                  <div style={{ height: "100%", minHeight: 0 }}>
                     <EconCalendarPanel />
                   </div>
                 )}
                 {activeTab === "snapshot" && (
-                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                  <div style={{ height: "100%", minHeight: 0 }}>
                     <SnapshotPanel />
                   </div>
                 )}
@@ -1310,7 +1351,7 @@ export default function HomePage() {
 
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 12, marginBottom: 12, position: "relative" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "nowrap", overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", minWidth: 0 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
                     SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
                   </span>
@@ -1336,7 +1377,7 @@ export default function HomePage() {
                     {spx > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: spxChg >= 0 ? C.green : C.red }}>{spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)</span>}
                   </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flexWrap: "wrap", rowGap: 8 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 8, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>MVC</span>
                     <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
@@ -1559,6 +1600,7 @@ export default function HomePage() {
           </div>
         </div>
       </main>
+      </div>
 
       <style>{`
         @keyframes pulse {

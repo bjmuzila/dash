@@ -2705,7 +2705,8 @@ async function waitForOptionData(streamerSymbols, timeoutMs = 3000) {
     let readyCount = 0;
     for (const sym of sample) {
       const hasSummary = !!dxSummaryCache[sym] && Object.keys(dxSummaryCache[sym]).length > 0;
-      if (hasSummary) readyCount++;
+      const hasGreeks = !!dxGreeksCache[sym] && Object.keys(dxGreeksCache[sym]).length > 0;
+      if (hasSummary || hasGreeks) readyCount++;
     }
     if (readyCount >= threshold) return;
     await sleep(120);
@@ -4086,7 +4087,7 @@ const server = http.createServer(async (req, res) => {
     // awaitDX: wait for live dxLink Greeks to populate before building response
     if (awaitDX && streamerSyms.length) {
       log('[awaitDX] Waiting for dxLink Summary for', streamerSyms.length, 'symbols…');
-      await waitForOptionData(streamerSyms, 0);
+      await waitForOptionData(streamerSyms, 4000);
       log('[awaitDX] dxLink wait complete');
     }
 

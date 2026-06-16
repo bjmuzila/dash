@@ -88,19 +88,27 @@ function fmtInt(value: number) {
 
 function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]) {
   if (!value) return "transparent";
+
   const abs = Math.abs(value);
   const ratio = Math.min(abs / Math.max(maxValue, 1), 1);
   const rank = topValues.indexOf(abs) + 1;
 
   let opacity: number;
-  if (rank === 1) opacity = Math.max(0.82, intensity * 0.92);
-  else if (rank === 2) opacity = Math.max(0.6, intensity * 0.78);
-  else if (rank === 3) opacity = Math.max(0.4, intensity * 0.62);
-  else opacity = Math.pow(ratio, 0.65) * intensity * 0.55;
+  if (rank === 1) {
+    opacity = Math.max(0.82, intensity * 0.92);
+  } else if (rank === 2) {
+    opacity = Math.max(0.6, intensity * 0.78);
+  } else if (rank === 3) {
+    opacity = Math.max(0.4, intensity * 0.62);
+  } else {
+    opacity = Math.pow(ratio, 0.65) * intensity * 0.55;
+  }
+
+  const finalOpacity = Math.min(opacity, 0.95).toFixed(3);
 
   return value > 0
-    ? `rgba(32,178,220,${Math.min(opacity, 0.95).toFixed(3)})`
-    : `rgba(220,50,60,${Math.min(opacity, 0.95).toFixed(3)})`;
+    ? `rgba(32,178,220,${finalOpacity})`
+    : `rgba(220,50,60,${finalOpacity})`;
 }
 
 function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
@@ -162,6 +170,7 @@ export default function OptionsChainPage() {
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [intensity, setIntensity] = useState(0.4);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
+  const [useRealData, setUseRealData] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
 
   // Live WS data ref + batched subscription
@@ -306,12 +315,13 @@ export default function OptionsChainPage() {
 
   const { trigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(doRefresh);
 
-  // Auto-load on ticker/expiry change
-  useEffect(() => {
-    if (activeTicker && selectedExpiry) {
-      loadChain(activeTicker, selectedExpiry);
-    }
-  }, [activeTicker, selectedExpiry]);
+  // Manual load via GO button (no auto-load)
+  const doGo = useCallback(() => {
+    if (!tickerInput || !selectedExpiry) return;
+    const ticker = (tickerInput || "SPX").toUpperCase();
+    setActiveTicker(ticker);
+    loadChain(ticker, selectedExpiry);
+  }, [tickerInput, selectedExpiry, loadChain]);
 
   const { rows, spot } = useMemo(() => {
     const strikes = strikeRowsRef.current;
@@ -515,6 +525,27 @@ export default function OptionsChainPage() {
           ))}
         </select>
 
+        <button
+          onClick={doGo}
+          disabled={!tickerInput || !selectedExpiry}
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            padding: "4px 12px",
+            border: "1px solid rgba(0,229,255,.5)",
+            borderRadius: 4,
+            background: tickerInput && selectedExpiry ? "rgba(0,229,255,.12)" : "rgba(0,229,255,.04)",
+            color: tickerInput && selectedExpiry ? "#00e5ff" : "#4a6a88",
+            cursor: tickerInput && selectedExpiry ? "pointer" : "not-allowed",
+            fontFamily: "Arial",
+            outline: "none",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          GO
+        </button>
+
         {autoPercentNote ? (
           <span style={{ fontSize: 9, fontWeight: 800, color: "#ffb300", letterSpacing: "0.08em", textTransform: "uppercase" }}>
             {autoPercentNote}
@@ -523,7 +554,7 @@ export default function OptionsChainPage() {
 
         <div style={{ flex: 1 }} />
 
-        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 800 }}>
           Intensity
         </span>
         <input
@@ -544,7 +575,7 @@ export default function OptionsChainPage() {
             {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot.toFixed(2)}</span>
           </span>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e676" }} />
-          <span style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: "0.08em" }}>UI PREVIEW</span>
+          <span style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
           <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate}</span>
         </div>
 
@@ -552,7 +583,7 @@ export default function OptionsChainPage() {
         <BoxSnapBtn targetRef={pageRef} />
         <BoxDiscordBtn
           targetRef={pageRef}
-          message={`📊 Options Chain — ${activeTicker} ${selectedExpiry} — UI Preview`}
+          message={`📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </div>
 
@@ -584,7 +615,14 @@ export default function OptionsChainPage() {
       </div>
 
       <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        {visibleRows.map((row) => {
+        {!strikeRowsRef.current.length ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 12, color: "#4a6a88" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Select ticker, expiry & % strikes</div>
+              <div style={{ fontSize: 11 }}>Then click GO to load chain</div>
+            </div>
+          </div>
+        ) : visibleRows.map((row) => {
           const isATM = row.strike === nearestStrike;
           const rowStyle = isATM
             ? { background: "rgba(255,179,0,.07)", borderTop: "1px solid rgba(255,179,0,.25)", borderBottom: "1px solid rgba(255,179,0,.25)" }
@@ -646,6 +684,7 @@ export default function OptionsChainPage() {
             </div>
           );
         })}
+        )}
       </div>
     </div>
   );
