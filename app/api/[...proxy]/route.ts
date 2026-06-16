@@ -101,6 +101,8 @@ export async function POST(request: NextRequest) {
       const data = await proxyResponse.json().catch(() => proxyResponse.text());
       return NextResponse.json(data, { status: proxyResponse.status });
     }
+
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   } catch (error) {
     console.error('[API] POST error:', error);
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
@@ -119,6 +121,8 @@ export async function DELETE(request: NextRequest) {
       const data = await proxyResponse.json().catch(() => proxyResponse.text());
       return NextResponse.json(data, { status: proxyResponse.status });
     }
+
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   } catch (error) {
     console.error('[PROXY] DELETE error:', error);
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
