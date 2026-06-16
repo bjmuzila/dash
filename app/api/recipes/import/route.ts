@@ -23,15 +23,15 @@ interface RecipeRecord {
   title: string;
   ingredients: string;
   instructions: string;
-  prepTime?: string;
-  cookTime?: string;
+  prep_time?: string;
+  cook_time?: string;
   servings?: string;
   image?: string;
   url?: string;
   notes?: string;
   tags: string;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
 
 async function ensureRecipesTable() {
@@ -264,13 +264,13 @@ export async function GET() {
         title: r.title,
         ingredients: JSON.parse(r.ingredients),
         instructions: JSON.parse(r.instructions),
-        prepTime: r.prep_time,
-        cookTime: r.cook_time,
+        prepTime: r.prep_time || undefined,
+        cookTime: r.cook_time || undefined,
         servings: r.servings,
         image: r.image,
         url: r.url,
         tags: r.tags ? JSON.parse(r.tags) : [],
-        createdAt: r.created_at,
+        createdAt: new Date(r.created_at),
       }))
     );
   } catch (error) {
