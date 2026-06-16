@@ -111,7 +111,7 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [showPageMenu, setShowPageMenu] = useState(false);
   const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
-  const [heatmapData, setHeatmapData] = useState(HEATMAP_ROWS);
+  const [heatmapData, setHeatmapData] = useState<{ strike: string; netGex: string; volOnly: string; dex: string; vex: string; dwGex: string; type: string; rank?: number; rankColor?: string; atm?: boolean }[]>(HEATMAP_ROWS);
   const [chartMode, setChartMode] = useState<"net-gex" | "call-put" | "oi-vol" | "vol-only" | "oi-overlay" | "net-dex" | "gex-flip">("net-gex");
   const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("1dte");
   const prevSpxRef = useRef(0);

@@ -8,10 +8,10 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 
 // DXLink (TT proxy) — only symbols confirmed to stream: index futures + SPX/VIX
 const US_FUTURES = [
-  { sym: "/ES:XCME",  label: "S&P 500",     wsKey: "/ES:XCME" },
-  { sym: "/NQ:XCME",  label: "Nasdaq 100",  wsKey: "/NQ:XCME" },
-  { sym: "/RTY:XCME", label: "Russell 2000", wsKey: "/RTY:XCME" },
-  { sym: "/YM:XCME",  label: "Dow Jones",   wsKey: "/YM:XCME" },
+  { sym: "/ES:XCME",  label: "S&P 500",      wsKey: "/ES:XCME",  yahooSym: "ES=F" },
+  { sym: "/NQ:XCME",  label: "Nasdaq 100",   wsKey: "/NQ:XCME",  yahooSym: "NQ=F" },
+  { sym: "/RTY:XCME", label: "Russell 2000", wsKey: "/RTY:XCME", yahooSym: "RTY=F" },
+  { sym: "/YM:XCME",  label: "Dow Jones",    wsKey: "/YM:XCME",  yahooSym: "YM=F" },
 ];
 
 const SPX_SYM = "SPX";
@@ -57,13 +57,15 @@ const FIXED_FX_CRYPTO = [
   { sym: "BTC-USD",  label: "BITCOIN" },
 ];
 
-// Yahoo fallbacks for RTY/YM in case DXLink doesn't carry them
-const RTY_YAHOO = { sym: "^RUT",    label: "Russell 2000", wsKey: "/RTY:XCME" };
-const YM_YAHOO  = { sym: "YM=F",    label: "Dow Jones",    wsKey: "/YM:XCME"  };
-const US_FUTURES_YAHOO = [RTY_YAHOO, YM_YAHOO];
+const INDEX_YAHOO = [
+  { sym: "^GSPC", wsKey: SPX_SYM },
+  { sym: "^VIX",  wsKey: "VIX" },
+];
 
 const YAHOO_SYMS = [
-  ...US_FUTURES_YAHOO, ...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO,
+  ...US_FUTURES.map(({ yahooSym }) => ({ sym: yahooSym })),
+  ...INDEX_YAHOO,
+  ...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO,
 ];
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -312,6 +314,7 @@ export default function PremarketPage() {
   const wsLiveRef = useRef<Record<string, LiveRec>>({});
   const [quotes, setQuotes] = useState<QuoteMap>({});
   const [yahooQuotes, setYahooQuotes] = useState<QuoteMap>({});
+  const [yahooTs, setYahooTs] = useState("");
   const [ts, setTs] = useState("");
   const [wsLive, setWsLive] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -467,39 +470,46 @@ export default function PremarketPage() {
   const pollYahoo = useCallback(async () => {
     const syms = YAHOO_SYMS.map(s => s.sym).join(",");
     try {
-      const r = await fetch(`/api/yahoo-quotes?symbols=${encodeURIComponent(syms)}`);
-      if (!r.ok) return;
+      const r = await fetch(`/api/yahoo-quotes?symbols=${encodeURIComponent(syms)}&_=${Date.now()}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`Yahoo quotes failed: ${r.status}`);
       const data: Record<string, { price: number | null; change: number | null; pct: number | null }> = await r.json();
       setYahooQuotes(data);
-    } catch (_) {}
+      setYahooTs(new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
+    } catch (_) {
+      throw _;
+    }
   }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(pollYahoo);
 
   useEffect(() => {
-    pollYahoo();
-    const id = setInterval(pollYahoo, 60_000);
+    pollYahoo().catch(() => {});
+    const id = setInterval(() => { pollYahoo().catch(() => {}); }, 60_000);
     return () => clearInterval(id);
   }, [pollYahoo]);
 
   // Merge: DXLink takes priority; Yahoo fills gaps
   const allQuotes: QuoteMap = { ...quotes };
   // Yahoo fallbacks for RTY/YM — only use if DXLink has no price
-  US_FUTURES_YAHOO.forEach(({ sym, wsKey }) => {
-    if (!allQuotes[wsKey]?.price && yahooQuotes[sym]) allQuotes[wsKey] = yahooQuotes[sym];
+  US_FUTURES.forEach(({ yahooSym, wsKey }) => {
+    if (yahooQuotes[yahooSym]?.price) allQuotes[wsKey] = yahooQuotes[yahooSym];
+  });
+  INDEX_YAHOO.forEach(({ sym, wsKey }) => {
+    if (yahooQuotes[sym]?.price) allQuotes[wsKey] = yahooQuotes[sym];
   });
   // Yahoo is authoritative for Europe/Asia/commodities/etc
   [...EUROPE, ...ASIA, ...COMMODITIES, ...RISK_ASSETS, ...FIXED_FX_CRYPTO].forEach(({ sym }) => {
     if (yahooQuotes[sym]) allQuotes[sym] = yahooQuotes[sym];
   });
 
-  const spxRow = quotes[SPX_SYM];
+  const spxRow = allQuotes[SPX_SYM];
   const spxPrice = spxRow?.price ?? null;
-  const spxPrev = wsLiveRef.current[SPX_SYM]?.prevClose ?? null;
-  const esRow   = quotes["/ESU26"] ?? quotes["/ES:XCME"];
+  const spxPrev = spxPrice != null && spxRow?.change != null ? spxPrice - spxRow.change : wsLiveRef.current[SPX_SYM]?.prevClose ?? null;
+  const esRow   = allQuotes["/ES:XCME"];
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const asOf = yahooTs ? `${dateStr} - ${yahooTs} ET` : `${dateStr} - fetching Yahoo...`;
 
   return (
     <div
