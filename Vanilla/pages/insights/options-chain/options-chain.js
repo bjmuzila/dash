@@ -503,6 +503,7 @@
     // ── parse response items into strike rows ──────────────────────────────────
     function buildStrikes(expGroups, spotPrice) {
       var map = {};
+      var sampleCall = null, samplePut = null; // For logging
       expGroups.forEach(function(expGroup) {
         var strikeRows = expGroup.strikes || [];
         strikeRows.forEach(function(item) {
@@ -510,8 +511,12 @@
           if (!strike) return;
           var key = strike.toFixed(2);
           if (!map[key]) map[key] = { strike:strike, callSym:null, putSym:null, callTT:null, putTT:null };
+          if (!sampleCall && item.call) sampleCall = item.call;
+          if (!samplePut && item.put) samplePut = item.put;
         });
       });
+      console.log('[Chain] Sample call fields:', Object.keys(sampleCall || {}));
+      console.log('[Chain] Sample put fields:', Object.keys(samplePut || {}));
 
       var allStrikes = Object.values(map).sort(function(a,b){ return a.strike - b.strike; });
 
@@ -669,27 +674,33 @@
 
       var sortedStrikes = _strikes.slice().sort(function(a,b){ return b.strike - a.strike; });
 
-      // Filter by range percentage
+      // Filter by range percentage (only if we have sufficient WS data; otherwise show all)
       var spot = _spot > 0 ? _spot : (window.esPrice > 1000 ? window.esPrice : 0);
-      if (_rangePercent === 'all') {
-        // Only show strikes with at least some data
-        var filtered = sortedStrikes.filter(function(r) {
-          var cd = _liveData[r.callSym] || r.callTT || {};
-          var pd = _liveData[r.putSym]  || r.putTT  || {};
-          return (parseFloat(cd.bid) > 0 || parseFloat(cd.ask) > 0 || parseFloat(cd.last) > 0 || parseFloat(cd.oi) > 0 || parseFloat(cd.vol) > 0) ||
-                 (parseFloat(pd.bid) > 0 || parseFloat(pd.ask) > 0 || parseFloat(pd.last) > 0 || parseFloat(pd.oi) > 0 || parseFloat(pd.vol) > 0);
-        });
-        if (filtered.length > 0) sortedStrikes = filtered;
-      } else if (spot > 0) {
-        var pctRange = _rangePercent / 100;
-        var lowerBound = spot * (1 - pctRange);
-        var upperBound = spot * (1 + pctRange);
-        var filtered = sortedStrikes.filter(function(r) {
-          return r.strike >= lowerBound && r.strike <= upperBound;
-        });
-        if (filtered.length > 0) sortedStrikes = filtered;
+      var greeksCount = Object.keys(_liveData).filter(function(sym) { return _liveData[sym] && _liveData[sym].delta != null; }).length;
+      var minGreeksNeeded = Math.max(5, Math.floor(_strikes.length * 0.1)); // At least 5 or 10% of strikes
+      var hasEnoughWsData = greeksCount >= minGreeksNeeded;
+
+      if (hasEnoughWsData) {
+        if (_rangePercent === 'all') {
+          // Only show strikes with at least some data
+          var filtered = sortedStrikes.filter(function(r) {
+            var cd = _liveData[r.callSym] || r.callTT || {};
+            var pd = _liveData[r.putSym]  || r.putTT  || {};
+            return (parseFloat(cd.bid) > 0 || parseFloat(cd.ask) > 0 || parseFloat(cd.last) > 0 || parseFloat(cd.oi) > 0 || parseFloat(cd.vol) > 0) ||
+                   (parseFloat(pd.bid) > 0 || parseFloat(pd.ask) > 0 || parseFloat(pd.last) > 0 || parseFloat(pd.oi) > 0 || parseFloat(pd.vol) > 0);
+          });
+          if (filtered.length > 0) sortedStrikes = filtered;
+        } else if (spot > 0) {
+          var pctRange = _rangePercent / 100;
+          var lowerBound = spot * (1 - pctRange);
+          var upperBound = spot * (1 + pctRange);
+          var filtered = sortedStrikes.filter(function(r) {
+            return r.strike >= lowerBound && r.strike <= upperBound;
+          });
+          if (filtered.length > 0) sortedStrikes = filtered;
+        }
       }
-      console.log('[Chain] renderTable after filter: ' + sortedStrikes.length + ' strikes, liveData=' + Object.keys(_liveData).length);
+      console.log('[Chain] renderTable: ' + sortedStrikes.length + ' strikes shown, ' + greeksCount + '/' + minGreeksNeeded + ' WS data, liveData keys=' + Object.keys(_liveData).length);
 
       var html = sortedStrikes.map(function(row) {
         var isATM = row.strike === atmStrike;
