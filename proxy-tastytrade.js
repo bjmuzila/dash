@@ -657,7 +657,13 @@ function addAutoSubscription(sym, types = null) {
     }
   });
   subscriptionTypesBySymbol.set(sym, current);
-  if (isNew) pendingNewSubscriptions = true;  // Mark that we have new subs to queue
+  if (isNew) {
+    pendingNewSubscriptions = true;  // Mark that we have new subs to queue
+    // Immediately try to send if channel is open
+    if (dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
+      sendSubscriptions();
+    }
+  }
   if (/\{type=optstat\}$/i.test(String(sym))) {
     log('!!!!!!!!!! OPTSTAT SUBSCRIBE QUEUED !!!!!!!!!!', sym, 'types=', [...current].join(','));
   }
