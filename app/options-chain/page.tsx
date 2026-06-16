@@ -329,29 +329,26 @@ export default function OptionsChainPage() {
       return buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed);
     }
 
-    // Build real rows from strikes + live data
+    // Use real strikes immediately, even if live data hasn't arrived yet
+    const atmStrike = strikes.length ? strikes[Math.floor(strikes.length / 2)].strike : 100;
     const realRows: MockRow[] = strikes.map(r => {
       const cd = liveDataRef.current[r.callSym ?? ""] || {};
       const pd = liveDataRef.current[r.putSym ?? ""] || {};
-      const cc = ((cd.oi ?? 0) + (cd.vol ?? 0)) || 1;
-      const pc = ((pd.oi ?? 0) + (pd.vol ?? 0)) || 1;
-      const spot = 6050; // fallback
+      const cc = ((cd.oi ?? 0) + (cd.vol ?? 0)) || 0;
+      const pc = ((pd.oi ?? 0) + (pd.vol ?? 0)) || 0;
       return {
         strike: r.strike,
-        gex: ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
-        dex: (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
-        chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
-        vex: ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
+        gex: cc > 0 || pc > 0 ? ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * atmStrike * atmStrike * 0.01 * 100 : 0,
+        dex: cc > 0 || pc > 0 ? (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * atmStrike * 100 : 0,
+        chex: cc > 0 || pc > 0 ? (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * atmStrike * 100 : 0,
+        vex: cc > 0 || pc > 0 ? ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * atmStrike * 100 : 0,
         premium: Math.round(((cd.bid ?? 0) + (cd.ask ?? 0)) / 2 * 100) || 0,
         volume: (cd.vol ?? 0) + (pd.vol ?? 0),
         oi: (cd.oi ?? 0) + (pd.oi ?? 0),
       };
     });
 
-    // Fall back to mock if no real data yet
-    return realRows.some(r => r.gex !== 0 || r.volume !== 0)
-      ? { rows: realRows, spot: strikes[Math.floor(strikes.length / 2)]?.strike ?? 6050 }
-      : buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed);
+    return { rows: realRows, spot: atmStrike };
   }, [activeTicker, expiries, refreshSeed, selectedExpiry]);
 
   const nearestStrike = useMemo(() => {
