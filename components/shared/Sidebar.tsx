@@ -34,6 +34,10 @@ const SettingsIcon = () => (
 const ES_DISPLAY_SYMBOL = "/ESU26";
 const NQ_DISPLAY_SYMBOL = "/NQU26";
 
+// All aliases the relay might emit for ES/NQ futures
+const ES_ALIASES = ["/ESU26", "/ESU6", "/ES:XCME", "/ES"];
+const NQ_ALIASES = ["/NQU26", "/NQU6", "/NQ:XCME", "/NQ"];
+
 const QUOTE_SYMBOLS = [
   { sym: "AMD",              label: "AMD" },
   { sym: "META",             label: "META" },
@@ -64,6 +68,13 @@ const WS_ALL_SYMBOLS = [
   { sym: "GOOGL",           label: "GOOGL" },
 ];
 
+// Canonical symbol normalizer: any ES/NQ alias → single display key
+function normalizeSymbol(raw: string): string {
+  if (raw.startsWith("/ES")) return ES_DISPLAY_SYMBOL;
+  if (raw.startsWith("/NQ")) return NQ_DISPLAY_SYMBOL;
+  return raw;
+}
+
 const REST_SYMBOLS = WS_ALL_SYMBOLS.filter(s => !s.sym.startsWith("/") && !["VIX", "SPX"].includes(s.sym));
 
 // Static sigma levels — replace with live calc if available
@@ -80,22 +91,32 @@ function useLiveQuotes() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    // All symbols to subscribe — include ES/NQ aliases so we catch whatever the relay emits
+    const allSubSymbols = [
+      ...WS_ALL_SYMBOLS.filter(s => !s.sym.startsWith("/")).map(s => s.sym),
+      ...ES_ALIASES,
+      ...NQ_ALIASES,
+    ];
+
+    function buildSubscribeMsg() {
+      return JSON.stringify({
+        type: "FEED_SUBSCRIPTION",
+        add: allSubSymbols.flatMap(sym => [
+          { type: "Quote",   symbol: sym },
+          { type: "Trade",   symbol: sym },
+          { type: "Summary", symbol: sym },
+        ]),
+      });
+    }
+
     function connect() {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
+      const state = wsRef.current?.readyState;
+      if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
       try {
         const ws = new WebSocket((process.env.NEXT_PUBLIC_WS_URL ?? "wss://vanila-8zn1.onrender.com") + "/ws/dxlink");
         wsRef.current = ws;
-        ws.onopen = () => {
-          ws.send(JSON.stringify({
-            type: "FEED_SUBSCRIPTION",
-            add: WS_ALL_SYMBOLS.flatMap(({ sym }) => [
-              { type: "Quote",   symbol: sym },
-              { type: "Trade",   symbol: sym },
-              { type: "Summary", symbol: sym },
-            ]),
-          }));
-        };
-        ws.onclose = () => { wsRef.current = null; setTimeout(connect, 5000); };
+        ws.onopen = () => { ws.send(buildSubscribeMsg()); };
+        ws.onclose = () => { wsRef.current = null; setTimeout(connect, 3000); };
         ws.onerror  = () => ws.close();
         ws.onmessage = (ev) => {
           try {
@@ -103,7 +124,7 @@ function useLiveQuotes() {
             if (msg.type !== "FEED_DATA") return;
             (msg.data || []).forEach((e: Record<string, unknown>) => {
               const rawSym = String(e.eventSymbol || "");
-              const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
+              const sym = normalizeSymbol(rawSym);
               if (!WS_ALL_SYMBOLS.find(s => s.sym === sym)) return;
               if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
               const rec = wsLiveRef.current[sym];
@@ -140,6 +161,11 @@ function useLiveQuotes() {
       } catch (_) {}
     }
     connect();
+    // Heartbeat: reconnect if stale
+    const hb = setInterval(() => {
+      const state = wsRef.current?.readyState;
+      if (state !== WebSocket.OPEN && state !== WebSocket.CONNECTING) connect();
+    }, 10000);
 
     async function seedPrevCloses() {
       try {
@@ -150,7 +176,7 @@ function useLiveQuotes() {
         const items: Array<Record<string, unknown>> = d?.data?.items || [];
         items.forEach(q => {
           const rawSym = String(q.symbol || "");
-          const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
+          const sym = normalizeSymbol(rawSym);
           const prev = Number(q["prev-close"] ?? 0);
           if (prev > 0) {
             if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
@@ -172,7 +198,7 @@ function useLiveQuotes() {
     }
     subscribeEquities();
 
-    return () => wsRef.current?.close();
+    return () => { clearInterval(hb); wsRef.current?.close(); };
   }, []);
 
   return pcts;
@@ -343,32 +369,41 @@ export default function Sidebar({
         Quotes
       </div>
 
-      {/* ── Quote rows ── */}
+      {/* ── Quote rows — sorted highest pct → lowest ── */}
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0, scrollbarWidth: "none" }}>
-        {QUOTE_SYMBOLS.map(({ sym, label }) => {
-          const pct = pcts[sym] ?? null;
-          const up = pct !== null ? pct >= 0 : null;
-          const color = pct === null ? "#3a5570" : pct < -0.01 ? "#ff4757" : "#00e676";
-          const isNqu = label === "NQU";
-          return (
-            <div
-              key={sym}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                padding: "4px 0",
-                background: isNqu ? "rgba(0,229,255,0.06)" : "transparent",
-                borderLeft: isNqu ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
-              }}
-            >
-              <span style={{ fontSize: 11, fontWeight: 700, color: isNqu ? "#00e5ff" : "#8da8c2", letterSpacing: "0.04em" }}>{label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
-                {pct !== null ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—"}
-              </span>
-            </div>
-          );
-        })}
+        {[...QUOTE_SYMBOLS]
+          .sort((a, b) => {
+            const pa = pcts[a.sym] ?? null;
+            const pb = pcts[b.sym] ?? null;
+            // nulls sink to bottom
+            if (pa === null && pb === null) return 0;
+            if (pa === null) return 1;
+            if (pb === null) return -1;
+            return pb - pa;
+          })
+          .map(({ sym, label }) => {
+            const pct = pcts[sym] ?? null;
+            const color = pct === null ? "#3a5570" : pct < -0.01 ? "#ff4757" : "#00e676";
+            const isNqu = label === "NQU";
+            return (
+              <div
+                key={sym}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  padding: "4px 0",
+                  background: isNqu ? "rgba(0,229,255,0.06)" : "transparent",
+                  borderLeft: isNqu ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
+                }}
+              >
+                <span style={{ fontSize: 11, fontWeight: 700, color: isNqu ? "#00e5ff" : "#8da8c2", letterSpacing: "0.04em" }}>{label}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
+                  {pct !== null ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—"}
+                </span>
+              </div>
+            );
+          })}
       </div>
 
       {/* divider */}
