@@ -44,7 +44,7 @@
     var _chainIntensity = 1.4;
     var _rangePercent = 10;
     var _wsDataStartTime = null;
-    var _minWaitForWsMs = 15000; // min ms to wait after first WS quote before rendering (15 seconds)
+    var _minWaitForWsMs = 20000; // min ms to wait after first WS quote before rendering (20 seconds)
     var _loadToken = 0;
     var _pendingToken = 0;
     var _pendingStrikes = [];
@@ -407,14 +407,31 @@
               setStatus('loading', 'SUBSCRIBING...');
               startWaitCountdown(_minWaitForWsMs, token);
               var waitUntil = Date.now() + _minWaitForWsMs;
+              var pollCount = 0;
               var checkReady = function() {
                 if (token !== _pendingToken) return;
                 var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
-                if (_wsDataStartTime && elapsed >= _minWaitForWsMs) { finalizeLoad(preStrikes, token, 'LIVE'); }
-                else if (elapsed >= _minWaitForWsMs) { finalizeLoad(preStrikes, token, 'LIVE (Static)'); }
-                else { setTimeout(checkReady, 50); }
+                var greeksCount = Object.keys(_liveData).filter(function(sym) { return _liveData[sym].delta != null; }).length;
+                var minGreeksNeeded = Math.max(5, Math.floor(preStrikes.length * 0.1)); // At least 5 or 10% of strikes
+
+                // Refresh display every 2 seconds (every 20 x 100ms polls) if we have some data
+                if (greeksCount >= minGreeksNeeded && pollCount > 0 && pollCount % 20 === 0) {
+                  renderTable();
+                  setStatus('loading', 'Collecting... ' + greeksCount + '/' + minGreeksNeeded);
+                }
+
+                if (elapsed >= _minWaitForWsMs && greeksCount >= minGreeksNeeded) {
+                  finalizeLoad(preStrikes, token, 'LIVE');
+                }
+                else if (elapsed >= _minWaitForWsMs) {
+                  finalizeLoad(preStrikes, token, 'LIVE (Collecting...' + greeksCount + '/' + minGreeksNeeded + ')');
+                }
+                else {
+                  pollCount++;
+                  setTimeout(checkReady, 100);
+                }
               };
-              setTimeout(checkReady, 50);
+              setTimeout(checkReady, 5000);
             }
             return;
           }
@@ -1049,36 +1066,8 @@
       var label = el('chain-ticker-label');
       if (label) label.textContent = _activeTicker;
 
-      updateCacheBadge();
-
-      // Restore last viewed chain from IDB on init
-      loadAllCacheEntries(function(entries) {
-        if (!entries.length) return;
-        // Pick the most recently saved entry
-        entries.sort(function(a, b) { return (b.savedAt || 0) - (a.savedAt || 0); });
-        var cached = entries[0];
-        if (!cached || !cached.ticker || !cached.expiry) return;
-
-        _activeTicker = cached.ticker;
-        _activeExpiry = cached.expiry;
-        _subSymbols   = (cached.symbols || []).slice();
-        if (input) input.value = cached.ticker;
-        if (label) label.textContent = cached.ticker;
-
-        // Render immediately from cached data
-        if (cached.strikes && cached.strikes.length && cached.liveData) {
-          _strikes   = cached.strikes;
-          _liveData  = cached.liveData;
-          _renderBlocked = false;
-          setStatus('loading', 'CACHED');
-          renderHeader();
-          renderTable();
-          console.log('[Chain] rendered from IDB cache: ' + cached.ticker + ' ' + cached.expiry);
-        }
-
-        // Reconnect WS to start streaming fresh updates
-        connectDxLink();
-      });
+      // Start with empty state — no auto-load
+      setStatus('idle', 'Ready to load');
 
       // Defer fetchExpirations until user selects a ticker to avoid blocking on page load
       var bodyEl = el('chain-body');

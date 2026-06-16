@@ -234,9 +234,9 @@ export default function HomePage() {
         </div>
 
         {/* Nav */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: C.muted, marginBottom: 20 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: "#fff", marginBottom: 20 }}>
           <span style={{ color: "#fff", cursor: "pointer" }}><GridIcon /></span>
-          <span style={{ cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = C.muted)}>
+          <span style={{ cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
             <CalendarIcon />
           </span>
         </div>
@@ -283,7 +283,7 @@ export default function HomePage() {
 
         {/* Bottom */}
         <div className="grad-divider-sidebar-t" style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, paddingTop: 16, width: "100%" }}>
-          <span style={{ color: C.muted, cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = C.muted)}>
+          <span style={{ color: "#fff", cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
             <SettingsIcon />
           </span>
           <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg, ${C.purple}, ${C.cyan})`, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)", cursor: "pointer" }} />
@@ -311,17 +311,18 @@ export default function HomePage() {
                   <span style={{ color: C.cyan }}><BarChart2 /></span>
                   Net Strike Gamma Exposure
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <button style={{ background: "rgba(255,255,255,0.10)", color: "#fff", padding: "2px 8px", fontSize: 10, borderRadius: 4, border: "none", cursor: "pointer" }}>ALL</button>
-                    <button style={{ color: C.muted, padding: "2px 8px", fontSize: 10, background: "none", border: "none", cursor: "pointer" }}>0DTE 6/15</button>
-                    <button style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, border: `1px solid rgba(0,240,255,0.50)`, padding: "2px 8px", fontSize: 10, borderRadius: 4, cursor: "pointer", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)" }}>1DTE 6/16</button>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 0, fontSize: 9, fontWeight: 700, color: C.muted, background: "rgba(0,0,0,0.40)", padding: 4, borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
-                    <span style={{ background: C.panel, color: C.cyan, padding: "2px 8px", borderRadius: 4 }}>Net GEX</span>
-                    <span style={{ padding: "2px 4px", cursor: "pointer" }}>Call - Put</span>
-                    <span style={{ padding: "2px 4px", cursor: "pointer" }}>OI + Vol</span>
-                  </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", width: "100%" }}>
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE 6/15</button>
+                  <button style={{ background: "rgba(0,240,255,0.25)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", textTransform: "uppercase", fontWeight: 600 }}>1DTE 6/16</button>
+                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
+                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ OI Overlay</button>
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ Net DEX</button>
+                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ GEX Flip</button>
                 </div>
               </div>
 
@@ -337,15 +338,15 @@ export default function HomePage() {
                     - GEX
                   </span>
                 </div>
-                <span style={{ color: C.muted }}>Units in Billions ($B)</span>
+                <span style={{ color: "#fff" }}>Units in Billions ($B)</span>
               </div>
 
               {/* Chart */}
               <div style={{ flex: 1, position: "relative", width: "100%", minHeight: 0 }}>
                 {/* Y-axis */}
-                <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace", color: C.muted, alignItems: "flex-end", zIndex: 20, pointerEvents: "none", paddingBottom: 20 }}>
+                <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace", color: "#fff", alignItems: "flex-end", zIndex: 20, pointerEvents: "none", paddingBottom: 20 }}>
                   {["+$6.00B","+$4.00B","+$2.00B","0","-$2.00B","-$4.00B","-$6.00B"].map((l, i) => (
-                    <span key={i} style={{ color: i < 3 ? C.cyan : i === 3 ? C.muted : C.orange }}>{l}</span>
+                    <span key={i} style={{ color: i < 3 ? C.cyan : i === 3 ? "#fff" : C.orange }}>{l}</span>
                   ))}
                 </div>
                 <svg viewBox="0 0 800 300" preserveAspectRatio="none" style={{ width: "100%", height: "100%", paddingRight: 48, paddingBottom: 24, boxSizing: "border-box" }}>
@@ -396,9 +397,9 @@ export default function HomePage() {
                   </g>
                 </svg>
                 {/* X-axis labels */}
-                <div className="grad-divider-t" style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "8px 30px 0", fontSize: 10, fontFamily: "monospace", color: C.muted }}>
+                <div className="grad-divider-t" style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "8px 30px 0", fontSize: 10, fontFamily: "monospace", color: "#fff" }}>
                   {["7450","7500","7554","7600","7650"].map((l, i) => (
-                    <span key={i} style={{ color: i === 2 ? "#fff" : C.muted, fontWeight: i === 2 ? 700 : 400 }}>{l}</span>
+                    <span key={i} style={{ color: i === 2 ? "#fff" : "#fff", fontWeight: i === 2 ? 700 : 400 }}>{l}</span>
                   ))}
                 </div>
               </div>
@@ -420,7 +421,7 @@ export default function HomePage() {
                     display: "flex", alignItems: "center", gap: 8,
                     padding: "12px 16px", fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em",
                     background: "none", border: "none", cursor: "pointer",
-                    color: activeTab === tab.id ? C.cyan : C.muted,
+                    color: activeTab === tab.id ? C.cyan : "#fff",
                     borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent",
                     marginBottom: -1,
                     transition: "color 0.15s",
@@ -435,7 +436,7 @@ export default function HomePage() {
                 {activeTab === "calendar" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, fontFamily: "monospace", color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, fontFamily: "monospace", color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>
                         Date: 2026-06-15
                         <span style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700 }}>TODAY</span>
                       </div>
@@ -449,7 +450,7 @@ export default function HomePage() {
                       <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 40, paddingTop: 2 }}>
                           <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#fff" }}>{ev.time}</span>
-                          <span style={{ fontSize: 8, textTransform: "uppercase", fontWeight: 700, color: C.muted }}>{ev.ampm}</span>
+                          <span style={{ fontSize: 8, textTransform: "uppercase", fontWeight: 700, color: "#fff" }}>{ev.ampm}</span>
                         </div>
                         <div style={{ flex: 1, minWidth: 0, borderLeft: "1px solid rgba(255,255,255,0.10)", paddingLeft: 16, position: "relative", paddingBottom: 4 }}>
                           <div style={{ position: "absolute", left: -3.5, top: 6, width: 6, height: 6, borderRadius: "50%", background: C.purple, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)" }} />
@@ -458,7 +459,7 @@ export default function HomePage() {
                             <span style={{ fontSize: 8, background: "rgba(255,255,255,0.10)", color: "#fff", padding: "2px 6px", borderRadius: 3, fontWeight: 700 }}>USD</span>
                           </div>
                           <div style={{ fontSize: 14, fontWeight: 600, color: "#fff", marginBottom: 2 }}>{ev.title}</div>
-                          <div style={{ fontSize: 10, color: C.muted }}>{ev.desc}</div>
+                          <div style={{ fontSize: 10, color: "#fff" }}>{ev.desc}</div>
                         </div>
                       </div>
                     ))}
@@ -472,7 +473,7 @@ export default function HomePage() {
                 {activeTab === "spxflow" && (
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
                   </div>
                 )}
               </div>
@@ -487,29 +488,29 @@ export default function HomePage() {
               {/* Row 1 */}
               <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    SPX <span style={{ color: C.muted, fontWeight: 400 }}>/ GEX</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
                   </span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#fff" }}>
                     {etTime}
                   </div>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.orange }}>{vix.toFixed(2)}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
+                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{vix.toFixed(2)}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
+                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
+                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
                     {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
                   </span>
                 </div>
@@ -517,23 +518,23 @@ export default function HomePage() {
               {/* Row 2 */}
               <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
                 {/* MVC */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.cyan }}>7,600</span>
+                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,600</span>
                 </div>
                 {/* OI & Vol Only */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>OI</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff" }}>7,570</span>
+                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>OI</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,570</span>
                 </div>
                 {/* GEX Zero/Flip */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>7,491</span>
+                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,491</span>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
                 </div>
                 {/* MVC Snapshot button — right aligned */}
                 <button style={{
@@ -560,7 +561,7 @@ export default function HomePage() {
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     LIVE GEX HEATMAP
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, color: C.muted }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff" }}>
                     {/* camera icon */}
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                     {/* message icon */}
@@ -584,10 +585,10 @@ export default function HomePage() {
               {/* Table */}
               <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
                 <table style={{ width: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse" }}>
-                  <thead style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
+                  <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : C.muted }}>{h}</th>
+                        <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -621,7 +622,7 @@ export default function HomePage() {
 
                         if (colIdx === 0) {
                           return (
-                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : C.muted }}>
+                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : "#fff" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {val}
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
@@ -633,14 +634,12 @@ export default function HomePage() {
                           );
                         }
 
-                        // Color logic per column
-                        const vals = [row.netGex, row.volOnly, row.dex, row.vex, row.dwGex];
-                        const v = vals[colIdx - 1];
+                        const v = val;
                         const isNegV = v?.startsWith("-");
                         const isPosV = v && !isNegV;
 
                         let cellBg = "transparent";
-                        let cellColor = isAtm ? C.cyan : isNegV ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
+                        let cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
                         let cellBorder = "none";
                         let cellFw: React.CSSProperties["fontWeight"] = 400;
 
@@ -666,7 +665,7 @@ export default function HomePage() {
                         if (isAtm) { cellFw = 700; }
                         if (colIdx === 5) {
                           cellBg = "rgba(0,0,0,0.20)";
-                          cellColor = isAtm ? C.cyan : isNegV ? "rgba(0,180,255,0.55)" : isNeg ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
+                          cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : isNeg ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
                         }
 
                         return (
@@ -689,7 +688,12 @@ export default function HomePage() {
                             onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(0,200,255,0.04)"; }}
                             onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                           >
-                            {[row.strike, row.netGex, row.volOnly, row.dex, row.vex, row.dwGex].map((v, ci) => cellVal(String(v), ci))}
+                            {cellVal(row.strike, 0)}
+                            {cellVal(row.netGex, 1)}
+                            {cellVal(row.volOnly, 2)}
+                            {cellVal(row.dex, 3)}
+                            {cellVal(row.vex, 4)}
+                            {cellVal(row.dwGex, 5)}
                           </tr>
                         </>
                       );
