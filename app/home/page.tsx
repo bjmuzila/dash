@@ -349,37 +349,35 @@ export default function HomePage() {
       return { x, y, barH, barW: BAR_W, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos, val: v };
     });
 
-    // OI overlay bars — green (callOI) from bottom up, red (putOI) from bottom up
-    const oiMaxAbs = Math.max(...slice.map(r => Math.max(r.callOI, r.putOI)), 1);
+    // OI overlay — call OI (green) and put OI (red/gold) as bars rising from bottom
+    // Scaled independently so peaks reach ~40% of half-chart height
+    const oiCallMax = Math.max(...slice.map(r => r.callOI), 1);
+    const oiPutMax  = Math.max(...slice.map(r => r.putOI),  1);
+    const OI_MAX_H  = CHART_H * 0.42; // max bar height from bottom
     const oiBars = chartMode === "oi-overlay" ? slice.map((r, i) => {
       const x = spacing * (i + 1);
-      const callH = Math.max(1, (r.callOI / oiMaxAbs) * (CHART_H / 2 - 24));
-      const putH  = Math.max(1, (r.putOI  / oiMaxAbs) * (CHART_H / 2 - 24));
-      return { x, callH, putH, barW: BAR_W * 0.6, strike: r.strike };
+      const callH = Math.max(1, (r.callOI / oiCallMax) * OI_MAX_H);
+      const putH  = Math.max(1, (r.putOI  / oiPutMax)  * OI_MAX_H);
+      return { x, callH, putH, barW: BAR_W, strike: r.strike };
     }) : null;
 
-    // Net DEX curve points
+    // Net DEX — smooth cubic-bezier curve overlay, scaled to chart half-height
     const dexMaxAbs = Math.max(...slice.map(r => Math.abs(r.netDEX)), 1);
-    const dexPoints = (chartMode === "net-dex") ? slice.map((r, i) => {
-      const x = spacing * (i + 1);
-      const y = ZERO_Y - (r.netDEX / dexMaxAbs) * (CHART_H / 2 - 24);
-      return { x, y };
-    }) : null;
+    const dexPoints = (chartMode === "net-dex") ? slice.map((r, i) => ({
+      x: spacing * (i + 1),
+      y: ZERO_Y - (r.netDEX / dexMaxAbs) * (CHART_H / 2 - 24),
+    })) : null;
 
-    // GEX flip / gamma zero profile — strikes where netGEX crosses zero
-    // Rendered as a vertical dashed line at each zero-crossing
-    const gexFlipStrikes = (chartMode === "gex-flip") ? (() => {
-      const crossings: number[] = [];
-      for (let i = 1; i < slice.length; i++) {
-        const prev = vals[start + i - 1];
-        const curr = vals[start + i];
-        if (prev !== undefined && curr !== undefined && Math.sign(prev) !== Math.sign(curr)) {
-          // Interpolate x position of zero crossing
-          const t = Math.abs(prev) / (Math.abs(prev) + Math.abs(curr));
-          crossings.push(spacing * i + spacing * t);
-        }
-      }
-      return crossings;
+    // GEX Flip / Gamma-zero profile — continuous line chart of cumulative netGEX
+    // Positive = above zero line (cyan area), negative = below (gold area)
+    const gexFlipPoints = (chartMode === "gex-flip") ? (() => {
+      // Use the raw netGEX values to draw a profile line
+      const flipMaxAbs = Math.max(...slice.map(r => Math.abs(r.netGEX)), 1);
+      return slice.map((r, i) => ({
+        x: spacing * (i + 1),
+        y: ZERO_Y - (r.netGEX / flipMaxAbs) * (CHART_H / 2 - 24),
+        isPos: r.netGEX >= 0,
+      }));
     })() : null;
 
     // Peak label
@@ -394,7 +392,7 @@ export default function HomePage() {
       callPutBars: isCallPut ? callPutBars : null,
       oiBars,
       dexPoints,
-      gexFlipStrikes,
+      gexFlipPoints,
       peakPosBar: peakPosBar as { x: number; y: number; strike: number } | null,
       peakLabel,
       spot,
@@ -614,31 +612,101 @@ export default function HomePage() {
                           />
                         ))}
 
-                        {/* OI overlay: green=call OI, red=put OI — from bottom of chart up */}
-                        {chartBars.oiBars?.map((b, i) => (
-                          <g key={`oi-${i}`}>
-                            <rect x={b.x - b.barW / 2} y={CHART_H - b.callH} width={b.barW / 2 - 1} height={b.callH} fill="rgba(16,185,129,0.5)"/>
-                            <rect x={b.x} y={CHART_H - b.putH} width={b.barW / 2 - 1} height={b.putH} fill="rgba(239,68,68,0.5)"/>
-                          </g>
-                        ))}
+                        {/* OI overlay: call=green mountain from bottom, put=gold/dark-green mountain from bottom */}
+                        {chartBars.oiBars && (() => {
+                          const callPts = chartBars.oiBars.map(b => `${b.x},${CHART_H - b.callH}`).join(" ");
+                          const putPts  = chartBars.oiBars.map(b => `${b.x},${CHART_H - b.putH}`).join(" ");
+                          const firstX  = chartBars.oiBars[0]?.x ?? 0;
+                          const lastX   = chartBars.oiBars[chartBars.oiBars.length - 1]?.x ?? CHART_W;
+                          return (
+                            <g opacity={0.75}>
+                              <defs>
+                                <linearGradient id="oiCallGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#10B981" stopOpacity="0.7"/>
+                                  <stop offset="100%" stopColor="#10B981" stopOpacity="0.1"/>
+                                </linearGradient>
+                                <linearGradient id="oiPutGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#EF4444" stopOpacity="0.6"/>
+                                  <stop offset="100%" stopColor="#EF4444" stopOpacity="0.1"/>
+                                </linearGradient>
+                              </defs>
+                              {/* Call OI — green fills from bottom */}
+                              <polygon
+                                points={`${firstX},${CHART_H} ${callPts} ${lastX},${CHART_H}`}
+                                fill="url(#oiCallGrad)"
+                              />
+                              <polyline points={callPts} fill="none" stroke="#10B981" strokeWidth="1.5" opacity={0.9}/>
+                              {/* Put OI — red fills from bottom */}
+                              <polygon
+                                points={`${firstX},${CHART_H} ${putPts} ${lastX},${CHART_H}`}
+                                fill="url(#oiPutGrad)"
+                              />
+                              <polyline points={putPts} fill="none" stroke="#EF4444" strokeWidth="1.5" opacity={0.9}/>
+                            </g>
+                          );
+                        })()}
 
-                        {/* Net DEX curve */}
-                        {chartBars.dexPoints && chartBars.dexPoints.length > 1 && (
-                          <polyline
-                            points={chartBars.dexPoints.map(p => `${p.x},${p.y}`).join(" ")}
-                            fill="none"
-                            stroke="#8B5CF6"
-                            strokeWidth="2"
-                            strokeLinejoin="round"
-                            opacity={0.85}
-                          />
-                        )}
+                        {/* Net DEX — smooth cubic bezier curve */}
+                        {chartBars.dexPoints && chartBars.dexPoints.length > 1 && (() => {
+                          const pts = chartBars.dexPoints;
+                          let d = `M ${pts[0].x} ${pts[0].y}`;
+                          for (let i = 1; i < pts.length; i++) {
+                            const prev = pts[i - 1];
+                            const curr = pts[i];
+                            const cpX = (prev.x + curr.x) / 2;
+                            d += ` C ${cpX},${prev.y} ${cpX},${curr.y} ${curr.x},${curr.y}`;
+                          }
+                          return (
+                            <path d={d} fill="none" stroke="#8B5CF6" strokeWidth="2.5" opacity={0.9}
+                              style={{ filter: "drop-shadow(0 0 4px rgba(139,92,246,0.6))" }}/>
+                          );
+                        })()}
 
-                        {/* GEX Flip: vertical dashed lines at zero crossings */}
-                        {chartBars.gexFlipStrikes?.map((x, i) => (
-                          <line key={`flip-${i}`} x1={x} y1={0} x2={x} y2={CHART_H}
-                            stroke="#F97316" strokeWidth="1.5" strokeDasharray="6 3" opacity={0.8}/>
-                        ))}
+                        {/* GEX Flip — continuous gamma zero profile line with area fill */}
+                        {chartBars.gexFlipPoints && chartBars.gexFlipPoints.length > 1 && (() => {
+                          const pts = chartBars.gexFlipPoints;
+                          // Build smooth path
+                          let d = `M ${pts[0].x} ${pts[0].y}`;
+                          for (let i = 1; i < pts.length; i++) {
+                            const prev = pts[i - 1];
+                            const curr = pts[i];
+                            const cpX = (prev.x + curr.x) / 2;
+                            d += ` C ${cpX},${prev.y} ${cpX},${curr.y} ${curr.x},${curr.y}`;
+                          }
+                          const firstX = pts[0].x, lastX = pts[pts.length - 1].x;
+                          return (
+                            <g>
+                              <defs>
+                                <linearGradient id="flipGradPos" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#00F0FF" stopOpacity="0.3"/>
+                                  <stop offset="100%" stopColor="#00F0FF" stopOpacity="0.0"/>
+                                </linearGradient>
+                                <linearGradient id="flipGradNeg" x1="0" y1="1" x2="0" y2="0">
+                                  <stop offset="0%" stopColor="#EAB308" stopOpacity="0.3"/>
+                                  <stop offset="100%" stopColor="#EAB308" stopOpacity="0.0"/>
+                                </linearGradient>
+                              </defs>
+                              {/* Area fill above zero */}
+                              <path
+                                d={`${d} L ${lastX},${ZERO_Y} L ${firstX},${ZERO_Y} Z`}
+                                fill="url(#flipGradPos)" opacity={0.6}
+                                style={{ clipPath: `inset(0 0 ${CHART_H - ZERO_Y}px 0)` }}
+                              />
+                              {/* Area fill below zero */}
+                              <path
+                                d={`${d} L ${lastX},${ZERO_Y} L ${firstX},${ZERO_Y} Z`}
+                                fill="url(#flipGradNeg)" opacity={0.6}
+                                style={{ clipPath: `inset(${ZERO_Y}px 0 0 0)` }}
+                              />
+                              {/* The profile line itself */}
+                              <path d={d} fill="none" stroke="#F97316" strokeWidth="2"
+                                opacity={0.9} style={{ filter: "drop-shadow(0 0 4px rgba(249,115,22,0.5))" }}/>
+                              {/* Zero line reference */}
+                              <line x1={firstX} y1={ZERO_Y} x2={lastX} y2={ZERO_Y}
+                                stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4"/>
+                            </g>
+                          );
+                        })()}
 
                         {/* Peak label */}
                         {(() => {
@@ -868,73 +936,99 @@ export default function HomePage() {
                       // Gradient divider after ATM row
                       const showDivider = idx > 0 && heatmapData[idx - 1]?.type === "atm";
 
+                      // intensity: 0.05–1.0, default 0.4. Scale colors relative to 0.4 baseline.
+                      const hi = intensity; // 0.05 = dim, 1.0 = max bright
+
+                      // Rank-based row background — applied to entire row via rowStyle
+                      // Positive ranks: cyan glow. Negative ranks: red glow. Intensity scales opacity.
+                      const posRank1 = isPosTop;
+                      const posRank2 = isPosStrong && row.rank === 2;
+                      const negRank1 = isNegTop;
+                      const negRank2 = isNegRed && row.rank === 2;
+
+                      const rowBg = (() => {
+                        if (isAtm) return `linear-gradient(to right, rgba(0,240,255,${(0.10*hi).toFixed(2)}), rgba(0,240,255,${(0.06*hi).toFixed(2)}), rgba(0,240,255,${(0.10*hi).toFixed(2)}))`;
+                        if (posRank1) return `rgba(0,200,255,${(0.18*hi).toFixed(2)})`;
+                        if (posRank2) return `rgba(0,160,200,${(0.12*hi).toFixed(2)})`;
+                        if (isPosStrong) return `rgba(0,120,160,${(0.07*hi).toFixed(2)})`;
+                        if (negRank1) return `rgba(180,20,20,${(0.30*hi).toFixed(2)})`;
+                        if (negRank2) return `rgba(140,15,15,${(0.22*hi).toFixed(2)})`;
+                        if (isNegRed) return `rgba(100,10,10,${(0.15*hi).toFixed(2)})`;
+                        if (isNeg) return `rgba(60,5,5,${(0.08*hi).toFixed(2)})`;
+                        return "transparent";
+                      })();
+
                       const rowStyle: React.CSSProperties = {
-                        borderBottom: isAtm
-                          ? "none"
-                          : "none",
-                        background: isAtm
-                          ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))"
-                          : "transparent",
+                        background: rowBg,
                         transition: "background 0.15s",
                         position: "relative",
+                        borderBottom: isAtm ? `1px solid rgba(0,240,255,${(0.15*hi).toFixed(2)})` : "none",
                       };
 
                       const cellVal = (val: string, colIdx: number) => {
-                        const isNegVal = val.startsWith("-");
-                        const isPosVal = !isNegVal && val !== "—";
                         const base: React.CSSProperties = { padding: "3px 6px", textAlign: colIdx === 0 ? "left" : "right", overflow: "hidden", textOverflow: "ellipsis" };
 
                         if (colIdx === 0) {
+                          const strikeColor = isAtm ? C.cyan : posRank1 ? "#fff" : negRank1 ? "#ff6b6b" : posRank2 ? "#00D9FF" : negRank2 ? "#ff8888" : "#aac4d8";
+                          // Rank badge color: #1 = orange/gold, #2 = silver, others = dimmer
+                          const rankBadgeBg = row.rank === 1 ? "#F97316" : row.rank === 2 ? "#6B7280" : "#374151";
                           return (
-                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
+                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: strikeColor }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
                                 <span style={{ minWidth: 44 }}>{val}</span>
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 9, letterSpacing: "0.08em", flexShrink: 0 }}>ATM</span>}
-                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 4px", borderRadius: 3, fontSize: 8, fontWeight: 700, flexShrink: 0 }}>#{row.rank}</span>}
+                                {row.rank && (
+                                  <span style={{
+                                    background: rankBadgeBg,
+                                    color: row.rank === 1 ? "#000" : "#fff",
+                                    padding: "1px 4px", borderRadius: 3, fontSize: 8, fontWeight: 700, flexShrink: 0,
+                                    boxShadow: row.rank <= 2 ? `0 0 ${6*hi}px ${rankBadgeBg}` : "none",
+                                  }}>#{row.rank}</span>
+                                )}
                               </div>
                             </td>
                           );
                         }
 
-                        // Color logic per column
+                        // Data columns — color text based on pos/neg, brighten for ranked rows
                         const vals = [row.netGex, row.volOnly, row.dex, row.vex, row.dwGex];
                         const v = vals[colIdx - 1];
                         const isNegV = v?.startsWith("-");
-                        const isPosV = v && !isNegV;
 
+                        // Cell highlight: rank #1 and #2 get bright text + subtle cell bg on key columns
                         let cellBg = "transparent";
-                        let cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
-                        let cellBorder = "none";
+                        let cellColor: string;
                         let cellFw: React.CSSProperties["fontWeight"] = 400;
 
-                        // Highlight hotspot cells — opacity scaled by intensity
-                        const hi = Math.min(1, intensity / 0.4); // 1.0 at default 0.4
-                        if ((isPosTop || isPosStrong) && !isNegV && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = `rgba(14,116,144,${(0.30 * hi).toFixed(2)})`;
-                          cellBorder = `1px solid rgba(0,240,255,${(0.20 * hi).toFixed(2)})`;
-                          cellColor = isPosTop ? "#fff" : "#00D9FF";
+                        if (isAtm) {
+                          cellColor = "#fff";
                           cellFw = 700;
-                        }
-                        if (isNegRed && isNegV && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = `rgba(0,60,100,${(0.45 * hi).toFixed(2)})`;
-                          cellBorder = `1px solid rgba(0,180,255,${(0.15 * hi).toFixed(2)})`;
-                          cellColor = C.cyan;
+                        } else if (posRank1) {
+                          cellColor = isNegV ? "rgba(100,180,220,0.7)" : "#00F0FF";
                           cellFw = 700;
-                        }
-                        if (isNegTop && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = `rgba(0,60,100,${(0.45 * hi).toFixed(2)})`;
-                          cellBorder = `1px solid rgba(0,180,255,${(0.15 * hi).toFixed(2)})`;
-                          cellColor = colIdx === 1 ? C.cyan : "#fff";
+                          if (colIdx === 1) cellBg = `rgba(0,220,255,${(0.12*hi).toFixed(2)})`;
+                        } else if (posRank2) {
+                          cellColor = isNegV ? "rgba(80,160,200,0.6)" : "#00D9FF";
+                          cellFw = 600;
+                          if (colIdx === 1) cellBg = `rgba(0,180,220,${(0.08*hi).toFixed(2)})`;
+                        } else if (isPosStrong) {
+                          cellColor = isNegV ? "rgba(60,140,180,0.55)" : "rgba(0,210,240,0.85)";
+                        } else if (negRank1) {
+                          cellColor = isNegV ? "#ff6b6b" : "rgba(200,120,120,0.8)";
                           cellFw = 700;
-                        }
-                        if (isAtm) { cellFw = 700; }
-                        if (colIdx === 5) {
-                          cellBg = "rgba(0,0,0,0.20)";
-                          cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : isNeg ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
+                          if (colIdx === 1) cellBg = `rgba(200,30,30,${(0.15*hi).toFixed(2)})`;
+                        } else if (negRank2) {
+                          cellColor = isNegV ? "#ff8888" : "rgba(180,100,100,0.7)";
+                          cellFw = 600;
+                          if (colIdx === 1) cellBg = `rgba(160,20,20,${(0.10*hi).toFixed(2)})`;
+                        } else if (isNegRed || isNeg) {
+                          cellColor = isNegV ? "rgba(220,100,100,0.7)" : "rgba(180,120,120,0.6)";
+                        } else {
+                          cellColor = isNegV ? "rgba(100,160,200,0.55)" : "rgba(200,220,230,0.75)";
                         }
 
                         return (
-                          <td key={`${row.strike}-${colIdx}`} style={{ ...base, background: cellBg, border: cellBorder, fontWeight: cellFw, color: cellColor, borderRadius: cellBorder !== "none" ? 4 : 0 }}>
+                          <td key={`${row.strike}-${colIdx}`} style={{ ...base, background: cellBg, fontWeight: cellFw, color: cellColor }}>
                             {v}
                           </td>
                         );

@@ -209,6 +209,7 @@ export default function Sidebar({
   const pathname = usePathname();
   const pcts = useLiveQuotes();
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const gridBtnRef = useRef<HTMLButtonElement>(null);
 
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
@@ -222,7 +223,7 @@ export default function Sidebar({
       height: "100%",
       background: "#07090f",
       borderRight: "1px solid rgba(255,255,255,0.06)",
-      overflow: "hidden",
+      overflow: "visible",
       fontFamily: "monospace",
     }}>
 
@@ -242,11 +243,17 @@ export default function Sidebar({
         </a>
 
         {/* Grid — page selector popout */}
-        <div style={{ position: "relative" }}>
+        <div>
           <button
             ref={gridBtnRef}
             title="Pages"
-            onClick={() => setPageMenuOpen(p => !p)}
+            onClick={() => {
+              if (!pageMenuOpen && gridBtnRef.current) {
+                const r = gridBtnRef.current.getBoundingClientRect();
+                setMenuPos({ top: r.top, left: r.right + 8 });
+              }
+              setPageMenuOpen(p => !p);
+            }}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
               width: 40, height: 40, borderRadius: 10, cursor: "pointer",
@@ -260,18 +267,17 @@ export default function Sidebar({
             <GridIcon />
           </button>
 
-          {/* Popout menu */}
-          {pageMenuOpen && (
+          {/* Popout menu — fixed so it escapes sidebar overflow */}
+          {pageMenuOpen && menuPos && (
             <>
-              {/* backdrop to close */}
               <div
                 style={{ position: "fixed", inset: 0, zIndex: 998 }}
                 onClick={() => setPageMenuOpen(false)}
               />
               <div style={{
-                position: "absolute",
-                left: "calc(100% + 8px)",
-                top: 0,
+                position: "fixed",
+                left: menuPos.left,
+                top: menuPos.top,
                 zIndex: 999,
                 background: "#0a0e18",
                 border: "1px solid rgba(0,229,255,0.20)",
