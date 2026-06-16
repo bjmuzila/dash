@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      const data = await proxyResponse.json().catch(() => proxyResponse.text());
+      const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
       return NextResponse.json(data, { status: proxyResponse.status });
     } catch (error) {
       console.error('[PROXY] GET error:', error);
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = await proxyResponse.json().catch(() => proxyResponse.text());
+      const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
       return NextResponse.json(data, { status: proxyResponse.status });
     }
 
@@ -118,7 +118,7 @@ export async function DELETE(request: NextRequest) {
       const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
       console.log('[PROXY] DELETE', proxyUrl);
       const proxyResponse = await fetch(proxyUrl, { method: 'DELETE' });
-      const data = await proxyResponse.json().catch(() => proxyResponse.text());
+      const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
       return NextResponse.json(data, { status: proxyResponse.status });
     }
 
