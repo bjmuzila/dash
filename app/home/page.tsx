@@ -80,6 +80,12 @@ const RotateCcwIcon = () => (
   </svg>
 );
 
+const ES_SYMBOL_ALIASES = ["/ESU26", "/ESU6", "/ES:XCME", "/ES"];
+
+function findQuote(items: Array<Record<string, unknown>>, symbols: string[]) {
+  return items.find((item) => symbols.includes(String(item.symbol ?? "")));
+}
+
 // ── Data ──────────────────────────────────────────────────────────────────────
 const SIDEBAR_SYMBOLS = ["AMD", "META", "SMH", "NVDA", "AMZN", "NQU", "QQQ", "GOOGL", "MSFT", "AAPL"];
 const DEFAULT_QUOTES = SIDEBAR_SYMBOLS.map(sym => ({ sym, chg: "—", pos: true, active: sym === "NQU" }));
@@ -163,12 +169,12 @@ export default function HomePage() {
   useEffect(() => {
     const fetchTopBarQuotes = async () => {
       try {
-        const res = await fetch("/api/quotes-batch?symbols=SPX,VIX,/ESU26", { cache: "no-store" });
+        const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
         const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
-        const spxQuote = items.find((item) => String(item.symbol ?? "") === "SPX");
-        const esQuote = items.find((item) => String(item.symbol ?? "") === "/ESU26");
+        const spxQuote = findQuote(items, ["SPX"]);
+        const esQuote = findQuote(items, ES_SYMBOL_ALIASES);
 
         if (spxQuote) {
           const last = Number(spxQuote.last ?? spxQuote.mark ?? 0);
@@ -247,7 +253,7 @@ export default function HomePage() {
   const refreshGexPanels = useCallback(async () => {
     const actualExpiry = expiryMap[selectedExpiry];
     const requests: Promise<Response>[] = [
-      fetch("/api/quotes-batch?symbols=SPX,VIX,/ESU26", { cache: "no-store" }),
+      fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" }),
     ];
 
     if (actualExpiry) {
@@ -277,9 +283,9 @@ export default function HomePage() {
     if (quotesRes?.ok) {
       const json = await quotesRes.json();
       const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
-      const spxQuote = items.find((item) => String(item.symbol ?? "") === "SPX");
-      const esQuote = items.find((item) => String(item.symbol ?? "") === "/ESU26");
-      const vixQuote = items.find((item) => String(item.symbol ?? "") === "VIX");
+      const spxQuote = findQuote(items, ["SPX"]);
+      const esQuote = findQuote(items, ES_SYMBOL_ALIASES);
+      const vixQuote = findQuote(items, ["VIX"]);
 
       if (spxQuote) {
         const last = Number(spxQuote.last ?? spxQuote.mark ?? 0);
@@ -651,6 +657,18 @@ export default function HomePage() {
       }));
     })() : null;
 
+    const gexFlipMarker = (() => {
+      if (gexFlip == null || !Number.isFinite(gexFlip)) return null;
+      const nearest = bars.reduce((best, bar) =>
+        Math.abs(bar.strike - gexFlip) < Math.abs(best.strike - gexFlip) ? bar : best
+      , bars[0]);
+      if (!nearest) return null;
+      return {
+        x: nearest.x,
+        strike: gexFlip,
+      };
+    })();
+
     // Peak label — always use the actual peak bar's strike so label matches position
     const peakLabel = peakPosBar ? peakPosBar.strike.toLocaleString() : null;
 
@@ -660,6 +678,7 @@ export default function HomePage() {
       oiBars,
       dexPoints,
       gexFlipPoints,
+      gexFlipMarker,
       peakPosBar,
       peakLabel,
       spot,
@@ -1001,6 +1020,24 @@ export default function HomePage() {
                               {/* Zero line reference */}
                               <line x1={firstX} y1={ZERO_Y} x2={lastX} y2={ZERO_Y}
                                 stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4"/>
+                              {chartBars.gexFlipMarker && (
+                                <g>
+                                  <line
+                                    x1={chartBars.gexFlipMarker.x}
+                                    y1={0}
+                                    x2={chartBars.gexFlipMarker.x}
+                                    y2={CHART_H}
+                                    stroke="#F97316"
+                                    strokeWidth="1.5"
+                                    strokeDasharray="5 4"
+                                    opacity={0.85}
+                                  />
+                                  <rect x={chartBars.gexFlipMarker.x - 24} y={18} width={48} height={14} fill="rgba(249,115,22,0.18)" rx="2" />
+                                  <text x={chartBars.gexFlipMarker.x} y={28} textAnchor="middle" fontSize="10" fontFamily="monospace" fill="#F97316" fontWeight="700">
+                                    G0 {chartBars.gexFlipMarker.strike.toFixed(0)}
+                                  </text>
+                                </g>
+                              )}
                             </g>
                           );
                         })()}
@@ -1165,7 +1202,7 @@ export default function HomePage() {
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>Flip</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{gexFlip ? gexFlip.toLocaleString() : "—"}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#F97316" }}>{gexFlip != null ? gexFlip.toLocaleString() : "—"}</span>
                   </div>
                   <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     <button

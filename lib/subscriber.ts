@@ -49,6 +49,8 @@ export interface SubscriberState {
 
 type SubscriberCallback = (state: SubscriberState) => void;
 
+const ES_SYMBOL_ALIASES = ['/ESU26', '/ESU6', '/ES:XCME', '/ES'];
+
 class Subscriber {
   private static instance: Subscriber;
   private state: SubscriberState;
@@ -111,7 +113,7 @@ class Subscriber {
    */
   private async fetchQuotes(): Promise<void> {
     try {
-      const res = await fetch('/api/quotes-batch?symbols=SPX,VIX,/ESU26', { cache: 'no-store' });
+      const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(['SPX', 'VIX', ...ES_SYMBOL_ALIASES].join(','))}`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
       const items: Array<Record<string, unknown>> = data?.data?.items ?? [];
@@ -129,7 +131,7 @@ class Subscriber {
           this.state.vix = last;
           changed = true;
         }
-        if (sym === '/ESU26' && last > 100) {
+        if (ES_SYMBOL_ALIASES.includes(sym) && last > 100) {
           this.state.esFutures = last;
           changed = true;
         }
