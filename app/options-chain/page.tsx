@@ -684,7 +684,6 @@ export default function OptionsChainPage() {
             </div>
           );
         })}
-        )}
       </div>
     </div>
   );
