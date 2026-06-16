@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
+import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import Subscriber, { type SubscriberState } from "@/lib/subscriber";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function etNow() {
@@ -69,18 +71,8 @@ const RotateCcwIcon = () => (
 );
 
 // ── Data ──────────────────────────────────────────────────────────────────────
-const QUOTES = [
-  { sym: "AMD",   chg: "+6.92%", pos: true },
-  { sym: "META",  chg: "+4.63%", pos: true },
-  { sym: "SMH",   chg: "+4.16%", pos: true },
-  { sym: "NVDA",  chg: "+3.36%", pos: true },
-  { sym: "AMZN",  chg: "+3.27%", pos: true },
-  { sym: "NQU",   chg: "+3.01%", pos: true, active: true },
-  { sym: "QQQ",   chg: "+2.98%", pos: true },
-  { sym: "GOOGL", chg: "+2.71%", pos: true },
-  { sym: "MSFT",  chg: "+2.31%", pos: true },
-  { sym: "AAPL",  chg: "+1.76%", pos: true },
-];
+const SIDEBAR_SYMBOLS = ["AMD", "META", "SMH", "NVDA", "AMZN", "NQU", "QQQ", "GOOGL", "MSFT", "AAPL"];
+const DEFAULT_QUOTES = SIDEBAR_SYMBOLS.map(sym => ({ sym, chg: "—", pos: true, active: sym === "NQU" }));
 
 const HEATMAP_ROWS = [
   { strike: "7,600", rank: 2, rankColor: "#8B94A7", netGex: "$63.72M", volOnly: "$63.72M", dex: "$25.82M", vex: "$73.62M", dwGex: "$9.90M", type: "pos-strong" },
@@ -106,14 +98,22 @@ const HEATMAP_ROWS = [
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function HomePage() {
   const [now, setNow] = useState(new Date());
+  const [sidebarQuotes, setSidebarQuotes] = useState(DEFAULT_QUOTES);
   const [spx, setSpx] = useState(7554.29);
   const [spxChg, setSpxChg] = useState(122.83);
   const [spxChgPct, setSpxChgPct] = useState(1.65);
   const [esFut, setEsFut] = useState(7562.0);
   const [netGex, setNetGex] = useState(15790000000);
   const [vix, setVix] = useState(16.20);
+  const [callWall, setCallWall] = useState<number | null>(null);
+  const [putWall, setPutWall] = useState<number | null>(null);
+  const [gexFlip, setGexFlip] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
-  const wsRef = useRef<WebSocket | null>(null);
+  const [showPageMenu, setShowPageMenu] = useState(false);
+  const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
+  const [heatmapData, setHeatmapData] = useState(HEATMAP_ROWS);
+  const [chartMode, setChartMode] = useState<"net-gex" | "call-put" | "oi-vol" | "vol-only" | "oi-overlay" | "net-dex" | "gex-flip">("net-gex");
+  const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("1dte");
   const prevSpxRef = useRef(0);
 
   useEffect(() => {
@@ -122,65 +122,220 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onopen = () => {
-      try {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: ["$SPX", "SPX", "/ESU26", "/ES:XCME", "VIX"],
-          feedTypesBySymbol: { "$SPX": ["Quote","Trade","Summary"], "SPX": ["Quote","Trade","Summary"], "/ESU26": ["Quote","Trade"], "/ES:XCME": ["Quote","Trade"], "VIX": ["Quote","Trade"] },
-        }));
-      } catch {}
+    const subscriber = Subscriber.getInstance();
+    subscriber.init();
+
+    // Subscribe to state updates
+    const unsubscribe = subscriber.subscribe((state: SubscriberState) => {
+      if (state.spotPrice > 100) {
+        const prev = prevSpxRef.current;
+        if (prev > 0) {
+          const chg = state.spotPrice - prev;
+          setSpxChg(chg);
+          setSpxChgPct((chg / prev) * 100);
+        }
+        if (prev === 0) prevSpxRef.current = state.spotPrice;
+        setSpx(state.spotPrice);
+      }
+      setEsFut(state.esFutures);
+      setVix(state.vix);
+      setNetGex(state.netGex);
+      setCallWall(state.callWall);
+      setPutWall(state.putWall);
+      setGexFlip(state.gexFlip);
+
+      if (state.chain.length > 0) {
+        setRawChain(state.chain);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      subscriber.disconnect();
     };
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type !== "FEED_DATA") return;
-        (msg.data as Array<Record<string, unknown>>).forEach(ev => {
-          const sym = String(ev.eventSymbol ?? "");
-          const t = ev.eventType;
-          if ((sym === "$SPX" || sym === "SPX") && t === "Quote") {
-            const bid = Number(ev.bidPrice ?? 0), ask = Number(ev.askPrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (mid > 100) {
-              if (prevSpxRef.current > 0) { const chg = mid - prevSpxRef.current; setSpxChg(chg); setSpxChgPct((chg / prevSpxRef.current) * 100); }
-              if (prevSpxRef.current === 0) prevSpxRef.current = mid;
-              setSpx(mid);
-            }
-          }
-          if ((sym === "/ESU26" || sym === "/ES:XCME") && t === "Quote") {
-            const bid = Number(ev.bidPrice ?? 0), ask = Number(ev.askPrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (mid > 100) setEsFut(mid);
-          }
-          if (sym === "VIX" && t === "Quote") {
-            const v = Number(ev.bidPrice ?? ev.lastPrice ?? 0);
-            if (v > 0) setVix(v);
-          }
-        });
-      } catch {}
-    };
-    ws.onclose = () => {};
-    return () => { ws.close(); };
   }, []);
 
+  // ── Task #13: Sidebar quotes poll ─────────────────────────────────────────────
   useEffect(() => {
-    const load = () => {
-      fetch("/api/gex", { cache: "no-store" })
-        .then(r => r.json())
-        .then(j => { const g = j?.summary?.totalNetGEX ?? j?.totalNetGEX ?? 0; if (isFinite(g) && g !== 0) setNetGex(g); })
-        .catch(() => {});
+    const fetchQuotes = async () => {
+      try {
+        const syms = SIDEBAR_SYMBOLS.join(",");
+        const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const items: Array<{ symbol: string; mark?: number; "prev-day-close"?: number; last?: number }> = Array.isArray(json?.data?.items) ? json.data.items : [];
+        if (!items.length) return;
+        setSidebarQuotes(SIDEBAR_SYMBOLS.map(sym => {
+          const q = items.find(i => i.symbol === sym || i.symbol === `${sym}:XCIS`);
+          if (!q) return { sym, chg: "—", pos: true, active: sym === "NQU" };
+          const price = q.mark ?? q.last ?? 0;
+          const prev = q["prev-day-close"] ?? 0;
+          const pct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+          const pos = pct >= 0;
+          return { sym, chg: `${pos ? "+" : ""}${pct.toFixed(2)}%`, pos, active: sym === "NQU" };
+        }));
+      } catch { /* non-fatal */ }
     };
-    load();
-    const t = setInterval(load, 60_000);
+    fetchQuotes();
+    const t = setInterval(fetchQuotes, 30_000);
     return () => clearInterval(t);
   }, []);
 
+  // ── Task #7 Step 3 + Task #9: Filter heatmap by expiry, apply live colors ────
+  useEffect(() => {
+    if (rawChain.length === 0) return;
+
+    const spot = spx || 7554;
+    const atmStrike = rawChain.reduce((best, r) =>
+      Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best
+    ).strike;
+
+    // Filter by DTE: 0DTE = dte <= 0 or dte === 1 (same-day); 1DTE = dte <= 1
+    const filtered = rawChain.filter(r => {
+      if (selectedExpiry === "0dte") return r.dte <= 1;
+      return r.dte <= 2; // 1DTE = include 0+1
+    });
+
+    const source = filtered.length > 0 ? filtered : rawChain;
+
+    // Sort descending (highest strike first) for display
+    const sortedAll = [...source].sort((a, b) => b.strike - a.strike);
+
+    // Window: 20 above + ATM + 20 below spot
+    const atmIdx = sortedAll.findIndex(r => r.strike === atmStrike);
+    const winStart = Math.max(0, atmIdx - 20);
+    const winEnd = Math.min(sortedAll.length - 1, atmIdx + 20);
+    const sorted = sortedAll.slice(winStart, winEnd + 1);
+
+    // Find top pos/neg for rank badges
+    const sorted_by_abs_gex = [...sorted].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX));
+    const topPos = sorted_by_abs_gex.filter(r => r.netGEX > 0).slice(0, 5).map(r => r.strike);
+    const topNeg = sorted_by_abs_gex.filter(r => r.netGEX < 0).slice(0, 5).map(r => r.strike);
+    const posRanks = Object.fromEntries(topPos.map((s, i) => [s, i + 1]));
+    const negRanks = Object.fromEntries(topNeg.map((s, i) => [s, i + 1]));
+
+    const fmt = (v: number) => {
+      const a = Math.abs(v);
+      const sign = v < 0 ? "-" : "";
+      if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+      if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+      if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(1)}K`;
+      return `${sign}$${a.toFixed(0)}`;
+    };
+
+    const rows = sorted.map(r => {
+      const isAtm = r.strike === atmStrike;
+      const isPosTop = posRanks[r.strike] === 1;
+      const isNegTop = negRanks[r.strike] === 1;
+      const rank = posRanks[r.strike] ?? negRanks[r.strike];
+      const rankColor = rank && rank <= 2 ? "#F97316" : rank ? "#8B94A7" : undefined;
+
+      let type = "neutral";
+      if (isAtm) type = "atm";
+      else if (isPosTop) type = "pos-top";
+      else if (isNegTop) type = "neg-top";
+      else if (r.netGEX > 0 && posRanks[r.strike]) type = "pos-strong";
+      else if (r.netGEX < 0 && negRanks[r.strike]) type = "neg-red";
+      else if (r.netGEX < 0) type = "neg";
+
+      return {
+        strike: r.strike.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
+        netGex: fmt(r.netGEX),
+        volOnly: fmt(r.netVolGEX),
+        dex: fmt(r.netDEX),
+        vex: "—",
+        dwGex: fmt(r.volNetDEX),
+        type,
+        rank: rank ?? undefined,
+        rankColor,
+        atm: isAtm,
+      };
+    });
+
+    setHeatmapData(rows);
+  }, [rawChain, selectedExpiry, spx]);
+
+
   const etTime = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
+  // ── Task #8: Compute GEX chart bars from live chain ───────────────────────────
+  const chartBars = (() => {
+    if (rawChain.length === 0) return null;
+
+    // Filter by expiry (same logic as heatmap)
+    const filtered = rawChain.filter(r =>
+      selectedExpiry === "0dte" ? r.dte <= 1 : r.dte <= 2
+    );
+    const source = filtered.length > 0 ? filtered : rawChain;
+    const sorted = [...source].sort((a, b) => a.strike - b.strike);
+
+    // Pick value to chart based on chartMode
+    const getVal = (r: typeof sorted[0]) => {
+      if (chartMode === "vol-only") return r.netVolGEX;
+      if (chartMode === "net-dex") return r.netDEX;
+      if (chartMode === "call-put") return r.callGEX - Math.abs(r.putGEX);
+      return r.netGEX; // net-gex, oi-vol, oi-overlay, gex-flip all default to netGEX
+    };
+
+    const vals = sorted.map(r => getVal(r));
+    const maxAbs = Math.max(...vals.map(Math.abs), 1);
+
+    // Trim to ~40 strikes centered on spot
+    const spot = spx || sorted[Math.floor(sorted.length / 2)]?.strike || 7500;
+    const atmIdx = sorted.reduce((bi, r, i) => Math.abs(r.strike - spot) < Math.abs(sorted[bi].strike - spot) ? i : bi, 0);
+    const half = 20;
+    const start = Math.max(0, atmIdx - half);
+    const end = Math.min(sorted.length - 1, atmIdx + half);
+    const slice = sorted.slice(start, end + 1);
+    const sliceVals = vals.slice(start, end + 1);
+
+    const CHART_W = 800;
+    const CHART_H = 300;
+    const ZERO_Y = CHART_H / 2; // zero line at midpoint
+    const barW = Math.max(10, Math.floor(CHART_W / (slice.length + 2)) - 2);
+    const spacing = Math.floor(CHART_W / (slice.length + 1));
+
+    // Find peak pos bar for label
+    let peakPosBar: { x: number; y: number; strike: number } | null = null;
+    let peakPosVal = 0;
+
+    const bars = slice.map((r, i) => {
+      const v = sliceVals[i];
+      const x = spacing * (i + 0.5);
+      const heightPct = Math.abs(v) / maxAbs;
+      const barH = Math.max(2, heightPct * (CHART_H / 2 - 20));
+      const isPos = v >= 0;
+      const y = isPos ? ZERO_Y - barH : ZERO_Y;
+      const fill = isPos ? "url(#cyanBarGrad)" : "url(#goldBarGrad)";
+      const glow = isPos
+        ? "drop-shadow(0 0 6px rgba(0,240,255,0.5))"
+        : "drop-shadow(0 0 6px rgba(234,179,8,0.5))";
+      const highlight = Math.abs(v) > maxAbs * 0.5;
+
+      if (isPos && Math.abs(v) > peakPosVal) {
+        peakPosVal = Math.abs(v);
+        peakPosBar = { x, y, strike: r.strike };
+      }
+
+      return { x, y, barH, barW, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos };
+    });
+
+    // Peak label based on chartMode
+    const peakLabel = (() => {
+      if (chartMode === "net-gex" || chartMode === "oi-vol") return callWall ? `${callWall.toLocaleString()}` : null;
+      if (chartMode === "vol-only") {
+        const top = [...source].sort((a, b) => Math.abs(b.netVolGEX) - Math.abs(a.netVolGEX))[0];
+        return top ? `${top.strike.toLocaleString()}` : null;
+      }
+      if (chartMode === "net-dex") {
+        const top = [...source].sort((a, b) => Math.abs(b.netDEX) - Math.abs(a.netDEX))[0];
+        return top ? `${top.strike.toLocaleString()}` : null;
+      }
+      return peakPosBar ? `${(peakPosBar as { strike: number }).strike.toLocaleString()}` : null;
+    })();
+
+    return { bars, peakPosBar, peakLabel, spot };
+  })();
 
   // ── Styles ──────────────────────────────────────────────────────────────────
   const C = {
@@ -234,8 +389,19 @@ export default function HomePage() {
         </div>
 
         {/* Nav */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: "#fff", marginBottom: 20 }}>
-          <span style={{ color: "#fff", cursor: "pointer" }}><GridIcon /></span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: "#fff", marginBottom: 20, position: "relative" }}>
+          <span style={{ color: "#fff", cursor: "pointer", position: "relative" }} onClick={() => setShowPageMenu(!showPageMenu)}>
+            <GridIcon />
+            {showPageMenu && (
+              <div style={{ position: "absolute", left: 60, top: -100, background: "rgba(13,17,25,0.95)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 8, minWidth: 180, maxHeight: 400, overflowY: "auto", zIndex: 100 }}>
+                {["Overview", "Premarket", "Database", "Insider", "ETF", "Move", "Options Chain", "Multi Greek", "Trading", "Logs", "Personal", "Legging", "Expiry Calendar"].map(page => (
+                  <div key={page} onClick={() => { setShowPageMenu(false); window.location.href = `/${page.toLowerCase().replace(/\s+/g, "-")}`; }} style={{ padding: "12px 16px", cursor: "pointer", color: "#fff", fontSize: 13, transition: "background 0.15s", borderBottom: "1px solid rgba(255,255,255,0.05)" }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(0,240,255,0.10)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                    {page}
+                  </div>
+                ))}
+              </div>
+            )}
+          </span>
           <span style={{ cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
             <CalendarIcon />
           </span>
@@ -245,7 +411,7 @@ export default function HomePage() {
         {/* Quotes */}
         <div style={{ flex: 1, width: "100%", overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 0, scrollbarWidth: "none" }}>
           <div style={{ fontSize: 9, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.15em", position: "sticky", top: 0, background: "rgba(5,6,10,0.8)", backdropFilter: "blur(8px)", width: "100%", textAlign: "center", padding: "8px 0", zIndex: 10 }}>Quotes</div>
-          {QUOTES.map(q => (
+          {sidebarQuotes.map(q => (
             <div key={q.sym} style={{
               display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer",
               padding: "6px 0", width: "100%", transition: "background 0.15s",
@@ -262,7 +428,7 @@ export default function HomePage() {
           <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", padding: "6px 0", width: "100%" }}>
             <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: C.red }}>VIX</span>
-            <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: C.red }}>-8.37%</span>
+            <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: C.red }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
           </div>
           <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
           <div style={{ fontSize: 9, fontWeight: 700, color: C.purple, textTransform: "uppercase", letterSpacing: "0.12em", textAlign: "center", padding: "4px 0" }}>Sigma</div>
@@ -312,17 +478,17 @@ export default function HomePage() {
                   Net Strike Gamma Exposure
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", width: "100%" }}>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE 6/15</button>
-                  <button style={{ background: "rgba(0,240,255,0.25)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", textTransform: "uppercase", fontWeight: 600 }}>1DTE 6/16</button>
+                  <button onClick={() => setSelectedExpiry("0dte")} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600, boxShadow: selectedExpiry === "0dte" ? "0 0 20px -5px rgba(0,240,255,0.3)" : "none" }}>0DTE 6/15</button>
+                  <button onClick={() => setSelectedExpiry("1dte")} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", boxShadow: selectedExpiry === "1dte" ? "0 0 20px -5px rgba(0,240,255,0.3)" : "none", textTransform: "uppercase", fontWeight: 600 }}>1DTE 6/16</button>
                   <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
+                  <button onClick={() => setChartMode("net-gex")} style={{ color: chartMode === "net-gex" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "net-gex" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
+                  <button onClick={() => setChartMode("call-put")} style={{ color: chartMode === "call-put" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "call-put" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
+                  <button onClick={() => setChartMode("oi-vol")} style={{ color: chartMode === "oi-vol" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "oi-vol" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
+                  <button onClick={() => setChartMode("vol-only")} style={{ color: chartMode === "vol-only" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "vol-only" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
                   <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ OI Overlay</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ Net DEX</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ GEX Flip</button>
+                  <button onClick={() => setChartMode("oi-overlay")} style={{ color: chartMode === "oi-overlay" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "oi-overlay" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ OI Overlay</button>
+                  <button onClick={() => setChartMode("net-dex")} style={{ color: chartMode === "net-dex" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "net-dex" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ Net DEX</button>
+                  <button onClick={() => setChartMode("gex-flip")} style={{ color: chartMode === "gex-flip" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: chartMode === "gex-flip" ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ GEX Flip</button>
                 </div>
               </div>
 
@@ -360,41 +526,58 @@ export default function HomePage() {
                     <linearGradient id="goldBarBright" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#D97706"/><stop offset="100%" stopColor="#FCD34D"/>
                     </linearGradient>
+                    <linearGradient id="strikeGradCyan" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="rgba(0,217,255,0.4)"/><stop offset="100%" stopColor="rgba(0,217,255,0.1)"/>
+                    </linearGradient>
                   </defs>
-                  <line x1="0" y1="50" x2="800" y2="50" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
+                  {/* Grid lines */}
+                  <line x1="0" y1="50"  x2="800" y2="50"  stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
                   <line x1="0" y1="100" x2="800" y2="100" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
                   <line x1="0" y1="200" x2="800" y2="200" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
                   <line x1="0" y1="250" x2="800" y2="250" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="380" y1="0" x2="380" y2="300" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4 4"/>
+                  {/* Zero line */}
                   <line x1="0" y1="150" x2="800" y2="150" stroke="rgba(255,255,255,0.2)" strokeWidth="2"/>
-                  <g fill="url(#cyanBarGrad)">
-                    <rect x="30" y="145" width="25" height="5"/><rect x="65" y="140" width="25" height="10"/>
-                    <rect x="100" y="140" width="25" height="10"/><rect x="135" y="130" width="25" height="20"/>
-                    <rect x="170" y="135" width="25" height="15"/><rect x="205" y="120" width="25" height="30"/>
-                    <rect x="240" y="130" width="25" height="20"/><rect x="275" y="140" width="25" height="10"/>
-                    <rect x="310" y="140" width="25" height="10"/>
-                    <rect x="345" y="20" width="25" height="130" fill="#00F0FF" style={{ filter: "drop-shadow(0 0 8px rgba(0,240,255,0.6))" }}/>
-                    <rect x="380" y="80" width="25" height="70"/><rect x="415" y="90" width="25" height="60"/>
-                    <rect x="450" y="110" width="25" height="40"/><rect x="485" y="60" width="25" height="90"/>
-                    <rect x="520" y="50" width="25" height="100"/><rect x="555" y="30" width="25" height="120"/>
-                    <rect x="590" y="80" width="25" height="70"/><rect x="625" y="110" width="25" height="40"/>
-                    <rect x="660" y="100" width="25" height="50"/><rect x="695" y="25" width="25" height="125" fill="#00F0FF"/>
-                  </g>
-                  <g fill="url(#goldBarGrad)">
-                    <rect x="30" y="150" width="25" height="30"/>
-                    <rect x="65" y="150" width="25" height="25"/>
-                    <rect x="100" y="150" width="25" height="30"/>
-                    <rect x="135" y="150" width="25" height="45"/>
-                    <rect x="170" y="150" width="25" height="50"/>
-                    <rect x="310" y="150" width="25" height="35"/>
-                    <rect x="345" y="150" width="25" height="10"/>
-                  </g>
-                  {/* Bigger gold bars — brighter gradient */}
-                  <g fill="url(#goldBarBright)">
-                    <rect x="205" y="150" width="25" height="60" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.5))" }}/>
-                    <rect x="240" y="150" width="25" height="55" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.4))" }}/>
-                    <rect x="275" y="150" width="25" height="40"/>
-                  </g>
+
+                  {/* Live bars from chain data (Task #8) */}
+                  {chartBars ? (
+                    <>
+                      {chartBars.bars.map((b, i) => (
+                        <rect
+                          key={`bar-${i}`}
+                          x={b.x - b.barW / 2}
+                          y={b.y}
+                          width={b.barW}
+                          height={b.barH}
+                          fill={b.fill}
+                          style={b.glow ? { filter: b.glow } : undefined}
+                        />
+                      ))}
+                      {/* Peak strike label (Task #8 Step 3, Task #7 Step 5) */}
+                      {(() => {
+                        const pb = chartBars.peakPosBar;
+                        if (!pb || !chartBars.peakLabel) return null;
+                        return (
+                          <>
+                            <rect x={pb.x - 18} y={Math.max(2, pb.y - 18)} width={36} height={14} fill="url(#strikeGradCyan)" rx="2"/>
+                            <text x={pb.x} y={Math.max(12, pb.y - 7)} textAnchor="middle" fontSize="10" fontFamily="monospace" fill={C.cyan} fontWeight="700">
+                              {chartBars.peakLabel}
+                            </text>
+                          </>
+                        );
+                      })()}
+                    </>
+                  ) : (
+                    /* Fallback static bars while loading */
+                    <>
+                      <g fill="url(#cyanBarGrad)">
+                        <rect x="345" y="20" width="25" height="130" fill="#00F0FF" style={{ filter: "drop-shadow(0 0 8px rgba(0,240,255,0.6))" }}/>
+                        <rect x="380" y="80" width="25" height="70"/>
+                        <rect x="695" y="25" width="25" height="125" fill="#00F0FF"/>
+                      </g>
+                      <rect x="333" y="5" width="24" height="14" fill="url(#strikeGradCyan)" rx="2"/>
+                      <text x="345" y="14" textAnchor="middle" fontSize="11" fontFamily="monospace" fill={C.cyan} fontWeight="700">7,570</text>
+                    </>
+                  )}
                 </svg>
                 {/* X-axis labels */}
                 <div className="grad-divider-t" style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "8px 30px 0", fontSize: 10, fontFamily: "monospace", color: "#fff" }}>
@@ -434,35 +617,8 @@ export default function HomePage() {
               {/* Tab content */}
               <div style={{ flex: 1, overflowY: "auto", padding: 24, scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
                 {activeTab === "calendar" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, fontFamily: "monospace", color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                        Date: 2026-06-15
-                        <span style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700 }}>TODAY</span>
-                      </div>
-                      <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)", color: "#fff", fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer" }}>Sync Now</button>
-                    </div>
-                    {[
-                      { time: "2:41", ampm: "AM", title: "The President departs The White House", desc: "en route to Joint Base Andrews" },
-                      { time: "3:01", ampm: "AM", title: "The President arrives", desc: "at Joint Base Andrews" },
-                      { time: "9:56", ampm: "AM", title: "The President arrives at Geneva Airport", desc: "en route to Evian Resort, France" },
-                    ].map((ev, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 40, paddingTop: 2 }}>
-                          <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#fff" }}>{ev.time}</span>
-                          <span style={{ fontSize: 8, textTransform: "uppercase", fontWeight: 700, color: "#fff" }}>{ev.ampm}</span>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0, borderLeft: "1px solid rgba(255,255,255,0.10)", paddingLeft: 16, position: "relative", paddingBottom: 4 }}>
-                          <div style={{ position: "absolute", left: -3.5, top: 6, width: 6, height: 6, borderRadius: "50%", background: C.purple, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)" }} />
-                          <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
-                            <span style={{ fontSize: 8, background: "rgba(139,92,246,0.20)", color: C.purple, padding: "2px 6px", borderRadius: 3, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>PRESIDENT</span>
-                            <span style={{ fontSize: 8, background: "rgba(255,255,255,0.10)", color: "#fff", padding: "2px 6px", borderRadius: 3, fontWeight: 700 }}>USD</span>
-                          </div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: "#fff", marginBottom: 2 }}>{ev.title}</div>
-                          <div style={{ fontSize: 10, color: "#fff" }}>{ev.desc}</div>
-                        </div>
-                      </div>
-                    ))}
+                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                    <EconCalendarPanel />
                   </div>
                 )}
                 {activeTab === "snapshot" && (
@@ -519,20 +675,20 @@ export default function HomePage() {
               <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                {/* MVC */}
+                {/* Call Wall */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,600</span>
+                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CW</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.cyan }}>{callWall ? callWall.toLocaleString() : "—"}</span>
                 </div>
-                {/* OI & Vol Only */}
+                {/* Put Wall */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>OI</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,570</span>
+                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PW</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>{putWall ? putWall.toLocaleString() : "—"}</span>
                 </div>
-                {/* GEX Zero/Flip */}
+                {/* GEX Flip */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
                   <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,491</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{gexFlip ? gexFlip.toLocaleString() : "—"}</span>
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
                 </div>
@@ -593,7 +749,7 @@ export default function HomePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {HEATMAP_ROWS.map((row, idx) => {
+                    {heatmapData.map((row, idx) => {
                       const isAtm = row.type === "atm";
                       const isPosTop = row.type === "pos-top";
                       const isNegTop = row.type === "neg-top";
@@ -601,8 +757,18 @@ export default function HomePage() {
                       const isNegRed = row.type === "neg-red";
                       const isNeg = row.type === "neg" || row.type === "neg-red" || row.type === "neg-top";
 
+                      // Find highest Net GEX
+                      const gexVals = heatmapData.map(r => {
+                        const val = r.netGex.replace(/[$,MKB]/g, "");
+                        const mult = r.netGex.includes("B") ? 1000 : r.netGex.includes("M") ? 1 : 0.001;
+                        return parseFloat(val) * mult;
+                      });
+                      const maxGex = Math.max(...gexVals);
+                      const currentGexVal = parseFloat(row.netGex.replace(/[$,MKB]/g, "")) * (row.netGex.includes("B") ? 1000 : row.netGex.includes("M") ? 1 : 0.001);
+                      const isHighestGex = currentGexVal === maxGex && currentGexVal > 0;
+
                       // Gradient divider after ATM row
-                      const showDivider = idx > 0 && HEATMAP_ROWS[idx - 1]?.type === "atm";
+                      const showDivider = idx > 0 && heatmapData[idx - 1]?.type === "atm";
 
                       const rowStyle: React.CSSProperties = {
                         borderBottom: isAtm
@@ -622,7 +788,7 @@ export default function HomePage() {
 
                         if (colIdx === 0) {
                           return (
-                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : "#fff" }}>
+                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : "#fff" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {val}
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
@@ -634,7 +800,9 @@ export default function HomePage() {
                           );
                         }
 
-                        const v = val;
+                        // Color logic per column
+                        const vals = [row.netGex, row.volOnly, row.dex, row.vex, row.dwGex];
+                        const v = vals[colIdx - 1];
                         const isNegV = v?.startsWith("-");
                         const isPosV = v && !isNegV;
 
@@ -669,7 +837,7 @@ export default function HomePage() {
                         }
 
                         return (
-                          <td key={colIdx} style={{ ...base, background: cellBg, border: cellBorder, fontWeight: cellFw, color: cellColor, borderRadius: cellBorder !== "none" ? 4 : 0 }}>
+                          <td key={`${row.strike}-${colIdx}`} style={{ ...base, background: cellBg, border: cellBorder, fontWeight: cellFw, color: cellColor, borderRadius: cellBorder !== "none" ? 4 : 0 }}>
                             {v}
                           </td>
                         );
@@ -688,12 +856,7 @@ export default function HomePage() {
                             onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(0,200,255,0.04)"; }}
                             onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                           >
-                            {cellVal(row.strike, 0)}
-                            {cellVal(row.netGex, 1)}
-                            {cellVal(row.volOnly, 2)}
-                            {cellVal(row.dex, 3)}
-                            {cellVal(row.vex, 4)}
-                            {cellVal(row.dwGex, 5)}
+                            {[row.strike, row.netGex, row.volOnly, row.dex, row.vex, row.dwGex].map((v, ci) => cellVal(String(v), ci))}
                           </tr>
                         </>
                       );

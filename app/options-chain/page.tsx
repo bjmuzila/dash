@@ -449,6 +449,7 @@ export default function OptionsChainPage() {
   const [spot, setSpot]         = useState(0);
   const [intensity, setIntensity] = useState(0.4);
   const [rangePercent, setRangePercent] = useState<number | "all">(10);
+  const rangePercentRef = useRef<number | "all">(10);
   const [status, setStatus]     = useState<{ state: "live"|"loading"|"err"|"idle"; msg: string }>({ state: "idle", msg: "--" });
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const [renderTick, setRenderTick] = useState(0);
@@ -551,7 +552,8 @@ export default function OptionsChainPage() {
 
     try {
       const pageId = `options-chain-${Date.now()}`;
-      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(t)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}`);
+      const rangeParam = rangePercentRef.current || '10';
+      const res = await fetch(`/api/chains?ticker=${encodeURIComponent(t)}&expiration=${encodeURIComponent(expDate)}&range=${encodeURIComponent(rangeParam)}&pageId=${encodeURIComponent(pageId)}`);
       if (token !== loadTokenRef.current) return;
       const json = await res.json();
 
@@ -668,7 +670,10 @@ export default function OptionsChainPage() {
   }, [ticker, selectedExpiry, activeTicker, expirations.length, fetchExpirations, loadChain]);
 
   // Bump renderTick when rangePercent changes so ChainTable filtered useMemo re-runs
-  useEffect(() => { setRenderTick(t => t + 1); }, [rangePercent]);
+  useEffect(() => {
+    rangePercentRef.current = rangePercent;
+    setRenderTick(t => t + 1);
+  }, [rangePercent]);
 
   // Auto-fetch expirations for default ticker on mount
   useEffect(() => {

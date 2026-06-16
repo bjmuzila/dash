@@ -1,6 +1,6 @@
 {
     "name": "bzila-dashboard",
-    "version": "2026.6.15-v87",
+    "version": "2026.6.16-v16",
     "private": true,
     "workspaces": [],
     "scripts": {
@@ -11,6 +11,7 @@
     },
     "dependencies": {
         "clsx": "^2.1.1",
+        "dotenv": "^17.4.2",
         "html2canvas": "^1.4.1",
         "lightweight-charts": "^5.0.0",
         "next": "^15.3.3",

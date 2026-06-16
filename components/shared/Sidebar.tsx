@@ -196,7 +196,7 @@ export default function Sidebar({
   collapsed?: boolean;
 }) {
   const pathname = usePathname();
-  const isOverview = pathname === "/";
+  const isOverview = pathname === "/overview";
 
   const borderColor = isOverview ? "var(--overview-border, var(--border))" : "var(--border)";
   const bg = isOverview ? "var(--overview-bg, #05080d)" : "var(--surface, #05080d)";
@@ -245,7 +245,7 @@ export default function Sidebar({
       {/* Header row: overview link + collapse button */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 6px", borderBottom: "1px solid var(--border)", flexShrink: 0, gap: 4 }}>
         <a
-          href="/"
+          href="/overview"
           aria-label="Go to Overview"
           style={{ background: "none", border: "none", color: "#00e5ff", cursor: "pointer", padding: "2px 6px", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none", fontSize: 10, fontWeight: 700, letterSpacing: ".06em", transition: "opacity 0.2s" }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.7")}

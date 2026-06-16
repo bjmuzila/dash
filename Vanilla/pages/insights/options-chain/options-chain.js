@@ -411,8 +411,12 @@
               var checkReady = function() {
                 if (token !== _pendingToken) return;
                 var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
-                var greeksCount = Object.keys(_liveData).filter(function(sym) { return _liveData[sym].delta != null; }).length;
+                var greeksCount = Object.keys(_liveData).filter(function(sym) { return _liveData[sym] && _liveData[sym].delta != null; }).length;
                 var minGreeksNeeded = Math.max(5, Math.floor(preStrikes.length * 0.1)); // At least 5 or 10% of strikes
+
+                // Update progress counter in toolbar
+                var progressEl = el('chain-progress-count');
+                if (progressEl) progressEl.textContent = greeksCount + '/' + minGreeksNeeded;
 
                 // Refresh display every 2 seconds (every 20 x 100ms polls) if we have some data
                 if (greeksCount >= minGreeksNeeded && pollCount > 0 && pollCount % 20 === 0) {

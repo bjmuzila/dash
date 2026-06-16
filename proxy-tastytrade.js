@@ -55,8 +55,8 @@ let schwabTokenExpiry  = 0;
 // Caches fetched option chains to eliminate redundant TT API calls and subscriptions
 // TTL: 1 hour per symbol (or 10 min if no explicit expiration)
 const chainCache = new Map();
-const CHAIN_CACHE_TTL_MS = 3600000;  // 1 hour for explicit expiration
-const CHAIN_CACHE_TTL_DEFAULT_MS = 600000;  // 10 min for default (nearest) expirations
+const CHAIN_CACHE_TTL_MS = 30000;  // 30 sec for explicit expiration (short-dated options change fast)
+const CHAIN_CACHE_TTL_DEFAULT_MS = 30000;  // 30 sec for default (nearest) expirations
 
 function getChainsFromCache(symbol, expiration) {
   const key = `${symbol.toUpperCase()}:${expiration || 'DEFAULT'}`;
@@ -560,9 +560,9 @@ let subscriptionSending = false;
 const queuedSubscriptionKeys = new Set();
 const activeAutoSubscriptionKeys = new Set();
 const activeCandleSubscriptionKeys = new Set();
-const SUBSCRIPTION_BATCH_SIZE = 500;    // large batches for fast drain
-const SUBSCRIPTION_BATCH_DELAY_BASE = 500;   // 500ms between batches
-const SUBSCRIPTION_BATCH_DELAY_MAX = 2000;   // 2 second max backoff
+const SUBSCRIPTION_BATCH_SIZE = 50;     // dxLink limit ~100, use 50 to be safe
+const SUBSCRIPTION_BATCH_DELAY_BASE = 1000;  // 1 second between batches
+const SUBSCRIPTION_BATCH_DELAY_MAX = 5000;   // 5 second max backoff
 let subscriptionBatchDelay = SUBSCRIPTION_BATCH_DELAY_BASE;
 let subscriptionErrorCount = 0;
 let pendingNewSubscriptions = false;  // Track if there are new subscriptions to send
@@ -740,7 +740,7 @@ async function sendSubscriptionsRateLimited() {
             batch.forEach(item => activeAutoSubscriptionKeys.add(subscriptionKey(item)));
             subscriptionErrorCount = 0;
             resolve();
-          }, 100);
+          }, 200);
         } catch (err) {
           reject(err);
         }
@@ -3854,7 +3854,7 @@ const server = http.createServer(async (req, res) => {
 
     const exp = u.searchParams.get('expiration') || '';
     const rangeRaw = u.searchParams.get('range') || '';
-    const rangeParam = rangeRaw === 'all' ? Infinity : parseInt(rangeRaw || '0', 10);
+    const rangeParam = rangeRaw === 'all' ? 'all' : (rangeRaw ? parseInt(rangeRaw, 10) : 0);
 
     // CHECK CACHE (2026-06-12): Return cached chain data if fresh (<1hr for explicit exp, <10min for defaults)
     // This eliminates redundant TT API calls and massive subscription queues
@@ -3952,16 +3952,16 @@ const server = http.createServer(async (req, res) => {
 
     // On initial load, filter to ±10% of underlying = ~20 strikes per side + ATM = 41 total.
     // Client can pass ?range=20 to widen to 20%, or ?range=all for no filter.
-    // rangeParam is a percentage (e.g., 10 = 10%)
+    // rangeParam is a percentage (e.g., 10 = 10%) or 'all'
     let chainRange = Infinity;
-    if (rangeParam === 'all' || rangeParam === Infinity) {
+    if (rangeParam === 'all') {
       chainRange = Infinity;
     } else if (exp) {
       // Explicit expiration: return all strikes
       chainRange = Infinity;
     } else if (rangeParam > 0) {
-      // rangeParam is a percentage - convert to dollar range
-      chainRange = rangeParam; // will be used as percentage below
+      // rangeParam is a percentage
+      chainRange = rangeParam;
     } else {
       // Default: ±10%
       chainRange = 10;
@@ -4053,31 +4053,34 @@ const server = http.createServer(async (req, res) => {
     });
     const restOICount = Object.keys(oiCache).length;
 
-    // Second pass: try market-data for symbols missing OI
-    const symbolsForOI = filteredOptions
-      .filter(o => !oiCache[o['streamer-symbol']])
+    // Second pass: fetch OI from market-data in batches
+    const allSymsForOI = filteredOptions
       .map(o => o['streamer-symbol'])
-      .filter(Boolean)
-      .slice(0, 100); // market-data has limits, batch in 100s
+      .filter(Boolean);
 
-    if (symbolsForOI.length > 0) {
+    // Batch the market-data requests (TT has rate limits)
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < allSymsForOI.length; i += BATCH_SIZE) {
+      if (Object.keys(oiCache).length >= allSymsForOI.length) break; // Already have all OI
+      const batch = allSymsForOI.slice(i, i + BATCH_SIZE);
       try {
-        const qs = symbolsForOI.map(s => `symbol[]=${encodeURIComponent(s)}`).join('&');
+        const qs = batch.map(s => `symbol[]=${encodeURIComponent(s)}`).join('&');
         const { status: s3, data: d3 } = await ttGet(`/market-data?${qs}`);
         if (s3 === 200 && d3?.data?.items) {
           d3.data.items.forEach(item => {
             const sym = item.symbol || '';
             const oi = Number(item['open-interest'] ?? item.openInterest ?? null);
-            if (isFinite(oi) && oi > 0) oiCache[sym] = oi;
+            if (isFinite(oi) && oi > 0 && !oiCache[sym]) oiCache[sym] = oi;
           });
-          const marketDataOICount = Object.keys(oiCache).length - restOICount;
-          if (marketDataOICount > 0) {
-            log('Added', marketDataOICount, 'more symbols from market-data (', restOICount, 'from REST)');
-          }
         }
       } catch (e) {
-        log('market-data fetch failed:', e.message);
+        log('market-data batch fetch failed:', e.message);
       }
+    }
+
+    const marketDataOICount = Object.keys(oiCache).length - restOICount;
+    if (marketDataOICount > 0) {
+      log('Added', marketDataOICount, 'symbols from market-data (', restOICount, 'from REST)');
     }
 
     if (restOICount > 0) {
@@ -4160,6 +4163,57 @@ const server = http.createServer(async (req, res) => {
     setChainsInCache(sym, exp, items);
 
     return sendJSON(res, 200, { data: { items, underlyingPrice, symbol: sym, rootSymbol }, context: '/option-chains/' + sym + '/nested' });
+  }
+
+  // ── GET /api/chains  ──────────────────────────────────────────────────────────
+  // React endpoint: fetch option chain with Greeks merged from dxGreeksCache
+  if (req.method === 'GET' && p === '/api/chains') {
+    const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+    const sym = (qs.get('ticker') || 'SPX').toUpperCase();
+    const exp = qs.get('expiration') || '';
+    const rangeParam = qs.get('range') || 'all';
+    const pageId = qs.get('pageId') || '';
+
+    try {
+      // Fetch from nested endpoint (merges REST + Greeks)
+      const { status: ttStatus, data: ttData } = await ttGet(`/option-chains/${sym}/nested`);
+      if (ttStatus !== 200 || !ttData?.data) {
+        return sendJSON(res, 404, { error: 'Chain not found', symbol: sym });
+      }
+
+      const { items, underlyingPrice, rootSymbol } = ttData.data;
+
+      // Apply expiration filter if specified
+      let filtered = items;
+      if (exp) {
+        filtered = items.filter(eg => (eg['expiration-date'] || '').slice(0, 10) === exp.slice(0, 10));
+        if (!filtered.length) filtered = items; // fallback to all
+      }
+
+      // Apply range filter if requested (not 'all')
+      if (rangeParam !== 'all' && underlyingPrice > 0) {
+        const rangePercent = parseFloat(rangeParam) || 10;
+        const pct = rangePercent / 100;
+        const lower = underlyingPrice * (1 - pct);
+        const upper = underlyingPrice * (1 + pct);
+
+        filtered = filtered.map(eg => ({
+          'expiration-date': eg['expiration-date'],
+          strikes: eg.strikes.filter(s => {
+            const strike = parseFloat(s['strike-price']);
+            return strike >= lower && strike <= upper;
+          })
+        })).filter(eg => eg.strikes.length > 0);
+      }
+
+      const cachedGreeks = Object.keys(dxGreeksCache).length;
+      log('chains built items:', filtered.length, 'first strikes:', filtered[0]?.strikes?.length, '| dxLink greeks cached:', cachedGreeks, '| underlying:', underlyingPrice, '| pageId:', pageId);
+
+      return sendJSON(res, 200, { data: { items: filtered, underlyingPrice, symbol: sym, rootSymbol } });
+    } catch (e) {
+      log('[/api/chains] error:', e.message);
+      return sendJSON(res, 500, { error: e.message });
+    }
   }
 
   if (req.method === 'POST' && p === '/proxy/dxlink/subscribe') {

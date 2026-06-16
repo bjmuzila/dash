@@ -9,7 +9,7 @@ export default function Navbar() {
       className="flex items-center justify-between px-4 py-2 border-b"
       style={{ borderColor: "var(--border)", background: "var(--surface)" }}
     >
-      <Link href="/" className="flex items-center gap-2">
+      <Link href="/home" className="flex items-center gap-2">
         <Image
           src="/bzilatrades-logo.png"
           alt="BzilaTrades"
