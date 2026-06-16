@@ -71,7 +71,7 @@ async function extractTikTokRecipe(url: string): Promise<StructuredRecipe> {
     if (metadata.subtitles?.en) {
       const subs = metadata.subtitles.en[0];
       if (subs.data) {
-        transcript = subs.data.map((s: any) => s.body).join(" ");
+        transcript = subs.data.map((s: Record<string, unknown>) => (s as any).body).join(" ");
       }
     }
 
@@ -98,7 +98,7 @@ async function extractRegularRecipe(url: string): Promise<StructuredRecipe> {
           title: data.name || "Untitled",
           ingredients: data.recipeIngredient || [],
           instructions: (data.recipeInstructions || [])
-            .map((i: any) => i.text || i)
+            .map((i: Record<string, unknown>) => (i as any).text || i)
             .filter(Boolean),
           prepTime: data.prepTime,
           cookTime: data.cookTime,
@@ -112,12 +112,12 @@ async function extractRegularRecipe(url: string): Promise<StructuredRecipe> {
     // Fallback: scrape basic content
     const title = $("h1").first().text() || "Untitled";
     const ingredients = $("li")
-      .map((_, el) => $(el).text())
+      .map((_: number, el: unknown) => $(el).text())
       .get()
       .filter((t: string) => t.length > 5)
       .slice(0, 20);
     const instructions = $("ol li, .instructions li")
-      .map((_, el) => $(el).text())
+      .map((_: number, el: unknown) => $(el).text())
       .get()
       .slice(0, 20);
 
