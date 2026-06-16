@@ -277,12 +277,20 @@ export default function HomePage() {
     const source = filtered.length > 0 ? filtered : rawChain;
     const sorted = [...source].sort((a, b) => a.strike - b.strike);
 
-    // Pick value to chart based on chartMode
+    // Pick primary bar value based on chartMode
+    // net-gex    → netGEX (OI-weighted gamma)
+    // call-put   → callGEX vs putGEX as separate bars (handled below)
+    // oi-vol     → netGEX + netVolGEX combined (OI + Volume)
+    // vol-only   → netVolGEX (volume-weighted gamma only)
+    // oi-overlay → netGEX bars + OI bars from bottom as overlay
+    // net-dex    → netGEX bars + netDEX curve overlay
+    // gex-flip   → netGEX bars + gamma zero profile line
     const getVal = (r: typeof sorted[0]) => {
       if (chartMode === "vol-only") return r.netVolGEX;
-      if (chartMode === "net-dex") return r.netDEX;
-      if (chartMode === "call-put") return r.callGEX - Math.abs(r.putGEX);
-      return r.netGEX; // net-gex, oi-vol, oi-overlay, gex-flip all default to netGEX
+      if (chartMode === "oi-vol") return r.netGEX + r.netVolGEX;
+      // call-put: use callGEX for positive bars, putGEX (negated) for negative — handled via callVal/putVal
+      if (chartMode === "call-put") return r.callGEX + r.putGEX; // putGEX is already negative
+      return r.netGEX; // net-gex, oi-overlay, net-dex, gex-flip base bars
     };
 
     const vals = sorted.map(r => getVal(r));
@@ -309,9 +317,20 @@ export default function HomePage() {
     let peakPosBar: { x: number; y: number; strike: number } | null = null as { x: number; y: number; strike: number } | null;
     let peakPosVal = 0;
 
+    // For call-put mode, build two bar arrays (call=cyan above zero, put=gold below zero)
+    const isCallPut = chartMode === "call-put";
+    const callPutBars: { x: number; callH: number; putH: number; barW: number; strike: number; callVal: number; putVal: number }[] = [];
+
     const bars = slice.map((r, i) => {
       const v = sliceVals[i];
       const x = spacing * (i + 1);
+
+      if (isCallPut) {
+        const callH = Math.max(2, (Math.abs(r.callGEX) / maxAbs) * (CHART_H / 2 - 24));
+        const putH  = Math.max(2, (Math.abs(r.putGEX)  / maxAbs) * (CHART_H / 2 - 24));
+        callPutBars.push({ x, callH, putH, barW: BAR_W, strike: r.strike, callVal: r.callGEX, putVal: r.putGEX });
+      }
+
       const heightPct = Math.abs(v) / maxAbs;
       const barH = Math.max(2, heightPct * (CHART_H / 2 - 24));
       const isPos = v >= 0;
@@ -330,22 +349,57 @@ export default function HomePage() {
       return { x, y, barH, barW: BAR_W, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos, val: v };
     });
 
-    // Peak label based on chartMode
+    // OI overlay bars — green (callOI) from bottom up, red (putOI) from bottom up
+    const oiMaxAbs = Math.max(...slice.map(r => Math.max(r.callOI, r.putOI)), 1);
+    const oiBars = chartMode === "oi-overlay" ? slice.map((r, i) => {
+      const x = spacing * (i + 1);
+      const callH = Math.max(1, (r.callOI / oiMaxAbs) * (CHART_H / 2 - 24));
+      const putH  = Math.max(1, (r.putOI  / oiMaxAbs) * (CHART_H / 2 - 24));
+      return { x, callH, putH, barW: BAR_W * 0.6, strike: r.strike };
+    }) : null;
+
+    // Net DEX curve points
+    const dexMaxAbs = Math.max(...slice.map(r => Math.abs(r.netDEX)), 1);
+    const dexPoints = (chartMode === "net-dex") ? slice.map((r, i) => {
+      const x = spacing * (i + 1);
+      const y = ZERO_Y - (r.netDEX / dexMaxAbs) * (CHART_H / 2 - 24);
+      return { x, y };
+    }) : null;
+
+    // GEX flip / gamma zero profile — strikes where netGEX crosses zero
+    // Rendered as a vertical dashed line at each zero-crossing
+    const gexFlipStrikes = (chartMode === "gex-flip") ? (() => {
+      const crossings: number[] = [];
+      for (let i = 1; i < slice.length; i++) {
+        const prev = vals[start + i - 1];
+        const curr = vals[start + i];
+        if (prev !== undefined && curr !== undefined && Math.sign(prev) !== Math.sign(curr)) {
+          // Interpolate x position of zero crossing
+          const t = Math.abs(prev) / (Math.abs(prev) + Math.abs(curr));
+          crossings.push(spacing * i + spacing * t);
+        }
+      }
+      return crossings;
+    })() : null;
+
+    // Peak label
     const peakLabel = (() => {
-      if (chartMode === "net-gex" || chartMode === "oi-vol") return callWall ? `${callWall.toLocaleString()}` : null;
-      if (chartMode === "vol-only") {
-        const top = [...source].sort((a, b) => Math.abs(b.netVolGEX) - Math.abs(a.netVolGEX))[0];
-        return top ? `${top.strike.toLocaleString()}` : null;
-      }
-      if (chartMode === "net-dex") {
-        const top = [...source].sort((a, b) => Math.abs(b.netDEX) - Math.abs(a.netDEX))[0];
-        return top ? `${top.strike.toLocaleString()}` : null;
-      }
+      if (callWall) return `${callWall.toLocaleString()}`;
       const ppb = peakPosBar as { x: number; y: number; strike: number } | null;
       return ppb ? `${ppb.strike.toLocaleString()}` : null;
     })();
 
-    return { bars, peakPosBar: peakPosBar as { x: number; y: number; strike: number } | null, peakLabel, spot };
+    return {
+      bars,
+      callPutBars: isCallPut ? callPutBars : null,
+      oiBars,
+      dexPoints,
+      gexFlipStrikes,
+      peakPosBar: peakPosBar as { x: number; y: number; strike: number } | null,
+      peakLabel,
+      spot,
+      ZERO_Y,
+    };
   })();
 
   // ── Styles ──────────────────────────────────────────────────────────────────
@@ -542,7 +596,13 @@ export default function HomePage() {
                     {/* Live bars */}
                     {chartBars ? (
                       <>
-                        {chartBars.bars.map((b, i) => (
+                        {/* Call-Put mode: cyan above zero, gold below zero, side by side */}
+                        {chartBars.callPutBars ? chartBars.callPutBars.map((b, i) => (
+                          <g key={`cp-${i}`}>
+                            <rect x={b.x - b.barW / 2} y={ZERO_Y - b.callH} width={b.barW / 2 - 1} height={b.callH} fill="url(#cyanBarGrad)" opacity={0.9}/>
+                            <rect x={b.x} y={ZERO_Y} width={b.barW / 2 - 1} height={b.putH} fill="url(#goldBarGrad)" opacity={0.9}/>
+                          </g>
+                        )) : chartBars.bars.map((b, i) => (
                           <rect
                             key={`bar-${i}`}
                             x={b.x - b.barW / 2}
@@ -553,6 +613,33 @@ export default function HomePage() {
                             style={b.glow ? { filter: b.glow } : undefined}
                           />
                         ))}
+
+                        {/* OI overlay: green=call OI, red=put OI — from bottom of chart up */}
+                        {chartBars.oiBars?.map((b, i) => (
+                          <g key={`oi-${i}`}>
+                            <rect x={b.x - b.barW / 2} y={CHART_H - b.callH} width={b.barW / 2 - 1} height={b.callH} fill="rgba(16,185,129,0.5)"/>
+                            <rect x={b.x} y={CHART_H - b.putH} width={b.barW / 2 - 1} height={b.putH} fill="rgba(239,68,68,0.5)"/>
+                          </g>
+                        ))}
+
+                        {/* Net DEX curve */}
+                        {chartBars.dexPoints && chartBars.dexPoints.length > 1 && (
+                          <polyline
+                            points={chartBars.dexPoints.map(p => `${p.x},${p.y}`).join(" ")}
+                            fill="none"
+                            stroke="#8B5CF6"
+                            strokeWidth="2"
+                            strokeLinejoin="round"
+                            opacity={0.85}
+                          />
+                        )}
+
+                        {/* GEX Flip: vertical dashed lines at zero crossings */}
+                        {chartBars.gexFlipStrikes?.map((x, i) => (
+                          <line key={`flip-${i}`} x1={x} y1={0} x2={x} y2={CHART_H}
+                            stroke="#F97316" strokeWidth="1.5" strokeDasharray="6 3" opacity={0.8}/>
+                        ))}
+
                         {/* Peak label */}
                         {(() => {
                           const pb = chartBars.peakPosBar;

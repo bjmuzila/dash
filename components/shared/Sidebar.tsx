@@ -203,7 +203,7 @@ export default function Sidebar({
 
   return (
     <nav style={{
-      width: 110,
+      width: 76,
       flexShrink: 0,
       display: "flex",
       flexDirection: "column",
@@ -273,8 +273,8 @@ export default function Sidebar({
                 borderLeft: isNqu ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
               }}
             >
-              <span style={{ fontSize: 10, fontWeight: 700, color: isNqu ? "#00e5ff" : "#8da8c2", letterSpacing: "0.04em" }}>{label}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, color, letterSpacing: "0.02em" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: isNqu ? "#00e5ff" : "#8da8c2", letterSpacing: "0.04em" }}>{label}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
                 {pct !== null ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—"}
               </span>
             </div>
@@ -292,8 +292,8 @@ export default function Sidebar({
         </div>
         {SIGMA_LEVELS.map(({ label, strike, color }) => (
           <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
-            <span style={{ fontSize: 9, color: color, fontWeight: 700, minWidth: 28 }}>{label}</span>
-            <span style={{ fontSize: 10, color: "#c5d5e5", fontWeight: 700, letterSpacing: "0.02em" }}>{strike}</span>
+            <span style={{ fontSize: 10, color: color, fontWeight: 700, minWidth: 24 }}>{label}</span>
+            <span style={{ fontSize: 11, color: "#c5d5e5", fontWeight: 700, letterSpacing: "0.02em" }}>{strike}</span>
           </div>
         ))}
       </div>
