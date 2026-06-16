@@ -531,7 +531,7 @@ export default function PremarketPage() {
           <h1 style={{ color: "#00e5ff", fontSize: 13, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", margin: 0 }}>
             Premarket Positioning
           </h1>
-          <span style={{ fontSize: 11, color: "#ffffff" }}>As of {dateStr} · 7:00 AM central</span>
+          <span style={{ fontSize: 11, color: "#ffffff" }}>As of {asOf}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span

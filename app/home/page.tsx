@@ -296,7 +296,7 @@ export default function HomePage() {
     const spacing = Math.floor(CHART_W / (slice.length + 1));
 
     // Find peak pos bar for label
-    let peakPosBar: { x: number; y: number; strike: number } | null = null;
+    let peakPosBar: { x: number; y: number; strike: number } | null = null as { x: number; y: number; strike: number } | null;
     let peakPosVal = 0;
 
     const bars = slice.map((r, i) => {
@@ -331,10 +331,11 @@ export default function HomePage() {
         const top = [...source].sort((a, b) => Math.abs(b.netDEX) - Math.abs(a.netDEX))[0];
         return top ? `${top.strike.toLocaleString()}` : null;
       }
-      return peakPosBar ? `${(peakPosBar as { strike: number }).strike.toLocaleString()}` : null;
+      const ppb = peakPosBar as { x: number; y: number; strike: number } | null;
+      return ppb ? `${ppb.strike.toLocaleString()}` : null;
     })();
 
-    return { bars, peakPosBar, peakLabel, spot };
+    return { bars, peakPosBar: peakPosBar as { x: number; y: number; strike: number } | null, peakLabel, spot };
   })();
 
   // ── Styles ──────────────────────────────────────────────────────────────────
