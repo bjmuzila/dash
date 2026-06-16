@@ -20,7 +20,7 @@ const QUOTE_PANEL_TICKERS = [
   "TSLA",
 ];
 
-const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30] as const;
+const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const CHAIN_COLUMNS = ["Strike", "Gex", "Dex", "Chex", "Vex", "Premium", "Volume", "OI"] as const;
 
 type ChainColumn = (typeof CHAIN_COLUMNS)[number];
@@ -47,17 +47,88 @@ function etDateKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+function isHoliday(date: Date): boolean {
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const year = date.getFullYear();
+
+  // US market holidays (non-exhaustive, add more as needed)
+  const holidays: Array<[number, number]> = [
+    [1, 1],    // New Year's Day
+    [7, 4],    // Independence Day
+    [12, 25],  // Christmas
+  ];
+
+  // Check fixed holidays
+  if (holidays.some(([m, d]) => month === m && day === d)) return true;
+
+  // MLK Day (3rd Monday in January)
+  if (month === 1) {
+    const firstDay = new Date(year, 0, 1).getDay();
+    const mlkDay = 15 + ((8 - firstDay) % 7);
+    if (day === mlkDay) return true;
+  }
+
+  // Presidents Day (3rd Monday in February)
+  if (month === 2) {
+    const firstDay = new Date(year, 1, 1).getDay();
+    const presDay = 15 + ((8 - firstDay) % 7);
+    if (day === presDay) return true;
+  }
+
+  // Memorial Day (last Monday in May)
+  if (month === 5) {
+    const lastDay = new Date(year, 5, 0).getDate();
+    const lastMonday = lastDay - ((new Date(year, 4, lastDay).getDay() + 1) % 7);
+    if (day === lastMonday) return true;
+  }
+
+  // Labor Day (1st Monday in September)
+  if (month === 9) {
+    const firstDay = new Date(year, 8, 1).getDay();
+    const laborDay = 1 + ((8 - firstDay) % 7);
+    if (day === laborDay) return true;
+  }
+
+  // Thanksgiving (4th Thursday in November)
+  if (month === 11) {
+    const firstDay = new Date(year, 10, 1).getDay();
+    const thanksgiving = 22 + ((5 - firstDay) % 7);
+    if (day === thanksgiving) return true;
+  }
+
+  return false;
+}
+
+function isTradingDay(date: Date): boolean {
+  const dayOfWeek = date.getDay();
+  // Skip weekends (0 = Sunday, 6 = Saturday)
+  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+  // Skip holidays
+  if (isHoliday(date)) return false;
+  return true;
+}
+
 function buildExpiries() {
   const today = etToday();
   const list: Array<{ value: string; label: string }> = [];
+  let daysAdded = 0;
+  let offset = 0;
 
-  for (let offset = 0; offset < 12; offset += 1) {
+  // Find next 12 trading days
+  while (daysAdded < 12 && offset < 30) {
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
-    const value = etDateKey(date);
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    list.push({ value, label: `${offset}DTE  ${mm}-${dd}` });
+
+    if (isTradingDay(date)) {
+      const value = etDateKey(date);
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const dd = String(date.getDate()).padStart(2, "0");
+      list.push({ value, label: `${daysAdded}DTE  ${mm}-${dd}` });
+      daysAdded++;
+    }
+
+    offset++;
   }
 
   return list;
@@ -171,6 +242,7 @@ export default function OptionsChainPage() {
   const [intensity, setIntensity] = useState(0.4);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const [useRealData, setUseRealData] = useState(false);
+  const [loadProgress, setLoadProgress] = useState(0); // 0-100
   const pageRef = useRef<HTMLDivElement>(null);
 
   // Live WS data ref + batched subscription
@@ -221,6 +293,7 @@ export default function OptionsChainPage() {
     const bust = bustCache ? `&noCache=1` : "";
 
     try {
+      setLoadProgress(10); // Fetching chain data
       const res = await fetch(
         `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}${bust}`
       );
@@ -230,12 +303,14 @@ export default function OptionsChainPage() {
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
       if (!items.length) return;
 
+      setLoadProgress(30); // Parsing strikes
       const target = (items as { "expiration-date"?: string }[]).filter(i =>
         String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
       );
       const strikes = buildStrikes(target.length ? target : items as unknown[]);
       strikeRowsRef.current = strikes;
 
+      setLoadProgress(50); // Subscribing to symbols
       // Batch subscribe all symbols at once
       const allSymbols = new Set<string>();
       strikes.forEach(row => {
@@ -248,12 +323,19 @@ export default function OptionsChainPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pageId, symbols: [...allSymbols], timeout: 6000, threshold: 0.5 }),
-        }).catch(() => {});
+        }).catch(() => {}).then(() => {
+          setLoadProgress(100); // Complete
+          setTimeout(() => setLoadProgress(0), 1000); // Hide after 1s
+        });
+      } else {
+        setLoadProgress(100);
+        setTimeout(() => setLoadProgress(0), 1000);
       }
 
       setRefreshSeed(s => s + 0.01);
     } catch (err) {
       console.error(`[OptionsChain] Load failed for ${ticker}:`, err);
+      setLoadProgress(0);
     }
   };
 
@@ -436,6 +518,11 @@ export default function OptionsChainPage() {
         fontFamily: "Arial, sans-serif",
       }}
     >
+      {loadProgress > 0 && (
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "#05080d", zIndex: 10 }}>
+          <div style={{ height: "100%", width: `${loadProgress}%`, background: "#00e5ff", transition: "width 0.3s ease" }} />
+        </div>
+      )}
       <div
         style={{
           display: "flex",
