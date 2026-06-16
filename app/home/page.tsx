@@ -484,14 +484,21 @@ export default function HomePage() {
                 // Hover tooltip
                 if (!chartBars || !svgRef.current) return;
                 const rect = svgRef.current.getBoundingClientRect();
-                const svgX = ((e.clientX - rect.left) / rect.width) * CHART_W;
+                // SVG has paddingRight:48 paddingBottom:24 — drawable area is narrower.
+                // Use getBoundingClientRect on the SVG then map via the SVG's own
+                // coordinate transform (handles CSS padding correctly).
+                const pt = svgRef.current.createSVGPoint();
+                pt.x = e.clientX;
+                pt.y = e.clientY;
+                const svgPt = pt.matrixTransform(svgRef.current.getScreenCTM()!.inverse());
+                const svgX = svgPt.x;
                 let closest: typeof chartBars.bars[0] | null = null;
                 let minDist = Infinity;
                 for (const b of chartBars.bars) {
                   const d = Math.abs(b.x - svgX);
                   if (d < minDist) { minDist = d; closest = b; }
                 }
-                if (closest && minDist < 30) {
+                if (closest && minDist < chartBars.bars[0]?.barW * 2 + 4) {
                   setHoverBar({ x: closest.x, y: closest.y, strike: closest.strike, val: closest.val, isPos: closest.isPos });
                 } else {
                   setHoverBar(null);
