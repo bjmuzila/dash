@@ -470,67 +470,9 @@ export default function HomePage() {
                   </div>
                 )}
                 {activeTab === "spxflow" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                    {/* Header row */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 9, fontFamily: "monospace", color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
-                        SPX Options Flow
-                        <span style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700 }}>LIVE</span>
-                      </div>
-                      <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)", color: "#fff", fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer" }}>Refresh</button>
-                    </div>
-
-                    {/* Bull/Bear premium bar */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontWeight: 700 }}>
-                        <span style={{ color: C.green }}>Call Premium</span>
-                        <span style={{ color: C.red }}>Put Premium</span>
-                      </div>
-                      <div style={{ width: "100%", height: 6, borderRadius: 4, overflow: "hidden", display: "flex" }}>
-                        <div style={{ background: C.green, height: "100%", width: "58%" }} />
-                        <div style={{ background: C.red, height: "100%", width: "42%" }} />
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.muted }}>
-                        <span>$2.84B</span><span>$2.06B</span>
-                      </div>
-                    </div>
-
-                    {/* Flow metrics grid */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                      {[
-                        { label: "Call Vol", val: "284K", color: C.green },
-                        { label: "Put Vol", val: "206K", color: C.red },
-                        { label: "P/C Ratio", val: "0.73", color: C.cyan },
-                        { label: "Sweeps", val: "142", color: C.orange },
-                        { label: "Blocks", val: "38", color: C.purple },
-                        { label: "Unusual", val: "17", color: "#EAB308" },
-                      ].map(m => (
-                        <div key={m.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{m.label}</span>
-                          <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: m.color }}>{m.val}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Recent large flow */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                      <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, marginBottom: 8 }}>Recent Large Prints</div>
-                      {[
-                        { time: "15:48", type: "CALL", strike: "7,600", exp: "6/20", prem: "$4.2M", side: "ASK", pos: true },
-                        { time: "15:31", type: "PUT",  strike: "7,500", exp: "6/20", prem: "$2.8M", side: "BID", pos: false },
-                        { time: "15:12", type: "CALL", strike: "7,650", exp: "6/27", prem: "$3.1M", side: "ASK", pos: true },
-                        { time: "14:55", type: "CALL", strike: "7,575", exp: "6/16", prem: "$1.9M", side: "MID", pos: true },
-                      ].map((f, i) => (
-                        <div key={i} className="heatmap-row" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", position: "relative" }}>
-                          <span style={{ fontFamily: "monospace", fontSize: 10, color: C.muted, width: 36, flexShrink: 0 }}>{f.time}</span>
-                          <span style={{ fontSize: 9, fontWeight: 800, color: f.pos ? C.green : C.red, background: f.pos ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", padding: "2px 6px", borderRadius: 3, width: 34, textAlign: "center", flexShrink: 0 }}>{f.type}</span>
-                          <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff", flex: 1 }}>{f.strike}</span>
-                          <span style={{ fontSize: 10, color: C.muted }}>{f.exp}</span>
-                          <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: f.pos ? C.green : C.red }}>{f.prem}</span>
-                          <span style={{ fontSize: 9, color: C.muted, width: 24, textAlign: "right" }}>{f.side}</span>
-                        </div>
-                      ))}
-                    </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
                   </div>
                 )}
               </div>
@@ -698,7 +640,7 @@ export default function HomePage() {
                         const isPosV = v && !isNegV;
 
                         let cellBg = "transparent";
-                        let cellColor = isAtm ? C.cyan : isNegV ? C.red : "rgba(255,255,255,0.80)";
+                        let cellColor = isAtm ? C.cyan : isNegV ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
                         let cellBorder = "none";
                         let cellFw: React.CSSProperties["fontWeight"] = 400;
 
@@ -710,21 +652,21 @@ export default function HomePage() {
                           cellFw = 700;
                         }
                         if (isNegRed && isNegV && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(76,29,36,1)";
-                          cellBorder = "1px solid rgba(239,68,68,0.15)";
-                          cellColor = "#fff";
+                          cellBg = "rgba(0,60,100,0.45)";
+                          cellBorder = "1px solid rgba(0,180,255,0.15)";
+                          cellColor = C.cyan;
                           cellFw = 700;
                         }
                         if (isNegTop && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(76,29,36,1)";
-                          cellBorder = "1px solid rgba(239,68,68,0.15)";
-                          cellColor = colIdx === 1 ? C.orange : "#fff";
+                          cellBg = "rgba(0,60,100,0.45)";
+                          cellBorder = "1px solid rgba(0,180,255,0.15)";
+                          cellColor = colIdx === 1 ? C.cyan : "#fff";
                           cellFw = 700;
                         }
                         if (isAtm) { cellFw = 700; }
                         if (colIdx === 5) {
                           cellBg = "rgba(0,0,0,0.20)";
-                          cellColor = isAtm ? C.cyan : isNegV ? C.red : isNeg ? C.red : "rgba(255,255,255,0.80)";
+                          cellColor = isAtm ? C.cyan : isNegV ? "rgba(0,180,255,0.55)" : isNeg ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
                         }
 
                         return (
@@ -744,7 +686,7 @@ export default function HomePage() {
                           <tr key={row.strike}
                             className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
                             style={rowStyle}
-                            onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}
+                            onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(0,200,255,0.04)"; }}
                             onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                           >
                             {[row.strike, row.netGex, row.volOnly, row.dex, row.vex, row.dwGex].map((v, ci) => cellVal(String(v), ci))}

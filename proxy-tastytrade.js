@@ -3800,9 +3800,22 @@ const server = http.createServer(async (req, res) => {
     const targetExpSet = new Set(targetExps);
     let filteredOptions = allOptions.filter(o => targetExpSet.has(o['expiration-date']));
 
-    // On initial load, filter to $100 above/below spot = 20 strikes per side + ATM = 41 total.
-    // Client can pass ?range=200 to widen, or ?range=all for no filter.
-    const chainRange = rangeParam > 0 ? rangeParam : (exp ? Infinity : 100);
+    // On initial load, filter to ±10% of underlying = ~20 strikes per side + ATM = 41 total.
+    // Client can pass ?range=20 to widen to 20%, or ?range=all for no filter.
+    // rangeParam is a percentage (e.g., 10 = 10%)
+    let chainRange = Infinity;
+    if (rangeParam === 'all' || rangeParam === Infinity) {
+      chainRange = Infinity;
+    } else if (exp) {
+      // Explicit expiration: return all strikes
+      chainRange = Infinity;
+    } else if (rangeParam > 0) {
+      // rangeParam is a percentage - convert to dollar range
+      chainRange = rangeParam; // will be used as percentage below
+    } else {
+      // Default: ±10%
+      chainRange = 10;
+    }
     // If underlying price is still unknown, derive it from the median strike in the option data.
     // This prevents returning an unfiltered 100-900+ strike range for equities like QQQ when
     // the quote fetch fails (e.g., proxy just started or market closed).
@@ -3819,11 +3832,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (chainRange < Infinity && underlyingPrice > 0) {
       const beforeCount = filteredOptions.length;
+      const percentRange = chainRange / 100; // Convert percentage to decimal
+      const lowerBound = underlyingPrice * (1 - percentRange);
+      const upperBound = underlyingPrice * (1 + percentRange);
       filteredOptions = filteredOptions.filter(o => {
         const strike = parseFloat(o['strike-price'] || 0);
-        return strike > 0 && Math.abs(strike - underlyingPrice) <= chainRange;
+        return strike > 0 && strike >= lowerBound && strike <= upperBound;
       });
-      log('chains filtered to $' + chainRange + ' range around ' + underlyingPrice + ':', beforeCount, '→', filteredOptions.length);
+      log('chains filtered to ±' + chainRange + '% range around ' + underlyingPrice + ' (' + lowerBound.toFixed(2) + '-' + upperBound.toFixed(2) + '):', beforeCount, '→', filteredOptions.length);
     } else {
       log('chains total options fetched:', allOptions.length, '→ returned full strike set:', filteredOptions.length, '(underlyingPrice:', underlyingPrice, ')');
     }
