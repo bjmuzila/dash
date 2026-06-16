@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useRef, useCallback } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import Subscriber, { type SubscriberState } from "@/lib/subscriber";
+import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function etNow() {
@@ -109,6 +111,8 @@ export default function HomePage() {
   const [spxChg, setSpxChg] = useState(122.83);
   const [spxChgPct, setSpxChgPct] = useState(1.65);
   const [esFut, setEsFut] = useState(7562.0);
+  const [esChg, setEsChg] = useState(0);
+  const [esChgPct, setEsChgPct] = useState(0);
   const [netGex, setNetGex] = useState(15790000000);
   const [vix, setVix] = useState(16.20);
   const [callWall, setCallWall] = useState<number | null>(null);
@@ -143,9 +147,49 @@ export default function HomePage() {
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<{ startX: number; startPan: number } | null>(null);
   const prevSpxRef = useRef(0);
+  const [mvcSaving, setMvcSaving] = useState<"idle" | "saving" | "ok" | "err">("idle");
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const fetchTopBarQuotes = async () => {
+      try {
+        const res = await fetch("/api/quotes-batch?symbols=SPX,VIX,/ESU26", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
+        const spxQuote = items.find((item) => String(item.symbol ?? "") === "SPX");
+        const esQuote = items.find((item) => String(item.symbol ?? "") === "/ESU26");
+
+        if (spxQuote) {
+          const last = Number(spxQuote.last ?? spxQuote.mark ?? 0);
+          const prev = Number(spxQuote["prev-close"] ?? spxQuote["day-close"] ?? 0);
+          if (last > 100 && prev > 0) {
+            const change = last - prev;
+            setSpxChg(change);
+            setSpxChgPct((change / prev) * 100);
+          }
+        }
+
+        if (esQuote) {
+          const last = Number(esQuote.last ?? esQuote.mark ?? 0);
+          const prev = Number(esQuote["prev-close"] ?? esQuote["day-close"] ?? 0);
+          if (last > 100 && prev > 0) {
+            const change = last - prev;
+            setEsChg(change);
+            setEsChgPct((change / prev) * 100);
+          }
+        }
+      } catch {
+        // no-op
+      }
+    };
+
+    fetchTopBarQuotes().catch(() => {});
+    const t = setInterval(() => { fetchTopBarQuotes().catch(() => {}); }, 15000);
     return () => clearInterval(t);
   }, []);
 
@@ -181,6 +225,19 @@ export default function HomePage() {
   }, []);
 
   // ── Task #13: Sidebar quotes poll ─────────────────────────────────────────────
+  const handleMvcSnapshot = useCallback(async () => {
+    if (mvcSaving === "saving") return;
+    setMvcSaving("saving");
+    try {
+      await saveManualMvcSnapshot();
+      setMvcSaving("ok");
+      setTimeout(() => setMvcSaving("idle"), 1800);
+    } catch {
+      setMvcSaving("err");
+      setTimeout(() => setMvcSaving("idle"), 2000);
+    }
+  }, [mvcSaving]);
+
   useEffect(() => {
     const fetchQuotes = async () => {
       try {
@@ -301,8 +358,20 @@ export default function HomePage() {
     const winEnd = Math.min(sortedAll.length - 1, atmIdx + 20);
     const sorted = sortedAll.slice(winStart, winEnd + 1);
 
-    // Find top pos/neg for rank badges — use vol fallback when OI=0
-    const effGex = (r: typeof sorted[0]) => r.netGEX !== 0 ? r.netGEX : r.netVolGEX;
+    const combinedGex = (r: typeof sorted[0]) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
+    const displayNetGex = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.netVolGEX ?? 0)
+        : combinedGex(r)
+    );
+    const displayDexValue = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.volNetDEX ?? 0)
+        : (r.netDEX ?? 0) + (r.volNetDEX ?? 0)
+    );
+
+    // Find top pos/neg for rank badges using the active data mode.
+    const effGex = (r: typeof sorted[0]) => displayNetGex(r);
     const sorted_by_abs_gex = [...sorted].sort((a, b) => Math.abs(effGex(b)) - Math.abs(effGex(a)));
     const topPos = sorted_by_abs_gex.filter(r => effGex(r) > 0).slice(0, 5).map(r => r.strike);
     const topNeg = sorted_by_abs_gex.filter(r => effGex(r) < 0).slice(0, 5).map(r => r.strike);
@@ -321,9 +390,8 @@ export default function HomePage() {
     const rows = sorted.map(r => {
       const isAtm = r.strike === atmStrike;
 
-      // When OI=0 (proxy throttle issue), fall back to volume-based GEX so rows aren't blank
-      const displayGex = r.netGEX !== 0 ? r.netGEX : r.netVolGEX;
-      const displayDex = r.netDEX  !== 0 ? r.netDEX  : r.volNetDEX;
+      const displayGex = displayNetGex(r);
+      const displayDex = displayDexValue(r);
 
       const isPosTop = posRanks[r.strike] === 1;
       const isNegTop = negRanks[r.strike] === 1;
@@ -338,7 +406,9 @@ export default function HomePage() {
       else if (displayGex < 0 && negRanks[r.strike]) type = "neg-red";
       else if (displayGex < 0) type = "neg";
 
-      const vannaValue = r.netVanna ?? r.netVolVanna ?? 0;
+      const vannaValue = dataMode === "vol-only"
+        ? (r.netVolVanna ?? r.netVanna ?? 0)
+        : (r.netVanna ?? 0) + (r.netVolVanna ?? 0);
       return {
         strike: r.strike.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
         netGex: fmt(displayGex),
@@ -360,7 +430,7 @@ export default function HomePage() {
     );
 
     setHeatmapData(nonEmpty);
-  }, [rawChain, selectedExpiry, spx]);
+  }, [rawChain, selectedExpiry, spx, dataMode]);
 
 
   const etTime = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -374,25 +444,27 @@ export default function HomePage() {
     const sorted = [...source].sort((a, b) => a.strike - b.strike);
     // Base chart uses one GEX mode plus one data mode, with optional overlays.
     const getSpot = (r: typeof sorted[0]) => r.spotPrice || spx || r.strike;
+    const getCallVolGex = (r: typeof sorted[0]) => (r.callGamma ?? 0) * (r.callVolume ?? 0) * getSpot(r) * getSpot(r);
+    const getPutVolGex = (r: typeof sorted[0]) => -Math.abs((r.putGamma ?? 0) * (r.putVolume ?? 0) * getSpot(r) * getSpot(r));
     const getCallVal = (r: typeof sorted[0]) => (
       dataMode === "vol-only"
-        ? (r.callGamma ?? 0) * (r.callVolume ?? 0) * getSpot(r) * getSpot(r)
-        : (r.callGEX ?? 0)
+        ? getCallVolGex(r)
+        : (r.callGEX ?? 0) + getCallVolGex(r)
     );
     const getPutVal = (r: typeof sorted[0]) => (
       dataMode === "vol-only"
-        ? -Math.abs((r.putGamma ?? 0) * (r.putVolume ?? 0) * getSpot(r) * getSpot(r))
-        : (r.putGEX ?? 0)
+        ? getPutVolGex(r)
+        : (r.putGEX ?? 0) + getPutVolGex(r)
     );
     const getNetVal = (r: typeof sorted[0]) => (
       dataMode === "vol-only"
         ? (r.netVolGEX ?? 0)
-        : (r.netGEX ?? 0)
+        : (r.netGEX ?? 0) + (r.netVolGEX ?? 0)
     );
     const getDexVal = (r: typeof sorted[0]) => (
       dataMode === "vol-only"
         ? (r.volNetDEX ?? 0)
-        : (r.netDEX ?? 0)
+        : (r.netDEX ?? 0) + (r.volNetDEX ?? 0)
     );
     const getVal = (r: typeof sorted[0]) => (
       gexMode === "call-put" ? getCallVal(r) + getPutVal(r) : getNetVal(r)
