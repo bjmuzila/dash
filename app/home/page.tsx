@@ -806,69 +806,50 @@ export default function HomePage() {
           {/* RIGHT COLUMN */}
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
 
-            {/* 2-row ticker — top of right panel */}
-            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
-              {/* Row 1 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
-                  </span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#fff" }}>
-                    {etTime}
-                  </div>
+            {/* Single-line ticker bar */}
+            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 12, marginBottom: 12, position: "relative" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "nowrap", overflow: "hidden" }}>
+                {/* SPX / GEX label + clock */}
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
+                  SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
+                </span>
+                <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0 }}>
+                  {etTime}
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{vix.toFixed(2)}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                {/* VIX */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                  {vix > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: C.red }}>{spxChg < 0 ? "+" : "-"}{Math.abs(vix * 0.05).toFixed(2)} ({spxChg < 0 ? "+" : "-"}{(Math.abs(vix * 0.05) / vix * 100).toFixed(2)}%)</span>}
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                {/* ESU — price only, no % */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
-                    {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
-                  </span>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                {/* SPX */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
+                  {spx > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: spxChg >= 0 ? C.green : C.red }}>{spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)</span>}
                 </div>
-              </div>
-              {/* Row 2 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                {/* Call Wall */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CW</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.cyan }}>{callWall ? callWall.toLocaleString() : "—"}</span>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                {/* CW / PW / FLIP */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>CW</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.cyan }}>{callWall ? callWall.toLocaleString() : "—"}</span>
                 </div>
-                {/* Put Wall */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PW</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>{putWall ? putWall.toLocaleString() : "—"}</span>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>PW</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.orange }}>{putWall ? putWall.toLocaleString() : "—"}</span>
                 </div>
-                {/* GEX Flip */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{gexFlip ? gexFlip.toLocaleString() : "—"}</span>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>FLIP</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{gexFlip ? gexFlip.toLocaleString() : "—"}</span>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                </div>
-                {/* MVC Snapshot button — right aligned */}
-                <button style={{
-                  background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)",
-                  color: C.cyan, fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 4,
-                  cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.1em",
-                  display: "flex", alignItems: "center", gap: 5,
-                }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  MVC Snapshot
-                </button>
               </div>
             </div>
 
@@ -907,165 +888,131 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Table */}
-              <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
-                <table style={{ width: "100%", textAlign: "right", fontSize: 10, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
-                  <colgroup>
-                    <col style={{ width: 80 }} />
-                    <col style={{ width: "16%" }} />
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "14%" }} />
-                    <col style={{ width: "18%" }} />
-                  </colgroup>
-                  <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
-                    <tr>
-                      {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "3px 6px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff", overflow: "hidden", textOverflow: "ellipsis" }}>{h}</th>
+              {/* Grid heatmap — matches mult-greek UI */}
+              {(() => {
+                // metricBg: rank-based cell background matching mult-greek
+                function metricBg(isPos: boolean, rank: number | undefined, ratio: number): string {
+                  if (rank === 1) return isPos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+                  if (rank === 2) return isPos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
+                  if (rank === 3) return isPos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+                  const op = Math.max(0.04, ratio * 0.18);
+                  return isPos ? `rgba(41,182,246,${op.toFixed(3)})` : `rgba(255,71,87,${op.toFixed(3)})`;
+                }
+
+                // Parse formatted string back to float for ratio calc
+                function parseGex(s: string): number {
+                  if (!s || s === "—") return 0;
+                  const neg = s.startsWith("-");
+                  const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+                  const mult = s.includes("B") ? 1e9 : s.includes("M") ? 1e6 : s.includes("K") ? 1e3 : 1;
+                  return (neg ? -1 : 1) * n * mult;
+                }
+
+                const COLS = [
+                  { key: "netGex",  label: "Net GEX" },
+                  { key: "volOnly", label: "Vol GEX" },
+                  { key: "dex",     label: "DEX" },
+                  { key: "dwGex",   label: "Δ·GEX" },
+                ];
+
+                // Compute abs max per column for ratio
+                const colMaxes = COLS.map(c =>
+                  Math.max(...heatmapData.map(r => Math.abs(parseGex(r[c.key as keyof typeof r] as string))), 1)
+                );
+
+                // TOTAL row — sum all numeric cols
+                const totals = COLS.map(c =>
+                  heatmapData.reduce((s, r) => s + parseGex(r[c.key as keyof typeof r] as string), 0)
+                );
+
+                const fmtN = (v: number) => {
+                  const a = Math.abs(v);
+                  const sign = v < 0 ? "-" : "+";
+                  if (a >= 1e9) return `${sign}$${(a/1e9).toFixed(2)}B`;
+                  if (a >= 1e6) return `${sign}$${(a/1e6).toFixed(2)}M`;
+                  if (a >= 1e3) return `${sign}$${(a/1e3).toFixed(1)}K`;
+                  return `${sign}$${a.toFixed(0)}`;
+                };
+
+                const gridCols = `64px repeat(${COLS.length}, 1fr)`;
+
+                return (
+                  <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent", background: "#0d1117" }}>
+                    {/* Sticky header */}
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, position: "sticky", top: 0, zIndex: 10, background: "#0d1117", borderBottom: "1px solid #1e3050" }}>
+                      <div style={{ padding: "4px 6px", fontSize: 9, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.1em" }}>Strike</div>
+                      {COLS.map(c => (
+                        <div key={c.key} style={{ padding: "4px 6px", fontSize: 9, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.1em", textAlign: "right" }}>{c.label}</div>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {heatmapData.map((row, idx) => {
+                    </div>
+
+                    {/* TOTAL row */}
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid #1e3050", background: "rgba(167,139,250,0.06)" }}>
+                      <div style={{ padding: "3px 6px", fontSize: 9, fontWeight: 800, color: "#a78bfa", fontFamily: "monospace" }}>TOTAL</div>
+                      {totals.map((v, ci) => (
+                        <div key={ci} style={{ padding: "3px 6px", fontSize: 9, fontFamily: "monospace", textAlign: "right", fontWeight: 700, color: v >= 0 ? "#22c55e" : "#ef4444" }}>
+                          {fmtN(v)}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Data rows */}
+                    {heatmapData.map((row) => {
                       const isAtm = row.type === "atm";
                       const isPosTop = row.type === "pos-top";
                       const isNegTop = row.type === "neg-top";
                       const isPosStrong = row.type === "pos-strong";
                       const isNegRed = row.type === "neg-red";
-                      const isNeg = row.type === "neg" || row.type === "neg-red" || row.type === "neg-top";
+                      const isPos = isPosTop || isPosStrong || (!isNegTop && !isNegRed && row.type === "neutral" && parseGex(row.netGex) >= 0);
 
-                      // Find highest Net GEX
-                      const gexVals = heatmapData.map(r => {
-                        const val = r.netGex.replace(/[$,MKB]/g, "");
-                        const mult = r.netGex.includes("B") ? 1000 : r.netGex.includes("M") ? 1 : 0.001;
-                        return parseFloat(val) * mult;
-                      });
-                      const maxGex = Math.max(...gexVals);
-                      const currentGexVal = parseFloat(row.netGex.replace(/[$,MKB]/g, "")) * (row.netGex.includes("B") ? 1000 : row.netGex.includes("M") ? 1 : 0.001);
-                      const isHighestGex = currentGexVal === maxGex && currentGexVal > 0;
-
-                      // Gradient divider after ATM row
-                      const showDivider = idx > 0 && heatmapData[idx - 1]?.type === "atm";
-
-                      // intensity: 0.05–1.0, default 0.4. Scale colors relative to 0.4 baseline.
-                      const hi = intensity; // 0.05 = dim, 1.0 = max bright
-
-                      // Rank-based row background — applied to entire row via rowStyle
-                      // Positive ranks: cyan glow. Negative ranks: red glow. Intensity scales opacity.
-                      const posRank1 = isPosTop;
-                      const posRank2 = isPosStrong && row.rank === 2;
-                      const negRank1 = isNegTop;
-                      const negRank2 = isNegRed && row.rank === 2;
-
-                      const rowBg = (() => {
-                        if (isAtm) return `linear-gradient(to right, rgba(0,240,255,${(0.10*hi).toFixed(2)}), rgba(0,240,255,${(0.06*hi).toFixed(2)}), rgba(0,240,255,${(0.10*hi).toFixed(2)}))`;
-                        if (posRank1) return `rgba(0,200,255,${(0.18*hi).toFixed(2)})`;
-                        if (posRank2) return `rgba(0,160,200,${(0.12*hi).toFixed(2)})`;
-                        if (isPosStrong) return `rgba(0,120,160,${(0.07*hi).toFixed(2)})`;
-                        if (negRank1) return `rgba(180,20,20,${(0.30*hi).toFixed(2)})`;
-                        if (negRank2) return `rgba(140,15,15,${(0.22*hi).toFixed(2)})`;
-                        if (isNegRed) return `rgba(100,10,10,${(0.15*hi).toFixed(2)})`;
-                        if (isNeg) return `rgba(60,5,5,${(0.08*hi).toFixed(2)})`;
-                        return "transparent";
-                      })();
-
-                      const rowStyle: React.CSSProperties = {
-                        background: rowBg,
-                        transition: "background 0.15s",
-                        position: "relative",
-                        borderBottom: isAtm ? `1px solid rgba(0,240,255,${(0.15*hi).toFixed(2)})` : "none",
-                      };
-
-                      const cellVal = (val: string, colIdx: number) => {
-                        const base: React.CSSProperties = { padding: "3px 6px", textAlign: colIdx === 0 ? "left" : "right", overflow: "hidden", textOverflow: "ellipsis" };
-
-                        if (colIdx === 0) {
-                          const strikeColor = isAtm ? C.cyan : posRank1 ? "#fff" : negRank1 ? "#ff6b6b" : posRank2 ? "#00D9FF" : negRank2 ? "#ff8888" : "#aac4d8";
-                          // Rank badge color: #1 = orange/gold, #2 = silver, others = dimmer
-                          const rankBadgeBg = row.rank === 1 ? "#F97316" : row.rank === 2 ? "#6B7280" : "#374151";
-                          return (
-                            <td key={`${row.strike}-strike`} style={{ ...base, fontWeight: 700, color: strikeColor }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
-                                <span style={{ minWidth: 44 }}>{val}</span>
-                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 9, letterSpacing: "0.08em", flexShrink: 0 }}>ATM</span>}
-                                {row.rank && (
-                                  <span style={{
-                                    background: rankBadgeBg,
-                                    color: row.rank === 1 ? "#000" : "#fff",
-                                    padding: "1px 4px", borderRadius: 3, fontSize: 8, fontWeight: 700, flexShrink: 0,
-                                    boxShadow: row.rank <= 2 ? `0 0 ${6*hi}px ${rankBadgeBg}` : "none",
-                                  }}>#{row.rank}</span>
-                                )}
-                              </div>
-                            </td>
-                          );
-                        }
-
-                        // Data columns — color text based on pos/neg, brighten for ranked rows
-                        const vals = [row.netGex, row.volOnly, row.dex, row.vex, row.dwGex];
-                        const v = vals[colIdx - 1];
-                        const isNegV = v?.startsWith("-");
-
-                        // Cell highlight: rank #1 and #2 get bright text + subtle cell bg on key columns
-                        let cellBg = "transparent";
-                        let cellColor: string;
-                        let cellFw: React.CSSProperties["fontWeight"] = 400;
-
-                        if (isAtm) {
-                          cellColor = "#fff";
-                          cellFw = 700;
-                        } else if (posRank1) {
-                          cellColor = isNegV ? "rgba(100,180,220,0.7)" : "#00F0FF";
-                          cellFw = 700;
-                          if (colIdx === 1) cellBg = `rgba(0,220,255,${(0.12*hi).toFixed(2)})`;
-                        } else if (posRank2) {
-                          cellColor = isNegV ? "rgba(80,160,200,0.6)" : "#00D9FF";
-                          cellFw = 600;
-                          if (colIdx === 1) cellBg = `rgba(0,180,220,${(0.08*hi).toFixed(2)})`;
-                        } else if (isPosStrong) {
-                          cellColor = isNegV ? "rgba(60,140,180,0.55)" : "rgba(0,210,240,0.85)";
-                        } else if (negRank1) {
-                          cellColor = isNegV ? "#ff6b6b" : "rgba(200,120,120,0.8)";
-                          cellFw = 700;
-                          if (colIdx === 1) cellBg = `rgba(200,30,30,${(0.15*hi).toFixed(2)})`;
-                        } else if (negRank2) {
-                          cellColor = isNegV ? "#ff8888" : "rgba(180,100,100,0.7)";
-                          cellFw = 600;
-                          if (colIdx === 1) cellBg = `rgba(160,20,20,${(0.10*hi).toFixed(2)})`;
-                        } else if (isNegRed || isNeg) {
-                          cellColor = isNegV ? "rgba(220,100,100,0.7)" : "rgba(180,120,120,0.6)";
-                        } else {
-                          cellColor = isNegV ? "rgba(100,160,200,0.55)" : "rgba(200,220,230,0.75)";
-                        }
-
-                        return (
-                          <td key={`${row.strike}-${colIdx}`} style={{ ...base, background: cellBg, fontWeight: cellFw, color: cellColor }}>
-                            {v}
-                          </td>
-                        );
-                      };
+                      const rowBg = isAtm
+                        ? "rgba(255,179,0,0.07)"
+                        : "transparent";
 
                       return (
-                        <>
-                          {showDivider && (
-                            <tr key={`div-${idx}`}>
-                              <td colSpan={6} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
-                            </tr>
-                          )}
-                          <tr key={row.strike}
-                            className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
-                            style={rowStyle}
-                            onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(0,200,255,0.04)"; }}
-                            onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                          >
-                            {[row.strike, row.netGex, row.volOnly, row.dex, row.vex, row.dwGex].map((v, ci) => cellVal(String(v), ci))}
-                          </tr>
-                        </>
+                        <div key={row.strike} style={{
+                          display: "grid", gridTemplateColumns: gridCols,
+                          background: rowBg,
+                          borderBottom: isAtm ? "1px solid rgba(255,179,0,0.25)" : "1px solid rgba(30,48,80,0.4)",
+                        }}>
+                          {/* Strike cell */}
+                          <div style={{
+                            padding: "3px 6px", fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                            color: isAtm ? "#ffb300" : "#8da8c2",
+                            display: "flex", alignItems: "center", gap: 3,
+                          }}>
+                            {row.strike}
+                            {isAtm && <span style={{ fontSize: 7, fontWeight: 900, color: "#ffb300", letterSpacing: "0.06em" }}>ATM</span>}
+                          </div>
+
+                          {/* Data cells */}
+                          {COLS.map((c, ci) => {
+                            const raw = row[c.key as keyof typeof row] as string;
+                            const val = parseGex(raw);
+                            const colIsPos = val >= 0;
+                            const ratio = Math.abs(val) / colMaxes[ci];
+                            const bg = raw === "—" ? "transparent" : metricBg(colIsPos, row.rank, ratio);
+                            const isRank1 = row.rank === 1;
+
+                            return (
+                              <div key={c.key} style={{
+                                padding: "3px 6px", fontSize: 10, fontFamily: "monospace", textAlign: "right",
+                                background: bg,
+                                color: isAtm ? "#ffb300" : colIsPos ? "#22c55e" : "#ef4444",
+                                fontWeight: isRank1 ? 700 : 400,
+                                outline: isRank1 ? "1px solid rgba(41,182,246,0.9)" : "none",
+                                outlineOffset: "-1px",
+                              }}>
+                                {raw}
+                              </div>
+                            );
+                          })}
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
