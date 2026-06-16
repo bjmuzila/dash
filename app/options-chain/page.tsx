@@ -86,13 +86,21 @@ function fmtInt(value: number) {
   return Math.round(value).toLocaleString("en-US");
 }
 
-function metricBg(value: number, maxValue: number, intensity: number) {
+function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]) {
   if (!value) return "transparent";
-  const ratio = Math.min((Math.abs(value) / Math.max(maxValue, 1)) * (0.35 + intensity * 0.65), 1);
-  const alpha = 0.08 + Math.pow(ratio, 1.45) * 0.82;
-  return value >= 0
-    ? `rgba(0,229,255,${alpha.toFixed(2)})`
-    : `rgba(255,71,87,${alpha.toFixed(2)})`;
+  const abs = Math.abs(value);
+  const ratio = Math.min(abs / Math.max(maxValue, 1), 1);
+  const rank = topValues.indexOf(abs) + 1;
+
+  let opacity: number;
+  if (rank === 1) opacity = Math.max(0.82, intensity * 0.92);
+  else if (rank === 2) opacity = Math.max(0.6, intensity * 0.78);
+  else if (rank === 3) opacity = Math.max(0.4, intensity * 0.62);
+  else opacity = Math.pow(ratio, 0.65) * intensity * 0.55;
+
+  return value > 0
+    ? `rgba(32,178,220,${Math.min(opacity, 0.95).toFixed(3)})`
+    : `rgba(220,50,60,${Math.min(opacity, 0.95).toFixed(3)})`;
 }
 
 function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
@@ -133,7 +141,7 @@ export default function OptionsChainPage() {
   const [selectedExpiry, setSelectedExpiry] = useState(expiries[0]?.value ?? "");
   const [displayPercent, setDisplayPercent] = useState<number>(10);
   const [refreshSeed, setRefreshSeed] = useState(0);
-  const [intensity, setIntensity] = useState(1.4);
+  const [intensity, setIntensity] = useState(0.4);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const pageRef = useRef<HTMLDivElement>(null);
 
@@ -217,6 +225,18 @@ export default function OptionsChainPage() {
     });
 
     return base;
+  }, [visibleRows]);
+
+  const top3ByColumn = useMemo(() => {
+    return {
+      gex: visibleRows.map((row) => Math.abs(row.gex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      dex: visibleRows.map((row) => Math.abs(row.dex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      chex: visibleRows.map((row) => Math.abs(row.chex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      vex: visibleRows.map((row) => Math.abs(row.vex)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      premium: visibleRows.map((row) => Math.abs(row.premium)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      volume: visibleRows.map((row) => Math.abs(row.volume)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+      oi: visibleRows.map((row) => Math.abs(row.oi)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
+    };
   }, [visibleRows]);
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
@@ -437,7 +457,7 @@ export default function OptionsChainPage() {
                     fontFamily: "monospace",
                     textAlign: "right",
                     color: cell.key === "premium" ? "#ffe08a" : "#ffffff",
-                    background: metricBg(cell.value, maxByColumn[cell.key], intensity),
+                    background: metricBg(cell.value, maxByColumn[cell.key], intensity, top3ByColumn[cell.key]),
                     fontWeight: 700,
                   }}
                 >

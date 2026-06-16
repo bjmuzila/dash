@@ -9,6 +9,8 @@ import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 
+type GexProfile = { levels: number[]; values: number[]; flipPoint: number | null } | null;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function etNow() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -51,11 +53,9 @@ function pickDashboardExpiries(
   const liquid = unique.filter((item) => item.strikeCount >= 20);
   const zeroSource = liquid[0] ?? unique[0];
   const zero = zeroSource?.date ?? "";
-  const zeroStrikeCount = zeroSource?.strikeCount ?? 0;
   const later = unique.filter((item) => item.date > zero);
-  const liquidLater = later.filter((item) => item.strikeCount >= Math.max(20, Math.floor(zeroStrikeCount * 0.35)));
+  const liquidLater = later.filter((item) => item.strikeCount >= 20);
   const rankedLater = (liquidLater.length ? liquidLater : later)
-    .slice(0, 5)
     .sort((a, b) => (b.strikeCount - a.strikeCount) || a.date.localeCompare(b.date));
   const one = rankedLater[0]?.date ?? later[0]?.date ?? zero;
   return { "0dte": zero, "1dte": one };
@@ -149,6 +149,7 @@ export default function HomePage() {
   const [callWall, setCallWall] = useState<number | null>(null);
   const [putWall, setPutWall] = useState<number | null>(null);
   const [gexFlip, setGexFlip] = useState<number | null>(null);
+  const [gexProfile, setGexProfile] = useState<GexProfile>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [showPageMenu, setShowPageMenu] = useState(false);
   const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
@@ -252,6 +253,7 @@ export default function HomePage() {
       setCallWall(state.callWall);
       setPutWall(state.putWall);
       setGexFlip(state.gexFlip);
+      setGexProfile(null);
 
     });
 
@@ -302,6 +304,7 @@ export default function HomePage() {
       setCallWall(json?.callWall ?? null);
       setPutWall(json?.putWall ?? null);
       setGexFlip(json?.gexFlip ?? null);
+      setGexProfile(json?.profile ?? null);
       updated = true;
     }
 
@@ -521,6 +524,7 @@ export default function HomePage() {
         setCallWall(json?.callWall ?? null);
         setPutWall(json?.putWall ?? null);
         setGexFlip(json?.gexFlip ?? null);
+        setGexProfile(json?.profile ?? null);
       } catch {
         // no-op
       }
@@ -756,14 +760,20 @@ export default function HomePage() {
       y: ZERO_Y - (getDexVal(r) / dexMaxAbs) * (CHART_H / 2 - 24),
     })) : null;
 
-    // GEX Flip / Gamma-zero profile — continuous line chart of cumulative netGEX
-    // Positive = above zero line (cyan area), negative = below (gold area)
+    // GEX Flip / Gamma-zero profile from server-side spot sweep, clipped to +/-5% around spot.
     const gexFlipPoints = showGexFlip ? (() => {
-      const flipMaxAbs = Math.max(...slice.map(r => Math.abs(getNetVal(r))), 1);
-      return slice.map((r, i) => ({
-        x: spacing * (i + 1),
-        y: ZERO_Y - (getNetVal(r) / flipMaxAbs) * (CHART_H / 2 - 24),
-        isPos: getNetVal(r) >= 0,
+      if (!gexProfile?.levels?.length || !gexProfile?.values?.length || !(spot > 0)) return null;
+      const lo = spot * 0.95;
+      const hi = spot * 1.05;
+      const points = gexProfile.levels
+        .map((level, i) => ({ level, value: Number(gexProfile.values[i] ?? 0) }))
+        .filter((point) => point.level >= lo && point.level <= hi && Number.isFinite(point.value));
+      if (points.length < 2) return null;
+      const flipMaxAbs = Math.max(...points.map((point) => Math.abs(point.value)), 1);
+      return points.map((point, i) => ({
+        x: 24 + ((CHART_W - 48) * i) / Math.max(points.length - 1, 1),
+        y: ZERO_Y - (point.value / flipMaxAbs) * (CHART_H / 2 - 24),
+        isPos: point.value >= 0,
       }));
     })() : null;
 
