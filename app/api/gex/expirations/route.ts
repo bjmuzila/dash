@@ -12,16 +12,28 @@ export async function GET() {
     if (!r.ok) throw new Error(`Proxy ${r.status}`);
 
     const data = await r.json();
-    // Response: { data: { items: [{expiration-date, expiration-type, ...}] } }
-    const items: Array<{ "expiration-date"?: string }> = data?.data?.items ?? [];
+    // Response: { data: { items: [{expiration-date, expiration-type, strike-count, ...}] } }
+    const items: Array<{
+      "expiration-date"?: string;
+      "expiration-type"?: string;
+      "strike-count"?: number;
+    }> = data?.data?.items ?? [];
     const today = new Date().toISOString().split("T")[0];
     const expirations = items
-      .map((i) => i["expiration-date"] ?? "")
-      .filter((e) => typeof e === "string" && e.length === 10 && e >= today)
-      .sort();
+      .map((item) => ({
+        date: item["expiration-date"] ?? "",
+        type: item["expiration-type"] ?? "",
+        strikeCount: Number(item["strike-count"] ?? 0),
+      }))
+      .filter((item) => typeof item.date === "string" && item.date.length === 10 && item.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date));
 
-    return NextResponse.json({ expirations, today });
+    return NextResponse.json({
+      expirations: expirations.map((item) => item.date),
+      items: expirations,
+      today,
+    });
   } catch (err) {
-    return NextResponse.json({ expirations: [], today: "", error: String(err) });
+    return NextResponse.json({ expirations: [], items: [], today: "", error: String(err) });
   }
 }

@@ -38,6 +38,23 @@ function fmtExpiryDate(value: string) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function pickDashboardExpiries(
+  items: Array<{ date: string; strikeCount: number }>
+): { "0dte": string; "1dte": string } {
+  const seen = new Set<string>();
+  const unique = items.filter((item) => {
+    if (!item.date || seen.has(item.date)) return false;
+    seen.add(item.date);
+    return true;
+  });
+
+  const liquid = unique.filter((item) => item.strikeCount >= 20);
+  const source = liquid.length >= 2 ? liquid : unique;
+  const zero = source[0]?.date ?? unique[0]?.date ?? "";
+  const one = source.find((item) => item.date !== zero)?.date ?? unique.find((item) => item.date !== zero)?.date ?? zero;
+  return { "0dte": zero, "1dte": one };
+}
+
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 const BarChart2 = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -446,20 +463,31 @@ export default function HomePage() {
         const res = await fetch("/api/gex/expirations", { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
-        const exps = Array.isArray(json?.expirations) ? json.expirations as string[] : [];
-        if (!exps.length) return;
+        const rawItems = Array.isArray(json?.items) ? json.items as Array<Record<string, unknown>> : [];
+        const rawExpirations = Array.isArray(json?.expirations) ? json.expirations as string[] : [];
 
         const today = etNow();
         today.setHours(0, 0, 0, 0);
-        const sorted = [...exps].sort((a, b) => a.localeCompare(b));
-        const upcoming = sorted.filter((exp) => {
-          const d = new Date(`${exp}T00:00:00`);
-          d.setHours(0, 0, 0, 0);
-          return d.getTime() >= today.getTime();
-        });
-        const zero = upcoming[0] ?? sorted[0] ?? "";
-        const one = upcoming[1] ?? upcoming[0] ?? sorted[1] ?? sorted[0] ?? "";
-        if (!cancelled) setExpiryMap({ "0dte": zero, "1dte": one });
+        const items = rawItems.length
+          ? rawItems
+              .map((item) => ({
+                date: String(item.date ?? ""),
+                strikeCount: Number(item.strikeCount ?? 0),
+              }))
+              .filter((item) => item.date)
+          : rawExpirations.map((date) => ({ date, strikeCount: 0 }));
+
+        const upcoming = items
+          .filter((item) => {
+            const d = new Date(`${item.date}T00:00:00`);
+            d.setHours(0, 0, 0, 0);
+            return d.getTime() >= today.getTime();
+          })
+          .sort((a, b) => a.date.localeCompare(b.date));
+
+        if (!upcoming.length) return;
+        const picked = pickDashboardExpiries(upcoming);
+        if (!cancelled) setExpiryMap(picked);
       } catch {
         // no-op
       }

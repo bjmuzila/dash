@@ -24,6 +24,12 @@ const CalendarIcon = () => (
     <line x1="3" y1="10" x2="21" y2="10"/>
   </svg>
 );
+const UserIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 21a8 8 0 0 0-16 0"/>
+    <circle cx="12" cy="7" r="4"/>
+  </svg>
+);
 const SettingsIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="3"/>
@@ -231,11 +237,21 @@ const PAGE_MENU = [
   { label: "Est. Move",     href: "/estimated-move" },
   { label: "Options Chain", href: "/options-chain" },
   { label: "Multi Greek",   href: "/mult-greek" },
+];
+
+const CALENDAR_MENU = [
   { label: "Trading",       href: "/trading" },
   { label: "Logs",          href: "/logs" },
-  { label: "Personal",      href: "/personal" },
   { label: "Legacy",        href: "/legacy" },
-  { label: "Econ Calendar", href: "/expiry-calendar" },
+  { label: "Econ Calendar", href: "/economic-calendar" },
+];
+
+const PERSONAL_MENU = [
+  { label: "Trading",            href: "/trading" },
+  { label: "Logs",               href: "/logs" },
+  { label: "Todo",               href: "", comingSoon: true },
+  { label: "Recipes",            href: "", comingSoon: true },
+  { label: "Budget",             href: "", comingSoon: true },
 ];
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -253,10 +269,17 @@ export default function Sidebar({
   const pathname = usePathname();
   const pcts = useLiveQuotes();
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [calendarMenuOpen, setCalendarMenuOpen] = useState(false);
+  const [personalMenuOpen, setPersonalMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [calendarMenuPos, setCalendarMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [personalMenuPos, setPersonalMenuPos] = useState<{ top: number; left: number } | null>(null);
   const gridBtnRef = useRef<HTMLButtonElement>(null);
+  const calendarBtnRef = useRef<HTMLButtonElement>(null);
+  const personalBtnRef = useRef<HTMLButtonElement>(null);
 
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
+  const isAnyActive = (items: Array<{ href: string }>) => items.some((item) => item.href && pathname === item.href);
 
   return (
     <nav style={{
@@ -296,6 +319,8 @@ export default function Sidebar({
                 const r = gridBtnRef.current.getBoundingClientRect();
                 setMenuPos({ top: r.top, left: r.right + 8 });
               }
+              setCalendarMenuOpen(false);
+              setPersonalMenuOpen(false);
               setPageMenuOpen(p => !p);
             }}
             style={{
@@ -367,16 +392,184 @@ export default function Sidebar({
         </div>
 
         {/* Calendar */}
-        <a href="/expiry-calendar" title="Calendar" style={{
-          display: "flex", alignItems: "center", justifyContent: "center",
-          width: 40, height: 40, borderRadius: 10, textDecoration: "none", transition: "all 0.15s",
-          background: isActive("/expiry-calendar") ? "rgba(0,229,255,0.12)" : "transparent",
-          border: isActive("/expiry-calendar") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-          color: isActive("/expiry-calendar") ? "#00e5ff" : "#3a5570",
-          boxShadow: isActive("/expiry-calendar") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
-        }}>
-          <CalendarIcon />
-        </a>
+        <div>
+          <button
+            ref={calendarBtnRef}
+            title="Calendar"
+            onClick={() => {
+              if (!calendarMenuOpen && calendarBtnRef.current) {
+                const r = calendarBtnRef.current.getBoundingClientRect();
+                setCalendarMenuPos({ top: r.top, left: r.right + 8 });
+              }
+              setPersonalMenuOpen(false);
+              setPageMenuOpen(false);
+              setCalendarMenuOpen((open) => !open);
+            }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 40, height: 40, borderRadius: 10, cursor: "pointer", transition: "all 0.15s",
+              background: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "rgba(0,229,255,0.12)" : "transparent",
+              border: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+              color: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "#00e5ff" : "#3a5570",
+              boxShadow: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+            }}
+          >
+            <CalendarIcon />
+          </button>
+
+          {calendarMenuOpen && calendarMenuPos && (
+            <>
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                onClick={() => setCalendarMenuOpen(false)}
+              />
+              <div style={{
+                position: "fixed",
+                left: calendarMenuPos.left,
+                top: calendarMenuPos.top,
+                zIndex: 999,
+                background: "#0a0e18",
+                border: "1px solid rgba(0,229,255,0.20)",
+                borderRadius: 10,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
+                minWidth: 170,
+                overflow: "hidden",
+                backdropFilter: "blur(16px)",
+              }}>
+                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                  Calendar
+                </div>
+                {CALENDAR_MENU.map(({ label, href }) => {
+                  const active = pathname === href;
+                  return (
+                    <a
+                      key={href}
+                      href={href}
+                      onClick={() => setCalendarMenuOpen(false)}
+                      style={{
+                        display: "block",
+                        padding: "7px 14px",
+                        fontSize: 12,
+                        fontWeight: active ? 700 : 500,
+                        color: active ? "#00e5ff" : "#8da8c2",
+                        textDecoration: "none",
+                        background: active ? "rgba(0,229,255,0.08)" : "transparent",
+                        borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
+                        transition: "all 0.1s",
+                        letterSpacing: "0.02em",
+                      }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#8da8c2"; } }}
+                    >
+                      {label}
+                    </a>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Personal */}
+        <div>
+          <button
+            ref={personalBtnRef}
+            title="Personal"
+            onClick={() => {
+              if (!personalMenuOpen && personalBtnRef.current) {
+                const r = personalBtnRef.current.getBoundingClientRect();
+                setPersonalMenuPos({ top: r.top, left: r.right + 8 });
+              }
+              setCalendarMenuOpen(false);
+              setPageMenuOpen(false);
+              setPersonalMenuOpen((open) => !open);
+            }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 40, height: 40, borderRadius: 10, cursor: "pointer", transition: "all 0.15s",
+              background: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "rgba(0,229,255,0.12)" : "transparent",
+              border: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+              color: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "#00e5ff" : "#3a5570",
+              boxShadow: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+            }}
+          >
+            <UserIcon />
+          </button>
+
+          {personalMenuOpen && personalMenuPos && (
+            <>
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                onClick={() => setPersonalMenuOpen(false)}
+              />
+              <div style={{
+                position: "fixed",
+                left: personalMenuPos.left,
+                top: personalMenuPos.top,
+                zIndex: 999,
+                background: "#0a0e18",
+                border: "1px solid rgba(0,229,255,0.20)",
+                borderRadius: 10,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
+                minWidth: 170,
+                overflow: "hidden",
+                backdropFilter: "blur(16px)",
+              }}>
+                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                  Personal
+                </div>
+                {PERSONAL_MENU.map(({ label, href, comingSoon }) => {
+                  const active = href ? pathname === href : false;
+                  if (comingSoon) {
+                    return (
+                      <div
+                        key={label}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "7px 14px",
+                          fontSize: 12,
+                          fontWeight: 500,
+                          color: "#64748b",
+                          background: "transparent",
+                          borderLeft: "2px solid transparent",
+                          letterSpacing: "0.02em",
+                        }}
+                      >
+                        <span>{label}</span>
+                        <span style={{ fontSize: 9, color: "#3a5570", letterSpacing: "0.08em", textTransform: "uppercase" }}>Soon</span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <a
+                      key={label}
+                      href={href}
+                      onClick={() => setPersonalMenuOpen(false)}
+                      style={{
+                        display: "block",
+                        padding: "7px 14px",
+                        fontSize: 12,
+                        fontWeight: active ? 700 : 500,
+                        color: active ? "#00e5ff" : "#8da8c2",
+                        textDecoration: "none",
+                        background: active ? "rgba(0,229,255,0.08)" : "transparent",
+                        borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
+                        transition: "all 0.1s",
+                        letterSpacing: "0.02em",
+                      }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#8da8c2"; } }}
+                    >
+                      {label}
+                    </a>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* divider */}
