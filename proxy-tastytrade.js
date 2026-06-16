@@ -625,7 +625,13 @@ async function bootstrapDashboardCorePhases() {
   // Run SPY/QQQ prewarm in background—don't wait for it
   prewarmCache().catch(e => log('Prewarm error:', e.message));
 
-  log('[BOOT] Phase 4: page-requested subscriptions remain deferred');
+  log('[BOOT] Phase 4: Start cache pruning');
+  const cachePruneTimer = setInterval(pruneStaleQuoteCache, CACHE_PRUNE_INTERVAL_MS);
+
+  log('[BOOT] Phase 5: Start subscription lifecycle management');
+  startSubscriptionPruning();
+
+  log('[BOOT] Phase 6: page-requested subscriptions remain deferred');
 }
 
 function subscriptionKey(item) {
@@ -633,6 +639,13 @@ function subscriptionKey(item) {
 }
 
 function queueAutoSubscription(item) {
+  // Validate symbol before queuing
+  const validated = normalizeDxCacheSymbol(item.symbol);
+  if (!validated) {
+    log(`[SUBSCRIPTIONS] Rejected invalid symbol: "${item.symbol}"`);
+    return;
+  }
+
   const key = subscriptionKey(item);
   if (activeAutoSubscriptionKeys.has(key) || queuedSubscriptionKeys.has(key)) return;
   queuedSubscriptionKeys.add(key);
@@ -703,7 +716,13 @@ async function sendSubscriptionsRateLimited() {
 
       if (batch.length === 0) break;
 
-      log(`[SUBSCRIPTIONS] Sending batch (${batch.length} items) | queue remaining: ${subscriptionQueue.length}`);
+      // Log batch contents for debugging symbol mismatches
+      const batchSymbols = [...new Set(batch.map(b => b.symbol))];
+      const batchTypes = [...new Set(batch.map(b => b.type))];
+      log(`[SUBSCRIPTIONS] Sending batch: ${batch.length} items (${batchSymbols.length} unique symbols, ${batchTypes.length} types)`);
+      log(`  Symbols: ${batchSymbols.slice(0, 10).join(', ')}${batchSymbols.length > 10 ? ' ... (' + batchSymbols.length + ' total)' : ''}`);
+      log(`  Types: ${batchTypes.join(', ')}`);
+      log(`  Queue remaining: ${subscriptionQueue.length}`);
 
       const sendPromise = new Promise((resolve, reject) => {
         try {
@@ -713,6 +732,10 @@ async function sendSubscriptionsRateLimited() {
             reset: false,
             add: batch
           }));
+
+          // Log what was actually sent
+          log(`[SUBSCRIPTIONS] Batch sent to dxLink (waiting 100ms for ACK)`);
+
           setTimeout(() => {
             batch.forEach(item => activeAutoSubscriptionKeys.add(subscriptionKey(item)));
             subscriptionErrorCount = 0;
@@ -1241,6 +1264,22 @@ async function fetchEsBasis() {
     log('fetchEsBasis error:', e.message);
   }
   return esBasisCache.basis;
+}
+
+// ─── 0DTE Expiration Staleness Check ──────────────────────────────────────
+function is0dteExpired(expiryDate) {
+  // SPX 0DTE expires at 4:00 PM ET
+  const now = new Date();
+  const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+
+  const todayStr = todayYmd();
+  if (expiryDate !== todayStr) return false; // Not today's option
+
+  // If past 4:00 PM ET and it's today's option, it's expired
+  if (etTime.getHours() >= 16) {
+    return true;
+  }
+  return false;
 }
 
 function spxLevelToEs(spxLevel, basis) {
@@ -1984,11 +2023,27 @@ function normalizeRestSymbol(symbol) {
 function normalizeDxCacheSymbol(symbol) {
   const s = String(symbol || '').trim();
   if (!s) return s;
+
+  // Normalize futures contracts (normalize to explicit year)
   if (/^\/ESU(26|6)?$/i.test(s)) return '/ESU26';
   if (/^\/ES(:XCME)?$/i.test(s)) return '/ES:XCME';
   if (/^\/NQU(26|6)?$/i.test(s)) return '/NQU26';
   if (/^\/NQ(:XCME)?$/i.test(s)) return '/NQ:XCME';
-  return s;
+
+  // Validate option symbols: SPXW060721C7500, SPY062821P400, etc.
+  if (/^[A-Z]{1,4}[CP]\d{6,8}$/.test(s)) {
+    // Valid YYYYMMDD or YYMMDD format option
+    return s.toUpperCase();
+  }
+
+  // Validate stock tickers: SPX, AAPL, VIX, etc.
+  if (/^[A-Z]{1,5}$/.test(s) && !s.includes('/')) {
+    return s.toUpperCase();
+  }
+
+  // Log and reject malformed symbols
+  log(`[WARN] Invalid symbol format: "${s}" (must be: ticker, /ESU26, or SPXW060721C7500)`);
+  return null; // Return null to signal invalid
 }
 
 function getDxCacheAliases(symbol, normalized) {
@@ -2709,9 +2764,26 @@ function connectDxLink() {
 
   dxSocket.on('open', () => {
     console.log('[DX] WebSocket connected, sending SETUP...');
+    log('[dxLink] Connected, flushing subscriptions after reconnect');
+
+    // On reconnect, clear all tracking and re-queue subscriptions
+    // This ensures symbols that were subscribed before disconnect are re-subscribed
+    activeAutoSubscriptionKeys.clear();
+    queuedSubscriptionKeys.clear();
+    pendingNewSubscriptions = true;
+
     if (dxSocket?.readyState === WebSocket.OPEN) {
       dxSocket.send(JSON.stringify({ type:'SETUP', channel:0, version:'0.1-DXF-JS/0.3.0', keepaliveTimeout:60, acceptKeepaliveTimeout:60 }));
     }
+
+    // Wait for channel handshake, then flush subscriptions
+    setTimeout(() => {
+      if (dxChannelOpen && dxSocket.readyState === WebSocket.OPEN) {
+        log('[dxLink] Sending subscription flush after reconnect (' + subscriptions.size + ' symbols)');
+        sendSubscriptions();
+      }
+    }, 100);
+
     clearInterval(keepAliveInterval);
     keepAliveInterval = setInterval(() => {
       if (dxSocket?.readyState === WebSocket.OPEN) dxSocket.send(JSON.stringify({ type:'KEEPALIVE', channel:0 }));
