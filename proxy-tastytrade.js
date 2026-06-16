@@ -3692,52 +3692,6 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, { data: { items: filteredItems } });
   }
 
-  // ─── Fetch option OI from Yahoo Finance (fallback) ────────────────────────
-  async function fetchYahooOptionOI(streamerSymbol) {
-    try {
-      // Convert streamer symbol (e.g., "NVDA 231215C00150000") to YF format
-      // Extract underlying symbol from streamer format: symbol + expiry + type + strike
-      const match = streamerSymbol.match(/^([A-Z0-9$]+)\s*(\d{6})([CP])(\d+)/);
-      if (!match) return null;
-
-      const [, underlying, expiry, type, strikeRaw] = match;
-      const year = parseInt('20' + expiry.slice(0, 2), 10);
-      const month = parseInt(expiry.slice(2, 4), 10);
-      const day = parseInt(expiry.slice(4, 6), 10);
-      const strike = parseInt(strikeRaw, 10) / 1000; // streamer stores as 150000 for 150.00
-
-      // Yahoo format: SPY230221C00150000
-      const yf = `${underlying}${expiry}${type}${strikeRaw}`;
-
-      // Fetch from Yahoo (public endpoint, no auth)
-      const resp = await new Promise((resolve, reject) => {
-        https.get(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(yf)}?modules=optionChain`, (res) => {
-          let data = '';
-          res.on('data', c => data += c);
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(data);
-              const chain = json?.quoteSummary?.result?.[0]?.optionChain?.result?.[0];
-              if (chain) {
-                const opts = chain.options?.[0]?.calls || chain.options?.[0]?.puts || [];
-                const found = opts.find(o => Math.abs(o.strike - strike) < 0.01);
-                resolve(found?.openInterest || null);
-              } else {
-                resolve(null);
-              }
-            } catch (e) {
-              resolve(null);
-            }
-          });
-        }).on('error', () => resolve(null));
-      });
-
-      return resp;
-    } catch (e) {
-      return null;
-    }
-  }
-
   if (req.method === 'GET' && p.startsWith('/proxy/api/tt/chains/')) {
     let sym = decodeURIComponent(p.slice('/proxy/api/tt/chains/'.length).split('?')[0]);
     sym = sym.replace(/^\$/, '');
@@ -3919,11 +3873,23 @@ const server = http.createServer(async (req, res) => {
       if (sampleOI.length > 0) log('DEBUG [Chain OI] symbol:', sym, 'expDate:', targetExps[0] || 'all', 'total options:', filteredOptions.length, 'sample OI:', sampleOI.slice(0, 3));
     }
 
-    // NOTE (2026-06-15): TastyTrade REST /option-chains mostly returns openInterest=0
-    // Real OI comes from market-data endpoint (daily snapshot, typically 6:30-8am ET)
-    // Gracefully fall back to REST if market-data unavailable
+    // NOTE (2026-06-15): Build OI cache from REST data + market-data fallback
+    // Many strikes DO have OI in REST response; just need to extract & cache it
     const oiCache = {};
+
+    // First pass: cache OI from REST response itself
+    filteredOptions.forEach(opt => {
+      const streamerSym = opt['streamer-symbol'] || '';
+      const restOI = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
+      if (restOI > 0 && streamerSym) {
+        oiCache[streamerSym] = restOI;
+      }
+    });
+    const restOICount = Object.keys(oiCache).length;
+
+    // Second pass: try market-data for symbols missing OI
     const symbolsForOI = filteredOptions
+      .filter(o => !oiCache[o['streamer-symbol']])
       .map(o => o['streamer-symbol'])
       .filter(Boolean)
       .slice(0, 100); // market-data has limits, batch in 100s
@@ -3938,13 +3904,18 @@ const server = http.createServer(async (req, res) => {
             const oi = Number(item['open-interest'] ?? item.openInterest ?? 0) || 0;
             if (oi > 0) oiCache[sym] = oi;
           });
-          if (Object.keys(oiCache).length > 0) {
-            log('Fetched OI for', Object.keys(oiCache).length, 'symbols from market-data');
+          const marketDataOICount = Object.keys(oiCache).length - restOICount;
+          if (marketDataOICount > 0) {
+            log('Added', marketDataOICount, 'more symbols from market-data (', restOICount, 'from REST)');
           }
         }
       } catch (e) {
-        log('market-data fetch failed:', e.message, '— falling back to REST OI');
+        log('market-data fetch failed:', e.message);
       }
+    }
+
+    if (restOICount > 0) {
+      log('Cached OI for', Object.keys(oiCache).length, 'symbols total');
     }
 
     for (const opt of filteredOptions) {
@@ -3968,21 +3939,14 @@ const server = http.createServer(async (req, res) => {
       const liveIv    = greeks.volatility > 0 ? greeks.volatility : firstFiniteNumber(opt['implied-volatility'], opt['iv']);
 
       // OI: Priority chain (2026-06-15 fix)
-      // 1. market-data endpoint (daily snapshot from TT, most accurate)
-      // 2. TastyTrade REST data (fallback if market-data unavailable)
-      // 3. Yahoo Finance (last resort, public API)
-      // 4. dxLink Summary cache (historical, may not update daily)
-      // 5. Last known non-zero dxLink OI from cache
-      // 6. Default to 0
-      const marketDataOI = Number(oiCache[streamerSym] ?? 0) || 0;
-      const restOI  = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
-      let yahooOI = 0;
-      if (!marketDataOI && !restOI && streamerSym) {
-        yahooOI = await fetchYahooOptionOI(streamerSym);
-      }
+      // 1. Merged cache (REST + market-data pre-cached above)
+      // 2. dxLink Summary cache (historical)
+      // 3. Last known non-zero dxLink OI from cache
+      // 4. Default to 0
+      const cachedMergedOI = Number(oiCache[streamerSym] ?? 0) || 0;
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
-      const cachedOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
-      const finalOI = marketDataOI || restOI || yahooOI || liveOI || cachedOI;
+      const cachedDxOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
+      const finalOI = cachedMergedOI || liveOI || cachedDxOI;
       if (finalOI > 0 && !cachedOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
