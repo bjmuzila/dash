@@ -20,7 +20,7 @@ const QUOTE_PANEL_TICKERS = [
   "TSLA",
 ];
 
-const DISPLAY_PERCENTS = [10, 20, 30, 40, 50, 100] as const;
+const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30] as const;
 const CHAIN_COLUMNS = ["Strike", "Gex", "Dex", "Chex", "Vex", "Premium", "Volume", "OI"] as const;
 
 type ChainColumn = (typeof CHAIN_COLUMNS)[number];
@@ -335,7 +335,7 @@ export default function OptionsChainPage() {
           }}
         >
           {DISPLAY_PERCENTS.map((percent) => (
-            <option key={percent} value={percent}>{percent === 100 ? "All strikes" : `${percent}% of strikes`}</option>
+            <option key={percent} value={percent}>{percent}% of strikes</option>
           ))}
         </select>
 
@@ -448,22 +448,25 @@ export default function OptionsChainPage() {
                 {Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)}
               </div>
 
-              {numericCells.map((cell) => (
-                <div
-                  key={cell.key}
-                  style={{
-                    padding: "8px 10px",
-                    fontSize: 12,
-                    fontFamily: "monospace",
-                    textAlign: "right",
-                    color: cell.key === "premium" ? "#ffe08a" : "#ffffff",
-                    background: metricBg(cell.value, maxByColumn[cell.key], intensity, top3ByColumn[cell.key]),
-                    fontWeight: 700,
-                  }}
-                >
-                  {cell.text}
-                </div>
-              ))}
+              {numericCells.map((cell) => {
+                const greekCell = cell.key === "gex" || cell.key === "dex" || cell.key === "chex" || cell.key === "vex";
+                return (
+                  <div
+                    key={cell.key}
+                    style={{
+                      padding: "8px 10px",
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                      textAlign: "right",
+                      color: cell.key === "premium" ? "#ffe08a" : "#ffffff",
+                      background: greekCell ? metricBg(cell.value, maxByColumn[cell.key], intensity, top3ByColumn[cell.key]) : "transparent",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {cell.text}
+                  </div>
+                );
+              })}
             </div>
           );
         })}

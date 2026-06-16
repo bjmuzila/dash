@@ -172,6 +172,7 @@ export default function HomePage() {
   const [showGexFlip, setShowGexFlip] = useState(false);
   const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("0dte");
   const [expiryMap, setExpiryMap] = useState<{ "0dte": string; "1dte": string }>({ "0dte": "", "1dte": "" });
+  const expiryCandidatesRef = useRef<Array<{ date: string; strikeCount: number }>>([]);
   const [rollingNetGexByStrike, setRollingNetGexByStrike] = useState<Record<number, number>>({});
   const [intensity, setIntensity] = useState(0.4);
   const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
@@ -253,7 +254,6 @@ export default function HomePage() {
       setCallWall(state.callWall);
       setPutWall(state.putWall);
       setGexFlip(state.gexFlip);
-      setGexProfile(null);
 
     });
 
@@ -495,6 +495,7 @@ export default function HomePage() {
           .sort((a, b) => a.date.localeCompare(b.date));
 
         if (!upcoming.length) return;
+        expiryCandidatesRef.current = upcoming;
         const picked = pickDashboardExpiries(upcoming);
         if (!cancelled) setExpiryMap(picked);
       } catch {
@@ -513,9 +514,38 @@ export default function HomePage() {
 
     const fetchExpiryChain = async () => {
       try {
-        const res = await fetch(`/api/gex?expiry=${encodeURIComponent(actualExpiry)}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const json = await res.json();
+        const fetchChainForExpiry = async (expiry: string) => {
+          const res = await fetch(`/api/gex?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store" });
+          if (!res.ok) return null;
+          return res.json();
+        };
+
+        let resolvedExpiry = actualExpiry;
+        let json = await fetchChainForExpiry(resolvedExpiry);
+        if (!json) return;
+
+        if (selectedExpiry === "1dte") {
+          const initialCount = Array.isArray(json?.chain) ? json.chain.length : 0;
+          if (initialCount < 20) {
+            const alternates = expiryCandidatesRef.current
+              .filter((item) => item.date !== expiryMap["0dte"] && item.date !== actualExpiry)
+              .sort((a, b) => (b.strikeCount - a.strikeCount) || a.date.localeCompare(b.date));
+
+            for (const alternate of alternates) {
+              const altJson = await fetchChainForExpiry(alternate.date);
+              const altCount = Array.isArray(altJson?.chain) ? altJson.chain.length : 0;
+              if (altJson && altCount >= 20) {
+                json = altJson;
+                resolvedExpiry = alternate.date;
+                if (!cancelled) {
+                  setExpiryMap((current) => ({ ...current, "1dte": alternate.date }));
+                }
+                break;
+              }
+            }
+          }
+        }
+
         if (cancelled) return;
         const nextChain = Array.isArray(json?.chain) ? json.chain : [];
         if (nextChain.length) setRawChain(nextChain);
@@ -999,15 +1029,15 @@ export default function HomePage() {
                       <line key={y} x1="0" y1={y} x2={CHART_W} y2={y} stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
                     ))}
                     {/* Zero line */}
-                    <line x1="0" y1={ZERO_Y} x2={CHART_W} y2={ZERO_Y} stroke="rgba(255,255,255,0.2)" strokeWidth="2"/>
+                    <line x1="0" y1={ZERO_Y} x2={CHART_W} y2={ZERO_Y} stroke="rgba(255,255,255,0.3)" strokeWidth="2"/>
                     {/* Spot price vertical line */}
                     {chartBars?.spot != null && (() => {
                       const spotBar = chartBars.bars.find(b => b.strike === chartBars.spot) ?? chartBars.bars.reduce((best, b) => Math.abs(b.strike - chartBars.spot) < Math.abs(best.strike - chartBars.spot) ? b : best, chartBars.bars[0]);
                       if (!spotBar) return null;
                       return (
                         <g>
-                          <line x1={spotBar.x} y1={0} x2={spotBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="6 4"/>
-                          <text x={spotBar.x + 4} y={14} fill="#ffffff" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
+                          <line x1={spotBar.x} y1={0} x2={spotBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.22)" strokeWidth="1" strokeDasharray="6 4"/>
+                          <text x={spotBar.x + 4} y={ZERO_Y - 6} fill="#ffffff" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
                         </g>
                       );
                     })()}

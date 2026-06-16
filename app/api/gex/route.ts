@@ -38,9 +38,15 @@ interface ProxyChainResponse {
   };
 }
 
-function normalizeFlipPoint(value: unknown): number | null {
+function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
   const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? num : null;
+  if (!Number.isFinite(num) || num <= 0) return null;
+  if (spotPrice > 0) {
+    const lo = spotPrice * 0.95;
+    const hi = spotPrice * 1.05;
+    if (num < lo || num > hi) return null;
+  }
+  return num;
 }
 
 export async function GET(request: Request) {
@@ -188,9 +194,9 @@ export async function GET(request: Request) {
     const profile = computeGEXProfile(profileRows.length >= 5 ? profileRows : chain, spotPrice);
 
     const resolvedGexFlip =
-      normalizeFlipPoint(profile?.flipPoint) ??
-      normalizeFlipPoint(summary.gexFlip) ??
-      normalizeFlipPoint(gexFlip);
+      normalizeFlipPoint(profile?.flipPoint, spotPrice) ??
+      normalizeFlipPoint(summary.gexFlip, spotPrice) ??
+      normalizeFlipPoint(gexFlip, spotPrice);
 
     return NextResponse.json({
       timestamp:  Date.now(),
