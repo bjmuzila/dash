@@ -272,7 +272,7 @@ export default function HomePage() {
         </div>
 
         {/* Bottom */}
-        <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.05)", width: "100%" }}>
+        <div className="grad-divider-sidebar-t" style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, paddingTop: 16, width: "100%" }}>
           <span style={{ color: C.muted, cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = C.muted)}>
             <SettingsIcon />
           </span>
@@ -284,39 +284,46 @@ export default function HomePage() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
 
         {/* ── HEADER ──────────────────────────────────────────────────────── */}
-        <header style={{
+        <header className="grad-divider-b" style={{
           height: 64, flexShrink: 0, display: "flex", alignItems: "center",
           justifyContent: "space-between", padding: "0 24px",
-          borderBottom: "1px solid rgba(255,255,255,0.05)",
           background: "rgba(0,0,0,0.10)", backdropFilter: "blur(12px)", position: "relative", zIndex: 10,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                SPX <span style={{ color: C.muted, fontWeight: 400 }}>/ GEX</span>
-              </span>
-              <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "4px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#fff", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)" }}>
-                {etTime}
+          {/* LEFT: 2-row compact ticker */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {/* Row 1: SPX/GEX label + time + VIX */}
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  SPX <span style={{ color: C.muted, fontWeight: 400 }}>/ GEX</span>
+                </span>
+                <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff" }}>
+                  {etTime}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>{vix.toFixed(2)}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>VIX</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.orange }}>{vix.toFixed(2)}</span>
-              <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
-            </div>
-            <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)" }} />
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>ESU</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>SPX</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
-              <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
-                {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
-              </span>
+            {/* Row 2: ESU + SPX */}
+            <div style={{ display: "flex", alignItems: "baseline", gap: 20 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
+                  {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
+                </span>
+              </div>
             </div>
           </div>
+
+          {/* RIGHT: MVC, FLIP, NET GEX, TT LIVE */}
           <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>MVC</span>
@@ -436,7 +443,7 @@ export default function HomePage() {
                   </g>
                 </svg>
                 {/* X-axis labels */}
-                <div style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "0 30px", fontSize: 10, fontFamily: "monospace", color: C.muted, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 8 }}>
+                <div className="grad-divider-t" style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "8px 30px 0", fontSize: 10, fontFamily: "monospace", color: C.muted }}>
                   {["7450","7500","7554","7600","7650"].map((l, i) => (
                     <span key={i} style={{ color: i === 2 ? "#fff" : C.muted, fontWeight: i === 2 ? 700 : 400 }}>{l}</span>
                   ))}
@@ -452,7 +459,7 @@ export default function HomePage() {
               boxShadow: "0 4px 24px -10px rgba(0,0,0,0.6)",
             }}>
               {/* Tab headers */}
-              <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(0,0,0,0.10)", padding: "0 16px", flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ display: "flex", background: "rgba(0,0,0,0.10)", padding: "0 16px", flexShrink: 0 }}>
                 {(["calendar","snapshot"] as const).map(tab => (
                   <button key={tab} onClick={() => setActiveTab(tab)} style={{
                     display: "flex", alignItems: "center", gap: 8,
@@ -543,7 +550,7 @@ export default function HomePage() {
               boxShadow: "0 4px 24px -10px rgba(0,0,0,0.6)",
             }}>
               {/* Heatmap header */}
-              <div style={{ padding: 24, borderBottom: "1px solid rgba(255,255,255,0.05)", display: "flex", flexDirection: "column", gap: 16, flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
@@ -576,7 +583,7 @@ export default function HomePage() {
                   <thead style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(10,13,20,0.90)", backdropFilter: "blur(8px)" }}>
                     <tr>
                       {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.05)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : C.muted }}>{h}</th>
+                        <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : C.muted }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -594,8 +601,8 @@ export default function HomePage() {
 
                       const rowStyle: React.CSSProperties = {
                         borderBottom: isAtm
-                          ? "1px solid rgba(0,240,255,0.40)"
-                          : "1px solid rgba(255,255,255,0.05)",
+                          ? "none"
+                          : "none",
                         background: isAtm
                           ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))"
                           : "transparent",
@@ -673,9 +680,10 @@ export default function HomePage() {
                             </tr>
                           )}
                           <tr key={row.strike}
+                            className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
                             style={rowStyle}
                             onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}
-                            onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = isAtm ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))" : "transparent"; }}
+                            onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                           >
                             {[row.strike, row.netGex, row.volOnly, row.dex, row.vex, row.dwGex].map((v, ci) => cellVal(String(v), ci))}
                           </tr>
@@ -694,6 +702,85 @@ export default function HomePage() {
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
+        }
+        .grad-divider-b {
+          position: relative;
+        }
+        .grad-divider-b::after {
+          content: '';
+          position: absolute;
+          bottom: 0; left: 0; right: 0;
+          height: 1px;
+          background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.10) 30%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.10) 70%, transparent 100%);
+          pointer-events: none;
+        }
+        .grad-divider-t {
+          position: relative;
+        }
+        .grad-divider-t::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 1px;
+          background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.10) 30%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.10) 70%, transparent 100%);
+          pointer-events: none;
+        }
+        .grad-divider-sidebar-b::after {
+          content: '';
+          position: absolute;
+          bottom: 0; left: 12px; right: 12px;
+          height: 1px;
+          background: linear-gradient(to right, transparent, rgba(255,255,255,0.10) 50%, transparent);
+          pointer-events: none;
+        }
+        .grad-divider-sidebar-t {
+          position: relative;
+        }
+        .grad-divider-sidebar-t::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 12px; right: 12px;
+          height: 1px;
+          background: linear-gradient(to right, transparent, rgba(255,255,255,0.10) 50%, transparent);
+          pointer-events: none;
+        }
+        .tab-active-border {
+          border-bottom: 2px solid #00F0FF !important;
+        }
+        .tab-inactive-border {
+          border-bottom: 2px solid transparent !important;
+        }
+        .heatmap-row {
+          position: relative;
+        }
+        .heatmap-row::after {
+          content: '';
+          position: absolute;
+          bottom: 0; left: 8px; right: 8px;
+          height: 1px;
+          background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.07) 25%, rgba(255,255,255,0.09) 50%, rgba(255,255,255,0.07) 75%, transparent 100%);
+          pointer-events: none;
+        }
+        .heatmap-row-atm {
+          position: relative;
+        }
+        .heatmap-row-atm::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 1px;
+          background: linear-gradient(to right, transparent 0%, rgba(0,240,255,0.25) 30%, rgba(0,240,255,0.40) 50%, rgba(0,240,255,0.25) 70%, transparent 100%);
+          pointer-events: none;
+          z-index: 1;
+        }
+        .heatmap-row-atm::after {
+          content: '';
+          position: absolute;
+          bottom: 0; left: 0; right: 0;
+          height: 1px;
+          background: linear-gradient(to right, transparent 0%, rgba(0,240,255,0.25) 30%, rgba(0,240,255,0.40) 50%, rgba(0,240,255,0.25) 70%, transparent 100%);
+          pointer-events: none;
+          z-index: 1;
         }
       `}</style>
     </div>

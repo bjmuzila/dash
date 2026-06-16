@@ -3932,10 +3932,10 @@ const server = http.createServer(async (req, res) => {
       const quote   = dxQuoteCache[streamerSym]   || {};
       const trade   = dxTradeCache[streamerSym]   || {};
       const fallbackGreeks = estimateOptionGreekFallback(opt, underlyingPrice, side);
-      const liveDelta = finiteNumber(greeks.delta, opt.delta, opt['delta']);
-      const liveGamma = finiteNumber(greeks.gamma, opt.gamma, opt['gamma']);
-      const liveTheta = finiteNumber(greeks.theta, opt.theta, opt['theta']);
-      const liveVega  = finiteNumber(greeks.vega, opt.vega, opt['vega']);
+      const liveDelta = firstFiniteNumber(greeks.delta, opt.delta, opt['delta'], null);
+      const liveGamma = firstFiniteNumber(greeks.gamma, opt.gamma, opt['gamma'], null);
+      const liveTheta = firstFiniteNumber(greeks.theta, opt.theta, opt['theta'], null);
+      const liveVega  = firstFiniteNumber(greeks.vega, opt.vega, opt['vega'], null);
       const liveIv    = greeks.volatility > 0 ? greeks.volatility : firstFiniteNumber(opt['implied-volatility'], opt['iv']);
 
       // OI: Priority chain (2026-06-15 fix)
@@ -3971,8 +3971,8 @@ const server = http.createServer(async (req, res) => {
         mark:                 firstFiniteNumber(opt['mid-price'], opt['mark'], opt.mark, 0),
         delta:                liveDelta !== null && Math.abs(liveDelta) > 0 ? liveDelta : fallbackGreeks.delta,
         gamma:                liveGamma !== null && liveGamma > 0 ? liveGamma : fallbackGreeks.gamma,
-        theta:                liveTheta,
-        vega:                 liveVega,
+        theta:                liveTheta !== null ? liveTheta : fallbackGreeks.theta,
+        vega:                 liveVega !== null ? liveVega : fallbackGreeks.vega,
         'implied-volatility': liveIv,
       };
     }
