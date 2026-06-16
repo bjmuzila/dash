@@ -148,6 +148,7 @@ export default function HomePage() {
   const [showGexFlip, setShowGexFlip] = useState(false);
   const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("0dte");
   const [expiryMap, setExpiryMap] = useState<{ "0dte": string; "1dte": string }>({ "0dte": "", "1dte": "" });
+  const [rollingNetGexByStrike, setRollingNetGexByStrike] = useState<Record<number, number>>({});
   const [intensity, setIntensity] = useState(0.4);
   const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
   const [panOffset, setPanOffset] = useState(0); // strike offset for drag-pan
@@ -160,6 +161,7 @@ export default function HomePage() {
   const spxFlowRef = useRef<HTMLDivElement>(null);
   const [mvcSaving, setMvcSaving] = useState<"idle" | "saving" | "ok" | "err">("idle");
   const [spxFlowRenderTick, setSpxFlowRenderTick] = useState(0);
+  const lastRollingPersistRef = useRef<{ expiry: string; stamp: number }>({ expiry: "", stamp: 0 });
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -327,6 +329,80 @@ export default function HomePage() {
       throw new Error("Refresh failed");
     }
   }, [expiryMap, selectedExpiry]);
+
+  useEffect(() => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    if (!actualExpiry) {
+      setRollingNetGexByStrike({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchRollingNetGex = async () => {
+      try {
+        const res = await fetch(
+          `/api/snapshots/option-strike-gex-history?expiry=${encodeURIComponent(actualExpiry)}&minutes=30`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+
+        const nextMap = Object.fromEntries(
+          (Array.isArray(json?.rows) ? json.rows : [])
+            .map((row: Record<string, unknown>) => [Number(row.strike ?? 0), Number(row.rolling_net_gex ?? 0)] as const)
+            .filter((entry: readonly [number, number]): entry is readonly [number, number] => entry[0] > 0 && Number.isFinite(entry[1]))
+        );
+
+        setRollingNetGexByStrike(nextMap);
+      } catch {
+        // no-op
+      }
+    };
+
+    fetchRollingNetGex().catch(() => {});
+    const t = setInterval(() => { fetchRollingNetGex().catch(() => {}); }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [expiryMap, selectedExpiry]);
+
+  useEffect(() => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    if (!actualExpiry || rawChain.length === 0) return;
+
+    const now = Date.now();
+    const last = lastRollingPersistRef.current;
+    if (last.expiry === actualExpiry && now - last.stamp < 25000) return;
+
+    const rows = rawChain
+      .map((row) => ({
+        timestamp: now,
+        expiry: actualExpiry,
+        spot: Number(row.spotPrice ?? spx ?? 0),
+        strike: Number(row.strike ?? 0),
+        net_gex: Number(row.netGEX ?? 0),
+      }))
+      .filter((row) => row.strike > 0 && Number.isFinite(row.net_gex));
+
+    if (!rows.length) return;
+    setRollingNetGexByStrike((current) =>
+      Object.keys(current).length
+        ? current
+        : Object.fromEntries(rows.map((row) => [row.strike, row.net_gex]))
+    );
+    lastRollingPersistRef.current = { expiry: actualExpiry, stamp: now };
+
+    void fetch("/api/snapshots/option-strike-gex-history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rows),
+    }).catch(() => {
+      lastRollingPersistRef.current = { expiry: "", stamp: 0 };
+    });
+  }, [expiryMap, rawChain, selectedExpiry, spx]);
 
   const refreshSpxFlowPanel = useCallback(async () => {
     setSpxFlowRenderTick((tick) => tick + 1);
@@ -514,7 +590,7 @@ export default function HomePage() {
         volOnly: fmt(r.netVolGEX),
         dex: fmt(displayDex),
         gexVex: fmt(displayGex + vannaValue),
-        rollingNetGex: "—",
+        rollingNetGex: Number.isFinite(rollingNetGexByStrike[r.strike]) ? fmt(rollingNetGexByStrike[r.strike]) : "—",
         type,
         rank: rank ?? undefined,
         rankColor,
@@ -529,7 +605,7 @@ export default function HomePage() {
     );
 
     setHeatmapData(nonEmpty);
-  }, [rawChain, selectedExpiry, spx, dataMode]);
+  }, [dataMode, rawChain, rollingNetGexByStrike, selectedExpiry, spx]);
 
 
   const etTime = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });

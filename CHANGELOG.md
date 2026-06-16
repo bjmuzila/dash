@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-06-16 (session 24) — Discord Bot with Slash Commands
+
+### New Files
+- `discord-bot.js` — Discord bot using discord.js + Puppeteer; screenshots Next.js pages at `https://dash-1fa2.onrender.com` and posts them to Discord. Commands: `/screenshot <page>`, `/gex`, `/snapshot`
+- `register-commands.js` — one-time script to register slash commands globally via Discord REST API
+
+### Modified Files
+- `package.json` — added `discord.js`, `puppeteer` dependencies; added `bot` and `bot:register` npm scripts
+- `.env.local` — added `DISCORD_BOT_TOKEN`, `DISCORD_APP_ID`, `DISCORD_GUILD_ID`, `DASHBOARD_URL`
+
+### Page Map (slash command choices → Next.js routes)
+- GEX Chart, Heatmap, Snapshot Flow, SPX Flow, MVC → `/home`
+- Exposure Stack → `/insights`
+- Multi Greek → `/mult-greek`
+
+### Notes
+- Bot runs locally via `npm run bot`; for 24/7 uptime deploy as Render Background Worker
+- Global command registration used (guild registration failed due to missing `applications.commands` scope on initial invite)
+- Puppeteer wait times set to 3s per page; `deferReply` wrapped in try/catch to handle stale interactions
+
+## 2026-06-16 (session 23) — Heatmap Height Fix + Overview Redirect
+
+### `app/overview/page.tsx`
+- Replaced full overview page with a simple `redirect("/home")` — `/overview` route now permanently redirects to `/home`
+
+### `components/dashboard/GexHeatmap.tsx`
+- Root `app/page.tsx` already redirects to `/home`; confirmed no change needed
+
+### `app/overview/page.tsx` (heatmap body wrapper)
+- Added `display: "flex", flexDirection: "column"` to heatmap body wrapper div so `GexHeatmap`'s `height: 100%` resolves correctly — fixes only 3 strikes showing in the live GEX heatmap panel
+
+### Version
+- Bumped to `2026.6.16-v48`
+
+---
+
+
 ## 2026-06-16 (session 22) — Task #7 Steps 1-2: GEX Toolbar Live Data Wiring
 
 ### `components/dashboard/GexToolbar.tsx`
