@@ -7,15 +7,19 @@
         "dev": "next dev --port 3002",
         "dev:full": "node server-with-proxy.js",
         "build": "next build",
-        "start": "node server-with-proxy.js"
+        "start": "node server-with-proxy.js",
+        "bot": "node discord-bot.js",
+        "bot:register": "node register-commands.js"
     },
     "dependencies": {
         "clsx": "^2.1.1",
+        "discord.js": "^14.16.3",
         "dotenv": "^17.4.2",
         "html2canvas": "^1.4.1",
         "lightweight-charts": "^5.0.0",
         "next": "^15.3.3",
         "pg": "^8.21.0",
+        "puppeteer": "^24.0.0",
         "react": "^19",
         "react-dom": "^19",
         "tailwind-merge": "^2.3.0"

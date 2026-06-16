@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getClientProxyBase, getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
 
 // All symbols — indices/futures always streamed, equities subscribed on mount
 const ES_DISPLAY_SYMBOL = "/ESU26";
@@ -68,13 +69,19 @@ export default function QuotesPanel() {
   const [countdown, setCountdown] = useState(30);
   const wsRef = useRef<WebSocket | null>(null);
   const lastUpdateRef = useRef(Date.now());
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── dxlink WS for all symbols ───────────────────────────────────────────────
   useEffect(() => {
-    function connect() {
+    async function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
+      const liveFeedReady = await isLiveFeedReady();
+      if (!liveFeedReady) {
+        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 10000);
+        return;
+      }
       try {
-        const ws = new WebSocket((process.env.NEXT_PUBLIC_WS_URL ?? "wss://vanila-8zn1.onrender.com") + "/ws/dxlink");
+        const ws = new WebSocket(getClientWsUrl());
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -88,7 +95,10 @@ export default function QuotesPanel() {
           }));
         };
 
-        ws.onclose = () => { wsRef.current = null; setTimeout(connect, 5000); };
+        ws.onclose = () => {
+          wsRef.current = null;
+          reconnectTimerRef.current = setTimeout(() => { void connect(); }, 5000);
+        };
         ws.onerror = () => ws.close();
 
         ws.onmessage = (ev) => {
@@ -156,7 +166,7 @@ export default function QuotesPanel() {
       } catch (_) {}
     }
 
-    connect();
+    void connect();
 
     // Seed prevClose for WS symbols from REST on mount so sane() check passes immediately
     async function seedPrevCloses() {
@@ -184,7 +194,10 @@ export default function QuotesPanel() {
     }
     seedPrevCloses();
 
-    return () => wsRef.current?.close();
+    return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
+    };
   }, []);
 
   // ── Subscribe equities to proxy so they stream on the WS ──────────────────
@@ -218,7 +231,7 @@ export default function QuotesPanel() {
         }
 
         // Tell proxy to subscribe these symbols to dxFeed — they'll stream on WS from now on
-        await fetch((process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com") + "/proxy/dxlink/subscribe", {
+        await fetch(getClientProxyBase() + "/proxy/dxlink/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

@@ -790,7 +790,7 @@ export default function HomePage() {
                 style={{
                   background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
                   borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
-                  height: 520, flexShrink: 0,
+                  height: 580, flexShrink: 0,
                 }}
               >
                 {/* Chart Header */}
@@ -860,14 +860,14 @@ export default function HomePage() {
                   {/* Y-axis */}
                   <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace", color: "#fff", alignItems: "flex-end", zIndex: 20, pointerEvents: "none", paddingBottom: 20 }}>
                     {["+$6B","+$4B","+$2B","0","-$2B","-$4B","-$6B"].map((l, i) => (
-                      <span key={i} style={{ color: i < 3 ? C.cyan : i === 3 ? "#fff" : C.orange }}>{l}</span>
+                      <span key={i} style={{ color: "#fff" }}>{l}</span>
                     ))}
                   </div>
                   <svg
                     ref={svgRef}
                     viewBox={`0 0 ${CHART_W} ${CHART_H}`}
                     preserveAspectRatio="none"
-                    style={{ width: "100%", height: "100%", paddingRight: 48, paddingBottom: 24, boxSizing: "border-box", cursor: dragRef.current ? "grabbing" : "grab", userSelect: "none" }}
+                    style={{ width: "100%", height: "100%", paddingRight: 32, paddingBottom: 24, boxSizing: "border-box", cursor: dragRef.current ? "grabbing" : "grab", userSelect: "none" }}
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
@@ -900,7 +900,7 @@ export default function HomePage() {
                       return (
                         <g>
                           <line x1={spotBar.x} y1={0} x2={spotBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="6 4"/>
-                          <text x={spotBar.x + 4} y={14} fill="rgba(255,255,255,0.35)" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
+                          <text x={spotBar.x + 4} y={14} fill="#ffffff" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
                         </g>
                       );
                     })()}
@@ -1058,8 +1058,8 @@ export default function HomePage() {
                             : Math.min(CHART_H - 16, tipY + 4);
                           return (
                             <>
-                              <rect x={pb.x - 22} y={rectY} width={44} height={14} fill="url(#strikeGradCyan)" rx="2"/>
-                              <text x={pb.x} y={labelY} textAnchor="middle" fontSize="10" fontFamily="monospace" fill={C.cyan} fontWeight="700">{chartBars.peakLabel}</text>
+                              <rect x={pb.x - 18} y={rectY} width={36} height={12} fill="url(#strikeGradCyan)" rx="2"/>
+                              <text x={pb.x} y={labelY} textAnchor="middle" fontSize="9" fontFamily="monospace" fill="#ffffff" fontWeight="700">{chartBars.peakLabel}</text>
                             </>
                           );
                         })()}
@@ -1074,12 +1074,12 @@ export default function HomePage() {
                   </svg>
                   {/* X-axis labels */}
                   {chartBars && (
-                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "4px 20px 0", fontSize: 9, fontFamily: "monospace", color: "#3a5570" }}>
+                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "space-between", padding: "4px 0 0", fontSize: 9, fontFamily: "monospace", color: "#fff" }}>
                       {[0, Math.floor(chartBars.bars.length/4), Math.floor(chartBars.bars.length/2), Math.floor(chartBars.bars.length*3/4), chartBars.bars.length-1].map(i => {
                         const b = chartBars.bars[i];
                         if (!b) return null;
                         const isAtm = Math.abs(b.strike - (spx || 7554)) < 10;
-                        return <span key={i} style={{ color: isAtm ? "#fff" : "#3a5570", fontWeight: isAtm ? 700 : 400 }}>{b.strike.toLocaleString()}</span>;
+                        return <span key={i} style={{ color: "#fff", fontWeight: isAtm ? 700 : 500 }}>{b.strike.toLocaleString()}</span>;
                       })}
                     </div>
                   )}
@@ -1189,8 +1189,8 @@ export default function HomePage() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>MVC</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+                    <span style={{ fontSize: 8, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>CW</span>

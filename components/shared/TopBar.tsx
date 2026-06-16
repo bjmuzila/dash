@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
+import { getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
 
 const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
@@ -158,6 +159,7 @@ export default function TopBar() {
   const [row2, setRow2] = useState<GexRow2>({ mvcOI: "—", mvcVol: "—", gexFlip: "--", peaks: [] });
 
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // mutable live data — not state, avoids render on every tick
   const live = useRef({
@@ -262,10 +264,15 @@ export default function TopBar() {
   useEffect(() => {
     const SYMS = [...ES_FEED_SYMBOLS, "SPX", "$SPX", "VIX"];
 
-    function connect() {
+    async function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
+      const liveFeedReady = await isLiveFeedReady();
+      if (!liveFeedReady) {
+        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 10000);
+        return;
+      }
       try {
-        const ws = new WebSocket((process.env.NEXT_PUBLIC_WS_URL ?? "wss://vanila-8zn1.onrender.com") + "/ws/dxlink");
+        const ws = new WebSocket(getClientWsUrl());
 
         wsRef.current = ws;
 
@@ -281,7 +288,11 @@ export default function TopBar() {
           }));
         };
 
-        ws.onclose = () => { setTtLive(false); wsRef.current = null; setTimeout(connect, 5000); };
+        ws.onclose = () => {
+          setTtLive(false);
+          wsRef.current = null;
+          reconnectTimerRef.current = setTimeout(() => { void connect(); }, 5000);
+        };
         ws.onerror = () => ws.close();
 
         ws.onmessage = (ev) => {
@@ -332,8 +343,11 @@ export default function TopBar() {
       } catch (_) {}
     }
 
-    connect();
-    return () => wsRef.current?.close();
+    void connect();
+    return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

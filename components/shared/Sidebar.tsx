@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { getClientProxyBase, getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
 
 // ── Icons ────────────────────────────────────────────────────────────────────
 const HomeIcon = () => (
@@ -93,6 +94,7 @@ function useLiveQuotes() {
   const wsLiveRef = useRef<Record<string, { lastPrice: number; prevClose: number; pctFeed: number; bidPrice: number; askPrice: number }>>({});
   const [pcts, setPcts] = useState<Record<string, number | null>>({});
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     // All symbols to subscribe — include ES/NQ aliases so we catch whatever the relay emits
@@ -113,14 +115,22 @@ function useLiveQuotes() {
       });
     }
 
-    function connect() {
+    async function connect() {
       const state = wsRef.current?.readyState;
       if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+      const liveFeedReady = await isLiveFeedReady();
+      if (!liveFeedReady) {
+        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 10000);
+        return;
+      }
       try {
-        const ws = new WebSocket((process.env.NEXT_PUBLIC_WS_URL ?? "wss://vanila-8zn1.onrender.com") + "/ws/dxlink");
+        const ws = new WebSocket(getClientWsUrl());
         wsRef.current = ws;
         ws.onopen = () => { ws.send(buildSubscribeMsg()); };
-        ws.onclose = () => { wsRef.current = null; setTimeout(connect, 3000); };
+        ws.onclose = () => {
+          wsRef.current = null;
+          reconnectTimerRef.current = setTimeout(() => { void connect(); }, 3000);
+        };
         ws.onerror  = () => ws.close();
         ws.onmessage = (ev) => {
           try {
@@ -164,7 +174,7 @@ function useLiveQuotes() {
         };
       } catch (_) {}
     }
-    connect();
+    void connect();
     // Heartbeat: reconnect if stale
     const hb = setInterval(() => {
       const state = wsRef.current?.readyState;
@@ -193,7 +203,7 @@ function useLiveQuotes() {
 
     async function subscribeEquities() {
       try {
-        await fetch((process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com") + "/proxy/dxlink/subscribe", {
+        await fetch(getClientProxyBase() + "/proxy/dxlink/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ symbols: REST_SYMBOLS.map(s => s.sym), feedTypes: ["Quote", "Trade", "Summary"] }),
@@ -202,7 +212,11 @@ function useLiveQuotes() {
     }
     subscribeEquities();
 
-    return () => { clearInterval(hb); wsRef.current?.close(); };
+    return () => {
+      clearInterval(hb);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
+    };
   }, []);
 
   return pcts;

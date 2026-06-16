@@ -1,3 +1,4 @@
+import { getClientWsUrl, isLiveFeedReady } from '@/lib/clientRuntime';
 import type { EventEmitter } from 'events';
 
 // Types
@@ -60,6 +61,7 @@ class Subscriber {
   private maxReconnectAttempts = 20; // keep retrying indefinitely
   private reconnectDelay = 2000;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastChainFetch = 0;
   private readonly CHAIN_THROTTLE_MS = 20000; // max one chain fetch per 20s
 
@@ -94,14 +96,14 @@ class Subscriber {
     if (this.heartbeatTimer !== null) return;
     // Fetch quotes first so top bar shows live prices immediately
     await Promise.all([this.fetchQuotes(), this.fetchChain()]);
-    this.connectWebSocket();
+    void this.connectWebSocket();
     // Poll quotes every 15s and chain every 30s regardless of WS
     this.heartbeatTimer = setInterval(() => {
       this.fetchQuotes();
       const s = this.wsRef?.readyState;
       if (s !== WebSocket.OPEN && s !== WebSocket.CONNECTING) {
         this.reconnectAttempts = 0;
-        this.connectWebSocket();
+        void this.connectWebSocket();
       }
     }, 15000);
     // Chain poll every 30s
@@ -167,15 +169,17 @@ class Subscriber {
   /**
    * Connect to WebSocket for live market data
    */
-  private connectWebSocket(): void {
+  private async connectWebSocket(): Promise<void> {
     if (typeof window === 'undefined') return;
+    if (this.wsRef && (this.wsRef.readyState === WebSocket.OPEN || this.wsRef.readyState === WebSocket.CONNECTING)) return;
 
-    // NEXT_PUBLIC_WS_URL is set in .env.local for dev (ws://localhost:3001).
-    // On Render it's not set, so fall back to the known proxy host.
-    const envUrl = (process.env.NEXT_PUBLIC_WS_URL ?? '').trim();
-    const wsUrl = envUrl
-      ? (envUrl.startsWith('ws') ? envUrl : `wss://${envUrl}`)
-      : 'wss://vanila-8zn1.onrender.com/ws/dxlink';
+    const ready = await isLiveFeedReady();
+    if (!ready) {
+      this.attemptReconnect();
+      return;
+    }
+
+    const wsUrl = getClientWsUrl();
 
     if (!wsUrl) return;
 
@@ -183,9 +187,12 @@ class Subscriber {
       this.wsRef = new WebSocket(wsUrl);
 
       this.wsRef.onopen = () => {
-        console.log('[Subscriber] WS connected');
         this.state.isConnected = true;
         this.reconnectAttempts = 0;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
         this.publish();
 
         // Subscribe to market data — all ES/NQ aliases so we catch whatever the relay emits
@@ -212,18 +219,17 @@ class Subscriber {
       };
 
       this.wsRef.onclose = () => {
-        console.log('[Subscriber] WS closed');
+        this.wsRef = null;
         this.state.isConnected = false;
         this.publish();
         this.attemptReconnect();
       };
 
-      this.wsRef.onerror = (err) => {
-        console.error('[Subscriber] WS error:', err);
+      this.wsRef.onerror = () => {
         this.state.isConnected = false;
+        this.wsRef?.close();
       };
     } catch (err) {
-      console.error('[Subscriber] connectWebSocket failed:', err);
       this.attemptReconnect();
     }
   }
@@ -232,11 +238,14 @@ class Subscriber {
    * Attempt to reconnect to WebSocket
    */
   private attemptReconnect(): void {
+    if (this.reconnectTimer) return;
     this.reconnectAttempts++;
     // Cap backoff at 30s, keep retrying forever
     const delay = Math.min(this.reconnectDelay * Math.pow(2, Math.min(this.reconnectAttempts - 1, 4)), 30000);
-    console.log(`[Subscriber] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-    setTimeout(() => { this.connectWebSocket(); }, delay);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connectWebSocket();
+    }, delay);
   }
 
   /**

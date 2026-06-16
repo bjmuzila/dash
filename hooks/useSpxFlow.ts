@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -252,12 +253,7 @@ function normalizeFeedData(data: unknown[]): FeedItem[] {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-const WS_URL =
-  typeof window !== "undefined"
-    ? (process.env.NEXT_PUBLIC_WS_URL
-        ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
-        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:3001/ws/dxlink`)
-    : "";
+const WS_URL = typeof window !== "undefined" ? getClientWsUrl() : "";
 
 export function useSpxFlow(enabled = true) {
   const [flow, setFlow] = useState<SpxFlowState>(INITIAL_STATE);
@@ -433,9 +429,14 @@ export function useSpxFlow(enabled = true) {
     ws.send(JSON.stringify({ type: "subscribe", symbols, feedTypesBySymbol }));
   }, []);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!enabled || !WS_URL) return;
     if (wsRef.current && wsRef.current.readyState < 2) return;
+    const liveFeedReady = await isLiveFeedReady();
+    if (!liveFeedReady) {
+      reconnectRef.current = setTimeout(() => { void connect(); }, 10000);
+      return;
+    }
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
@@ -626,12 +627,12 @@ export function useSpxFlow(enabled = true) {
     ws.onerror = () => setFlow((p) => ({ ...p, connected: false }));
     ws.onclose = () => {
       setFlow((p) => ({ ...p, connected: false }));
-      reconnectRef.current = setTimeout(connect, 5000);
+      reconnectRef.current = setTimeout(() => { void connect(); }, 5000);
     };
   }, [appendOrAggregateOrder, enabled, publish, subscribeRestWatchlistOptions]);
 
   useEffect(() => {
-    connect();
+    void connect();
     return () => {
       wsRef.current?.close();
       if (reconnectRef.current) clearTimeout(reconnectRef.current);

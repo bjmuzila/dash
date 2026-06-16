@@ -117,8 +117,7 @@ export function BoxDiscordBtn({
   message?: string;
 }) {
   const [s, set] = useState<BtnState>("idle");
-  const iconOnly = !label;
-  const run = useCallback(async () => {
+    const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
@@ -136,7 +135,7 @@ export function BoxDiscordBtn({
   return (
     <button onClick={run} disabled={s === "busy"} title="Send screenshot to Discord"
       style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 13 }}>
-      {statusText ?? "💬"}
+      {statusText ?? <IconDiscord /> }
     </button>
   );
 }
@@ -229,3 +228,4 @@ export default function DataBox({
     </div>
   );
 }
+
