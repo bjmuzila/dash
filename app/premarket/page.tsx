@@ -83,6 +83,7 @@ interface QuoteRow {
   price:  number | null;
   change: number | null;
   pct:    number | null;
+  time?:  number | null;
 }
 
 type QuoteMap = Record<string, QuoteRow>;
@@ -472,9 +473,11 @@ export default function PremarketPage() {
     try {
       const r = await fetch(`/api/yahoo-quotes?symbols=${encodeURIComponent(syms)}&_=${Date.now()}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`Yahoo quotes failed: ${r.status}`);
-      const data: Record<string, { price: number | null; change: number | null; pct: number | null }> = await r.json();
+      const data: QuoteMap = await r.json();
       setYahooQuotes(data);
-      setYahooTs(new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
+      const latestYahooTime = Object.values(data).reduce((latest, row) => Math.max(latest, row?.time ?? 0), 0);
+      const displayTime = latestYahooTime > 0 ? new Date(latestYahooTime * 1000) : new Date();
+      setYahooTs(displayTime.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
     } catch (_) {
       throw _;
     }

@@ -6,7 +6,9 @@ export const revalidate = 0;
 // Yahoo Finance v8 chart endpoint — no crumb required, one request per symbol
 // We fetch in parallel then combine
 
-async function fetchOne(sym: string): Promise<{ price: number | null; change: number | null; pct: number | null }> {
+type YahooQuote = { price: number | null; change: number | null; pct: number | null; time: number | null };
+
+async function fetchOne(sym: string): Promise<YahooQuote> {
   try {
     const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d&includePrePost=true&_=${Date.now()}`;
     const res = await fetch(url, {
@@ -23,23 +25,26 @@ async function fetchOne(sym: string): Promise<{ price: number | null; change: nu
       cache: "no-store",
     });
 
-    if (!res.ok) return { price: null, change: null, pct: null };
+    if (!res.ok) return { price: null, change: null, pct: null, time: null };
 
     const data = await res.json();
     const result = data?.chart?.result?.[0];
     const meta = result?.meta;
-    if (!meta) return { price: null, change: null, pct: null };
+    if (!meta) return { price: null, change: null, pct: null, time: null };
 
     const closes = result?.indicators?.quote?.[0]?.close;
     const lastClose = Array.isArray(closes) ? [...closes].reverse().find((v) => typeof v === "number" && Number.isFinite(v)) : null;
+    const timestamps = result?.timestamp;
+    const lastTime = Array.isArray(timestamps) ? [...timestamps].reverse().find((v) => typeof v === "number" && Number.isFinite(v)) : null;
     const price     = meta.regularMarketPrice ?? lastClose ?? null;
     const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
     const change    = price != null && prevClose != null ? price - prevClose : null;
     const pct       = change != null && prevClose ? (change / prevClose) * 100 : null;
+    const time      = meta.regularMarketTime ?? lastTime ?? null;
 
-    return { price, change, pct };
+    return { price, change, pct, time };
   } catch {
-    return { price: null, change: null, pct: null };
+    return { price: null, change: null, pct: null, time: null };
   }
 }
 
@@ -53,7 +58,7 @@ export async function GET(request: NextRequest) {
   // Fetch all in parallel
   const results = await Promise.all(syms.map(sym => fetchOne(sym).then(q => ({ sym, q }))));
 
-  const quotes: Record<string, { price: number | null; change: number | null; pct: number | null }> = {};
+  const quotes: Record<string, YahooQuote> = {};
   results.forEach(({ sym, q }) => { quotes[sym] = q; });
 
   return NextResponse.json(quotes, {

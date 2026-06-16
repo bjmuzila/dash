@@ -2,8 +2,6 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import QuotesPanel from "./QuotesPanel";
-import DailyEmPanel from "./DailyEmPanel";
 import pkg from "../../package.json";
 
 // ── Shared chevron-in-box button icon (matches design reference) ─────────────
@@ -262,10 +260,9 @@ export default function Sidebar({
         </button>
       </div>
 
-      {/* Panels fill available space */}
+      {/* Live ticker fills available space */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#05080d" }}>
-        <QuotesPanel />
-        <DailyEmPanel />
+        <CollapsedTicker />
       </div>
 
       {/* Version */}
