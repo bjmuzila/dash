@@ -42,9 +42,9 @@
     var _renderTimer  = null;
     var _priceMode    = 'mid';
     var _chainIntensity = 1.4;
-    var _rangePercent = 5;
+    var _rangePercent = 10;
     var _wsDataStartTime = null;
-    var _minWaitForWsMs = 10000; // min ms to wait after first WS quote before rendering (10 seconds)
+    var _minWaitForWsMs = 15000; // min ms to wait after first WS quote before rendering (15 seconds)
     var _loadToken = 0;
     var _pendingToken = 0;
     var _pendingStrikes = [];
@@ -253,12 +253,14 @@
     // ── fetch expirations and populate expiry dropdown ─────────────────────────
     function fetchExpirations(cb) {
       function isExpiryValid(exp) {
-        // After 4pm ET (16:00), skip 0DTE
-        var etTime = new Date().toLocaleString('en-US', {timeZone:'America/New_York'});
-        var etHour = parseInt(etTime.split(',')[1].trim().split(':')[0], 10);
-        if (etHour >= 16 && exp.daysTo === 0) return false;
-        // Skip expired expirations
+        // Skip expired expirations only
         if (exp.daysTo < 0) return false;
+        // After 4pm ET (16:00), skip 0DTE only for SPX
+        if (_activeTicker === 'SPX' || _activeTicker === 'SPXW') {
+          var etTime = new Date().toLocaleString('en-US', {timeZone:'America/New_York'});
+          var etHour = parseInt(etTime.split(',')[1].trim().split(':')[0], 10);
+          if (etHour >= 16 && exp.daysTo === 0) return false;
+        }
         return true;
       }
 

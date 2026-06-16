@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function etNow() {
@@ -111,7 +112,7 @@ export default function HomePage() {
   const [esFut, setEsFut] = useState(7562.0);
   const [netGex, setNetGex] = useState(15790000000);
   const [vix, setVix] = useState(16.20);
-  const [activeTab, setActiveTab] = useState<"calendar" | "snapshot">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const wsRef = useRef<WebSocket | null>(null);
   const prevSpxRef = useRef(0);
 
@@ -410,18 +411,21 @@ export default function HomePage() {
             }}>
               {/* Tab headers */}
               <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0 }}>
-                {(["calendar","snapshot"] as const).map(tab => (
-                  <button key={tab} onClick={() => setActiveTab(tab)} style={{
+                {([
+                  { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
+                  { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
+                  { id: "spxflow", label: "SPX Flow", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg> },
+                ] as const).map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
                     display: "flex", alignItems: "center", gap: 8,
                     padding: "12px 16px", fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em",
                     background: "none", border: "none", cursor: "pointer",
-                    color: activeTab === tab ? C.cyan : C.muted,
-                    borderBottom: activeTab === tab ? `2px solid ${C.cyan}` : "2px solid transparent",
+                    color: activeTab === tab.id ? C.cyan : C.muted,
+                    borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent",
                     marginBottom: -1,
                     transition: "color 0.15s",
                   }}>
-                    {tab === "calendar" ? <CalendarIcon /> : <ActivityIcon />}
-                    {tab === "calendar" ? "Economic Calendar" : "Snapshot Flow"}
+                    {tab.icon}{tab.label}
                   </button>
                 ))}
               </div>
@@ -461,29 +465,71 @@ export default function HomePage() {
                   </div>
                 )}
                 {activeTab === "snapshot" && (
+                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                    <SnapshotPanel />
+                  </div>
+                )}
+                {activeTab === "spxflow" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                    {/* Header row */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 9, fontFamily: "monospace", color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
+                        SPX Options Flow
+                        <span style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700 }}>LIVE</span>
+                      </div>
+                      <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)", color: "#fff", fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer" }}>Refresh</button>
+                    </div>
+
+                    {/* Bull/Bear premium bar */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontWeight: 700 }}>
+                        <span style={{ color: C.green }}>Call Premium</span>
+                        <span style={{ color: C.red }}>Put Premium</span>
+                      </div>
+                      <div style={{ width: "100%", height: 6, borderRadius: 4, overflow: "hidden", display: "flex" }}>
+                        <div style={{ background: C.green, height: "100%", width: "58%" }} />
+                        <div style={{ background: C.red, height: "100%", width: "42%" }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.muted }}>
+                        <span>$2.84B</span><span>$2.06B</span>
+                      </div>
+                    </div>
+
+                    {/* Flow metrics grid */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                       {[
-                        { label: "P/C VOL RATIO", val: "12.60", color: C.red },
-                        { label: "B/B RATIO", val: "1.06", color: C.green },
-                        { label: "BULL VOL", val: "38", color: C.green },
-                        { label: "BEAR VOL", val: "30", color: C.red },
+                        { label: "Call Vol", val: "284K", color: C.green },
+                        { label: "Put Vol", val: "206K", color: C.red },
+                        { label: "P/C Ratio", val: "0.73", color: C.cyan },
+                        { label: "Sweeps", val: "142", color: C.orange },
+                        { label: "Blocks", val: "38", color: C.purple },
+                        { label: "Unusual", val: "17", color: "#EAB308" },
                       ].map(m => (
-                        <div key={m.label} style={{ background: "rgba(0,0,0,0.20)", border: "1px solid rgba(255,255,255,0.05)", padding: 12, borderRadius: 8, textAlign: "center" }}>
-                          <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{m.label}</div>
-                          <div style={{ fontSize: 28, fontWeight: 700, color: m.color, lineHeight: 1 }}>{m.val}</div>
+                        <div key={m.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{m.label}</span>
+                          <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: m.color }}>{m.val}</span>
                         </div>
                       ))}
                     </div>
-                    <div style={{ background: "rgba(0,0,0,0.20)", border: "1px solid rgba(255,255,255,0.05)", padding: 16, borderRadius: 8, display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>
-                        <span style={{ color: C.green }}>144.8K Net Bullish</span>
-                        <span style={{ color: C.red }}>137.2K Net Bearish</span>
-                      </div>
-                      <div style={{ width: "100%", height: 8, borderRadius: 4, overflow: "hidden", display: "flex" }}>
-                        <div style={{ background: C.green, height: "100%", width: "51.3%" }} />
-                        <div style={{ background: C.red, height: "100%", width: "48.7%" }} />
-                      </div>
+
+                    {/* Recent large flow */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                      <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, marginBottom: 8 }}>Recent Large Prints</div>
+                      {[
+                        { time: "15:48", type: "CALL", strike: "7,600", exp: "6/20", prem: "$4.2M", side: "ASK", pos: true },
+                        { time: "15:31", type: "PUT",  strike: "7,500", exp: "6/20", prem: "$2.8M", side: "BID", pos: false },
+                        { time: "15:12", type: "CALL", strike: "7,650", exp: "6/27", prem: "$3.1M", side: "ASK", pos: true },
+                        { time: "14:55", type: "CALL", strike: "7,575", exp: "6/16", prem: "$1.9M", side: "MID", pos: true },
+                      ].map((f, i) => (
+                        <div key={i} className="heatmap-row" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", position: "relative" }}>
+                          <span style={{ fontFamily: "monospace", fontSize: 10, color: C.muted, width: 36, flexShrink: 0 }}>{f.time}</span>
+                          <span style={{ fontSize: 9, fontWeight: 800, color: f.pos ? C.green : C.red, background: f.pos ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", padding: "2px 6px", borderRadius: 3, width: 34, textAlign: "center", flexShrink: 0 }}>{f.type}</span>
+                          <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff", flex: 1 }}>{f.strike}</span>
+                          <span style={{ fontSize: 10, color: C.muted }}>{f.exp}</span>
+                          <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: f.pos ? C.green : C.red }}>{f.prem}</span>
+                          <span style={{ fontSize: 9, color: C.muted, width: 24, textAlign: "right" }}>{f.side}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -497,7 +543,7 @@ export default function HomePage() {
             {/* 2-row ticker — top of right panel */}
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
               {/* Row 1 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                     SPX <span style={{ color: C.muted, fontWeight: 400 }}>/ GEX</span>
@@ -512,21 +558,51 @@ export default function HomePage() {
                   <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.orange }}>{vix.toFixed(2)}</span>
                   <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
                 </div>
-              </div>
-              {/* Row 2 */}
-              <div style={{ display: "flex", alignItems: "baseline", gap: 24 }}>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
                   <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
                     {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
                   </span>
                 </div>
+              </div>
+              {/* Row 2 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                {/* MVC */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.cyan }}>7,600</span>
+                </div>
+                {/* OI & Vol Only */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>OI</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff" }}>7,570</span>
+                </div>
+                {/* GEX Zero/Flip */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>7,491</span>
+                </div>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                </div>
+                {/* MVC Snapshot button — right aligned */}
+                <button style={{
+                  background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)",
+                  color: C.cyan, fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 4,
+                  cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.1em",
+                  display: "flex", alignItems: "center", gap: 5,
+                }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  MVC Snapshot
+                </button>
               </div>
             </div>
 
