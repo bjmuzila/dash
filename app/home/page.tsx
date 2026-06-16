@@ -520,30 +520,36 @@ export default function HomePage() {
           return res.json();
         };
 
-        let resolvedExpiry = actualExpiry;
-        let json = await fetchChainForExpiry(resolvedExpiry);
-        if (!json) return;
-
         if (selectedExpiry === "1dte") {
-          const initialCount = Array.isArray(json?.chain) ? json.chain.length : 0;
-          if (initialCount < 20) {
-            const alternates = expiryCandidatesRef.current
+          const candidates = [
+            actualExpiry,
+            ...expiryCandidatesRef.current
               .filter((item) => item.date !== expiryMap["0dte"] && item.date !== actualExpiry)
-              .sort((a, b) => (b.strikeCount - a.strikeCount) || a.date.localeCompare(b.date));
+              .map((item) => item.date),
+          ];
 
-            for (const alternate of alternates) {
-              const altJson = await fetchChainForExpiry(alternate.date);
-              const altCount = Array.isArray(altJson?.chain) ? altJson.chain.length : 0;
-              if (altJson && altCount >= 20) {
-                json = altJson;
-                resolvedExpiry = alternate.date;
-                if (!cancelled) {
-                  setExpiryMap((current) => ({ ...current, "1dte": alternate.date }));
-                }
-                break;
-              }
+          let bestExpiry = actualExpiry;
+          let bestJson: any = null;
+          let bestCount = -1;
+
+          for (const candidate of candidates) {
+            const candidateJson = await fetchChainForExpiry(candidate);
+            const candidateCount = Array.isArray(candidateJson?.chain) ? candidateJson.chain.length : 0;
+            if (candidateJson && candidateCount > bestCount) {
+              bestJson = candidateJson;
+              bestExpiry = candidate;
+              bestCount = candidateCount;
             }
           }
+
+          if (!bestJson) return;
+          if (bestExpiry !== actualExpiry && !cancelled) {
+            setExpiryMap((current) => ({ ...current, "1dte": bestExpiry }));
+          }
+          var json = bestJson;
+        } else {
+          var json = await fetchChainForExpiry(actualExpiry);
+          if (!json) return;
         }
 
         if (cancelled) return;
@@ -791,20 +797,43 @@ export default function HomePage() {
     })) : null;
 
     // GEX Flip / Gamma-zero profile from server-side spot sweep, clipped to +/-5% around spot.
-    const gexFlipPoints = showGexFlip ? (() => {
-      if (!gexProfile?.levels?.length || !gexProfile?.values?.length || !(spot > 0)) return null;
+    const gexFlipSeries = showGexFlip ? (() => {
+      if (!(spot > 0)) return null;
       const lo = spot * 0.95;
       const hi = spot * 1.05;
-      const points = gexProfile.levels
-        .map((level, i) => ({ level, value: Number(gexProfile.values[i] ?? 0) }))
-        .filter((point) => point.level >= lo && point.level <= hi && Number.isFinite(point.value));
+      const profilePoints = gexProfile?.levels?.length && gexProfile?.values?.length
+        ? gexProfile.levels
+            .map((level, i) => ({ level, value: Number(gexProfile.values[i] ?? 0) }))
+            .filter((point) => point.level >= lo && point.level <= hi && Number.isFinite(point.value))
+        : [];
+      const points = profilePoints.length >= 2
+        ? profilePoints
+        : sorted
+            .filter((row) => row.strike >= lo && row.strike <= hi)
+            .map((row) => ({ level: row.strike, value: getNetVal(row) }))
+            .filter((point) => Number.isFinite(point.value));
       if (points.length < 2) return null;
       const flipMaxAbs = Math.max(...points.map((point) => Math.abs(point.value)), 1);
-      return points.map((point, i) => ({
-        x: 24 + ((CHART_W - 48) * i) / Math.max(points.length - 1, 1),
-        y: ZERO_Y - (point.value / flipMaxAbs) * (CHART_H / 2 - 24),
-        isPos: point.value >= 0,
-      }));
+      const crossings: number[] = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (a.value === 0) crossings.push(a.level);
+        else if ((a.value > 0 && b.value < 0) || (a.value < 0 && b.value > 0)) {
+          crossings.push(a.level + (b.level - a.level) * (Math.abs(a.value) / (Math.abs(a.value) + Math.abs(b.value))));
+        }
+      }
+      const flipPoint = crossings.length
+        ? crossings.reduce((best, value) => Math.abs(value - spot) < Math.abs(best - spot) ? value : best)
+        : null;
+      return {
+        points: points.map((point, i) => ({
+          x: 24 + ((CHART_W - 48) * i) / Math.max(points.length - 1, 1),
+          y: ZERO_Y - (point.value / flipMaxAbs) * (CHART_H / 2 - 24),
+          isPos: point.value >= 0,
+        })),
+        flipPoint,
+      };
     })() : null;
 
     // Peak label — always use the actual peak bar's strike so label matches position
@@ -815,7 +844,8 @@ export default function HomePage() {
       callPutBars: isCallPut ? callPutBars : null,
       oiBars,
       dexPoints,
-      gexFlipPoints,
+      gexFlipPoints: gexFlipSeries?.points ?? null,
+      gexFlipPoint: gexFlipSeries?.flipPoint ?? null,
       peakPosBar,
       peakLabel,
       spot,
@@ -1037,7 +1067,7 @@ export default function HomePage() {
                       return (
                         <g>
                           <line x1={spotBar.x} y1={0} x2={spotBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.22)" strokeWidth="1" strokeDasharray="6 4"/>
-                          <text x={spotBar.x + 4} y={ZERO_Y - 6} fill="#ffffff" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
+                          <text x={spotBar.x + 4} y={12} fill="#ffffff" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
                         </g>
                       );
                     })()}
@@ -1321,7 +1351,7 @@ export default function HomePage() {
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>Flip</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#F97316" }}>{gexFlip != null ? gexFlip.toLocaleString() : "—"}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#F97316" }}>{chartBars?.gexFlipPoint != null ? chartBars.gexFlipPoint.toLocaleString(undefined, { maximumFractionDigits: 1 }) : gexFlip != null ? gexFlip.toLocaleString() : "—"}</span>
                   </div>
                   <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     <button

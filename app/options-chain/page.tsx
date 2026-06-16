@@ -166,6 +166,7 @@ export default function OptionsChainPage() {
 
   // Live WS data ref + batched subscription
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
+  const strikeRowsRef = useRef<StrikeRow[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const loadTokenRef = useRef(0);
   const pageIdRef = useRef(`options-chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -224,6 +225,7 @@ export default function OptionsChainPage() {
         String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
       );
       const strikes = buildStrikes(target.length ? target : items as unknown[]);
+      strikeRowsRef.current = strikes;
 
       // Batch subscribe all symbols at once
       const allSymbols = new Set<string>();
@@ -239,6 +241,8 @@ export default function OptionsChainPage() {
           body: JSON.stringify({ pageId, symbols: [...allSymbols], timeout: 6000, threshold: 0.5 }),
         }).catch(() => {});
       }
+
+      setRefreshSeed(s => s + 0.01);
     } catch (err) {
       console.error(`[OptionsChain] Load failed for ${ticker}:`, err);
     }
@@ -309,10 +313,36 @@ export default function OptionsChainPage() {
     }
   }, [activeTicker, selectedExpiry]);
 
-  const { rows, spot } = useMemo(
-    () => buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed),
-    [activeTicker, expiries, refreshSeed, selectedExpiry],
-  );
+  const { rows, spot } = useMemo(() => {
+    const strikes = strikeRowsRef.current;
+    if (!strikes.length) {
+      return buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed);
+    }
+
+    // Build real rows from strikes + live data
+    const realRows: MockRow[] = strikes.map(r => {
+      const cd = liveDataRef.current[r.callSym ?? ""] || {};
+      const pd = liveDataRef.current[r.putSym ?? ""] || {};
+      const cc = ((cd.oi ?? 0) + (cd.vol ?? 0)) || 1;
+      const pc = ((pd.oi ?? 0) + (pd.vol ?? 0)) || 1;
+      const spot = 6050; // fallback
+      return {
+        strike: r.strike,
+        gex: ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
+        dex: (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
+        chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
+        vex: ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
+        premium: Math.round(((cd.bid ?? 0) + (cd.ask ?? 0)) / 2 * 100) || 0,
+        volume: (cd.vol ?? 0) + (pd.vol ?? 0),
+        oi: (cd.oi ?? 0) + (pd.oi ?? 0),
+      };
+    });
+
+    // Fall back to mock if no real data yet
+    return realRows.some(r => r.gex !== 0 || r.volume !== 0)
+      ? { rows: realRows, spot: strikes[Math.floor(strikes.length / 2)]?.strike ?? 6050 }
+      : buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed);
+  }, [activeTicker, expiries, refreshSeed, selectedExpiry]);
 
   const nearestStrike = useMemo(() => {
     if (!rows.length) return 0;
