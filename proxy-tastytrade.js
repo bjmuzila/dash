@@ -3877,11 +3877,11 @@ const server = http.createServer(async (req, res) => {
     // Many strikes DO have OI in REST response; just need to extract & cache it
     const oiCache = {};
 
-    // First pass: cache OI from REST response itself
+    // First pass: cache OI from REST response itself (only if > 0)
     filteredOptions.forEach(opt => {
       const streamerSym = opt['streamer-symbol'] || '';
-      const restOI = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
-      if (restOI > 0 && streamerSym) {
+      const restOI = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? null);
+      if (isFinite(restOI) && restOI > 0 && streamerSym) {
         oiCache[streamerSym] = restOI;
       }
     });
@@ -3901,8 +3901,8 @@ const server = http.createServer(async (req, res) => {
         if (s3 === 200 && d3?.data?.items) {
           d3.data.items.forEach(item => {
             const sym = item.symbol || '';
-            const oi = Number(item['open-interest'] ?? item.openInterest ?? 0) || 0;
-            if (oi > 0) oiCache[sym] = oi;
+            const oi = Number(item['open-interest'] ?? item.openInterest ?? null);
+            if (isFinite(oi) && oi > 0) oiCache[sym] = oi;
           });
           const marketDataOICount = Object.keys(oiCache).length - restOICount;
           if (marketDataOICount > 0) {
