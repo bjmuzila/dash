@@ -161,10 +161,6 @@
       renderHeader();
       renderTable();
       setStatus('live', liveLabel || 'LIVE');
-      // Save after render — only persist this chain's subscribed symbols, not the full shared global
-      var liveSnapshot = {};
-      _subSymbols.forEach(function(sym) { if (_liveData[sym]) liveSnapshot[sym] = _liveData[sym]; });
-      saveSubCache(_activeTicker, _activeExpiry, _subSymbols, _strikes, liveSnapshot);
     }
 
     function hasSnapshotData(strikes) {
@@ -256,12 +252,23 @@
 
     // ── fetch expirations and populate expiry dropdown ─────────────────────────
     function fetchExpirations(cb) {
+      function isExpiryValid(exp) {
+        // After 4pm ET (16:00), skip 0DTE
+        var etTime = new Date().toLocaleString('en-US', {timeZone:'America/New_York'});
+        var etHour = parseInt(etTime.split(',')[1].trim().split(':')[0], 10);
+        if (etHour >= 16 && exp.daysTo === 0) return false;
+        // Skip expired expirations
+        if (exp.daysTo < 0) return false;
+        return true;
+      }
+
       if (_expiryCache[_activeTicker] && _expiryCache[_activeTicker].length) {
         _expirations = _expiryCache[_activeTicker].slice();
         var expSelCached = el('chain-expiry-select');
         if (expSelCached) {
           expSelCached.innerHTML = '<option value="" style="background:#0a0e14;color:#e4e4e7">-- Expiry --</option>';
-          _expirations.forEach(function(exp) {
+          var validExpirations = _expirations.filter(isExpiryValid);
+          validExpirations.forEach(function(exp) {
             var opt = document.createElement('option');
             opt.value = exp.date;
             opt.textContent = exp.label;
@@ -269,8 +276,8 @@
             opt.style.color = '#e4e4e7';
             expSelCached.appendChild(opt);
           });
-          var dte0 = _expirations.filter(function(e){ return e.daysTo===0; })[0];
-          var autoSelect = dte0 || _expirations[0];
+          var dte0 = validExpirations.filter(function(e){ return e.daysTo===0; })[0];
+          var autoSelect = dte0 || validExpirations[0];
           if (autoSelect) { expSelCached.value = autoSelect.date; _activeExpiry = autoSelect.date; }
         }
         setStatus('idle', 'READY');
@@ -319,7 +326,8 @@
 
           if (expSel) {
             expSel.innerHTML = '<option value="" style="background:#0a0e14;color:#e4e4e7">-- Expiry --</option>';
-            filtered.forEach(function(exp) {
+            var validFiltered = filtered.filter(isExpiryValid);
+            validFiltered.forEach(function(exp) {
               var opt = document.createElement('option');
               opt.value = exp.date;
               opt.textContent = exp.label;
@@ -327,8 +335,8 @@
               opt.style.color = '#e4e4e7';
               expSel.appendChild(opt);
             });
-            var dte0 = filtered.filter(function(e){ return e.daysTo===0; })[0];
-            var autoSelect = dte0 || filtered[0];
+            var dte0 = validFiltered.filter(function(e){ return e.daysTo===0; })[0];
+            var autoSelect = dte0 || validFiltered[0];
             if (autoSelect) { expSel.value = autoSelect.date; _activeExpiry = autoSelect.date; }
           }
 
@@ -348,28 +356,11 @@
       var token = _pendingToken;
       setStatus('loading', 'LOADING...');
       var bodyEl = el('chain-body');
-      if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Preparing chain...</div>';
+      if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Loading chain...</div>';
 
-      // Check IDB cache first, then kick off REST fetch — so _cacheHit is set
-      // before checkReady starts polling and the countdown is never shown for hits
+      // Skip cache, fetch fresh data
       var _cacheHit = false;
-      loadSubCacheEntry(_activeTicker, expDate, function(cached) {
-        if (token !== _pendingToken) return;
-        if (cached && cached.strikes && cached.strikes.length && cached.liveData) {
-          _strikes       = cached.strikes;
-          // Merge cached data into shared global — don't overwrite live WS data
-          Object.keys(cached.liveData).forEach(function(sym) {
-            if (!_liveData[sym] || !_liveData[sym]._ws) _liveData[sym] = cached.liveData[sym];
-          });
-          _subSymbols    = (cached.symbols || []).slice();
-          _renderBlocked = false;
-          _cacheHit      = true;
-          setStatus('loading', 'CACHED — refreshing...');
-          renderHeader();
-          renderTable();
-        }
-        startFetch();
-      });
+      startFetch();
 
       var pageId = 'options-chain-' + Date.now();
       var baseUrl = '/proxy/api/tt/chains/' + encodeURIComponent(_activeTicker) + '?expiration=' + expDate + '&pageId=' + encodeURIComponent(pageId);
@@ -976,18 +967,14 @@
       if (!Array.isArray(data)) return;
       if (!_wsDataStartTime) _wsDataStartTime = Date.now();
       var changed = false;
-      var summaryCount = 0;
       data.forEach(function(ev) {
         if (!ev || !ev.eventSymbol) return;
         var t = ev.eventType;
         if (t === 'Quote')   { applyQuote(ev);   changed = true; }
         if (t === 'Greeks')  { applyGreeks(ev);  changed = true; }
-        if (t === 'Summary') { applySummary(ev); changed = true; summaryCount++; }
+        if (t === 'Summary') { applySummary(ev); changed = true; }
         if (t === 'Trade')   { applyTrade(ev);   changed = true; }
       });
-      if (summaryCount > 0 && summaryCount % 50 === 0) {
-        console.log('[Chain] Received', summaryCount, 'Summary events');
-      }
       if (changed) scheduleRender();
     }
 

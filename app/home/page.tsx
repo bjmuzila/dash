@@ -264,10 +264,19 @@ export default function HomePage() {
             <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: C.red }}>-8.37%</span>
           </div>
           <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
-          <div style={{ fontSize: 9, fontWeight: 700, color: C.orange, textTransform: "uppercase", letterSpacing: "0.15em", textAlign: "center", padding: "4px 0" }}>Est Move</div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "6px 0", marginBottom: 8 }}>
-            <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: C.cyan }}>ESU</span>
-            <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: "#fff" }}>±40.50</span>
+          <div style={{ fontSize: 9, fontWeight: 700, color: C.purple, textTransform: "uppercase", letterSpacing: "0.12em", textAlign: "center", padding: "4px 0" }}>Sigma</div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "4px 0", marginBottom: 8, width: "100%" }}>
+            {[
+              { label: "1σ", val: "7,595", color: C.cyan },
+              { label: "2σ", val: "7,636", color: C.purple },
+              { label: "-1σ", val: "7,513", color: C.cyan },
+              { label: "-2σ", val: "7,472", color: C.purple },
+            ].map(s => (
+              <div key={s.label} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <span style={{ fontFamily: "monospace", fontSize: 9, fontWeight: 700, color: s.color, opacity: 0.7 }}>{s.label}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: "#fff" }}>{s.val}</span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -283,85 +292,17 @@ export default function HomePage() {
       {/* ── MAIN ──────────────────────────────────────────────────────────── */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
 
-        {/* ── HEADER ──────────────────────────────────────────────────────── */}
-        <header className="grad-divider-b" style={{
-          height: 64, flexShrink: 0, display: "flex", alignItems: "center",
-          justifyContent: "space-between", padding: "0 24px",
-          background: "rgba(0,0,0,0.10)", backdropFilter: "blur(12px)", position: "relative", zIndex: 10,
-        }}>
-          {/* LEFT: 2-row compact ticker */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {/* Row 1: SPX/GEX label + time + VIX */}
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                  SPX <span style={{ color: C.muted, fontWeight: 400 }}>/ GEX</span>
-                </span>
-                <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff" }}>
-                  {etTime}
-                </div>
-              </div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>{vix.toFixed(2)}</span>
-                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
-              </div>
-            </div>
-            {/* Row 2: ESU + SPX */}
-            <div style={{ display: "flex", alignItems: "baseline", gap: 20 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
-                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
-                  {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* RIGHT: MVC, FLIP, NET GEX, TT LIVE */}
-          <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>MVC</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.cyan }}>7,600</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>FLIP</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.orange }}>7,491</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, background: "rgba(0,240,255,0.10)", padding: "4px 12px", borderRadius: 4, border: "1px solid rgba(0,240,255,0.20)", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)" }}>
-              <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>NET GEX</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.cyan }}>{fmtMoney(netGex)}</span>
-            </div>
-            <button style={{
-              background: "rgba(139,92,246,0.20)", color: C.purple, border: "1px solid rgba(139,92,246,0.30)",
-              padding: "4px 12px", fontSize: 10, fontWeight: 700, borderRadius: 4,
-              display: "flex", alignItems: "center", gap: 4, cursor: "pointer",
-              boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)",
-            }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.cyan, display: "inline-block", animation: "pulse 2s infinite" }} />
-              TT LIVE
-            </button>
-          </div>
-        </header>
-
         {/* ── BODY ──────────────────────────────────────────────────────────── */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 24, minHeight: 0, overflow: "hidden" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
 
           {/* LEFT COLUMN */}
-          <div style={{ width: "55%", display: "flex", flexDirection: "column", gap: 24, minWidth: 0, height: "100%" }}>
+          <div style={{ width: "55%", display: "flex", flexDirection: "column", gap: 0, minWidth: 0, height: "100%", overflow: "hidden" }}>
 
-            {/* GEX CHART — float card */}
+            {/* GEX CHART */}
             <div style={{
               background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
               borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
               height: 400, flexShrink: 0,
-              border: "1px solid rgba(255,255,255,0.03)",
-              boxShadow: "0 4px 24px -10px rgba(0,0,0,0.6)",
             }}>
               {/* Chart Header */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
@@ -390,8 +331,8 @@ export default function HomePage() {
                     <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(0,240,255,0.8)" }} />
                     + GEX
                   </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: C.orange }}>
-                    <span style={{ width: 8, height: 8, background: C.orange, borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(249,115,22,0.8)" }} />
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308" }}>
+                    <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(234,179,8,0.7)" }} />
                     - GEX
                   </span>
                 </div>
@@ -411,8 +352,11 @@ export default function HomePage() {
                     <linearGradient id="cyanBarGrad" x1="0" y1="1" x2="0" y2="0">
                       <stop offset="0%" stopColor="#0284C7"/><stop offset="100%" stopColor="#00F0FF"/>
                     </linearGradient>
-                    <linearGradient id="orangeBarGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#C2410C"/><stop offset="100%" stopColor="#F97316"/>
+                    <linearGradient id="goldBarGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#CA8A04"/><stop offset="100%" stopColor="#EAB308"/>
+                    </linearGradient>
+                    <linearGradient id="goldBarBright" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#D97706"/><stop offset="100%" stopColor="#FCD34D"/>
                     </linearGradient>
                   </defs>
                   <line x1="0" y1="50" x2="800" y2="50" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
@@ -434,12 +378,20 @@ export default function HomePage() {
                     <rect x="590" y="80" width="25" height="70"/><rect x="625" y="110" width="25" height="40"/>
                     <rect x="660" y="100" width="25" height="50"/><rect x="695" y="25" width="25" height="125" fill="#00F0FF"/>
                   </g>
-                  <g fill="url(#orangeBarGrad)">
-                    <rect x="30" y="150" width="25" height="30"/><rect x="65" y="150" width="25" height="25"/>
-                    <rect x="100" y="150" width="25" height="30"/><rect x="135" y="150" width="25" height="45"/>
-                    <rect x="170" y="150" width="25" height="50"/><rect x="205" y="150" width="25" height="60"/>
-                    <rect x="240" y="150" width="25" height="55"/><rect x="275" y="150" width="25" height="40"/>
-                    <rect x="310" y="150" width="25" height="35"/><rect x="345" y="150" width="25" height="10"/>
+                  <g fill="url(#goldBarGrad)">
+                    <rect x="30" y="150" width="25" height="30"/>
+                    <rect x="65" y="150" width="25" height="25"/>
+                    <rect x="100" y="150" width="25" height="30"/>
+                    <rect x="135" y="150" width="25" height="45"/>
+                    <rect x="170" y="150" width="25" height="50"/>
+                    <rect x="310" y="150" width="25" height="35"/>
+                    <rect x="345" y="150" width="25" height="10"/>
+                  </g>
+                  {/* Bigger gold bars — brighter gradient */}
+                  <g fill="url(#goldBarBright)">
+                    <rect x="205" y="150" width="25" height="60" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.5))" }}/>
+                    <rect x="240" y="150" width="25" height="55" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.4))" }}/>
+                    <rect x="275" y="150" width="25" height="40"/>
                   </g>
                 </svg>
                 {/* X-axis labels */}
@@ -451,15 +403,13 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* TABS — float card */}
+            {/* TABS */}
             <div style={{
               background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden",
-              border: "1px solid rgba(255,255,255,0.03)",
-              boxShadow: "0 4px 24px -10px rgba(0,0,0,0.6)",
+              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: 24,
             }}>
               {/* Tab headers */}
-              <div className="grad-divider-b" style={{ display: "flex", background: "rgba(0,0,0,0.10)", padding: "0 16px", flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0 }}>
                 {(["calendar","snapshot"] as const).map(tab => (
                   <button key={tab} onClick={() => setActiveTab(tab)} style={{
                     display: "flex", alignItems: "center", gap: 8,
@@ -543,14 +493,50 @@ export default function HomePage() {
 
           {/* RIGHT COLUMN */}
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
+
+            {/* 2-row ticker — top of right panel */}
+            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
+              {/* Row 1 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    SPX <span style={{ color: C.muted, fontWeight: 400 }}>/ GEX</span>
+                  </span>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#fff" }}>
+                    {etTime}
+                  </div>
+                </div>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: C.orange }}>{vix.toFixed(2)}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
+                </div>
+              </div>
+              {/* Row 2 */}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 24 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
+                </div>
+                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
+                    {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Heatmap */}
             <div style={{
               background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, height: "100%", overflow: "hidden",
-              border: "1px solid rgba(255,255,255,0.03)",
-              boxShadow: "0 4px 24px -10px rgba(0,0,0,0.6)",
+              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden",
             }}>
               {/* Heatmap header */}
-              <div className="grad-divider-b" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
@@ -580,7 +566,7 @@ export default function HomePage() {
               {/* Table */}
               <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
                 <table style={{ width: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse" }}>
-                  <thead style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(10,13,20,0.90)", backdropFilter: "blur(8px)" }}>
+                  <thead style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
                         <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : C.muted }}>{h}</th>
