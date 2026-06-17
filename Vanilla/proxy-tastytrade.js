@@ -715,9 +715,15 @@ function defaultAutoTypesForSymbol(sym) {
 function addAutoSubscription(sym, types = null) {
   if (!sym) return;
 
+  // Log subscription source on first occurrence
+  if (!subscriptions.has(sym)) {
+    const stack = new Error().stack.split('\n').slice(1, 4).join(' | ');
+    log(`[SUBSCRIBE] Adding ${sym} — caller: ${stack}`);
+  }
+
   // Evict stale subscriptions if over limit
-  const MAX_SUBSCRIPTIONS = 800;
-  const STALE_THRESHOLD_MS = 5 * 60 * 1000;  // 5 minutes
+  const MAX_SUBSCRIPTIONS = 1000;
+  const STALE_THRESHOLD_MS = 2 * 60 * 1000;  // 2 minutes
   if (subscriptions.size >= MAX_SUBSCRIPTIONS) {
     const now = Date.now();
     let evicted = 0;
@@ -4214,13 +4220,13 @@ const server = http.createServer(async (req, res) => {
       log('chains root-symbol:', rootSymbol, 'expirations:', expirations.length);
 
       targetExps = expirations.map(e => e['expiration-date']).filter(Boolean).sort();
-      // No explicit exp — pick nearest few
+      // No explicit exp — default to 0DTE only (or 1DTE if today's market is closed)
       const todayDate = todayYmd().ymd;
       const hasTodayExpiry = targetExps.some(d => d === todayDate);
       if (hasTodayExpiry) {
-        targetExps = [todayDate, ...targetExps.filter(d => d !== todayDate).slice(0, 2)];
+        targetExps = [todayDate];  // ONLY 0DTE on page load — prevent massive subscription list
       } else {
-        targetExps = targetExps.slice(0, 3);
+        targetExps = [targetExps[0]];  // Next available expiration only
       }
     }
 
