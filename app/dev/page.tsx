@@ -19,6 +19,7 @@ type ChainStrike = {
 };
 
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
+const PROBE_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const TICKERS = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "SMH"] as const;
 const SIDES: Array<{ value: OptionSide; label: string }> = [
   { value: "call", label: "Call" },
@@ -138,6 +139,7 @@ export default function DevPage() {
     elapsedMs: number;
     payload: unknown;
     note?: string;
+    seenFeedTypes?: string[];
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -283,7 +285,7 @@ export default function DevPage() {
 
     const started = performance.now();
     const feedTypesBySymbol: Record<string, string[]> = {
-      [trimmed]: [feedType],
+      [trimmed]: PROBE_FEED_TYPES,
     };
 
     try {
@@ -337,6 +339,7 @@ export default function DevPage() {
         found: false,
         elapsedMs: Math.round(performance.now() - started),
         payload: null,
+        seenFeedTypes: seenEvents.map((item) => item.eventType),
         note: seenEvents.length
           ? `Timed out waiting for ${feedType}. Saw: ${seenEvents.map((item) => item.eventType).join(", ")}`
           : `No ${feedType} event arrived before timeout.`,
@@ -388,6 +391,7 @@ export default function DevPage() {
           found: true,
           elapsedMs: Math.round(performance.now() - started),
           payload: match,
+          seenFeedTypes: bySymbol.map((item) => String(item.eventType ?? "")).filter(Boolean),
         });
       } catch {
         // ignore malformed frames
@@ -563,6 +567,11 @@ export default function DevPage() {
             {probeMeta ? (
               <div style={{ marginBottom: 10, fontSize: 12, color: "#8da8c2" }}>
                 Subscription state: {probeMeta.subscriptionState === "new" ? "new subscription requested" : probeMeta.subscriptionState === "existing" ? "already subscribed / cache replay possible" : "unknown"}
+              </div>
+            ) : null}
+            {result?.seenFeedTypes?.length ? (
+              <div style={{ marginBottom: 10, fontSize: 12, color: "#8da8c2" }}>
+                Returned feed types: {result.seenFeedTypes.join(", ")}
               </div>
             ) : null}
             {seenEvents.length ? (
