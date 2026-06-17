@@ -568,6 +568,9 @@ let keepAliveInterval= null;
 const DX_CHANNEL     = 1;          // AUTO channel for Quote/Trade/Greeks/Summary
 const DX_CHANNEL_HISTORY = 3;      // HISTORY channel for Candle (time-series)
 const MAX_DXLINK_AUTO_SYMBOLS = 2000;
+const MAX_PENDING_SUBSCRIPTION_QUEUE = 4000;
+const MAX_PAGE_OPTION_SYMBOLS = 48;
+const MAX_DIRECT_SUBSCRIBE_SYMBOLS = 12;
 let dxHistoryChannelOpen = false;
 let dxHistoryConfigured = false;
 
@@ -586,8 +589,8 @@ let pendingNewSubscriptions = false;  // Track if there are new subscriptions to
 
 // ─── Subscription Lifecycle Tracking ─────────────────────────────────────
 const subscriptionCreatedAt = new Map(); // symbol → creation timestamp
-const IDLE_SUBSCRIPTION_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
-const PRUNE_INTERVAL_MS = 10 * 60 * 1000; // Check every 10 minutes
+const IDLE_SUBSCRIPTION_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+const PRUNE_INTERVAL_MS = 60 * 1000; // Check every minute
 const OVERNIGHT_IDLE_LIMIT_MS = parseInt(process.env.OVERNIGHT_IDLE_LIMIT_MS || String(30 * 60 * 1000), 10);
 const OVERNIGHT_CHECK_INTERVAL_MS = 60 * 1000;
 let lastBrowserActivityAt = Date.now();
@@ -751,8 +754,27 @@ function subscriptionKey(item) {
   return `${item.type}:${item.symbol}`;
 }
 
-function queueAutoSubscription(item) {
+function isOptionSubscriptionSymbol(sym) {
+  return /[CP]\d/.test(String(sym || ''));
+}
+
+function trimSubscriptionQueue() {
+  if (subscriptionQueue.length <= MAX_PENDING_SUBSCRIPTION_QUEUE) return 0;
+  let removed = 0;
+  for (let i = subscriptionQueue.length - 1; i >= 0 && subscriptionQueue.length > MAX_PENDING_SUBSCRIPTION_QUEUE; i--) {
+    const queued = subscriptionQueue[i];
+    if (!queued) continue;
+    if (isCoreLiveSubscription(queued.symbol) || isSpxwSymbol(queued.symbol)) continue;
+    queuedSubscriptionKeys.delete(subscriptionKey(queued));
+    subscriptionQueue.splice(i, 1);
+    removed++;
+  }
+  return removed;
+}
+
+function queueAutoSubscription(item, options = {}) {
   if (enterOvernightIdleMode()) return;
+  const { priority = false } = options;
   // Validate symbol before queuing
   const validated = normalizeDxCacheSymbol(item.symbol);
   if (!validated) {
@@ -762,8 +784,19 @@ function queueAutoSubscription(item) {
 
   const key = subscriptionKey(item);
   if (activeAutoSubscriptionKeys.has(key) || queuedSubscriptionKeys.has(key)) return;
+  if (!priority && subscriptionQueue.length >= MAX_PENDING_SUBSCRIPTION_QUEUE && isOptionSubscriptionSymbol(validated) && !isSpxwSymbol(validated)) {
+    return;
+  }
   queuedSubscriptionKeys.add(key);
-  subscriptionQueue.push(item);
+  if (priority) {
+    subscriptionQueue.unshift(item);
+  } else {
+    subscriptionQueue.push(item);
+  }
+  const removed = trimSubscriptionQueue();
+  if (removed > 0) {
+    log(`[SUBSCRIPTIONS] Trimmed ${removed} queued option items to hold queue under ${MAX_PENDING_SUBSCRIPTION_QUEUE}`);
+  }
 }
 
 function removeAutoSubscription(sym, reason = 'release') {
@@ -2948,7 +2981,7 @@ function sleep(ms) {
 const subscriptionManager = {
   pageOwnedSubscriptions: new Map(),
   pageRequests: new Map(),
-  maxSubscriptionsPerPage: 500,
+  maxSubscriptionsPerPage: MAX_PAGE_OPTION_SYMBOLS,
 
   releaseSymbols(symbols, reason = 'page-release') {
     if (!symbols || symbols.size === 0) return 0;
@@ -3008,6 +3041,10 @@ const subscriptionManager = {
       log(`[SubscriptionMgr] Adding ${newSymbols.length} new subscriptions for page ${pageId}`);
       newSymbols.forEach(sym => {
         addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
+        queueAutoSubscription({ type: 'Quote', symbol: sym }, { priority: true });
+        queueAutoSubscription({ type: 'Greeks', symbol: sym }, { priority: true });
+        queueAutoSubscription({ type: 'Trade', symbol: sym }, { priority: true });
+        queueAutoSubscription({ type: 'Summary', symbol: sym }, { priority: true });
       });
       sendSubscriptionsRateLimited();
     }
@@ -3025,7 +3062,7 @@ const subscriptionManager = {
 
   cleanup() {
     const now = Date.now();
-    const timeout = 5 * 60 * 1000;
+    const timeout = 90 * 1000;
     let removed = 0;
 
     for (const [pageId, data] of this.pageRequests) {
@@ -4367,7 +4404,7 @@ const server = http.createServer(async (req, res) => {
     sym = sym.replace(/^\$/, '');
     const pageId = u.searchParams.get('pageId') || '';
     const noSubscribe = u.searchParams.get('noSubscribe') === '1';
-    const allowAutoSubscribe = !pageId;
+    const allowAutoSubscribe = !pageId && /^SPX[W]?$/i.test(sym);
     // awaitDX=1: subscribe chain to dxLink and wait for live Greeks before responding
     const awaitDX = u.searchParams.get('awaitDX') === '1';
 
@@ -4750,7 +4787,11 @@ const server = http.createServer(async (req, res) => {
         const { symbols, feedTypesBySymbol, feedTypes } = parsed;
         log('dxlink subscribe body:', JSON.stringify(parsed));
         if (Array.isArray(symbols)) {
-          symbols.forEach(s => normalizeRequestedCandleSymbols(s).forEach(sym => {
+          const cappedSymbols = symbols.slice(0, MAX_DIRECT_SUBSCRIBE_SYMBOLS);
+          if (symbols.length > cappedSymbols.length) {
+            log(`[dxlink subscribe] Capped direct subscribe from ${symbols.length} to ${cappedSymbols.length} symbols`);
+          }
+          cappedSymbols.forEach(s => normalizeRequestedCandleSymbols(s).forEach(sym => {
             const requestedTypes = Array.isArray(feedTypesBySymbol?.[s])
               ? feedTypesBySymbol[s]
               : (Array.isArray(feedTypes) ? feedTypes : null);
@@ -4758,9 +4799,12 @@ const server = http.createServer(async (req, res) => {
               ? ['Message', 'Configuration']
               : requestedTypes;
             addAutoSubscription(sym, optstatTypes);
+            (optstatTypes || defaultAutoTypesForSymbol(sym)).forEach(type => {
+              queueAutoSubscription({ type, symbol: sym }, { priority: true });
+            });
           }));
           await ensureDxLinkReady();
-          sendSubscriptions();
+          sendSubscriptionsRateLimited();
         }
       } catch(e) {}
       sendJSON(res, 200, { ok:true, subscriptions:[...subscriptions] });
