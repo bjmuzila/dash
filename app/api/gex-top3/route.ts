@@ -12,9 +12,6 @@ export async function GET() {
     const data = await res.json();
     return NextResponse.json(data);
   } catch (err) {
-    return NextResponse.json(
-      { error: String(err), rows: [] },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: String(err), rows: [] });
   }
 }

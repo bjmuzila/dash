@@ -16,6 +16,6 @@ export async function GET(request: Request) {
     const json = await res.json();
     return NextResponse.json(json);
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ error: String(e) });
   }
 }

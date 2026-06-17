@@ -13,6 +13,6 @@ export async function GET(request: NextRequest) {
     const json = await res.json().catch(() => ({}));
     return NextResponse.json(json, { status: res.status });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ data: { items: [] }, error: String(e) });
   }
 }

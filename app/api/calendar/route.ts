@@ -119,7 +119,7 @@ export async function GET() {
     if (!econRes.ok) {
       const detail = await econRes.text().then(t => t.slice(0, 200)).catch(() => "");
       console.error(`[calendar] proxy returned ${econRes.status}: ${detail}`);
-      return NextResponse.json({ error: `Upstream ${econRes.status}`, detail, events: [] }, { status: 502 });
+      return NextResponse.json({ error: `Upstream ${econRes.status}`, detail, events: [] });
     }
 
     const raw: FFEvent[] = await econRes.json();
@@ -149,6 +149,6 @@ export async function GET() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[calendar] error: ${msg}`);
-    return NextResponse.json({ error: msg, events: [] }, { status: 500 });
+    return NextResponse.json({ error: msg, events: [] });
   }
 }
