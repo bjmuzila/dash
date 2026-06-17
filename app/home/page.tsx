@@ -40,6 +40,15 @@ function fmtExpiryDate(value: string) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function ymdET(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 function pickDashboardExpiries(
   items: Array<{ date: string; strikeCount: number }>
 ): { "0dte": string; "1dte": string } {
@@ -54,10 +63,10 @@ function pickDashboardExpiries(
 
   const today = etNow();
   today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = ymdET(today);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+  const tomorrowStr = ymdET(tomorrow);
 
   const zero = unique.find((item) => item.date >= todayStr)?.date ?? unique[0]?.date ?? "";
   const one =

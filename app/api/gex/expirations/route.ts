@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 
 const PROXY = process.env.PROXY_URL ?? "http://localhost:3001";
 
+function todayET(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 export async function GET() {
   try {
     // Use the dedicated expirations endpoint — reads TT nested chain directly
@@ -18,7 +27,7 @@ export async function GET() {
       "expiration-type"?: string;
       "strike-count"?: number;
     }> = data?.data?.items ?? [];
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayET();
     const expirations = items
       .map((item) => ({
         date: item["expiration-date"] ?? "",
