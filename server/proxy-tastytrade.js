@@ -568,7 +568,9 @@ let keepAliveInterval= null;
 const DX_CHANNEL     = 1;          // AUTO channel for Quote/Trade/Greeks/Summary
 const DX_CHANNEL_HISTORY = 3;      // HISTORY channel for Candle (time-series)
 const MAX_DXLINK_AUTO_SYMBOLS = 2000;
-const MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS = 320;
+const MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS_PER_EXPIRY = 160;
+const MAX_BOOTSTRAP_SPY_OPTION_SYMBOLS = 96;
+const MAX_BOOTSTRAP_QQQ_OPTION_SYMBOLS = 96;
 const MAX_PENDING_SUBSCRIPTION_QUEUE = 4000;
 const MAX_PAGE_OPTION_SYMBOLS = 48;
 const MAX_DIRECT_SUBSCRIBE_SYMBOLS = 12;
@@ -609,18 +611,6 @@ const CORE_LIVE_SUBSCRIPTIONS = new Set([
   '/ESU6',
   '/ES:XCME',
   '/NQ:XCME',
-  'US10Y',
-  '2YY',
-  '2Y',
-  '/2YY',
-  'TNX',
-  '^TNX',
-  'TNX.X',
-  'UST10Y',
-  'CL:NYMEX:N26',
-  'CL',
-  '/CL',
-  '@CL'
 ]);
 
 const CORE_LIVE_TYPES = ['Quote', 'Trade', 'TradeETH', 'Summary'];
@@ -716,14 +706,14 @@ function seedCoreLiveSubscriptions() {
 
 async function bootstrapDashboardCoreData() {
   if (enterOvernightIdleMode()) return;
-  await ensureTodaySpxOptionSubscriptions();
+  await ensureStartupOptionSubscriptions();
   seedCoreLiveSubscriptions();
 }
 
 async function bootstrapDashboardCorePhases() {
   if (enterOvernightIdleMode()) return;
-  log('[BOOT] Phase 1: SPX 0DTE bootstrap');
-  await ensureTodaySpxOptionSubscriptions();
+  log('[BOOT] Phase 1: SPX 0DTE + 1DTE, SPY 0DTE, QQQ 0DTE bootstrap');
+  await ensureStartupOptionSubscriptions();
 
   log('[BOOT] Phase 2: core quote warmup');
   seedCoreLiveSubscriptions();
@@ -1106,7 +1096,9 @@ const marketDataSnapshotCache = {}; // symbol → { value, ts }
 const prevCloseFallbackCache = {}; // symbol -> { value, ts }
 const historyDailyCache = new Map(); // symbol -> { ts, payload }
 const historyDailyInFlight = new Map(); // symbol -> Promise<payload>
-let spx0dteEnsurePromise = null;
+let spxBootstrapPromise = null;
+let spyBootstrapPromise = null;
+let qqqBootstrapPromise = null;
 let putCallCache = { ratio: 0, date: '', source: '', ts: 0 };
 
 // ─── Cache TTL Management ─────────────────────────────────────────────────
@@ -2335,27 +2327,10 @@ function buildCboeOiMap(options, expDate) {
   return oiMap;
 }
 
-async function ensureTodaySpxOptionSubscriptions() {
-  if (spx0dteEnsurePromise) return spx0dteEnsurePromise;
-  spx0dteEnsurePromise = (async () => {
-    const { status: s1, data: d1 } = await ttGet('/option-chains/SPX/nested');
-    if (s1 !== 200 || !d1?.data?.items?.length) {
-      log('SPX 0DTE subscribe: nested chain failed', s1);
-      return 0;
-    }
-
-    const chainObj = d1.data.items.find(c => c['root-symbol'] === 'SPXW') || d1.data.items[0];
-    const rootSymbol = chainObj['root-symbol'] || 'SPXW';
-    const allExpDates = (chainObj.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-    const expDate = getTargetExpirationDate(allExpDates);
-    if (!expDate) return 0;
-    const compactExp = String(expDate).replace(/-/g, '').slice(2);
-    const already = [...subscriptions].filter(s => isSpxwSymbol(s) && optionExpirationCompact(s) === compactExp);
-    if (already.length >= 300) return already.length;
-
-    const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`);
-    const options = s2 === 200 && d2?.data?.items ? d2.data.items : [];
-    const spot = firstFiniteNumber(
+function getBootSpotForUnderlying(symbol) {
+  const upper = String(symbol || '').toUpperCase();
+  if (/^SPX[W]?$/i.test(upper)) {
+    return firstFiniteNumber(
       dxTradeCache.SPX?.price,
       dxTradeCache['$SPX']?.price,
       dxQuoteCache.SPX?.last,
@@ -2364,15 +2339,93 @@ async function ensureTodaySpxOptionSubscriptions() {
       marketDataPrevCloseCache.SPX,
       0
     );
-    const nearestSymbols = pickNearestOptionStreamerSymbols(options, spot, MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS);
-    const syms = [...new Set(nearestSymbols.filter(Boolean))];
-    if (!syms.length) return already.length;
+  }
+  return firstFiniteNumber(
+    dxTradeCache[upper]?.price,
+    dxQuoteCache[upper]?.last,
+    marketDataPrevCloseCache[upper],
+    0
+  );
+}
+
+async function bootstrapOptionSubscriptionsForUnderlying(symbol, {
+  preferredRoot = null,
+  expirationCount = 1,
+  maxSymbolsPerExpiry = 100
+} = {}) {
+  const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(symbol)}/nested`);
+  if (s1 !== 200 || !d1?.data?.items?.length) {
+    log(`${symbol} bootstrap: nested chain failed`, s1);
+    return 0;
+  }
+
+  const roots = d1.data.items || [];
+  const chainObj = preferredRoot
+    ? (roots.find(c => c['root-symbol'] === preferredRoot) || roots[0])
+    : roots[0];
+  const rootSymbol = chainObj?.['root-symbol'] || preferredRoot || symbol;
+  const allExpDates = (chainObj?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
+  const today = todayYmd().ymd;
+  const targetExpirations = allExpDates.filter(exp => exp >= today).slice(0, expirationCount);
+  if (!targetExpirations.length) return 0;
+
+  const spot = getBootSpotForUnderlying(symbol);
+  let total = 0;
+
+  for (const expDate of targetExpirations) {
+    const compactExp = String(expDate).replace(/-/g, '').slice(2);
+    const existing = [...subscriptions].filter(s => {
+      const normalized = String(s || '').replace(/^\./, '').toUpperCase();
+      return normalized.startsWith(rootSymbol.toUpperCase()) && optionExpirationCompact(normalized) === compactExp;
+    });
+    if (existing.length >= maxSymbolsPerExpiry) {
+      total += existing.length;
+      continue;
+    }
+
+    const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`);
+    const options = s2 === 200 && d2?.data?.items ? d2.data.items : [];
+    const syms = [...new Set(pickNearestOptionStreamerSymbols(options, spot, maxSymbolsPerExpiry).filter(Boolean))];
+    if (!syms.length) continue;
 
     syms.forEach(sym => addAutoSubscription(sym, ['Quote','Trade','TradeETH','Greeks','Summary']));
-    log('SPX 0DTE subscribe:', syms.length, 'symbols for', expDate, `(nearest to spot ${spot || 'unknown'})`);
-    return syms.length;
-  })().finally(() => { spx0dteEnsurePromise = null; });
-  return spx0dteEnsurePromise;
+    total += syms.length;
+    log(`${symbol} bootstrap: ${syms.length} symbols for ${expDate} (spot ${spot || 'unknown'})`);
+  }
+
+  return total;
+}
+
+async function ensureStartupOptionSubscriptions() {
+  if (spxBootstrapPromise) return spxBootstrapPromise;
+  spxBootstrapPromise = (async () => {
+    const [spxCount, spyCount, qqqCount] = await Promise.all([
+      bootstrapOptionSubscriptionsForUnderlying('SPX', {
+        preferredRoot: 'SPXW',
+        expirationCount: 2,
+        maxSymbolsPerExpiry: MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS_PER_EXPIRY,
+      }),
+      (async () => {
+        if (spyBootstrapPromise) return spyBootstrapPromise;
+        spyBootstrapPromise = bootstrapOptionSubscriptionsForUnderlying('SPY', {
+          expirationCount: 1,
+          maxSymbolsPerExpiry: MAX_BOOTSTRAP_SPY_OPTION_SYMBOLS,
+        }).finally(() => { spyBootstrapPromise = null; });
+        return spyBootstrapPromise;
+      })(),
+      (async () => {
+        if (qqqBootstrapPromise) return qqqBootstrapPromise;
+        qqqBootstrapPromise = bootstrapOptionSubscriptionsForUnderlying('QQQ', {
+          expirationCount: 1,
+          maxSymbolsPerExpiry: MAX_BOOTSTRAP_QQQ_OPTION_SYMBOLS,
+        }).finally(() => { qqqBootstrapPromise = null; });
+        return qqqBootstrapPromise;
+      })(),
+    ]);
+    log(`[BOOT] Option bootstrap totals | SPX=${spxCount} SPY=${spyCount} QQQ=${qqqCount}`);
+    return spxCount + spyCount + qqqCount;
+  })().finally(() => { spxBootstrapPromise = null; });
+  return spxBootstrapPromise;
 }
 
 function normalizeRestSymbol(symbol) {
@@ -4404,7 +4457,7 @@ const server = http.createServer(async (req, res) => {
     sym = sym.replace(/^\$/, '');
     const pageId = u.searchParams.get('pageId') || '';
     const noSubscribe = u.searchParams.get('noSubscribe') === '1';
-    const allowAutoSubscribe = !pageId && /^SPX[W]?$/i.test(sym);
+    const allowAutoSubscribe = false;
     // awaitDX=1: subscribe chain to dxLink and wait for live Greeks before responding
     const awaitDX = u.searchParams.get('awaitDX') === '1';
 
@@ -5905,24 +5958,26 @@ server.listen(PORT, async () => {
       const ok = await ensureToken();
       if (!ok) return;
 
-      // Always re-subscribe to the current target expiry chain (rolls to next day after 4PM)
+      // Keep only SPX 0DTE + 1DTE warmed for GEX refresh
       if (dxSocket?.readyState === WebSocket.OPEN && dxChannelOpen) {
         const { status: sNested, data: dNested } = await ttGet('/option-chains/SPX/nested');
         const chainObjR = dNested?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || dNested?.data?.items?.[0];
         const allExpDatesR = (chainObjR?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-        const targetExpR = getTargetExpirationDate(allExpDatesR);
-        if (targetExpR) {
+        const targetExpsR = allExpDatesR.filter(exp => exp >= todayYmd().ymd).slice(0, 2);
+        if (targetExpsR.length) {
           const spot0 = firstFiniteNumber(gexLevelCache.spot, dxTradeCache['$SPX']?.price, dxQuoteCache['$SPX']?.last, 5800);
-          const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${targetExpR}`);
-          if (status === 200 && data?.data?.items?.length) {
-            const syms = pickNearestOptionStreamerSymbols(data.data.items, spot0, 200);
-            syms.forEach(sym => {
-              queueAutoSubscription({ type: 'Greeks',  symbol: sym });
-              queueAutoSubscription({ type: 'Summary', symbol: sym });
-            });
-            await sendSubscriptionsRateLimited();
-            await sleep(2000); // let Greeks populate
+          for (const expDate of targetExpsR) {
+            const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${expDate}`);
+            if (status === 200 && data?.data?.items?.length) {
+              const syms = pickNearestOptionStreamerSymbols(data.data.items, spot0, MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS_PER_EXPIRY);
+              syms.forEach(sym => {
+                queueAutoSubscription({ type: 'Greeks',  symbol: sym });
+                queueAutoSubscription({ type: 'Summary', symbol: sym });
+              });
+            }
           }
+          await sendSubscriptionsRateLimited();
+          await sleep(2000); // let Greeks populate
         }
       }
 
