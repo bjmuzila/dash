@@ -14,7 +14,7 @@ if not exist "%~dp0bzila-dashboard\public\bzilatrades-logo.png" (
 )
 
 :: Install proxy dependencies if needed, then start (port 3001)
-start "Tastytrade Proxy" cmd /k "cd /d %~dp0 && npm install --prefix . dotenv ws 2>nul & node proxy-tastytrade.js"
+start "Tastytrade Proxy" cmd /k "cd /d %~dp0 && npm install --prefix . dotenv ws 2>nul & node server\proxy-tastytrade.js"
 
 :: Wait for proxy to initialize
 echo  Waiting for proxy to start...

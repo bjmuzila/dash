@@ -1,6 +1,6 @@
 /**
  * Custom Next.js server combining proxy + app
- * Run with: node server.js
+ * Run with: node server/server.js
  */
 const { createServer } = require('http');
 const { parse } = require('url');
@@ -8,7 +8,8 @@ const next = require('next');
 const path = require('path');
 
 const PORT = parseInt(process.env.PORT || '3002', 10);
-const app = next({ dev: process.env.NODE_ENV !== 'production' });
+const ROOT_DIR = path.resolve(__dirname, '..');
+const app = next({ dev: process.env.NODE_ENV !== 'production', dir: ROOT_DIR });
 const handle = app.getRequestHandler();
 
 // Import proxy logic (minimal - just the key endpoints)

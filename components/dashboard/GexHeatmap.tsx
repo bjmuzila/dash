@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { densifyChainRows, type ChainRow } from "@/lib/math/calculations";
+import { densifyChainRows, type ChainRow } from "@/lib/calculations/calculations";
 
 interface HeatmapRow {
   strike: number;

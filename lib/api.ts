@@ -1,5 +1,5 @@
 // Client-side API helpers (calls Next.js API routes)
-// Server-side: import directly from lib/math/ or lib/db.ts
+// Server-side: import directly from lib/calculations/ or lib/db.ts
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 

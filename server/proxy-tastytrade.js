@@ -18,7 +18,9 @@ const http      = require('http');
 const https     = require('https');
 const fs        = require('fs');
 const path      = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env.local'), override: false });
+const ROOT_DIR = path.resolve(__dirname, '..');
+
+require('dotenv').config({ path: path.join(ROOT_DIR, '.env.local'), override: false });
 const { URL }   = require('url');
 const { spawn }  = require('child_process');
 const WebSocket = require('ws');
@@ -26,10 +28,10 @@ const WebSocket = require('ws');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const PORT           = parseInt(process.env.PORT || '3001', 10);
-const TOKEN_FILE     = path.join(__dirname, 'tastytrade_token.json');
-const SCHWAB_TOKEN_FILE = path.join(__dirname, '.schwab_tokens.json');
-const BACKUP_DIR     = path.join(__dirname, 'data');
-const DB_FILE        = path.join(__dirname, 'data', 'trading.db');
+const TOKEN_FILE     = path.join(ROOT_DIR, 'tastytrade_token.json');
+const SCHWAB_TOKEN_FILE = path.join(ROOT_DIR, '.schwab_tokens.json');
+const BACKUP_DIR     = path.join(ROOT_DIR, 'data');
+const DB_FILE        = path.join(ROOT_DIR, 'data', 'trading.db');
 const BUY_SELL_BACKUP_FILE = path.join(BACKUP_DIR, 'buy-sell-scores.json');
 const DAILY_CLOSES_FILE    = path.join(BACKUP_DIR, 'daily-closes.json');
 const REFRESH_ENV    = process.env.REFRESH_TOKEN || process.env.TT_REFRESH_TOKEN || '';
@@ -42,8 +44,8 @@ const SCHWAB_BASE   = 'api.schwabapi.com';
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || 'https://discord.com/api/webhooks/1466249857122570454/REDACTED';
 
 // Google OAuth — token stored in google_token.json after first auth
-const GOOGLE_TOKEN_FILE     = path.join(__dirname, 'google_token.json');
-const GOOGLE_CREDENTIALS_FILE = path.join(__dirname, 'google_credentials.json');
+const GOOGLE_TOKEN_FILE     = path.join(ROOT_DIR, 'google_token.json');
+const GOOGLE_CREDENTIALS_FILE = path.join(ROOT_DIR, 'google_credentials.json');
 const GOOGLE_SCOPES         = 'https://www.googleapis.com/auth/spreadsheets';
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -1268,13 +1270,13 @@ setInterval(() => {
 }, 30000);
 
 // ─── MotiveWave GEX Level Export ──────────────────────────────────────────────
-const GEX_CSV_PATH = path.join(__dirname, 'gex_levels.csv');
+const GEX_CSV_PATH = path.join(ROOT_DIR, 'gex_levels.csv');
 let gexLevelCache = { callWall: 0, putWall: 0, zeroGamma: 0, spot: 0, esSpot: 0, basis: 0, ts: 0 };
 
 // ─── Intraday Greeks History ──────────────────────────────────────────────────
 // Stores GEX/DEX/CHEX/VEX snapshots every 30s during market hours
 // Cleared at midnight ET each day
-const INTRADAY_FILE = path.join(__dirname, 'data', 'intraday-greeks.json');
+const INTRADAY_FILE = path.join(ROOT_DIR, 'data', 'intraday-greeks.json');
 let intradayGreeksHistory = [];  // [{ time, ts, gex, dex, chex, vex, buyPct, spot }]
 let lastIntradayDate = '';
 
@@ -1495,7 +1497,7 @@ const restMonitor = {
 };
 
 // Log to file for debugging
-const logStream = fs.createWriteStream(path.join(__dirname, 'proxy.log'), { flags: 'a' });
+const logStream = fs.createWriteStream(path.join(ROOT_DIR, 'proxy.log'), { flags: 'a' });
 
 function log(...a) {
   const msg = '[TT-Proxy] ' + a.join(' ');
@@ -1936,6 +1938,7 @@ async function ttGet(apiPath) {
 
 async function fetchUnderlyingLast(symbol) {
   const clean = normalizeRestSymbol(symbol || 'SPXW');
+  if (isBlockedQuoteSymbol(clean)) return 0;
   const cached = marketDataSnapshotCache[clean];
   if (cached && Number.isFinite(cached.value) && cached.value > 0 && (Date.now() - cached.ts) < 5 * 60 * 1000) {
     return cached.value;
@@ -1975,9 +1978,9 @@ async function fetchYahooOI(symbol, expDate) {
   if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.map;
 
   try {
-    const helperPath = fs.existsSync(path.join(__dirname, 'yahoo_oi_fetch.py'))
-      ? path.join(__dirname, 'yahoo_oi_fetch.py')
-      : path.join(__dirname, 'Vanilla', 'yahoo_oi_fetch.py');
+    const helperPath = fs.existsSync(path.join(ROOT_DIR, 'yahoo_oi_fetch.py'))
+      ? path.join(ROOT_DIR, 'yahoo_oi_fetch.py')
+      : path.join(ROOT_DIR, 'Vanilla', 'yahoo_oi_fetch.py');
     const pyExe = process.env.PYTHON || process.env.PYTHON_EXECUTABLE || 'python';
     const payload = await new Promise((resolve, reject) => {
       const proc = spawn(pyExe, [helperPath, yahooSymbol, expDate], { windowsHide: true });
@@ -2341,9 +2344,26 @@ function normalizeRestSymbol(symbol) {
   return s;
 }
 
+const BLOCKED_QUOTE_SYMBOLS = new Set([
+  '2YY',
+  '2Y',
+  '/2YY',
+  '^TNX',
+  'US10Y',
+  'TNX.X',
+  'UST10Y',
+  'CL:NYMEX:N26',
+  '/CL',
+]);
+
+function isBlockedQuoteSymbol(symbol) {
+  return BLOCKED_QUOTE_SYMBOLS.has(String(symbol || '').trim().toUpperCase());
+}
+
 function normalizeDxCacheSymbol(symbol) {
   let s = String(symbol || '').trim();
   if (!s) return s;
+  if (isBlockedQuoteSymbol(s)) return null;
 
   // Strip leading dot (TastyTrade streamer-symbol format: .SPXW260717C7505)
   s = s.replace(/^\./, '');
@@ -2523,7 +2543,7 @@ async function fetchTodayIntradayCandles(symbol) {
 
 function marketDataQueryForSymbols(symbols) {
   const parts = [];
-  symbols.map(normalizeRestSymbol).filter(Boolean).forEach(sym => {
+  symbols.map(normalizeRestSymbol).filter(Boolean).filter(sym => !isBlockedQuoteSymbol(sym)).forEach(sym => {
     if (sym === 'SPX' || sym === 'NDX' || sym === 'VIX') parts.push('index[]=' + encodeURIComponent(sym));
     else if (/^\//.test(sym)) parts.push('future[]=' + encodeURIComponent(sym));
     else parts.push('equity[]=' + encodeURIComponent(sym));
@@ -3480,8 +3500,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const https_module = require('https');
       const calendarUrl = 'https://media-cdn.factba.se/rss/json/trump/calendar-full.json';
-      const outputPath = path.join(__dirname, 'data', 'trump_calendar_latest.json');
-      const dataDir = path.join(__dirname, 'data');
+      const outputPath = path.join(ROOT_DIR, 'data', 'trump_calendar_latest.json');
+      const dataDir = path.join(ROOT_DIR, 'data');
 
       // Ensure data directory exists
       if (!fs.existsSync(dataDir)) {
@@ -4214,7 +4234,7 @@ const server = http.createServer(async (req, res) => {
       ...u.searchParams.getAll('equity[]'),
       ...u.searchParams.getAll('symbols')
         .flatMap(v => String(v || '').split(','))
-    ].map(s => String(s || '').trim()).filter(Boolean);
+    ].map(s => String(s || '').trim()).filter(s => s && !isBlockedQuoteSymbol(s));
     const allSyms = requestedSyms.length ? requestedSyms : [
       'SPX','VIX','/ES:XCME','/NQ:XCME',
       'SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA',
@@ -4223,6 +4243,7 @@ const server = http.createServer(async (req, res) => {
     // Normalize symbols to cache keys (strips leading dots, normalizes futures)
     const items = await Promise.all(allSyms.map(async sym => {
       const normalized = normalizeDxCacheSymbol(sym);
+      if (!normalized) return null;
       const q = dxQuoteCache[normalized] || dxQuoteCache[sym] || {};
       const t = dxTradeCache[normalized] || dxTradeCache[sym] || {};
       const s = dxSummaryCache[normalized] || dxSummaryCache[sym] || {};
@@ -5479,8 +5500,8 @@ const server = http.createServer(async (req, res) => {
       '.svg':'image/svg+xml', '.woff2':'font/woff2', '.woff':'font/woff'
     };
     const filePath = p === '/' ? 'index.html' : p.slice(1);
-    const abs = path.resolve(__dirname, filePath);
-    if (abs.startsWith(path.resolve(__dirname)) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+    const abs = path.resolve(ROOT_DIR, filePath);
+    if (abs.startsWith(ROOT_DIR) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
       const ext = path.extname(abs).toLowerCase();
       const mime = MIME[ext] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': mime, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache' });

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { computeGexSummary } from "@/lib/math/gex";
-import { computeGEXProfile } from "@/lib/math/calculations";
-import type { ChainRow } from "@/lib/math/calculations";
+import { computeGexSummary } from "@/lib/calculations/gex";
+import { computeGEXProfile } from "@/lib/calculations/calculations";
+import type { ChainRow } from "@/lib/calculations/calculations";
 
 const PROXY = process.env.PROXY_URL ?? "http://127.0.0.1:3001";
 

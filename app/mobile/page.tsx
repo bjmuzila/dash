@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import GexChart, { type GexMode, type DataMode } from "@/components/dashboard/GexChart";
 import GexHeatmap from "@/components/dashboard/GexHeatmap";
-import { computeGexSummary } from "@/lib/math/gex";
-import type { ChainRow } from "@/lib/math/calculations";
+import { computeGexSummary } from "@/lib/calculations/gex";
+import type { ChainRow } from "@/lib/calculations/calculations";
 
 interface LiveEntry {
   bid?: number; ask?: number; last?: number;

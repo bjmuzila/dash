@@ -1,5 +1,32 @@
 # Dashboard Snapshots & Features
 
+## Economic Calendar Snapshot Main Event Ranking
+
+The yellow main-event box in the Economic Calendar snapshot uses this recurring high-impact event ranking first, then event time as the tiebreaker.
+
+1. US Nonfarm Payrolls (NFP) + Unemployment Rate + Hourly Earnings (Monthly, 1st Friday)
+2. US CPI (Headline & Core) (Monthly, mid-month)
+3. FOMC / Fed Rate Decision + Dot Plot + Powell Press Conference (~Every 6 weeks)
+4. US GDP (Advance/2nd/3rd Estimates) (Quarterly)
+5. US PPI (Producer Price Index) (Monthly, usually day after CPI)
+6. ISM Manufacturing PMI (Monthly, early month)
+7. ISM Services PMI (Monthly, early-mid month)
+8. US Retail Sales (Monthly, mid-month)
+9. US ADP Private Payrolls (Monthly, Wednesday before NFP)
+10. Weekly Initial Jobless Claims (Every Thursday)
+11. US PCE Price Index (Monthly, Fed's preferred inflation gauge)
+12. US Durable Goods Orders (Monthly)
+13. US Industrial Production (Monthly)
+14. US Housing Starts / Building Permits (Monthly)
+15. US Existing Home Sales (Monthly)
+16. US JOLTS Job Openings (Monthly)
+17. US Consumer Confidence / Michigan Sentiment (Monthly)
+18. US Factory Orders (Monthly)
+19. US Trade Balance (Monthly)
+20. Central Bank Decisions (ECB, BoE, etc.) + Major Global CPI/GDP/PMIs
+
+---
+
 ## Refresh Button Visual Feedback System
 
 ### Overview

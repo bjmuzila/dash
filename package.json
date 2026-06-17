@@ -4,10 +4,11 @@
     "private": true,
     "workspaces": [],
     "scripts": {
-        "dev": "node server-with-proxy.js",
-        "dev:full": "node server-with-proxy.js",
+        "dev": "node server/server-with-proxy.js",
+        "dev:full": "node server/server-with-proxy.js",
         "build": "next build",
-        "start": "node server-with-proxy.js",
+        "test": "tsx --test tests/**/*.test.ts",
+        "start": "node server/server-with-proxy.js",
         "bot": "node discord-bot.js",
         "bot:register": "node register-commands.js"
     },
@@ -33,6 +34,7 @@
         "autoprefixer": "^10.4.19",
         "postcss": "^8.4.38",
         "tailwindcss": "^3.4.3",
+        "tsx": "^4.22.4",
         "typescript": "^5"
     }
 }

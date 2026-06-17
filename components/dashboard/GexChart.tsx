@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type ChainRow } from "@/lib/math/calculations";
+import { type ChainRow } from "@/lib/calculations/calculations";
 
 export type GexMode   = "net" | "call-put";
 export type DataMode  = "oi-vol" | "vol-only";
@@ -666,6 +666,7 @@ export default function GexChart({
       {/* Tooltip */}
       {tooltip && (() => {
         const r    = tooltip.row;
+        const tooltipGex = dataMode === "vol-only" ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
         return (
           <div style={{
             position: "absolute", zIndex: 100, pointerEvents: "none",
@@ -678,7 +679,7 @@ export default function GexChart({
             <span style={{ color: "#8B94A7" }}>Strike</span>
             <span style={{ fontWeight: 700 }}>{r.strike.toLocaleString()}</span>
             <span style={{ color: "#8B94A7" }}>GEX</span>
-            <span style={{ fontWeight: 700, color: (r.netGEX ?? 0) >= 0 ? "#00F0FF" : "#EAB308" }}>{fmtGex(r.netGEX ?? 0)}</span>
+            <span style={{ fontWeight: 700, color: tooltipGex >= 0 ? "#00F0FF" : "#EAB308" }}>{fmtGex(tooltipGex)}</span>
           </div>
         );
       })()}

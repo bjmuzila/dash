@@ -2,7 +2,7 @@
  * Custom Next.js server that optionally spawns proxy as child process
  * Falls back to Next.js-only if proxy fails to start
  *
- * Usage: node server-with-proxy.js
+ * Usage: node server/server-with-proxy.js
  */
 const { spawn } = require('child_process');
 const { createServer } = require('http');
@@ -13,12 +13,14 @@ const path = require('path');
 const WebSocket = require('ws');
 const dotenv = require('dotenv');
 
-dotenv.config({ path: path.join(__dirname, '.env.local'), override: false });
-dotenv.config({ path: path.join(__dirname, '.env'), override: false });
+const ROOT_DIR = path.resolve(__dirname, '..');
+
+dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: false });
+dotenv.config({ path: path.join(ROOT_DIR, '.env'), override: false });
 
 const PORT = parseInt(process.env.PORT || '3002', 10);
 const PROXY_PORT = 3001;
-const app = next({ dev: process.env.NODE_ENV !== 'production' });
+const app = next({ dev: process.env.NODE_ENV !== 'production', dir: ROOT_DIR });
 const handle = app.getRequestHandler();
 const wsProxyServer = new WebSocket.Server({ noServer: true });
 const localProxyTarget = process.env.PROXY_URL || `http://127.0.0.1:${PROXY_PORT}`;
@@ -77,6 +79,7 @@ async function startProxy() {
   try {
     proxyProcess = spawn('node', [path.join(__dirname, 'proxy-tastytrade.js')], {
       stdio: 'pipe',
+      cwd: ROOT_DIR,
       env: { ...process.env, PORT: String(PROXY_PORT) }
     });
 

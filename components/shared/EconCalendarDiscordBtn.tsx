@@ -51,9 +51,9 @@ function includeTemplateEvent(ev: CalEvent): boolean {
 
 const HEADLINE_PRIORITY_RULES: RegExp[] = [
   /\b(nonfarm payroll|nfp|unemployment rate|average hourly earnings|hourly earnings)\b/i,
-  /\b(cpi|consumer price index)\b/i,
+  /\b(cpi|consumer price index|headline cpi|core cpi)\b/i,
   /\b(fomc|fed rate decision|federal funds rate|powell|dot plot|rate decision)\b/i,
-  /\b(gdp|gross domestic product)\b/i,
+  /\b(gdp|gross domestic product|advance gdp|second estimate|third estimate)\b/i,
   /\b(ppi|producer price index)\b/i,
   /\bism manufacturing|manufacturing pmi\b/i,
   /\bism services|services pmi|non-manufacturing pmi\b/i,
@@ -69,7 +69,7 @@ const HEADLINE_PRIORITY_RULES: RegExp[] = [
   /\b(consumer confidence|michigan sentiment|consumer sentiment)\b/i,
   /\b(factory orders)\b/i,
   /\b(trade balance)\b/i,
-  /\b(ecb|boe|bank of england|central bank|global cpi|global gdp|global pmi)\b/i,
+  /\b(ecb|boe|bank of england|central bank|global cpi|global gdp|global pmi|major global cpi|major global gdp|major global pmi)\b/i,
 ];
 
 function headlinePriorityIndex(ev: CalEvent): number {
@@ -84,11 +84,14 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""):
   const today = etToday();
   const todayEvents = events
     .filter(e => e.date === today && includeTemplateEvent(e))
-    .sort((a, b) => a.time.localeCompare(b.time));
+    .sort((a, b) => {
+      const priorityDiff = headlinePriorityIndex(a) - headlinePriorityIndex(b);
+      return priorityDiff !== 0 ? priorityDiff : a.time.localeCompare(b.time);
+    });
 
   const headlineEv = todayEvents[0];
   const additionalEvents = headlineEv
-    ? todayEvents.slice(1)
+    ? todayEvents.slice(1).sort((a, b) => a.time.localeCompare(b.time))
     : [];
 
   const formattedQuote = (() => {
