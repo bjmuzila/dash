@@ -2367,6 +2367,13 @@ function normalizeDxCacheSymbol(symbol) {
   // Strip leading dot (TastyTrade streamer-symbol format: .SPXW260717C7505)
   s = s.replace(/^\./, '');
 
+  // Core live subscriptions include a few non-equity symbols that are valid
+  // dxFeed instruments even though they do not match the simple ticker regex.
+  const upper = s.toUpperCase();
+  if (CORE_LIVE_SUBSCRIPTIONS.has(upper)) {
+    return upper;
+  }
+
   // Normalize futures contracts (normalize to explicit year)
   if (/^\/ESU(26|6)?$/i.test(s)) return '/ESU26';
   if (/^\/ES(:XCME)?$/i.test(s)) return '/ES:XCME';
