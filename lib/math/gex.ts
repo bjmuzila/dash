@@ -23,12 +23,10 @@ export function computeGexSummary(
   spotPrice: number,
   mode: CalcMode = "net"
 ): GexSummary {
-  // Use pre-computed netGEX from proxy if available, otherwise calculate
+  // Net GEX is always open-interest net GEX plus volume net GEX.
   const annotated = chain.map((row) => ({
     ...row,
-    netGEX: row.netGEX != null && row.netGEX !== 0
-      ? row.netGEX
-      : calculateNetGEX(row, mode),
+    netGEX: calculateNetGEX(row, mode),
   }));
 
   const totalNetGEX = annotated.reduce((sum, r) => sum + (r.netGEX ?? 0), 0);

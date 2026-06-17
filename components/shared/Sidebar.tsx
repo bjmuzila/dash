@@ -272,15 +272,31 @@ export default function Sidebar({
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [calendarMenuOpen, setCalendarMenuOpen] = useState(false);
   const [personalMenuOpen, setPersonalMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [calendarMenuPos, setCalendarMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [personalMenuPos, setPersonalMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [settingsMenuPos, setSettingsMenuPos] = useState<{ top: number; left: number } | null>(null);
   const gridBtnRef = useRef<HTMLButtonElement>(null);
   const calendarBtnRef = useRef<HTMLButtonElement>(null);
   const personalBtnRef = useRef<HTMLButtonElement>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
 
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
   const isAnyActive = (items: Array<{ href: string }>) => items.some((item) => item.href && pathname === item.href);
+  const goIntoIdle = async () => {
+    setIdleActionState("busy");
+    try {
+      const res = await fetch(`${getClientProxyBase()}/proxy/api/idle`, { method: "POST" });
+      if (!res.ok) throw new Error("Idle request failed");
+      setIdleActionState("ok");
+      setTimeout(() => setIdleActionState("idle"), 1800);
+    } catch {
+      setIdleActionState("err");
+      setTimeout(() => setIdleActionState("idle"), 2200);
+    }
+  };
 
   return (
     <nav style={{
@@ -325,6 +341,7 @@ export default function Sidebar({
               }
               setCalendarMenuOpen(false);
               setPersonalMenuOpen(false);
+              setSettingsMenuOpen(false);
               setPageMenuOpen(p => !p);
             }}
             style={{
@@ -407,6 +424,7 @@ export default function Sidebar({
               }
               setPersonalMenuOpen(false);
               setPageMenuOpen(false);
+              setSettingsMenuOpen(false);
               setCalendarMenuOpen((open) => !open);
             }}
             style={{
@@ -486,6 +504,7 @@ export default function Sidebar({
               }
               setCalendarMenuOpen(false);
               setPageMenuOpen(false);
+              setSettingsMenuOpen(false);
               setPersonalMenuOpen((open) => !open);
             }}
             style={{
@@ -643,13 +662,66 @@ export default function Sidebar({
       {/* ── Bottom: Settings + Avatar ── */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 0 14px" }}>
         <button
+          ref={settingsBtnRef}
           title="Settings"
+          onClick={() => {
+            if (!settingsMenuOpen && settingsBtnRef.current) {
+              const r = settingsBtnRef.current.getBoundingClientRect();
+              setSettingsMenuPos({ top: r.top - 8, left: r.right + 8 });
+            }
+            setPageMenuOpen(false);
+            setCalendarMenuOpen(false);
+            setPersonalMenuOpen(false);
+            setSettingsMenuOpen((open) => !open);
+          }}
           style={{ background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8, transition: "color 0.15s" }}
           onMouseEnter={e => (e.currentTarget.style.color = HOME_THEME.cyan)}
           onMouseLeave={e => (e.currentTarget.style.color = HOME_THEME.muted)}
         >
           <SettingsIcon />
         </button>
+        {settingsMenuOpen && settingsMenuPos && (
+          <>
+            <div
+              style={{ position: "fixed", inset: 0, zIndex: 999998 }}
+              onClick={() => setSettingsMenuOpen(false)}
+            />
+            <div style={{
+              position: "fixed",
+              left: settingsMenuPos.left,
+              top: settingsMenuPos.top,
+              zIndex: 999999,
+              background: "rgba(13,17,25,0.96)",
+              border: "1px solid rgba(0,229,255,0.20)",
+              borderRadius: 10,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
+              minWidth: 168,
+              padding: 8,
+              backdropFilter: "blur(16px)",
+            }}>
+              <button
+                type="button"
+                onClick={goIntoIdle}
+                disabled={idleActionState === "busy"}
+                style={{
+                  width: "100%",
+                  minHeight: 34,
+                  border: "1px solid rgba(0,229,255,0.24)",
+                  borderRadius: 8,
+                  background: idleActionState === "ok" ? "rgba(0,230,118,0.14)" : "rgba(0,229,255,0.08)",
+                  color: idleActionState === "err" ? "#ff4757" : idleActionState === "ok" ? "#00e676" : HOME_THEME.text,
+                  cursor: idleActionState === "busy" ? "wait" : "pointer",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {idleActionState === "busy" ? "Going idle" : idleActionState === "ok" ? "Idle on" : idleActionState === "err" ? "Error" : "Go into idle"}
+              </button>
+            </div>
+          </>
+        )}
         {/* Avatar circle */}
         <div style={{
           width: 32, height: 32, borderRadius: "50%",

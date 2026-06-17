@@ -656,7 +656,7 @@ export default function HomePage() {
         setChainDebug(buildChainDebug(nextChain, "/api/chains", actualExpiry));
         const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? 0);
         if (spot > 100) setSpx(spot);
-        const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0), 0);
+        const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
         if (Number.isFinite(nextNetGex)) setNetGex(nextNetGex);
         setCallWall(null);
         setPutWall(null);

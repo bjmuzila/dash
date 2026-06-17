@@ -82,21 +82,13 @@ function headlinePriorityIndex(ev: CalEvent): number {
 
 function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""): string {
   const today = etToday();
-  const todayEvents = events.filter(e => e.date === today && includeTemplateEvent(e));
+  const todayEvents = events
+    .filter(e => e.date === today && includeTemplateEvent(e))
+    .sort((a, b) => a.time.localeCompare(b.time));
 
-  // Sort by time
-  todayEvents.sort((a, b) => a.time.localeCompare(b.time));
-
-  const rankedEvents = [...todayEvents].sort((a, b) => {
-    const priDiff = headlinePriorityIndex(a) - headlinePriorityIndex(b);
-    if (priDiff !== 0) return priDiff;
-    if (isHighPriority(a) !== isHighPriority(b)) return isHighPriority(a) ? -1 : 1;
-    return a.time.localeCompare(b.time);
-  });
-
-  const headlineEv = rankedEvents[0];
+  const headlineEv = todayEvents[0];
   const additionalEvents = headlineEv
-    ? rankedEvents.filter(e => e !== headlineEv)
+    ? todayEvents.slice(1)
     : [];
 
   const formattedQuote = (() => {
@@ -278,6 +270,15 @@ function IconDiscord({ size = 11 }: { size?: number }) {
   );
 }
 
+function IconCamera({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function EconCalendarDiscordBtn() {
@@ -299,6 +300,7 @@ export default function EconCalendarDiscordBtn() {
   }, [s]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#7289da";
+  const statusLabel = s === "busy" ? "..." : s === "ok" ? "OK" : s === "err" ? "ERR" : null;
   const label = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "💬";
 
   return (
@@ -314,12 +316,12 @@ export default function EconCalendarDiscordBtn() {
         background: "rgba(255,255,255,0.04)",
         color,
         cursor: s === "busy" ? "default" : "pointer",
-        fontSize: 0, fontWeight: 700, letterSpacing: ".08em",
+        fontSize: statusLabel ? 9 : 0, fontWeight: 700, letterSpacing: ".08em",
         fontFamily: "inherit", flexShrink: 0,
         transition: "color .15s, border-color .15s",
       }}
     >
-      {s === "busy" ? "?" : s === "ok" ? "?" : s === "err" ? "?" : <IconDiscord />}
+      {statusLabel ?? <IconDiscord />}
     </button>
   );
 }
@@ -343,6 +345,7 @@ export function EconCalendarTemplateCopyBtn() {
   }, [s]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
+  const statusLabel = s === "busy" ? "..." : s === "ok" ? "OK" : s === "err" ? "ERR" : null;
   const label = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
 
   return (
@@ -360,14 +363,14 @@ export function EconCalendarTemplateCopyBtn() {
         background: "rgba(255,255,255,0.04)",
         color,
         cursor: s === "busy" ? "default" : "pointer",
-        fontSize: 13,
+        fontSize: statusLabel ? 9 : 0,
         fontWeight: 700,
         fontFamily: "inherit",
         flexShrink: 0,
         transition: "color .15s, border-color .15s",
       }}
     >
-      {s === "busy" ? "?" : s === "ok" ? "?" : s === "err" ? "?" : <IconDiscord />}
+      {statusLabel ?? <IconCamera />}
     </button>
   );
 }

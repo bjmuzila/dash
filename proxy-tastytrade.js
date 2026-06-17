@@ -575,6 +575,12 @@ let pendingNewSubscriptions = false;  // Track if there are new subscriptions to
 const subscriptionCreatedAt = new Map(); // symbol → creation timestamp
 const IDLE_SUBSCRIPTION_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
 const PRUNE_INTERVAL_MS = 10 * 60 * 1000; // Check every 10 minutes
+const OVERNIGHT_IDLE_LIMIT_MS = parseInt(process.env.OVERNIGHT_IDLE_LIMIT_MS || String(30 * 60 * 1000), 10);
+const OVERNIGHT_CHECK_INTERVAL_MS = 60 * 1000;
+let lastBrowserActivityAt = Date.now();
+let overnightIdleMode = false;
+let manualIdleMode = false;
+let overnightIdleTimer = null;
 
 const CORE_LIVE_SUBSCRIPTIONS = new Set([
   'SPX',
@@ -621,16 +627,94 @@ function isCoreLiveSubscription(sym) {
   return CORE_LIVE_SUBSCRIPTIONS.has(clean);
 }
 
+function isOvernightThrottleWindowEt(date = new Date()) {
+  const mins = getEtMinutes(date);
+  return mins >= 22 * 60 || mins < 6 * 60;
+}
+
+function isOvernightIdle() {
+  return isOvernightThrottleWindowEt() && dxClients.size === 0 && (Date.now() - lastBrowserActivityAt) >= OVERNIGHT_IDLE_LIMIT_MS;
+}
+
+function markProxyActivity() {
+  lastBrowserActivityAt = Date.now();
+  if (overnightIdleMode) {
+    overnightIdleMode = false;
+    log('[OVERNIGHT] Activity detected; live data can resume');
+  }
+}
+
+function closeDxLinkForOvernightIdle() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+  if (dxSocket && (dxSocket.readyState === WebSocket.OPEN || dxSocket.readyState === WebSocket.CONNECTING)) {
+    try { dxSocket.close(1000, 'overnight idle'); } catch (_) {}
+  }
+  dxSocket = null;
+  dxAuthorized = false;
+  dxChannelOpen = false;
+  dxHistoryChannelOpen = false;
+  dxHistoryConfigured = false;
+  subscriptionQueue.length = 0;
+  queuedSubscriptionKeys.clear();
+  activeAutoSubscriptionKeys.clear();
+  activeCandleSubscriptionKeys.clear();
+  pendingNewSubscriptions = false;
+}
+
+function enterOvernightIdleMode() {
+  if (manualIdleMode) {
+    closeDxLinkForOvernightIdle();
+    return true;
+  }
+  if (!isOvernightIdle()) return false;
+  if (!overnightIdleMode) {
+    overnightIdleMode = true;
+    for (const sym of [...subscriptions]) {
+      if (!isCoreLiveSubscription(sym)) removeAutoSubscription(sym, 'overnight-idle');
+    }
+    log('[OVERNIGHT] No browser activity for 30 minutes between 10pm-6am ET; live data paused');
+  }
+  closeDxLinkForOvernightIdle();
+  return true;
+}
+
+function enterManualIdleMode() {
+  manualIdleMode = true;
+  overnightIdleMode = true;
+  for (const sym of [...subscriptions]) {
+    if (!isCoreLiveSubscription(sym)) removeAutoSubscription(sym, 'manual-idle');
+  }
+  closeDxLinkForOvernightIdle();
+  log('[IDLE] Manual idle mode enabled');
+}
+
+function startOvernightIdleMonitor() {
+  if (overnightIdleTimer) return;
+  overnightIdleTimer = setInterval(() => {
+    if (!isOvernightThrottleWindowEt()) {
+      overnightIdleMode = false;
+      return;
+    }
+    enterOvernightIdleMode();
+  }, OVERNIGHT_CHECK_INTERVAL_MS);
+}
+
 function seedCoreLiveSubscriptions() {
+  if (enterOvernightIdleMode()) return;
   CORE_LIVE_SUBSCRIPTIONS.forEach(sym => addAutoSubscription(sym, CORE_LIVE_TYPES));
 }
 
 async function bootstrapDashboardCoreData() {
+  if (enterOvernightIdleMode()) return;
   await ensureTodaySpxOptionSubscriptions();
   seedCoreLiveSubscriptions();
 }
 
 async function bootstrapDashboardCorePhases() {
+  if (enterOvernightIdleMode()) return;
   log('[BOOT] Phase 1: SPX 0DTE bootstrap');
   await ensureTodaySpxOptionSubscriptions();
 
@@ -655,6 +739,7 @@ function subscriptionKey(item) {
 }
 
 function queueAutoSubscription(item) {
+  if (enterOvernightIdleMode()) return;
   // Validate symbol before queuing
   const validated = normalizeDxCacheSymbol(item.symbol);
   if (!validated) {
@@ -705,6 +790,7 @@ function defaultAutoTypesForSymbol(sym) {
 }
 
 function addAutoSubscription(sym, types = null) {
+  if (enterOvernightIdleMode()) return;
   if (!sym) return;
   const isNew = !subscriptions.has(sym);
   subscriptions.add(sym);
@@ -737,6 +823,7 @@ function addAutoSubscription(sym, types = null) {
 }
 
 async function sendSubscriptionsRateLimited() {
+  if (enterOvernightIdleMode()) return;
   if (subscriptionSending || subscriptionQueue.length === 0) return;
   subscriptionSending = true;
 
@@ -1150,11 +1237,16 @@ async function spxFlowFlushCalls() {
 }
 
 // Schedule periodic flushes
-setInterval(() => { spxFlowFlushPremium().catch(() => {}); spxFlowFlushCalls().catch(() => {}); }, 10000);
+setInterval(() => {
+  if (enterOvernightIdleMode()) return;
+  spxFlowFlushPremium().catch(() => {});
+  spxFlowFlushCalls().catch(() => {});
+}, 10000);
 
 // Reset accumulator at RTH open (9:30 ET) and EXT open (17:00 ET) each day
 let _spxFlowLastSession = spxFlowCurrentSession();
 setInterval(() => {
+  if (enterOvernightIdleMode()) return;
   const sess = spxFlowCurrentSession();
   if (sess !== _spxFlowLastSession) {
     // Flush before reset
@@ -1868,20 +1960,23 @@ async function fetchUnderlyingLast(symbol) {
 
 // Fetch OI from Yahoo Finance option chain — works 24/7, no auth needed.
 // Returns Map of streamerSymbol -> { oi, volume } e.g. '.AAPL260605C307.5' -> { oi: 3498, volume: 120 }
-const yahooOiCache = new Map(); // key: 'AAPL|2026-06-05', ttl 15min
+const yahooOiCache = new Map(); // key: 'AAPL|2026-06-05', ttl 24hr
 async function fetchYahooOI(symbol, expDate) {
   // Skip Yahoo for index options (SPX/SPXW) — use CBOE instead
-  if (/^SPX[W]?$/i.test(symbol)) return new Map();
+  const cleanSymbol = String(symbol || '').trim().toUpperCase();
+  const yahooSymbol = /^SPX[W]?$/i.test(cleanSymbol) ? '^SPX' : cleanSymbol;
 
-  const cacheKey = symbol + '|' + expDate;
+  const cacheKey = cleanSymbol + '|' + expDate;
   const cached = yahooOiCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 15 * 60 * 1000) return cached.map;
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.map;
 
   try {
-    const helperPath = path.join(__dirname, 'yahoo_oi_fetch.py');
+    const helperPath = fs.existsSync(path.join(__dirname, 'yahoo_oi_fetch.py'))
+      ? path.join(__dirname, 'yahoo_oi_fetch.py')
+      : path.join(__dirname, 'Vanilla', 'yahoo_oi_fetch.py');
     const pyExe = process.env.PYTHON || process.env.PYTHON_EXECUTABLE || 'python';
     const payload = await new Promise((resolve, reject) => {
-      const proc = spawn(pyExe, [helperPath, symbol, expDate], { windowsHide: true });
+      const proc = spawn(pyExe, [helperPath, yahooSymbol, expDate], { windowsHide: true });
       let stdout = '';
       let stderr = '';
       proc.stdout.on('data', chunk => stdout += chunk.toString('utf8'));
@@ -1902,14 +1997,21 @@ async function fetchYahooOI(symbol, expDate) {
     Object.entries(items).forEach(([dxSym, info]) => {
       const item = { oi: maxWholeNumber(info?.oi), volume: firstVolumeNumber(info?.volume) };
       oiMap.set(dxSym, item);
+      if (/^SPX[W]?$/i.test(cleanSymbol)) {
+        oiMap.set(String(dxSym).replace(/^\.\^SPX/i, '.SPX'), item);
+        oiMap.set(String(dxSym).replace(/^\.\^SPX/i, '.SPXW'), item);
+      }
       if (info?.contractSymbol) oiMap.set(String(info.contractSymbol).toUpperCase(), item);
     });
     yahooOiCache.set(cacheKey, { map: oiMap, ts: Date.now() });
-    log('Yahoo OI fetched for', symbol, expDate, '- contracts:', oiMap.size);
+    log('Yahoo OI fetched for', cleanSymbol, expDate, '- contracts:', oiMap.size);
     return oiMap;
   } catch(e) {
     log('Yahoo OI fetch error:', e.message);
-    return new Map();
+    return fetchYahooOIDirect(cleanSymbol, expDate).catch(err => {
+      log('Yahoo direct OI fetch error:', err.message);
+      return new Map();
+    });
   }
 }
 
@@ -1918,6 +2020,102 @@ async function fetchYahooOI(symbol, expDate) {
 // _SPX.json  = standard monthly (AM-settled)
 // _SPXW.json = weekly/PM-settled expirations (may return empty outside market hours)
 // Both are fetched in parallel and merged. Each cached separately for 15 min.
+function strikeKeyText(strike) {
+  const n = Number(strike);
+  if (!Number.isFinite(n)) return String(strike || '');
+  return Number.isInteger(n) ? String(n) : String(n).replace(/\.?0+$/, '');
+}
+
+function yahooOiLookup(map, streamerSym, rootSymbol, expDate, side, strike) {
+  if (!map || !map.size) return null;
+  const compact = String(expDate || '').replace(/-/g, '').slice(2);
+  const s = strikeKeyText(strike);
+  const keys = [
+    streamerSym,
+    String(streamerSym || '').replace(/^\.SPXW/i, '.SPX'),
+    String(streamerSym || '').replace(/^\.SPX/i, '.SPXW'),
+    `.${rootSymbol || 'SPXW'}${compact}${side}${s}`,
+    `.SPXW${compact}${side}${s}`,
+    `.SPX${compact}${side}${s}`,
+  ].filter(Boolean);
+  for (const key of keys) {
+    const hit = map.get(key) || map.get(String(key).toUpperCase());
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function fetchSpxYahooOiForExpirations(expDates) {
+  const unique = [...new Set((expDates || []).filter(Boolean))];
+  const maps = new Map();
+  await Promise.all(unique.map(async expDate => {
+    maps.set(expDate, await fetchYahooOI('SPX', expDate));
+  }));
+  return maps;
+}
+
+function msUntilNextEt(hour, minute = 0) {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const p = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  const etNow = new Date(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}-05:00`);
+  const target = new Date(etNow);
+  target.setHours(hour, minute, 0, 0);
+  if (etNow >= target) target.setDate(target.getDate() + 1);
+  return Math.max(1000, target.getTime() - etNow.getTime());
+}
+
+function scheduleDailySpxYahooOiCache() {
+  const run = async () => {
+    try {
+      const { status, data } = await ttGet('/option-chains/SPX/nested');
+      if (status !== 200) throw new Error('nested chain status ' + status);
+      const chainObj = data?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || data?.data?.items?.[0];
+      const expirations = (chainObj?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
+      await fetchSpxYahooOiForExpirations(expirations);
+      log('[Yahoo OI] Daily 6am SPX open-interest cache warmed for', expirations.length, 'expirations');
+    } catch (e) {
+      log('[Yahoo OI] Daily cache warm failed:', e.message);
+    } finally {
+      setTimeout(run, msUntilNextEt(6, 0));
+    }
+  };
+  setTimeout(run, msUntilNextEt(6, 0));
+  log('[Yahoo OI] Daily SPX open-interest cache scheduled for 6:00am ET');
+}
+
+async function fetchYahooOIDirect(symbol, expDate) {
+  const cleanSymbol = String(symbol || '').trim().toUpperCase();
+  const yahooSymbol = /^SPX[W]?$/i.test(cleanSymbol) ? '^SPX' : cleanSymbol;
+  const expUnix = Math.floor(new Date(`${expDate}T12:00:00Z`).getTime() / 1000);
+  const url = `https://query2.finance.yahoo.com/v7/finance/options/${encodeURIComponent(yahooSymbol)}?date=${expUnix}`;
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } });
+  if (!resp.ok) throw new Error('status ' + resp.status);
+  const json = await resp.json();
+  const result = json?.optionChain?.result?.[0]?.options?.[0] || {};
+  const oiMap = new Map();
+  const add = (contract, side) => {
+    const strike = strikeKeyText(contract?.strike);
+    const item = { oi: maxWholeNumber(contract?.openInterest), volume: firstVolumeNumber(contract?.volume) };
+    const compact = expDate.replace(/-/g, '').slice(2);
+    oiMap.set(`.${cleanSymbol}${compact}${side}${strike}`, item);
+    if (/^SPX[W]?$/i.test(cleanSymbol)) {
+      oiMap.set(`.SPX${compact}${side}${strike}`, item);
+      oiMap.set(`.SPXW${compact}${side}${strike}`, item);
+    }
+    if (contract?.contractSymbol) oiMap.set(String(contract.contractSymbol).toUpperCase(), item);
+  };
+  (result.calls || []).forEach(contract => add(contract, 'C'));
+  (result.puts || []).forEach(contract => add(contract, 'P'));
+  yahooOiCache.set(cleanSymbol + '|' + expDate, { map: oiMap, ts: Date.now() });
+  log('Yahoo direct OI fetched for', cleanSymbol, expDate, '- contracts:', oiMap.size);
+  return oiMap;
+}
+
 const cboeSpxCache  = { data: null, date: null, pending: null };
 const cboeSpxwCache = { data: null, date: null, pending: null };
 
@@ -2440,6 +2638,7 @@ function broadcast(msg) {
 }
 
 async function ensureDxLinkReady() {
+  if (enterOvernightIdleMode()) return false;
   if (dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) return true;
   const ok = await ensureToken();
   if (!ok) return false;
@@ -2457,6 +2656,7 @@ async function ensureDxLinkReady() {
 }
 
 function sendSubscriptions() {
+  if (enterOvernightIdleMode()) return;
   // AUTO channel - queue ONLY NEW subscriptions (not re-queuing old ones)
   if (!dxSocket || dxSocket.readyState !== WebSocket.OPEN || !dxChannelOpen) return;
   if (!pendingNewSubscriptions) return;  // Exit early if no new subscriptions
@@ -2717,7 +2917,10 @@ const subscriptionManager = {
   }
 };
 
-setInterval(() => subscriptionManager.cleanup(), 60000);
+setInterval(() => {
+  if (enterOvernightIdleMode()) return;
+  subscriptionManager.cleanup();
+}, 60000);
 
 async function waitForOptionData(streamerSymbols, timeoutMs = 3000) {
   const sample = [...new Set((streamerSymbols || []).filter(Boolean))];
@@ -2835,6 +3038,7 @@ function convertCompactToObjects(data) {
 }
 
 function connectDxLink() {
+  if (enterOvernightIdleMode()) return;
   if (dxSocket && (dxSocket.readyState === WebSocket.OPEN || dxSocket.readyState === WebSocket.CONNECTING)) {
     console.log('[DX] Already connecting/connected');
     return;
@@ -3076,7 +3280,7 @@ function connectDxLink() {
     activeCandleSubscriptionKeys.clear();
     clearInterval(keepAliveInterval);
     dxSocket = null;
-    if (dxClients.size > 0) setTimeout(async () => {
+    if (dxClients.size > 0 && !isOvernightIdle()) setTimeout(async () => {
       await ensureToken(); await fetchDxLinkToken(); connectDxLink();
     }, 5000);
   });
@@ -3101,6 +3305,22 @@ const server = http.createServer(async (req, res) => {
   if (CURRENT_LEVEL <= LOG_LEVELS.info) warn(req.method, p); // warn level for request entry
   else log(req.method, p);
 
+  if (req.method === 'POST' && p === '/proxy/api/idle') {
+    enterManualIdleMode();
+    return sendJSON(res, 200, {
+      ok: true,
+      idle: true,
+      message: 'Proxy is now in idle mode.'
+    });
+  }
+
+  if (enterOvernightIdleMode() && p !== '/health' && p !== '/proxy/api/status') {
+    return sendJSON(res, 503, {
+      error: 'overnight_idle',
+      message: 'Live data is paused after 30 minutes of inactivity between 10pm and 6am ET.'
+    });
+  }
+
   // ── HEALTH CHECK ──────────────────────────────────────────────
   if (p === '/health') {
     if (!schwabAccessToken && fs.existsSync(SCHWAB_TOKEN_FILE)) {
@@ -3119,6 +3339,10 @@ const server = http.createServer(async (req, res) => {
       ok: true, port: PORT,
       schwab_connected: !!(schwabAccessToken && Date.now() < schwabTokenExpiry),
       tastytrade_connected: !!(accessToken && Date.now() < tokenExpiry),
+      overnight_idle: overnightIdleMode,
+      manual_idle: manualIdleMode,
+      overnight_window: isOvernightThrottleWindowEt(),
+      idle_minutes: Math.floor((Date.now() - lastBrowserActivityAt) / 60000),
       authUrl: `https://api.schwabapi.com/v1/oauth/authorize?response_type=code&${params}`,
       redirectUri: REDIRECT_URI
     });
@@ -3665,11 +3889,15 @@ const server = http.createServer(async (req, res) => {
         if (chainResp.ok) {
           const chainData = await chainResp.json();
           const expirations = chainData?.data?.items?.[0]?.expirations || [];
+          const yahooOiMaps = await fetchSpxYahooOiForExpirations(
+            (filterCompact ? [expiryParam] : expirations.map(exp => exp['expiration-date'])).filter(Boolean)
+          );
           log(`[GEX-CHAIN] REST returned ${expirations.length} expirations`);
 
           for (const exp of expirations) {
             const expDate = exp['expiration-date'];
             if (!expDate) continue;
+            if (filterCompact && expDate !== expiryParam) continue;
 
             const [yy, mm, dd] = expDate.split('-');
             const dte = Math.max(0, Math.floor((new Date(yy, mm - 1, dd) - today) / (1000 * 60 * 60 * 24)));
@@ -3677,6 +3905,9 @@ const server = http.createServer(async (req, res) => {
             for (const option of exp['option-chains'] || []) {
               const strike = parseInt(parseFloat(option['strike-price']), 10);
               if (!strike || strike <= 0) continue;
+              const rawType = String(option['option-type'] || '').toUpperCase();
+              const streamerSym = option['streamer-symbol'] || '';
+              const yahooOI = yahooOiLookup(yahooOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike)?.oi || 0;
 
               if (!strikeMap[strike]) {
                 strikeMap[strike] = {
@@ -3685,6 +3916,8 @@ const server = http.createServer(async (req, res) => {
                   putGamma: 0, putDelta: 0, putOI: 0, putVol: 0
                 };
               }
+              if (rawType === 'C' && yahooOI > 0) strikeMap[strike].callOI = yahooOI;
+              if (rawType === 'P' && yahooOI > 0) strikeMap[strike].putOI = yahooOI;
             }
           }
           log(`[GEX-CHAIN] REST structure: ${Object.keys(strikeMap).length} strikes`);
@@ -4046,7 +4279,29 @@ const server = http.createServer(async (req, res) => {
         sendSubscriptionsRateLimited();
         log('Subscribed', newSyms.length, 'NEW symbols from CACHED chain');
       }
-      return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: cachedUnderlyingPrice, symbol: sym, rootSymbol: cachedRootSymbol }, context: 'cache' });
+      let itemsToReturn = cachedItems;
+      if (/^SPX[W]?$/i.test(sym)) {
+        itemsToReturn = JSON.parse(JSON.stringify(cachedItems));
+        const expDates = itemsToReturn.map(eg => eg['expiration-date']).filter(Boolean);
+        const fallbackMaps = await fetchSpxYahooOiForExpirations(expDates);
+        for (const eg of itemsToReturn) {
+          const expDate = eg['expiration-date'];
+          const map = fallbackMaps.get(expDate);
+          for (const strikeRow of eg.strikes || []) {
+            const strike = parseFloat(strikeRow['strike-price'] || 0);
+            for (const [sideName, sideCode] of [['call', 'C'], ['put', 'P']]) {
+              const leg = strikeRow[sideName];
+              if (!leg || Number(leg.openInterest || leg['open-interest'] || 0) > 0) continue;
+              const hit = yahooOiLookup(map, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike);
+              if (hit?.oi > 0) {
+                leg.openInterest = hit.oi;
+                leg['open-interest'] = hit.oi;
+              }
+            }
+          }
+        }
+      }
+      return sendJSON(res, 200, { data: { items: itemsToReturn, underlyingPrice: cachedUnderlyingPrice, symbol: sym, rootSymbol: cachedRootSymbol }, context: 'cache' });
     }
 
     const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(sym)}/nested`);
@@ -4193,10 +4448,9 @@ const server = http.createServer(async (req, res) => {
       log('[awaitDX] dxLink wait complete');
     }
 
-    // REMOVED: Yahoo/CBOE fallbacks (2026-06-11)
-    // OI now comes from TastyTrade REST data directly (opt['open-interest'])
-    // Real-time updates via dxLink Summary.openInterest
-    const oiFallbackMaps = new Map();
+    const oiFallbackMaps = isSpxFamily
+      ? await fetchSpxYahooOiForExpirations(targetExps)
+      : new Map();
 
     // Build nested structure: data.data.items = array of expGroups
     const expMap = {};
@@ -4286,7 +4540,8 @@ const server = http.createServer(async (req, res) => {
       const cachedMergedOI = Number(oiCache[streamerSym] ?? 0) || 0;
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
       const cachedDxOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
-      const finalOI = cachedMergedOI || liveOI || cachedDxOI;
+      const yahooOI = yahooOiLookup(oiFallbackMaps.get(expDate), streamerSym, rootSymbol, expDate, rawType, strikePrice)?.oi || 0;
+      const finalOI = cachedMergedOI || liveOI || cachedDxOI || yahooOI;
       if (finalOI > 0 && !cachedDxOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
@@ -5137,6 +5392,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocket.Server({ server, path:'/ws/dxlink' });
 
 wss.on('connection', ws => {
+  markProxyActivity();
   dxClients.add(ws);
   let subscriptionDebounceTimer = null;
 
@@ -5185,6 +5441,7 @@ wss.on('connection', ws => {
     // Market-data seeding happens at proxy startup in server.listen()
   }
   ws.on('message', async raw => {
+    markProxyActivity();
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'subscribe' && Array.isArray(msg.symbols)) {
@@ -5199,6 +5456,7 @@ wss.on('connection', ws => {
   });
   ws.on('close', () => {
     dxClients.delete(ws);
+    lastBrowserActivityAt = Date.now();
     if (dxClients.size === 0 && dxSocket) { clearInterval(keepAliveInterval); dxSocket.close(); dxSocket = null; }
   });
   ws.on('error', e => console.error('[WS] Browser error:', e.message));
@@ -5355,11 +5613,13 @@ async function prewarmCache() {
 server.listen(PORT, async () => {
   log(`Proxy running on port ${PORT}`);
   warn(`REST monitor enabled | stall=${Math.round(REST_MONITOR_STALL_MS / 1000)}s | summary=${Math.round(REST_MONITOR_SUMMARY_MS / 1000)}s | tick=${Math.round(REST_MONITOR_TICK_MS / 1000)}s`);
+  startOvernightIdleMonitor();
 
   // ── Init SQLite DB ───────────────────────────────────────────────────────────
   try {
     initDB();
     scheduleNightlyClear();
+    scheduleDailySpxYahooOiCache();
   } catch (e) {
     log('[DB] SQLite init failed (better-sqlite3 not installed?). Run: npm install better-sqlite3');
     log('[DB] Error:', e.message);
@@ -5425,6 +5685,7 @@ server.listen(PORT, async () => {
   }
   // Auto-refresh every 90 min
   setInterval(async () => {
+    if (enterOvernightIdleMode()) return;
     if (isExpired()) {
       const ok = await refreshAccessToken();
       if (ok) { await fetchDxLinkToken(); if (!dxSocket || dxSocket.readyState !== WebSocket.OPEN) connectDxLink(); }
@@ -5433,6 +5694,7 @@ server.listen(PORT, async () => {
 
   // ─── Auto-refresh GEX levels every 5 minutes (24/7) ─────────────────────────
   setInterval(async () => {
+    if (enterOvernightIdleMode()) return;
     try {
       const ok = await ensureToken();
       if (!ok) return;
@@ -5472,12 +5734,14 @@ server.listen(PORT, async () => {
 
   // ─── Intraday Greeks snapshot every 30 seconds ──────────────────────────────
   setInterval(() => {
+    if (enterOvernightIdleMode()) return;
     emitRestMonitorSummary();
     checkRestMonitorStalls();
   }, REST_MONITOR_TICK_MS);
 
   loadIntradayHistory();
   setInterval(() => {
+    if (enterOvernightIdleMode()) return;
     try {
       const now = new Date();
       // Use Intl for correct ET offset (handles EDT/EST automatically)
