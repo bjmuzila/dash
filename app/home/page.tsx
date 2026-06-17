@@ -274,6 +274,7 @@ export default function HomePage() {
         if (prev === 0) prevSpxRef.current = state.spotPrice;
         setSpx(state.spotPrice);
       }
+      setRawChain(state.chain);
       setEsFut(state.esFutures);
       setVix(state.vix);
       setNetGex(state.netGex);
@@ -422,8 +423,8 @@ export default function HomePage() {
   }, [expiryMap, selectedExpiry]);
 
   useEffect(() => {
+    if (rawChain.length === 0) return;
     const actualExpiry = expiryMap[selectedExpiry];
-    if (!actualExpiry || rawChain.length === 0) return;
 
     const now = Date.now();
     const last = lastRollingPersistRef.current;
@@ -602,7 +603,10 @@ export default function HomePage() {
 
   // ── Task #7 Step 3 + Task #9: Filter heatmap by expiry, apply live colors ────
   useEffect(() => {
-    if (rawChain.length === 0) return;
+    if (rawChain.length === 0) {
+      setHeatmapData([]);
+      return;
+    }
 
     const spot = spx || 7554;
 
@@ -627,11 +631,8 @@ export default function HomePage() {
     // Sort descending (highest strike first) for display
     const sortedAll = [...source].sort((a, b) => b.strike - a.strike);
 
-    // Window: 20 above + ATM + 20 below spot
-    const atmIdx = sortedAll.findIndex(r => r.strike === atmStrike);
-    const winStart = Math.max(0, atmIdx - 20);
-    const winEnd = Math.min(sortedAll.length - 1, atmIdx + 20);
-    const sorted = sortedAll.slice(winStart, winEnd + 1);
+    // Window: show all available strikes
+    const sorted = sortedAll;
 
     const combinedGex = (r: typeof sorted[0]) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
     const displayNetGex = (r: typeof sorted[0]) => (

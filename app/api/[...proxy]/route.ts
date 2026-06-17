@@ -13,6 +13,18 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const path = url.pathname.replace('/api', '');
 
+  // Handle keepalive - proxy health check
+  if (path === '/keepalive') {
+    try {
+      const res = await fetch('http://127.0.0.1:3001/health', { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return NextResponse.json({ ok: false }, { status: 500 });
+      const data = await res.json();
+      return NextResponse.json(data);
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: String(e) }, { status: 500 });
+    }
+  }
+
   // Handle proxy/api/tt/* paths - route to TastyTrade
   if (path.startsWith('/proxy/api/tt/')) {
     try {

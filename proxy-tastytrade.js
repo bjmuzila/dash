@@ -1395,8 +1395,13 @@ const restMonitor = {
   startedAt: Date.now()
 };
 
+// Log to file for debugging
+const logStream = fs.createWriteStream(path.join(__dirname, 'proxy.log'), { flags: 'a' });
+
 function log(...a) {
-  console.log('[TT-Proxy]', ...a);
+  const msg = '[TT-Proxy] ' + a.join(' ');
+  console.log(msg);
+  logStream.write(msg + '\n');
 }
 
 // ─── Schedule prev-close refresh (must be after log() is defined) ────────────
@@ -3618,37 +3623,108 @@ const server = http.createServer(async (req, res) => {
     if (!(spxSpot > 0)) spxSpot = firstFiniteNumber(dxTradeCache['$SPX']?.price, dxQuoteCache['$SPX']?.last, dxTradeCache['SPX']?.price, dxQuoteCache['SPX']?.last, 0);
     if (!(spxSpot > 0)) spxSpot = await fetchUnderlyingLast('SPX').catch(() => 0);
 
-    // Optional expiry filter: ?expiry=YYYY-MM-DD
+    // Optional expiry filter (not used in REST fallback but needed for response)
     const expiryParam = u.searchParams.get('expiry') || '';
     let filterCompact = '';
     if (expiryParam && /^\d{4}-\d{2}-\d{2}$/.test(expiryParam)) {
-      filterCompact = expiryParam.replace(/-/g, '').slice(2); // YYMMDD
+      filterCompact = expiryParam.replace(/-/g, '').slice(2);
     }
 
     const strikeMap = {};
-    for (const [sym, greeks] of Object.entries(dxGreeksCache)) {
-      if (!isSpxwSymbol(sym)) continue;
-      // Apply expiry filter if provided
-      if (filterCompact && optionExpirationCompact(sym) !== filterCompact) continue;
-      const m = String(sym).match(/[CP](\d{4,6})$/);
-      if (!m) continue;
-      const strike = parseInt(m[1], 10);
-      if (!strike) continue;
-      const summary = dxSummaryCache[sym] || {};
-      const gamma   = Math.abs(firstFiniteNumber(greeks.gamma, 0));
-      const delta   = firstFiniteNumber(greeks.delta, 0);
-      const oi      = maxWholeNumber(summary.openInterest);
-      const vol     = maxWholeNumber(summary.volume);
-      const isCall  = /C\d{4,8}$/.test(sym);
-      if (!strikeMap[strike]) strikeMap[strike] = { strike, callGamma: 0, callDelta: 0, callOI: 0, callVol: 0, putGamma: 0, putDelta: 0, putOI: 0, putVol: 0 };
-      if (isCall) { strikeMap[strike].callGamma = gamma; strikeMap[strike].callDelta = delta;  strikeMap[strike].callOI = oi; strikeMap[strike].callVol = vol; }
-      else        { strikeMap[strike].putGamma  = gamma; strikeMap[strike].putDelta  = delta;  strikeMap[strike].putOI  = oi; strikeMap[strike].putVol  = vol; }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    log(`[GEX-CHAIN] accessToken=${accessToken ? 'SET' : 'NULL'}, cache=${Object.keys(dxGreeksCache).length} symbols`);
+
+    // Step 1: Fetch full chain structure from REST API
+    let token = accessToken;
+    if (!token) {
+      try {
+        const tokenData = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+        token = tokenData.access_token;
+        log(`[GEX-CHAIN] Read token from file`);
+      } catch (e) {
+        log(`[GEX-CHAIN] Failed to read token file: ${e.message}`);
+      }
     }
 
+    if (token) {
+      try {
+        const chainResp = await fetch(`https://api.tastyworks.com/option-chains/SPXW/nested`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (chainResp.ok) {
+          const chainData = await chainResp.json();
+          const expirations = chainData?.data?.items?.[0]?.expirations || [];
+          log(`[GEX-CHAIN] REST returned ${expirations.length} expirations`);
+
+          for (const exp of expirations) {
+            const expDate = exp['expiration-date'];
+            if (!expDate) continue;
+
+            const [yy, mm, dd] = expDate.split('-');
+            const dte = Math.max(0, Math.floor((new Date(yy, mm - 1, dd) - today) / (1000 * 60 * 60 * 24)));
+
+            for (const option of exp['option-chains'] || []) {
+              const strike = parseInt(parseFloat(option['strike-price']), 10);
+              if (!strike || strike <= 0) continue;
+
+              if (!strikeMap[strike]) {
+                strikeMap[strike] = {
+                  strike, dte,
+                  callGamma: 0, callDelta: 0, callOI: 0, callVol: 0,
+                  putGamma: 0, putDelta: 0, putOI: 0, putVol: 0
+                };
+              }
+            }
+          }
+          log(`[GEX-CHAIN] REST structure: ${Object.keys(strikeMap).length} strikes`);
+        } else {
+          log(`[GEX-CHAIN] REST error: ${chainResp.status}`);
+        }
+      } catch (err) {
+        log(`[GEX-CHAIN] REST fetch error: ${err.message}`);
+      }
+    }
+
+    // Step 2: Enrich with Greeks from dxGreeksCache
+    for (const [symbolKey, greeksData] of Object.entries(dxGreeksCache)) {
+      const match = symbolKey.match(/\.?SPXW(\d{2})(\d{2})(\d{2})([CP])(\d+)/);
+      if (!match) continue;
+
+      const [, yy, mm, dd, optType, strikeStr] = match;
+      const strike = parseInt(strikeStr, 10);
+      const expDate = new Date(2000 + parseInt(yy, 10), parseInt(mm, 10) - 1, parseInt(dd, 10));
+      const dte = Math.max(0, Math.floor((expDate - today) / (1000 * 60 * 60 * 24)));
+
+      // Initialize strike entry if new
+      if (!strikeMap[strike]) {
+        strikeMap[strike] = {
+          strike, dte,
+          callGamma: 0, callDelta: 0, callOI: 0, callVol: 0,
+          putGamma: 0, putDelta: 0, putOI: 0, putVol: 0
+        };
+      }
+
+      // Populate Greeks from cache
+      const isCall = optType === 'C';
+      const gamma = Math.abs(greeksData.gamma || 0);
+      const delta = greeksData.delta || 0;
+
+      if (isCall) {
+        strikeMap[strike].callGamma = gamma;
+        strikeMap[strike].callDelta = delta;
+      } else {
+        strikeMap[strike].putGamma = gamma;
+        strikeMap[strike].putDelta = delta;
+      }
+    }
+
+    log(`[GEX-CHAIN] Final: ${Object.keys(strikeMap).length} strikes with Greeks enrich`);
     const rows = Object.values(strikeMap).map(r => {
       const callGEX = r.callGamma * r.callOI * spxSpot * spxSpot;
       const putGEX  = r.putGamma  * r.putOI  * spxSpot * spxSpot * -1;
-      return { ...r, callGEX, putGEX, netGEX: callGEX + putGEX };
+      return { strike: r.strike, dte: r.dte, callGamma: r.callGamma, callDelta: r.callDelta, callOI: r.callOI, callVol: r.callVol, putGamma: r.putGamma, putDelta: r.putDelta, putOI: r.putOI, putVol: r.putVol, callGEX, putGEX, netGEX: callGEX + putGEX };
     }).sort((a, b) => a.strike - b.strike);
 
     return sendJSON(res, 200, {

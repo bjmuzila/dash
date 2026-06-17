@@ -143,22 +143,43 @@ class Subscriber {
   }
 
   /**
-   * Fetch chain data from /api/gex
+   * Fetch chain data from /api/gex-chain (full per-strike data)
    */
   private async fetchChain(): Promise<void> {
     try {
-      const res = await fetch('/api/gex', { cache: 'no-store' });
+      const res = await fetch('/api/gex-chain', { cache: 'no-store' });
       if (!res.ok) throw new Error(`API returned ${res.status}`);
       const data = await res.json();
 
-      this.state.chain = data.chain || [];
+      this.state.chain = (data.rows || []).map((row: any) => ({
+        strike: row.strike || 0,
+        callOI: row.callOI || 0,
+        putOI: row.putOI || 0,
+        callVolume: row.callVol || 0,
+        putVolume: row.putVol || 0,
+        callGamma: row.callGamma || 0,
+        putGamma: row.putGamma || 0,
+        callDelta: row.callDelta || 0,
+        putDelta: row.putDelta || 0,
+        callGEX: row.callGEX || 0,
+        putGEX: row.putGEX || 0,
+        netGEX: row.netGEX || 0,
+        netVolGEX: 0,
+        netDEX: 0,
+        volNetDEX: 0,
+        callIV: 0,
+        putIV: 0,
+        dte: row.dte || 0,
+        spotPrice: data.spot || 0,
+      }));
+
       // Only overwrite spotPrice if proxy returned a valid value
-      if (data.spotPrice > 100) this.state.spotPrice = data.spotPrice;
-      this.state.netGex = data.summary?.totalNetGEX || 0;
+      if (data.spot > 100) this.state.spotPrice = data.spot;
+      this.state.netGex = data.netGEX || 0;
       this.state.callWall = data.callWall ?? null;
       this.state.putWall = data.putWall ?? null;
       this.state.gexFlip = data.gexFlip ?? null;
-      this.state.timestamp = data.timestamp || Date.now();
+      this.state.timestamp = data.ts || Date.now();
 
       this.publish();
     } catch (err) {
