@@ -568,6 +568,7 @@ let keepAliveInterval= null;
 const DX_CHANNEL     = 1;          // AUTO channel for Quote/Trade/Greeks/Summary
 const DX_CHANNEL_HISTORY = 3;      // HISTORY channel for Candle (time-series)
 const MAX_DXLINK_AUTO_SYMBOLS = 2000;
+const MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS = 320;
 const MAX_PENDING_SUBSCRIPTION_QUEUE = 4000;
 const MAX_PAGE_OPTION_SYMBOLS = 48;
 const MAX_DIRECT_SUBSCRIBE_SYMBOLS = 12;
@@ -2354,11 +2355,21 @@ async function ensureTodaySpxOptionSubscriptions() {
 
     const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`);
     const options = s2 === 200 && d2?.data?.items ? d2.data.items : [];
-    const syms = [...new Set(options.map(opt => opt?.['streamer-symbol']).filter(Boolean))];
+    const spot = firstFiniteNumber(
+      dxTradeCache.SPX?.price,
+      dxTradeCache['$SPX']?.price,
+      dxQuoteCache.SPX?.last,
+      dxQuoteCache['$SPX']?.last,
+      gexLevelCache.spot,
+      marketDataPrevCloseCache.SPX,
+      0
+    );
+    const nearestSymbols = pickNearestOptionStreamerSymbols(options, spot, MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS);
+    const syms = [...new Set(nearestSymbols.filter(Boolean))];
     if (!syms.length) return already.length;
 
     syms.forEach(sym => addAutoSubscription(sym, ['Quote','Trade','TradeETH','Greeks','Summary']));
-    log('SPX 0DTE subscribe:', syms.length, 'symbols for', expDate, '(full expiration)');
+    log('SPX 0DTE subscribe:', syms.length, 'symbols for', expDate, `(nearest to spot ${spot || 'unknown'})`);
     return syms.length;
   })().finally(() => { spx0dteEnsurePromise = null; });
   return spx0dteEnsurePromise;
