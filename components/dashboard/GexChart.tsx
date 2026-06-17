@@ -567,25 +567,22 @@ export default function GexChart({
   }, [expiry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
-  useEffect(() => {
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
     const el = containerRef.current;
     if (!el) return;
-    const handler = (e: WheelEvent) => {
-      e.preventDefault();
-      const { rows } = densify(chain, spotPrice);
-      if (!rows.length) return;
-      const vp     = vpRef.current;
-      const factor = e.deltaY > 0 ? 1.16 : 0.86;
-      const next   = clamp(Math.round(vp.count * factor), MIN_COUNT, rows.length);
-      if (next === vp.count) return;
-      const frac   = clamp(e.offsetX / el.clientWidth, 0, 1);
-      const anchor = (vp.start ?? 0) + frac * vp.count;
-      vp.count = next;
-      vp.start = clamp(Math.round(anchor - frac * next), 0, Math.max(0, rows.length - next));
-      draw();
-    };
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
+    const { rows } = densify(chain, spotPrice);
+    if (!rows.length) return;
+    const vp     = vpRef.current;
+    const factor = e.deltaY > 0 ? 1.16 : 0.86;
+    const next   = clamp(Math.round(vp.count * factor), MIN_COUNT, rows.length);
+    if (next === vp.count) return;
+    const rect   = el.getBoundingClientRect();
+    const frac   = clamp((e.clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+    const anchor = (vp.start ?? 0) + frac * vp.count;
+    vp.count = next;
+    vp.start = clamp(Math.round(anchor - frac * next), 0, Math.max(0, rows.length - next));
+    draw();
   }, [chain, spotPrice, draw]);
 
   // ── Pointer down ──
@@ -601,7 +598,7 @@ export default function GexChart({
       startYScale: yScaleRef.current,
       pxPerStrike: Math.max(1, W / Math.max(1, vp.count)),
     };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    containerRef.current?.setPointerCapture(e.pointerId);
     e.preventDefault();
   }, []);
 
@@ -656,7 +653,8 @@ export default function GexChart({
   return (
     <div
       ref={containerRef}
-      style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", cursor: "crosshair", background: "var(--overview-bg, #05080d)" }}
+      style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", cursor: "crosshair", background: "var(--overview-bg, #05080d)", touchAction: "none" }}
+      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

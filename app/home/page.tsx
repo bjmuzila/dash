@@ -227,6 +227,48 @@ function findQuote(items: Array<Record<string, unknown>>, symbols: string[]) {
   return items.find((item) => symbols.includes(String(item.symbol ?? "")));
 }
 
+function quoteNumber(q: Record<string, unknown> | undefined, ...keys: string[]) {
+  if (!q) return 0;
+  for (const key of keys) {
+    const num = Number(q[key]);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return 0;
+}
+
+function quotePrev(q: Record<string, unknown> | undefined, fallback = 0) {
+  return quoteNumber(
+    q,
+    "prev-close",
+    "prevClose",
+    "previousClose",
+    "prevDayClose",
+    "prev-day-close",
+    "prevDayClosePrice",
+    "prev-day-close-price",
+    "close-price",
+    "closePrice"
+  ) || fallback;
+}
+
+async function fetchPrevCloseFallbacks(): Promise<{ ES: number; NQ: number; SPX: number; VIX: number }> {
+  try {
+    const res = await fetch("/api/prev-closes", { cache: "no-store" });
+    if (!res.ok) return { ES: 0, NQ: 0, SPX: 0, VIX: 0 };
+    const json = await res.json();
+    const data = json?.data ?? {};
+    const saved = json?.debug?.savedDailyCloses ?? {};
+    return {
+      ES: Number(data.ES ?? saved.ES ?? 0),
+      NQ: Number(data.NQ ?? saved.NQ ?? 0),
+      SPX: Number(data.SPX ?? saved.SPX ?? 0),
+      VIX: Number(data.VIX ?? saved.VIX ?? 0),
+    };
+  } catch {
+    return { ES: 0, NQ: 0, SPX: 0, VIX: 0 };
+  }
+}
+
 // ── Data ──────────────────────────────────────────────────────────────────────
 const SIDEBAR_SYMBOLS = ["AMD", "META", "SMH", "NVDA", "AMZN", "NQU", "QQQ", "GOOGL", "MSFT", "AAPL"];
 const DEFAULT_QUOTES = SIDEBAR_SYMBOLS.map(sym => ({ sym, chg: "—", pos: true, active: sym === "NQU" }));
@@ -351,13 +393,15 @@ export default function HomePage() {
         const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
+        const prevFallbacks = await fetchPrevCloseFallbacks();
         const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
         const spxQuote = findQuote(items, ["SPX"]);
         const esQuote = findQuote(items, ES_SYMBOL_ALIASES);
 
         if (spxQuote) {
-          const last = Number(spxQuote.last ?? spxQuote.mark ?? 0);
-          const prev = Number(spxQuote["prev-close"] ?? spxQuote["day-close"] ?? 0);
+          const last = quoteNumber(spxQuote, "last", "mark");
+          let prev = quotePrev(spxQuote, prevFallbacks.SPX);
+          if (prevFallbacks.SPX > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.SPX;
           if (last > 100 && prev > 0) {
             const change = last - prev;
             setSpxChg(change);
@@ -366,8 +410,9 @@ export default function HomePage() {
         }
 
         if (esQuote) {
-          const last = Number(esQuote.last ?? esQuote.mark ?? 0);
-          const prev = Number(esQuote["prev-close"] ?? esQuote["day-close"] ?? 0);
+          const last = quoteNumber(esQuote, "last", "mark");
+          let prev = quotePrev(esQuote, prevFallbacks.ES);
+          if (prevFallbacks.ES > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.ES;
           if (last > 100 && prev > 0) {
             const change = last - prev;
             setEsChg(change);
@@ -461,14 +506,16 @@ export default function HomePage() {
 
     if (quotesRes?.ok) {
       const json = await quotesRes.json();
+      const prevFallbacks = await fetchPrevCloseFallbacks();
       const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
       const spxQuote = findQuote(items, ["SPX"]);
       const esQuote = findQuote(items, ES_SYMBOL_ALIASES);
       const vixQuote = findQuote(items, ["VIX"]);
 
       if (spxQuote) {
-        const last = Number(spxQuote.last ?? spxQuote.mark ?? 0);
-        const prev = Number(spxQuote["prev-close"] ?? spxQuote["day-close"] ?? 0);
+        const last = quoteNumber(spxQuote, "last", "mark");
+        let prev = quotePrev(spxQuote, prevFallbacks.SPX);
+        if (prevFallbacks.SPX > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.SPX;
         if (last > 100) {
           setSpx(last);
         }
@@ -480,8 +527,9 @@ export default function HomePage() {
       }
 
       if (esQuote) {
-        const last = Number(esQuote.last ?? esQuote.mark ?? 0);
-        const prev = Number(esQuote["prev-close"] ?? esQuote["day-close"] ?? 0);
+        const last = quoteNumber(esQuote, "last", "mark");
+        let prev = quotePrev(esQuote, prevFallbacks.ES);
+        if (prevFallbacks.ES > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.ES;
         if (last > 100) {
           setEsFut(last);
         }
@@ -573,13 +621,13 @@ export default function HomePage() {
         const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`, { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
-        const items: Array<{ symbol: string; mark?: number; "prev-day-close"?: number; last?: number }> = Array.isArray(json?.data?.items) ? json.data.items : [];
+        const items: Array<Record<string, unknown> & { symbol: string }> = Array.isArray(json?.data?.items) ? json.data.items : [];
         if (!items.length) return;
         setSidebarQuotes(SIDEBAR_SYMBOLS.map(sym => {
           const q = items.find(i => i.symbol === sym || i.symbol === `${sym}:XCIS`);
           if (!q) return { sym, chg: "—", pos: true, active: sym === "NQU" };
-          const price = q.mark ?? q.last ?? 0;
-          const prev = q["prev-day-close"] ?? 0;
+          const price = quoteNumber(q, "mark", "last");
+          const prev = quotePrev(q);
           const pct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
           const pos = pct >= 0;
           return { sym, chg: `${pos ? "+" : ""}${pct.toFixed(2)}%`, pos, active: sym === "NQU" };

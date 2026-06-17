@@ -87,6 +87,14 @@ function normalizeSymbol(raw: string): string {
   return raw;
 }
 
+function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const num = Number(q[key]);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return 0;
+}
+
 const REST_SYMBOLS = WS_ALL_SYMBOLS.filter(s => !s.sym.startsWith("/") && !["VIX", "SPX"].includes(s.sym));
 
 // Static sigma levels — replace with live calc if available
@@ -168,12 +176,13 @@ function useLiveQuotes() {
               WS_ALL_SYMBOLS.forEach(({ sym }) => {
                 const rec = wsLiveRef.current[sym];
                 if (!rec) return;
-                if (rec.pctFeed !== 0 && Math.abs(rec.pctFeed) <= 20) { next[sym] = rec.pctFeed; return; }
                 const price = rec.lastPrice || (rec.bidPrice > 0 && rec.askPrice > 0 ? (rec.bidPrice + rec.askPrice) / 2 : 0);
                 if (price > 0 && rec.prevClose > 0) {
                   const pct = ((price - rec.prevClose) / rec.prevClose) * 100;
                   if (Math.abs(pct) <= 20) next[sym] = pct;
+                  return;
                 }
+                if (rec.pctFeed !== 0 && Math.abs(rec.pctFeed) <= 20) next[sym] = rec.pctFeed;
               });
               return next;
             });
@@ -198,7 +207,18 @@ function useLiveQuotes() {
         items.forEach(q => {
           const rawSym = String(q.symbol || "");
           const sym = normalizeSymbol(rawSym);
-          const prev = Number(q["prev-close"] ?? 0);
+          const prev = quoteNumber(
+            q,
+            "prev-close",
+            "prevClose",
+            "previousClose",
+            "prevDayClose",
+            "prev-day-close",
+            "prevDayClosePrice",
+            "prev-day-close-price",
+            "close-price",
+            "closePrice"
+          );
           if (prev > 0) {
             if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
             wsLiveRef.current[sym].prevClose = prev;

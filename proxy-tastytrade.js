@@ -18,6 +18,7 @@ const http      = require('http');
 const https     = require('https');
 const fs        = require('fs');
 const path      = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env.local'), override: false });
 const { URL }   = require('url');
 const { spawn }  = require('child_process');
 const WebSocket = require('ws');
@@ -33,6 +34,8 @@ const BUY_SELL_BACKUP_FILE = path.join(BACKUP_DIR, 'buy-sell-scores.json');
 const DAILY_CLOSES_FILE    = path.join(BACKUP_DIR, 'daily-closes.json');
 const REFRESH_ENV    = process.env.REFRESH_TOKEN || process.env.TT_REFRESH_TOKEN || '';
 const CLIENT_SECRET  = process.env.CLIENT_SECRET  || process.env.TT_CLIENT_SECRET || '';
+const MASSIVE_API_KEY = process.env.MASSIVE_API_KEY || (process.env.POLYGON_API_KEY !== 'your_key_here' ? process.env.POLYGON_API_KEY : '') || '';
+const MASSIVE_BASE_URL = (process.env.MASSIVE_BASE_URL || process.env.POLYGON_BASE_URL || 'https://api.massive.com').replace(/\/+$/, '');
 const SCHWAB_CLIENT_ID = process.env.SCHWAB_CLIENT_ID || 'REDACTED';
 const SCHWAB_CLIENT_SECRET = process.env.SCHWAB_CLIENT_SECRET || 'REDACTED';
 const SCHWAB_BASE   = 'api.schwabapi.com';
@@ -1961,6 +1964,7 @@ async function fetchUnderlyingLast(symbol) {
 // Fetch OI from Yahoo Finance option chain — works 24/7, no auth needed.
 // Returns Map of streamerSymbol -> { oi, volume } e.g. '.AAPL260605C307.5' -> { oi: 3498, volume: 120 }
 const yahooOiCache = new Map(); // key: 'AAPL|2026-06-05', ttl 24hr
+const massiveOiCache = new Map(); // key: 'SPX|2026-06-05', ttl 24hr
 async function fetchYahooOI(symbol, expDate) {
   // Skip Yahoo for index options (SPX/SPXW) — use CBOE instead
   const cleanSymbol = String(symbol || '').trim().toUpperCase();
@@ -2026,6 +2030,31 @@ function strikeKeyText(strike) {
   return Number.isInteger(n) ? String(n) : String(n).replace(/\.?0+$/, '');
 }
 
+function parseOptionTickerDetails(ticker) {
+  const clean = String(ticker || '').replace(/^O:/i, '').toUpperCase();
+  const m = clean.match(/^([A-Z^]{1,8})(\d{6})([CP])(\d{8})$/);
+  if (!m) return null;
+  const [, root, yymmdd, side, strikeRaw] = m;
+  const yy = yymmdd.slice(0, 2);
+  const mm = yymmdd.slice(2, 4);
+  const dd = yymmdd.slice(4, 6);
+  return {
+    root,
+    expDate: `20${yy}-${mm}-${dd}`,
+    compact: yymmdd,
+    side,
+    strike: parseInt(strikeRaw, 10) / 1000,
+  };
+}
+
+function putOiMapEntries(oiMap, root, expDate, side, strike, item, ticker = '') {
+  const compact = String(expDate || '').replace(/-/g, '').slice(2);
+  const strikeText = strikeKeyText(strike);
+  const roots = new Set([root, 'SPX', 'SPXW'].filter(Boolean).map(r => String(r).replace(/^\^/, '').toUpperCase()));
+  roots.forEach(r => oiMap.set(`.${r}${compact}${side}${strikeText}`, item));
+  if (ticker) oiMap.set(String(ticker).toUpperCase(), item);
+}
+
 function yahooOiLookup(map, streamerSym, rootSymbol, expDate, side, strike) {
   if (!map || !map.size) return null;
   const compact = String(expDate || '').replace(/-/g, '').slice(2);
@@ -2043,6 +2072,64 @@ function yahooOiLookup(map, streamerSym, rootSymbol, expDate, side, strike) {
     if (hit) return hit;
   }
   return null;
+}
+
+async function massiveHttpJson(url) {
+  const resp = await fetch(url, { headers: { 'User-Agent': 'spx-gex-dashboard/1.0', 'Accept': 'application/json' } });
+  if (!resp.ok) throw new Error('status ' + resp.status);
+  return resp.json();
+}
+
+async function fetchMassiveOI(symbol, expDate) {
+  const cleanSymbol = String(symbol || '').trim().toUpperCase().replace(/^\^/, '');
+  if (!MASSIVE_API_KEY) return new Map();
+  const cacheKey = cleanSymbol + '|' + expDate;
+  const cached = massiveOiCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.map;
+
+  const underlyingCandidates = /^SPX[W]?$/i.test(cleanSymbol) ? ['I:SPX', 'SPX'] : [cleanSymbol];
+  let lastError = null;
+  for (const underlying of underlyingCandidates) {
+    try {
+      const oiMap = new Map();
+      let url = `${MASSIVE_BASE_URL}/v3/snapshot/options/${encodeURIComponent(underlying)}?expiration_date=${encodeURIComponent(expDate)}&limit=250&apiKey=${encodeURIComponent(MASSIVE_API_KEY)}`;
+      while (url) {
+        const json = await massiveHttpJson(url);
+        const items = Array.isArray(json?.results) ? json.results : [];
+        for (const row of items) {
+          const ticker = row?.details?.ticker || row?.ticker || row?.symbol || '';
+          const parsed = parseOptionTickerDetails(ticker);
+          if (!parsed || parsed.expDate !== expDate) continue;
+          const oi = maxWholeNumber(row?.open_interest ?? row?.openInterest ?? row?.details?.open_interest);
+          const volume = firstVolumeNumber(row?.day?.volume ?? row?.volume);
+          const item = { oi, volume };
+          putOiMapEntries(oiMap, parsed.root, expDate, parsed.side, parsed.strike, item, ticker);
+        }
+        url = json?.next_url
+          ? `${json.next_url}${String(json.next_url).includes('?') ? '&' : '?'}apiKey=${encodeURIComponent(MASSIVE_API_KEY)}`
+          : '';
+      }
+      if (oiMap.size > 0) {
+        massiveOiCache.set(cacheKey, { map: oiMap, ts: Date.now() });
+        log('Massive OI fetched for', cleanSymbol, expDate, '- contracts:', oiMap.size);
+        return oiMap;
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (lastError) log('Massive OI fetch error:', lastError.message);
+  massiveOiCache.set(cacheKey, { map: new Map(), ts: Date.now() });
+  return new Map();
+}
+
+async function fetchSpxMassiveOiForExpirations(expDates) {
+  const unique = [...new Set((expDates || []).filter(Boolean))];
+  const maps = new Map();
+  await Promise.all(unique.map(async expDate => {
+    maps.set(expDate, await fetchMassiveOI('SPX', expDate));
+  }));
+  return maps;
 }
 
 async function fetchSpxYahooOiForExpirations(expDates) {
@@ -2076,8 +2163,9 @@ function scheduleDailySpxYahooOiCache() {
       if (status !== 200) throw new Error('nested chain status ' + status);
       const chainObj = data?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || data?.data?.items?.[0];
       const expirations = (chainObj?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-      await fetchSpxYahooOiForExpirations(expirations);
-      log('[Yahoo OI] Daily 6am SPX open-interest cache warmed for', expirations.length, 'expirations');
+      const massiveMaps = await fetchSpxMassiveOiForExpirations(expirations);
+      await fetchSpxYahooOiForExpirations(expirations.filter(expDate => !(massiveMaps.get(expDate)?.size > 0)));
+      log('[OI] Daily 6am SPX open-interest cache warmed for', expirations.length, 'expirations');
     } catch (e) {
       log('[Yahoo OI] Daily cache warm failed:', e.message);
     } finally {
@@ -2085,7 +2173,7 @@ function scheduleDailySpxYahooOiCache() {
     }
   };
   setTimeout(run, msUntilNextEt(6, 0));
-  log('[Yahoo OI] Daily SPX open-interest cache scheduled for 6:00am ET');
+  log('[OI] Daily SPX open-interest cache scheduled for 6:00am ET');
 }
 
 async function fetchYahooOIDirect(symbol, expDate) {
@@ -3889,8 +3977,10 @@ const server = http.createServer(async (req, res) => {
         if (chainResp.ok) {
           const chainData = await chainResp.json();
           const expirations = chainData?.data?.items?.[0]?.expirations || [];
+          const oiExpirations = (filterCompact ? [expiryParam] : expirations.map(exp => exp['expiration-date'])).filter(Boolean);
+          const massiveOiMaps = await fetchSpxMassiveOiForExpirations(oiExpirations);
           const yahooOiMaps = await fetchSpxYahooOiForExpirations(
-            (filterCompact ? [expiryParam] : expirations.map(exp => exp['expiration-date'])).filter(Boolean)
+            oiExpirations.filter(expDate => !(massiveOiMaps.get(expDate)?.size > 0))
           );
           log(`[GEX-CHAIN] REST returned ${expirations.length} expirations`);
 
@@ -3907,7 +3997,10 @@ const server = http.createServer(async (req, res) => {
               if (!strike || strike <= 0) continue;
               const rawType = String(option['option-type'] || '').toUpperCase();
               const streamerSym = option['streamer-symbol'] || '';
-              const yahooOI = yahooOiLookup(yahooOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike)?.oi || 0;
+              const fallbackOI = (
+                yahooOiLookup(massiveOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike) ||
+                yahooOiLookup(yahooOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike)
+              )?.oi || 0;
 
               if (!strikeMap[strike]) {
                 strikeMap[strike] = {
@@ -3916,8 +4009,8 @@ const server = http.createServer(async (req, res) => {
                   putGamma: 0, putDelta: 0, putOI: 0, putVol: 0
                 };
               }
-              if (rawType === 'C' && yahooOI > 0) strikeMap[strike].callOI = yahooOI;
-              if (rawType === 'P' && yahooOI > 0) strikeMap[strike].putOI = yahooOI;
+              if (rawType === 'C' && fallbackOI > 0) strikeMap[strike].callOI = fallbackOI;
+              if (rawType === 'P' && fallbackOI > 0) strikeMap[strike].putOI = fallbackOI;
             }
           }
           log(`[GEX-CHAIN] REST structure: ${Object.keys(strikeMap).length} strikes`);
@@ -4283,16 +4376,20 @@ const server = http.createServer(async (req, res) => {
       if (/^SPX[W]?$/i.test(sym)) {
         itemsToReturn = JSON.parse(JSON.stringify(cachedItems));
         const expDates = itemsToReturn.map(eg => eg['expiration-date']).filter(Boolean);
+        const massiveMaps = await fetchSpxMassiveOiForExpirations(expDates);
         const fallbackMaps = await fetchSpxYahooOiForExpirations(expDates);
         for (const eg of itemsToReturn) {
           const expDate = eg['expiration-date'];
+          const massiveMap = massiveMaps.get(expDate);
           const map = fallbackMaps.get(expDate);
           for (const strikeRow of eg.strikes || []) {
             const strike = parseFloat(strikeRow['strike-price'] || 0);
             for (const [sideName, sideCode] of [['call', 'C'], ['put', 'P']]) {
               const leg = strikeRow[sideName];
               if (!leg || Number(leg.openInterest || leg['open-interest'] || 0) > 0) continue;
-              const hit = yahooOiLookup(map, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike);
+              const hit =
+                yahooOiLookup(massiveMap, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike) ||
+                yahooOiLookup(map, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike);
               if (hit?.oi > 0) {
                 leg.openInterest = hit.oi;
                 leg['open-interest'] = hit.oi;
@@ -4448,8 +4545,11 @@ const server = http.createServer(async (req, res) => {
       log('[awaitDX] dxLink wait complete');
     }
 
+    const massiveOiFallbackMaps = isSpxFamily
+      ? await fetchSpxMassiveOiForExpirations(targetExps)
+      : new Map();
     const oiFallbackMaps = isSpxFamily
-      ? await fetchSpxYahooOiForExpirations(targetExps)
+      ? await fetchSpxYahooOiForExpirations(targetExps.filter(expDate => !(massiveOiFallbackMaps.get(expDate)?.size > 0)))
       : new Map();
 
     // Build nested structure: data.data.items = array of expGroups
@@ -4540,8 +4640,11 @@ const server = http.createServer(async (req, res) => {
       const cachedMergedOI = Number(oiCache[streamerSym] ?? 0) || 0;
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
       const cachedDxOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
-      const yahooOI = yahooOiLookup(oiFallbackMaps.get(expDate), streamerSym, rootSymbol, expDate, rawType, strikePrice)?.oi || 0;
-      const finalOI = cachedMergedOI || liveOI || cachedDxOI || yahooOI;
+      const fallbackOI = (
+        yahooOiLookup(massiveOiFallbackMaps.get(expDate), streamerSym, rootSymbol, expDate, rawType, strikePrice) ||
+        yahooOiLookup(oiFallbackMaps.get(expDate), streamerSym, rootSymbol, expDate, rawType, strikePrice)
+      )?.oi || 0;
+      const finalOI = cachedMergedOI || liveOI || cachedDxOI || fallbackOI;
       if (finalOI > 0 && !cachedDxOI && streamerSym) dxOpenInterestCache[streamerSym] = finalOI;
       // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
