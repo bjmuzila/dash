@@ -79,6 +79,36 @@ function pickDashboardExpiries(
 }
 
 function flattenChainResponse(data: any): SubscriberState["chain"] {
+  if (Array.isArray(data?.chain)) {
+    return data.chain
+      .map((row: any): SubscriberState["chain"][number] => ({
+        strike: Number(row?.strike ?? 0),
+        spotPrice: Number(row?.spotPrice ?? row?.spot ?? data?.spotPrice ?? 0),
+        callOI: Number(row?.callOI ?? 0),
+        putOI: Number(row?.putOI ?? 0),
+        callVolume: Number(row?.callVolume ?? row?.callVol ?? 0),
+        putVolume: Number(row?.putVolume ?? row?.putVol ?? 0),
+        callGamma: Number(row?.callGamma ?? 0),
+        putGamma: Number(row?.putGamma ?? 0),
+        callDelta: Number(row?.callDelta ?? 0),
+        putDelta: Number(row?.putDelta ?? 0),
+        callGEX: Number(row?.callGEX ?? 0),
+        putGEX: Number(row?.putGEX ?? 0),
+        netGEX: Number(row?.netGEX ?? 0),
+        netVolGEX: Number(row?.netVolGEX ?? 0),
+        netDEX: Number(row?.netDEX ?? 0),
+        volNetDEX: Number(row?.volNetDEX ?? 0),
+        dte: Number(row?.dte ?? 0),
+        callIV: Number(row?.callIV ?? 0),
+        putIV: Number(row?.putIV ?? 0),
+      }))
+      .filter((row: SubscriberState["chain"][number]) => row.strike > 0)
+      .sort(
+        (a: SubscriberState["chain"][number], b: SubscriberState["chain"][number]) =>
+          a.strike - b.strike
+      );
+  }
+
   const items = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.items) ? data.items : [];
   const out: SubscriberState["chain"] = [];
 
@@ -446,6 +476,7 @@ export default function HomePage() {
         setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
         setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
         setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+        setGexProfile(json?.profile ?? null);
         setChainDebug(buildChainDebug(chain, "/api/gex", String(json?.data?.expiration ?? json?.expiration ?? "-")));
       } catch {
         // no-op
@@ -506,7 +537,7 @@ export default function HomePage() {
       fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" }),
     ];
     if (actualExpiry) {
-      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all&strikeWindow=80&noSubscribe=1`, { cache: "no-store" }));
+      requests.unshift(fetch(`/api/gex?expiry=${encodeURIComponent(actualExpiry)}`, { cache: "no-store" }));
     }
     const responses = await Promise.all(requests);
     let updated = false;
@@ -518,15 +549,15 @@ export default function HomePage() {
       const json = await chainRes.json();
       const nextChain = flattenChainResponse(json);
       if (nextChain.length) setRawChain(nextChain);
-      setChainDebug(buildChainDebug(nextChain, "/api/chains", actualExpiry || "-"));
-      const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? 0);
+      setChainDebug(buildChainDebug(nextChain, "/api/gex", actualExpiry || "-"));
+      const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? json?.spotPrice ?? 0);
       if (spot > 100) setSpx(spot);
       const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
       if (Number.isFinite(nextNetGex)) setNetGex(nextNetGex);
-      setCallWall(null);
-      setPutWall(null);
-      setGexFlip(null);
-      setGexProfile(null);
+      setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
+      setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
+      setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+      setGexProfile(json?.profile ?? null);
       updated = true;
     }
 
@@ -716,7 +747,7 @@ export default function HomePage() {
     const fetchExpiryChain = async () => {
       try {
         const fetchChainForExpiry = async (expiry: string) => {
-          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=80&noSubscribe=1`, { cache: "no-store" });
+          const res = await fetch(`/api/gex?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store" });
           if (!res.ok) return null;
           return res.json();
         };
@@ -727,15 +758,15 @@ export default function HomePage() {
         if (cancelled) return;
         const nextChain = flattenChainResponse(json);
         if (nextChain.length) setRawChain(nextChain);
-        setChainDebug(buildChainDebug(nextChain, "/api/chains", actualExpiry));
-        const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? 0);
+        setChainDebug(buildChainDebug(nextChain, "/api/gex", actualExpiry));
+        const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? json?.spotPrice ?? 0);
         if (spot > 100) setSpx(spot);
         const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
         if (Number.isFinite(nextNetGex)) setNetGex(nextNetGex);
-        setCallWall(null);
-        setPutWall(null);
-        setGexFlip(null);
-        setGexProfile(null);
+        setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
+        setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
+        setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+        setGexProfile(json?.profile ?? null);
       } catch {
         // no-op
       }

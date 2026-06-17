@@ -20,6 +20,7 @@ async function fetchGexChain(expiry: string): Promise<any> {
   const qs = new URLSearchParams({
     ticker: "SPX",
     range: "all",
+    noSubscribe: "1",
   });
   if (expiry) qs.set("expiration", expiry);
 

@@ -543,12 +543,10 @@ export default function GexChart({
   useEffect(() => {
     return () => {
       const canvas = canvasRef.current;
-      const container = containerRef.current;
       if (canvas) {
         const ctx = canvas.getContext("2d");
         if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
-      if (container) container.innerHTML = '';
       // Clear refs
       vpRef.current = { start: null, count: 61 };
       yScaleRef.current = 1;

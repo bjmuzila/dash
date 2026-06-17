@@ -154,7 +154,6 @@ export default function GexHeatmap({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (bodyRef.current) bodyRef.current.innerHTML = '';
       initializedRef.current = false;
     };
   }, []);
