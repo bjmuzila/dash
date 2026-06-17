@@ -66,6 +66,35 @@ function todayEt(): string {
   }).format(new Date());
 }
 
+function extractExpirations(payload: unknown): string[] {
+  const json = payload as {
+    expirations?: unknown;
+    items?: Array<Record<string, unknown>>;
+    data?: { items?: Array<Record<string, unknown>> };
+  };
+
+  const out = new Set<string>();
+  const add = (value: unknown) => {
+    const date = String(value ?? "");
+    if (date.length === 10) out.add(date);
+  };
+
+  if (Array.isArray(json?.expirations)) {
+    json.expirations.forEach(add);
+  }
+
+  if (Array.isArray(json?.items)) {
+    json.items.forEach((item) => add(item.date ?? item["expiration-date"]));
+  }
+
+  if (Array.isArray(json?.data?.items)) {
+    json.data.items.forEach((item) => add(item.date ?? item["expiration-date"]));
+  }
+
+  const today = todayEt();
+  return [...out].filter((date) => date >= today).sort();
+}
+
 export default function DevPage() {
   const [feedType, setFeedType] = useState<FeedType>("Greeks");
   const [source, setSource] = useState<SymbolSource>("0dte-calls");
@@ -93,19 +122,29 @@ export default function DevPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/gex/expirations", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((json) => {
+    const loadExpirations = async () => {
+      try {
+        let expirations: string[] = [];
+
+        const primary = await fetch("/api/gex/expirations", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+        expirations = extractExpirations(primary);
+
+        if (!expirations.length) {
+          const fallback = await fetch("/api/expirations?ticker=SPX", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+          expirations = extractExpirations(fallback);
+        }
+
         if (cancelled) return;
-        const expirations = Array.isArray(json?.expirations) ? (json.expirations as string[]) : [];
         setExpiryOptions(expirations);
         const today = todayEt();
         const initial = expirations.includes(today) ? today : expirations[0] ?? "";
         setExpiry(initial);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setExpiryOptions([]);
-      });
+      }
+    };
+
+    loadExpirations().catch(() => {});
     return () => {
       cancelled = true;
     };
