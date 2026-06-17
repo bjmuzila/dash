@@ -5,6 +5,21 @@ const INTERVAL_MS = 30_000;
 
 export const dynamic = "force-dynamic";
 
+function normalizeGexPayload(json: any) {
+  const data = json?.data ?? json ?? {};
+  return {
+    ...data,
+    data,
+    netGex: data.netGex ?? data.totalNetGEX ?? data.net_gex ?? null,
+    totalNetGEX: data.totalNetGEX ?? data.netGex ?? data.net_gex ?? null,
+    gammaFlip: data.gammaFlip ?? data.gammaZero ?? data.gexFlip ?? null,
+    gexFlip: data.gexFlip ?? data.gammaFlip ?? data.gammaZero ?? null,
+    callWall: data.callWall ?? null,
+    putWall: data.putWall ?? null,
+    mvcStrike: data.mvcStrike ?? data.mvc?.strike ?? null,
+  };
+}
+
 export async function GET() {
   const encoder = new TextEncoder();
 
@@ -19,13 +34,13 @@ export async function GET() {
           const res = await fetch(`${PROXY}/proxy/api/tt/gex`, { cache: "no-store" });
           const json = res.ok ? await res.json() : { error: "proxy error" };
           try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(json)}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalizeGexPayload(json))}\n\n`));
           } catch {
             isClosed = true;
           }
         } catch (e) {
           try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: String(e) })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalizeGexPayload({ error: String(e) }))}\n\n`));
           } catch {
             isClosed = true;
           }

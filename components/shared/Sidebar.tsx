@@ -342,14 +342,14 @@ export default function Sidebar({
           {pageMenuOpen && menuPos && (
             <>
               <div
-                style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                style={{ position: "fixed", inset: 0, zIndex: 999998 }}
                 onClick={() => setPageMenuOpen(false)}
               />
               <div style={{
                 position: "fixed",
                 left: menuPos.left,
                 top: menuPos.top,
-                zIndex: 999,
+                zIndex: 999999,
                 background: "rgba(13,17,25,0.95)",
                 border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
@@ -422,14 +422,14 @@ export default function Sidebar({
           {calendarMenuOpen && calendarMenuPos && (
             <>
               <div
-                style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                style={{ position: "fixed", inset: 0, zIndex: 999998 }}
                 onClick={() => setCalendarMenuOpen(false)}
               />
               <div style={{
                 position: "fixed",
                 left: calendarMenuPos.left,
                 top: calendarMenuPos.top,
-                zIndex: 999,
+                zIndex: 999999,
                 background: "rgba(13,17,25,0.95)",
                 border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
@@ -501,14 +501,14 @@ export default function Sidebar({
           {personalMenuOpen && personalMenuPos && (
             <>
               <div
-                style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                style={{ position: "fixed", inset: 0, zIndex: 999998 }}
                 onClick={() => setPersonalMenuOpen(false)}
               />
               <div style={{
                 position: "fixed",
                 left: personalMenuPos.left,
                 top: personalMenuPos.top,
-                zIndex: 999,
+                zIndex: 999999,
                 background: "rgba(13,17,25,0.95)",
                 border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
