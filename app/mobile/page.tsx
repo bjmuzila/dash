@@ -192,7 +192,7 @@ export default function MobileGexPage() {
     async (expiry: string) => {
       try {
         const pageId = pageIdRef.current;
-        const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&pageId=${encodeURIComponent(pageId)}`;
+        const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=20&pageId=${encodeURIComponent(pageId)}`;
         const res = await fetch(url);
         if (!res.ok) return;
         const json = await res.json();

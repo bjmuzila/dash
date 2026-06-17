@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 interface FFEvent {
   title: string;
@@ -7,6 +9,19 @@ interface FFEvent {
   impact: string;
   forecast: string;
   previous: string;
+  actual?: string;
+}
+
+interface LocalEvent {
+  date: string;
+  time: string;
+  name?: string;
+  title?: string;
+  period?: string;
+  country?: string;
+  impact?: string;
+  forecast?: string;
+  previous?: string;
   actual?: string;
 }
 
@@ -28,6 +43,43 @@ interface CalEvent {
   forecast: string;
   previous: string;
   actual: string;
+}
+
+const FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+const SAVED_EVENTS_PATH = join(process.cwd(), "app/api/econ-calendar/events.json");
+
+async function fetchForexFactoryEvents(): Promise<FFEvent[]> {
+  const res = await fetch(FF_URL, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "Accept": "application/json",
+      "Referer": "https://www.forexfactory.com/",
+    },
+    next: { revalidate: 1800 },
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().then(t => t.slice(0, 200)).catch(() => "");
+    throw new Error(`ForexFactory ${res.status}${detail ? `: ${detail}` : ""}`);
+  }
+
+  const raw = await res.json();
+  return Array.isArray(raw) ? raw : [];
+}
+
+function fetchSavedEvents(): FFEvent[] {
+  const raw: LocalEvent[] = JSON.parse(readFileSync(SAVED_EVENTS_PATH, "utf-8"));
+  if (!Array.isArray(raw)) return [];
+
+  return raw.map(ev => ({
+    title: ev.title ?? ev.name ?? "",
+    country: ev.country ?? "USD",
+    date: `${ev.date}T${ev.time || "00:00"}:00-04:00`,
+    impact: ev.impact ?? "High",
+    forecast: ev.forecast ?? "",
+    previous: ev.previous ?? ev.period ?? "",
+    actual: ev.actual ?? "",
+  }));
 }
 
 function toET(iso: string): { date: string; time: string; time_formatted: string } {
@@ -106,23 +158,23 @@ async function fetchTrumpEvents(): Promise<CalEvent[]> {
 }
 
 export async function GET() {
-  const proxyBase = process.env.PROXY_URL ?? "http://127.0.0.1:3001";
-
   try {
-    const [econRes, trumpEvents] = await Promise.all([
-      fetch(`${proxyBase}/proxy/api/econ-calendar`, {
-        next: { revalidate: 1800 },
-      }),
+    const [econResult, trumpEvents] = await Promise.allSettled([
+      fetchForexFactoryEvents(),
       fetchTrumpEvents(),
     ]);
 
-    if (!econRes.ok) {
-      const detail = await econRes.text().then(t => t.slice(0, 200)).catch(() => "");
-      console.error(`[calendar] proxy returned ${econRes.status}: ${detail}`);
-      return NextResponse.json({ error: `Upstream ${econRes.status}`, detail, events: [] });
-    }
+    let raw: FFEvent[] = [];
+    let source = "forexfactory";
+    let warning: string | undefined;
 
-    const raw: FFEvent[] = await econRes.json();
+    if (econResult.status === "fulfilled" && econResult.value.length > 0) {
+      raw = econResult.value;
+    } else {
+      warning = econResult.status === "rejected" ? econResult.reason?.message : "ForexFactory returned no events";
+      raw = fetchSavedEvents();
+      source = "saved";
+    }
 
     const econEvents: CalEvent[] = raw
       .map(ev => {
@@ -140,10 +192,11 @@ export async function GET() {
         };
       });
 
-    const events: CalEvent[] = [...econEvents, ...trumpEvents];
+    const events: CalEvent[] = [...econEvents, ...(trumpEvents.status === "fulfilled" ? trumpEvents.value : [])]
+      .sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
 
-    console.log(`[calendar] loaded ${econEvents.length} econ events across all countries + ${trumpEvents.length} Trump events`);
-    return NextResponse.json({ events }, {
+    console.log(`[calendar] loaded ${econEvents.length} econ events from ${source} + ${trumpEvents.status === "fulfilled" ? trumpEvents.value.length : 0} Trump events`);
+    return NextResponse.json({ events, source, warning }, {
       headers: { "Cache-Control": "s-maxage=1800, stale-while-revalidate=3600" },
     });
   } catch (err) {

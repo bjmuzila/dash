@@ -631,7 +631,7 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
     return d.getHours() * 60 + d.getMinutes();
   })();
   const elapsedMins = Math.max(0, Math.min(etMins, SESSION_CLOSE) - SESSION_OPEN);
-  const pacePct = Math.round(Math.max(0, Math.min(100, (elapsedMins / (SESSION_CLOSE - SESSION_OPEN)) * 100)));
+  const sessionPct = Math.round(Math.max(0, Math.min(100, (elapsedMins / (SESSION_CLOSE - SESSION_OPEN)) * 100)));
   const isActive = etMins >= SESSION_OPEN && etMins <= SESSION_CLOSE;
 
   // Build 15m slot bars: 28 slots 9:30–16:00
@@ -650,6 +650,15 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
   const maxVol = Math.max(1, ...slots.map(s => Math.max(s.vol, s.avg)));
   const totalVol = slots.reduce((a, s) => a + s.vol, 0);
   const activeSlots = slots.filter(s => s.vol > 0).length;
+  const comparableSlots = slots.filter((s) => {
+    const [h, m] = s.label.split(":").map(Number);
+    const slotMins = h * 60 + m;
+    return slotMins <= Math.min(etMins, SESSION_CLOSE);
+  });
+  const avgComparableVol = comparableSlots.reduce((a, s) => a + s.avg, 0);
+  const todayComparableVol = comparableSlots.reduce((a, s) => a + s.vol, 0);
+  const relVolPct = avgComparableVol > 0 ? Math.round((todayComparableVol / avgComparableVol) * 100) : 0;
+  const relVolLabel = avgComparableVol > 0 ? `${relVolPct}%` : "--";
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -784,7 +793,7 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
           <div style={{ fontSize: 14, color: "#ff5b5b", fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase" }}>Relative Volume</div>
           <div style={{ fontSize: 10, color: "#ffffff", marginTop: 2 }}>ES Futures · Cumulative Volume vs Average</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 30, lineHeight: 1, fontWeight: 900, color: "#ff5b5b", fontFamily: "monospace", marginTop: 6 }}>
-            <span>{pacePct}%</span>
+            <span>{relVolLabel}</span>
             <span style={{ fontSize: 10, fontFamily: "system-ui,sans-serif", color: "#ffd0d0", background: "rgba(255,91,91,.14)", border: "1px solid rgba(255,91,91,.45)", padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase" }}>
               {isActive ? "ACTIVE" : "CLOSED"}
             </span>
@@ -822,7 +831,7 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
         <div style={{ fontSize: 10, color: "#ff5b5b", fontWeight: 900 }}>{elapsedMins}m elapsed · {Math.max(0, SESSION_CLOSE - SESSION_OPEN - elapsedMins)}m left</div>
       </div>
       <div style={{ height: 4, background: "rgba(255,255,255,.08)", borderRadius: 999, overflow: "hidden" }}>
-        <div style={{ width: `${pacePct}%`, height: "100%", background: "linear-gradient(90deg,#ff5b5b,#ff8a8a)", transition: "width .4s" }} />
+        <div style={{ width: `${sessionPct}%`, height: "100%", background: "linear-gradient(90deg,#ff5b5b,#ff8a8a)", transition: "width .4s" }} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, color: "#ffffff", marginTop: 4, padding: "0 2px" }}>
         <span>Session: 9:30 – 16:00 ET</span>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState, useEffect, useRef, useCallback } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import GexChart from "@/components/dashboard/GexChart";
 import Subscriber, { type SubscriberState } from "@/lib/subscriber";
 import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -434,7 +435,7 @@ export default function HomePage() {
       fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" }),
     ];
     if (actualExpiry) {
-      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all&noSubscribe=1`, { cache: "no-store" }));
+      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all&strikeWindow=20&noSubscribe=1`, { cache: "no-store" }));
     }
     const responses = await Promise.all(requests);
     let updated = false;
@@ -641,7 +642,7 @@ export default function HomePage() {
     const fetchExpiryChain = async () => {
       try {
         const fetchChainForExpiry = async (expiry: string) => {
-          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" });
+          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=20&noSubscribe=1`, { cache: "no-store" });
           if (!res.ok) return null;
           return res.json();
         };
@@ -704,8 +705,9 @@ export default function HomePage() {
     // Sort descending (highest strike first) for display
     const sortedAll = [...source].sort((a, b) => b.strike - a.strike);
 
-    // Window: show all available strikes
-    const sorted = sortedAll;
+    const aboveAtm = sortedAll.filter((r) => r.strike > atmStrike).slice(-20);
+    const atmAndBelow = sortedAll.filter((r) => r.strike <= atmStrike).slice(0, 21);
+    const sorted = [...aboveAtm, ...atmAndBelow];
 
     const combinedGex = (r: typeof sorted[0]) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
     const displayNetGex = (r: typeof sorted[0]) => (
@@ -1127,232 +1129,20 @@ export default function HomePage() {
                   <span>src: {chainDebug.source}</span>
                   <span>exp: {chainDebug.expiry || "-"}</span>
                 </div>
-
                 {/* Chart */}
-                <div style={{ flex: 1, position: "relative", width: "100%", minHeight: 0 }} onWheel={handleWheel}>
-                  {/* Hover tooltip */}
-                  {hoverBar && (
-                    <div style={{
-                      position: "absolute", zIndex: 30, pointerEvents: "none",
-                      top: 8, left: "50%", transform: "translateX(-50%)",
-                      background: "rgba(13,17,25,0.92)", border: "1px solid rgba(0,240,255,0.25)",
-                      borderRadius: 6, padding: "6px 12px", fontSize: 11, fontFamily: "monospace",
-                      color: "#fff", display: "flex", gap: 12, backdropFilter: "blur(8px)",
-                    }}>
-                      <span style={{ color: C.muted }}>Strike</span>
-                      <span style={{ fontWeight: 700 }}>{hoverBar.strike.toLocaleString()}</span>
-                      <span style={{ color: C.muted }}>GEX</span>
-                      <span style={{ fontWeight: 700, color: hoverBar.isPos ? C.cyan : "#EAB308" }}>{fmtMoney(hoverBar.val)}</span>
-                    </div>
-                  )}
-                  {/* Y-axis */}
-                  <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace", color: "#fff", alignItems: "flex-end", zIndex: 20, pointerEvents: "none", paddingBottom: 20 }}>
-                    {["+$6B","+$4B","+$2B","0","-$2B","-$4B","-$6B"].map((l, i) => (
-                      <span key={i} style={{ color: "#fff" }}>{l}</span>
-                    ))}
-                  </div>
-                  <svg
-                    ref={svgRef}
-                    viewBox={`0 0 ${CHART_W} ${CHART_H}`}
-                    preserveAspectRatio="none"
-                    style={{ width: "100%", height: "100%", paddingRight: 32, paddingBottom: 24, boxSizing: "border-box", cursor: dragRef.current ? "grabbing" : "grab", userSelect: "none" }}
-                    onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={() => { dragRef.current = null; setHoverBar(null); }}
-                  >
-                    <defs>
-                      <linearGradient id="cyanBarGrad" x1="0" y1="1" x2="0" y2="0">
-                        <stop offset="0%" stopColor="#0284C7"/><stop offset="100%" stopColor="#00F0FF"/>
-                      </linearGradient>
-                      <linearGradient id="goldBarGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#CA8A04"/><stop offset="100%" stopColor="#EAB308"/>
-                      </linearGradient>
-                      <linearGradient id="goldBarBright" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#D97706"/><stop offset="100%" stopColor="#FCD34D"/>
-                      </linearGradient>
-                      <linearGradient id="strikeGradCyan" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="rgba(0,217,255,0.4)"/><stop offset="100%" stopColor="rgba(0,217,255,0.1)"/>
-                      </linearGradient>
-                    </defs>
-                    {/* Grid lines */}
-                    {[CHART_H*0.125, CHART_H*0.25, CHART_H*0.375, CHART_H*0.625, CHART_H*0.75, CHART_H*0.875].map(y => (
-                      <line key={y} x1="0" y1={y} x2={CHART_W} y2={y} stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                    ))}
-                    {/* Zero line */}
-                    <line x1="0" y1={ZERO_Y} x2={CHART_W} y2={ZERO_Y} stroke="rgba(255,255,255,0.3)" strokeWidth="2"/>
-                    {/* Spot price vertical line */}
-                    {chartBars?.spot != null && (() => {
-                      const spotBar = chartBars.bars.find(b => b.strike === chartBars.spot) ?? chartBars.bars.reduce((best, b) => Math.abs(b.strike - chartBars.spot) < Math.abs(best.strike - chartBars.spot) ? b : best, chartBars.bars[0]);
-                      if (!spotBar) return null;
-                      return (
-                        <g>
-                          <line x1={spotBar.x} y1={0} x2={spotBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.22)" strokeWidth="1" strokeDasharray="6 4"/>
-                          <text x={spotBar.x + 4} y={12} fill="#ffffff" fontSize="9" fontFamily="monospace">SPX {chartBars.spot.toLocaleString()}</text>
-                        </g>
-                      );
-                    })()}
-                    {/* Hover highlight */}
-                    {hoverBar && (
-                      <line x1={hoverBar.x} y1={0} x2={hoverBar.x} y2={CHART_H} stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4"/>
-                    )}
-
-                    {/* Live bars */}
-                    {chartBars ? (
-                      <>
-                        {/* Call-Put mode: full-width bars mirrored around zero */}
-                        {chartBars.callPutBars ? chartBars.callPutBars.map((b, i) => (
-                          <g key={`cp-${i}`}>
-                            <rect x={b.x - b.barW / 2} y={ZERO_Y - b.callH} width={b.barW} height={b.callH} fill="url(#cyanBarGrad)" opacity={0.92}/>
-                            <rect x={b.x - b.barW / 2} y={ZERO_Y} width={b.barW} height={b.putH} fill="url(#goldBarGrad)" opacity={0.92}/>
-                          </g>
-                        )) : chartBars.bars.map((b, i) => (
-                          <rect
-                            key={`bar-${i}`}
-                            x={b.x - b.barW / 2}
-                            y={b.y}
-                            width={b.barW}
-                            height={b.barH}
-                            fill={hoverBar?.strike === b.strike ? (b.isPos ? "#fff" : "#FCD34D") : b.fill}
-                            style={b.glow ? { filter: b.glow } : undefined}
-                          />
-                        ))}
-
-                        {/* OI overlay: call=green mountain from bottom, put=gold/dark-green mountain from bottom */}
-                        {chartBars.oiBars && (() => {
-                          const callPts = chartBars.oiBars.map(b => `${b.x},${CHART_H - b.callH}`).join(" ");
-                          const putPts  = chartBars.oiBars.map(b => `${b.x},${CHART_H - b.putH}`).join(" ");
-                          const firstX  = chartBars.oiBars[0]?.x ?? 0;
-                          const lastX   = chartBars.oiBars[chartBars.oiBars.length - 1]?.x ?? CHART_W;
-                          return (
-                            <g opacity={0.75}>
-                              <defs>
-                                <linearGradient id="oiCallGrad" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#10B981" stopOpacity="0.7"/>
-                                  <stop offset="100%" stopColor="#10B981" stopOpacity="0.1"/>
-                                </linearGradient>
-                                <linearGradient id="oiPutGrad" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#EF4444" stopOpacity="0.6"/>
-                                  <stop offset="100%" stopColor="#EF4444" stopOpacity="0.1"/>
-                                </linearGradient>
-                              </defs>
-                              {/* Call OI — green fills from bottom */}
-                              <polygon
-                                points={`${firstX},${CHART_H} ${callPts} ${lastX},${CHART_H}`}
-                                fill="url(#oiCallGrad)"
-                              />
-                              {/* Put OI — red fills from bottom */}
-                              <polygon
-                                points={`${firstX},${CHART_H} ${putPts} ${lastX},${CHART_H}`}
-                                fill="url(#oiPutGrad)"
-                              />
-                            </g>
-                          );
-                        })()}
-
-                        {/* Net DEX — smooth cubic bezier curve */}
-                        {chartBars.dexPoints && chartBars.dexPoints.length > 1 && (() => {
-                          const pts = chartBars.dexPoints;
-                          let d = `M ${pts[0].x} ${pts[0].y}`;
-                          for (let i = 1; i < pts.length; i++) {
-                            const prev = pts[i - 1];
-                            const curr = pts[i];
-                            const cpX = (prev.x + curr.x) / 2;
-                            d += ` C ${cpX},${prev.y} ${cpX},${curr.y} ${curr.x},${curr.y}`;
-                          }
-                          return (
-                            <path d={d} fill="none" stroke="#8B5CF6" strokeWidth="2.5" opacity={0.9}
-                              style={{ filter: "drop-shadow(0 0 4px rgba(139,92,246,0.6))" }}/>
-                          );
-                        })()}
-
-                        {/* GEX Flip — continuous gamma zero profile line with area fill */}
-                        {chartBars.gexFlipPoints && chartBars.gexFlipPoints.length > 1 && (() => {
-                          const pts = chartBars.gexFlipPoints;
-                          // Build smooth path
-                          let d = `M ${pts[0].x} ${pts[0].y}`;
-                          for (let i = 1; i < pts.length; i++) {
-                            const prev = pts[i - 1];
-                            const curr = pts[i];
-                            const cpX = (prev.x + curr.x) / 2;
-                            d += ` C ${cpX},${prev.y} ${cpX},${curr.y} ${curr.x},${curr.y}`;
-                          }
-                          const firstX = pts[0].x, lastX = pts[pts.length - 1].x;
-                          return (
-                            <g>
-                              <defs>
-                                <linearGradient id="flipGradPos" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#00F0FF" stopOpacity="0.3"/>
-                                  <stop offset="100%" stopColor="#00F0FF" stopOpacity="0.0"/>
-                                </linearGradient>
-                                <linearGradient id="flipGradNeg" x1="0" y1="1" x2="0" y2="0">
-                                  <stop offset="0%" stopColor="#EAB308" stopOpacity="0.3"/>
-                                  <stop offset="100%" stopColor="#EAB308" stopOpacity="0.0"/>
-                                </linearGradient>
-                              </defs>
-                              {/* Area fill above zero */}
-                              <path
-                                d={`${d} L ${lastX},${ZERO_Y} L ${firstX},${ZERO_Y} Z`}
-                                fill="url(#flipGradPos)" opacity={0.6}
-                                style={{ clipPath: `inset(0 0 ${CHART_H - ZERO_Y}px 0)` }}
-                              />
-                              {/* Area fill below zero */}
-                              <path
-                                d={`${d} L ${lastX},${ZERO_Y} L ${firstX},${ZERO_Y} Z`}
-                                fill="url(#flipGradNeg)" opacity={0.6}
-                                style={{ clipPath: `inset(${ZERO_Y}px 0 0 0)` }}
-                              />
-                              {/* The profile line itself */}
-                              <path d={d} fill="none" stroke="#F97316" strokeWidth="2"
-                                opacity={0.9} style={{ filter: "drop-shadow(0 0 4px rgba(249,115,22,0.5))" }}/>
-                              {/* Zero line reference */}
-                              <line x1={firstX} y1={ZERO_Y} x2={lastX} y2={ZERO_Y}
-                                stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4"/>
-                            </g>
-                          );
-                        })()}
-
-                        {/* Peak label — at tip of tallest absolute bar */}
-                        {(() => {
-                          const pb = chartBars.peakPosBar;
-                          if (!pb || !chartBars.peakLabel) return null;
-                          // tip: top of pos bar = pb.y; bottom of neg bar = pb.y + pb.barH
-                          const tipY = pb.isPos
-                            ? pb.y               // top edge of positive bar
-                            : pb.y + pb.barH;    // bottom edge of negative bar
-                          const labelY = pb.isPos
-                            ? Math.max(16, tipY - 4)       // above bar tip
-                            : Math.min(CHART_H - 4, tipY + 18); // below bar tip
-                          const rectY = pb.isPos
-                            ? Math.max(2, tipY - 18)
-                            : Math.min(CHART_H - 16, tipY + 4);
-                          return (
-                            <>
-                              <rect x={pb.x - 18} y={rectY} width={36} height={12} fill="url(#strikeGradCyan)" rx="2"/>
-                              <text x={pb.x} y={labelY} textAnchor="middle" fontSize="9" fontFamily="monospace" fill="#ffffff" fontWeight="700">{chartBars.peakLabel}</text>
-                            </>
-                          );
-                        })()}
-                      </>
-                    ) : (
-                      <>
-                        <rect x="370" y="20" width="25" height={ZERO_Y - 20} fill="#00F0FF" style={{ filter: "drop-shadow(0 0 8px rgba(0,240,255,0.6))" }}/>
-                        <rect x="333" y="5" width="44" height="14" fill="url(#strikeGradCyan)" rx="2"/>
-                        <text x="355" y="14" textAnchor="middle" fontSize="11" fontFamily="monospace" fill={C.cyan} fontWeight="700">Loading…</text>
-                      </>
-                    )}
-                  </svg>
-                  {/* X-axis labels */}
-                  {chartBars && (
-                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "space-between", padding: "4px 0 0", fontSize: 9, fontFamily: "monospace", color: "#fff" }}>
-                      {[0, Math.floor(chartBars.bars.length/4), Math.floor(chartBars.bars.length/2), Math.floor(chartBars.bars.length*3/4), chartBars.bars.length-1].map(i => {
-                        const b = chartBars.bars[i];
-                        if (!b) return null;
-                        const isAtm = Math.abs(b.strike - (spx || 7554)) < 10;
-                        return <span key={i} style={{ color: "#fff", fontWeight: isAtm ? 700 : 500 }}>{b.strike.toLocaleString()}</span>;
-                      })}
-                    </div>
-                  )}
+                <div style={{ flex: 1, position: "relative", width: "100%", minHeight: 0 }}>
+                  <GexChart
+                    chain={rawChain}
+                    spotPrice={spx}
+                    flipPoint={gexFlip}
+                    gexProfile={gexProfile}
+                    mode={gexMode === "call-put" ? "call-put" : "net"}
+                    dataMode={dataMode}
+                    showOI={showOiOverlay}
+                    showDex={showNetDex}
+                    showFlipCurve={showGexFlip}
+                    expiry={expiryMap[selectedExpiry]}
+                  />
                 </div>
               </div>
               );
