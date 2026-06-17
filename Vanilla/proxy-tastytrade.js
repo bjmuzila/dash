@@ -3508,6 +3508,65 @@ const server = http.createServer(async (req, res) => {
       : sendJSON(res, 401, { error: 'Refresh failed' });
   }
 
+  // ── GET /proxy/api/spx-core ─────────────────────────────────────────────
+  // Returns current SPX price and quote data
+  if (req.method === 'GET' && p === '/proxy/api/spx-core') {
+    const cached = dxQuoteCache['/SPX:XCME'] || dxQuoteCache['SPX'];
+    if (cached) {
+      return sendJSON(res, 200, {
+        symbol: 'SPX',
+        lastPrice: cached.last || cached.mark || cached.bidPrice || 0,
+        bidPrice: cached.bidPrice,
+        askPrice: cached.askPrice,
+        dayOpenPrice: cached.dayOpenPrice || 0,
+        dayHighPrice: cached.dayHighPrice || 0,
+        dayLowPrice: cached.dayLowPrice || 0,
+        dayVolume: cached.dayVolume || 0,
+        openInterest: cached.openInterest || 0
+      });
+    }
+    const { status, data } = await ttGet('/market-metrics?symbols=SPX');
+    return sendJSON(res, status, data);
+  }
+
+  // ── GET /proxy/api/spx-prevclose ─────────────────────────────────────────────
+  // Returns previous close price for SPX
+  if (req.method === 'GET' && p === '/proxy/api/spx-prevclose') {
+    const cached = dxQuoteCache['/SPX:XCME'] || dxQuoteCache['SPX'];
+    if (cached && cached.prevDayClosePrice) {
+      return sendJSON(res, 200, {
+        symbol: 'SPX',
+        prevDayClosePrice: cached.prevDayClosePrice
+      });
+    }
+    const { status, data } = await ttGet('/market-metrics?symbols=SPX');
+    return sendJSON(res, status, data);
+  }
+
+  // ── GET /proxy/api/spx-chain ─────────────────────────────────────────────────
+  // Returns option chain for SPX at given expiration
+  if (req.method === 'GET' && p === '/proxy/api/spx-chain') {
+    const expiration = u.searchParams.get('expiration') || '';
+    const type = u.searchParams.get('type') || 'both';
+    try {
+      // Use the main chains endpoint which already handles formatting
+      const { status, data } = await ttGet(`/option-chains/SPX/nested`);
+      if (status === 200 && data?.data?.[0]) {
+        const chain = data.data[0];
+        // Filter by expiration if provided
+        if (expiration && chain.option_chain) {
+          const filtered = chain.option_chain.filter(exp => exp.expiration_date === expiration);
+          return sendJSON(res, 200, filtered.length > 0 ? filtered : chain.option_chain);
+        }
+        return sendJSON(res, 200, chain.option_chain || chain);
+      }
+      return sendJSON(res, status || 500, data || { error: 'No chain data' });
+    } catch (e) {
+      log('[SPX-CHAIN] Error:', e.message);
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
   if (req.method === 'GET' && p.startsWith('/proxy/api/tt/quote/')) {
     const sym = decodeURIComponent(p.slice('/proxy/api/tt/quote/'.length));
     const { status, data } = await ttGet(`/market-metrics?symbols=${sym.split(',').map(s => encodeURIComponent(s.trim())).join(',')}`);
