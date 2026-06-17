@@ -4323,22 +4323,12 @@ const server = http.createServer(async (req, res) => {
       log('Cap: trimming on-demand streamer syms from', streamerSyms.length, 'to', ON_DEMAND_CAP, 'for', sym);
       streamerSyms = streamerSyms.slice(0, ON_DEMAND_CAP);
     }
-    // Only subscribe symbols not already active — prevents re-flooding on every chain fetch
-    const newSyms = streamerSyms.filter(s => !subscriptions.has(s));
-    if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
-      newSyms.forEach(s => {
-        addAutoSubscription(s, ['Quote','Greeks','Summary','Trade']);
-        queueAutoSubscription({ type: 'Quote',   symbol: s });
-        queueAutoSubscription({ type: 'Greeks',  symbol: s });
-        queueAutoSubscription({ type: 'Summary', symbol: s });
-        queueAutoSubscription({ type: 'Trade',   symbol: s });
-      });
-      sendSubscriptionsRateLimited();
-      log('Subscribed', newSyms.length, 'NEW on-demand symbols (', streamerSyms.length - newSyms.length, 'already active) for', sym, 'expiry', exp || 'nearest');
-    } else if (isPrewarmedFresh) {
+    // DISABLED: Do NOT auto-subscribe on-demand chain fetches to prevent symbol explosion
+    // Frontend can explicitly subscribe via /api/proxy/dxlink-subscribe if needed
+    if (isPrewarmedFresh) {
       log('Chain fetch for pre-warmed', sym, '— skipping subscribe (prewarm handles it)');
-    } else if (streamerSyms.length) {
-      log('Chain fetch: all', streamerSyms.length, 'symbols already subscribed, skipping queue');
+    } else {
+      log('Chain fetch for', sym, 'expiry', exp || 'nearest', '— NOT auto-subscribing', streamerSyms.length, 'symbols (use explicit subscribe endpoint)');
     }
 
     // awaitDX: wait for live dxLink data — but only if cache is cold (< 20% already populated)
