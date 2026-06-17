@@ -14,7 +14,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-const PROXY = process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com";
+function getProxyUrl(): string {
+  if (process.env.NEXT_PUBLIC_PROXY_URL) return process.env.NEXT_PUBLIC_PROXY_URL;
+  if (typeof window !== "undefined") return window.location.origin;
+  return "http://localhost:3001";
+}
+
 const CACHE_KEY = "nav_daily_em_v1";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -98,7 +103,7 @@ interface CachedEM {
 async function getCloses(): Promise<{ spx: number; es: number; ndx: number; nq: number }> {
   if (isMarketHours()) {
     try {
-      const r = await fetch(`${PROXY}/proxy/api/tt/quotes-batch?symbols=SPX,NDX,/ES:XCME,/NQ:XCME`);
+      const r = await fetch(`${getProxyUrl()}/proxy/api/tt/quotes-batch?symbols=SPX,NDX,/ES:XCME,/NQ:XCME`);
       if (r.ok) {
         const d = await r.json();
         const items: Record<string, unknown>[] = d?.data?.items || d?.items || [];
@@ -123,7 +128,7 @@ async function getCloses(): Promise<{ spx: number; es: number; ndx: number; nq: 
   // Outside market hours — use em-closes
   const etNow = getEtNow();
   const todayStr = etNow.toISOString().slice(0, 10);
-  const url = `${PROXY}/proxy/api/tt/em-closes` + (isInEmWindow() ? `?closeDate=${todayStr}` : "");
+  const url = `${getProxyUrl()}/proxy/api/tt/em-closes` + (isInEmWindow() ? `?closeDate=${todayStr}` : "");
   const r = await fetch(url);
   if (!r.ok) throw new Error("em-closes failed: " + r.status);
   const d = await r.json();
@@ -159,7 +164,7 @@ async function getStraddle(indexSym: string, spotClose: number): Promise<EMResul
 
   for (const expStr of expirations) {
     try {
-      const chainUrl = `${PROXY}/proxy/api/tt/chains/${encodeURIComponent(indexSym)}?range=all&expiration=${encodeURIComponent(expStr)}&noSubscribe=1`;
+      const chainUrl = `${getProxyUrl()}/proxy/api/tt/chains/${encodeURIComponent(indexSym)}?range=all&expiration=${encodeURIComponent(expStr)}&noSubscribe=1`;
       const r = await fetch(chainUrl);
       if (!r.ok) continue;
       const j = await r.json();
@@ -202,7 +207,7 @@ async function getStraddle(indexSym: string, spotClose: number): Promise<EMResul
             if (callSym || putSym) {
               try {
                 const syms = [callSym, putSym].filter(Boolean);
-                const mr = await fetch(`${PROXY}/proxy/api/tt/option-marks?symbols=${encodeURIComponent(syms.join(","))}`);
+                const mr = await fetch(`${getProxyUrl()}/proxy/api/tt/option-marks?symbols=${encodeURIComponent(syms.join(","))}`);
                 if (mr.ok) {
                   const md = await mr.json();
                   const marks: Record<string, Record<string, unknown>> = {};
@@ -226,7 +231,7 @@ async function getStraddle(indexSym: string, spotClose: number): Promise<EMResul
           if ((callMid <= 0 || putMid <= 0 || callIV <= 0 || putIV <= 0) && (callSym || putSym)) {
             try {
               const syms = [callSym, putSym].filter(Boolean);
-              const mr = await fetch(`${PROXY}/proxy/api/tt/option-marks?symbols=${encodeURIComponent(syms.join(","))}`);
+              const mr = await fetch(`${getProxyUrl()}/proxy/api/tt/option-marks?symbols=${encodeURIComponent(syms.join(","))}`);
               if (mr.ok) {
                 const md = await mr.json();
                 const marks: Record<string, Record<string, unknown>> = {};

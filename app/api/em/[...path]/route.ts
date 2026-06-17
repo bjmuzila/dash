@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PROXY_BASE = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
+const PROXY_BASE = process.env.PROXY_URL ?? "http://localhost:3001";
 
 // Catch-all proxy: /api/em/[...path] → http://localhost:3001/proxy/api/tt/[...path]
 // Also handles: /api/em/subscription-ready, /api/em/discord-webhook

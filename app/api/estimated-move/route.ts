@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const PROXY = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
+const PROXY = process.env.PROXY_URL ?? "http://localhost:3001";
 
 // Symbols to compute EM for, in order
 const TICKERS = [

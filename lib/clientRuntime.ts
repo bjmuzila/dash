@@ -22,18 +22,24 @@ export function getClientProxyBase(): string {
   if (isLocalHost(window.location.hostname)) {
     return `${window.location.protocol}//${window.location.hostname}:3001`;
   }
-  return "https://vanila-8zn1.onrender.com";
+  // Use same-origin requests (relative path) for production
+  return window.location.origin;
 }
 
 export function getClientWsUrl(path = "/ws/dxlink"): string {
   if (typeof window === "undefined") return "";
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const envUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_WS_URL ?? "", "ws");
-  const base = envUrl
-    || (isLocalHost(window.location.hostname)
-      ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:3001`
-      : "wss://vanila-8zn1.onrender.com");
-  return base.endsWith(normalizedPath) ? base : `${base}${normalizedPath}`;
+  if (envUrl) {
+    return envUrl.endsWith(normalizedPath) ? envUrl : `${envUrl}${normalizedPath}`;
+  }
+  if (isLocalHost(window.location.hostname)) {
+    const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${wsProto}://${window.location.hostname}:3001${normalizedPath}`;
+  }
+  // Use same-origin requests for production (WSS to same host)
+  const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${wsProto}://${window.location.host}${normalizedPath}`;
 }
 
 export async function isLiveFeedReady(force = false): Promise<boolean> {

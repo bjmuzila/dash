@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const PROXY = process.env.PROXY_URL ?? (process.env.RENDER ? "https://vanila-8zn1.onrender.com" : "http://localhost:3001");
+const PROXY = process.env.PROXY_URL ?? "http://localhost:3001";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

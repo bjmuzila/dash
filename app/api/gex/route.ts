@@ -3,7 +3,7 @@ import { computeGexSummary } from "@/lib/math/gex";
 import { computeGEXProfile } from "@/lib/math/calculations";
 import type { ChainRow } from "@/lib/math/calculations";
 
-const PROXY = process.env.PROXY_URL ?? (process.env.RENDER ? "https://vanila-8zn1.onrender.com" : "http://localhost:3001");
+const PROXY = process.env.PROXY_URL ?? "http://localhost:3001";
 
 interface ProxyOption {
   "open-interest"?: number;

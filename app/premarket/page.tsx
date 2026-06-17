@@ -326,8 +326,10 @@ export default function PremarketPage() {
     function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
       try {
+        const wsProto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws";
+        const wsHost = typeof window !== "undefined" ? window.location.host : "localhost:3001";
         const ws = new WebSocket(
-          (process.env.NEXT_PUBLIC_WS_URL ?? "wss://vanila-8zn1.onrender.com") + "/ws/dxlink"
+          (process.env.NEXT_PUBLIC_WS_URL ?? `${wsProto}://${wsHost}`) + "/ws/dxlink"
         );
         wsRef.current = ws;
 
@@ -448,9 +450,9 @@ export default function PremarketPage() {
     // Subscribe RTY/YM/VIX/SPX — ES/NQ are pre-subscribed by proxy
     async function subscribeExtras() {
       try {
+        const proxyBase = process.env.NEXT_PUBLIC_PROXY_URL ?? (typeof window !== "undefined" ? window.location.origin : "http://localhost:3001");
         await fetch(
-          (process.env.NEXT_PUBLIC_PROXY_URL ?? "https://vanila-8zn1.onrender.com") +
-            "/proxy/dxlink/subscribe",
+          proxyBase + "/proxy/dxlink/subscribe",
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
