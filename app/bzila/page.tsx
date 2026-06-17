@@ -10,6 +10,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useSpxFlow } from "@/hooks/useSpxFlow";
+import { usePageLoadStatus } from "@/lib/pageStatus";
 
 type StrikeMode = "rolling" | "change";
 type StrikeBucket = "above" | "below";
@@ -657,6 +658,7 @@ function StrikeBucketChart({
 }
 
 export default function BzilaPage() {
+  usePageLoadStatus({ pageKey: "bzila", pageLabel: "Bzila", path: "/bzila" });
   const { flow } = useSpxFlow(true);
   const initialCycle = useMemo(() => getSessionCycle(), []);
   const [mode, setMode] = useState<StrikeMode>("rolling");
