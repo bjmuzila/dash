@@ -293,6 +293,7 @@ const PAGE_MENU = [
   { label: "Est. Move",     href: "/estimated-move" },
   { label: "Options Chain", href: "/options-chain" },
   { label: "Multi Greek",   href: "/mult-greek" },
+  { label: "Dev",           href: "/dev" },
 ];
 
 const CALENDAR_MENU = [

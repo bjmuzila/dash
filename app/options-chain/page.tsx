@@ -139,17 +139,6 @@ function buildExpiries() {
   return list;
 }
 
-function tickerSeed(input: string) {
-  return input
-    .toUpperCase()
-    .split("")
-    .reduce((sum, ch, index) => sum + ch.charCodeAt(0) * (index + 3), 0);
-}
-
-function expirySeed(input: string) {
-  return input.replaceAll("-", "").split("").reduce((sum, ch, index) => sum + Number(ch) * (index + 1), 0);
-}
-
 function fmtMoney(value: number) {
   const sign = value >= 0 ? "+" : "-";
   const abs = Math.abs(value);
@@ -187,36 +176,6 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
     : `rgba(220,50,60,${finalOpacity})`;
 }
 
-function buildMockRows(ticker: string, expiry: string, refreshSeed: number) {
-  const seed = tickerSeed(ticker) + expirySeed(expiry) + Math.floor(refreshSeed) * 17;
-  const baseSpot = ticker === "SPX" ? 6050 : ticker === "QQQ" ? 530 : ticker === "SMH" ? 290 : 100 + (seed % 240);
-  const step = baseSpot > 1000 ? 5 : baseSpot > 300 ? 2.5 : 1;
-  const count = 41;
-  const center = Math.round(baseSpot / step) * step;
-  const start = center - step * Math.floor(count / 2);
-
-  const rows: MockRow[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const strike = Number((start + step * index).toFixed(step % 1 === 0 ? 0 : 2));
-    const distance = index - Math.floor(count / 2);
-    const wave = Math.sin((seed + index * 11) / 7.5);
-    const alt = Math.cos((seed + index * 9) / 5.25);
-    const decay = 1 - Math.min(Math.abs(distance) / 24, 0.82);
-
-    rows.push({
-      strike,
-      gex: Math.round((wave * 5.2 + alt * 2.4) * 1_100_000 * decay),
-      dex: Math.round((Math.cos((seed + index * 13) / 8.2) * 4.6 - distance * 0.11) * 760_000 * decay),
-      chex: Math.round((Math.sin((seed + index * 5) / 4.1) * 3.2 + distance * 0.08) * 420_000 * decay),
-      vex: Math.round((Math.cos((seed + index * 7) / 6.4) * 2.6 - Math.sin(index / 3)) * 360_000 * decay),
-      volume: Math.round((1_100 + Math.abs(alt) * 6_400 + Math.abs(distance) * 120) * decay),
-      oi: Math.round((3_000 + Math.abs(wave + alt) * 18_000 + Math.abs(distance) * 180) * decay),
-    });
-  }
-
-  return { rows, spot: center };
-}
-
 interface LiveEntry {
   iv?: number | null;
   delta?: number | null;
@@ -245,10 +204,10 @@ export default function OptionsChainPage() {
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [intensity, setIntensity] = useState(0.4);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
-  const [useRealData, setUseRealData] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0); // 0-100
   const [greekMode, setGreekMode] = useState<GreekMode>("gex");
   const pageRef = useRef<HTMLDivElement>(null);
+  const [chainError, setChainError] = useState<string | null>(null);
 
   // Live WS data ref + batched subscription
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
@@ -298,6 +257,7 @@ export default function OptionsChainPage() {
     const bust = bustCache ? `&noCache=1` : "";
 
     try {
+      setChainError(null);
       setLoadProgress(10); // Fetching chain data
       const res = await fetch(
         `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}${bust}`
@@ -306,19 +266,36 @@ export default function OptionsChainPage() {
       if (token !== loadTokenRef.current) return;
 
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
-      if (!items.length) return;
+      if (!items.length) {
+        strikeRowsRef.current = [];
+        setUnderlyingPrice(0);
+        setChainError(`No live chain payload returned for ${ticker} ${expDate}.`);
+        setLoadProgress(0);
+        setRefreshSeed(s => s + 0.01);
+        return;
+      }
 
       setLoadProgress(30); // Parsing strikes
       const target = (items as { "expiration-date"?: string }[]).filter(i =>
         String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
       );
       const strikes = buildStrikes(target.length ? target : items as unknown[]);
+      if (!strikes.length) {
+        strikeRowsRef.current = [];
+        setUnderlyingPrice(0);
+        setChainError(`No live strikes resolved for ${ticker} ${expDate}.`);
+        setLoadProgress(0);
+        setRefreshSeed(s => s + 0.01);
+        return;
+      }
       strikeRowsRef.current = strikes;
 
       // Extract underlying price from API response
       const underlyingPrice = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (underlyingPrice > 0) {
         setUnderlyingPrice(underlyingPrice);
+      } else {
+        setUnderlyingPrice(0);
       }
 
       setLoadProgress(50); // Subscribing to symbols
@@ -346,6 +323,9 @@ export default function OptionsChainPage() {
       setRefreshSeed(s => s + 0.01);
     } catch (err) {
       console.error(`[OptionsChain] Load failed for ${ticker}:`, err);
+      strikeRowsRef.current = [];
+      setUnderlyingPrice(0);
+      setChainError(`Live chain load failed for ${ticker} ${expDate}.`);
       setLoadProgress(0);
     }
   };
@@ -429,7 +409,7 @@ export default function OptionsChainPage() {
   const { rows, spot } = useMemo(() => {
     const strikes = strikeRowsRef.current;
     if (!strikes.length) {
-      return buildMockRows(activeTicker, selectedExpiry || expiries[0]?.value || etDateKey(etToday()), refreshSeed);
+      return { rows: [] as MockRow[], spot: 0 };
     }
 
     // Use underlying price from chain data, fallback to middle strike
@@ -691,7 +671,7 @@ export default function OptionsChainPage() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
           <span style={{ fontSize: 11, color: "#e4e4e7", fontWeight: 700 }}>
-            {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot.toFixed(2)}</span>
+            {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
           </span>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e676" }} />
           <span style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
@@ -737,8 +717,12 @@ export default function OptionsChainPage() {
         {!strikeRowsRef.current.length ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 12, color: "#4a6a88" }}>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Select ticker, expiry & % strikes</div>
-              <div style={{ fontSize: 11 }}>Then click GO to load chain</div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+                {chainError ? "No Live Chain Data" : "Select ticker, expiry & % strikes"}
+              </div>
+              <div style={{ fontSize: 11 }}>
+                {chainError ?? "Then click GO to load chain"}
+              </div>
             </div>
           </div>
         ) : visibleRows.map((row) => {
