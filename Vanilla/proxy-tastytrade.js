@@ -2458,15 +2458,15 @@ const subscriptionManager = {
       requested: Date.now()
     });
 
-    // Subscribe only NEW symbols to dxLink
+    // Track symbols for this page (cache-only, no auto-subscribe)
+    // Frontend must explicitly call /api/proxy/dxlink-subscribe if it wants live updates
     const newSymbols = symbols.filter(sym => !this.activeSubscriptions.has(sym));
     if (newSymbols.length > 0) {
-      log(`[SubscriptionMgr] Adding ${newSymbols.length} new subscriptions for page ${pageId}`);
+      log(`[SubscriptionMgr] Tracking ${newSymbols.length} symbols for page ${pageId} (no auto-subscribe)`);
       newSymbols.forEach(sym => {
         this.activeSubscriptions.add(sym);
-        addAutoSubscription(sym, ['Quote','Greeks','Summary','Trade']);
+        // DISABLED: Do not auto-subscribe — let frontend explicitly request dxLink via /api/proxy/dxlink-subscribe
       });
-      sendSubscriptionsRateLimited();
     }
 
     // Return immediately - don't wait for cache
