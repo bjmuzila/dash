@@ -31,8 +31,8 @@ const BACKUP_DIR     = path.join(__dirname, 'data');
 const DB_FILE        = path.join(__dirname, 'data', 'trading.db');
 const BUY_SELL_BACKUP_FILE = path.join(BACKUP_DIR, 'buy-sell-scores.json');
 const DAILY_CLOSES_FILE    = path.join(BACKUP_DIR, 'daily-closes.json');
-const REFRESH_ENV    = process.env.REFRESH_TOKEN || '';
-const CLIENT_SECRET  = process.env.CLIENT_SECRET  || '';
+const REFRESH_ENV    = process.env.REFRESH_TOKEN || process.env.TT_REFRESH_TOKEN || '';
+const CLIENT_SECRET  = process.env.CLIENT_SECRET  || process.env.TT_CLIENT_SECRET || '';
 const SCHWAB_CLIENT_ID = process.env.SCHWAB_CLIENT_ID || 'REDACTED';
 const SCHWAB_CLIENT_SECRET = process.env.SCHWAB_CLIENT_SECRET || 'REDACTED';
 const SCHWAB_BASE   = 'api.schwabapi.com';
@@ -5440,7 +5440,7 @@ server.listen(PORT, async () => {
       // (subscribed via /proxy/dxlink/subscribe endpoint from estimated-moves.js)
     }
   } else {
-    log('⚠ Token refresh failed — check .env REFRESH_TOKEN');
+    log('⚠ Token refresh failed — check REFRESH_TOKEN or TT_REFRESH_TOKEN');
   }
   // Auto-refresh every 90 min
   setInterval(async () => {
