@@ -81,16 +81,43 @@ function flattenChainResponse(data: any): SubscriberState["chain"] {
       if (!(strike > 0)) continue;
 
       const spotPrice = Number(data?.data?.underlyingPrice ?? data?.underlyingPrice ?? strike);
-      const callOI = Number(call?.["open-interest"] ?? call?.openInterest ?? 0);
-      const putOI = Number(put?.["open-interest"] ?? put?.openInterest ?? 0);
-      const callVolume = Number(call?.volume ?? call?.dayVolume ?? 0);
-      const putVolume = Number(put?.volume ?? put?.dayVolume ?? 0);
-      const callGamma = Math.abs(Number(call?.gamma ?? 0));
-      const putGamma = Math.abs(Number(put?.gamma ?? 0));
-      const callDelta = Number(call?.delta ?? 0);
-      const putDelta = Number(put?.delta ?? 0);
-      const callIV = Number(call?.["implied-volatility"] ?? call?.impliedVolatility ?? 0);
-      const putIV = Number(put?.["implied-volatility"] ?? put?.impliedVolatility ?? 0);
+      const pickNum = (...values: unknown[]) => {
+        for (const value of values) {
+          const num = Number(value);
+          if (Number.isFinite(num) && num !== 0) return num;
+        }
+        return 0;
+      };
+      const callOI = pickNum(
+        call?.["open-interest"],
+        call?.openInterest,
+        call?.open_interest,
+        call?.["open-interest-quantity"],
+        call?.oi,
+        call?.["oi"],
+        strikeRow?.callOI,
+        strikeRow?.callOi,
+        strikeRow?.call_open_interest
+      );
+      const putOI = pickNum(
+        put?.["open-interest"],
+        put?.openInterest,
+        put?.open_interest,
+        put?.["open-interest-quantity"],
+        put?.oi,
+        put?.["oi"],
+        strikeRow?.putOI,
+        strikeRow?.putOi,
+        strikeRow?.put_open_interest
+      );
+      const callVolume = pickNum(call?.volume, call?.dayVolume, call?.day_volume, strikeRow?.callVolume, strikeRow?.callVol);
+      const putVolume = pickNum(put?.volume, put?.dayVolume, put?.day_volume, strikeRow?.putVolume, strikeRow?.putVol);
+      const callGamma = Math.abs(pickNum(call?.gamma, call?.["gamma"], strikeRow?.callGamma, strikeRow?.call_gamma));
+      const putGamma = Math.abs(pickNum(put?.gamma, put?.["gamma"], strikeRow?.putGamma, strikeRow?.put_gamma));
+      const callDelta = pickNum(call?.delta, call?.["delta"], strikeRow?.callDelta, strikeRow?.call_delta);
+      const putDelta = pickNum(put?.delta, put?.["delta"], strikeRow?.putDelta, strikeRow?.put_delta);
+      const callIV = pickNum(call?.["implied-volatility"], call?.impliedVolatility, call?.iv, strikeRow?.callIV, strikeRow?.call_iv);
+      const putIV = pickNum(put?.["implied-volatility"], put?.impliedVolatility, put?.iv, strikeRow?.putIV, strikeRow?.put_iv);
       const callGEX = callGamma * callOI * spotPrice * spotPrice;
       const putGEX = putGamma * putOI * spotPrice * spotPrice * -1;
 
