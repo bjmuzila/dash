@@ -2943,6 +2943,7 @@ function sleep(ms) {
 const subscriptionManager = {
   pageOwnedSubscriptions: new Map(),
   pageRequests: new Map(),
+  maxSubscriptionsPerPage: 500,
 
   releaseSymbols(symbols, reason = 'page-release') {
     if (!symbols || symbols.size === 0) return 0;
@@ -2974,9 +2975,13 @@ const subscriptionManager = {
     }
 
     const uniqueSymbols = [...new Set(symbols.filter(Boolean))];
-    const nextSymbols = new Set(uniqueSymbols);
+    const cappedSymbols = uniqueSymbols.slice(0, this.maxSubscriptionsPerPage);
+    if (uniqueSymbols.length > cappedSymbols.length) {
+      log(`[SubscriptionMgr] Capping page ${pageId} from ${uniqueSymbols.length} to ${cappedSymbols.length} symbols to keep live subscriptions bounded`);
+    }
+    const nextSymbols = new Set(cappedSymbols);
     const previous = this.pageRequests.get(pageId)?.symbols || new Set();
-    const addedSymbols = uniqueSymbols.filter(sym => !previous.has(sym));
+    const addedSymbols = cappedSymbols.filter(sym => !previous.has(sym));
     const removedSymbols = new Set([...previous].filter(sym => !nextSymbols.has(sym)));
 
     if (removedSymbols.size > 0) {

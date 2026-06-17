@@ -714,6 +714,11 @@ function defaultAutoTypesForSymbol(sym) {
 
 function addAutoSubscription(sym, types = null) {
   if (!sym) return;
+  // Hard cap: never exceed 500 symbols (prevents memory explosion)
+  const MAX_SUBSCRIPTIONS = 500;
+  if (subscriptions.size >= MAX_SUBSCRIPTIONS && !subscriptions.has(sym)) {
+    return;  // Silently drop new subscriptions when at cap
+  }
   const isNew = !subscriptions.has(sym);
   subscriptions.add(sym);
   const current = subscriptionTypesBySymbol.get(sym) || new Set();
