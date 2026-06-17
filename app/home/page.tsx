@@ -506,7 +506,7 @@ export default function HomePage() {
       fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" }),
     ];
     if (actualExpiry) {
-      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all&strikeWindow=20&noSubscribe=1`, { cache: "no-store" }));
+      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all&strikeWindow=80&noSubscribe=1`, { cache: "no-store" }));
     }
     const responses = await Promise.all(requests);
     let updated = false;
@@ -716,7 +716,7 @@ export default function HomePage() {
     const fetchExpiryChain = async () => {
       try {
         const fetchChainForExpiry = async (expiry: string) => {
-          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=20&noSubscribe=1`, { cache: "no-store" });
+          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=80&noSubscribe=1`, { cache: "no-store" });
           if (!res.ok) return null;
           return res.json();
         };

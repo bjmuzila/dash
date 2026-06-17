@@ -2166,8 +2166,7 @@ function scheduleDailySpxYahooOiCache() {
       if (status !== 200) throw new Error('nested chain status ' + status);
       const chainObj = data?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || data?.data?.items?.[0];
       const expirations = (chainObj?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-      const massiveMaps = await fetchSpxMassiveOiForExpirations(expirations);
-      await fetchSpxYahooOiForExpirations(expirations.filter(expDate => !(massiveMaps.get(expDate)?.size > 0)));
+      await fetchSpxYahooOiForExpirations(expirations);
       log('[OI] Daily 6am SPX open-interest cache warmed for', expirations.length, 'expirations');
     } catch (e) {
       log('[Yahoo OI] Daily cache warm failed:', e.message);
@@ -3998,10 +3997,7 @@ const server = http.createServer(async (req, res) => {
           const chainData = await chainResp.json();
           const expirations = chainData?.data?.items?.[0]?.expirations || [];
           const oiExpirations = (filterCompact ? [expiryParam] : expirations.map(exp => exp['expiration-date'])).filter(Boolean);
-          const massiveOiMaps = await fetchSpxMassiveOiForExpirations(oiExpirations);
-          const yahooOiMaps = await fetchSpxYahooOiForExpirations(
-            oiExpirations.filter(expDate => !(massiveOiMaps.get(expDate)?.size > 0))
-          );
+          const yahooOiMaps = await fetchSpxYahooOiForExpirations(oiExpirations);
           log(`[GEX-CHAIN] REST returned ${expirations.length} expirations`);
 
           for (const exp of expirations) {
@@ -4017,10 +4013,7 @@ const server = http.createServer(async (req, res) => {
               if (!strike || strike <= 0) continue;
               const rawType = String(option['option-type'] || '').toUpperCase();
               const streamerSym = option['streamer-symbol'] || '';
-              const fallbackOI = (
-                yahooOiLookup(massiveOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike) ||
-                yahooOiLookup(yahooOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike)
-              )?.oi || 0;
+              const fallbackOI = yahooOiLookup(yahooOiMaps.get(expDate), streamerSym, 'SPXW', expDate, rawType, strike)?.oi || 0;
 
               if (!strikeMap[strike]) {
                 strikeMap[strike] = {
@@ -4397,20 +4390,16 @@ const server = http.createServer(async (req, res) => {
       if (/^SPX[W]?$/i.test(sym)) {
         itemsToReturn = JSON.parse(JSON.stringify(cachedItems));
         const expDates = itemsToReturn.map(eg => eg['expiration-date']).filter(Boolean);
-        const massiveMaps = await fetchSpxMassiveOiForExpirations(expDates);
         const fallbackMaps = await fetchSpxYahooOiForExpirations(expDates);
         for (const eg of itemsToReturn) {
           const expDate = eg['expiration-date'];
-          const massiveMap = massiveMaps.get(expDate);
           const map = fallbackMaps.get(expDate);
           for (const strikeRow of eg.strikes || []) {
             const strike = parseFloat(strikeRow['strike-price'] || 0);
             for (const [sideName, sideCode] of [['call', 'C'], ['put', 'P']]) {
               const leg = strikeRow[sideName];
               if (!leg || Number(leg.openInterest || leg['open-interest'] || 0) > 0) continue;
-              const hit =
-                yahooOiLookup(massiveMap, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike) ||
-                yahooOiLookup(map, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike);
+              const hit = yahooOiLookup(map, leg['streamer-symbol'], cachedRootSymbol, expDate, sideCode, strike);
               if (hit?.oi > 0) {
                 leg.openInterest = hit.oi;
                 leg['open-interest'] = hit.oi;
@@ -4566,11 +4555,8 @@ const server = http.createServer(async (req, res) => {
       log('[awaitDX] dxLink wait complete');
     }
 
-    const massiveOiFallbackMaps = isSpxFamily
-      ? await fetchSpxMassiveOiForExpirations(targetExps)
-      : new Map();
     const oiFallbackMaps = isSpxFamily
-      ? await fetchSpxYahooOiForExpirations(targetExps.filter(expDate => !(massiveOiFallbackMaps.get(expDate)?.size > 0)))
+      ? await fetchSpxYahooOiForExpirations(targetExps)
       : new Map();
 
     // Build nested structure: data.data.items = array of expGroups

@@ -41,6 +41,7 @@ const SettingsIcon = () => (
 // ── Live quotes feed ─────────────────────────────────────────────────────────
 const ES_DISPLAY_SYMBOL = "/ESU26";
 const NQ_DISPLAY_SYMBOL = "/NQU26";
+const NQ_FEED_SYMBOLS = [NQ_DISPLAY_SYMBOL, "/NQU26", "/NQU6", "/NQ:XCME", "/NQ"];
 
 // All aliases the relay might emit for ES/NQ futures
 const ES_ALIASES = ["/ESU26", "/ESU6", "/ES:XCME", "/ES"];
@@ -198,7 +199,11 @@ function useLiveQuotes() {
 
     async function seedFromRest() {
       try {
-        const syms = QUOTE_SYMBOLS.map(s => s.sym).join(",");
+        const syms = [
+          ...QUOTE_SYMBOLS.map(s => s.sym),
+          ...NQ_FEED_SYMBOLS,
+          ...ES_ALIASES,
+        ].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`, { cache: "no-store" });
         if (!r.ok) return;
         const d = await r.json();
@@ -209,7 +214,10 @@ function useLiveQuotes() {
           items.forEach(q => {
             const rawSym = String(q.symbol || "");
             const sym = normalizeSymbol(rawSym);
-            const pct = quoteNumber(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
+            if (!QUOTE_SYMBOLS.find(s => s.sym === sym)) return;
+            const last = quoteNumber(q, "last", "mark", "lastPrice");
+            const prev = quoteNumber(q, "prev-close", "prevClose", "previousClose", "prevDayClosePrice");
+            const pct = prev > 0 && last > 0 ? ((last - prev) / prev) * 100 : quoteNumber(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
             if (pct != null && Math.abs(pct) <= 20) next[sym] = pct;
           });
           return next;
