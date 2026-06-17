@@ -3809,13 +3809,12 @@ const server = http.createServer(async (req, res) => {
       'SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA',
       'COIN','HOOD','IWM','NFLX','PLTR','NDX'
     ];
-    // dxLink cache keys for indices use $ prefix
-    const dxKeyMap = { SPX:'$SPX', NDX:'NDX', VIX:'VIX' };
+    // Normalize symbols to cache keys (strips leading dots, normalizes futures)
     const items = await Promise.all(allSyms.map(async sym => {
-      const dxKey = dxKeyMap[sym] || sym;
-      const q = dxQuoteCache[dxKey] || dxQuoteCache[sym] || {};
-      const t = dxTradeCache[dxKey] || dxTradeCache[sym] || {};
-      const s = dxSummaryCache[dxKey] || dxSummaryCache[sym] || {};
+      const normalized = normalizeDxCacheSymbol(sym);
+      const q = dxQuoteCache[normalized] || dxQuoteCache[sym] || {};
+      const t = dxTradeCache[normalized] || dxTradeCache[sym] || {};
+      const s = dxSummaryCache[normalized] || dxSummaryCache[sym] || {};
       const yahooRaw = sym === 'VIX' ? await fetchYahooIntradayQuote(sym) : null;
       // Always prefer livePrevCloses (auto-refreshed from Yahoo daily close) over intraday meta
       const vixKnownPrev = livePrevCloses.VIX || 0;
