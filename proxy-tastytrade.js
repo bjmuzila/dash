@@ -2901,11 +2901,13 @@ function connectDxLink() {
       sendCandleSubscriptions();
     }
     else if (msg.type === 'FEED_DATA') {
-      // Log sample of incoming data
+      // Log incoming data to verify dxLink is sending
       if (Array.isArray(msg.data) && msg.data.length >= 2) {
         const eventType = msg.data[0];
-        const rowCount = msg.data[1]?.length || 0;
-
+        const rows = msg.data[1];
+        const rowCount = Array.isArray(rows) ? rows.length : 0;
+        const fieldCount = rowCount > 0 ? Math.floor(rowCount / 10) : 0; // rough estimate of fields
+        log(`[DX FEED_DATA] ${eventType} with ${rowCount} values (${fieldCount} records est.)`);
       }
       
       // Convert COMPACT format to object format for browser clients
