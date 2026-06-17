@@ -2047,8 +2047,11 @@ function normalizeRestSymbol(symbol) {
 }
 
 function normalizeDxCacheSymbol(symbol) {
-  const s = String(symbol || '').trim();
+  let s = String(symbol || '').trim();
   if (!s) return s;
+
+  // Strip leading dot (TastyTrade streamer-symbol format: .SPXW260717C7505)
+  s = s.replace(/^\./, '');
 
   // Normalize futures contracts (normalize to explicit year)
   if (/^\/ESU(26|6)?$/i.test(s)) return '/ESU26';
