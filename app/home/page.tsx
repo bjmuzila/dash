@@ -399,7 +399,6 @@ export default function HomePage() {
         if (prev === 0) prevSpxRef.current = state.spotPrice;
         setSpx(state.spotPrice);
       }
-      setRawChain(state.chain);
       setEsFut(state.esFutures);
       setVix(state.vix);
       setNetGex(state.netGex);
@@ -435,7 +434,7 @@ export default function HomePage() {
       fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" }),
     ];
     if (actualExpiry) {
-      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all`, { cache: "no-store" }));
+      requests.unshift(fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(actualExpiry)}&range=all&noSubscribe=1`, { cache: "no-store" }));
     }
     const responses = await Promise.all(requests);
     let updated = false;
@@ -642,42 +641,13 @@ export default function HomePage() {
     const fetchExpiryChain = async () => {
       try {
         const fetchChainForExpiry = async (expiry: string) => {
-          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`, { cache: "no-store" });
+          const res = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" });
           if (!res.ok) return null;
           return res.json();
         };
 
-        if (selectedExpiry === "1dte") {
-          const candidates = [
-            actualExpiry,
-            ...expiryCandidatesRef.current
-              .filter((item) => item.date !== expiryMap["0dte"] && item.date !== actualExpiry)
-              .map((item) => item.date),
-          ];
-
-          let bestExpiry = actualExpiry;
-          let bestJson: any = null;
-          let bestCount = -1;
-
-          for (const candidate of candidates) {
-            const candidateJson = await fetchChainForExpiry(candidate);
-            const candidateCount = flattenChainResponse(candidateJson).length;
-            if (candidateJson && candidateCount > bestCount) {
-              bestJson = candidateJson;
-              bestExpiry = candidate;
-              bestCount = candidateCount;
-            }
-          }
-
-          if (!bestJson) return;
-          if (bestExpiry !== actualExpiry && !cancelled) {
-            setExpiryMap((current) => ({ ...current, "1dte": bestExpiry }));
-          }
-          var json = bestJson;
-        } else {
-          var json = await fetchChainForExpiry(actualExpiry);
-          if (!json) return;
-        }
+        const json = await fetchChainForExpiry(actualExpiry);
+        if (!json) return;
 
         if (cancelled) return;
         const nextChain = flattenChainResponse(json);
