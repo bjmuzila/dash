@@ -19,12 +19,6 @@ let proxyProcess = null;
 let proxyReady = false;
 
 function startProxy() {
-  // Skip proxy in production on Render if it's not working
-  if (process.env.RENDER && process.env.NODE_ENV === 'production') {
-    console.log('[SERVER] Skipping proxy startup on Render (use API routes instead)');
-    return;
-  }
-
   console.log('[SERVER] Starting proxy server on port 3001...');
   try {
     proxyProcess = spawn('node', [path.join(__dirname, 'proxy-tastytrade.js')], {
