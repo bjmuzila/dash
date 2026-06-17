@@ -5592,9 +5592,9 @@ wss.on('connection', ws => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 // Pre-warm: fetch SPX chain + subscribe all streamer-symbols to dxLink at startup
 // ─── Target Expiration Logic ──────────────────────────────────────────────────
-// 9:30am–4:00pm ET  → 0DTE (today)
-// 4:00pm–midnight ET → next trading day expiration
-// midnight–9:30am ET → 0DTE (today, new day)
+// Keep SPX 0DTE pinned to the current ET calendar date for the full session day.
+// That preserves same-day SPXW greeks after the close so dashboards and intraday
+// exposure views still resolve against today's 0DTE instead of rolling forward early.
 function getTargetExpirationDate(availableExpirations) {
   const now    = new Date();
   const et     = isDST(now) ? -4 : -5;
@@ -5602,10 +5602,6 @@ function getTargetExpirationDate(availableExpirations) {
   const etHour = etNow.getUTCHours();
   const etMin  = etNow.getUTCMinutes();
   const etTime = etHour * 60 + etMin;
-
-  const MARKET_OPEN  = 9  * 60 + 30;  // 570  — 9:30 AM ET
-  const MARKET_CLOSE = 16 * 60;        // 960  — 4:00 PM ET
-  const MIDNIGHT     = 0;              // 0    — 12:00 AM ET
 
   // ET calendar date string (YYYY-MM-DD)
   const etDateStr = etNow.toISOString().split('T')[0];
@@ -5626,19 +5622,8 @@ function getTargetExpirationDate(availableExpirations) {
     return sorted.find(e => e >= target) || sorted[sorted.length - 1];
   }
 
-  if (etTime >= MARKET_OPEN && etTime < MARKET_CLOSE) {
-    // 9:30 AM – 4:00 PM ET → today's SPX chain (0DTE)
-    return nearestOnOrAfter(etDateStr);
-  } else if (etTime >= MARKET_CLOSE) {
-    // 4:00 PM – midnight ET → tomorrow / next trading day (1DTE)
-    const nextDay = nextTradingDay(etDateStr);
-    return nearestOnOrAfter(nextDay);
-  } else {
-    // Midnight – 9:30 AM ET → next trading day 0DTE chain
-    // (same target as after-hours: pre-load tomorrow's chain)
-    const nextDay = nextTradingDay(etDateStr);
-    return nearestOnOrAfter(nextDay);
-  }
+  void etTime;
+  return nearestOnOrAfter(etDateStr);
 }
 
 function isDST(date) {
@@ -5662,7 +5647,7 @@ async function prewarmCache() {
         const allExpDates = (chainObj.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
 
         // CRITICAL: Only 0DTE (today's expiration)
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayYmd().ymd;
         const todayExp = allExpDates.find(d => d === today);
         if (!todayExp) { log(`Prewarm: no 0DTE expiration for ${symbol}`); return []; }
 
