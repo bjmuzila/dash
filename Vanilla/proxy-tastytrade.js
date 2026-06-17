@@ -1858,7 +1858,7 @@ async function ensureTodaySpxOptionSubscriptions() {
     const chainObj = d1.data.items.find(c => c['root-symbol'] === 'SPXW') || d1.data.items[0];
     const rootSymbol = chainObj['root-symbol'] || 'SPXW';
     const allExpDates = (chainObj.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-    const expDate = getTargetExpirationDate(allExpDates);
+    const expDate = getTargetExpirationDate(allExpDates, 'SPX');
     if (!expDate) return 0;
     const compactExp = String(expDate).replace(/-/g, '').slice(2);
     const already = [...subscriptions].filter(s => isSpxwSymbol(s) && optionExpirationCompact(s) === compactExp);
@@ -5508,7 +5508,7 @@ wss.on('connection', ws => {
 // 9:30am–4:00pm ET  → 0DTE (today)
 // 4:00pm–midnight ET → next trading day expiration
 // midnight–9:30am ET → 0DTE (today, new day)
-function getTargetExpirationDate(availableExpirations) {
+function getTargetExpirationDate(availableExpirations, symbol = 'SPX') {
   const now    = new Date();
   const et     = isDST(now) ? -4 : -5;
   const etNow  = new Date(now.getTime() + et * 3600000);
@@ -5539,19 +5539,25 @@ function getTargetExpirationDate(availableExpirations) {
     return sorted.find(e => e >= target) || sorted[sorted.length - 1];
   }
 
-  if (etTime >= MARKET_OPEN && etTime < MARKET_CLOSE) {
-    // 9:30 AM – 4:00 PM ET → today's SPX chain (0DTE)
-    return nearestOnOrAfter(etDateStr);
-  } else if (etTime >= MARKET_CLOSE) {
-    // 4:00 PM – midnight ET → tomorrow / next trading day (1DTE)
-    const nextDay = nextTradingDay(etDateStr);
-    return nearestOnOrAfter(nextDay);
-  } else {
-    // Midnight – 9:30 AM ET → next trading day 0DTE chain
-    // (same target as after-hours: pre-load tomorrow's chain)
-    const nextDay = nextTradingDay(etDateStr);
-    return nearestOnOrAfter(nextDay);
+  const cleanSym = String(symbol || 'SPX').toUpperCase();
+
+  // SPX: only 0DTE and 1DTE
+  if (cleanSym === 'SPX' || cleanSym === 'SPXW') {
+    if (etTime >= MARKET_OPEN && etTime < MARKET_CLOSE) {
+      return nearestOnOrAfter(etDateStr);  // 0DTE
+    } else {
+      const nextDay = nextTradingDay(etDateStr);
+      return nearestOnOrAfter(nextDay);    // 1DTE
+    }
   }
+
+  // SPY, QQQ: only 0DTE (no auto-load of future expirations)
+  if (cleanSym === 'SPY' || cleanSym === 'QQQ') {
+    return nearestOnOrAfter(etDateStr);    // 0DTE only
+  }
+
+  // Everything else: return nothing (require explicit request)
+  return null;
 }
 
 function isDST(date) {
@@ -5749,7 +5755,7 @@ server.listen(PORT, async () => {
         const { status: sNested, data: dNested } = await ttGet('/option-chains/SPX/nested');
         const chainObjR = dNested?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || dNested?.data?.items?.[0];
         const allExpDatesR = (chainObjR?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-        const targetExpR = getTargetExpirationDate(allExpDatesR);
+        const targetExpR = getTargetExpirationDate(allExpDatesR, 'SPX');
         if (targetExpR) {
           const spot0 = firstFiniteNumber(gexLevelCache.spot, dxTradeCache['$SPX']?.price, dxQuoteCache['$SPX']?.last, 5800);
           const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${targetExpR}`);
