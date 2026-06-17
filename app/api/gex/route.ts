@@ -17,6 +17,17 @@ function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
 }
 
 async function fetchGexChain(expiry: string): Promise<any> {
+  const fastQs = new URLSearchParams();
+  if (expiry) fastQs.set("expiry", expiry);
+
+  const fastRes = await fetch(`${PROXY}/proxy/api/tt/gex-chain?${fastQs.toString()}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (fastRes.ok) {
+    return fastRes.json();
+  }
+
   const qs = new URLSearchParams({
     ticker: "SPX",
     range: "all",
@@ -33,6 +44,35 @@ async function fetchGexChain(expiry: string): Promise<any> {
 }
 
 function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {
+  if (Array.isArray(data?.rows)) {
+    const spot = Number(data?.spot ?? fallbackSpot ?? 0);
+    return data.rows
+      .map((row: any) => ({
+        strike: Number(row?.strike ?? 0),
+        spotPrice: spot,
+        callOI: Number(row?.callOI ?? 0),
+        putOI: Number(row?.putOI ?? 0),
+        callVolume: Number(row?.callVolume ?? row?.callVol ?? 0),
+        putVolume: Number(row?.putVolume ?? row?.putVol ?? 0),
+        callGamma: Number(row?.callGamma ?? 0),
+        putGamma: Number(row?.putGamma ?? 0),
+        callDelta: Number(row?.callDelta ?? 0),
+        putDelta: Number(row?.putDelta ?? 0),
+        callGEX: Number(row?.callGEX ?? 0),
+        putGEX: Number(row?.putGEX ?? 0),
+        netGEX: Number(row?.netGEX ?? 0),
+        netVolGEX: Number(row?.netVolGEX ?? 0),
+        netDEX: Number(row?.netDEX ?? 0),
+        volNetDEX: Number(row?.volNetDEX ?? 0),
+        dte: Number(row?.dte ?? 0),
+        callIV: Number(row?.callIV ?? 0),
+        putIV: Number(row?.putIV ?? 0),
+        type: "call",
+      } as ChainRow))
+      .filter((row: ChainRow) => row.strike > 0)
+      .sort((a: ChainRow, b: ChainRow) => a.strike - b.strike);
+  }
+
   const items = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.items) ? data.items : [];
   const underlyingPrice = Number(data?.data?.underlyingPrice ?? data?.underlyingPrice ?? fallbackSpot ?? 0);
   const rows: ChainRow[] = [];
@@ -95,7 +135,7 @@ export async function GET(request: Request) {
     const expiry = searchParams.get("expiry") ?? "";
     const data = await fetchGexChain(expiry);
     const chain = flattenChain(data);
-    const spotPrice = Number(data?.data?.underlyingPrice ?? data?.underlyingPrice ?? chain[0]?.spotPrice ?? 0);
+    const spotPrice = Number(data?.spot ?? data?.data?.underlyingPrice ?? data?.underlyingPrice ?? chain[0]?.spotPrice ?? 0);
 
     const summary = computeGexSummary(chain, spotPrice);
     const profile = computeGEXProfile(chain, spotPrice);
@@ -108,8 +148,8 @@ export async function GET(request: Request) {
       timestamp: Number(data?.ts ?? Date.now()),
       spotPrice,
       expiration: expiry || null,
-      callWall: summary.callWall ?? (Number(data?.callWall ?? 0) || null),
-      putWall: summary.putWall ?? (Number(data?.putWall ?? 0) || null),
+      callWall: summary.callWall ?? (Number(data?.callWall ?? data?.data?.callWall ?? 0) || null),
+      putWall: summary.putWall ?? (Number(data?.putWall ?? data?.data?.putWall ?? 0) || null),
       gexFlip: resolvedGexFlip,
       chain,
       summary,
