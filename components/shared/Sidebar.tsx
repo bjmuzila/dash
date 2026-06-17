@@ -87,6 +87,10 @@ function normalizeSymbol(raw: string): string {
   return raw;
 }
 
+function isEsAlias(sym: string) {
+  return /^\/ES/i.test(sym) || sym === ES_DISPLAY_SYMBOL;
+}
+
 function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {
     const num = Number(q[key]);
@@ -191,6 +195,29 @@ function useLiveQuotes() {
       } catch (_) {}
     }
     void connect();
+
+    async function seedFromRest() {
+      try {
+        const syms = QUOTE_SYMBOLS.map(s => s.sym).join(",");
+        const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const d = await r.json();
+        const items: Array<Record<string, unknown>> = d?.data?.items || [];
+        if (!items.length) return;
+        setPcts(prev => {
+          const next = { ...prev };
+          items.forEach(q => {
+            const rawSym = String(q.symbol || "");
+            const sym = normalizeSymbol(rawSym);
+            const pct = quoteNumber(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
+            if (pct != null && Math.abs(pct) <= 20) next[sym] = pct;
+          });
+          return next;
+        });
+      } catch (_) {}
+    }
+    seedFromRest();
+
     // Heartbeat: reconnect if stale
     const hb = setInterval(() => {
       const state = wsRef.current?.readyState;

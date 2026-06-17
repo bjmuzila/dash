@@ -18,6 +18,7 @@ const TABLES = [
   { id: "premium_flow", label: "Premium Flow" },
   { id: "greeks_ts", label: "Greeks TS" },
   { id: "playbook_feed", label: "Playbook Feed" },
+  { id: "page_load_status", label: "Page Status" },
   { id: "es_candles", label: "ES Candles" },
   { id: "bzila_snapshots", label: "Bzila Snaps" },
   { id: "bzila_gex_history", label: "GEX History" },
@@ -130,6 +131,11 @@ export default function DatabasePage() {
             return r;
           }
         });
+      } else if (t === "page_load_status") {
+        data = data.map((r) => ({
+          ...r,
+          is_loaded: typeof r.is_loaded === "boolean" ? r.is_loaded : String(r.is_loaded) === "true",
+        }));
       }
 
       setRows(data);

@@ -4600,27 +4600,32 @@ const server = http.createServer(async (req, res) => {
     const restOICount = Object.keys(oiCache).length;
 
     // Second pass: fetch OI from market-data in batches
+    // SPX/SPXW uses dedicated fallback sources below, so skip the extra sweep
+    // to avoid hammering /market-data and starving live feed handling.
+    const skipMarketDataOiSweep = /^SPX[W]?$/i.test(sym);
     const allSymsForOI = filteredOptions
       .map(o => o['streamer-symbol'])
       .filter(Boolean);
 
-    // Batch the market-data requests (TT has rate limits)
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < allSymsForOI.length; i += BATCH_SIZE) {
-      if (Object.keys(oiCache).length >= allSymsForOI.length) break; // Already have all OI
-      const batch = allSymsForOI.slice(i, i + BATCH_SIZE);
-      try {
-        const qs = batch.map(s => `symbol[]=${encodeURIComponent(s)}`).join('&');
-        const { status: s3, data: d3 } = await ttGet(`/market-data?${qs}`);
-        if (s3 === 200 && d3?.data?.items) {
-          d3.data.items.forEach(item => {
-            const sym = item.symbol || '';
-            const oi = Number(item['open-interest'] ?? item.openInterest ?? null);
-            if (isFinite(oi) && oi > 0 && !oiCache[sym]) oiCache[sym] = oi;
-          });
+    if (!skipMarketDataOiSweep) {
+      // Batch the market-data requests (TT has rate limits)
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < allSymsForOI.length; i += BATCH_SIZE) {
+        if (Object.keys(oiCache).length >= allSymsForOI.length) break; // Already have all OI
+        const batch = allSymsForOI.slice(i, i + BATCH_SIZE);
+        try {
+          const qs = batch.map(s => `symbol[]=${encodeURIComponent(s)}`).join('&');
+          const { status: s3, data: d3 } = await ttGet(`/market-data?${qs}`);
+          if (s3 === 200 && d3?.data?.items) {
+            d3.data.items.forEach(item => {
+              const sym = item.symbol || '';
+              const oi = Number(item['open-interest'] ?? item.openInterest ?? null);
+              if (isFinite(oi) && oi > 0 && !oiCache[sym]) oiCache[sym] = oi;
+            });
+          }
+        } catch (e) {
+          log('market-data batch fetch failed:', e.message);
         }
-      } catch (e) {
-        log('market-data batch fetch failed:', e.message);
       }
     }
 

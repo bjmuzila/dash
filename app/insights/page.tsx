@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, queryPlaybookFeedToday, savePlaybookSignal, type EsCandleRecord } from "@/lib/snapdb";
+import { usePageLoadStatus } from "@/lib/pageStatus";
 import IbLogic from "@/components/insights/IbLogic";
 
 type InsightsTab = "exposure" | "vix" | "ib";
@@ -924,6 +925,7 @@ const TABS: { id: InsightsTab; label: string }[] = [
 ];
 
 export default function InsightsPage() {
+  usePageLoadStatus({ pageKey: "insights", pageLabel: "Insights", path: "/insights" });
   const exposureRef = useRef<HTMLDivElement>(null);
   const [tab, setTab]   = useState<InsightsTab>("exposure");
   const [gex, setGex]   = useState<GexData | null>(null);

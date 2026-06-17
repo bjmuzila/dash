@@ -430,6 +430,32 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const seedGex = async () => {
+      try {
+        const res = await fetch("/api/gex", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const chain = flattenChainResponse(json);
+        if (chain.length) setRawChain(chain);
+        const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? json?.spotPrice ?? 0);
+        if (spot > 100) setSpx(spot);
+        const nextNetGex = chain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
+        if (Number.isFinite(nextNetGex) && chain.length) setNetGex(nextNetGex);
+        setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
+        setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
+        setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+        setChainDebug(buildChainDebug(chain, "/api/gex", String(json?.data?.expiration ?? json?.expiration ?? "-")));
+      } catch {
+        // no-op
+      }
+    };
+    seedGex();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     const subscriber = Subscriber.getInstance();
     subscriber.init();
 
@@ -495,7 +521,7 @@ export default function HomePage() {
       setChainDebug(buildChainDebug(nextChain, "/api/chains", actualExpiry || "-"));
       const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? 0);
       if (spot > 100) setSpx(spot);
-      const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0), 0);
+      const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
       if (Number.isFinite(nextNetGex)) setNetGex(nextNetGex);
       setCallWall(null);
       setPutWall(null);

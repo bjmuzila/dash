@@ -52,7 +52,7 @@ const ES_FEED_SYMBOLS = [ES_DISPLAY_SYMBOL, "/ESU6"];
 const NQ_FEED_SYMBOLS = [NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"];
 
 function isEsuSymbol(sym: string) {
-  return /^\/ESU(26|6)?$/i.test(sym);
+  return /^\/ES(U(26|6)?|:XCME)?$/i.test(sym) || /^\/ES/i.test(sym);
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -405,7 +405,7 @@ export default function TopBar() {
         const mvcStr   = data?.mvcStrike   ?? data?.mvc?.strike;
         setRow2({
           mvcOI:   mvcStr   ? String(mvcStr) : "—",
-          mvcVol:  netGex   != null ? (netGex / 1e9).toFixed(2) + "B" : "—",
+          mvcVol:  data?.mvcValueOIVol != null ? String(data.mvcValueOIVol) : (netGex != null ? (netGex / 1e9).toFixed(2) + "B" : "—"),
           gexFlip: flip     ? Number(flip).toLocaleString("en-US", { maximumFractionDigits: 0 }) : "--",
           peaks:   callWall ? [String(callWall)] : [],
         });

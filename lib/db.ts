@@ -133,6 +133,19 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       no_long TEXT, up TEXT, mid TEXT, down TEXT, no_short TEXT,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS page_load_status (
+      id SERIAL PRIMARY KEY,
+      page_key TEXT NOT NULL UNIQUE,
+      page_label TEXT,
+      path TEXT,
+      is_loaded BOOLEAN NOT NULL DEFAULT FALSE,
+      last_loaded_at TIMESTAMPTZ,
+      last_unloaded_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_page_load_status_loaded ON page_load_status(is_loaded);
+    CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
   `);
 }
 
@@ -472,6 +485,49 @@ export async function getPlaybookFeed(date?: string, limit = 500): Promise<Playb
   }
   return queryAll<PlaybookFeedRecord>(
     "SELECT * FROM playbook_feed ORDER BY timestamp DESC LIMIT ?",
+    [limit]
+  );
+}
+
+// ── Page load status ─────────────────────────────────────────────────────────
+
+export interface PageLoadStatusRecord {
+  id?: number;
+  page_key: string;
+  page_label?: string | null;
+  path?: string | null;
+  is_loaded: boolean;
+  last_loaded_at?: string | null;
+  last_unloaded_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function upsertPageLoadStatus(r: Omit<PageLoadStatusRecord, "id" | "updated_at">): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO page_load_status (page_key, page_label, path, is_loaded, last_loaded_at, last_unloaded_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (page_key) DO UPDATE
+       SET page_label = EXCLUDED.page_label,
+           path = EXCLUDED.path,
+           is_loaded = EXCLUDED.is_loaded,
+           last_loaded_at = COALESCE(EXCLUDED.last_loaded_at, page_load_status.last_loaded_at),
+           last_unloaded_at = COALESCE(EXCLUDED.last_unloaded_at, page_load_status.last_unloaded_at),
+           updated_at = CURRENT_TIMESTAMP`,
+    [
+      r.page_key,
+      r.page_label ?? null,
+      r.path ?? null,
+      r.is_loaded,
+      r.last_loaded_at ?? null,
+      r.last_unloaded_at ?? null,
+    ]
+  );
+}
+
+export async function getPageLoadStatus(limit = 200): Promise<PageLoadStatusRecord[]> {
+  return queryAll<PageLoadStatusRecord>(
+    "SELECT * FROM page_load_status ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT ?",
     [limit]
   );
 }

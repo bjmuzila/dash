@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, HistogramSeries, ColorType, CrosshairMode, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, CandlestickData, HistogramData } from "lightweight-charts";
+import { usePageLoadStatus } from "@/lib/pageStatus";
 
 type Candle = {
   timestamp: number;
@@ -71,6 +72,7 @@ function toChartTime(ts: number): UTCTimestamp {
 }
 
 export default function EsCandlesPage() {
+  usePageLoadStatus({ pageKey: "es-candles", pageLabel: "ES Candles", path: "/es-candles" });
   const [rows, setRows] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("idle");

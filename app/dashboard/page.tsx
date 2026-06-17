@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSpxFlow } from "@/hooks/useSpxFlow";
 import { savePremiumFlowSnapshot, getPremiumFlowToday } from "@/lib/snapdb";
+import { usePageLoadStatus } from "@/lib/pageStatus";
 import FlowTape from "@/components/dashboard/FlowTape";
 
 function fmtPrice(val: number) {
@@ -85,6 +86,7 @@ function toEtDate(ts: number): string {
 }
 
 export default function DashboardPage() {
+  usePageLoadStatus({ pageKey: "dashboard", pageLabel: "Dashboard", path: "/dashboard" });
   const { flow, reset: resetFlow, seed } = useSpxFlow(true);
   const lastPremiumSaveRef = useRef(0);
   const tapeSavedRef = useRef(0);
