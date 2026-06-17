@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { getClientProxyBase, getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
+import { HOME_THEME } from "./homeTheme";
 
 // ── Icons ────────────────────────────────────────────────────────────────────
 const HomeIcon = () => (
@@ -288,10 +289,11 @@ export default function Sidebar({
       display: "flex",
       flexDirection: "column",
       height: "100%",
-      background: "#07090f",
-      borderRight: "1px solid rgba(255,255,255,0.06)",
+      background: "rgba(13,17,25,0.62)",
+      backdropFilter: "blur(16px)",
+      borderRight: `1px solid ${HOME_THEME.border}`,
       overflow: "visible",
-      fontFamily: "monospace",
+      fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
     }}>
 
       {/* ── Nav icons ── */}
@@ -303,7 +305,7 @@ export default function Sidebar({
           width: 40, height: 40, borderRadius: 10, textDecoration: "none", transition: "all 0.15s",
           background: isActive("/home") ? "rgba(0,229,255,0.12)" : "transparent",
           border: isActive("/home") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-          color: isActive("/home") ? "#00e5ff" : "#3a5570",
+          color: isActive("/home") ? HOME_THEME.cyan : HOME_THEME.muted,
           boxShadow: isActive("/home") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
         }}>
           <HomeIcon />
@@ -328,7 +330,7 @@ export default function Sidebar({
               width: 40, height: 40, borderRadius: 10, cursor: "pointer",
               background: pageMenuOpen ? "rgba(0,229,255,0.12)" : "transparent",
               border: pageMenuOpen ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-              color: pageMenuOpen ? "#00e5ff" : "#3a5570",
+              color: pageMenuOpen ? HOME_THEME.cyan : HOME_THEME.muted,
               boxShadow: pageMenuOpen ? "0 0 12px rgba(0,229,255,0.18)" : "none",
               transition: "all 0.15s",
             }}
@@ -348,7 +350,7 @@ export default function Sidebar({
                 left: menuPos.left,
                 top: menuPos.top,
                 zIndex: 999,
-                background: "#0a0e18",
+                background: "rgba(13,17,25,0.95)",
                 border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
                 boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
@@ -357,7 +359,7 @@ export default function Sidebar({
                 backdropFilter: "blur(16px)",
               }}>
                 {/* header */}
-                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                   Pages
                 </div>
                 {PAGE_MENU.map(({ label, href }) => {
@@ -372,15 +374,15 @@ export default function Sidebar({
                         padding: "7px 14px",
                         fontSize: 12,
                         fontWeight: active ? 700 : 500,
-                        color: active ? "#00e5ff" : "#8da8c2",
+                        color: active ? HOME_THEME.cyan : HOME_THEME.muted,
                         textDecoration: "none",
                         background: active ? "rgba(0,229,255,0.08)" : "transparent",
                         borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
                         transition: "all 0.1s",
                         letterSpacing: "0.02em",
                       }}
-                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
-                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#8da8c2"; } }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = HOME_THEME.text; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = HOME_THEME.muted; } }}
                     >
                       {label}
                     </a>
@@ -410,7 +412,7 @@ export default function Sidebar({
               width: 40, height: 40, borderRadius: 10, cursor: "pointer", transition: "all 0.15s",
               background: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "rgba(0,229,255,0.12)" : "transparent",
               border: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-              color: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "#00e5ff" : "#3a5570",
+              color: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? HOME_THEME.cyan : HOME_THEME.muted,
               boxShadow: calendarMenuOpen || isAnyActive(CALENDAR_MENU) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
             }}
           >
@@ -428,7 +430,7 @@ export default function Sidebar({
                 left: calendarMenuPos.left,
                 top: calendarMenuPos.top,
                 zIndex: 999,
-                background: "#0a0e18",
+                background: "rgba(13,17,25,0.95)",
                 border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
                 boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
@@ -436,7 +438,7 @@ export default function Sidebar({
                 overflow: "hidden",
                 backdropFilter: "blur(16px)",
               }}>
-                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                   Calendar
                 </div>
                 {CALENDAR_MENU.map(({ label, href }) => {
@@ -451,15 +453,15 @@ export default function Sidebar({
                         padding: "7px 14px",
                         fontSize: 12,
                         fontWeight: active ? 700 : 500,
-                        color: active ? "#00e5ff" : "#8da8c2",
+                        color: active ? HOME_THEME.cyan : HOME_THEME.muted,
                         textDecoration: "none",
                         background: active ? "rgba(0,229,255,0.08)" : "transparent",
                         borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
                         transition: "all 0.1s",
                         letterSpacing: "0.02em",
                       }}
-                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
-                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#8da8c2"; } }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = HOME_THEME.text; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = HOME_THEME.muted; } }}
                     >
                       {label}
                     </a>
@@ -489,7 +491,7 @@ export default function Sidebar({
               width: 40, height: 40, borderRadius: 10, cursor: "pointer", transition: "all 0.15s",
               background: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "rgba(0,229,255,0.12)" : "transparent",
               border: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-              color: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "#00e5ff" : "#3a5570",
+              color: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? HOME_THEME.cyan : HOME_THEME.muted,
               boxShadow: personalMenuOpen || isAnyActive(PERSONAL_MENU.filter((item) => item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
             }}
           >
@@ -507,7 +509,7 @@ export default function Sidebar({
                 left: personalMenuPos.left,
                 top: personalMenuPos.top,
                 zIndex: 999,
-                background: "#0a0e18",
+                background: "rgba(13,17,25,0.95)",
                 border: "1px solid rgba(0,229,255,0.20)",
                 borderRadius: 10,
                 boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
@@ -515,7 +517,7 @@ export default function Sidebar({
                 overflow: "hidden",
                 backdropFilter: "blur(16px)",
               }}>
-                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                   Personal
                 </div>
                 {PERSONAL_MENU.map(({ label, href, comingSoon }) => {
@@ -531,14 +533,14 @@ export default function Sidebar({
                           padding: "7px 14px",
                           fontSize: 12,
                           fontWeight: 500,
-                          color: "#64748b",
+                          color: HOME_THEME.muted,
                           background: "transparent",
                           borderLeft: "2px solid transparent",
                           letterSpacing: "0.02em",
                         }}
                       >
                         <span>{label}</span>
-                        <span style={{ fontSize: 9, color: "#3a5570", letterSpacing: "0.08em", textTransform: "uppercase" }}>Soon</span>
+                        <span style={{ fontSize: 9, color: HOME_THEME.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>Soon</span>
                       </div>
                     );
                   }
@@ -552,15 +554,15 @@ export default function Sidebar({
                         padding: "7px 14px",
                         fontSize: 12,
                         fontWeight: active ? 700 : 500,
-                        color: active ? "#00e5ff" : "#8da8c2",
+                        color: active ? HOME_THEME.cyan : HOME_THEME.muted,
                         textDecoration: "none",
                         background: active ? "rgba(0,229,255,0.08)" : "transparent",
                         borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
                         transition: "all 0.1s",
                         letterSpacing: "0.02em",
                       }}
-                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
-                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#8da8c2"; } }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(0,229,255,0.05)"; (e.currentTarget as HTMLElement).style.color = HOME_THEME.text; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = HOME_THEME.muted; } }}
                     >
                       {label}
                     </a>
@@ -573,10 +575,10 @@ export default function Sidebar({
       </div>
 
       {/* divider */}
-      <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "4px 12px" }} />
+      <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px" }} />
 
       {/* ── QUOTES label ── */}
-      <div style={{ padding: "8px 12px 4px", fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+      <div style={{ padding: "8px 12px 4px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
         Quotes
       </div>
 
@@ -594,7 +596,7 @@ export default function Sidebar({
           })
           .map(({ sym, label }) => {
             const pct = pcts[sym] ?? null;
-            const color = pct === null ? "#3a5570" : pct < -0.01 ? "#ff4757" : "#00e676";
+            const color = pct === null ? HOME_THEME.muted : pct < -0.01 ? "#ff4757" : "#00e676";
             const isNqu = label === "NQU";
             return (
               <div
@@ -608,7 +610,7 @@ export default function Sidebar({
                   borderLeft: isNqu ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
                 }}
               >
-                <span style={{ fontSize: 11, fontWeight: 700, color: isNqu ? "#00e5ff" : "#8da8c2", letterSpacing: "0.04em" }}>{label}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: isNqu ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
                   {pct !== null ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—"}
                 </span>
@@ -618,31 +620,31 @@ export default function Sidebar({
       </div>
 
       {/* divider */}
-      <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "4px 12px" }} />
+      <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px" }} />
 
       {/* ── SIGMA section ── */}
       <div style={{ padding: "6px 12px 4px" }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>
           Sigma
         </div>
         {SIGMA_LEVELS.map(({ label, strike, color }) => (
           <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
             <span style={{ fontSize: 10, color: color, fontWeight: 700, minWidth: 24 }}>{label}</span>
-            <span style={{ fontSize: 11, color: "#c5d5e5", fontWeight: 700, letterSpacing: "0.02em" }}>{strike}</span>
+            <span style={{ fontSize: 11, color: HOME_THEME.text, fontWeight: 700, letterSpacing: "0.02em" }}>{strike}</span>
           </div>
         ))}
       </div>
 
       {/* divider */}
-      <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "4px 12px 0" }} />
+      <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px 0" }} />
 
       {/* ── Bottom: Settings + Avatar ── */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 0 14px" }}>
         <button
           title="Settings"
-          style={{ background: "none", border: "none", color: "#3a5570", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8, transition: "color 0.15s" }}
-          onMouseEnter={e => (e.currentTarget.style.color = "#00e5ff")}
-          onMouseLeave={e => (e.currentTarget.style.color = "#3a5570")}
+          style={{ background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8, transition: "color 0.15s" }}
+          onMouseEnter={e => (e.currentTarget.style.color = HOME_THEME.cyan)}
+          onMouseLeave={e => (e.currentTarget.style.color = HOME_THEME.muted)}
         >
           <SettingsIcon />
         </button>
