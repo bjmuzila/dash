@@ -258,31 +258,41 @@ export default function GexChart({
     ctx.beginPath(); ctx.rect(PAD_L, PAD_T, cW, cH); ctx.clip();
 
     // ── Bars ──
-    const drawBar = (x: number, v: number) => {
+    const hoverStrike = tooltip?.row.strike;
+    const drawBar = (x: number, v: number, highlighted = false) => {
       if (!v) return;
       const yTop = v >= 0 ? clamp(yFor(v), PAD_T, yZero) : yZero;
       const yBot = v >= 0 ? yZero : clamp(yFor(v), yZero, PAD_T + cH);
       const h    = Math.abs(yBot - yTop);
       if (h < 0.5) return;
       const grad = ctx.createLinearGradient(0, yTop, 0, yTop + h);
-      if (v >= 0) {
-        grad.addColorStop(0, "rgba(41,182,246,0.9)");   // blue bright top
-        grad.addColorStop(1, "rgba(41,182,246,0.2)");   // blue faded bottom
+      if (highlighted) {
+        grad.addColorStop(0, "rgba(255,255,255,0.98)");
+        grad.addColorStop(1, v >= 0 ? "rgba(180,245,255,0.72)" : "rgba(255,238,180,0.72)");
+        ctx.shadowColor = v >= 0 ? "rgba(0,240,255,0.70)" : "rgba(255,179,0,0.70)";
+        ctx.shadowBlur = 12;
+      } else if (v >= 0) {
+        grad.addColorStop(0, "rgba(41,182,246,0.9)");
+        grad.addColorStop(1, "rgba(41,182,246,0.2)");
       } else {
-        grad.addColorStop(0, "rgba(255,179,0,0.2)");    // amber faded top
-        grad.addColorStop(1, "rgba(255,179,0,0.9)");    // amber bright bottom
+        grad.addColorStop(0, "rgba(255,179,0,0.2)");
+        grad.addColorStop(1, "rgba(255,179,0,0.9)");
       }
       ctx.fillStyle = grad;
       ctx.fillRect(x - barW / 2, yTop, barW, h);
+      if (highlighted) {
+        ctx.shadowBlur = 0;
+      }
     };
 
     data.forEach((r, i) => {
       const x = xAt(i);
+      const highlighted = hoverStrike === r.strike;
       if (isCallPut) {
-        drawBar(x,  Math.abs(getCall(r)));
-        drawBar(x, -Math.abs(getPut(r)));
+        drawBar(x,  Math.abs(getCall(r)), highlighted);
+        drawBar(x, -Math.abs(getPut(r)), highlighted);
       } else {
-        drawBar(x, getNet(r));
+        drawBar(x, getNet(r), highlighted);
       }
     });
 
@@ -517,7 +527,7 @@ export default function GexChart({
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
     ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve]);
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, tooltip?.row.strike]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
@@ -658,41 +668,19 @@ export default function GexChart({
       {/* Tooltip */}
       {tooltip && (() => {
         const r    = tooltip.row;
-        const diff = r.strike - spotPrice;
-        const pct  = spotPrice ? (diff / spotPrice * 100) : 0;
-        const sign = diff >= 0 ? "+" : "";
-        const W    = containerRef.current?.clientWidth ?? 400;
-        const left = tooltip.x + 14 + 178 > W - 10 ? tooltip.x - 190 : tooltip.x + 14;
-        const top  = Math.max(PAD_T + 4, tooltip.y - 40);
         return (
           <div style={{
-            position: "absolute", left, top, pointerEvents: "none",
-            background: "rgba(0,0,0,0.97)", border: "1px solid #1a3a50",
-            borderRadius: 5, padding: "9px 11px", zIndex: 100, minWidth: 168,
-            fontFamily: "Arial, Helvetica, sans-serif",
+            position: "absolute", zIndex: 100, pointerEvents: "none",
+            top: 8, left: "50%", transform: "translateX(-50%)",
+            background: "rgba(13,17,25,0.92)", border: "1px solid rgba(0,240,255,0.25)",
+            borderRadius: 6, padding: "6px 12px",
+            fontSize: 11, fontFamily: "monospace",
+            color: "#fff", display: "flex", gap: 12, backdropFilter: "blur(8px)",
           }}>
-            <div style={{ fontWeight: 700, color: "#e8f4ff", fontSize: 12, marginBottom: 5 }}>
-              {r.strike.toLocaleString()} <span style={{ fontWeight: 400, color: "#5a7a99", fontSize: 10 }}>{sign}{pct.toFixed(2)}% from spot</span>
-            </div>
-            <div style={{ borderTop: "1px solid #1a3050", paddingTop: 5, marginBottom: 5 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 8px", fontSize: 10, color: "#7a96b0" }}>
-                <span>net GEX</span>  <span style={{ color: (r.netGEX ?? 0) >= 0 ? "#29b6f6" : "#ffb300", fontWeight: 700 }}>{fmtGex(r.netGEX ?? 0)}</span>
-                <span>call GEX</span> <span style={{ color: "#29b6f6",  fontWeight: 700 }}>{fmtGex(r.callGEX ?? 0)}</span>
-                <span>put GEX</span>  <span style={{ color: "#ffb300",  fontWeight: 700 }}>{fmtGex(r.putGEX  ?? 0)}</span>
-              </div>
-            </div>
-            <div style={{ borderTop: "1px solid #1a3050", paddingTop: 5, marginBottom: 5 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 8px", fontSize: 10, color: "#7a96b0" }}>
-                <span>call vol</span> <span style={{ color: "#c8ddf0", fontWeight: 700 }}>{fmtPos(r.callVolume ?? 0)}</span>
-                <span>put vol</span>  <span style={{ color: "#c8ddf0", fontWeight: 700 }}>{fmtPos(r.putVolume  ?? 0)}</span>
-              </div>
-            </div>
-            <div style={{ borderTop: "1px solid #1a3050", paddingTop: 5 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 8px", fontSize: 10, color: "#7a96b0" }}>
-                <span>call OI</span>  <span style={{ color: "#c8ddf0", fontWeight: 700 }}>{fmtPos(r.callOI ?? 0)}</span>
-                <span>put OI</span>   <span style={{ color: "#c8ddf0", fontWeight: 700 }}>{fmtPos(r.putOI  ?? 0)}</span>
-              </div>
-            </div>
+            <span style={{ color: "#8B94A7" }}>Strike</span>
+            <span style={{ fontWeight: 700 }}>{r.strike.toLocaleString()}</span>
+            <span style={{ color: "#8B94A7" }}>GEX</span>
+            <span style={{ fontWeight: 700, color: (r.netGEX ?? 0) >= 0 ? "#00F0FF" : "#EAB308" }}>{fmtGex(r.netGEX ?? 0)}</span>
           </div>
         );
       })()}
