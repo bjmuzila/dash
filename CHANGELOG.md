@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-16 (session 25) — Options Chain: Fixed Missing Strikes & OI Display
+
+### Modified Files
+- `Vanilla/proxy-tastytrade.js` — Restricted chain caching to 0DTE SPX only; added `/proxy/api/clear-chain-cache` endpoint
+- `Vanilla/pages/insights/options-chain/options-chain.js` — Fixed strike filtering to show all strikes; changed range from percentage-of-spot to dollar-amount; added 10-second auto-refresh after GO click
+- `package.json` — Version bumped to `2026.6.16-v73`
+
+### Key Fixes
+- **Cache Issue:** Cache was returning stale 1-expiration data, blocking fresh API fetches. Now only caches 0DTE SPX; all other symbols fetch fresh.
+- **Missing Strikes:** Aggressive data-presence filter was hiding strikes with no TT snapshot prices. Now shows all strikes from API response.
+- **Range Filter:** Was applying too-narrow percentage-of-spot range. Changed to dollar-amount (e.g., ±150 = ±$150 around ATM).
+- **OI Display:** Confirmed TastyTrade returns `open-interest` field; dxLink Summary events populate live OI. Auto-refresh cycles allow WS data to populate table in real-time.
+
+### Result
+Options chain displays full strike range with proper OI/volume/GEX. Initial load shows all strikes; WS data populates over 10 seconds as subscriptions arrive.
+
+---
+
 ## 2026-06-16 (session 24) — Discord Bot with Slash Commands
 
 ### New Files

@@ -2088,6 +2088,14 @@ function getDxCacheAliases(symbol, normalized) {
   } else if (/^\/NQ(:XCME)?$/i.test(raw)) {
     aliases.add('/NQ:XCME');
     aliases.add('/NQ');
+  } else if (/^SPX$/i.test(normalized)) {
+    aliases.add('$SPX');
+    aliases.add('SPX');
+  } else if (/^VIX$/i.test(normalized)) {
+    aliases.add('$VIX.X');
+    aliases.add('VIX');
+  } else if (/^NDX$/i.test(normalized)) {
+    aliases.add('NDX');
   }
   return [...aliases].filter(Boolean);
 }
