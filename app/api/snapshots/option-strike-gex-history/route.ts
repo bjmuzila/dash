@@ -1,5 +1,3 @@
-"use server";
-
 import { NextRequest, NextResponse } from "next/server";
 import { getOptionStrikeRollingNetGex, insertOptionStrikeGexRows } from "@/lib/db";
 
@@ -27,20 +25,22 @@ export async function POST(req: NextRequest) {
         ? body.rows
         : [body];
 
-    await insertOptionStrikeGexRows(
-      rows.map((row) => ({
-        timestamp: Number(row.timestamp),
+    const normalized = rows
+      .map((row) => ({
+        timestamp: Number(row.timestamp ?? Date.now()),
         date: String(row.date ?? todayET()),
         expiry: String(row.expiry ?? ""),
         spot: Number(row.spot ?? 0),
         strike: Number(row.strike ?? 0),
         net_gex: Number(row.net_gex ?? 0),
-      })).filter((row) => row.expiry && row.strike > 0 && Number.isFinite(row.net_gex))
-    );
+      }))
+      .filter((row) => row.expiry && row.strike > 0 && Number.isFinite(row.net_gex));
 
-    return NextResponse.json({ ok: true, count: rows.length });
+    await insertOptionStrikeGexRows(normalized);
+
+    return NextResponse.json({ ok: true, count: normalized.length });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: String(err) });
   }
 }
 
@@ -52,13 +52,13 @@ export async function GET(req: NextRequest) {
     const minutes = Math.max(1, Math.min(240, Number(searchParams.get("minutes") ?? 30)));
 
     if (!expiry) {
-      return NextResponse.json({ error: "expiry is required" }, { status: 400 });
+      return NextResponse.json({ error: "expiry is required", rows: [], minutes });
     }
 
     const sinceTimestamp = Date.now() - minutes * 60 * 1000;
     const rows = await getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp);
     return NextResponse.json({ rows, minutes });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: String(err), rows: [] });
   }
 }
