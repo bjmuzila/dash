@@ -2965,13 +2965,13 @@ function connectDxLink() {
                 const entry = {};
                 getDxCacheAliases(sym, key).forEach(alias => { dxGreeksCache[alias] = entry; });
                 greeksFields.forEach((f, j) => entry[f] = rows[base + j]);
-                if (sym.includes('SPX') || sym.includes('SPY')) log(`[DX CACHE] Greeks for ${sym} → key: ${key}`);
+                if (String(sym).includes('SPX') || String(sym).includes('SPY')) log(`[DX CACHE] Greeks for ${sym} → key: ${key}`);
               } else if (eventType === 'Summary') {
                 const key = normalizeDxCacheSymbol(sym);
                 const entry = {};
                 getDxCacheAliases(sym, key).forEach(alias => { dxSummaryCache[alias] = entry; });
                 summaryFields.forEach((f, j) => entry[f] = rows[base + j]);
-                if (sym.includes('SPX') || sym.includes('SPY')) log(`[DX CACHE] Summary for ${sym} → key: ${key}`);
+                if (String(sym).includes('SPX') || String(sym).includes('SPY')) log(`[DX CACHE] Summary for ${sym} → key: ${key}`);
                 const oi = Number(entry.openInterest ?? 0) || 0;
                 if (oi > 0) {
                   getDxCacheAliases(sym, key).forEach(alias => { dxOpenInterestCache[alias] = oi; });
@@ -2997,7 +2997,7 @@ function connectDxLink() {
                 const entry = {};
                 getDxCacheAliases(sym, key).forEach(alias => { dxQuoteCache[alias] = entry; });
                 quoteFields.forEach((f, j) => entry[f] = rows[base + j]);
-                if (sym.includes('SPX') || sym.includes('SPY')) log(`[DX CACHE] Quote for ${sym} → key: ${key}`);
+                if (String(sym).includes('SPX') || String(sym).includes('SPY')) log(`[DX CACHE] Quote for ${sym} → key: ${key}`);
                 if (!/(^$|^NDX$|^VIX$)/.test(sym)) {
                   if (sym === 'SPY' || sym === 'SPX' || sym === '$SPX') {
                   }
