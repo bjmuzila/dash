@@ -12,6 +12,7 @@ type FeedItem = Record<string, unknown> & {
 };
 
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
+const TICKERS = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "SMH"] as const;
 const SOURCE_OPTIONS: Array<{ value: SymbolSource; label: string }> = [
   { value: "custom", label: "Custom symbol" },
   { value: "0dte-calls", label: "SPX 0DTE calls" },
@@ -96,9 +97,11 @@ function extractExpirations(payload: unknown): string[] {
 }
 
 export default function DevPage() {
+  const pageIdRef = useRef(`dev-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const [ticker, setTicker] = useState<(typeof TICKERS)[number]>("SPX");
   const [feedType, setFeedType] = useState<FeedType>("Greeks");
   const [source, setSource] = useState<SymbolSource>("0dte-calls");
-  const [symbol, setSymbol] = useState(".SPXW");
+  const [symbol, setSymbol] = useState("");
   const [expiry, setExpiry] = useState("");
   const [expiryOptions, setExpiryOptions] = useState<string[]>([]);
   const [callSymbols, setCallSymbols] = useState<string[]>([]);
@@ -126,11 +129,13 @@ export default function DevPage() {
       try {
         let expirations: string[] = [];
 
-        const primary = await fetch("/api/gex/expirations", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+        const primary = ticker === "SPX"
+          ? await fetch("/api/gex/expirations", { cache: "no-store" }).then((r) => r.json()).catch(() => null)
+          : null;
         expirations = extractExpirations(primary);
 
         if (!expirations.length) {
-          const fallback = await fetch("/api/expirations?ticker=SPX", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+          const fallback = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" }).then((r) => r.json()).catch(() => null);
           expirations = extractExpirations(fallback);
         }
 
@@ -148,14 +153,14 @@ export default function DevPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [ticker]);
 
   useEffect(() => {
     if (!expiry) return;
     let cancelled = false;
     setLoadingSymbols(true);
 
-    fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" })
+    fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
@@ -193,7 +198,7 @@ export default function DevPage() {
     return () => {
       cancelled = true;
     };
-  }, [expiry]);
+  }, [expiry, ticker]);
 
   useEffect(() => {
     if (source === "custom") return;
@@ -218,6 +223,21 @@ export default function DevPage() {
     setResult(null);
 
     const started = performance.now();
+    try {
+      await fetch("/api/proxy/subscription-ready", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageId: pageIdRef.current,
+          symbols: [trimmed],
+          timeout: 8000,
+          threshold: 1,
+        }),
+      });
+    } catch {
+      // continue with direct socket probe even if the registration call fails
+    }
+
     const ws = new WebSocket(getClientWsUrl());
     wsRef.current = ws;
 
@@ -235,7 +255,7 @@ export default function DevPage() {
         payload: null,
         note: `No ${feedType} event arrived before timeout.`,
       });
-    }, 5000);
+    }, 10000);
 
     ws.onopen = () => {
       const feedTypesBySymbol: Record<string, string[]> = {
@@ -334,6 +354,17 @@ export default function DevPage() {
         }}
       >
         <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Ticker</span>
+          <select value={ticker} onChange={(e) => setTicker(e.target.value as (typeof TICKERS)[number])} style={inputStyle}>
+            {TICKERS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
           <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Feed Type</span>
           <select value={feedType} onChange={(e) => setFeedType(e.target.value as FeedType)} style={inputStyle}>
             {FEED_TYPES.map((item) => (
@@ -406,6 +437,7 @@ export default function DevPage() {
         }}
       >
         <InfoCard label="Expiry" value={expiry || "—"} />
+        <InfoCard label="Ticker" value={ticker} />
         <InfoCard label="Selected Symbol" value={symbol || "—"} />
         <InfoCard label="Feed Type" value={feedType} />
         <InfoCard label="Elapsed" value={result ? `${result.elapsedMs} ms` : "—"} />
