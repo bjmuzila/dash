@@ -143,20 +143,20 @@ class Subscriber {
   }
 
   /**
-   * Fetch chain data from /api/gex-chain (full per-strike data)
+   * Fetch chain data from the Next.js GEX route so the dashboard stays on port 3002.
    */
   private async fetchChain(): Promise<void> {
     try {
-      const res = await fetch('/api/gex-chain', { cache: 'no-store' });
+      const res = await fetch('/api/gex', { cache: 'no-store' });
       if (!res.ok) throw new Error(`API returned ${res.status}`);
       const data = await res.json();
 
-      this.state.chain = (data.rows || []).map((row: any) => ({
+      this.state.chain = (data.chain || []).map((row: any) => ({
         strike: row.strike || 0,
         callOI: row.callOI || 0,
         putOI: row.putOI || 0,
-        callVolume: row.callVol || 0,
-        putVolume: row.putVol || 0,
+        callVolume: row.callVolume || row.callVol || 0,
+        putVolume: row.putVolume || row.putVol || 0,
         callGamma: row.callGamma || 0,
         putGamma: row.putGamma || 0,
         callDelta: row.callDelta || 0,
@@ -164,22 +164,22 @@ class Subscriber {
         callGEX: row.callGEX || 0,
         putGEX: row.putGEX || 0,
         netGEX: row.netGEX || 0,
-        netVolGEX: 0,
-        netDEX: 0,
-        volNetDEX: 0,
-        callIV: 0,
-        putIV: 0,
+        netVolGEX: row.netVolGEX || 0,
+        netDEX: row.netDEX || 0,
+        volNetDEX: row.volNetDEX || 0,
+        callIV: row.callIV || 0,
+        putIV: row.putIV || 0,
         dte: row.dte || 0,
-        spotPrice: data.spot || 0,
+        spotPrice: data.spotPrice || 0,
       }));
 
       // Only overwrite spotPrice if proxy returned a valid value
-      if (data.spot > 100) this.state.spotPrice = data.spot;
-      this.state.netGex = data.netGEX || 0;
+      if (data.spotPrice > 100) this.state.spotPrice = data.spotPrice;
+      this.state.netGex = data.summary?.totalNetGEX || 0;
       this.state.callWall = data.callWall ?? null;
       this.state.putWall = data.putWall ?? null;
       this.state.gexFlip = data.gexFlip ?? null;
-      this.state.timestamp = data.ts || Date.now();
+      this.state.timestamp = data.timestamp || Date.now();
 
       this.publish();
     } catch (err) {

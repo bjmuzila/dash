@@ -7,22 +7,6 @@ const nextConfig = {
     return {
       beforeFiles: [
         {
-          source: '/api/gex-chain',
-          destination: `${vanillaBackend}/proxy/api/tt/gex-chain`
-        },
-        {
-          source: '/api/gex/expirations',
-          destination: `${vanillaBackend}/proxy/api/tt/gex-expirations`
-        },
-        {
-          source: '/api/gex/:path*',
-          destination: `${vanillaBackend}/proxy/api/tt/gex/:path*`
-        },
-        {
-          source: '/api/quotes-batch',
-          destination: `${vanillaBackend}/proxy/api/tt/quotes-batch`
-        },
-        {
           source: '/api/snapshots/:path*',
           destination: `${vanillaBackend}/proxy/api/snapshots/:path*`
         },

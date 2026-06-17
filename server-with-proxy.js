@@ -17,8 +17,25 @@ const handle = app.getRequestHandler();
 // Spawn proxy server as child process on port 3001
 let proxyProcess = null;
 let proxyReady = false;
+let proxyRestartTimer = null;
+
+function clearProxyRestartTimer() {
+  if (!proxyRestartTimer) return;
+  clearTimeout(proxyRestartTimer);
+  proxyRestartTimer = null;
+}
+
+function scheduleProxyRestart() {
+  if (proxyRestartTimer) return;
+  proxyRestartTimer = setTimeout(() => {
+    proxyRestartTimer = null;
+    startProxy();
+  }, 1500);
+}
 
 function startProxy() {
+  if (proxyProcess && !proxyProcess.killed) return;
+  clearProxyRestartTimer();
   console.log('[SERVER] Starting proxy server on port 3001...');
   try {
     proxyProcess = spawn('node', [path.join(__dirname, 'proxy-tastytrade.js')], {
@@ -45,21 +62,20 @@ function startProxy() {
 
     proxyProcess.on('exit', (code, signal) => {
       console.warn(`[SERVER] Proxy exited with code ${code}, signal ${signal}`);
+      proxyProcess = null;
+      proxyReady = false;
+      scheduleProxyRestart();
     });
   } catch (err) {
     console.error('[SERVER] Failed to start proxy:', err);
+    proxyProcess = null;
+    proxyReady = false;
+    scheduleProxyRestart();
   }
 }
 
 app.prepare().then(() => {
-  // On Render (production), start proxy. Local dev, run separately.
-  if (process.env.RENDER || process.env.NODE_ENV === 'production') {
-    console.log('[SERVER] Starting proxy for Render/production...');
-    startProxy();
-  } else {
-    console.log('[SERVER] Local dev: proxy must run in separate terminal');
-    console.log('[SERVER] Start with: node proxy-tastytrade.js');
-  }
+  startProxy();
 
   createServer((req, res) => {
     const parsedUrl = parse(req.url, true);
