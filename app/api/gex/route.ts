@@ -5,31 +5,6 @@ import type { ChainRow } from "@/lib/math/calculations";
 
 const PROXY = process.env.PROXY_URL ?? "http://127.0.0.1:3001";
 
-interface ProxyGexRow {
-  strike?: number;
-  dte?: number;
-  callGamma?: number;
-  callDelta?: number;
-  callOI?: number;
-  callVol?: number;
-  putGamma?: number;
-  putDelta?: number;
-  putOI?: number;
-  putVol?: number;
-  callGEX?: number;
-  putGEX?: number;
-  netGEX?: number;
-}
-
-interface ProxyGexChainResponse {
-  spot?: number;
-  callWall?: number;
-  putWall?: number;
-  gexFlip?: number;
-  ts?: number;
-  rows?: ProxyGexRow[];
-}
-
 function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return null;
@@ -41,9 +16,14 @@ function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
   return num;
 }
 
-async function fetchGexChain(expiry: string): Promise<ProxyGexChainResponse> {
-  const qs = expiry ? `?expiry=${encodeURIComponent(expiry)}` : "";
-  const res = await fetch(`${PROXY}/proxy/api/tt/gex-chain${qs}`, {
+async function fetchGexChain(expiry: string): Promise<any> {
+  const qs = new URLSearchParams({
+    ticker: "SPX",
+    range: "all",
+  });
+  if (expiry) qs.set("expiration", expiry);
+
+  const res = await fetch(`${PROXY}/api/chains?${qs.toString()}`, {
     cache: "no-store",
     signal: AbortSignal.timeout(8_000),
   });
@@ -51,54 +31,70 @@ async function fetchGexChain(expiry: string): Promise<ProxyGexChainResponse> {
   return res.json();
 }
 
+function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {
+  const items = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.items) ? data.items : [];
+  const underlyingPrice = Number(data?.data?.underlyingPrice ?? data?.underlyingPrice ?? fallbackSpot ?? 0);
+  const rows: ChainRow[] = [];
+
+  for (const expGroup of items) {
+    const exp = String(expGroup?.["expiration-date"] ?? expGroup?.expirationDate ?? "");
+    const strikes = Array.isArray(expGroup?.strikes) ? expGroup.strikes : [];
+    for (const strikeRow of strikes) {
+      const strike = Number(strikeRow?.["strike-price"] ?? strikeRow?.strikePrice ?? strikeRow?.strike ?? 0);
+      const call = strikeRow?.call ?? null;
+      const put = strikeRow?.put ?? null;
+      if (!(strike > 0)) continue;
+
+      const callOI = Number(call?.["open-interest"] ?? call?.openInterest ?? 0);
+      const putOI = Number(put?.["open-interest"] ?? put?.openInterest ?? 0);
+      const callVol = Number(call?.volume ?? call?.dayVolume ?? 0);
+      const putVol = Number(put?.volume ?? put?.dayVolume ?? 0);
+      const callGamma = Math.abs(Number(call?.gamma ?? 0));
+      const putGamma = Math.abs(Number(put?.gamma ?? 0));
+      const callDelta = Number(call?.delta ?? 0);
+      const putDelta = Number(put?.delta ?? 0);
+      const callIV = Number(call?.["implied-volatility"] ?? call?.impliedVolatility ?? 0);
+      const putIV = Number(put?.["implied-volatility"] ?? put?.impliedVolatility ?? 0);
+      const spot = underlyingPrice || strike;
+
+      const callGEX = callGamma * callOI * spot * spot;
+      const putGEX = putGamma * putOI * spot * spot * -1;
+
+      rows.push({
+        strike,
+        spotPrice: spot,
+        callOI,
+        putOI,
+        callVolume: callVol,
+        putVolume: putVol,
+        callGamma,
+        putGamma,
+        callDelta,
+        putDelta,
+        callGEX,
+        putGEX,
+        netGEX: callGEX + putGEX,
+        netVolGEX: callGamma * callVol * spot * spot - putGamma * putVol * spot * spot,
+        netDEX: callDelta * callOI * spot * 100 - Math.abs(putDelta) * putOI * spot * 100,
+        volNetDEX: callDelta * callVol * spot * 100 - Math.abs(putDelta) * putVol * spot * 100,
+        dte: exp ? Math.max(0, Math.round((new Date(`${exp}T00:00:00`).getTime() - new Date().setHours(0,0,0,0)) / 86400000)) : 0,
+        callIV,
+        putIV,
+        type: "call",
+      } as ChainRow);
+    }
+  }
+
+  return rows.sort((a, b) => a.strike - b.strike);
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const expiry = searchParams.get("expiry") ?? "";
     const data = await fetchGexChain(expiry);
-    const spotPrice = Number(data?.spot ?? 0);
-
-    const chain: ChainRow[] = (data?.rows ?? [])
-      .map((row) => {
-        const strike = Number(row.strike ?? 0);
-        const callOI = Number(row.callOI ?? 0);
-        const putOI = Number(row.putOI ?? 0);
-        const callVolume = Number(row.callVol ?? 0);
-        const putVolume = Number(row.putVol ?? 0);
-        const callGamma = Math.abs(Number(row.callGamma ?? 0));
-        const putGamma = Math.abs(Number(row.putGamma ?? 0));
-        const callDelta = Number(row.callDelta ?? 0);
-        const putDelta = Number(row.putDelta ?? 0);
-        const dte = Number(row.dte ?? 0);
-        const spot = spotPrice || strike;
-        const callGEX = Number(row.callGEX ?? callGamma * callOI * spot * spot);
-        const putGEX = Number(row.putGEX ?? putGamma * putOI * spot * spot * -1);
-        const netGEX = Number(row.netGEX ?? callGEX + putGEX);
-
-        return {
-          strike,
-          spotPrice: spot,
-          callOI,
-          putOI,
-          callVolume,
-          putVolume,
-          callGamma,
-          putGamma,
-          callDelta,
-          putDelta,
-          callGEX,
-          putGEX,
-          netGEX,
-          netVolGEX: callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot,
-          netDEX: callDelta * callOI * spot * 100 - Math.abs(putDelta) * putOI * spot * 100,
-          volNetDEX: callDelta * callVolume * spot * 100 - Math.abs(putDelta) * putVolume * spot * 100,
-          dte,
-          callIV: 0,
-          putIV: 0,
-        };
-      })
-      .filter((row) => Number.isFinite(row.strike) && row.strike > 0)
-      .sort((a, b) => a.strike - b.strike);
+    const chain = flattenChain(data);
+    const spotPrice = Number(data?.data?.underlyingPrice ?? data?.underlyingPrice ?? chain[0]?.spotPrice ?? 0);
 
     const summary = computeGexSummary(chain, spotPrice);
     const profile = computeGEXProfile(chain, spotPrice);
