@@ -4,19 +4,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getClientWsUrl } from "@/lib/clientRuntime";
 
 type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
-type SymbolSource = "custom" | "0dte-calls" | "0dte-puts";
+type OptionSide = "call" | "put";
+type ProbeStatus = "idle" | "loading" | "found" | "not-found" | "error";
 
 type FeedItem = Record<string, unknown> & {
   eventType: string;
   eventSymbol: string;
 };
 
+type ChainStrike = {
+  strike: number;
+  callSymbol: string;
+  putSymbol: string;
+};
+
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const TICKERS = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "SMH"] as const;
-const SOURCE_OPTIONS: Array<{ value: SymbolSource; label: string }> = [
-  { value: "custom", label: "Custom symbol" },
-  { value: "0dte-calls", label: "SPX 0DTE calls" },
-  { value: "0dte-puts", label: "SPX 0DTE puts" },
+const SIDES: Array<{ value: OptionSide; label: string }> = [
+  { value: "call", label: "Call" },
+  { value: "put", label: "Put" },
 ];
 
 function normalizeFeedData(data: unknown[]): FeedItem[] {
@@ -96,18 +102,30 @@ function extractExpirations(payload: unknown): string[] {
   return [...out].filter((date) => date >= today).sort();
 }
 
+function formatStrikeValue(value: number): string {
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function buildStrikeLabel(strike: ChainStrike, side: OptionSide): string {
+  const sym = side === "call" ? strike.callSymbol : strike.putSymbol;
+  return sym ? `${formatStrikeValue(strike.strike)}  |  ${sym}` : formatStrikeValue(strike.strike);
+}
+
 export default function DevPage() {
   const pageIdRef = useRef(`dev-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const [ticker, setTicker] = useState<(typeof TICKERS)[number]>("SPX");
   const [feedType, setFeedType] = useState<FeedType>("Greeks");
-  const [source, setSource] = useState<SymbolSource>("0dte-calls");
-  const [symbol, setSymbol] = useState("");
   const [expiry, setExpiry] = useState("");
   const [expiryOptions, setExpiryOptions] = useState<string[]>([]);
-  const [callSymbols, setCallSymbols] = useState<string[]>([]);
-  const [putSymbols, setPutSymbols] = useState<string[]>([]);
-  const [loadingSymbols, setLoadingSymbols] = useState(false);
-  const [status, setStatus] = useState<"idle" | "loading" | "found" | "not-found" | "error">("idle");
+  const [optionSide, setOptionSide] = useState<OptionSide>("put");
+  const [strikes, setStrikes] = useState<ChainStrike[]>([]);
+  const [selectedStrike, setSelectedStrike] = useState("");
+  const [manualSymbol, setManualSymbol] = useState("");
+  const [status, setStatus] = useState<ProbeStatus>("idle");
+  const [loadingExpirations, setLoadingExpirations] = useState(false);
+  const [loadingStrikes, setLoadingStrikes] = useState(false);
+  const [chainRootSymbol, setChainRootSymbol] = useState("");
   const [result, setResult] = useState<{
     symbol: string;
     feedType: FeedType;
@@ -118,17 +136,24 @@ export default function DevPage() {
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const sourceSymbols = useMemo(
-    () => (source === "0dte-calls" ? callSymbols : source === "0dte-puts" ? putSymbols : []),
-    [source, callSymbols, putSymbols]
+  const selectedStrikeRow = useMemo(
+    () => strikes.find((strike) => String(strike.strike) === selectedStrike) ?? null,
+    [selectedStrike, strikes]
   );
+
+  const builtSymbol = useMemo(() => {
+    if (!selectedStrikeRow) return "";
+    return optionSide === "call" ? selectedStrikeRow.callSymbol : selectedStrikeRow.putSymbol;
+  }, [optionSide, selectedStrikeRow]);
+
+  const effectiveSymbol = useMemo(() => manualSymbol.trim() || builtSymbol, [builtSymbol, manualSymbol]);
 
   useEffect(() => {
     let cancelled = false;
     const loadExpirations = async () => {
+      setLoadingExpirations(true);
       try {
         let expirations: string[] = [];
-
         const primary = ticker === "SPX"
           ? await fetch("/api/gex/expirations", { cache: "no-store" }).then((r) => r.json()).catch(() => null)
           : null;
@@ -142,13 +167,25 @@ export default function DevPage() {
         if (cancelled) return;
         setExpiryOptions(expirations);
         const today = todayEt();
-        const initial = expirations.includes(today) ? today : expirations[0] ?? "";
-        setExpiry(initial);
+        setExpiry((current) => {
+          if (current && expirations.includes(current)) return current;
+          if (expirations.includes(today)) return today;
+          return expirations[0] ?? "";
+        });
       } catch {
-        if (!cancelled) setExpiryOptions([]);
+        if (!cancelled) {
+          setExpiryOptions([]);
+          setExpiry("");
+        }
+      } finally {
+        if (!cancelled) setLoadingExpirations(false);
       }
     };
 
+    setStrikes([]);
+    setSelectedStrike("");
+    setManualSymbol("");
+    setChainRootSymbol("");
     loadExpirations().catch(() => {});
     return () => {
       cancelled = true;
@@ -156,55 +193,70 @@ export default function DevPage() {
   }, [ticker]);
 
   useEffect(() => {
-    if (!expiry) return;
-    let cancelled = false;
-    setLoadingSymbols(true);
+    if (!expiry) {
+      setStrikes([]);
+      setSelectedStrike("");
+      setChainRootSymbol("");
+      return;
+    }
 
-    fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((json) => {
+    let cancelled = false;
+    const loadStrikes = async () => {
+      setLoadingStrikes(true);
+      try {
+        const json = await fetch(
+          `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`,
+          { cache: "no-store" }
+        ).then((r) => r.json());
+
         if (cancelled) return;
+
+        const rootSymbol = String(json?.data?.rootSymbol ?? json?.rootSymbol ?? "");
         const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
-        const target = items.filter((item) => String(item["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10));
-        const groups = target.length ? target : items;
-        const nextCalls: string[] = [];
-        const nextPuts: string[] = [];
+        const targetGroups = items.filter((item) => String(item["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10));
+        const groups = targetGroups.length ? targetGroups : items;
+        const nextStrikes: ChainStrike[] = [];
 
         groups.forEach((group) => {
-          const strikes = Array.isArray(group.strikes) ? (group.strikes as Array<Record<string, unknown>>) : [];
-          strikes.forEach((strike) => {
-            const call = strike.call as Record<string, unknown> | undefined;
-            const put = strike.put as Record<string, unknown> | undefined;
-            const callSym = String(call?.["streamer-symbol"] ?? "");
-            const putSym = String(put?.["streamer-symbol"] ?? "");
-            if (callSym) nextCalls.push(callSym);
-            if (putSym) nextPuts.push(putSym);
+          const groupStrikes = Array.isArray(group.strikes) ? (group.strikes as Array<Record<string, unknown>>) : [];
+          groupStrikes.forEach((strikeRow) => {
+            const call = strikeRow.call as Record<string, unknown> | undefined;
+            const put = strikeRow.put as Record<string, unknown> | undefined;
+            const strike = Number(strikeRow["strike-price"] ?? strikeRow.strikePrice ?? strikeRow.strike ?? 0);
+            if (!(strike > 0)) return;
+
+            nextStrikes.push({
+              strike,
+              callSymbol: String(call?.["streamer-symbol"] ?? call?.symbol ?? ""),
+              putSymbol: String(put?.["streamer-symbol"] ?? put?.symbol ?? ""),
+            });
           });
         });
 
-        setCallSymbols([...new Set(nextCalls)]);
-        setPutSymbols([...new Set(nextPuts)]);
-      })
-      .catch(() => {
+        nextStrikes.sort((a, b) => a.strike - b.strike);
+        setChainRootSymbol(rootSymbol);
+        setStrikes(nextStrikes);
+        setSelectedStrike((current) => {
+          if (current && nextStrikes.some((row) => String(row.strike) === current)) return current;
+          return nextStrikes.length ? String(nextStrikes[Math.floor(nextStrikes.length / 2)].strike) : "";
+        });
+      } catch {
         if (!cancelled) {
-          setCallSymbols([]);
-          setPutSymbols([]);
+          setChainRootSymbol("");
+          setStrikes([]);
+          setSelectedStrike("");
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingSymbols(false);
-      });
+      } finally {
+        if (!cancelled) setLoadingStrikes(false);
+      }
+    };
 
+    setManualSymbol("");
+    loadStrikes().catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [expiry, ticker]);
-
-  useEffect(() => {
-    if (source === "custom") return;
-    if (!sourceSymbols.length) return;
-    setSymbol(sourceSymbols[0]);
-  }, [source, sourceSymbols]);
 
   useEffect(() => {
     return () => {
@@ -214,7 +266,7 @@ export default function DevPage() {
   }, []);
 
   const runProbe = useCallback(async () => {
-    const trimmed = symbol.trim();
+    const trimmed = effectiveSymbol.trim();
     if (!trimmed) return;
 
     wsRef.current?.close();
@@ -235,7 +287,7 @@ export default function DevPage() {
         }),
       });
     } catch {
-      // continue with direct socket probe even if the registration call fails
+      // allow the direct probe to continue
     }
 
     const ws = new WebSocket(getClientWsUrl());
@@ -316,7 +368,7 @@ export default function DevPage() {
         note: "Socket error while waiting for proxy data.",
       });
     };
-  }, [feedType, symbol]);
+  }, [effectiveSymbol, feedType]);
 
   return (
     <div
@@ -338,7 +390,7 @@ export default function DevPage() {
         </div>
         <h1 style={{ margin: "8px 0 0", fontSize: 26, fontWeight: 800 }}>Proxy Subscription Probe</h1>
         <div style={{ marginTop: 6, fontSize: 13, color: "#8da8c2" }}>
-          Subscribe a symbol, wait for the first proxy socket event, and see the raw payload plus elapsed time.
+          Build the option symbol from dropdowns, subscribe it through the proxy, and inspect the first raw event that comes back.
         </div>
       </div>
 
@@ -354,7 +406,7 @@ export default function DevPage() {
         }}
       >
         <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-          <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Ticker</span>
+          <span style={labelStyle}>Ticker</span>
           <select value={ticker} onChange={(e) => setTicker(e.target.value as (typeof TICKERS)[number])} style={inputStyle}>
             {TICKERS.map((item) => (
               <option key={item} value={item}>
@@ -365,7 +417,7 @@ export default function DevPage() {
         </label>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-          <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Feed Type</span>
+          <span style={labelStyle}>Feed Type</span>
           <select value={feedType} onChange={(e) => setFeedType(e.target.value as FeedType)} style={inputStyle}>
             {FEED_TYPES.map((item) => (
               <option key={item} value={item}>
@@ -376,20 +428,9 @@ export default function DevPage() {
         </label>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-          <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Source</span>
-          <select value={source} onChange={(e) => setSource(e.target.value as SymbolSource)} style={inputStyle}>
-            {SOURCE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-          <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Expiry</span>
-          <select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle}>
-            {!expiryOptions.length ? <option value="">No expiries</option> : null}
+          <span style={labelStyle}>Expiry</span>
+          <select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle} disabled={loadingExpirations || !expiryOptions.length}>
+            {!expiryOptions.length ? <option value="">{loadingExpirations ? "Loading..." : "No expiries"}</option> : null}
             {expiryOptions.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -398,34 +439,51 @@ export default function DevPage() {
           </select>
         </label>
 
-        {source === "custom" ? (
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-            <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Symbol</span>
-            <input value={symbol} onChange={(e) => setSymbol(e.target.value)} style={inputStyle} placeholder=".SPXW260617C7500" />
-          </label>
-        ) : (
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-            <span style={{ color: "#8da8c2", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              {source === "0dte-calls" ? "0DTE Call Symbol" : "0DTE Put Symbol"}
-            </span>
-            <select value={symbol} onChange={(e) => setSymbol(e.target.value)} style={inputStyle} disabled={loadingSymbols || !sourceSymbols.length}>
-              {!sourceSymbols.length ? <option value="">{loadingSymbols ? "Loading…" : "No symbols"}</option> : null}
-              {sourceSymbols.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          <span style={labelStyle}>Side</span>
+          <select value={optionSide} onChange={(e) => setOptionSide(e.target.value as OptionSide)} style={inputStyle}>
+            {SIDES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          <span style={labelStyle}>Strike</span>
+          <select
+            value={selectedStrike}
+            onChange={(e) => setSelectedStrike(e.target.value)}
+            style={inputStyle}
+            disabled={loadingStrikes || !strikes.length}
+          >
+            {!strikes.length ? <option value="">{loadingStrikes ? "Loading..." : "No strikes"}</option> : null}
+            {strikes.map((item) => (
+              <option key={item.strike} value={String(item.strike)}>
+                {buildStrikeLabel(item, optionSide)}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          <span style={labelStyle}>Manual Override</span>
+          <input
+            value={manualSymbol}
+            onChange={(e) => setManualSymbol(e.target.value)}
+            style={inputStyle}
+            placeholder="Optional exact symbol"
+          />
+        </label>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button onClick={() => void runProbe()} style={buttonStyle} disabled={!symbol.trim() || !expiry}>
+        <button onClick={() => void runProbe()} style={buttonStyle} disabled={!effectiveSymbol.trim()}>
           Run Probe
         </button>
         <div style={{ fontSize: 12, color: statusColor(status), fontWeight: 700, letterSpacing: "0.04em" }}>
-          {status === "idle" ? "Ready" : status === "loading" ? "Waiting for proxy event…" : status === "found" ? "Found" : status === "not-found" ? "Not found" : "Error"}
+          {status === "idle" ? "Ready" : status === "loading" ? "Waiting for proxy event..." : status === "found" ? "Found" : status === "not-found" ? "Not found" : "Error"}
         </div>
       </div>
 
@@ -436,11 +494,14 @@ export default function DevPage() {
           gap: 12,
         }}
       >
-        <InfoCard label="Expiry" value={expiry || "—"} />
-        <InfoCard label="Ticker" value={ticker} />
-        <InfoCard label="Selected Symbol" value={symbol || "—"} />
+        <InfoCard label="Root" value={chainRootSymbol || "-"} />
+        <InfoCard label="Expiry" value={expiry || "-"} />
+        <InfoCard label="Side" value={optionSide.toUpperCase()} />
+        <InfoCard label="Strike" value={selectedStrike || "-"} />
+        <InfoCard label="Built Symbol" value={builtSymbol || "-"} />
+        <InfoCard label="Selected Symbol" value={effectiveSymbol || "-"} />
         <InfoCard label="Feed Type" value={feedType} />
-        <InfoCard label="Elapsed" value={result ? `${result.elapsedMs} ms` : "—"} />
+        <InfoCard label="Elapsed" value={result ? `${result.elapsedMs} ms` : "-"} />
       </div>
 
       <div
@@ -456,9 +517,7 @@ export default function DevPage() {
         </div>
         {result ? (
           <>
-            {result.note ? (
-              <div style={{ marginBottom: 10, fontSize: 13, color: "#ffd166" }}>{result.note}</div>
-            ) : null}
+            {result.note ? <div style={{ marginBottom: 10, fontSize: 13, color: "#ffd166" }}>{result.note}</div> : null}
             <pre
               style={{
                 margin: 0,
@@ -497,13 +556,20 @@ function InfoCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function statusColor(status: "idle" | "loading" | "found" | "not-found" | "error") {
+function statusColor(status: ProbeStatus) {
   if (status === "found") return "#00e676";
   if (status === "not-found") return "#ffb703";
   if (status === "error") return "#ff5d73";
   if (status === "loading") return "#00e5ff";
   return "#8da8c2";
 }
+
+const labelStyle: React.CSSProperties = {
+  color: "#8da8c2",
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+};
 
 const inputStyle: React.CSSProperties = {
   height: 40,
@@ -512,20 +578,18 @@ const inputStyle: React.CSSProperties = {
   background: "#0a0f16",
   color: "#f5fbff",
   padding: "0 12px",
-  fontSize: 13,
   outline: "none",
 };
 
 const buttonStyle: React.CSSProperties = {
-  height: 40,
+  height: 42,
   padding: "0 16px",
   borderRadius: 10,
-  border: "1px solid rgba(0,229,255,0.3)",
-  background: "linear-gradient(180deg, rgba(0,229,255,0.16), rgba(0,229,255,0.08))",
-  color: "#00e5ff",
-  fontSize: 13,
+  border: "1px solid rgba(0,229,255,0.24)",
+  background: "linear-gradient(180deg, #0fe6ff 0%, #00a7d6 100%)",
+  color: "#03131a",
   fontWeight: 800,
-  cursor: "pointer",
-  letterSpacing: "0.08em",
+  letterSpacing: "0.06em",
   textTransform: "uppercase",
+  cursor: "pointer",
 };
