@@ -5751,12 +5751,18 @@ server.listen(PORT, async () => {
           const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${targetExpR}`);
           if (status === 200 && data?.data?.items?.length) {
             const syms = pickNearestOptionStreamerSymbols(data.data.items, spot0, 200);
-            syms.forEach(sym => {
-              queueAutoSubscription({ type: 'Greeks',  symbol: sym });
-              queueAutoSubscription({ type: 'Summary', symbol: sym });
-            });
-            await sendSubscriptionsRateLimited();
-            await sleep(2000); // let Greeks populate
+            const newSyms = syms.filter(sym => !subscriptions.has(sym));
+            if (newSyms.length > 0) {
+              newSyms.forEach(sym => {
+                queueAutoSubscription({ type: 'Greeks',  symbol: sym });
+                queueAutoSubscription({ type: 'Summary', symbol: sym });
+              });
+              await sendSubscriptionsRateLimited();
+              log('[GEX-refresh] queued', newSyms.length, 'new SPX symbols (already subscribed:', syms.length - newSyms.length, ')');
+              await sleep(2000); // let Greeks populate
+            } else {
+              log('[GEX-refresh] all', syms.length, 'SPX symbols already subscribed, skipping re-queue');
+            }
           }
         }
       }
