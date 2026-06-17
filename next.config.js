@@ -9,7 +9,7 @@ const nextConfig = {
       beforeFiles: [
         {
           source: '/api/:path*',
-          destination: `${vanillaBackend}/proxy/api/:path*`
+          destination: `${vanillaBackend}/proxy/api/tt/:path*`
         },
         {
           source: '/proxy/:path*',
