@@ -289,6 +289,8 @@ export default function Sidebar({
       display: "flex",
       flexDirection: "column",
       height: "100%",
+      position: "relative",
+      zIndex: 10000,
       background: "rgba(13,17,25,0.62)",
       backdropFilter: "blur(16px)",
       borderRight: `1px solid ${HOME_THEME.border}`,

@@ -44,20 +44,27 @@ function pickDashboardExpiries(
   items: Array<{ date: string; strikeCount: number }>
 ): { "0dte": string; "1dte": string } {
   const seen = new Set<string>();
-  const unique = items.filter((item) => {
-    if (!item.date || seen.has(item.date)) return false;
-    seen.add(item.date);
-    return true;
-  });
+  const unique = items
+    .filter((item) => {
+      if (!item.date || seen.has(item.date)) return false;
+      seen.add(item.date);
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-  const liquid = unique.filter((item) => item.strikeCount >= 20);
-  const zeroSource = liquid[0] ?? unique[0];
-  const zero = zeroSource?.date ?? "";
-  const later = unique.filter((item) => item.date > zero);
-  const liquidLater = later.filter((item) => item.strikeCount >= 20);
-  const rankedLater = (liquidLater.length ? liquidLater : later)
-    .sort((a, b) => (b.strikeCount - a.strikeCount) || a.date.localeCompare(b.date));
-  const one = rankedLater[0]?.date ?? later[0]?.date ?? zero;
+  const today = etNow();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().slice(0, 10);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+
+  const zero = unique.find((item) => item.date >= todayStr)?.date ?? unique[0]?.date ?? "";
+  const one =
+    unique.find((item) => item.date >= tomorrowStr)?.date ??
+    unique.find((item) => item.date > zero)?.date ??
+    zero;
+
   return { "0dte": zero, "1dte": one };
 }
 
@@ -914,7 +921,7 @@ export default function HomePage() {
 
             {/* GEX CHART */}
             {(() => {
-              // Dynamic DTE date labels
+              // Dynamic date labels
               const d0 = expiryMap["0dte"] ? fmtExpiryDate(expiryMap["0dte"]) : "--/--";
               const d1 = expiryMap["1dte"] ? fmtExpiryDate(expiryMap["1dte"]) : "--/--";
 
@@ -983,8 +990,8 @@ export default function HomePage() {
                     Net GEX
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    <button onClick={() => { setSelectedExpiry("0dte"); setPanOffset(0); }} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE {d0}</button>
-                    <button onClick={() => { setSelectedExpiry("1dte"); setPanOffset(0); }} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>1DTE {d1}</button>
+                    <button onClick={() => { setSelectedExpiry("0dte"); setPanOffset(0); }} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Today {d0}</button>
+                    <button onClick={() => { setSelectedExpiry("1dte"); setPanOffset(0); }} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Tomorrow {d1}</button>
                     <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
                     {(["net-gex","call-put"] as const).map(m => (
                       <button key={m} onClick={() => { setGexMode(m); setPanOffset(0); }} style={{ color: gexMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: gexMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
@@ -1667,5 +1674,4 @@ export default function HomePage() {
     </div>
   );
 }
-
 
