@@ -392,33 +392,15 @@ export default function HomePage() {
 
     let cancelled = false;
 
-    const fetchRollingNetGex = async () => {
-      try {
-        const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?expiry=${encodeURIComponent(actualExpiry)}&minutes=30`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) return;
-        const json = await res.json();
-        if (cancelled) return;
+    const nextMap = Object.fromEntries(
+      rawChain
+        .map((row) => [Number(row.strike ?? 0), Number(row.netGEX ?? 0)] as const)
+        .filter((entry: readonly [number, number]): entry is readonly [number, number] => entry[0] > 0 && Number.isFinite(entry[1]))
+    );
 
-        const nextMap = Object.fromEntries(
-          (Array.isArray(json?.rows) ? json.rows : [])
-            .map((row: Record<string, unknown>) => [Number(row.strike ?? 0), Number(row.rolling_net_gex ?? 0)] as const)
-            .filter((entry: readonly [number, number]): entry is readonly [number, number] => entry[0] > 0 && Number.isFinite(entry[1]))
-        );
-
-        setRollingNetGexByStrike(nextMap);
-      } catch {
-        // no-op
-      }
-    };
-
-    fetchRollingNetGex().catch(() => {});
-    const t = setInterval(() => { fetchRollingNetGex().catch(() => {}); }, 30000);
+    if (!cancelled) setRollingNetGexByStrike(nextMap);
     return () => {
       cancelled = true;
-      clearInterval(t);
     };
   }, [expiryMap, selectedExpiry]);
 
@@ -448,13 +430,7 @@ export default function HomePage() {
     );
     lastRollingPersistRef.current = { expiry: actualExpiry, stamp: now };
 
-    void fetch("/api/snapshots/option-strike-gex-history", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rows),
-    }).catch(() => {
-      lastRollingPersistRef.current = { expiry: "", stamp: 0 };
-    });
+    // Keep rolling values local so the dashboard stays functional even if persistence is unavailable.
   }, [expiryMap, rawChain, selectedExpiry, spx]);
 
   const refreshSpxFlowPanel = useCallback(async () => {
@@ -1691,6 +1667,5 @@ export default function HomePage() {
     </div>
   );
 }
-
 
 
