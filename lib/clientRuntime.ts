@@ -33,15 +33,8 @@ export function getClientWsUrl(path = "/ws/dxlink"): string {
   if (envUrl) {
     return envUrl.endsWith(normalizedPath) ? envUrl : `${envUrl}${normalizedPath}`;
   }
-  // Always connect directly to proxy (port 3001), not through Next.js
-  // WebSocket upgrades cannot be rewritten by Next.js
-  if (isLocalHost(window.location.hostname)) {
-    const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${wsProto}://${window.location.hostname}:3001${normalizedPath}`;
-  }
-  // Production: connect to proxy at same hostname but port 3001
   const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${wsProto}://${window.location.hostname}:3001${normalizedPath}`;
+  return `${wsProto}://${window.location.host}${normalizedPath}`;
 }
 
 export async function isLiveFeedReady(force = false): Promise<boolean> {

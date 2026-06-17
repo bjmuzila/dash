@@ -436,7 +436,7 @@ function fmtNum(v: number | undefined | null, decimals = 2, prefix = ""): string
 const DXLINK_WS_URL =
   typeof window !== "undefined"
     ? (process.env.NEXT_PUBLIC_WS_URL ??
-        `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:3001/ws/dxlink`)
+        `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/dxlink`)
     : "";
 
 function Sparkline({ data, color, height = 62 }: { data: { ts: number; value: number }[]; color: string; height?: number }) {

@@ -46,26 +46,11 @@ export async function GET(request: NextRequest) {
   // Handle proxy/api/* paths - forward to proxy server
   if (path.startsWith('/proxy/')) {
     try {
-      // Try local first, fall back to remote if needed
       const localProxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
-      const remoteProxyUrl = process.env.REMOTE_PROXY_URL
-        ? `${process.env.REMOTE_PROXY_URL}${path}${request.nextUrl.search}`
-        : null;
-
-      let proxyResponse: Response;
-      try {
-        proxyResponse = await Promise.race([
-          fetch(localProxyUrl, { method: 'GET' }),
-          new Promise<Response>((_: unknown, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
-        ]);
-      } catch (localErr) {
-        if (remoteProxyUrl) {
-          console.log('[PROXY] Local failed, trying remote:', remoteProxyUrl);
-          proxyResponse = await fetch(remoteProxyUrl, { method: 'GET' });
-        } else {
-          throw localErr;
-        }
-      }
+      const proxyResponse = await Promise.race([
+        fetch(localProxyUrl, { method: 'GET' }),
+        new Promise<Response>((_: unknown, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+      ]);
 
       const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
       return NextResponse.json(data, { status: proxyResponse.status });

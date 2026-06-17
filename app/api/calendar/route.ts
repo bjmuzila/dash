@@ -106,7 +106,7 @@ async function fetchTrumpEvents(): Promise<CalEvent[]> {
 }
 
 export async function GET() {
-  const proxyBase = process.env.PROXY_URL ?? "https://vanila-8zn1.onrender.com";
+  const proxyBase = process.env.PROXY_URL ?? "http://127.0.0.1:3001";
 
   try {
     const [econRes, trumpEvents] = await Promise.all([

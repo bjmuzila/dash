@@ -3,16 +3,16 @@
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
-    const vanillaBackend = process.env.VANILLA_BACKEND_URL || 'http://localhost:3001';
+    const internalProxyBase = process.env.PROXY_URL || 'http://127.0.0.1:3001';
     return {
       beforeFiles: [
         {
           source: '/api/snapshots/:path*',
-          destination: `${vanillaBackend}/proxy/api/snapshots/:path*`
+          destination: `${internalProxyBase}/proxy/api/snapshots/:path*`
         },
         {
           source: '/proxy/:path*',
-          destination: `${vanillaBackend}/proxy/:path*`
+          destination: `${internalProxyBase}/proxy/:path*`
         }
       ]
     }

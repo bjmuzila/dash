@@ -3,39 +3,31 @@ import { computeGexSummary } from "@/lib/math/gex";
 import { computeGEXProfile } from "@/lib/math/calculations";
 import type { ChainRow } from "@/lib/math/calculations";
 
-const PROXY = process.env.PROXY_URL ?? "http://localhost:3001";
+const PROXY = process.env.PROXY_URL ?? "http://127.0.0.1:3001";
 
-interface ProxyOption {
-  "open-interest"?: number;
-  openInterest?: number;
-  volume?: number;
-  delta?: number;
-  gamma?: number;
-  bid?: number;
-  ask?: number;
-  last?: number;
-  "implied-volatility"?: number;
-  impliedVolatility?: number;
+interface ProxyGexRow {
+  strike?: number;
+  dte?: number;
+  callGamma?: number;
+  callDelta?: number;
+  callOI?: number;
+  callVol?: number;
+  putGamma?: number;
+  putDelta?: number;
+  putOI?: number;
+  putVol?: number;
+  callGEX?: number;
+  putGEX?: number;
+  netGEX?: number;
 }
 
-interface ProxyStrike {
-  "strike-price": string;
-  call?: ProxyOption;
-  put?: ProxyOption;
-}
-
-interface ProxyExpGroup {
-  "expiration-date": string;
-  "days-to-expiration"?: number;
-  daysToExpiration?: number;
-  strikes: ProxyStrike[];
-}
-
-interface ProxyChainResponse {
-  data?: {
-    items?: ProxyExpGroup[];
-    underlyingPrice?: number;
-  };
+interface ProxyGexChainResponse {
+  spot?: number;
+  callWall?: number;
+  putWall?: number;
+  gexFlip?: number;
+  ts?: number;
+  rows?: ProxyGexRow[];
 }
 
 function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
@@ -49,169 +41,78 @@ function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
   return num;
 }
 
-async function fetchChainResponse(expiry: string): Promise<Response> {
-  const urls = expiry
-    ? [
-        `${PROXY}/proxy/api/tt/chains/SPX?expiration=${encodeURIComponent(expiry)}&range=all&awaitDX=1`,
-        `${PROXY}/proxy/api/tt/chains/SPX?expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`,
-      ]
-    : [`${PROXY}/proxy/api/tt/chains/SPX?range=all&noSubscribe=1`];
-
-  let lastError: unknown = null;
-
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (res.ok) return res;
-      lastError = new Error(`Proxy returned ${res.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(String(lastError ?? "Proxy request failed"));
+async function fetchGexChain(expiry: string): Promise<ProxyGexChainResponse> {
+  const qs = expiry ? `?expiry=${encodeURIComponent(expiry)}` : "";
+  const res = await fetch(`${PROXY}/proxy/api/tt/gex-chain${qs}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
+  return res.json();
 }
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const expiry = searchParams.get("expiry") ?? "";
+    const data = await fetchGexChain(expiry);
+    const spotPrice = Number(data?.spot ?? 0);
 
-    const res = await fetchChainResponse(expiry);
-    const data: ProxyChainResponse = await res.json();
-    const items = data?.data?.items ?? [];
-    const spotPrice: number = data?.data?.underlyingPrice ?? 0;
-
-    const strikeMap = new Map<number, ChainRow>();
-    const profileRows: ChainRow[] = [];
-
-    for (const expGroup of items) {
-      const expDate = expGroup["expiration-date"];
-      if (expiry && expDate !== expiry) continue;
-
-      for (const strikeObj of expGroup.strikes ?? []) {
-        const strike = parseFloat(strikeObj["strike-price"] ?? "0");
-        if (!strike || !isFinite(strike)) continue;
-
-        const c = strikeObj.call ?? {};
-        const p = strikeObj.put ?? {};
-
-        const callOI = Number(c["open-interest"] ?? c.openInterest ?? 0);
-        const putOI = Number(p["open-interest"] ?? p.openInterest ?? 0);
-        const callVolume = Number(c.volume ?? 0);
-        const putVolume = Number(p.volume ?? 0);
-        const callGamma = Math.abs(Number(c.gamma ?? 0));
-        const putGamma = Math.abs(Number(p.gamma ?? 0));
-        const callDelta = Number(c.delta ?? 0);
-        const putDelta = Number(p.delta ?? 0);
-        const callIV = Number(c["implied-volatility"] ?? c.impliedVolatility ?? 0);
-        const putIV = Number(p["implied-volatility"] ?? p.impliedVolatility ?? 0);
-        const dte = Number(expGroup["days-to-expiration"] ?? expGroup.daysToExpiration ?? 0);
-
+    const chain: ChainRow[] = (data?.rows ?? [])
+      .map((row) => {
+        const strike = Number(row.strike ?? 0);
+        const callOI = Number(row.callOI ?? 0);
+        const putOI = Number(row.putOI ?? 0);
+        const callVolume = Number(row.callVol ?? 0);
+        const putVolume = Number(row.putVol ?? 0);
+        const callGamma = Math.abs(Number(row.callGamma ?? 0));
+        const putGamma = Math.abs(Number(row.putGamma ?? 0));
+        const callDelta = Number(row.callDelta ?? 0);
+        const putDelta = Number(row.putDelta ?? 0);
+        const dte = Number(row.dte ?? 0);
         const spot = spotPrice || strike;
-        const callGEX = callGamma * callOI * spot * spot;
-        const putGEX = putGamma * putOI * spot * spot * -1;
-        const netGEX = callGEX + putGEX;
+        const callGEX = Number(row.callGEX ?? callGamma * callOI * spot * spot);
+        const putGEX = Number(row.putGEX ?? putGamma * putOI * spot * spot * -1);
+        const netGEX = Number(row.netGEX ?? callGEX + putGEX);
 
-        const netVolGEX = callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot;
-        const netDEX = callDelta * callOI * spot * 100 - Math.abs(putDelta) * putOI * spot * 100;
-        const volNetDEX = callDelta * callVolume * spot * 100 - Math.abs(putDelta) * putVolume * spot * 100;
-
-        const sqrtT = Math.sqrt(Math.max(dte, 0.5) / 365);
-        const callVanna1 = callIV > 0 ? callDelta * (1 - callDelta) * sqrtT / callIV : 0;
-        const putVanna1 = putIV > 0 ? Math.abs(putDelta) * (1 - Math.abs(putDelta)) * sqrtT / putIV : 0;
-        const VANNA_SCALE = spot * 100;
-        const netVanna = (callVanna1 * callOI - putVanna1 * putOI) * VANNA_SCALE;
-        const netVolVanna = (callVanna1 * callVolume - putVanna1 * putVolume) * VANNA_SCALE;
-
-        if ((callIV > 0 || putIV > 0) && (callOI > 0 || putOI > 0)) {
-          profileRows.push({ strike, callOI, putOI, callIV, putIV, dte });
-        }
-
-        const existing = strikeMap.get(strike);
-        if (existing) {
-          existing.callOI! += callOI;
-          existing.putOI! += putOI;
-          existing.callVolume! += callVolume;
-          existing.putVolume! += putVolume;
-          existing.callGEX! += callGEX;
-          existing.putGEX! += putGEX;
-          existing.netGEX! += netGEX;
-          existing.netVolGEX! += netVolGEX;
-          existing.netDEX! += netDEX;
-          existing.volNetDEX! += volNetDEX;
-          existing.netVanna! += netVanna;
-          existing.netVolVanna! += netVolVanna;
-          if (dte < (existing.dte ?? Infinity)) existing.dte = dte;
-          if (callOI > 0) existing.callGamma = callGamma;
-          if (putOI > 0) existing.putGamma = putGamma;
-          if (callOI > 0) existing.callDelta = callDelta;
-          if (putOI > 0) existing.putDelta = putDelta;
-        } else {
-          strikeMap.set(strike, {
-            strike,
-            spotPrice: spot,
-            callOI,
-            putOI,
-            callVolume,
-            putVolume,
-            callGamma,
-            putGamma,
-            callDelta,
-            putDelta,
-            callGEX,
-            putGEX,
-            netGEX,
-            netVolGEX,
-            netDEX,
-            volNetDEX,
-            netVanna,
-            netVolVanna,
-            callIV,
-            putIV,
-            dte,
-          });
-        }
-      }
-    }
-
-    const chain = [...strikeMap.values()].sort((a, b) => a.strike - b.strike);
-
-    let gexFlip: number | null = null;
-    let callWall: number | undefined;
-    let putWall: number | undefined;
-    try {
-      const gexMeta = await fetch(`${PROXY}/proxy/api/tt/gex`, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(3000),
-      });
-      if (gexMeta.ok) {
-        const gexJson = await gexMeta.json();
-        gexFlip = gexJson?.data?.gamma_flip_spx ?? null;
-        callWall = gexJson?.data?.call_wall_spx ?? undefined;
-        putWall = gexJson?.data?.put_wall_spx ?? undefined;
-      }
-    } catch {}
+        return {
+          strike,
+          spotPrice: spot,
+          callOI,
+          putOI,
+          callVolume,
+          putVolume,
+          callGamma,
+          putGamma,
+          callDelta,
+          putDelta,
+          callGEX,
+          putGEX,
+          netGEX,
+          netVolGEX: callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot,
+          netDEX: callDelta * callOI * spot * 100 - Math.abs(putDelta) * putOI * spot * 100,
+          volNetDEX: callDelta * callVolume * spot * 100 - Math.abs(putDelta) * putVolume * spot * 100,
+          dte,
+          callIV: 0,
+          putIV: 0,
+        };
+      })
+      .filter((row) => Number.isFinite(row.strike) && row.strike > 0)
+      .sort((a, b) => a.strike - b.strike);
 
     const summary = computeGexSummary(chain, spotPrice);
-    const profile = computeGEXProfile(profileRows.length >= 5 ? profileRows : chain, spotPrice);
-
+    const profile = computeGEXProfile(chain, spotPrice);
     const resolvedGexFlip =
       normalizeFlipPoint(profile?.flipPoint, spotPrice) ??
       normalizeFlipPoint(summary.gexFlip, spotPrice) ??
-      normalizeFlipPoint(gexFlip, spotPrice);
+      normalizeFlipPoint(data?.gexFlip, spotPrice);
 
     return NextResponse.json({
-      timestamp: Date.now(),
+      timestamp: Number(data?.ts ?? Date.now()),
       spotPrice,
       expiration: expiry || null,
-      callWall: summary.callWall ?? callWall,
-      putWall: summary.putWall ?? putWall,
+      callWall: summary.callWall ?? (Number(data?.callWall ?? 0) || null),
+      putWall: summary.putWall ?? (Number(data?.putWall ?? 0) || null),
       gexFlip: resolvedGexFlip,
       chain,
       summary,
