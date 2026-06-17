@@ -1,13 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ensureToken, ttFetch } from '@/lib/proxy/auth';
-
 /**
  * Catch-all proxy route for all /api/* requests
  * Routes:
- *   /api/proxy/* -> forwards to TastyTrade/external APIs
+ *   /api/proxy/* -> forwards to the local market-data proxy
  *   /api/snapshots -> Next.js native routes
- *   /api/tt/* -> TastyTrade API proxy
  */
+
+const PROXY = process.env.PROXY_URL ?? 'http://127.0.0.1:3001';
+
+async function proxyJson(path: string, init?: RequestInit) {
+  const response = await fetch(`${PROXY}${path}`, {
+    ...init,
+    signal: AbortSignal.timeout(20_000),
+  });
+  const text = await response.text();
+  let data: unknown = text;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { text };
+  }
+  return NextResponse.json(data, { status: response.status });
+}
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -25,35 +39,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Handle proxy/api/tt/* paths - route to TastyTrade
-  if (path.startsWith('/proxy/api/tt/')) {
-    try {
-      const ttPath = path.replace('/proxy', ''); // /api/tt/...
-      const hasToken = await ensureToken();
-      if (!hasToken) {
-        return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
-      }
-
-      const ttResponse = await ttFetch(ttPath + request.nextUrl.search);
-      const data = await ttResponse.json();
-      return NextResponse.json(data, { status: ttResponse.status });
-    } catch (error) {
-      console.error('[API] TastyTrade proxy error:', error);
-      return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
-    }
-  }
-
-  // Handle proxy/api/* paths - forward to proxy server
+  // Handle /api/proxy/* paths - forward to the live proxy server.
   if (path.startsWith('/proxy/')) {
     try {
-      const localProxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
-      const proxyResponse = await Promise.race([
-        fetch(localProxyUrl, { method: 'GET' }),
-        new Promise<Response>((_: unknown, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
-      ]);
-
-      const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
-      return NextResponse.json(data, { status: proxyResponse.status });
+      return await proxyJson(`${path}${request.nextUrl.search}`, { method: 'GET', cache: 'no-store' });
     } catch (error) {
       console.error('[PROXY] GET error:', error);
       return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
@@ -70,33 +59,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Handle proxy/api/tt/* paths
-    if (path.startsWith('/proxy/api/tt/')) {
-      const ttPath = path.replace('/proxy', '');
-      const hasToken = await ensureToken();
-      if (!hasToken) {
-        return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
-      }
-
-      const ttResponse = await ttFetch(ttPath + request.nextUrl.search, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      const data = await ttResponse.json();
-      return NextResponse.json(data, { status: ttResponse.status });
-    }
-
     // Forward to proxy server on 3001
     if (path.startsWith('/proxy/')) {
-      const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
-      console.log('[PROXY] POST', proxyUrl);
-      const proxyResponse = await fetch(proxyUrl, {
+      return await proxyJson(`${path}${request.nextUrl.search}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
-      return NextResponse.json(data, { status: proxyResponse.status });
     }
 
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -112,11 +81,7 @@ export async function DELETE(request: NextRequest) {
 
   try {
     if (path.startsWith('/proxy/')) {
-      const proxyUrl = `http://127.0.0.1:3001${path}${request.nextUrl.search}`;
-      console.log('[PROXY] DELETE', proxyUrl);
-      const proxyResponse = await fetch(proxyUrl, { method: 'DELETE' });
-      const data = await proxyResponse.json().catch((_: unknown) => proxyResponse.text());
-      return NextResponse.json(data, { status: proxyResponse.status });
+      return await proxyJson(`${path}${request.nextUrl.search}`, { method: 'DELETE' });
     }
 
     return NextResponse.json({ error: 'Not found' }, { status: 404 });

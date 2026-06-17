@@ -67,7 +67,7 @@ function getChainsFromCache(symbol, expiration) {
   if (cached) {
     const age = Date.now() - cached.timestamp;
     if (age <= ttl) {
-      log(`[CACHE HIT] ${key} (${Math.round(age / 1000)}s old, ${cached.data.length} expirations)`);
+      log(`[CACHE HIT] ${key} (${Math.round(age / 1000)}s old, ${chainCacheItemCount(cached.data)} expirations)`);
       return cached.data;
     }
     chainCache.delete(key);
@@ -83,7 +83,7 @@ function getChainsFromCache(symbol, expiration) {
           const data = JSON.parse(row.data);
           // Restore to in-memory cache for next access
           chainCache.set(key, { timestamp: row.timestamp, data });
-          log(`[CACHE HIT-DB] ${key} (${Math.round(age / 1000)}s old, ${data.length} expirations)`);
+          log(`[CACHE HIT-DB] ${key} (${Math.round(age / 1000)}s old, ${chainCacheItemCount(data)} expirations)`);
           return data;
         } else {
           db.prepare('DELETE FROM chains_cache WHERE symbol = ? AND expiration = ?').run(symbol.toUpperCase(), expiration || 'DEFAULT');
@@ -95,6 +95,10 @@ function getChainsFromCache(symbol, expiration) {
   }
 
   return null;
+}
+
+function chainCacheItemCount(data) {
+  return Array.isArray(data) ? data.length : Array.isArray(data?.items) ? data.items.length : 0;
 }
 
 function setChainsInCache(symbol, expiration, strikeData) {
@@ -112,12 +116,12 @@ function setChainsInCache(symbol, expiration, strikeData) {
         INSERT OR REPLACE INTO chains_cache (symbol, expiration, data, timestamp)
         VALUES (?, ?, ?, ?)
       `).run(symbol.toUpperCase(), expiration || 'DEFAULT', data, timestamp);
-      log(`[CACHE SET-DB] ${key} (${strikeData.length} expirations)`);
+      log(`[CACHE SET-DB] ${key} (${chainCacheItemCount(strikeData)} expirations)`);
     } catch (e) {
       console.warn('[CACHE] SQLite write error:', e.message);
     }
   } else {
-    log(`[CACHE SET] ${key} (${strikeData.length} expirations, DB not ready)`);
+    log(`[CACHE SET] ${key} (${chainCacheItemCount(strikeData)} expirations, DB not ready)`);
   }
 }
 
@@ -2081,6 +2085,11 @@ function normalizeDxCacheSymbol(symbol) {
 function getDxCacheAliases(symbol, normalized) {
   const aliases = new Set([normalized]);
   const raw = String(symbol || '').trim();
+  if (raw) aliases.add(raw);
+  if (normalized && /^[A-Z]+\d{6}[CP]\d+$/i.test(normalized)) {
+    aliases.add(normalized.replace(/^\./, ''));
+    aliases.add('.' + normalized.replace(/^\./, ''));
+  }
   if (/^\/ESU(26|6)?$/i.test(raw)) {
     aliases.add('/ESU26');
     aliases.add('/ESU6');
@@ -4011,11 +4020,15 @@ const server = http.createServer(async (req, res) => {
     const exp = u.searchParams.get('expiration') || '';
     const rangeRaw = u.searchParams.get('range') || '';
     const rangeParam = rangeRaw === 'all' ? 'all' : (rangeRaw ? parseInt(rangeRaw, 10) : 0);
+    const noCache = u.searchParams.get('noCache') === '1';
 
     // CHECK CACHE (2026-06-12): Return cached chain data if fresh (<1hr for explicit exp, <10min for defaults)
     // This eliminates redundant TT API calls and massive subscription queues
-    const cachedItems = getChainsFromCache(sym, exp);
+    const cachedPayload = noCache || pageId ? null : getChainsFromCache(sym, exp);
+    const cachedItems = Array.isArray(cachedPayload) ? cachedPayload : cachedPayload?.items;
     if (cachedItems && !awaitDX) {
+      const cachedUnderlyingPrice = Array.isArray(cachedPayload) ? 0 : firstFiniteNumber(cachedPayload?.underlyingPrice, 0);
+      const cachedRootSymbol = Array.isArray(cachedPayload) ? sym : (cachedPayload?.rootSymbol || sym);
       // Still subscribe to symbols if not already subscribed (cache doesn't prevent live updates)
       const streamerSyms = noSubscribe ? [] : cachedItems
         .flatMap(eg => eg.strikes || [])
@@ -4033,7 +4046,7 @@ const server = http.createServer(async (req, res) => {
         sendSubscriptionsRateLimited();
         log('Subscribed', newSyms.length, 'NEW symbols from CACHED chain');
       }
-      return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: 0, symbol: sym }, context: 'cache' });
+      return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: cachedUnderlyingPrice, symbol: sym, rootSymbol: cachedRootSymbol }, context: 'cache' });
     }
 
     const { status: s1, data: d1 } = await ttGet(`/option-chains/${encodeURIComponent(sym)}/nested`);
@@ -4318,7 +4331,7 @@ const server = http.createServer(async (req, res) => {
     log('chains built items:', items.length, 'first strikes:', items[0]?.strikes?.length, '| dxLink greeks cached:', cachedGreeks, '| underlying:', underlyingPrice);
 
     // SAVE TO CACHE (2026-06-12): Cache the built items for future requests
-    setChainsInCache(sym, exp, items);
+    setChainsInCache(sym, exp, { items, underlyingPrice, rootSymbol });
 
     return sendJSON(res, 200, { data: { items, underlyingPrice, symbol: sym, rootSymbol }, context: '/option-chains/' + sym + '/nested' });
   }
@@ -4328,46 +4341,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && p === '/api/chains') {
     const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
     const sym = (qs.get('ticker') || 'SPX').toUpperCase();
-    const exp = qs.get('expiration') || '';
-    const rangeParam = qs.get('range') || 'all';
-    const pageId = qs.get('pageId') || '';
+    qs.delete('ticker');
+    if (!qs.has('range')) qs.set('range', 'all');
 
     try {
-      // Fetch from nested endpoint (merges REST + Greeks)
-      const { status: ttStatus, data: ttData } = await ttGet(`/option-chains/${sym}/nested`);
-      if (ttStatus !== 200 || !ttData?.data) {
-        return sendJSON(res, 404, { error: 'Chain not found', symbol: sym });
-      }
-
-      const { items, underlyingPrice, rootSymbol } = ttData.data;
-
-      // Apply expiration filter if specified
-      let filtered = items;
-      if (exp) {
-        filtered = items.filter(eg => (eg['expiration-date'] || '').slice(0, 10) === exp.slice(0, 10));
-        if (!filtered.length) filtered = items; // fallback to all
-      }
-
-      // Apply range filter if requested (not 'all')
-      if (rangeParam !== 'all' && underlyingPrice > 0) {
-        const rangePercent = parseFloat(rangeParam) || 10;
-        const pct = rangePercent / 100;
-        const lower = underlyingPrice * (1 - pct);
-        const upper = underlyingPrice * (1 + pct);
-
-        filtered = filtered.map(eg => ({
-          'expiration-date': eg['expiration-date'],
-          strikes: eg.strikes.filter(s => {
-            const strike = parseFloat(s['strike-price']);
-            return strike >= lower && strike <= upper;
-          })
-        })).filter(eg => eg.strikes.length > 0);
-      }
-
-      const cachedGreeks = Object.keys(dxGreeksCache).length;
-      log('chains built items:', filtered.length, 'first strikes:', filtered[0]?.strikes?.length, '| dxLink greeks cached:', cachedGreeks, '| underlying:', underlyingPrice, '| pageId:', pageId);
-
-      return sendJSON(res, 200, { data: { items: filtered, underlyingPrice, symbol: sym, rootSymbol } });
+      const target = `http://127.0.0.1:${PORT}/proxy/api/tt/chains/${encodeURIComponent(sym)}?${qs.toString()}`;
+      const upstream = await fetch(target, { signal: AbortSignal.timeout(20000) });
+      const json = await upstream.json().catch(() => ({ error: 'Invalid proxy response' }));
+      return sendJSON(res, upstream.status, json);
     } catch (e) {
       log('[/api/chains] error:', e.message);
       return sendJSON(res, 500, { error: e.message });

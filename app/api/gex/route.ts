@@ -23,9 +23,9 @@ async function fetchGexChain(expiry: string): Promise<any> {
   });
   if (expiry) qs.set("expiration", expiry);
 
-  const res = await fetch(`${PROXY}/api/chains?${qs.toString()}`, {
+  const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?${qs.toString()}`, {
     cache: "no-store",
-    signal: AbortSignal.timeout(8_000),
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
   return res.json();
