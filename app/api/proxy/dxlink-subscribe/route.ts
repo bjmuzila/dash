@@ -11,8 +11,8 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
-    return NextResponse.json(json, { status: res.status });
+    return NextResponse.json({ ok: res.ok, ...json });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ ok: false, error: String(e) });
   }
 }

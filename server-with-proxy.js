@@ -22,9 +22,7 @@ const app = next({ dev: process.env.NODE_ENV !== 'production' });
 const handle = app.getRequestHandler();
 const wsProxyServer = new WebSocket.Server({ noServer: true });
 const localProxyTarget = process.env.PROXY_URL || `http://127.0.0.1:${PROXY_PORT}`;
-const isRenderProduction = process.env.RENDER === 'true' && process.env.NODE_ENV === 'production';
 const shouldManageLocalProxy =
-  !isRenderProduction &&
   /^(https?:\/\/)?(127\.0\.0\.1|localhost)(:\d+)?/i.test(localProxyTarget);
 
 // Spawn proxy server as child process on port 3001

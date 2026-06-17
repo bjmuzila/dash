@@ -1226,6 +1226,9 @@ export default function InsightsPage() {
       const r = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" });
       if (!r.ok) return;
       const data = await r.json();
+      const groups = Array.isArray((data as ChainResponse)?.data?.items) ? (data as ChainResponse).data?.items : [];
+      const hasStrikes = groups?.some((group) => Array.isArray(group.strikes) && group.strikes.length > 0);
+      if (!hasStrikes) return;
       const snap = computeExposureSnapshot(data as ChainResponse, fallbackSpot);
       applySnapshot(snap);
     } catch { /* silent */ }
