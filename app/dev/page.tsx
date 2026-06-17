@@ -126,6 +126,11 @@ export default function DevPage() {
   const [loadingExpirations, setLoadingExpirations] = useState(false);
   const [loadingStrikes, setLoadingStrikes] = useState(false);
   const [chainRootSymbol, setChainRootSymbol] = useState("");
+  const [seenEvents, setSeenEvents] = useState<Array<{ eventType: string; payload: unknown }>>([]);
+  const [probeMeta, setProbeMeta] = useState<{
+    subscriptionState: "unknown" | "new" | "existing";
+    readyMessage?: string;
+  } | null>(null);
   const [result, setResult] = useState<{
     symbol: string;
     feedType: FeedType;
@@ -273,10 +278,16 @@ export default function DevPage() {
     wsRef.current = null;
     setStatus("loading");
     setResult(null);
+    setSeenEvents([]);
+    setProbeMeta(null);
 
     const started = performance.now();
+    const feedTypesBySymbol: Record<string, string[]> = {
+      [trimmed]: [feedType],
+    };
+
     try {
-      await fetch("/api/proxy/subscription-ready", {
+      const readyResponse = await fetch("/api/proxy/subscription-ready", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -286,8 +297,29 @@ export default function DevPage() {
           threshold: 1,
         }),
       });
+      const readyJson = await readyResponse.json().catch(() => null) as
+        | { newSubscriptions?: unknown; message?: unknown }
+        | null;
+      const newSubscriptions = Number(readyJson?.newSubscriptions ?? 0);
+      setProbeMeta({
+        subscriptionState: newSubscriptions > 0 ? "new" : "existing",
+        readyMessage: typeof readyJson?.message === "string" ? readyJson.message : undefined,
+      });
     } catch {
       // allow the direct probe to continue
+    }
+
+    try {
+      await fetch("/api/proxy/dxlink-subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbols: [trimmed],
+          feedTypesBySymbol,
+        }),
+      });
+    } catch {
+      // keep probing even if direct subscribe fails
     }
 
     const ws = new WebSocket(getClientWsUrl());
@@ -305,15 +337,13 @@ export default function DevPage() {
         found: false,
         elapsedMs: Math.round(performance.now() - started),
         payload: null,
-        note: `No ${feedType} event arrived before timeout.`,
+        note: seenEvents.length
+          ? `Timed out waiting for ${feedType}. Saw: ${seenEvents.map((item) => item.eventType).join(", ")}`
+          : `No ${feedType} event arrived before timeout.`,
       });
-    }, 10000);
+    }, 15000);
 
     ws.onopen = () => {
-      const feedTypesBySymbol: Record<string, string[]> = {
-        [trimmed]: [feedType],
-      };
-
       ws.send(
         JSON.stringify({
           type: "subscribe",
@@ -328,6 +358,18 @@ export default function DevPage() {
         const message = JSON.parse(event.data);
         if (message?.type !== "FEED_DATA" || !Array.isArray(message.data)) return;
         const items = normalizeFeedData(message.data);
+        const bySymbol = items.filter((item) => String(item.eventSymbol ?? "") === trimmed);
+        if (bySymbol.length) {
+          setSeenEvents((current) => {
+            const next = [...current];
+            bySymbol.forEach((item) => {
+              const eventType = String(item.eventType ?? "");
+              if (!eventType || next.some((entry) => entry.eventType === eventType)) return;
+              next.push({ eventType, payload: item });
+            });
+            return next;
+          });
+        }
         const match = items.find(
           (item) => String(item.eventSymbol ?? "") === trimmed && String(item.eventType ?? "") === feedType
         );
@@ -368,7 +410,7 @@ export default function DevPage() {
         note: "Socket error while waiting for proxy data.",
       });
     };
-  }, [effectiveSymbol, feedType]);
+  }, [effectiveSymbol, feedType, seenEvents]);
 
   return (
     <div
@@ -518,6 +560,16 @@ export default function DevPage() {
         {result ? (
           <>
             {result.note ? <div style={{ marginBottom: 10, fontSize: 13, color: "#ffd166" }}>{result.note}</div> : null}
+            {probeMeta ? (
+              <div style={{ marginBottom: 10, fontSize: 12, color: "#8da8c2" }}>
+                Subscription state: {probeMeta.subscriptionState === "new" ? "new subscription requested" : probeMeta.subscriptionState === "existing" ? "already subscribed / cache replay possible" : "unknown"}
+              </div>
+            ) : null}
+            {seenEvents.length ? (
+              <div style={{ marginBottom: 10, fontSize: 12, color: "#8da8c2" }}>
+                Seen event types: {seenEvents.map((item) => item.eventType).join(", ")}
+              </div>
+            ) : null}
             <pre
               style={{
                 margin: 0,

@@ -10,9 +10,9 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const json = await res.json().catch(() => ({}));
-    return NextResponse.json({ ok: res.ok, ...json });
+    const json = await res.json().catch(() => ({ ok: res.ok }));
+    return NextResponse.json(json, { status: res.status });
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e) });
+    return NextResponse.json({ ok: false, error: String(e) }, { status: 502 });
   }
 }
