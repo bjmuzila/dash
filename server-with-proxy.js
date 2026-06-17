@@ -58,7 +58,14 @@ function startProxy() {
 }
 
 app.prepare().then(() => {
-  startProxy();
+  // On Render (production), start proxy. Local dev, run separately.
+  if (process.env.RENDER || process.env.NODE_ENV === 'production') {
+    console.log('[SERVER] Starting proxy for Render/production...');
+    startProxy();
+  } else {
+    console.log('[SERVER] Local dev: proxy must run in separate terminal');
+    console.log('[SERVER] Start with: node proxy-tastytrade.js');
+  }
 
   createServer((req, res) => {
     const parsedUrl = parse(req.url, true);
