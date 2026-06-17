@@ -121,6 +121,27 @@ function flattenChainResponse(data: any): SubscriberState["chain"] {
   return out.sort((a, b) => a.strike - b.strike);
 }
 
+function buildChainDebug(rows: SubscriberState["chain"], source: string, expiry: string) {
+  let callOI = 0;
+  let putOI = 0;
+  let nonZeroGex = 0;
+
+  for (const row of rows) {
+    if ((row.callOI ?? 0) > 0) callOI += 1;
+    if ((row.putOI ?? 0) > 0) putOI += 1;
+    if (Number(row.netGEX ?? 0) !== 0) nonZeroGex += 1;
+  }
+
+  return {
+    strikes: rows.length,
+    callOI,
+    putOI,
+    nonZeroGex,
+    source,
+    expiry,
+  };
+}
+
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 const BarChart2 = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -239,6 +260,14 @@ export default function HomePage() {
   const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
   const [panOffset, setPanOffset] = useState(0); // strike offset for drag-pan
   const [hoverBar, setHoverBar] = useState<{ x: number; y: number; strike: number; val: number; isPos: boolean } | null>(null);
+  const [chainDebug, setChainDebug] = useState({
+    strikes: 0,
+    callOI: 0,
+    putOI: 0,
+    nonZeroGex: 0,
+    source: "-",
+    expiry: "-",
+  });
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<{ startX: number; startPan: number } | null>(null);
   const prevSpxRef = useRef(0);
@@ -382,6 +411,7 @@ export default function HomePage() {
       const json = await chainRes.json();
       const nextChain = flattenChainResponse(json);
       if (nextChain.length) setRawChain(nextChain);
+      setChainDebug(buildChainDebug(nextChain, "/api/chains", actualExpiry || "-"));
       const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? 0);
       if (spot > 100) setSpx(spot);
       const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0), 0);
@@ -616,6 +646,7 @@ export default function HomePage() {
         if (cancelled) return;
         const nextChain = flattenChainResponse(json);
         if (nextChain.length) setRawChain(nextChain);
+        setChainDebug(buildChainDebug(nextChain, "/api/chains", actualExpiry));
         const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? 0);
         if (spot > 100) setSpx(spot);
         const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0), 0);
@@ -1081,6 +1112,14 @@ export default function HomePage() {
                     <span style={{ color: "#3a5570" }}>Drag to pan · Scroll to zoom ({zoomHalf*2} strikes)</span>
                   </div>
                   <span style={{ color: "#fff" }}>Units in $B</span>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", padding: "0 8px 8px", fontSize: 10, fontFamily: "monospace", color: "#8B94A7" }}>
+                  <span>chain: {chainDebug.strikes}</span>
+                  <span>call OI: {chainDebug.callOI}</span>
+                  <span>put OI: {chainDebug.putOI}</span>
+                  <span>nonzero GEX: {chainDebug.nonZeroGex}</span>
+                  <span>src: {chainDebug.source}</span>
+                  <span>exp: {chainDebug.expiry || "-"}</span>
                 </div>
 
                 {/* Chart */}
