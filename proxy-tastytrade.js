@@ -2059,9 +2059,9 @@ function normalizeDxCacheSymbol(symbol) {
   if (/^\/NQU(26|6)?$/i.test(s)) return '/NQU26';
   if (/^\/NQ(:XCME)?$/i.test(s)) return '/NQ:XCME';
 
-  // Validate option symbols: SPXW060721C7500, SPY062821P400, etc.
-  if (/^[A-Z]{1,4}[CP]\d{6,8}$/.test(s)) {
-    // Valid YYYYMMDD or YYMMDD format option
+  // Validate option symbols: SPXW260616P7505, SPY260618C750, etc.
+  // Format: TICKER + C/P + YYMMDD(6 digits) + strike(1-5 digits)
+  if (/^[A-Z]{1,5}[CP]\d{6}\d{1,5}$/.test(s)) {
     return s.toUpperCase();
   }
 
