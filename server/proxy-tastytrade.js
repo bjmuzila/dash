@@ -71,7 +71,7 @@ function getChainsFromCache(symbol, expiration) {
   const cached = chainCache.get(key);
   if (cached) {
     const age = Date.now() - cached.timestamp;
-    if (age <= ttl) {
+    if (age <= ttl && chainCacheItemCount(cached.data) > 0) {
       log(`[CACHE HIT] ${key} (${Math.round(age / 1000)}s old, ${chainCacheItemCount(cached.data)} expirations)`);
       return cached.data;
     }
@@ -86,6 +86,10 @@ function getChainsFromCache(symbol, expiration) {
         const age = Date.now() - row.timestamp;
         if (age <= ttl) {
           const data = JSON.parse(row.data);
+          if (chainCacheItemCount(data) <= 0) {
+            db.prepare('DELETE FROM chains_cache WHERE symbol = ? AND expiration = ?').run(symbol.toUpperCase(), expiration || 'DEFAULT');
+            return null;
+          }
           // Restore to in-memory cache for next access
           chainCache.set(key, { timestamp: row.timestamp, data });
           log(`[CACHE HIT-DB] ${key} (${Math.round(age / 1000)}s old, ${chainCacheItemCount(data)} expirations)`);
@@ -107,6 +111,10 @@ function chainCacheItemCount(data) {
 }
 
 function setChainsInCache(symbol, expiration, strikeData) {
+  if (chainCacheItemCount(strikeData) <= 0) {
+    log(`[CACHE SKIP] ${symbol.toUpperCase()}:${expiration || 'DEFAULT'} empty payload not cached`);
+    return;
+  }
   const key = `${symbol.toUpperCase()}:${expiration || 'DEFAULT'}`;
   const timestamp = Date.now();
 
@@ -726,9 +734,9 @@ async function bootstrapDashboardCorePhases() {
   log('[BOOT] Phase 2: core quote warmup');
   seedCoreLiveSubscriptions();
 
-  log('[BOOT] Phase 3: SPY/QQQ option prewarm (non-blocking)');
+  log('[BOOT] Phase 3: extra prewarm skipped (SPX 0DTE bootstrap already active)');
   // Run SPY/QQQ prewarm in background—don't wait for it
-  prewarmCache().catch(e => log('Prewarm error:', e.message));
+  // prewarmCache intentionally disabled to keep startup focused on SPX 0DTE only
 
   log('[BOOT] Phase 4: Start cache pruning');
   const cachePruneTimer = setInterval(pruneStaleQuoteCache, CACHE_PRUNE_INTERVAL_MS);
@@ -2319,18 +2327,15 @@ async function ensureTodaySpxOptionSubscriptions() {
     if (!expDate) return 0;
     const compactExp = String(expDate).replace(/-/g, '').slice(2);
     const already = [...subscriptions].filter(s => isSpxwSymbol(s) && optionExpirationCompact(s) === compactExp);
-    if (already.length >= 160) return already.length;
+    if (already.length >= 300) return already.length;
 
     const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(rootSymbol)}?expiration-date=${expDate}`);
     const options = s2 === 200 && d2?.data?.items ? d2.data.items : [];
-    const quotePrice = await fetchUnderlyingLast('SPX').catch(() => 0);
-    const dxSpot = firstFiniteNumber(dxQuoteCache['SPX']?.last, dxQuoteCache['$SPX']?.last, dxTradeCache['$SPX']?.price, dxQuoteCache['SPX']?.bidPrice, dxQuoteCache['$SPX']?.bidPrice, 0);
-    const underlyingPrice = inferUnderlyingPrice(options, quotePrice || dxSpot) || dxSpot || 5800;
-    const syms = pickNearestOptionStreamerSymbols(options, underlyingPrice, 160);
+    const syms = [...new Set(options.map(opt => opt?.['streamer-symbol']).filter(Boolean))];
     if (!syms.length) return already.length;
 
     syms.forEach(sym => addAutoSubscription(sym, ['Quote','Trade','TradeETH','Greeks','Summary']));
-    log('SPX 0DTE subscribe:', syms.length, 'symbols for', expDate, 'around', underlyingPrice);
+    log('SPX 0DTE subscribe:', syms.length, 'symbols for', expDate, '(full expiration)');
     return syms.length;
   })().finally(() => { spx0dteEnsurePromise = null; });
   return spx0dteEnsurePromise;
@@ -4665,7 +4670,6 @@ const server = http.createServer(async (req, res) => {
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
       const cachedDxOI = Number(dxOpenInterestCache[streamerSym] || 0) || 0;
       const fallbackOI = (
-        yahooOiLookup(massiveOiFallbackMaps.get(expDate), streamerSym, rootSymbol, expDate, rawType, strikePrice) ||
         yahooOiLookup(oiFallbackMaps.get(expDate), streamerSym, rootSymbol, expDate, rawType, strikePrice)
       )?.oi || 0;
       const finalOI = cachedMergedOI || liveOI || cachedDxOI || fallbackOI;
@@ -5564,9 +5568,59 @@ wss.on('connection', ws => {
     }
   }, 200);
 
+  function sendCachedFeedSnapshot(targetWs, symbol, requestedTypes) {
+    if (!targetWs || targetWs.readyState !== WebSocket.OPEN || !symbol) return;
+    const wanted = Array.isArray(requestedTypes) && requestedTypes.length ? new Set(requestedTypes) : null;
+    const allows = (type) => !wanted || wanted.has(type);
+
+    if (allows('Quote') && dxQuoteCache[symbol]) {
+      const q = dxQuoteCache[symbol];
+      targetWs.send(JSON.stringify({ type:'FEED_DATA', data:['Quote',[symbol, q.bidPrice, q.askPrice, q.bidSize, q.askSize]] }));
+    }
+    if (allows('Trade') && dxTradeCache[symbol]) {
+      const t = dxTradeCache[symbol];
+      targetWs.send(JSON.stringify({ type:'FEED_DATA', data:['Trade',[symbol, t.price, t.dayVolume, t.size]] }));
+    }
+    if (allows('Summary') && dxSummaryCache[symbol]) {
+      const s = dxSummaryCache[symbol];
+      targetWs.send(JSON.stringify({ type:'FEED_DATA', data:[{
+        eventType: 'Summary', eventSymbol: symbol,
+        openInterest: s.openInterest || 0, dayVolume: s.dayVolume || 0,
+        dayOpenPrice: s.dayOpenPrice || 0, dayHighPrice: s.dayHighPrice || 0,
+        dayLowPrice: s.dayLowPrice || 0, prevDayClosePrice: s.prevDayClosePrice || 0
+      }] }));
+    }
+    if (allows('Greeks') && dxGreeksCache[symbol]) {
+      const g = dxGreeksCache[symbol];
+      targetWs.send(JSON.stringify({ type:'FEED_DATA', data:[{
+        eventType: 'Greeks', eventSymbol: symbol,
+        volatility: g.volatility ?? g.iv ?? 0,
+        delta: g.delta ?? 0,
+        gamma: g.gamma ?? 0,
+        theta: g.theta ?? 0,
+        rho: g.rho ?? 0,
+        vega: g.vega ?? 0
+      }] }));
+    }
+  }
+
   if (!dxSocket || dxSocket.readyState === WebSocket.CLOSED) {
     // Market-data seeding happens at proxy startup in server.listen()
   }
+  ws.on('message', raw => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg?.type !== 'subscribe' || !Array.isArray(msg.symbols)) return;
+      msg.symbols.forEach(sym => {
+        const requestedTypes = Array.isArray(msg.feedTypesBySymbol?.[sym])
+          ? msg.feedTypesBySymbol[sym]
+          : (Array.isArray(msg.feedTypes) ? msg.feedTypes : null);
+        sendCachedFeedSnapshot(ws, sym, requestedTypes);
+      });
+    } catch (e) {
+      // ignore here; the main socket handler below logs parse failures
+    }
+  });
   ws.on('message', async raw => {
     markProxyActivity();
     try {
@@ -5634,7 +5688,7 @@ function isDST(date) {
 }
 
 async function prewarmCache() {
-  log('Pre-warming dxLink cache for SPX, SPY, QQQ options...');
+  log('Pre-warming dxLink cache for SPX 0DTE options only...');
   const allPrewarmSyms = [];
 
   try {
@@ -5653,6 +5707,10 @@ async function prewarmCache() {
 
         const { status: s2, data: d2 } = await ttGet(`/option-chains/${encodeURIComponent(symbol)}?expiration-date=${todayExp}`);
         if (s2 !== 200 || !d2?.data?.items) { log(`Prewarm: chain fetch failed for ${symbol}`, s2); return; }
+
+        const fullSyms = [...new Set(d2.data.items.map(o => o['streamer-symbol']).filter(Boolean))];
+        log(`Prewarm: ${symbol} 0DTE ${todayExp}: queued full expiration with ${fullSyms.length} symbols`);
+        return fullSyms;
 
         const quotePrice = await fetchUnderlyingLast(symbol).catch(() => 0);
         const underlyingPrice = quotePrice > 0 ? quotePrice : (symbol === 'SPY' ? 725 : symbol === 'QQQ' ? 700 : 5800);
@@ -5685,17 +5743,9 @@ async function prewarmCache() {
     };
 
     // Prewarm ONLY 0DTE SPX, SPY, QQQ — hard cap to keep queue small
-    const SPX_CAP = 200, SPY_CAP = 100, QQQ_CAP = 100;
-    const spxSyms = (await prewarmSymbol('SPX', 'SPXW', 'dollar100')) || [];
-    const spySyms = (await prewarmSymbol('SPY', 'SPY', 'pct20')) || [];
-    const qqqSyms = (await prewarmSymbol('QQQ', 'QQQ', 'pct20')) || [];
-
-    allPrewarmSyms.push(
-      ...spxSyms.slice(0, SPX_CAP),
-      ...spySyms.slice(0, SPY_CAP),
-      ...qqqSyms.slice(0, QQQ_CAP)
-    );
-    log(`Prewarm: total ${allPrewarmSyms.length} option symbols (SPX: ${Math.min(spxSyms.length, SPX_CAP)}, SPY: ${Math.min(spySyms.length, SPY_CAP)}, QQQ: ${Math.min(qqqSyms.length, QQQ_CAP)})`);
+    const spxSyms = (await prewarmSymbol('SPX', 'SPXW', 'full')) || [];
+    allPrewarmSyms.push(...spxSyms);
+    log(`Prewarm: total ${allPrewarmSyms.length} SPX 0DTE option symbols`);
 
     // Wait for dxLink to be ready, then subscribe via rate-limited queue
     const waitAndSubscribe = () => {

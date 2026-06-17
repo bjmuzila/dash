@@ -46,6 +46,6 @@ export async function GET(request: Request) {
     const json = trimChainToStrikeWindow(await res.json(), strikeWindow);
     return NextResponse.json(json);
   } catch (e) {
-    return NextResponse.json({ error: String(e) });
+    return NextResponse.json({ error: String(e), url }, { status: 502 });
   }
 }
