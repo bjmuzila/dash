@@ -76,6 +76,23 @@ export interface GreeksRecord {
   sellScore: number;
 }
 
+export interface PlaybookFeedRecord {
+  id?: number;
+  timestamp: number;
+  date: string;
+  time: string;
+  text: string;
+  color?: string | null;
+  source?: string | null;
+  expiry?: string | null;
+  regime_key?: string | null;
+  spot?: number | null;
+  gex?: number | null;
+  dex?: number | null;
+  chex?: number | null;
+  vex?: number | null;
+}
+
 export interface EsCandleRecord {
   id?:             number;
   timestamp:       number;
@@ -288,6 +305,49 @@ export async function queryGreeksToday(): Promise<GreeksRecord[]> {
   const res   = await fetch(`/api/snapshots/greeks?date=${today}&limit=5000`);
   const json  = await res.json();
   return (json.rows ?? []) as GreeksRecord[];
+}
+
+export async function savePlaybookSignal(payload: {
+  text: string;
+  color?: string;
+  source?: string;
+  expiry?: string;
+  regimeKey?: string;
+  spot?: number | null;
+  gex?: number | null;
+  dex?: number | null;
+  chex?: number | null;
+  vex?: number | null;
+}): Promise<number> {
+  const now = new Date();
+  const res = await fetch("/api/snapshots/playbook", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      timestamp: now.getTime(),
+      date: etDateStr(now),
+      time: now.toTimeString().split(" ")[0],
+      source: payload.source ?? "insights-exposure",
+      text: payload.text,
+      color: payload.color ?? null,
+      expiry: payload.expiry ?? null,
+      regimeKey: payload.regimeKey ?? null,
+      spot: payload.spot ?? null,
+      gex: payload.gex ?? null,
+      dex: payload.dex ?? null,
+      chex: payload.chex ?? null,
+      vex: payload.vex ?? null,
+    }),
+  });
+  const json = await res.json();
+  return json.id ?? 0;
+}
+
+export async function queryPlaybookFeedToday(limit = 200): Promise<PlaybookFeedRecord[]> {
+  const today = etDateStr();
+  const res = await fetch(`/api/snapshots/playbook?date=${today}&limit=${limit}`);
+  const json = await res.json();
+  return (json.rows ?? []) as PlaybookFeedRecord[];
 }
 
 // ── ES Candles ────────────────────────────────────────────────────────────────

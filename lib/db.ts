@@ -64,6 +64,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_gts_date ON greeks_ts(date);
     CREATE INDEX IF NOT EXISTS idx_gts_ts ON greeks_ts(timestamp);
 
+    CREATE TABLE IF NOT EXISTS playbook_feed (
+      id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
+      time TEXT, text TEXT NOT NULL, color TEXT, source TEXT DEFAULT 'insights-exposure',
+      expiry TEXT, regime_key TEXT, spot REAL, gex REAL, dex REAL, chex REAL, vex REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_date ON playbook_feed(date);
+    CREATE INDEX IF NOT EXISTS idx_playbook_ts ON playbook_feed(timestamp);
+
     CREATE TABLE IF NOT EXISTS es_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       "slotKey" TEXT NOT NULL UNIQUE, time TEXT, symbol TEXT, "intervalMinutes" INTEGER,
@@ -407,6 +415,63 @@ export async function getGreeksTs(date?: string, limit = 1000): Promise<GreeksTs
   }
   return queryAll<GreeksTsRecord>(
     "SELECT * FROM greeks_ts ORDER BY timestamp DESC LIMIT ?",
+    [limit]
+  );
+}
+
+// —— Playbook Feed ————————————————————————————————————————————————————————————————
+
+export interface PlaybookFeedRecord {
+  id?: number;
+  timestamp: number;
+  date: string;
+  time: string;
+  text: string;
+  color?: string | null;
+  source?: string | null;
+  expiry?: string | null;
+  regime_key?: string | null;
+  spot?: number | null;
+  gex?: number | null;
+  dex?: number | null;
+  chex?: number | null;
+  vex?: number | null;
+}
+
+export async function insertPlaybookFeed(r: Omit<PlaybookFeedRecord, "id">): Promise<number> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO playbook_feed (timestamp,date,time,text,color,source,expiry,regime_key,spot,gex,dex,chex,vex)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     RETURNING id`,
+    [
+      r.timestamp,
+      r.date,
+      r.time,
+      r.text,
+      r.color ?? null,
+      r.source ?? "insights-exposure",
+      r.expiry ?? null,
+      r.regime_key ?? null,
+      r.spot ?? null,
+      r.gex ?? null,
+      r.dex ?? null,
+      r.chex ?? null,
+      r.vex ?? null,
+    ]
+  );
+  return Number(result.rows[0]?.id ?? 0);
+}
+
+export async function getPlaybookFeed(date?: string, limit = 500): Promise<PlaybookFeedRecord[]> {
+  if (date) {
+    return queryAll<PlaybookFeedRecord>(
+      "SELECT * FROM playbook_feed WHERE date = ? ORDER BY timestamp DESC LIMIT ?",
+      [date, limit]
+    );
+  }
+  return queryAll<PlaybookFeedRecord>(
+    "SELECT * FROM playbook_feed ORDER BY timestamp DESC LIMIT ?",
     [limit]
   );
 }

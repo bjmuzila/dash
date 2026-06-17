@@ -7,6 +7,7 @@ const TABLES = [
   { id: "mvc_snapshots",     label: "MVC Snapshots" },
   { id: "premium_flow",      label: "Premium Flow" },
   { id: "greeks_ts",         label: "Greeks TS" },
+  { id: "playbook_feed",     label: "Playbook Feed" },
   { id: "es_candles",        label: "ES Candles" },
   { id: "bzila_snapshots",   label: "Bzila Snaps" },
   { id: "bzila_gex_history", label: "GEX History" },

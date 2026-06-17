@@ -8,6 +8,7 @@ const ALLOWED_TABLES: Record<string, { dateCol?: string }> = {
   mvc_snapshots:     { dateCol: "date" },
   premium_flow:      { dateCol: "date" },
   greeks_ts:         { dateCol: "date" },
+  playbook_feed:     { dateCol: "date" },
   es_candles:        { dateCol: "date" },
   bzila_snapshots:   { dateCol: "date" },
   bzila_gex_history: { dateCol: "date" },

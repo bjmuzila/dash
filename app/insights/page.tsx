@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, type EsCandleRecord } from "@/lib/snapdb";
+import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, queryPlaybookFeedToday, savePlaybookSignal, type EsCandleRecord } from "@/lib/snapdb";
 import IbLogic from "@/components/insights/IbLogic";
 
 type InsightsTab = "exposure" | "vix" | "ib";
@@ -936,6 +936,7 @@ export default function InsightsPage() {
   const historicalCandlesRef = useRef<EsCandleRecord[]>([]);
   const initialExpirySetRef = useRef(false);
   const mountedRef = useRef(true);
+  const latestRef = useRef<GreeksRecord | null>(null);
 
   const lastEsCandleSaveRef = useRef(0);
 
@@ -1010,6 +1011,17 @@ export default function InsightsPage() {
       }
     }).catch(() => {});
 
+    queryPlaybookFeedToday(50).then(rows => {
+      if (!rows.length) return;
+      setSignals(rows.map((row, index) => ({
+        id: Number(row.id ?? index + 1),
+        text: row.text,
+        color: row.color || "#00e5ff",
+        time: row.time,
+      })));
+      signalIdRef.current = Math.max(...rows.map((row, index) => Number(row.id ?? index + 1)), signalIdRef.current);
+    }).catch(() => {});
+
     // Also poll candles via proxy every 60s
     const candleInterval = setInterval(() => {
       fetch("/api/insights/em", { cache: "no-store" })
@@ -1040,9 +1052,28 @@ export default function InsightsPage() {
       const next = [{ id: ++signalIdRef.current, text, color, time }, ...prev].slice(0, 10);
       return next;
     });
+    const current = latestRef.current;
+    const regime = current ? getRegime(current.gex, current.dex) : null;
+    savePlaybookSignal({
+      text,
+      color,
+      source: "insights-exposure",
+      expiry: activeExpiryRef.current || undefined,
+      regimeKey: regime?.key,
+      spot: current?.spot ?? null,
+      gex: current?.gex ?? null,
+      dex: current?.dex ?? null,
+      chex: current?.chex ?? null,
+      vex: current?.vex ?? null,
+    })
+      .then(() => {
+        window.dispatchEvent(new CustomEvent("db-mvc-updated", { detail: { triggerType: "playbook-feed" } }));
+      })
+      .catch(() => {});
   }, []);
 
   const applySnapshot = useCallback((snap: GreeksRecord) => {
+    latestRef.current = snap;
     setLatest(snap);
     setHistory(prev => {
       const bucket = Math.floor(snap.ts / 5000);
@@ -1246,6 +1277,7 @@ export default function InsightsPage() {
     if (initialExpirySetRef.current) {
       setHistory([]);
       setLatest(null);
+      latestRef.current = null;
     }
     initialExpirySetRef.current = true;
     doRefresh();
