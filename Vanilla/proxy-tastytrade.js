@@ -714,13 +714,29 @@ function defaultAutoTypesForSymbol(sym) {
 
 function addAutoSubscription(sym, types = null) {
   if (!sym) return;
-  // Hard cap: never exceed 500 symbols (prevents memory explosion)
-  const MAX_SUBSCRIPTIONS = 500;
-  if (subscriptions.size >= MAX_SUBSCRIPTIONS && !subscriptions.has(sym)) {
-    return;  // Silently drop new subscriptions when at cap
+
+  // Evict stale subscriptions if over limit
+  const MAX_SUBSCRIPTIONS = 800;
+  const STALE_THRESHOLD_MS = 5 * 60 * 1000;  // 5 minutes
+  if (subscriptions.size >= MAX_SUBSCRIPTIONS) {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [oldSym, lastAccess] of subscriptionLastAccess.entries()) {
+      if (now - lastAccess > STALE_THRESHOLD_MS && oldSym !== sym) {
+        subscriptions.delete(oldSym);
+        subscriptionTypesBySymbol.delete(oldSym);
+        subscriptionLastAccess.delete(oldSym);
+        evicted++;
+        if (subscriptions.size < MAX_SUBSCRIPTIONS) break;
+      }
+    }
+    if (evicted > 0) log(`[SUBSCRIPTIONS] Evicted ${evicted} stale symbols (threshold: ${STALE_THRESHOLD_MS}ms)`);
   }
+
   const isNew = !subscriptions.has(sym);
   subscriptions.add(sym);
+  subscriptionLastAccess.set(sym, Date.now());  // Track access time
+
   const current = subscriptionTypesBySymbol.get(sym) || new Set();
   const incoming = types || defaultAutoTypesForSymbol(sym);
   incoming.forEach(type => {
@@ -802,6 +818,7 @@ const dxClients           = new Set();
 const subscriptionFilter  = new SubscriptionFilter();  // Per-client subscription tracking
 const subscriptions       = new Set();
 const subscriptionTypesBySymbol = new Map();
+const subscriptionLastAccess = new Map();  // Track last access time for eviction
 const candleSubscriptions = new Set();  // separate set for candle symbols
 const dxCandleCache = {};
 
