@@ -604,16 +604,6 @@ const CORE_LIVE_SUBSCRIPTIONS = new Set([
   'NDX',
   'SPY',
   'QQQ',
-  'AAPL',
-  'AMD',
-  'AMZN',
-  'GOOGL',
-  'META',
-  'MSFT',
-  'NVDA',
-  'SPCX',
-  'TSLA',
-  'SMH',
   '/ESU26',
   '/ESU6',
   '/ES:XCME',
@@ -4284,8 +4274,7 @@ const server = http.createServer(async (req, res) => {
     ].map(s => String(s || '').trim()).filter(s => s && !isBlockedQuoteSymbol(s));
     const allSyms = requestedSyms.length ? requestedSyms : [
       'SPX','VIX','/ES:XCME','/NQ:XCME',
-      'SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA',
-      'COIN','HOOD','IWM','NFLX','PLTR','NDX'
+      'SPY','QQQ','NDX'
     ];
     // Normalize symbols to cache keys (strips leading dots, normalizes futures)
     const items = await Promise.all(allSyms.map(async sym => {
@@ -5578,7 +5567,7 @@ wss.on('connection', ws => {
   // Send cached quotes immediately so topbar populates without waiting for next tick
   setTimeout(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    ['SPX','VIX','/ES:XCME','/NQ:XCME','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'].forEach(sym => {
+    ['SPX','VIX','/ES:XCME','/NQ:XCME','SPY','QQQ','NDX'].forEach(sym => {
       if (dxQuoteCache[sym]) {
         const q = dxQuoteCache[sym];
         ws.send(JSON.stringify({ type:'FEED_DATA', data:['Quote',[sym, q.bidPrice, q.askPrice, q.bidSize, q.askSize]] }));
@@ -5841,7 +5830,7 @@ server.listen(PORT, async () => {
       try {
         const indices = ['SPX','VIX','NDX'];
         const futures = ['/ES','/NQ'];
-        const equities = ['SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','COIN','HOOD','IWM','NFLX','PLTR'];
+        const equities = ['SPY','QQQ'];
         
         const indResp = await ttGet(`/market-data/by-type?${indices.map(s => `index[]=${encodeURIComponent(s)}`).join('&')}`);
         const indItems = indResp.data?.data?.items || indResp.data?.items || [];

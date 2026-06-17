@@ -48,18 +48,10 @@ const ES_ALIASES = ["/ESU26", "/ESU6", "/ES:XCME", "/ES"];
 const NQ_ALIASES = ["/NQU26", "/NQU6", "/NQ:XCME", "/NQ"];
 
 const QUOTE_SYMBOLS = [
-  { sym: "SPCX",             label: "SPCX" },
   { sym: "SPY",              label: "SPY" },
   { sym: "QQQ",              label: "QQQ" },
-  { sym: "AMD",              label: "AMD" },
-  { sym: "META",             label: "META" },
-  { sym: "SMH",              label: "SMH" },
-  { sym: "NVDA",             label: "NVDA" },
-  { sym: "AMZN",             label: "AMZN" },
   { sym: NQ_DISPLAY_SYMBOL,  label: "NQU" },
-  { sym: "GOOGL",            label: "GOOGL" },
-  { sym: "MSFT",             label: "MSFT" },
-  { sym: "AAPL",             label: "AAPL" },
+  { sym: "SPX",              label: "SPX" },
   { sym: "VIX",              label: "VIX" },
 ];
 
@@ -68,17 +60,9 @@ const WS_ALL_SYMBOLS = [
   { sym: ES_DISPLAY_SYMBOL, label: "ESU" },
   { sym: NQ_DISPLAY_SYMBOL, label: "NQU" },
   { sym: "SPX",             label: "SPX" },
-  { sym: "SPCX",            label: "SPCX" },
   { sym: "SPY",             label: "SPY" },
   { sym: "QQQ",             label: "QQQ" },
-  { sym: "SMH",             label: "SMH" },
-  { sym: "NVDA",            label: "NVDA" },
-  { sym: "AAPL",            label: "AAPL" },
-  { sym: "META",            label: "META" },
-  { sym: "MSFT",            label: "MSFT" },
-  { sym: "AMD",             label: "AMD" },
-  { sym: "AMZN",            label: "AMZN" },
-  { sym: "GOOGL",           label: "GOOGL" },
+  { sym: "NDX",             label: "NDX" },
 ];
 
 // Canonical symbol normalizer: any ES/NQ alias → single display key

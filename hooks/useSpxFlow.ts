@@ -100,7 +100,7 @@ const INITIAL_STATE: SpxFlowState = {
 
 const FLOW_AGGREGATE_WINDOW_MS = 500;
 const DEDUP_MAX_SIZE = 10000;
-const REST_WATCHLIST = ["SPY", "QQQ", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"] as const;
+const REST_WATCHLIST = ["SPY", "QQQ"] as const;
 
 // ── ET helpers ────────────────────────────────────────────────────────────────
 

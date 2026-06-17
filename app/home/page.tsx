@@ -300,7 +300,7 @@ async function fetchPrevCloseFallbacks(): Promise<{ ES: number; NQ: number; SPX:
 }
 
 // ── Data ──────────────────────────────────────────────────────────────────────
-const SIDEBAR_SYMBOLS = ["AMD", "META", "SMH", "NVDA", "AMZN", "NQU", "QQQ", "GOOGL", "MSFT", "AAPL"];
+const SIDEBAR_SYMBOLS = ["SPY", "QQQ", "NQU", "SPX", "VIX"];
 const DEFAULT_QUOTES = SIDEBAR_SYMBOLS.map(sym => ({ sym, chg: "—", pos: true, active: sym === "NQU" }));
 
 const HEATMAP_ROWS = [
