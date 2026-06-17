@@ -5643,6 +5643,14 @@ async function prewarmCache() {
       });
       log(`Prewarm: queued ${allPrewarmSyms.length} option symbols (${subscriptionQueue.length} total items) - sending rate-limited`);
       sendSubscriptionsRateLimited();
+
+      // Compute GEX after 3s wait for Greeks to populate
+      setTimeout(async () => {
+        const spot = await fetchUnderlyingLast('SPX').catch(() => 5800);
+        const basis = await fetchEsBasis().catch(() => 0);
+        computeAndCacheGexLevels(spot, basis);
+        log('Prewarm: initial GEX computation complete');
+      }, 3000);
     };
     waitAndSubscribe();
 
@@ -5746,32 +5754,10 @@ server.listen(PORT, async () => {
       const ok = await ensureToken();
       if (!ok) return;
 
-      // Always re-subscribe to the current target expiry chain (rolls to next day after 4PM)
-      if (dxSocket?.readyState === WebSocket.OPEN && dxChannelOpen) {
-        const { status: sNested, data: dNested } = await ttGet('/option-chains/SPX/nested');
-        const chainObjR = dNested?.data?.items?.find(c => c['root-symbol'] === 'SPXW') || dNested?.data?.items?.[0];
-        const allExpDatesR = (chainObjR?.expirations || []).map(e => e['expiration-date']).filter(Boolean).sort();
-        const targetExpR = getTargetExpirationDate(allExpDatesR, 'SPX');
-        if (targetExpR) {
-          const spot0 = firstFiniteNumber(gexLevelCache.spot, dxTradeCache['$SPX']?.price, dxQuoteCache['$SPX']?.last, 5800);
-          const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${targetExpR}`);
-          if (status === 200 && data?.data?.items?.length) {
-            const syms = pickNearestOptionStreamerSymbols(data.data.items, spot0, 200);
-            const newSyms = syms.filter(sym => !subscriptions.has(sym));
-            if (newSyms.length > 0) {
-              newSyms.forEach(sym => {
-                queueAutoSubscription({ type: 'Greeks',  symbol: sym });
-                queueAutoSubscription({ type: 'Summary', symbol: sym });
-              });
-              await sendSubscriptionsRateLimited();
-              log('[GEX-refresh] queued', newSyms.length, 'new SPX symbols (already subscribed:', syms.length - newSyms.length, ')');
-              await sleep(2000); // let Greeks populate
-            } else {
-              log('[GEX-refresh] all', syms.length, 'SPX symbols already subscribed, skipping re-queue');
-            }
-          }
-        }
-      }
+      // DISABLED: GEX refresh loop no longer auto-subscribes
+      // Prewarm + user requests handle all subscriptions
+      // This loop now only computes GEX from existing dxGreeksCache
+      log('[GEX-refresh] Skipping re-subscription (prewarm maintains subscriptions)');
 
       // Compute and cache GEX levels (uses dxGreeksCache populated above)
       const [spot, basis] = await Promise.all([
