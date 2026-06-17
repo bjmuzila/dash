@@ -205,8 +205,8 @@
       renderTable();
     }
 
-    function setChainRange(pct) {
-      _rangePercent = (pct === 'all' || pct === 0) ? 'all' : (parseFloat(pct) || 10);
+    function setChainRange(dollars) {
+      _rangePercent = (dollars === 'all' || dollars === 0) ? 'all' : (parseFloat(dollars) || 150);
       var sel = el('chain-range-select');
       if (sel && sel.value !== String(_rangePercent)) sel.value = String(_rangePercent);
       renderTable();
@@ -503,7 +503,6 @@
     // ── parse response items into strike rows ──────────────────────────────────
     function buildStrikes(expGroups, spotPrice) {
       var map = {};
-      var sampleCall = null, samplePut = null; // For logging
       expGroups.forEach(function(expGroup) {
         var strikeRows = expGroup.strikes || [];
         strikeRows.forEach(function(item) {
@@ -511,12 +510,8 @@
           if (!strike) return;
           var key = strike.toFixed(2);
           if (!map[key]) map[key] = { strike:strike, callSym:null, putSym:null, callTT:null, putTT:null };
-          if (!sampleCall && item.call) sampleCall = item.call;
-          if (!samplePut && item.put) samplePut = item.put;
         });
       });
-      console.log('[Chain] Sample call fields:', Object.keys(sampleCall || {}));
-      console.log('[Chain] Sample put fields:', Object.keys(samplePut || {}));
 
       var allStrikes = Object.values(map).sort(function(a,b){ return a.strike - b.strike; });
 
@@ -680,26 +675,17 @@
       var minGreeksNeeded = Math.max(5, Math.floor(_strikes.length * 0.1)); // At least 5 or 10% of strikes
       var hasEnoughWsData = greeksCount >= minGreeksNeeded;
 
-      if (hasEnoughWsData) {
-        if (_rangePercent === 'all') {
-          // Only show strikes with at least some data
-          var filtered = sortedStrikes.filter(function(r) {
-            var cd = _liveData[r.callSym] || r.callTT || {};
-            var pd = _liveData[r.putSym]  || r.putTT  || {};
-            return (parseFloat(cd.bid) > 0 || parseFloat(cd.ask) > 0 || parseFloat(cd.last) > 0 || parseFloat(cd.oi) > 0 || parseFloat(cd.vol) > 0) ||
-                   (parseFloat(pd.bid) > 0 || parseFloat(pd.ask) > 0 || parseFloat(pd.last) > 0 || parseFloat(pd.oi) > 0 || parseFloat(pd.vol) > 0);
-          });
-          if (filtered.length > 0) sortedStrikes = filtered;
-        } else if (spot > 0) {
-          var pctRange = _rangePercent / 100;
-          var lowerBound = spot * (1 - pctRange);
-          var upperBound = spot * (1 + pctRange);
-          var filtered = sortedStrikes.filter(function(r) {
-            return r.strike >= lowerBound && r.strike <= upperBound;
-          });
-          if (filtered.length > 0) sortedStrikes = filtered;
-        }
+      if (hasEnoughWsData && _rangePercent !== 'all' && spot > 0) {
+        // rangePercent is in dollars, not percentage (e.g., 150 = ±150 around ATM)
+        var dollarRange = parseFloat(_rangePercent) || 150;
+        var lowerBound = spot - dollarRange;
+        var upperBound = spot + dollarRange;
+        var filtered = sortedStrikes.filter(function(r) {
+          return r.strike >= lowerBound && r.strike <= upperBound;
+        });
+        if (filtered.length > 0) sortedStrikes = filtered;
       }
+      // 'all' shows every strike in the API response, no filtering
       console.log('[Chain] renderTable: ' + sortedStrikes.length + ' strikes shown, ' + greeksCount + '/' + minGreeksNeeded + ' WS data, liveData keys=' + Object.keys(_liveData).length);
 
       var html = sortedStrikes.map(function(row) {
@@ -1096,6 +1082,24 @@
       }
     };
 
+    var _autoRefreshTimer = null;
+    var _autoRefreshCount = 0;
+
+    function startAutoRefresh() {
+      if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
+      _autoRefreshCount = 0;
+      _autoRefreshTimer = setInterval(function() {
+        _autoRefreshCount++;
+        if (_autoRefreshCount >= 5) { // 5 refreshes × 2 sec = 10 seconds
+          clearInterval(_autoRefreshTimer);
+          _autoRefreshTimer = null;
+          return;
+        }
+        // Re-render to pick up new WS data
+        renderTable();
+      }, 2000);
+    }
+
     window.chainGo = function() {
       var tickerInput = el('chain-ticker-select');
       var expSel      = el('chain-expiry-select');
@@ -1110,13 +1114,14 @@
         fetchExpirations(function() {
           var expSel2 = el('chain-expiry-select');
           var e = expSel2 ? expSel2.value : null;
-          if (e) { _activeExpiry = e; loadExpiry(e); }
+          if (e) { _activeExpiry = e; loadExpiry(e); startAutoRefresh(); }
           else setStatus('idle', 'PICK EXPIRY');
         });
       } else {
         if (!expiry) { setStatus('err', 'SELECT EXPIRY'); return; }
         _activeExpiry = expiry;
         loadExpiry(expiry);
+        startAutoRefresh();
       }
     };
 

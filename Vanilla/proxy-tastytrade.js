@@ -99,6 +99,10 @@ function getChainsFromCache(symbol, expiration) {
 }
 
 function setChainsInCache(symbol, expiration, strikeData) {
+  // Only cache 0DTE SPX
+  const is0DTESPX = (symbol.toUpperCase() === 'SPX' || symbol.toUpperCase() === 'SPXW') && expiration === todayYmd().ymd;
+  if (!is0DTESPX) return; // Skip caching for all other symbols/expirations
+
   const key = `${symbol.toUpperCase()}:${expiration || 'DEFAULT'}`;
   const timestamp = Date.now();
 
@@ -113,12 +117,12 @@ function setChainsInCache(symbol, expiration, strikeData) {
         INSERT OR REPLACE INTO chains_cache (symbol, expiration, data, timestamp)
         VALUES (?, ?, ?, ?)
       `).run(symbol.toUpperCase(), expiration || 'DEFAULT', data, timestamp);
-      log(`[CACHE SET-DB] ${key} (${strikeData.length} expirations)`);
+      log(`[CACHE SET-DB 0DTE-SPX] ${key} (${strikeData.length} expirations)`);
     } catch (e) {
       console.warn('[CACHE] SQLite write error:', e.message);
     }
   } else {
-    log(`[CACHE SET] ${key} (${strikeData.length} expirations, DB not ready)`);
+    log(`[CACHE SET 0DTE-SPX] ${key} (${strikeData.length} expirations, DB not ready)`);
   }
 }
 
@@ -4096,35 +4100,12 @@ const server = http.createServer(async (req, res) => {
     const rangeRaw = u.searchParams.get('range') || '';
     const rangeParam = rangeRaw === 'all' ? Infinity : parseInt(rangeRaw || '0', 10);
 
-    // CHECK CACHE (2026-06-12): Return cached chain data if fresh (<1hr for explicit exp, <10min for defaults)
-    // This eliminates redundant TT API calls and massive subscription queues
-    const cachedItems = noCache ? null : getChainsFromCache(sym, exp);
+    // CHECK CACHE: Only cache 0DTE SPX (pre-warmed at startup)
+    // All other symbols/expirations: always fetch fresh
+    const is0DTESPX = (sym.toUpperCase() === 'SPX' || sym.toUpperCase() === 'SPXW') && exp === todayYmd().ymd;
+    const cachedItems = (is0DTESPX && !noCache) ? getChainsFromCache(sym, exp) : null;
     if (cachedItems && !awaitDX) {
-      // SPX/SPY/QQQ 0DTE are pre-warmed at startup — skip re-subscribing from cache
-      // to avoid flooding dxLink with thousands of duplicate subscription requests.
-      // Other symbols (on-demand) may subscribe their symbols from cache.
-      const PREWARM_SYMS = new Set(['SPX', 'SPXW', 'SPY', 'QQQ']);
-      const isPrewarmed = PREWARM_SYMS.has(sym.toUpperCase());
-      if (!isPrewarmed && !noSubscribe) {
-        const streamerSyms = cachedItems
-          .flatMap(eg => eg.strikes || [])
-          .flatMap(strike => [strike.call?.['streamer-symbol'], strike.put?.['streamer-symbol']])
-          .filter(Boolean);
-        const newSyms = streamerSyms.filter(s => !subscriptions.has(s));
-        if (newSyms.length && dxSocket && dxSocket.readyState === WebSocket.OPEN && dxChannelOpen) {
-          newSyms.forEach(s => {
-            addAutoSubscription(s, ['Quote','Greeks','Summary','Trade']);
-            queueAutoSubscription({ type: 'Quote',   symbol: s });
-            queueAutoSubscription({ type: 'Greeks',  symbol: s });
-            queueAutoSubscription({ type: 'Summary', symbol: s });
-            queueAutoSubscription({ type: 'Trade',   symbol: s });
-          });
-          sendSubscriptionsRateLimited();
-          log('Subscribed', newSyms.length, 'NEW on-demand symbols from CACHED chain for', sym);
-        }
-      } else if (isPrewarmed) {
-        log('Cache hit for pre-warmed symbol', sym, '— skipping re-subscribe (already handled by prewarm)');
-      }
+      log('Cache hit for 0DTE SPX — returning cached data');
       return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: 0, symbol: sym }, context: 'cache' });
     }
 
@@ -4188,6 +4169,20 @@ const server = http.createServer(async (req, res) => {
     for (const { status: s2, data: d2 } of chainResponses) {
       if (s2 === 200 && d2?.data?.items) {
         allOptions = allOptions.concat(d2.data.items);
+      }
+    }
+
+    // Debug: log the structure of the first option returned
+    if (allOptions.length > 0) {
+      const firstCall = allOptions[0]?.call;
+      const firstPut = allOptions[0]?.put;
+      if (firstCall) {
+        log('[CHAIN_API] First call fields:', Object.keys(firstCall).join(', '));
+        log('[CHAIN_API] First call OI:', firstCall['open-interest'], 'openInterest:', firstCall.openInterest);
+      }
+      if (firstPut) {
+        log('[CHAIN_API] First put fields:', Object.keys(firstPut).join(', '));
+        log('[CHAIN_API] First put OI:', firstPut['open-interest'], 'openInterest:', firstPut.openInterest);
       }
     }
 
@@ -4509,6 +4504,24 @@ const server = http.createServer(async (req, res) => {
       browserClients:dxClients.size,
       candleCache: candleStats
     });
+  }
+
+  if (req.method === 'GET' && p === '/proxy/api/clear-chain-cache') {
+    const sym = u.searchParams.get('symbol') || '';
+    if (sym) {
+      chainCache.delete(sym.toUpperCase() + ':DEFAULT');
+      [0, 1, 2, 3, 4, 5, 6, 7].forEach(i => chainCache.delete(sym.toUpperCase() + ':exp' + i));
+      if (db) {
+        try {
+          db.prepare('DELETE FROM chains_cache WHERE symbol = ?').run(sym.toUpperCase());
+          log('[CACHE CLEAR]', sym, 'removed from in-memory and SQLite');
+        } catch (e) {
+          log('[CACHE CLEAR] SQLite error:', e.message);
+        }
+      }
+      return sendJSON(res, 200, { cleared: sym });
+    }
+    return sendJSON(res, 400, { error: 'symbol required' });
   }
 
   if (req.method === 'GET' && p === '/proxy/api/dxlink/candles') {
