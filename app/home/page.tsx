@@ -306,6 +306,8 @@ const SettingsIcon = () => (
 export default function HomePage() {
   const pageIdRef = useRef(`${PAGE_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const wsRef = useRef<WebSocket | null>(null);
+  const gexWsRef = useRef<WebSocket | null>(null);
+  const gexWsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
   const subscribedSymbolsRef = useRef<string[]>([]);
   const lastSpotRef = useRef(0);
@@ -333,7 +335,7 @@ export default function HomePage() {
   const [quoteSnapshots, setQuoteSnapshots] = useState<Record<string, { last: number; prev: number }>>({});
   const [renderTick, setRenderTick] = useState(0);
   const [status, setStatus] = useState("READY");
-  // GEX chart rows come directly from /api/gex (fast gex-chain endpoint, pre-computed)
+  // GEX chart rows pushed from /ws/gex broadcaster (server-computed loop)
   const [gexChainRows, setGexChainRows] = useState<ChainRow[]>([]);
   const [gexSpot, setGexSpot] = useState(0);
 
