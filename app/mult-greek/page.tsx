@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { ensureProxyLiveSubscription } from "@/lib/proxy/liveSubscription";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -422,6 +423,7 @@ export default function MultGreekPage() {
 
   // WS ref
   const wsRef = useRef<WebSocket | null>(null);
+  const subscribedSymbolsRef = useRef<string[]>([]);
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -516,12 +518,23 @@ export default function MultGreekPage() {
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
 
-    if (allSymbols.size > 0) {
-      fetch("/api/proxy/subscription-ready", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId, symbols: [...allSymbols], timeout: 6000, threshold: 0.5 }),
-      }).catch(() => {});
+    const symbolList = [...allSymbols];
+    subscribedSymbolsRef.current = symbolList;
+    if (symbolList.length > 0) {
+      await ensureProxyLiveSubscription(
+        pageId,
+        symbolList,
+        Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
+        0.5,
+        6000,
+      );
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: "subscribe",
+          symbols: symbolList,
+          feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
+        }));
+      }
     }
 
     activeExpiryRef.current = expDate;
@@ -558,6 +571,14 @@ export default function MultGreekPage() {
 
     ws.onopen = () => {
       setStatus({ state: "live", msg: "LIVE" });
+      const symbolList = subscribedSymbolsRef.current;
+      if (symbolList.length > 0) {
+        ws.send(JSON.stringify({
+          type: "subscribe",
+          symbols: symbolList,
+          feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
+        }));
+      }
     };
 
     ws.onmessage = (e) => {

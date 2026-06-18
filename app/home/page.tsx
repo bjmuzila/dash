@@ -344,6 +344,9 @@ export default function HomePage() {
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
   const subscribedSymbolsRef = useRef<string[]>([]);
   const lastSpotRef = useRef(0);
+  const quoteSnapshotsRef = useRef<Record<string, { last: number; prev: number }>>({});
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
 
   const [now, setNow] = useState(new Date());
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
@@ -363,6 +366,10 @@ export default function HomePage() {
   const [status, setStatus] = useState("READY");
 
   useEffect(() => {
+    quoteSnapshotsRef.current = quoteSnapshots;
+  }, [quoteSnapshots]);
+
+  useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -372,6 +379,10 @@ export default function HomePage() {
   }, []);
 
   const connectSocket = useCallback(() => {
+    if (unmountedRef.current) return;
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL
       ? `${process.env.NEXT_PUBLIC_WS_URL}/ws/dxlink`
       : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
@@ -401,7 +412,7 @@ export default function HomePage() {
         if (message?.type !== "FEED_DATA" || !Array.isArray(message.data)) return;
         const items = normalizeFeedData(message.data);
         let changed = false;
-        const nextQuotes = { ...quoteSnapshots };
+        const nextQuotes = { ...quoteSnapshotsRef.current };
 
         items.forEach((item) => {
           const sym = String(item.eventSymbol ?? "");
@@ -481,6 +492,7 @@ export default function HomePage() {
 
         setQuoteSnapshots(nextQuotes);
         setSidebarQuotes(makeSidebarQuotes(nextQuotes));
+        quoteSnapshotsRef.current = nextQuotes;
         if (changed) scheduleRender();
       } catch {
         // ignore malformed frames
@@ -489,14 +501,25 @@ export default function HomePage() {
 
     ws.onerror = () => setStatus("WS ERR");
     ws.onclose = () => {
+      if (wsRef.current === ws) wsRef.current = null;
+      if (unmountedRef.current) return;
       setStatus("RECONNECT");
-      setTimeout(connectSocket, 2500);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connectSocket();
+      }, 2500);
     };
-  }, [quoteSnapshots, scheduleRender]);
+  }, [scheduleRender]);
 
   useEffect(() => {
     connectSocket();
     return () => {
+      unmountedRef.current = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       wsRef.current?.close();
       wsRef.current = null;
     };

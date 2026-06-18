@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { ensureProxyLiveSubscription } from "@/lib/proxy/liveSubscription";
 
 const QUOTE_PANEL_TICKERS = [
   "VIX",
@@ -215,6 +216,7 @@ export default function OptionsChainPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const loadTokenRef = useRef(0);
   const pageIdRef = useRef(`options-chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const subscribedSymbolsRef = useRef<string[]>([]);
 
   // Build strikes from chain JSON
   const buildStrikes = (expGroups: unknown[]): StrikeRow[] => {
@@ -306,15 +308,25 @@ export default function OptionsChainPage() {
         if (row.putSym) allSymbols.add(row.putSym);
       });
 
-      if (allSymbols.size > 0) {
-        fetch("/api/proxy/subscription-ready", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pageId, symbols: [...allSymbols], timeout: 6000, threshold: 0.5 }),
-        }).catch(() => {}).then(() => {
-          setLoadProgress(100); // Complete
-          setTimeout(() => setLoadProgress(0), 1000); // Hide after 1s
-        });
+      const symbolList = [...allSymbols];
+      subscribedSymbolsRef.current = symbolList;
+      if (symbolList.length > 0) {
+        await ensureProxyLiveSubscription(
+          pageId,
+          symbolList,
+          Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
+          0.5,
+          6000,
+        );
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: "subscribe",
+            symbols: symbolList,
+            feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
+          }));
+        }
+        setLoadProgress(100); // Complete
+        setTimeout(() => setLoadProgress(0), 1000); // Hide after 1s
       } else {
         setLoadProgress(100);
         setTimeout(() => setLoadProgress(0), 1000);
@@ -335,6 +347,17 @@ export default function OptionsChainPage() {
     const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
     const ws = new WebSocket(`${wsBase}/ws/dxlink`);
     wsRef.current = ws;
+
+    ws.onopen = () => {
+      const symbolList = subscribedSymbolsRef.current;
+      if (symbolList.length > 0) {
+        ws.send(JSON.stringify({
+          type: "subscribe",
+          symbols: symbolList,
+          feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
+        }));
+      }
+    };
 
     ws.onmessage = (e) => {
       let msg: Record<string, unknown>;

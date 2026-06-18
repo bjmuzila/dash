@@ -6,6 +6,7 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, queryPlaybookFeedToday, savePlaybookSignal, type EsCandleRecord } from "@/lib/snapdb";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import IbLogic from "@/components/insights/IbLogic";
+import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
 
 type InsightsTab = "exposure" | "vix" | "ib";
 
@@ -77,44 +78,6 @@ interface ChainResponse {
     items?: ChainGroup[];
     underlyingPrice?: number;
   };
-}
-
-interface FeedItem {
-  eventType: string;
-  eventSymbol: string;
-  time?: number;
-  price?: number;
-  size?: number;
-  bidPrice?: number;
-  askPrice?: number;
-}
-
-function normalizeFeedData(data: unknown[]): FeedItem[] {
-  if (!data.length) return [];
-  if (typeof data[0] === "object" && !Array.isArray(data[0])) return data as FeedItem[];
-  const eventType = data[0] as string;
-  const rows = data[1] as unknown[];
-  if (typeof eventType !== "string" || !Array.isArray(rows)) return [];
-  const fieldsByType: Record<string, string[]> = {
-    Quote: ["bidPrice", "askPrice", "bidSize", "askSize"],
-    Trade: ["price", "dayVolume", "size"],
-    TimeAndSale: ["time", "sequence", "exchangeCode", "price", "size", "bidPrice", "askPrice", "saleConditions", "flags", "aggressorSide"],
-  };
-  const fields = fieldsByType[eventType];
-  if (!fields) return [];
-  const hasType = rows[0] === eventType;
-  const step = fields.length + (hasType ? 2 : 1);
-  const out: FeedItem[] = [];
-  for (let i = 0; i <= rows.length - step; i += step) {
-    const base = i + (hasType ? 2 : 1);
-    const item: Record<string, unknown> = {
-      eventType: hasType ? rows[i] : eventType,
-      eventSymbol: hasType ? rows[i + 1] : rows[i],
-    };
-    fields.forEach((f, j) => { item[f] = rows[base + j]; });
-    out.push(item as unknown as FeedItem);
-  }
-  return out;
 }
 
 function getEtDateParts(date = new Date()) {
@@ -1103,11 +1066,13 @@ export default function InsightsPage() {
 
   // ── WebSocket: live GREEKS_INTRADAY broadcast + history on connect ────────
   const wsRef = useRef<WebSocket | null>(null);
+  const pageIdRef = useRef(`insights-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   useEffect(() => {
     if (!DXLINK_WS_URL || !mountedRef.current) return;
     const ws = new WebSocket(DXLINK_WS_URL);
     wsRef.current = ws;
-    const esFeedTypes = ["/ESU26", "/ES:XCME", "/ES"].reduce((acc, sym) => {
+    const esSymbols = ["/ESU26", "/ES:XCME", "/ES"];
+    const esFeedTypes = esSymbols.reduce((acc, sym) => {
       acc[sym] = ["Quote", "Trade", "TradeETH", "TimeAndSale", "Summary"];
       return acc;
     }, {} as Record<string, string[]>);
@@ -1123,14 +1088,7 @@ export default function InsightsPage() {
         }
       } catch { /* silent */ }
       if (mountedRef.current) {
-        fetch("/api/proxy/dxlink-subscribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            symbols: ["/ESU26", "/ES:XCME", "/ES"],
-            feedTypesBySymbol: esFeedTypes,
-          }),
-        }).catch(() => {});
+        ensureProxyLiveSubscription(pageIdRef.current, esSymbols, esFeedTypes, 0.5, 6000).catch(() => {});
       }
     };
 
@@ -1139,7 +1097,7 @@ export default function InsightsPage() {
       try {
         const msg = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
         if (msg?.type === "FEED_DATA" && Array.isArray(msg.data)) {
-          normalizeFeedData(msg.data).forEach((item) => {
+          normalizeProxyFeedData(msg.data).forEach((item) => {
             const sym = String(item.eventSymbol ?? "");
             if (!sym.startsWith("/ES")) return;
             if (item.eventType !== "TimeAndSale" && item.eventType !== "Trade" && item.eventType !== "TradeETH") return;
