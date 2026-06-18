@@ -18,6 +18,15 @@ type ChainStrike = {
   putSymbol: string;
 };
 
+type PathProbe = {
+  status: ProbeStatus;
+  httpStatus?: number;
+  elapsedMs?: number;
+  ok?: boolean;
+  summary?: string;
+  error?: string;
+};
+
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const PROBE_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const TICKERS = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "SMH"] as const;
@@ -141,6 +150,7 @@ export default function DevPage() {
     note?: string;
     seenFeedTypes?: string[];
   } | null>(null);
+  const [pathProbes, setPathProbes] = useState<Record<string, PathProbe>>({});
   const wsRef = useRef<WebSocket | null>(null);
 
   const selectedStrikeRow = useMemo(
@@ -184,6 +194,74 @@ export default function DevPage() {
       },
     ];
   }, [effectiveSymbol, expiry, ticker]);
+
+  const probePath = useCallback(async (label: string, path: string) => {
+    const started = performance.now();
+    setPathProbes((current) => ({
+      ...current,
+      [label]: { status: "loading" },
+    }));
+
+    try {
+      const response = await fetch(path, { cache: "no-store" });
+      const text = await response.text();
+      let summary = `HTTP ${response.status}`;
+      try {
+        const json = JSON.parse(text) as Record<string, unknown>;
+        if (json?.error && typeof json.error === "string") {
+          summary = `${summary} - ${json.error}`;
+        } else if (json?.data && typeof json.data === "object" && json.data) {
+          const data = json.data as Record<string, unknown>;
+          const parts: string[] = [];
+          if (Array.isArray(data.items)) parts.push(`items=${data.items.length}`);
+          if (typeof data.symbol === "string") parts.push(`symbol=${data.symbol}`);
+          if (typeof data.rootSymbol === "string") parts.push(`root=${data.rootSymbol}`);
+          if (typeof data.closeDate === "string") parts.push(`closeDate=${data.closeDate}`);
+          if (typeof data.prevClose === "number") parts.push(`prevClose=${data.prevClose}`);
+          if (typeof data.last === "number") parts.push(`last=${data.last}`);
+          if (parts.length) summary = `${summary} - ${parts.join(", ")}`;
+        } else if (Array.isArray(json?.items)) {
+          summary = `${summary} - items=${json.items.length}`;
+        } else if (typeof json?.prevClose === "number" || typeof json?.last === "number") {
+          summary = `${summary} - ${[
+            typeof json.prevClose === "number" ? `prevClose=${json.prevClose}` : null,
+            typeof json.last === "number" ? `last=${json.last}` : null,
+          ].filter(Boolean).join(", ")}`;
+        }
+      } catch {
+        if (text.trim()) {
+          summary = `${summary} - ${text.slice(0, 120).replace(/\s+/g, " ")}`;
+        }
+      }
+
+      setPathProbes((current) => ({
+        ...current,
+        [label]: {
+          status: response.ok ? "found" : "error",
+          httpStatus: response.status,
+          elapsedMs: Math.round(performance.now() - started),
+          ok: response.ok,
+          summary,
+        },
+      }));
+    } catch (error) {
+      setPathProbes((current) => ({
+        ...current,
+        [label]: {
+          status: "error",
+          elapsedMs: Math.round(performance.now() - started),
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  }, []);
+
+  const probeAllPaths = useCallback(async () => {
+    for (const item of dataPaths) {
+      await probePath(item.label, item.path);
+    }
+  }, [dataPaths, probePath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,17 +666,36 @@ export default function DevPage() {
           padding: 16,
         }}
       >
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8da8c2", marginBottom: 10 }}>
-          Data Paths
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8da8c2" }}>
+            Data Paths
+          </div>
+          <button onClick={() => void probeAllPaths()} style={{ ...buttonStyle, height: 36, padding: "0 12px", fontSize: 11 }}>
+            Probe All
+          </button>
         </div>
         <div style={{ display: "grid", gap: 10 }}>
           {dataPaths.map((item) => (
             <div key={item.label} style={{ padding: 12, borderRadius: 10, background: "rgba(5,8,13,0.72)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#f5fbff", marginBottom: 6 }}>{item.label}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#f5fbff" }}>{item.label}</div>
+                <button onClick={() => void probePath(item.label, item.path)} style={{ ...buttonStyle, height: 32, padding: "0 10px", fontSize: 10 }}>
+                  Probe
+                </button>
+              </div>
               <div style={{ fontFamily: "Consolas, 'Courier New', monospace", fontSize: 12, color: "#00e5ff", wordBreak: "break-word" }}>
                 {item.path}
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#8da8c2" }}>{item.note}</div>
+              <div style={{ marginTop: 8, fontSize: 12, color: statusColor(pathProbes[item.label]?.status ?? "idle") }}>
+                {pathProbes[item.label]?.status === "idle" || !pathProbes[item.label]
+                  ? "Not probed"
+                  : pathProbes[item.label]?.status === "loading"
+                    ? "Probing..."
+                    : pathProbes[item.label]?.error
+                      ? `Error: ${pathProbes[item.label]?.error}`
+                      : `${pathProbes[item.label]?.summary}${pathProbes[item.label]?.elapsedMs != null ? ` (${pathProbes[item.label]?.elapsedMs} ms)` : ""}`}
+              </div>
             </div>
           ))}
         </div>

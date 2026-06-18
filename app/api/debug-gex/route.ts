@@ -76,10 +76,12 @@ export async function GET() {
       cache: "no-store",
     });
     const text = await r.text();
-    let cboeData: unknown;
-    try { cboeData = JSON.parse(text); } catch { cboeData = null; }
-    const opts = (cboeData as Record<string,unknown>)?.data?.options ?? [];
-    results.cboe = { status: r.status, totalContracts: (opts as unknown[]).length, textPreview: text.slice(0, 200) };
+    let totalContracts = 0;
+    try {
+      const cboeData = JSON.parse(text) as { data?: { options?: unknown[] } };
+      totalContracts = cboeData?.data?.options?.length ?? 0;
+    } catch { /* not JSON */ }
+    results.cboe = { status: r.status, totalContracts, textPreview: text.slice(0, 200) };
   } catch (e: unknown) {
     results.cboe = { error: e instanceof Error ? e.message : String(e) };
   }
