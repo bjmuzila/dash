@@ -6,8 +6,7 @@ function createDxLinkWsBridge({ server, targetUrl, log = console }) {
   server.on('upgrade', (request, socket, head) => {
     const pathname = new URL(request.url || '/', 'http://localhost').pathname;
     if (pathname !== '/ws/dxlink') {
-      socket.destroy();
-      return;
+      return; // let other upgrade handlers (e.g. /ws/gex broadcaster) handle it
     }
 
     wsProxyServer.handleUpgrade(request, socket, head, (clientSocket) => {
