@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-17 (session 27) - Dashboard Route Removed from Navigation
+
+### `app/dashboard/page.tsx`
+- Replaced the dashboard page with a redirect to `/home` so the old proxy-control route no longer serves a separate screen
+
+### `components/shared/Sidebar.tsx`
+- Removed the dashboard shortcut from the persistent sidebar so the page is no longer exposed in the left rail
+
+### Intent
+- The shared sidebar now points users at the home page and other working sections only, keeping the dashboard control surface out of sight
+
 ## 2026-06-17 (session 26) - Global Sidebar Replaced with Home-Style Rail
 
 ### `components/shared/Sidebar.tsx`

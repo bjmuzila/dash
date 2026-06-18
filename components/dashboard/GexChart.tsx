@@ -183,6 +183,7 @@ export default function GexChart({
     const isCallPut = mode === "call-put";
 
     const getNet  = (r: ChainRow) => isVol ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
+    const getOITotal = (r: ChainRow) => (r.callOI ?? 0) + (r.putOI ?? 0);
     const getCall = (r: ChainRow) => isVol
       ? (r.callGamma ?? 0) * (r.callVolume ?? 0) * spotPrice * spotPrice
       : (r.callGEX ?? 0);
@@ -318,6 +319,28 @@ export default function GexChart({
       };
       drawOIArea(data.map(r => r.callOI ?? 0), "rgba(144,238,144,0.32)", "rgba(144,238,144,0.06)");
       drawOIArea(data.map(r => r.putOI  ?? 0), "rgba(255,182,193,0.32)", "rgba(255,182,193,0.06)");
+      const oiPts = data.map((r, i) => ({ x: xAt(i), y: yOI(getOITotal(r)) }));
+      if (oiPts.length > 1) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(0,229,255,0.95)";
+        ctx.lineWidth = 2.2;
+        ctx.shadowColor = "rgba(0,229,255,0.35)";
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.moveTo(oiPts[0].x, oiPts[0].y);
+        for (let i = 0; i < oiPts.length - 1; i++) {
+          const midX = (oiPts[i].x + oiPts[i + 1].x) / 2;
+          const midY = (oiPts[i].y + oiPts[i + 1].y) / 2;
+          ctx.quadraticCurveTo(oiPts[i].x, oiPts[i].y, midX, midY);
+        }
+        ctx.lineTo(oiPts[oiPts.length - 1].x, oiPts[oiPts.length - 1].y);
+        ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = "rgba(0,229,255,0.70)";
+        ctx.font = "bold 8px Arial";
+        ctx.textAlign = "left";
+        ctx.fillText("+OI", PAD_L + 3, oiPts[0].y - 4);
+      }
     }
 
     // ── DEX line — white, 60% height scale centered on yZero ──
@@ -325,8 +348,10 @@ export default function GexChart({
       const dexVals = data.map(r => isVol ? (r.volNetDEX ?? 0) : (r.netDEX ?? 0));
       const maxDex  = Math.max(...dexVals.map(Math.abs).filter(v => v > 0), 1);
       const yDex    = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6;
-      ctx.strokeStyle = "rgba(255,255,255,0.80)";
+      ctx.strokeStyle = "rgba(139,92,246,0.95)";
       ctx.lineWidth   = 2;
+      ctx.shadowColor = "rgba(139,92,246,0.35)";
+      ctx.shadowBlur = 10;
       const pts = dexVals.map((v, i) => ({ x: xAt(i), y: yDex(v) }));
       if (pts.length > 1) {
         ctx.beginPath();
@@ -340,8 +365,9 @@ export default function GexChart({
         ctx.stroke();
       }
       // DEX zero-crossing label
-      ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "bold 8px Arial"; ctx.textAlign = "left";
-      ctx.fillText("DEX", PAD_L + 3, yDex(0) - 3);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(139,92,246,0.85)"; ctx.font = "bold 8px Arial"; ctx.textAlign = "left";
+      ctx.fillText("+NET DEX", PAD_L + 3, yDex(0) - 3);
     }
 
     // ── GEX Flip: BS profile curve + gamma-zero vertical line ──
@@ -360,8 +386,10 @@ export default function GexChart({
         ctx.stroke();
       };
 
-      ctx.strokeStyle = "#00e5ff";
+      ctx.strokeStyle = "#f97316";
       ctx.lineWidth   = 1.8;
+      ctx.shadowColor = "rgba(249,115,22,0.35)";
+      ctx.shadowBlur = 10;
       ctx.setLineDash([]);
 
       if (gexProfile && gexProfile.levels.length > 1) {
@@ -421,7 +449,7 @@ export default function GexChart({
           ctx.rect(PAD_L, PAD_T, cW, cH);
           ctx.clip();
           ctx.setLineDash([6, 5]);
-          ctx.strokeStyle = "rgba(0,229,255,0.85)";
+          ctx.strokeStyle = "rgba(249,115,22,0.85)";
           ctx.lineWidth = 1.3;
           ctx.beginPath();
           ctx.moveTo(flipX, PAD_T);
@@ -430,10 +458,10 @@ export default function GexChart({
           ctx.setLineDash([]);
           ctx.restore();
 
-          ctx.fillStyle = "#00e5ff";
+          ctx.fillStyle = "#f97316";
           ctx.font = "bold 9px Arial";
           ctx.textAlign = "center";
-          const lbl = `GEX FLIP ${Math.round(flip).toLocaleString()}`;
+          const lbl = `+GEX FLIP ${Math.round(flip).toLocaleString()}`;
           ctx.fillText(lbl, clamp(flipX, PAD_L + 48, PAD_L + cW - 48), PAD_T + 11);
         }
       }
@@ -460,7 +488,7 @@ export default function GexChart({
       const col = pv >= 0 ? "#29b6f6" : "#ffb300";
       ctx.save();
       ctx.font = "bold 10px Arial";
-      const lbl = peak.strike.toLocaleString();
+      const lbl = `MVC ${peak.strike.toLocaleString()}`;
       const tw  = ctx.measureText(lbl).width;
       const bw  = tw + 10, bh = 15;
       const bx  = clamp(xAt(pi) - bw / 2, 2, W - bw - 2);
@@ -492,14 +520,14 @@ export default function GexChart({
         ctx.save();
         ctx.beginPath(); ctx.rect(PAD_L, PAD_T, cW, cH); ctx.clip();
         ctx.setLineDash([5, 5]);
-        ctx.strokeStyle = "rgba(220,220,220,0.40)";
+        ctx.strokeStyle = "rgba(220,220,220,0.55)";
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(sx, PAD_T); ctx.lineTo(sx, PAD_T + cH); ctx.stroke();
         ctx.setLineDash([]);
         ctx.restore();
-        ctx.fillStyle = "rgba(220,220,220,0.75)";
+        ctx.fillStyle = "rgba(220,220,220,0.85)";
         ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
-        ctx.fillText(spotPrice.toFixed(0), clamp(sx, PAD_L + 18, PAD_L + cW - 18), PAD_T + cH - 6);
+        ctx.fillText(`SPX ${spotPrice.toFixed(2)}`, clamp(sx, PAD_L + 28, PAD_L + cW - 28), PAD_T + 10);
       }
     }
 
@@ -516,7 +544,7 @@ export default function GexChart({
       ? [["#29b6f6", "Call GEX"], ["#ffb300", "Put GEX"]]
       : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
     if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
-    if (showFlipCurve) legend.push(["#00e5ff", gexProfile ? "Profile" : "GEX curve"]);
+    if (showFlipCurve) legend.push(["#f97316", gexProfile ? "Profile" : "GEX curve"]);
     legend.forEach(([col, lbl], i) => {
       const lx = PAD_L + i * 72;
       ctx.fillStyle = col;        ctx.fillRect(lx, 5, 8, 7);

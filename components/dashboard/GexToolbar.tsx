@@ -102,15 +102,14 @@ function ToggleBtn({ label, active, onClick }: { label: string; active: boolean;
 }
 
 // Format expiry date → DTE label e.g. "0DTE", "1DTE", "Fri 6/13"
-function expiryLabel(expiry: string): string {
-  if (!expiry) return "ALL";
-  const dte = getExpiryDte(expiry);
+function expiryLabel(expiry: string): { day: string; date: string } {
+  if (!expiry) return { day: "ALL", date: "EXP" };
   const d = new Date(expiry + "T00:00:00");
   const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const dateStr = `${d.getMonth()+1}/${d.getDate()}`;
-  if (dte === 0) return `0DTE ${dateStr}`;
-  if (dte === 1) return `1DTE ${dateStr}`;
-  return `${days[d.getDay()]} ${dateStr}`;
+  return {
+    day: days[d.getDay()],
+    date: `${d.getMonth() + 1}/${d.getDate()}`,
+  };
 }
 
 function getExpiryDte(expiry: string): number {
@@ -157,8 +156,32 @@ export default function GexToolbar({
             style={{ fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2, background: selectedExpiry === "" ? "#1a2a3a" : "transparent", color: selectedExpiry === "" ? "#00e5ff" : "#fff", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}
           >ALL</button>
           {visibleExpirations.map(exp => (
-            <button key={exp} onClick={() => onExpiry(exp)} style={{ fontSize: TOOLBAR_FONT_SIZE, padding: "3px 7px", border: "none", borderRadius: 2, background: selectedExpiry === exp ? "#1a2a3a" : "transparent", color: selectedExpiry === exp ? "#00e5ff" : "#fff", cursor: "pointer", fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
-              {expiryLabel(exp)}
+            <button
+              key={exp}
+              onClick={() => onExpiry(exp)}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 0,
+                minWidth: 44,
+                fontSize: TOOLBAR_FONT_SIZE,
+                padding: "3px 8px",
+                border: "none",
+                borderRadius: 2,
+                background: selectedExpiry === exp ? "#1a2a3a" : "transparent",
+                color: selectedExpiry === exp ? "#00e5ff" : "#fff",
+                cursor: "pointer",
+                fontWeight: 700,
+                fontFamily: "inherit",
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+                lineHeight: 1.05,
+              }}
+            >
+              <span style={{ fontSize: 8.5, opacity: 0.9, letterSpacing: "0.05em" }}>{expiryLabel(exp).day}</span>
+              <span style={{ fontSize: 9.5 }}>{expiryLabel(exp).date}</span>
             </button>
           ))}
         </div>

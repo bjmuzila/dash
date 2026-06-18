@@ -279,21 +279,6 @@ export default function Sidebar() {
           Shortcuts
         </div>
         <Link
-          href="/dashboard"
-          style={{
-            display: "block",
-            padding: "4px 0",
-            fontSize: 10,
-            color: isActive("/dashboard") ? HOME_THEME.cyan : HOME_THEME.muted,
-            textDecoration: "none",
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-          }}
-        >
-          Dashboard
-        </Link>
-        <Link
           href="/mult-greek"
           style={{
             display: "block",
