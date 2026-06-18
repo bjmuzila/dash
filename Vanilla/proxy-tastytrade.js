@@ -1799,9 +1799,13 @@ async function refreshCboeCache(cache, url) {
   const today = new Date().toISOString().split('T')[0];
   if (cache.data && cache.date === today) return;
   cache.pending = cboeHttpFetch(url).then(opts => {
-    cache.data = opts;
-    cache.date = today;
-    log('CBOE cached', url, '-', (opts.length || 0), 'contracts');
+    if (opts.length > 0) {
+      cache.data = opts;
+      cache.date = today;
+      log('CBOE cached', url, '-', opts.length, 'contracts');
+    } else {
+      log('CBOE returned 0 contracts for', url, '— not caching, will retry');
+    }
   }).finally(() => { cache.pending = null; });
   await cache.pending;
 }
@@ -2855,6 +2859,26 @@ const server = http.createServer(async (req, res) => {
   else log(req.method, p);
 
   // ── HEALTH CHECK ──────────────────────────────────────────────
+  if (p === '/debug-oi') {
+    const today = new Date().toISOString().slice(0, 10);
+    let cboeResult = { error: 'not run' };
+    try {
+      const oiMap = await fetchCboeSpxOI(today);
+      const keys = [...oiMap.keys()].slice(0, 5);
+      cboeResult = { size: oiMap.size, sampleKeys: keys };
+    } catch (e) { cboeResult = { error: e.message }; }
+    const dxSummaryCount = Object.keys(dxSummaryCache).filter(k => isSpxwSymbol(k)).length;
+    const dxGreeksCount  = Object.keys(dxGreeksCache).filter(k => isSpxwSymbol(k)).length;
+    const sampleSummary = Object.entries(dxSummaryCache).filter(([k]) => isSpxwSymbol(k)).slice(0, 3)
+      .map(([k, v]) => ({ sym: k, oi: v.openInterest }));
+    return sendJSON(res, 200, {
+      cboe: cboeResult,
+      dxSummarySpxwCount: dxSummaryCount,
+      dxGreeksSpxwCount: dxGreeksCount,
+      sampleDxSummary: sampleSummary,
+    });
+  }
+
   if (p === '/health') {
     if (!schwabAccessToken && fs.existsSync(SCHWAB_TOKEN_FILE)) {
       try {

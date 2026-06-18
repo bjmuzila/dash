@@ -68,5 +68,30 @@ export async function GET() {
     results.proxyHealth = { error: e instanceof Error ? e.message : String(e) };
   }
 
+  // 4. Hit CBOE directly to verify it's reachable and returning data
+  try {
+    const r = await fetch("https://cdn.cboe.com/api/global/delayed_quotes/options/_SPXW.json", {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    const data = await r.json();
+    const opts = data?.data?.options ?? [];
+    const todayOpts = opts.filter((o: Record<string,unknown>) => {
+      const sym = String(o.option ?? "");
+      return sym.includes("260618"); // today YYMMDD
+    });
+    results.cboe = {
+      status: r.status,
+      totalContracts: opts.length,
+      todayContracts: todayOpts.length,
+      sampleToday: todayOpts.slice(0, 3).map((o: Record<string,unknown>) => ({
+        option: o.option, oi: o.open_interest, vol: o.volume,
+      })),
+    };
+  } catch (e: unknown) {
+    results.cboe = { error: e instanceof Error ? e.message : String(e) };
+  }
+
   return NextResponse.json(results, { status: 200 });
 }
