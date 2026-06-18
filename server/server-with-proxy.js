@@ -12,6 +12,9 @@ const next = require('next');
 const path = require('path');
 const dotenv = require('dotenv');
 const { createDxLinkWsBridge } = require('./websocket-server');
+const { createGexBroadcaster } = require('./ws/broadcaster');
+const gexLoop = require('./loops/gex-loop');
+const { Pool } = require('pg');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 
@@ -113,7 +116,16 @@ async function startProxy() {
   }
 }
 
-app.prepare().then(() => {
+// Postgres pool for GEX loop writes
+const pgPool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_URL.includes('localhost') ? undefined : { rejectUnauthorized: false },
+      max: 3,
+    })
+  : null;
+
+app.prepare().then(async () => {
   void startProxy();
 
   const server = createServer((req, res) => {
@@ -121,16 +133,25 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
+  // Existing dxLink WS bridge (keep for live Greeks streaming)
   createDxLinkWsBridge({
     server,
     targetUrl: `ws://127.0.0.1:${PROXY_PORT}/ws/dxlink`,
     log: console
   });
 
+  // New: GEX push broadcaster on /ws/gex
+  createGexBroadcaster(server);
+
   server.listen(PORT, (err) => {
     if (err) throw err;
     console.log(`[SERVER] Next.js ready on http://localhost:${PORT}`);
   });
+
+  // Start GEX computation loop (runs independently of any client requests)
+  await gexLoop.start({ pool: pgPool });
+  console.log('[SERVER] GEX loop started');
+
 }).catch((err) => {
   console.error('[SERVER] Failed to start:', err);
   process.exit(1);

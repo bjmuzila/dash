@@ -578,21 +578,38 @@ export default function HomePage() {
     if (selectedExpiry) await loadChain(selectedExpiry);
   }, [loadChain, selectedExpiry]);
 
-  const chainRows = useMemo(() => {
+  // Live WS-rebuilt chain — only accurate once symbols are subscribed and WS events arrive
+  const wsChainRows = useMemo(() => {
     void renderTick;
     const liveSpot = spot > 0 ? spot : Number(quoteSnapshots.SPX?.last ?? 0);
     if (!(liveSpot > 0) || !strikeRows.length) return [] as ChainRow[];
     return buildChainRows(strikeRows, liveDataRef.current, liveSpot);
   }, [quoteSnapshots.SPX?.last, renderTick, spot, strikeRows]);
 
-  const heatmapRows = useMemo(() => {
-    if (!(spot > 0) || !chainRows.length) return [] as HeatmapRow[];
-    return toHeatmapRows(chainRows, spot);
-  }, [chainRows, spot]);
-
-  // Chart uses the fast gex-chain data; heatmap uses live WS chain
-  const chartRows = gexChainRows.length > 0 ? gexChainRows : chainRows;
+  // Both chart and heatmap use the pre-computed chain from /api/gex (full strikes + fallback Greeks).
+  // WS chain kicks in once live data arrives and overrides at least a few strikes.
+  const chartRows = gexChainRows.length > 0 ? gexChainRows : wsChainRows;
   const chartSpot = gexSpot > 0 ? gexSpot : spot;
+
+  // For heatmap: merge gexChainRows with any live WS updates for accurate real-time deltas
+  const chainRows = useMemo(() => {
+    if (!gexChainRows.length) return wsChainRows;
+    if (!wsChainRows.length) return gexChainRows;
+    // Build a map of WS-updated strikes for fast lookup
+    const wsMap = new Map(wsChainRows.map(r => [r.strike, r]));
+    // Use WS data only if it has non-zero gamma (i.e., live Greeks came in)
+    return gexChainRows.map(row => {
+      const ws = wsMap.get(row.strike);
+      if (ws && ((ws.callGamma ?? 0) > 0 || (ws.putGamma ?? 0) > 0)) return ws;
+      return row;
+    });
+  }, [gexChainRows, wsChainRows]);
+
+  const heatmapRows = useMemo(() => {
+    const useSpot = chartSpot > 0 ? chartSpot : spot;
+    if (!(useSpot > 0) || !chainRows.length) return [] as HeatmapRow[];
+    return toHeatmapRows(chainRows, useSpot);
+  }, [chainRows, chartSpot, spot]);
 
   const netGex = useMemo(
     () => chartRows.reduce((sum, row) => sum + ((dataMode === "vol-only" ? row.netVolGEX : row.netGEX) ?? 0), 0),
@@ -619,29 +636,7 @@ export default function HomePage() {
   };
 
   return (
-    <div style={{ height: "100%", width: "100%", overflow: "hidden", background: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "row" }}>
-      <aside style={{ width: 85, flexShrink: 0, display: "flex", flexDirection: "column", padding: "24px 0", alignItems: "center", zIndex: 20, position: "relative", background: "rgba(0,0,0,0.10)", backdropFilter: "blur(12px)", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
-        <div style={{ width: 48, height: 48, background: "rgba(0,240,255,0.10)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", border: "1px solid rgba(0,240,255,0.2)", marginBottom: 24, color: C.cyan }}><HomeIcon /></div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: "#fff", marginBottom: 20 }}>
-          <span><GridIcon /></span>
-          <span><CalendarIcon /></span>
-        </div>
-        <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", marginBottom: 16 }} />
-        <div style={{ flex: 1, width: "100%", overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", scrollbarWidth: "none" }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.15em", position: "sticky", top: 0, background: "rgba(5,6,10,0.8)", backdropFilter: "blur(8px)", width: "100%", textAlign: "center", padding: "8px 0", zIndex: 10 }}>Quotes</div>
-          {sidebarQuotes.map((q) => (
-            <div key={q.sym} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "6px 0", width: "100%", background: q.active ? "rgba(255,255,255,0.05)" : "transparent", borderLeft: q.active ? `2px solid ${C.cyan}` : "2px solid transparent" }}>
-              <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff" }}>{q.sym}</span>
-              <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: q.pos ? C.green : C.red }}>{q.chg}</span>
-            </div>
-          ))}
-        </div>
-        <div className="grad-divider-sidebar-t" style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, paddingTop: 16, width: "100%" }}>
-          <span><SettingsIcon /></span>
-          <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg, ${C.purple}, ${C.cyan})` }} />
-        </div>
-      </aside>
-
+    <div style={{ height: "100%", width: "100%", overflow: "hidden", background: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden" }}>

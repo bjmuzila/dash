@@ -17,30 +17,28 @@ function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
 }
 
 async function fetchGexChain(expiry: string): Promise<any> {
-  const fastQs = new URLSearchParams();
-  if (expiry) fastQs.set("expiry", expiry);
-
-  const fastRes = await fetch(`${PROXY}/proxy/api/tt/gex-chain?${fastQs.toString()}`, {
-    cache: "no-store",
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (fastRes.ok) {
-    return fastRes.json();
-  }
-
-  const qs = new URLSearchParams({
-    ticker: "SPX",
-    range: "all",
-    awaitDX: "1",
-  });
+  // Primary: use the full chains endpoint — has estimateOptionGreekFallback for every strike
+  // so GEX is non-zero across the whole chain even before dxGreeksCache is warm.
+  // Cache-friendly (no pageId), hits SQLite cache on repeat calls.
+  const qs = new URLSearchParams({ range: "all" });
   if (expiry) qs.set("expiration", expiry);
 
   const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?${qs.toString()}`, {
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
-  if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
-  return res.json();
+  if (res.ok) return res.json();
+
+  // Fallback: gex-chain (faster but only returns strikes with warm dxGreeksCache)
+  const fastQs = new URLSearchParams();
+  if (expiry) fastQs.set("expiry", expiry);
+  const fastRes = await fetch(`${PROXY}/proxy/api/tt/gex-chain?${fastQs.toString()}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (fastRes.ok) return fastRes.json();
+
+  throw new Error(`Both gex endpoints failed`);
 }
 
 function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {

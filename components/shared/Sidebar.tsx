@@ -46,7 +46,11 @@ const SettingsIcon = () => (
 );
 
 const QUOTE_SYMBOLS = [
+  { sym: "/ESU26", label: "ESU" },
+  { sym: "/ESU6", label: "ESU" },
   { sym: "/ES:XCME", label: "ESU" },
+  { sym: "/NQU26", label: "NQU" },
+  { sym: "/NQU6", label: "NQU" },
   { sym: "/NQ:XCME", label: "NQU" },
   { sym: "SPX", label: "SPX" },
   { sym: "SPY", label: "SPY" },
@@ -85,6 +89,12 @@ function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
     if (Number.isFinite(num) && num > 0) return num;
   }
   return 0;
+}
+
+function normalizeSym(sym: string) {
+  if (sym.startsWith("/ES")) return "/ESU26";
+  if (sym.startsWith("/NQ")) return "/NQU26";
+  return sym;
 }
 
 function fmtPct(value: number | null) {
@@ -126,7 +136,7 @@ function useSidebarQuotes() {
           if (msg.type !== "FEED_DATA") return;
           const next: Record<string, number | null> = {};
           (msg.data || []).forEach((e: Record<string, unknown>) => {
-            const sym = String(e.eventSymbol || "");
+            const sym = normalizeSym(String(e.eventSymbol || ""));
             if (!QUOTE_SYMBOLS.some((item) => item.sym === sym)) return;
             const bid = Number(e.bidPrice ?? 0);
             const ask = Number(e.askPrice ?? 0);
