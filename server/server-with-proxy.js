@@ -10,8 +10,8 @@ const net = require('net');
 const { parse } = require('url');
 const next = require('next');
 const path = require('path');
-const WebSocket = require('ws');
 const dotenv = require('dotenv');
+const { createDxLinkWsBridge } = require('./websocket-server');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 
@@ -22,7 +22,6 @@ const PORT = parseInt(process.env.PORT || '3002', 10);
 const PROXY_PORT = 3001;
 const app = next({ dev: process.env.NODE_ENV !== 'production', dir: ROOT_DIR });
 const handle = app.getRequestHandler();
-const wsProxyServer = new WebSocket.Server({ noServer: true });
 const localProxyTarget = process.env.PROXY_URL || `http://127.0.0.1:${PROXY_PORT}`;
 const shouldManageLocalProxy =
   /^(https?:\/\/)?(127\.0\.0\.1|localhost)(:\d+)?/i.test(localProxyTarget);
@@ -122,53 +121,10 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
-  server.on('upgrade', (request, socket, head) => {
-    const pathname = parse(request.url || '').pathname;
-    if (pathname !== '/ws/dxlink') {
-      socket.destroy();
-      return;
-    }
-
-    wsProxyServer.handleUpgrade(request, socket, head, (clientSocket) => {
-      wsProxyServer.emit('connection', clientSocket, request);
-      const upstream = new WebSocket(`ws://127.0.0.1:${PROXY_PORT}/ws/dxlink`);
-
-      const closeBoth = () => {
-        if (clientSocket.readyState === WebSocket.OPEN || clientSocket.readyState === WebSocket.CONNECTING) {
-          clientSocket.close();
-        }
-        if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
-          upstream.close();
-        }
-      };
-
-      upstream.on('open', () => {
-        clientSocket.on('message', (message, isBinary) => {
-          if (upstream.readyState === WebSocket.OPEN) {
-            upstream.send(message, { binary: isBinary });
-          }
-        });
-
-        upstream.on('message', (message, isBinary) => {
-          if (clientSocket.readyState === WebSocket.OPEN) {
-            clientSocket.send(message, { binary: isBinary });
-          }
-        });
-      });
-
-      upstream.on('error', (err) => {
-        console.error('[WS PROXY] Upstream error:', err.message);
-        closeBoth();
-      });
-
-      clientSocket.on('error', (err) => {
-        console.error('[WS PROXY] Client error:', err.message);
-        closeBoth();
-      });
-
-      upstream.on('close', closeBoth);
-      clientSocket.on('close', closeBoth);
-    });
+  createDxLinkWsBridge({
+    server,
+    targetUrl: `ws://127.0.0.1:${PROXY_PORT}/ws/dxlink`,
+    log: console
   });
 
   server.listen(PORT, (err) => {

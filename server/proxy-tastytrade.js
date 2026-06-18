@@ -24,6 +24,11 @@ require('dotenv').config({ path: path.join(ROOT_DIR, '.env.local'), override: fa
 const { URL }   = require('url');
 const { spawn }  = require('child_process');
 const WebSocket = require('ws');
+const {
+  computeIntradaySnapshot: computeIntradaySnapshotShared,
+  buildGexLevels,
+  spxLevelToEs: sharedSpxLevelToEs
+} = require('./computation/gex-calculator');
 // const Database  = require('better-sqlite3');  // Optional - comment out if build fails
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -1331,6 +1336,15 @@ function saveIntradayHistory() {
 }
 
 function computeIntradaySnapshot(spot) {
+  return computeIntradaySnapshotShared({
+    dxGreeksCache,
+    dxSummaryCache,
+    readBuySellBackup,
+    spot
+  });
+}
+
+/*
   // GEX: net gamma exposure in billions (same formula as computeAndCacheGexLevels)
   let totalGEX = 0;
   let totalDeltaCall = 0, totalDeltaPut = 0;
@@ -1389,6 +1403,7 @@ function computeIntradaySnapshot(spot) {
 
   return { time, ts: now.getTime(), gex, dex, chex, vex, buyPct, spot };
 }
+*/
 
 // ES basis = yesterday's 4pm settlement spread: ES_close - SPX_close
 // Formula: SPX_from_ES = ES - (ES_close_yesterday - SPX_close_yesterday)
