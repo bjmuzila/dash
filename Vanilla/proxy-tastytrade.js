@@ -2639,6 +2639,7 @@ function connectDxLink() {
   dxHistoryChannelOpen = false;
   dxHistoryConfigured = false;
   activeAutoSubscriptionKeys.clear();
+  queuedSubscriptionKeys.clear();
   activeCandleSubscriptionKeys.clear();
 
   dxSocket.on('open', () => {
@@ -2683,7 +2684,9 @@ function connectDxLink() {
         }
       }));
       // Force re-send ALL subscriptions on channel open (handles reconnects where pendingNewSubscriptions=false)
+      // Must clear BOTH sets — queuedSubscriptionKeys blocks re-queuing just as activeAutoSubscriptionKeys does
       activeAutoSubscriptionKeys.clear();
+      queuedSubscriptionKeys.clear();
       pendingNewSubscriptions = true;
       sendSubscriptions();
     }
@@ -2833,6 +2836,7 @@ function connectDxLink() {
     log(`dxLink closed (${code}) — reconnecting in 5s`);
     dxAuthorized = dxChannelOpen = dxHistoryChannelOpen = dxHistoryConfigured = false;
     activeAutoSubscriptionKeys.clear();
+    queuedSubscriptionKeys.clear();
     activeCandleSubscriptionKeys.clear();
     clearInterval(keepAliveInterval);
     dxSocket = null;
