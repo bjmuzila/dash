@@ -443,6 +443,7 @@ class TastytradeProxy {
     this.contracts = new Map(); // streamerSymbol -> contract meta
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
     this.summaries = new Map(); // streamerSymbol -> { oi, prevClose }
+    this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
     this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
     this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
     this.oiTimer = null;
@@ -610,8 +611,21 @@ class TastytradeProxy {
       this.flow.addPrint({ streamerSymbol: sym, price: Number(ev.price), size: Number(ev.size), quote });
       return;
     }
-    // Greeks event ignored on purpose: per chosen design we compute greeks
-    // locally via Black-Scholes. (Switch here to consume broker greeks.)
+    if (ev.eventType === 'Greeks') {
+      // Raw broker greeks from dxFeed. Preferred over locally-solved BS greeks:
+      // the broker's IV is far less noisy than solving IV from a tick price.
+      // (No vanna/charm in this event — those are derived in _recompute.)
+      const gamma = firstFiniteNumber(ev.gamma);
+      const delta = firstFiniteNumber(ev.delta);
+      const vega = firstFiniteNumber(ev.vega);
+      const theta = firstFiniteNumber(ev.theta);
+      const iv = firstFiniteNumber(ev.volatility);
+      // Only store if we got at least a usable gamma or IV.
+      if (gamma || iv) {
+        this.greeks.set(sym, { iv, delta, gamma, theta, vega });
+      }
+      return;
+    }
   }
 
   /** Build flat rows, compute greeks locally, write GEX + flow to state. */
@@ -630,16 +644,18 @@ class TastytradeProxy {
       const q = this.quotes.get(c.streamerSymbol);
       const s = this.summaries.get(c.streamerSymbol);
       const rest = this.restOI.get(c.streamerSymbol);
+      const gk = this.greeks.get(c.streamerSymbol); // raw broker greeks (if any)
       const oi = (rest?.oi ?? 0) || (s?.oi ?? 0);
       const vol = this.volumes.get(c.streamerSymbol) || rest?.volume || 0;
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.
-      if (!(mid > 0) && !(oi > 0) && !(vol > 0)) continue;
+      if (!(mid > 0) && !(oi > 0) && !(vol > 0) && !gk) continue;
 
       const T = yearsToExpiry(c.expiration);
-      let iv = 0;
-      if (mid > 0) {
+      // Prefer the broker's IV (stable); only solve from price if none was sent.
+      let iv = gk?.iv > 0 ? gk.iv : 0;
+      if (!(iv > 0) && mid > 0) {
         iv = impliedVol({ price: mid, S: this.spot, K: c.strike, T, r: RISK_FREE, type: c.type });
       }
       if (iv > 0) {
@@ -649,7 +665,7 @@ class TastytradeProxy {
           atmIV = iv;
         }
       }
-      staged.push({ c, oi, vol, T, iv });
+      staged.push({ c, oi, vol, T, iv, gk });
     }
 
     if (!staged.length) return;
@@ -658,26 +674,39 @@ class TastytradeProxy {
     // ATM IV so their gamma is non-zero and their OI counts toward GEX.
     const rows = [];
     for (const st of staged) {
-      const { c, oi, vol, T } = st;
+      const { c, oi, vol, T, gk } = st;
       const iv = st.iv > 0 ? st.iv : atmIV;
-      let g = { gamma: 0, delta: 0, theta: 0, vega: 0, vanna: 0, charm: 0 };
+
+      // BS is used to source vanna/charm (dxFeed Greeks has neither) and as the
+      // fallback for delta/gamma/vega when no broker greeks arrived for a strike.
+      // Fed with the RAW broker IV when available, so it's stable.
+      let bs = { gamma: 0, delta: 0, theta: 0, vega: 0, vanna: 0, charm: 0 };
       if (iv > 0) {
-        g = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
+        bs = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
       }
+
+      // Prefer raw broker greeks for delta/gamma/vega; fall back to BS per-field.
+      const gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma : bs.gamma;
+      const delta = gk && Number.isFinite(gk.delta) && gk.delta !== 0 ? gk.delta : bs.delta;
+      const theta = gk && Number.isFinite(gk.theta) && gk.theta !== 0 ? gk.theta : bs.theta;
+      const vega  = gk && Number.isFinite(gk.vega)  && gk.vega  !== 0 ? gk.vega  : bs.vega;
+
       // Normalize to conventional reporting units:
       //   theta/charm: per-year -> per-day  (÷365)
       //   vega/vanna : per 1.00 vol -> per 1% vol  (÷100)
+      // Broker theta/vega already arrive in conventional units, so only the
+      // BS-derived vanna/charm get the unit scaling.
       rows.push({
         strike: c.strike,
         side: c.type === 'C' ? 'call' : 'put',
         oi,
         volume: vol,
-        gamma: g.gamma,
-        delta: g.delta,
-        theta: g.theta / 365,
-        vega: g.vega / 100,
-        vanna: g.vanna / 100,
-        charm: g.charm / 365,
+        gamma,
+        delta,
+        theta: gk ? theta : theta / 365,
+        vega: gk ? vega : vega / 100,
+        vanna: bs.vanna / 100,   // always BS-derived (not in broker feed)
+        charm: bs.charm / 365,   // always BS-derived
         iv,
         dte: c.dte,
       });

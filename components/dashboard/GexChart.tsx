@@ -273,11 +273,20 @@ export default function GexChart({
         ctx.shadowColor = v >= 0 ? "rgba(0,240,255,0.70)" : "rgba(255,179,0,0.70)";
         ctx.shadowBlur = 12;
       } else if (v >= 0) {
-        grad.addColorStop(0, "rgba(41,182,246,0.9)");
+        // Lighten higher-GEX bars very slightly (blend toward white by magnitude).
+        const t = Math.min(Math.abs(v) / netMax, 1);   // 0..1 relative magnitude
+        const lift = 0.28 * t;                          // max ~28% toward white
+        const mix = (c: number) => Math.round(c + (255 - c) * lift);
+        const r = mix(41), gC = mix(182), b = mix(246);
+        grad.addColorStop(0, `rgba(${r},${gC},${b},0.9)`);
         grad.addColorStop(1, "rgba(41,182,246,0.2)");
       } else {
+        const t = Math.min(Math.abs(v) / netMax, 1);
+        const lift = 0.28 * t;
+        const mix = (c: number) => Math.round(c + (255 - c) * lift);
+        const r = mix(255), gC = mix(179), b = mix(0);
         grad.addColorStop(0, "rgba(255,179,0,0.2)");
-        grad.addColorStop(1, "rgba(255,179,0,0.9)");
+        grad.addColorStop(1, `rgba(${r},${gC},${b},0.9)`);
       }
       ctx.fillStyle = grad;
       ctx.fillRect(x - barW / 2, yTop, barW, h);

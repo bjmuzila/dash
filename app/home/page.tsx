@@ -28,17 +28,37 @@ type StrikeRow = {
 };
 type QuoteTile = { sym: string; chg: string; pos: boolean; active?: boolean };
 type HeatmapRow = {
+  strikeNum: number;
   strike: string;
-  netGex: string;
-  volOnly: string;
-  dex: string;
-  vex: string;
-  dwGex: string;
+  // Raw numeric values (used for intensity coloring) + formatted text.
+  netGexVal: number;   netGex: string;
+  volOnlyVal: number;  volOnly: string;
+  dexVal: number;      dex: string;
+  gexVexVal: number;   gexVex: string;   // GEX + VEX (net GEX + vanna)
+  rollingVal: number | null; rolling: string;  // 30-min rolling net GEX (DB)
   type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
   rank?: number;
   rankColor?: string;
   atm?: boolean;
 };
+// Intensity-scaled cell background. Ported from options-chain metricBg logic:
+// rank-based floors for the top 3 magnitudes, power curve for the rest.
+function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]): string {
+  if (!value) return "transparent";
+  const abs = Math.abs(value);
+  const ratio = Math.min(abs / Math.max(maxValue, 1), 1);
+  const rank = topValues.indexOf(abs) + 1;
+  let opacity: number;
+  if (rank === 1) opacity = Math.max(0.82, intensity * 0.92);
+  else if (rank === 2) opacity = Math.max(0.6, intensity * 0.78);
+  else if (rank === 3) opacity = Math.max(0.4, intensity * 0.62);
+  else opacity = Math.pow(ratio, 0.65) * intensity * 0.55;
+  const finalOpacity = Math.min(opacity, 0.95).toFixed(3);
+  return value > 0
+    ? `rgba(32,178,220,${finalOpacity})`
+    : `rgba(220,50,60,${finalOpacity})`;
+}
+
 type ExpiryOption = { value: string; label: string };
 type GexMode = "net" | "call-put";
 type DataMode = "oi-vol" | "vol-only";
@@ -158,7 +178,10 @@ function buildChainRows(strikes: StrikeRow[], liveData: Record<string, LiveEntry
   });
 }
 
-function pickCenterRows(rows: ChainRow[], spot: number, count = 41): ChainRow[] {
+// Window the chain to N strikes above and N below the ATM strike (inclusive of
+// ATM). Rows are returned descending by strike (highest at top). Centers on the
+// strike nearest spot; clamps gracefully at the chain edges.
+function pickCenterRows(rows: ChainRow[], spot: number, sideCount = 20): ChainRow[] {
   if (!rows.length) return [];
   const sorted = [...rows].sort((a, b) => b.strike - a.strike);
   let atmIndex = 0;
@@ -170,13 +193,13 @@ function pickCenterRows(rows: ChainRow[], spot: number, count = 41): ChainRow[] 
       atmIndex = index;
     }
   });
-  const start = Math.max(0, atmIndex - Math.floor(count / 2));
-  const end = Math.min(sorted.length, start + count);
+  const start = Math.max(0, atmIndex - sideCount);
+  const end = Math.min(sorted.length, atmIndex + sideCount + 1);
   return sorted.slice(start, end);
 }
 
-function toHeatmapRows(rows: ChainRow[], spot: number): HeatmapRow[] {
-  const windowRows = pickCenterRows(rows, spot, 41);
+function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<number, number>): HeatmapRow[] {
+  const windowRows = pickCenterRows(rows, spot, 20);
   const byAbsPos = [...windowRows].filter((row) => (row.netGEX ?? 0) > 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
   const byAbsNeg = [...windowRows].filter((row) => (row.netGEX ?? 0) < 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
   const rankMap = new Map<number, { rank: number; rankColor: string }>();
@@ -194,7 +217,8 @@ function toHeatmapRows(rows: ChainRow[], spot: number): HeatmapRow[] {
     const volOnly = row.netVolGEX ?? 0;
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
     const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);
-    const dwGex = net - volOnly;
+    const gexVex = net + vex;                         // GEX + VEX
+    const rolling = rollingByStrike?.get(row.strike); // 30-min rolling net GEX
     const isAtm = row.strike === atmStrike;
     let type: HeatmapRow["type"] = "neutral";
     if (isAtm) type = "atm";
@@ -205,12 +229,14 @@ function toHeatmapRows(rows: ChainRow[], spot: number): HeatmapRow[] {
     else if (net < 0) type = "neg";
 
     return {
+      strikeNum: row.strike,
       strike: formatStrikeValue(row.strike),
-      netGex: fmtMoney(net),
-      volOnly: fmtMoney(volOnly),
-      dex: fmtMoney(dex),
-      vex: fmtMoney(vex),
-      dwGex: fmtMoney(dwGex),
+      netGexVal: net,        netGex: fmtMoney(net),
+      volOnlyVal: volOnly,   volOnly: fmtMoney(volOnly),
+      dexVal: dex,           dex: fmtMoney(dex),
+      gexVexVal: gexVex,     gexVex: fmtMoney(gexVex),
+      rollingVal: rolling ?? null,
+      rolling: rolling == null ? "—" : fmtMoney(rolling),
       type,
       rank: rankMap.get(row.strike)?.rank,
       rankColor: rankMap.get(row.strike)?.rankColor,
@@ -306,6 +332,10 @@ export default function HomePage() {
   // GEX chart rows pushed from /ws/gex broadcaster (server-computed loop)
   const [gexChainRows, setGexChainRows] = useState<ChainRow[]>([]);
   const [gexSpot, setGexSpot] = useState(0);
+  // Heatmap intensity slider (0.2–3, default 0.4) — controls cell color opacity.
+  const [intensity, setIntensity] = useState(0.4);
+  // 30-min rolling net GEX per strike, pulled from the history DB.
+  const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
 
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
@@ -486,13 +516,65 @@ export default function HomePage() {
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
     if (!(useSpot > 0) || !chainRows.length) return [] as HeatmapRow[];
-    return toHeatmapRows(chainRows, useSpot);
-  }, [chainRows, chartSpot, spot]);
+    return toHeatmapRows(chainRows, useSpot, rollingByStrike);
+  }, [chainRows, chartSpot, spot, rollingByStrike]);
 
-  const netGex = useMemo(
-    () => chartRows.reduce((sum, row) => sum + ((dataMode === "vol-only" ? row.netVolGEX : row.netGEX) ?? 0), 0),
+  // Column maxes + top-3 magnitudes for intensity coloring (per visible column).
+  const heatmapColorMeta = useMemo(() => {
+    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal", "rollingVal"] as const;
+    const max: Record<string, number> = {};
+    const top3: Record<string, number[]> = {};
+    for (const c of cols) {
+      const absVals = heatmapRows
+        .map((r) => Math.abs(Number(r[c] ?? 0)))
+        .filter((v) => v > 0);
+      max[c] = absVals.length ? Math.max(...absVals) : 1;
+      top3[c] = [...absVals].sort((a, b) => b - a).slice(0, 3);
+    }
+    return { max, top3 };
+  }, [heatmapRows]);
+
+  // Poll the 30-min rolling net GEX history for the active expiry.
+  useEffect(() => {
+    if (!selectedExpiry) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(
+          `/api/snapshots/option-strike-gex-history?expiry=${encodeURIComponent(selectedExpiry)}&minutes=30`,
+          { cache: "no-store" }
+        );
+        if (!r.ok) return;
+        const json = await r.json();
+        const rows: Array<{ strike: number; rolling_net_gex: number }> = json?.rows ?? [];
+        if (cancelled) return;
+        setRollingByStrike(new Map(rows.map((x) => [Number(x.strike), Number(x.rolling_net_gex)])));
+      } catch { /* ignore */ }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [selectedExpiry]);
+
+  // OI + Vol mode = OI-based net GEX PLUS volume-based net GEX (matches the label).
+  // Vol Only mode = volume-based component alone.
+  const netGexLive = useMemo(
+    () => chartRows.reduce((sum, row) => {
+      const v = dataMode === "vol-only"
+        ? (row.netVolGEX ?? 0)
+        : (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
+      return sum + v;
+    }, 0),
     [chartRows, dataMode]
   );
+  // Throttle the displayed value so the header doesn't jitter on every WS tick.
+  const [netGex, setNetGexDisplay] = useState(0);
+  const netGexLiveRef = useRef(0);
+  useEffect(() => { netGexLiveRef.current = netGexLive; }, [netGexLive]);
+  useEffect(() => {
+    const id = setInterval(() => setNetGexDisplay(netGexLiveRef.current), 1000);
+    return () => clearInterval(id);
+  }, []);
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
 
@@ -648,14 +730,35 @@ export default function HomePage() {
                 <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   <span style={{ color: "#fff" }}>Stream</span>
                   <span style={{ color: C.cyan }}>{subscribedSymbolsRef.current.length} option symbols</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+                    <span style={{ color: "#94a3b8", fontWeight: 800 }}>Intensity</span>
+                    <input
+                      type="range"
+                      min={0.2}
+                      max={3}
+                      step={0.01}
+                      value={intensity}
+                      onChange={(e) => setIntensity(Number(e.target.value))}
+                      style={{ width: 100, accentColor: "#00e5ff", cursor: "pointer" }}
+                    />
+                    <span style={{ color: "#00e5ff", fontWeight: 700, minWidth: 36, textAlign: "right", fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
+                  </div>
                 </div>
               </div>
 
-              <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
-                <table style={{ width: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse" }}>
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
+                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "18%" }} />
+                  </colgroup>
                   <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike", "Net GEX", "Vol Only", "DEX", "VEX", "Delta W. GEX"].map((header, index) => (
+                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "GEX + VEX", "30 Min Rolling Net GEX"].map((header, index) => (
                         <th key={header} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
                       ))}
                     </tr>
@@ -669,46 +772,20 @@ export default function HomePage() {
                         background: isAtm ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))" : "transparent",
                         transition: "background 0.15s",
                         position: "relative",
+                        // Distribute rows evenly into the available height so the
+                        // heatmap stretches to fill the panel at any screen size.
+                        height: heatmapRows.length ? `${100 / heatmapRows.length}%` : undefined,
                       };
 
-                      const cellVal = (val: string, colIdx: number) => {
-                        const isNegVal = val.startsWith("-");
-                        const base: React.CSSProperties = { padding: "10px 16px", textAlign: colIdx === 0 ? "left" : "right" };
-                        if (colIdx === 0) {
-                          return (
-                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                {val}
-                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
-                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>}
-                              </div>
-                            </td>
-                          );
-                        }
-
-                        let cellBg = "transparent";
-                        let cellColor = isAtm ? "#fff" : isNegVal ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
-                        let cellBorder = "none";
-                        let cellFw: React.CSSProperties["fontWeight"] = 400;
-                        if ((row.type === "pos-top" || row.type === "pos-strong") && !isNegVal && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(14,116,144,0.30)";
-                          cellBorder = "1px solid rgba(0,240,255,0.20)";
-                          cellColor = row.type === "pos-top" ? "#fff" : "#00D9FF";
-                          cellFw = 700;
-                        }
-                        if ((row.type === "neg-red" || row.type === "neg-top") && isNegVal && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(0,60,100,0.45)";
-                          cellBorder = "1px solid rgba(0,180,255,0.15)";
-                          cellColor = C.cyan;
-                          cellFw = 700;
-                        }
-                        if (isAtm) cellFw = 700;
-                        if (colIdx === 5) {
-                          cellBg = "rgba(0,0,0,0.20)";
-                        }
+                      // Numeric cell: background opacity from metricBg (intensity-scaled).
+                      const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
+                        const base: React.CSSProperties = { padding: "4px 16px", textAlign: "right" };
+                        const bg = value == null
+                          ? "transparent"
+                          : metricBg(value, heatmapColorMeta.max[colKey] ?? 1, intensity, heatmapColorMeta.top3[colKey] ?? []);
                         return (
-                          <td key={colIdx} style={{ ...base, background: cellBg, border: cellBorder, fontWeight: cellFw, color: cellColor, borderRadius: cellBorder !== "none" ? 4 : 0 }}>
-                            {val}
+                          <td key={colIdx} style={{ ...base, background: bg, fontWeight: isAtm ? 700 : 400, color: "#fff" }}>
+                            {text}
                           </td>
                         );
                       };
@@ -721,12 +798,18 @@ export default function HomePage() {
                             </tr>
                           )}
                           <tr className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
-                            {cellVal(row.strike, 0)}
-                            {cellVal(row.netGex, 1)}
-                            {cellVal(row.volOnly, 2)}
-                            {cellVal(row.dex, 3)}
-                            {cellVal(row.vex, 4)}
-                            {cellVal(row.dwGex, 5)}
+                            <td style={{ padding: "4px 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                {row.strike}
+                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
+                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>}
+                              </div>
+                            </td>
+                            {dataCell(row.netGex, row.netGexVal, "netGexVal", 1)}
+                            {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
+                            {dataCell(row.dex, row.dexVal, "dexVal", 3)}
+                            {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
+                            {dataCell(row.rolling, row.rollingVal, "rollingVal", 5)}
                           </tr>
                         </React.Fragment>
                       );
@@ -762,37 +845,14 @@ export default function HomePage() {
           background: linear-gradient(to right, transparent, rgba(255,255,255,0.10) 50%, transparent);
           pointer-events: none;
         }
-        .heatmap-row {
-          position: relative;
+        /* No position:relative on <tr> — it displaces cells in table layout.
+           Row separators / ATM emphasis use border + box-shadow on the cells. */
+        .heatmap-row td {
+          border-bottom: 1px solid rgba(255,255,255,0.05);
         }
-        .heatmap-row::after {
-          content: '';
-          position: absolute;
-          bottom: 0; left: 8px; right: 8px;
-          height: 1px;
-          background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.07) 25%, rgba(255,255,255,0.09) 50%, rgba(255,255,255,0.07) 75%, transparent 100%);
-          pointer-events: none;
-        }
-        .heatmap-row-atm {
-          position: relative;
-        }
-        .heatmap-row-atm::before {
-          content: '';
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          height: 1px;
-          background: linear-gradient(to right, transparent 0%, rgba(0,240,255,0.25) 30%, rgba(0,240,255,0.40) 50%, rgba(0,240,255,0.25) 70%, transparent 100%);
-          pointer-events: none;
-          z-index: 1;
-        }
-        .heatmap-row-atm::after {
-          content: '';
-          position: absolute;
-          bottom: 0; left: 0; right: 0;
-          height: 1px;
-          background: linear-gradient(to right, transparent 0%, rgba(0,240,255,0.25) 30%, rgba(0,240,255,0.40) 50%, rgba(0,240,255,0.25) 70%, transparent 100%);
-          pointer-events: none;
-          z-index: 1;
+        .heatmap-row-atm td {
+          border-top: 1px solid rgba(0,240,255,0.35);
+          border-bottom: 1px solid rgba(0,240,255,0.35);
         }
       `}</style>
     </div>
