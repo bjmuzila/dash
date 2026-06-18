@@ -13,6 +13,8 @@ Completed.
 
 do not reference or bring up or edit any schwab code back into anything. That code is dead and all shoould be deleted
 
+for each majore change - place a quick summary of the change log in "C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed\md files\CHANGELOG.md"
+
 ---
 
 # NEXT.JS APP — FILE MAP

@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-17 (session 25) - Proxy Live Data Wiring + Initial Server Modularization
+
+### Live Proxy Subscription Wiring
+- `lib/proxy/liveSubscription.ts` - added shared helpers to normalize proxy feed payloads and guarantee live proxy subscriptions through `/api/proxy/subscription-ready` and `/api/proxy/dxlink-subscribe`
+- `app/home/page.tsx` - rewired `/home` to follow the same proxy-first live data flow as `/dev`: fetch chain data, prepare option symbols, ensure proxy subscriptions, consume `/ws/dxlink`, and build the GEX chart + options heatmap from shared live Greeks, summary, quote, and trade updates
+- `app/mult-greek/page.tsx` - wired multi-greek into the same proxy subscription readiness flow and re-subscribe behavior on websocket open/reconnect
+- `app/options-chain/page.tsx` - wired options chain into the same proxy subscription readiness flow and re-subscribe behavior on websocket open/reconnect
+- `app/insights/page.tsx` - switched insights live feed setup to the shared proxy subscription helper and shared feed normalization path
+
+### WebSocket Stability Fix
+- `app/home/page.tsx` - fixed a websocket reconnect storm that was repeatedly opening `/ws/dxlink` connections and flooding the browser with `Insufficient resources` errors
+- Root cause: the socket connect callback was being recreated from live quote state changes, which caused repeated reconnects and overlapping sockets
+- Fix: added stable refs for quote snapshots, reconnect timers, and unmount state so `/home` now keeps a single connection and reconnects in a controlled way
+
+### Initial Server Refactor
+- `server/websocket-server.js` - extracted the reusable `/ws/dxlink` websocket bridge used by the custom Next.js server
+- `server/computation/utils.js` - extracted shared numeric and symbol/date helpers for proxy computations
+- `server/computation/flow-processor.js` - extracted buy/sell snapshot helper logic used by derived metrics
+- `server/computation/vex-chex.js` - extracted shared exposure accumulation logic for DEX, VEX, and CHEX-style calculations
+- `server/computation/gex-calculator.js` - extracted reusable intraday snapshot and GEX level calculation helpers
+- `server/server-with-proxy.js` - updated to use the extracted websocket bridge module
+- `server/proxy-tastytrade.js` - began routing intraday snapshot logic through the shared computation module path as the first step of breaking up the monolithic proxy
+
+### Verification
+- `npm run build` completed successfully after the live data wiring and server extraction changes
+
 ## 2026-06-16 (session 24) — Discord Bot with Slash Commands
 
 ### New Files

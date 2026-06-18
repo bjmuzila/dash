@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import { type ChainRow, computeGEXProfile, findCallWall, findGEXFlip, findPutWall } from "@/lib/calculations/calculations";
+import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
+import { getClientWsUrl } from "@/lib/clientRuntime";
 
 type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
 type OptionSide = "call" | "put";
@@ -76,45 +78,6 @@ function fmtExpiryLabel(dateStr: string, label: string) {
 
 function formatStrikeValue(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
-}
-
-function normalizeFeedData(data: unknown[]): Array<Record<string, unknown>> {
-  if (!Array.isArray(data) || !data.length) return [];
-  if (typeof data[0] === "object" && data[0] !== null && !Array.isArray(data[0])) {
-    return data as Array<Record<string, unknown>>;
-  }
-
-  const eventType = data[0] as string;
-  const rows = data[1] as unknown[];
-  if (typeof eventType !== "string" || !Array.isArray(rows)) return [];
-
-  const fieldsByType: Record<string, string[]> = {
-    Quote: ["bidPrice", "askPrice", "bidSize", "askSize"],
-    Trade: ["price", "dayVolume", "size"],
-    Summary: ["dayId", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "dayClosePrice", "prevDayId", "prevDayClosePrice", "openInterest"],
-    Greeks: ["volatility", "delta", "gamma", "theta", "rho", "vega"],
-  };
-
-  const fields = fieldsByType[eventType];
-  if (!fields) return [];
-
-  const hasType = rows[0] === eventType;
-  const step = fields.length + (hasType ? 2 : 1);
-  const out: Array<Record<string, unknown>> = [];
-
-  for (let i = 0; i <= rows.length - step; i += step) {
-    const base = i + (hasType ? 2 : 1);
-    const item: Record<string, unknown> = {
-      eventType: hasType ? rows[i] : eventType,
-      eventSymbol: hasType ? rows[i + 1] : rows[i],
-    };
-    fields.forEach((field, index) => {
-      item[field] = rows[base + index];
-    });
-    out.push(item);
-  }
-
-  return out;
 }
 
 function extractExpirations(payload: unknown): string[] {
@@ -383,9 +346,7 @@ export default function HomePage() {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
     }
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ? `${process.env.NEXT_PUBLIC_WS_URL}/ws/dxlink`
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
+    const wsUrl = getClientWsUrl();
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -410,7 +371,7 @@ export default function HomePage() {
       try {
         const message = JSON.parse(event.data);
         if (message?.type !== "FEED_DATA" || !Array.isArray(message.data)) return;
-        const items = normalizeFeedData(message.data);
+        const items = normalizeProxyFeedData(message.data);
         let changed = false;
         const nextQuotes = { ...quoteSnapshotsRef.current };
 
@@ -557,20 +518,13 @@ export default function HomePage() {
     const symbols = nextStrikes.flatMap((row) => [row.callSym, row.putSym]).filter(Boolean) as string[];
     subscribedSymbolsRef.current = symbols;
 
-    await fetch("/api/proxy/subscription-ready", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageId, symbols, timeout: 8000, threshold: 1 }),
-    }).catch(() => null);
-
-    await fetch("/api/proxy/dxlink-subscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        symbols,
-        feedTypesBySymbol: Object.fromEntries(symbols.map((symbol) => [symbol, OPTION_FEED_TYPES])),
-      }),
-    }).catch(() => null);
+    await ensureProxyLiveSubscription(
+      pageId,
+      symbols,
+      Object.fromEntries(symbols.map((symbol) => [symbol, OPTION_FEED_TYPES])),
+      1,
+      8000,
+    ).catch(() => null);
 
     if (wsRef.current?.readyState === WebSocket.OPEN && symbols.length) {
       wsRef.current.send(JSON.stringify({
