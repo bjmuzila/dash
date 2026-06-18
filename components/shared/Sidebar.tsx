@@ -97,6 +97,26 @@ function normalizeSym(sym: string) {
   return sym;
 }
 
+function pctFromQuote(q: Record<string, unknown>) {
+  const directPct = quoteNumber(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
+  if (directPct && Math.abs(directPct) <= 20) return directPct;
+
+  const last = quoteNumber(q, "last", "lastPrice", "mark", "mark-price", "price", "close", "closePrice");
+  const prev = quoteNumber(q, "prev-close", "prevClose", "previousClose", "prevDayClosePrice", "close-price", "closePrice");
+  if (last > 0 && prev > 0) {
+    const pct = ((last - prev) / prev) * 100;
+    if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+  }
+
+  const change = quoteNumber(q, "change", "netChange", "dayChange", "tradeChange");
+  if (change && prev > 0) {
+    const pct = (change / prev) * 100;
+    if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+  }
+
+  return null;
+}
+
 function fmtPct(value: number | null) {
   if (value === null || !Number.isFinite(value)) return "—";
   const sign = value >= 0 ? "+" : "";
@@ -107,6 +127,26 @@ function useSidebarQuotes() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcts, setPcts] = useState<Record<string, number | null>>({});
+
+  const refreshQuotes = async () => {
+    try {
+      const symbols = QUOTE_SYMBOLS.map((item) => item.sym).join(",");
+      const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(symbols)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const items: Array<Record<string, unknown>> = data?.data?.items || [];
+      const next: Record<string, number | null> = {};
+      items.forEach((item) => {
+        const sym = normalizeSym(String(item.symbol || item.eventSymbol || ""));
+        if (!QUOTE_SYMBOLS.some((entry) => entry.sym === sym)) return;
+        const pct = pctFromQuote(item);
+        if (pct !== null) next[sym] = pct;
+      });
+      if (Object.keys(next).length) setPcts((prev) => ({ ...prev, ...next }));
+    } catch {
+      // ignore fallback failures
+    }
+  };
 
   useEffect(() => {
     async function connect() {
@@ -162,9 +202,14 @@ function useSidebarQuotes() {
     }
 
     void connect();
+    void refreshQuotes();
+    const fallbackTimer = setInterval(() => {
+      void refreshQuotes();
+    }, 30000);
 
     return () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      clearInterval(fallbackTimer);
       wsRef.current?.close();
     };
   }, []);
@@ -230,7 +275,8 @@ export default function Sidebar() {
           <HomeIcon />
         </Link>
 
-        <div
+        <Link
+          href="/overview"
           title="Overview"
           style={{
             display: "flex",
@@ -248,7 +294,7 @@ export default function Sidebar() {
           }}
         >
           <GridIcon />
-        </div>
+        </Link>
 
         <Link
           href="/economic-calendar"
@@ -355,36 +401,15 @@ export default function Sidebar() {
           />
         </div>
 
-        {idleActionState === "ok" ? (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, textAlign: "center" }}>
-            <div style={{
-              fontSize: 8,
-              color: HOME_THEME.text,
-              textTransform: "uppercase",
-              letterSpacing: "0.12em",
-            }}>
-              Live
-            </div>
-            <div style={{
-              fontSize: 8,
-              color: HOME_THEME.green,
-              textTransform: "uppercase",
-              letterSpacing: "0.12em",
-            }}>
-              Live
-            </div>
-          </div>
-        ) : (
-          <div style={{
-            fontSize: 8,
-            color: idleActionState === "err" ? HOME_THEME.red : "#ff4d4d",
-            textTransform: "uppercase",
-            letterSpacing: "0.12em",
-            textAlign: "center",
-          }}>
-            {idleActionState === "busy" ? "Going live" : "Idle"}
-          </div>
-        )}
+        <div style={{
+          fontSize: 8,
+          color: idleActionState === "err" ? HOME_THEME.red : HOME_THEME.muted,
+          textTransform: "uppercase",
+          letterSpacing: "0.12em",
+          textAlign: "center",
+        }}>
+          {idleActionState === "busy" ? "Working" : "Ready"}
+        </div>
       </div>
     </nav>
   );

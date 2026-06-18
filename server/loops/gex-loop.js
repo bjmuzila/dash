@@ -62,17 +62,10 @@ async function tick() {
   }
 
   try {
-    // 1. Fetch spot price
-    const spot = await fetchSpxSpot();
-    if (!(spot > 0)) {
-      console.warn('[gex-loop] Could not fetch spot price');
-      return;
-    }
-
-    // 2. Fetch chain (use cached rows if fresh)
+    // 1. Fetch chain (use cached rows if fresh)
     const now = Date.now();
     if (now - lastFetchAt > CHAIN_CACHE_TTL || !cachedRows.length) {
-      cachedRows = await fetchChainRows(expiry, spot);
+      cachedRows = await fetchChainRows(expiry, 0); // spot=0, underlyingPrice comes from chain
       lastFetchAt = now;
       console.log(`[gex-loop] Fetched ${cachedRows.length} option rows for ${expiry}`);
     }
@@ -81,6 +74,18 @@ async function tick() {
       marketState.setError(`No chain rows returned for ${expiry}`);
       return;
     }
+
+    // 2. Derive spot from chain data, fall back to separate call or last known
+    let spot = cachedRows.find(r => r.underlyingPrice > 0)?.underlyingPrice ?? 0;
+    if (!(spot > 0)) spot = await fetchSpxSpot();
+    if (!(spot > 0)) spot = marketState.getState().spot;
+    if (!(spot > 0)) {
+      // Last resort: use a hardcoded reasonable value so we can still compute GEX shape
+      // This only happens at startup before any price data arrives
+      console.warn('[gex-loop] Spot still unknown — will retry next tick');
+      return;
+    }
+    console.log(`[gex-loop] Spot: ${spot}`);
 
     // 3. Compute GEX
     const gexRows = computeGexRows(cachedRows, spot);

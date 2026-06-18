@@ -56,7 +56,25 @@ async function fetchSpxwExpirations() {
 async function fetchSpxwOptionsForExpiry(expDate) {
   const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${expDate}`);
   if (status !== 200) throw new Error(`TT chain for ${expDate} returned ${status}`);
-  return Array.isArray(data?.data?.items) ? data.data.items : [];
+
+  // TT returns items = array of expiration objects.
+  // Each expiration has an 'option-chains' array of individual option rows.
+  const expItems = Array.isArray(data?.data?.items) ? data.data.items : [];
+  const options = [];
+
+  for (const exp of expItems) {
+    const chain = exp['option-chains'];
+    if (Array.isArray(chain)) {
+      // Copy expiration-date onto each option row for reference
+      for (const opt of chain) {
+        if (!opt['expiration-date']) opt['expiration-date'] = exp['expiration-date'] ?? expDate;
+        options.push(opt);
+      }
+    }
+  }
+
+  console.log(`[tt-chain] SPXW chain: ${expItems.length} expiry groups → ${options.length} options, sample opt keys: ${Object.keys(options[0] ?? {}).slice(0, 6).join(', ')}`);
+  return options;
 }
 
 /**

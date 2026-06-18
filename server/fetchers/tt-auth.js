@@ -11,7 +11,6 @@ const path  = require('path');
 const ROOT_DIR      = path.resolve(__dirname, '../..');
 const TOKEN_FILE    = path.join(ROOT_DIR, 'tastytrade_token.json');
 const REFRESH_ENV   = process.env.TT_REFRESH_TOKEN || '';
-const CLIENT_SECRET = process.env.TT_CLIENT_SECRET || '';
 
 let accessToken  = null;
 let refreshToken = REFRESH_ENV;
@@ -59,7 +58,6 @@ async function refreshAccessToken() {
   if (!refreshToken) { console.error('[tt-auth] No refresh token available'); return false; }
   try {
     const params = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken });
-    if (CLIENT_SECRET) params.set('client_secret', CLIENT_SECRET);
     const body = params.toString();
     const { status, data } = await httpsRequest({
       hostname: 'api.tastytrade.com',
