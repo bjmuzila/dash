@@ -7,12 +7,11 @@
  *   3. Update market-state (triggers WS broadcast to all /ws/gex clients)
  *   4. Write snapshot to Postgres
  *
- * No direct TT REST chain fetching — delegates to /api/gex which already
- * handles enrichment via the proxy's dxLink + estimateOptionGreekFallback.
+ * No direct TT REST calls — expiry is derived from today's date, chain data
+ * comes from /api/gex which handles auth via the proxy.
  */
 'use strict';
 
-const { fetchSpxwExpirations } = require('../fetchers/tt-chain');
 const { findGexFlip, findCallWall, findPutWall, totalNetGex } = require('../computation/gex-calculator');
 const marketState = require('../state/market-state');
 const http = require('http');
@@ -132,23 +131,41 @@ async function tick() {
 
 // ── Expiry refresh ───────────────────────────────────────────────────────────
 
+/**
+ * Derive today's date as 0DTE expiry — no TT API call needed.
+ * Also fetches the expiration list from /api/gex response's expiration field.
+ */
 async function refreshExpirations() {
   try {
-    const expirations = await fetchSpxwExpirations();
-    if (!expirations.length) return;
-
-    marketState.setExpirations(expirations);
-
-    // Auto-select 0DTE if no expiry is set yet
+    const today = new Date().toISOString().slice(0, 10);
     const current = marketState.getState().expiry;
-    if (!current && expirations[0]) {
-      const selected = expirations[0];
-      marketState.setExpiry(selected);
-      cachedRows = []; // force re-fetch for new expiry
-      console.log(`[gex-loop] Auto-selected expiry: ${selected}`);
+
+    // Auto-select today as 0DTE if no expiry set yet
+    if (!current) {
+      marketState.setExpiry(today);
+      marketState.setExpirations([today]);
+      cachedRows = [];
+      console.log(`[gex-loop] Auto-selected expiry: ${today}`);
     }
 
-    console.log(`[gex-loop] Expirations refreshed: ${expirations.slice(0, 3).join(', ')}...`);
+    // Try to get full expirations list from /api/gex (proxy handles auth)
+    try {
+      const apiResult = await fetchGexFromApi(current || today);
+      if (apiResult.expiration) {
+        // Confirm the expiry matches what proxy returned
+        const confirmed = String(apiResult.expiration).slice(0, 10);
+        if (confirmed && confirmed !== (current || today)) {
+          console.log(`[gex-loop] Proxy returned expiry ${confirmed}, updating`);
+          marketState.setExpiry(confirmed);
+          marketState.setExpirations([confirmed]);
+          cachedRows = [];
+        }
+      }
+    } catch (e) {
+      // Non-fatal — we already have today's date set
+    }
+
+    console.log(`[gex-loop] Expirations refreshed: ${current || today}`);
   } catch (err) {
     console.error('[gex-loop] refreshExpirations error:', err.message);
   }
