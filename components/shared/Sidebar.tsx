@@ -359,8 +359,8 @@ export default function Sidebar() {
         )}
 
         <Link
-          href="/economic-calendar"
-          title="Calendar"
+          href="/dev"
+          title="Dev"
           style={{
             display: "flex",
             alignItems: "center",
@@ -370,10 +370,10 @@ export default function Sidebar() {
             borderRadius: 10,
             textDecoration: "none",
             transition: "all 0.15s",
-            background: isActive("/economic-calendar") ? "rgba(0,229,255,0.12)" : "transparent",
-            border: isActive("/economic-calendar") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-            color: isActive("/economic-calendar") ? HOME_THEME.cyan : HOME_THEME.muted,
-            boxShadow: isActive("/economic-calendar") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+            background: isActive("/dev") ? "rgba(0,229,255,0.12)" : "transparent",
+            border: isActive("/dev") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+            color: isActive("/dev") ? HOME_THEME.cyan : HOME_THEME.muted,
+            boxShadow: isActive("/dev") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
           }}
         >
           <CalendarIcon />
