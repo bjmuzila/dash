@@ -4193,7 +4193,8 @@ const server = http.createServer(async (req, res) => {
     const cachedItems = (is0DTESPX && !noCache) ? getChainsFromCache(sym, exp) : null;
     if (cachedItems && !awaitDX) {
       log('Cache hit for 0DTE SPX — returning cached data');
-      return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: 0, symbol: sym }, context: 'cache' });
+      const cacheSpot = firstFiniteNumber(dxTradeCache['SPX']?.price, dxTradeCache['$SPX']?.price, dxQuoteCache['SPX']?.last, dxQuoteCache['$SPX']?.last, 0);
+      return sendJSON(res, 200, { data: { items: cachedItems, underlyingPrice: cacheSpot, symbol: sym }, context: 'cache' });
     }
 
     // Known root symbols — skip /nested round-trip when expiration is explicit

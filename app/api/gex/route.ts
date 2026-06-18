@@ -19,8 +19,8 @@ function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
 async function fetchGexChain(expiry: string): Promise<any> {
   // Primary: use the full chains endpoint — has estimateOptionGreekFallback for every strike
   // so GEX is non-zero across the whole chain even before dxGreeksCache is warm.
-  // Cache-friendly (no pageId), hits SQLite cache on repeat calls.
-  const qs = new URLSearchParams({ range: "all" });
+  // noCache=1: bypass proxy in-memory cache so OI and Greeks are always fresh (not stale from cold-start).
+  const qs = new URLSearchParams({ range: "all", noCache: "1" });
   if (expiry) qs.set("expiration", expiry);
 
   const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?${qs.toString()}`, {

@@ -77,6 +77,7 @@ const PAGE_SHORTCUTS = [
   { label: "Options Chain", href: "/options-chain" },
   { label: "Multi Greek", href: "/mult-greek" },
   { label: "Trading", href: "/trading" },
+  { label: "Budget", href: "/budget" },
   { label: "Logs", href: "/logs" },
   { label: "Personal", href: "/personal" },
   { label: "Legacy", href: "/legacy" },

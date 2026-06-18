@@ -146,6 +146,42 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_page_load_status_loaded ON page_load_status(is_loaded);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
+
+    CREATE TABLE IF NOT EXISTS budget_profiles (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS budget_categories (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      period TEXT NOT NULL DEFAULT 'monthly',
+      color TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_categories_profile ON budget_categories(profile_id);
+
+    CREATE TABLE IF NOT EXISTS budget_entries (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      category_id INTEGER REFERENCES budget_categories(id) ON DELETE SET NULL,
+      type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      title TEXT NOT NULL,
+      notes TEXT,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_entries_profile ON budget_entries(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_entries_occurred ON budget_entries(occurred_at);
   `);
 }
 
@@ -834,4 +870,87 @@ export async function getOptionStrikeRollingNetGex(
     rolling_net_gex: Number(row.rolling_net_gex ?? 0),
     points: Number(row.points ?? 0),
   }));
+}
+
+export interface BudgetProfileRecord {
+  id: number;
+  name: string;
+  currency: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface BudgetCategoryRecord {
+  id: number;
+  profile_id: number;
+  name: string;
+  amount: number;
+  period: string;
+  color?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface BudgetEntryRecord {
+  id: number;
+  profile_id: number;
+  category_id?: number | null;
+  type: "income" | "expense";
+  amount: number;
+  title: string;
+  notes?: string | null;
+  occurred_at: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function getOrCreateBudgetProfile(name = "Default"): Promise<BudgetProfileRecord> {
+  const pool = await getDb();
+  const found = await queryOne<BudgetProfileRecord>("SELECT * FROM budget_profiles WHERE name = ? LIMIT 1", [name]);
+  if (found) return found;
+  const result = await pool.query(
+    `INSERT INTO budget_profiles (name, currency) VALUES ($1, $2) RETURNING *`,
+    [name, "USD"]
+  );
+  return result.rows[0] as BudgetProfileRecord;
+}
+
+export async function listBudgetProfiles(): Promise<BudgetProfileRecord[]> {
+  return queryAll<BudgetProfileRecord>("SELECT * FROM budget_profiles ORDER BY id ASC");
+}
+
+export async function upsertBudgetCategory(input: { profile_id: number; name: string; amount: number; period: string; color?: string | null }): Promise<BudgetCategoryRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_categories (profile_id, name, amount, period, color)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT(profile_id, name) DO UPDATE SET amount = EXCLUDED.amount, period = EXCLUDED.period, color = EXCLUDED.color, updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [input.profile_id, input.name, input.amount, input.period, input.color ?? null]
+  );
+  return result.rows[0] as BudgetCategoryRecord;
+}
+
+export async function listBudgetCategories(profileId: number): Promise<BudgetCategoryRecord[]> {
+  return queryAll<BudgetCategoryRecord>(
+    "SELECT * FROM budget_categories WHERE profile_id = ? ORDER BY id DESC",
+    [profileId]
+  );
+}
+
+export async function insertBudgetEntry(input: Omit<BudgetEntryRecord, "id" | "created_at" | "updated_at">): Promise<BudgetEntryRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_entries (profile_id, category_id, type, amount, title, notes, occurred_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [input.profile_id, input.category_id ?? null, input.type, input.amount, input.title, input.notes ?? null, input.occurred_at]
+  );
+  return result.rows[0] as BudgetEntryRecord;
+}
+
+export async function listBudgetEntries(profileId: number, limit = 200): Promise<BudgetEntryRecord[]> {
+  return queryAll<BudgetEntryRecord>(
+    "SELECT * FROM budget_entries WHERE profile_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?",
+    [profileId, limit]
+  );
 }

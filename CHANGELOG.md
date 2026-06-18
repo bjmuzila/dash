@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-18 (session 33) — Fix GEX heatmap showing +$0 for all strikes
+
+### Root cause
+The proxy caches 0DTE SPX chains for 10 minutes. On cold start, the cache was populated before `dxSummaryCache` was warm (OI = 0) and with no live Greeks. The GEX loop calls `/api/gex` every 5s → `/api/gex` calls proxy without `noCache=1` → proxy served stale 0-OI cached data → `netGEX = gamma × 0 × spot² = 0` for every strike.
+
+Secondary issue: the cache hit path returned `underlyingPrice: 0`, so even if gamma was non-zero, `spot` fell back to strike value (minor accuracy issue).
+
+### Fixes
+- **`app/api/gex/route.ts`**: Added `noCache=1` to proxy chains request so the GEX loop always gets fresh data (current OI + live/estimated Greeks), never stale cache.
+- **`Vanilla/proxy-tastytrade.js`**: Cache hit path now reads live spot from `dxTradeCache`/`dxQuoteCache` instead of hardcoding `underlyingPrice: 0`.
+
+---
+
 ## 2026-06-18 (session 32) — Unified WS connection pattern across all pages
 
 All live-data consumers now use the same pattern:
