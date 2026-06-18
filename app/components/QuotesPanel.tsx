@@ -45,7 +45,6 @@ export default function QuotesPanel() {
           });
         }
 
-        await this.loadPrevCloses();
         this.render();
         // Poll % change every 30 seconds
         setInterval(() => this.updateChanges(), 30000);
@@ -81,26 +80,6 @@ export default function QuotesPanel() {
           });
         } catch (e) {
           console.warn('[Quotes] Failed to update changes:', e);
-        }
-      },
-
-      async loadPrevCloses() {
-        try {
-          const response = await fetch('/proxy/api/spx-prevclose');
-          if (!response.ok) return;
-          const data = await response.json();
-          if (data && typeof data === 'object') {
-            if (data.prevClose !== undefined) {
-              this.prevCloses = {
-                '/ES': data.prevClose,
-                '/NQ': data.prevClose
-              };
-            } else {
-              this.prevCloses = { ...data };
-            }
-          }
-        } catch (e) {
-          console.warn('[Quotes] Failed to load previous closes:', e);
         }
       },
 

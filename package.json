@@ -1,6 +1,6 @@
 {
     "name": "bzila-dashboard",
-    "version": "2026.6.18-v39",
+    "version": "2026.6.18-v41",
     "private": true,
     "workspaces": [],
     "scripts": {
@@ -24,6 +24,7 @@
         "react": "^19",
         "react-dom": "^19",
         "tailwind-merge": "^2.3.0",
+        "ws": "^8.18.0",
         "xlsx": "^0.18.5"
     },
     "devDependencies": {

@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-18 (session 29) - Proxy Removal & Vanilla Archive
+
+### Objective
+Remove all proxy-dependent code in preparation for a full proxy rebuild from scratch. Archive the Vanilla JS dashboard so it is not touched by AI tooling.
+
+### Proxy Calls Removed / Stubbed
+All proxy fetch calls removed or replaced with no-ops across:
+- `Vanilla/pages/overview/overview.js` — quotes-batch, debug-summary, prev-closes, auto-connect, greeks-intraday, db/insert, db/query, backup/buy-sell-scores, es-stats, chains, discord-webhook, twitter, levels
+- `Vanilla/shared/overview.js` — token exchange, logout, proxyGet, fetchGEX chain, lazy DTE chain, all quotes-batch blocks, auto-connect, compare GEX, buy-sell score backup/restore, SPY/QQQ chain, equity ticker chain, schwabAdapt chain
+- `Vanilla/pages/mult-greek/mult-greek.js` — `/proxy/dxlink/subscribe`
+- `Vanilla/pages/insights/options-chain/options-chain.js` — `/proxy/dxlink/subscribe`
+- `Vanilla/shared/spx-flow.js` — `/proxy/dxlink/subscribe`
+- `Vanilla/futures_flow.js` — quotes-batch
+- `Vanilla/live-signals-vanilla.js` — `/proxy/api/levels`
+- `Vanilla/flow-recorder.js` — quotes-batch
+- `Vanilla/updateDailyEM_replacement.js` — early throw before all chain/quotes fetches
+
+### Archive Created
+- `archive-vanilla.ps1` script executed — moved `Vanilla/` folder and all `proxy*.js` root files into `_ARCHIVED_DO_NOT_EDIT/`
+- `_ARCHIVED_DO_NOT_EDIT/README.md` written to prevent AI tools from reading or modifying archived content
+
+### Folder Cleanup (identified, script ready)
+- Identified stale root files: log files, `.bat` scripts, duplicate `.md` files, `tastytrade_token.json`, corrupted DB, empty `bzila-dashboard/` folder
+- Cleanup PowerShell script provided; awaiting user confirmation on 3 files (`build_spx_ohlc_5m.mjs`, `estimated-moves.*`, `gex_levels.csv`)
+
+### Version
+- `package.json` bumped to `2026.6.18-v39` and pushed to GitHub
+
 ## 2026-06-17 (session 28) - Sidebar Page Shortcuts Moved Into Grid Menu
 
 ### `components/shared/Sidebar.tsx`

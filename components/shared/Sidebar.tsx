@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { getClientProxyBase, getClientWsUrl } from "@/lib/clientRuntime";
+
 import { HOME_THEME } from "./homeTheme";
 
 const HomeIcon = () => (
@@ -150,51 +150,6 @@ function useSidebarQuotes() {
   };
 
   useEffect(() => {
-    function connect() {
-      if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) return;
-
-      const ws = new WebSocket(getClientWsUrl());
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: QUOTE_SYMBOLS.map(s => s.sym),
-        }));
-      };
-
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type !== "FEED_DATA") return;
-          const next: Record<string, number | null> = {};
-          (msg.data || []).forEach((e: Record<string, unknown>) => {
-            const sym = normalizeSym(String(e.eventSymbol || ""));
-            if (!QUOTE_SYMBOLS.some((item) => item.sym === sym)) return;
-            const bid = Number(e.bidPrice ?? 0);
-            const ask = Number(e.askPrice ?? 0);
-            const price = Number(e.price ?? 0);
-            const prev = quoteNumber(e, "prevDayClosePrice", "prevClose", "previousClose");
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : price;
-            const last = price > 0 ? price : mid;
-            const pct = prev > 0 && last > 0 ? ((last - prev) / prev) * 100 : Number(e.dayPercentChange ?? 0);
-            if (Number.isFinite(pct)) next[sym] = pct;
-          });
-          if (Object.keys(next).length) setPcts((prev) => ({ ...prev, ...next }));
-        } catch {
-          // ignore malformed frames
-        }
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        reconnectTimerRef.current = setTimeout(() => { connect(); }, 3000);
-      };
-
-      ws.onerror = () => ws.close();
-    }
-
-    connect();
     void refreshQuotes();
     const fallbackTimer = setInterval(() => {
       void refreshQuotes();
@@ -203,7 +158,6 @@ function useSidebarQuotes() {
     return () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       clearInterval(fallbackTimer);
-      wsRef.current?.close();
     };
   }, []);
 
@@ -229,18 +183,7 @@ export default function Sidebar() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  const goIntoIdle = async () => {
-    setIdleActionState("busy");
-    try {
-      const res = await fetch(`${getClientProxyBase()}/proxy/api/idle`, { method: "POST" });
-      if (!res.ok) throw new Error("Idle request failed");
-      setIdleActionState("ok");
-      setTimeout(() => setIdleActionState("idle"), 1800);
-    } catch {
-      setIdleActionState("err");
-      setTimeout(() => setIdleActionState("idle"), 2200);
-    }
-  };
+  const goIntoIdle = async () => {};
 
   return (
     <nav

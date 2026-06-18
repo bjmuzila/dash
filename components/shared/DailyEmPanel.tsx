@@ -14,12 +14,6 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-function getProxyUrl(): string {
-  if (process.env.NEXT_PUBLIC_PROXY_URL) return process.env.NEXT_PUBLIC_PROXY_URL;
-  if (typeof window !== "undefined") return window.location.origin;
-  return "http://localhost:3001";
-}
-
 const CACHE_KEY = "nav_daily_em_v1";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -35,14 +29,6 @@ function isInEmWindow(): boolean {
   return mins >= 16 * 60 && mins <= 18 * 60;
 }
 
-function isMarketHours(): boolean {
-  const now = getEtNow();
-  const dow = now.getDay();
-  if (dow === 0 || dow === 6) return false;
-  const mins = now.getHours() * 60 + now.getMinutes();
-  return mins >= 9.5 * 60 && mins < 16 * 60;
-}
-
 function nextWeekday(from: Date): string {
   const base = from.toISOString().slice(0, 10);
   const d = new Date(base + "T12:00:00Z");
@@ -56,21 +42,6 @@ function getCacheKeyDate(): string {
   const dow = now.getDay();
   if (dow === 0 || dow === 6) return nextWeekday(now);
   return now.toISOString().slice(0, 10);
-}
-
-function calcDTE(expDateStr: string): number {
-  return Math.ceil((new Date(expDateStr + "T16:00:00").getTime() - Date.now()) / 86400000);
-}
-
-function optMid(leg: Record<string, unknown> | null | undefined): number {
-  if (!leg) return 0;
-  const bid = parseFloat(String(leg.bid || leg["bid-price"] || 0));
-  const ask = parseFloat(String(leg.ask || leg["ask-price"] || 0));
-  if (bid > 0 && ask > 0) return (bid + ask) / 2;
-  const mark = parseFloat(String(leg.mark || leg["mark-price"] || leg["mid-price"] || 0));
-  if (mark > 0) return mark;
-  const last = parseFloat(String(leg.last || leg["last-price"] || 0));
-  return last > 0 ? last : 0;
 }
 
 function fmtFut(n: number): string {
@@ -101,168 +72,11 @@ interface CachedEM {
 
 // ─── data fetching ────────────────────────────────────────────────────────────
 async function getCloses(): Promise<{ spx: number; es: number; ndx: number; nq: number }> {
-  if (isMarketHours()) {
-    try {
-      const r = await fetch(`${getProxyUrl()}/proxy/api/tt/quotes-batch?symbols=SPX,NDX,/ES:XCME,/NQ:XCME`);
-      if (r.ok) {
-        const d = await r.json();
-        const items: Record<string, unknown>[] = d?.data?.items || d?.items || [];
-        const bySymbol: Record<string, Record<string, unknown>> = {};
-        items.forEach((item) => { if (item?.symbol) bySymbol[String(item.symbol)] = item; });
-        const getPrice = (...keys: string[]) => {
-          for (const k of keys) {
-            const v = parseFloat(String(bySymbol[k]?.last || bySymbol[k]?.mid || bySymbol[k]?.bid || 0));
-            if (v > 0) return v;
-          }
-          return 0;
-        };
-        const spx = getPrice("SPX", "$SPX");
-        const ndx = getPrice("NDX", "$NDX");
-        const es = getPrice("/ESU26", "/ESU6", "/ES:XCME", "/ES");
-        const nq = getPrice("/NQ:XCME", "/NQU26", "/NQU6", "/NQM26", "/NQM6");
-        if (spx > 0 && ndx > 0) return { spx, es: es || spx, ndx, nq: nq || ndx };
-      }
-    } catch (_) {}
-  }
-
-  // Outside market hours — use em-closes
-  const etNow = getEtNow();
-  const todayStr = etNow.toISOString().slice(0, 10);
-  const url = `${getProxyUrl()}/proxy/api/tt/em-closes` + (isInEmWindow() ? `?closeDate=${todayStr}` : "");
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("em-closes failed: " + r.status);
-  const d = await r.json();
-  const data = d?.data || d || {};
-  if (!data.spx) throw new Error("SPX close = 0");
-  if (!data.ndx) throw new Error("NDX close = 0");
-  return { spx: data.spx, es: data.es || data.spx, ndx: data.ndx, nq: data.nq || data.ndx };
+  return { spx: 0, es: 0, ndx: 0, nq: 0 };
 }
 
 async function getStraddle(indexSym: string, spotClose: number): Promise<EMResult | null> {
-  const ny = getEtNow();
-  const today = ny.toISOString().slice(0, 10);
-  const dow = ny.getDay();
-
-  function nextTradingDay(): string {
-    const d = new Date(today + "T12:00:00Z");
-    do { d.setUTCDate(d.getUTCDate() + 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
-    return d.toISOString().slice(0, 10);
-  }
-
-  let expirations: string[];
-  if (dow === 0 || dow === 6) {
-    expirations = [nextTradingDay()];
-  } else if (isInEmWindow()) {
-    expirations = [nextTradingDay()];
-  } else {
-    const d1 = new Date(today + "T12:00:00Z");
-    d1.setUTCDate(d1.getUTCDate() + 1);
-    const tomorrow = d1.toISOString().slice(0, 10);
-    const monday = nextTradingDay();
-    expirations = [...new Set([today, tomorrow, monday])];
-  }
-
-  for (const expStr of expirations) {
-    try {
-      const chainUrl = `${getProxyUrl()}/proxy/api/tt/chains/${encodeURIComponent(indexSym)}?range=all&expiration=${encodeURIComponent(expStr)}&noSubscribe=1`;
-      const r = await fetch(chainUrl);
-      if (!r.ok) continue;
-      const j = await r.json();
-
-      type StrikeGroup = { "expiration-date"?: string; strikes?: Record<string, unknown>[] };
-      const sortedGroups: Array<{ dateStr: string; group: StrikeGroup }> = ((j.data?.items || []) as StrikeGroup[])
-        .map((g) => ({ dateStr: String(g["expiration-date"] || "").trim(), group: g }))
-        .filter((x) => x.dateStr)
-        .sort((a, b) => a.dateStr.localeCompare(b.dateStr));
-
-      const candidateGroups = sortedGroups
-        .filter((x) => x.dateStr >= expStr).map((x) => x.group)
-        .concat(sortedGroups.filter((x) => x.dateStr < expStr).map((x) => x.group));
-
-      for (const expGroup of candidateGroups) {
-        const groupExp = String(expGroup["expiration-date"] || "").trim();
-        const strikes = expGroup.strikes || [];
-        if (!strikes.length) continue;
-
-        // Find ATM strike closest to spotClose
-        let atm = strikes[0];
-        let minDist = Infinity;
-        for (const s of strikes) {
-          const dist = Math.abs(parseFloat(String(s["strike-price"])) - spotClose);
-          if (dist < minDist) { minDist = dist; atm = s; }
-        }
-
-        const call = atm?.call as Record<string, unknown> | undefined;
-        const put = atm?.put as Record<string, unknown> | undefined;
-        let callMid = optMid(call);
-        let putMid = optMid(put);
-        const dte = calcDTE(groupExp);
-        let em = 0;
-
-        if (indexSym === "NDX") {
-          // NDX: straddle-based
-          if ((callMid <= 0 || putMid <= 0)) {
-            const callSym = String(call?.["streamer-symbol"] || call?.symbol || "");
-            const putSym = String(put?.["streamer-symbol"] || put?.symbol || "");
-            if (callSym || putSym) {
-              try {
-                const syms = [callSym, putSym].filter(Boolean);
-                const mr = await fetch(`${getProxyUrl()}/proxy/api/tt/option-marks?symbols=${encodeURIComponent(syms.join(","))}`);
-                if (mr.ok) {
-                  const md = await mr.json();
-                  const marks: Record<string, Record<string, unknown>> = {};
-                  (md?.data?.items || []).forEach((m: Record<string, unknown>) => { if (m?.symbol) marks[String(m.symbol)] = m; });
-                  if (callSym && marks[callSym] && callMid <= 0) callMid = optMid(marks[callSym]);
-                  if (putSym && marks[putSym] && putMid <= 0) putMid = optMid(marks[putSym]);
-                }
-              } catch (_) {}
-            }
-          }
-          const straddle = callMid + putMid;
-          em = straddle > 0 ? straddle * 0.85 : spotClose * 0.02 * 0.85;
-        } else {
-          // SPX: IV formula primary, straddle fallback
-          let callIV = parseFloat(String(call?.["implied-volatility"] || call?.iv || 0));
-          let putIV = parseFloat(String(put?.["implied-volatility"] || put?.iv || 0));
-
-          // option-marks fallback
-          const callSym = String(call?.["streamer-symbol"] || call?.symbol || "");
-          const putSym = String(put?.["streamer-symbol"] || put?.symbol || "");
-          if ((callMid <= 0 || putMid <= 0 || callIV <= 0 || putIV <= 0) && (callSym || putSym)) {
-            try {
-              const syms = [callSym, putSym].filter(Boolean);
-              const mr = await fetch(`${getProxyUrl()}/proxy/api/tt/option-marks?symbols=${encodeURIComponent(syms.join(","))}`);
-              if (mr.ok) {
-                const md = await mr.json();
-                const marks: Record<string, Record<string, unknown>> = {};
-                (md?.data?.items || []).forEach((m: Record<string, unknown>) => { if (m?.symbol) marks[String(m.symbol)] = m; });
-                if (callSym && marks[callSym]) {
-                  if (callMid <= 0) callMid = optMid(marks[callSym]);
-                  if (callIV <= 0) callIV = parseFloat(String(marks[callSym]?.["implied-volatility"] || marks[callSym]?.iv || 0));
-                }
-                if (putSym && marks[putSym]) {
-                  if (putMid <= 0) putMid = optMid(marks[putSym]);
-                  if (putIV <= 0) putIV = parseFloat(String(marks[putSym]?.["implied-volatility"] || marks[putSym]?.iv || 0));
-                }
-              }
-            } catch (_) {}
-          }
-
-          const avgIV = (callIV + putIV) / 2;
-          if (avgIV > 0 && dte > 0) {
-            em = 0.84 * avgIV * spotClose * Math.sqrt(dte / 365);
-          } else {
-            const straddle = callMid + putMid;
-            em = straddle > 0 ? straddle * 0.85 : spotClose * 0.02 * 0.85;
-          }
-        }
-
-        if (em > 0) return { close: spotClose, em, exp: groupExp };
-      }
-    } catch (_) {}
-  }
-
-  // Fallback: 2% historical estimate
+  void indexSym;
   return { close: spotClose, em: spotClose * 0.02 * 0.85, exp: getCacheKeyDate() };
 }
 

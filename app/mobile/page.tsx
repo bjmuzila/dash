@@ -81,7 +81,6 @@ export default function MobileGexPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subSymsRef = useRef<string[]>([]);
-  const pageIdRef = useRef(`mobile-gex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   const scheduleRender = useCallback(() => {
     if (renderTimer.current) return;
@@ -96,103 +95,11 @@ export default function MobileGexPage() {
     }, 200);
   }, []);
 
-  // WebSocket connection
-  useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setWsStatus("live");
-      try {
-        ws.send(
-          JSON.stringify({
-            type: "subscribe",
-            symbols: ["$SPX", "SPX"],
-            feedTypesBySymbol: { $SPX: ["Quote", "Trade"], SPX: ["Quote", "Trade"] },
-          })
-        );
-      } catch {}
-      const syms = subSymsRef.current;
-      if (syms.length) {
-        const feedTypes = syms.reduce((acc, s) => {
-          acc[s] = ["Quote", "Greeks", "Summary", "Trade"];
-          return acc;
-        }, {} as Record<string, string[]>);
-        try {
-          ws.send(JSON.stringify({ type: "subscribe", symbols: syms, feedTypesBySymbol: feedTypes }));
-        } catch {}
-      }
-    };
-
-    ws.onmessage = (e) => {
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(e.data);
-      } catch {
-        return;
-      }
-      if (msg.type !== "FEED_DATA") return;
-      const data = msg.data as unknown[];
-      if (!Array.isArray(data)) return;
-      let changed = false;
-      data.forEach((ev) => {
-        const event = ev as Record<string, unknown>;
-        const sym = String(event.eventSymbol ?? "");
-        if (!sym) return;
-        if (!liveRef.current[sym]) liveRef.current[sym] = {};
-        const d = liveRef.current[sym];
-        const t = event.eventType;
-        if (t === "Greeks") {
-          if (event.delta != null) d.delta = event.delta as number;
-          if (event.gamma != null) d.gamma = event.gamma as number;
-          if (event.theta != null) d.theta = event.theta as number;
-          if (event.vega != null) d.vega = event.vega as number;
-          if (event.volatility != null) d.iv = event.volatility as number;
-          changed = true;
-        } else if (t === "Summary") {
-          if (event.openInterest != null) d.oi = event.openInterest as number;
-          if (event["open-interest"] != null) d.oi = event["open-interest"] as number;
-          if (event.dayVolume != null) d.vol = event.dayVolume as number;
-          changed = true;
-        } else if (t === "Quote") {
-          if (event.bidPrice != null) d.bid = event.bidPrice as number;
-          if (event.askPrice != null) d.ask = event.askPrice as number;
-          changed = true;
-        } else if (t === "Trade") {
-          if (event.dayVolume != null && (event.dayVolume as number) > 0) d.vol = event.dayVolume as number;
-          if (event.price != null && (event.price as number) > 0) d.last = event.price as number;
-          changed = true;
-        }
-        if (sym === "$SPX" || sym === "SPX") {
-          const bid = Number(event.bidPrice ?? 0);
-          const ask = Number(event.askPrice ?? 0);
-          const last = Number(event.price ?? 0);
-          const price = t === "Quote" ? (bid + ask) / 2 || bid || ask : t === "Trade" ? last : 0;
-          if (price > 100) {
-            spotRef.current = price;
-            setSpotPrice(price);
-          }
-        }
-      });
-      if (changed) scheduleRender();
-    };
-
-    ws.onclose = () => setWsStatus("idle");
-    ws.onerror = () => setWsStatus("err");
-
-    return () => {
-      ws.close();
-    };
-  }, [scheduleRender]);
 
   const loadStructure = useCallback(
     async (expiry: string) => {
       try {
-        const pageId = pageIdRef.current;
-        const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=20&pageId=${encodeURIComponent(pageId)}`;
+        const url = `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&strikeWindow=20`;
         const res = await fetch(url);
         if (!res.ok) return;
         const json = await res.json();
@@ -292,14 +199,6 @@ export default function MobileGexPage() {
           try {
             ws.send(JSON.stringify({ type: "subscribe", symbols: allSyms, feedTypesBySymbol: feedTypes }));
           } catch {}
-        }
-
-        if (allSyms.length) {
-          fetch("/api/proxy/subscription-ready", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pageId, symbols: allSyms, timeout: 5000, threshold: 0.5 }),
-          }).catch(() => {});
         }
 
         scheduleRender();

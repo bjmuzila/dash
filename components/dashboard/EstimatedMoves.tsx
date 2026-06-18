@@ -99,7 +99,6 @@ const API = {
   optionMarks: (symbols: string) =>
     `/api/em/option-marks?symbols=${encodeURIComponent(symbols)}`,
   emCloses: () => `/api/em/em-closes`,
-  subscriptionReady: () => `/api/proxy/subscription-ready`,
   history: (symbol: string, interval = "1Day") =>
     `/api/em/market-data/history/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`,
   dxlinkCandles: (symbol: string, start: number, count: number) =>
@@ -406,25 +405,9 @@ async function fetchQuoteDetail(ticker: string, engine: EMEngine) {
   return { quote: q, close, prevClose };
 }
 
-const metricsIvCache: Record<string, Record<string, number>> = {};
-
 async function fetchMetricsIv(ticker: string, targetExp: string): Promise<number> {
-  if (metricsIvCache[ticker]?.[targetExp] != null) return metricsIvCache[ticker][targetExp];
-  try {
-    const r = await fetch(`/api/proxy/tt/quote/${encodeURIComponent(ticker)}`);
-    if (!r.ok) return 0;
-    const json = await r.json();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const expiryIvs: any[] = json?.data?.items?.[0]?.["option-expiration-implied-volatilities"] ?? [];
-    if (!metricsIvCache[ticker]) metricsIvCache[ticker] = {};
-    expiryIvs.forEach((e: any) => {
-      const iv = Number(e["implied-volatility"] ?? 0);
-      if (e["expiration-date"] && iv > 0) metricsIvCache[ticker][e["expiration-date"]] = iv;
-    });
-    return metricsIvCache[ticker][targetExp] ?? 0;
-  } catch {
-    return 0;
-  }
+  void ticker; void targetExp;
+  return 0;
 }
 
 async function fetchOptionMarks(symbols: string[]) {
@@ -701,26 +684,6 @@ export default function EstimatedMoves() {
   const refreshEstimatedMoves = useCallback(async () => {
     setRows([]);
     const engine = makeEngine();
-
-    if (!bulkSubscribedRef.current) {
-      try {
-        setStatus({ text: "Subscribing...", color: "#00e5ff" });
-        await fetch(API.subscriptionReady(), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pageId: "em-" + Date.now(),
-            symbols: ["SPX","VIX","/ESU26","NQM","SPY","QQQ","SMH","AAPL","AMD","AMZN",
-              "GOOGL","META","MSFT","NVDA","TSLA","COIN","HOOD","IWM","NFLX","PLTR","NDX"],
-            timeout: 4000, threshold: 0.7,
-          }),
-        });
-        bulkSubscribedRef.current = true;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      } catch (e) {
-        console.warn("Subscribe failed:", e);
-      }
-    }
 
     const effectiveExp = getTargetExpiration(knownExpirations, expOverride);
     const settled: EMRow[] = [];

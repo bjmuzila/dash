@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getClientProxyBase, getClientWsUrl } from "@/lib/clientRuntime";
+
 
 // All symbols — indices/futures always streamed, equities subscribed on mount
 const ES_DISPLAY_SYMBOL = "/ESU26";
@@ -71,169 +71,34 @@ export default function QuotesPanel() {
   const lastUpdateRef = useRef(Date.now());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── dxlink WS for all symbols ───────────────────────────────────────────────
+  // ── Seed prices from REST on mount ────────────────────────────────────────
   useEffect(() => {
-    async function connect() {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    async function seedPrices() {
       try {
-        const ws = new WebSocket(getClientWsUrl());
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          // Register with proxy's subscription filter
-          ws.send(JSON.stringify({
-            type: "subscribe",
-            symbols: WS_SYMBOLS.map(s => s.sym),
-          }));
-        };
-
-        ws.onclose = () => {
-          wsRef.current = null;
-          reconnectTimerRef.current = setTimeout(() => { void connect(); }, 5000);
-        };
-        ws.onerror = () => ws.close();
-
-        ws.onmessage = (ev) => {
-          try {
-            const msg = JSON.parse(ev.data);
-            if (msg.type !== "FEED_DATA") return;
-            const events: unknown[] = msg.data || [];
-
-            const normalize = (raw: string): string => {
-              if (raw.startsWith("/ES")) return ES_DISPLAY_SYMBOL;
-              if (raw.startsWith("/NQ")) return NQ_DISPLAY_SYMBOL;
-              return raw;
-            };
-
-            events.forEach((ev: unknown) => {
-              const e = ev as Record<string, unknown>;
-              const sym = normalize(String(e.eventSymbol || ""));
-              if (!WS_SYMBOLS.find(s => s.sym === sym)) return;
-              if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
-              const rec = wsLiveRef.current[sym];
-              const eType = String(e.eventType || "");
-
-              if (eType === "Quote") {
-                if (e.bidPrice != null) rec.bidPrice = Number(e.bidPrice);
-                if (e.askPrice != null) rec.askPrice = Number(e.askPrice);
-                if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
-              } else if (eType === "Trade") {
-                if (e.price != null && Number(e.price) > 0) rec.lastPrice = Number(e.price);
-                if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
-              } else if (eType === "Summary") {
-                const pc = Number(e.prevDayClosePrice ?? e.prevClose ?? e.previousClose ?? 0);
-                if (pc > 0) rec.prevClose = pc;
-                if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
-              }
-
-              const directPct = Number(e.dayPercentChange ?? e.changePercent ?? e["percent-change"] ?? e.netPercentChange ?? e.netPercentChangeInDouble ?? 0);
-              if (directPct !== 0 && Number.isFinite(directPct) && Math.abs(directPct) <= 20) rec.pctFeed = directPct;
-            });
-
-            // recompute WS rows
-            // Only sanity-check manually computed pct (not dxFeed's own dayPercentChange)
-            const sane = (price: number, prev: number) => prev > 0 && Math.abs(price - prev) / prev < 0.20;
-            setRows(prev => {
-              const next = { ...prev };
-              WS_SYMBOLS.forEach(({ sym }) => {
-                const rec = wsLiveRef.current[sym];
-                if (!rec) return;
-                // Trust dxFeed's own pctFeed directly — no sanity check needed
-                if (rec.pctFeed !== 0 && Math.abs(rec.pctFeed) <= 20) { next[sym] = rec.pctFeed; return; }
-                const price = rec.lastPrice || (rec.bidPrice > 0 && rec.askPrice > 0 ? (rec.bidPrice + rec.askPrice) / 2 : 0);
-                if (price > 0 && sane(price, rec.prevClose)) {
-                  const pct = ((price - rec.prevClose) / rec.prevClose) * 100;
-                  if (Math.abs(pct) <= 20) next[sym] = pct;
-                }
-              });
-              return next;
-            });
-
-            const now = new Date();
-            setTs(`${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`);
-            lastUpdateRef.current = Date.now();
-            setCountdown(30);
-          } catch (_) {}
-        };
-      } catch (_) {}
-    }
-
-    void connect();
-
-    // Seed prevClose for WS symbols from REST on mount so sane() check passes immediately
-    async function seedPrevCloses() {
-      try {
-        const syms = ["VIX", "SPX", "SPCX", "QQQ", "SMH", "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA", ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"].join(",");
+        const syms = [...REST_SYMBOLS.map(s => s.sym), ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
         if (!r.ok) return;
         const d = await r.json();
         const items: Array<Record<string, unknown>> = d?.data?.items || [];
-        items.forEach(q => {
-          const rawSym = String(q.symbol || "");
-          const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
-          const prev = Number(q["prev-close"] ?? q.prevClose ?? q.previousClose ?? q.prevDayClosePrice ?? 0);
-          if (prev > 0) {
-            if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
-            wsLiveRef.current[sym].prevClose = prev;
-          }
-          const pct = pctFromQuote(q);
-          if (pct != null) {
-            if (!wsLiveRef.current[sym]) wsLiveRef.current[sym] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0 };
-            wsLiveRef.current[sym].pctFeed = pct;
-          }
-        });
-      } catch (_) {}
-    }
-    seedPrevCloses();
-
-    return () => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      wsRef.current?.close();
-    };
-  }, []);
-
-  // ── Subscribe equities to proxy so they stream on the WS ──────────────────
-  useEffect(() => {
-    async function subscribeEquities() {
-      try {
-        // Seed current prices from REST first so panel isn't empty on load
-          const syms = [...REST_SYMBOLS.map(s => s.sym), ES_DISPLAY_SYMBOL, "/ESU6", "/ES:XCME", NQ_DISPLAY_SYMBOL, "/NQU26", "/NQ:XCME"].join(",");
-        const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
-        if (r.ok) {
-          const d = await r.json();
-          const items: Array<Record<string, unknown>> = d?.data?.items || [];
-          setRows(prev => {
-            const next = { ...prev };
-            items.forEach(q => {
-              const rawSym = String(q.symbol || "");
-              const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
-              if (!REST_SYMBOLS.find(s => s.sym === sym)) return;
-              const last = Number(q.last ?? 0);
-              const prev2 = Number(q["prev-close"] ?? q.prevClose ?? q.previousClose ?? q.prevDayClosePrice ?? 0);
-              const pct = pctFromQuote(q);
-              if (pct != null) {
-                next[sym] = pct;
-              } else if (last > 0 && prev2 > 0 && Math.abs(last - prev2) / prev2 < 0.20) {
-                const pct2 = ((last - prev2) / prev2) * 100;
-                next[sym] = pct2;
-              }
-            });
-            return next;
+        setRows(prev => {
+          const next = { ...prev };
+          items.forEach(q => {
+            const rawSym = String(q.symbol || "");
+            const sym = rawSym.startsWith("/ES") ? ES_DISPLAY_SYMBOL : rawSym.startsWith("/NQ") ? NQ_DISPLAY_SYMBOL : rawSym;
+            const last = Number(q.last ?? 0);
+            const prev2 = Number(q["prev-close"] ?? q.prevClose ?? q.previousClose ?? q.prevDayClosePrice ?? 0);
+            const pct = pctFromQuote(q);
+            if (pct != null) {
+              next[sym] = pct;
+            } else if (last > 0 && prev2 > 0 && Math.abs(last - prev2) / prev2 < 0.20) {
+              next[sym] = ((last - prev2) / prev2) * 100;
+            }
           });
-        }
-
-        // Tell proxy to subscribe these symbols to dxFeed — they'll stream on WS from now on
-        await fetch(getClientProxyBase() + "/proxy/dxlink/subscribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            symbols: REST_SYMBOLS.map(s => s.sym),
-            feedTypes: ["Quote", "Trade", "Summary"],
-          }),
+          return next;
         });
       } catch (_) {}
     }
-    subscribeEquities();
+    seedPrices();
   }, []);
 
   // 30-second countdown timer

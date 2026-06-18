@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { ensureProxyLiveSubscription } from "@/lib/proxy/liveSubscription";
-import { getClientWsUrl } from "@/lib/clientRuntime";
 
 const QUOTE_PANEL_TICKERS = [
   "VIX",
@@ -216,7 +214,6 @@ export default function OptionsChainPage() {
   const strikeRowsRef = useRef<StrikeRow[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const loadTokenRef = useRef(0);
-  const pageIdRef = useRef(`options-chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const subscribedSymbolsRef = useRef<string[]>([]);
 
   // Build strikes from chain JSON
@@ -256,14 +253,13 @@ export default function OptionsChainPage() {
   const loadChain = async (ticker: string, expDate: string, bustCache = false) => {
     loadTokenRef.current += 1;
     const token = loadTokenRef.current;
-    const pageId = pageIdRef.current;
     const bust = bustCache ? `&noCache=1` : "";
 
     try {
       setChainError(null);
       setLoadProgress(10); // Fetching chain data
       const res = await fetch(
-        `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}${bust}`
+        `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`
       );
       const json = await res.json();
       if (token !== loadTokenRef.current) return;
@@ -311,27 +307,8 @@ export default function OptionsChainPage() {
 
       const symbolList = [...allSymbols];
       subscribedSymbolsRef.current = symbolList;
-      if (symbolList.length > 0) {
-        await ensureProxyLiveSubscription(
-          pageId,
-          symbolList,
-          Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
-          0.5,
-          6000,
-        );
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: "subscribe",
-            symbols: symbolList,
-            feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
-          }));
-        }
-        setLoadProgress(100); // Complete
-        setTimeout(() => setLoadProgress(0), 1000); // Hide after 1s
-      } else {
-        setLoadProgress(100);
-        setTimeout(() => setLoadProgress(0), 1000);
-      }
+      setLoadProgress(100);
+      setTimeout(() => setLoadProgress(0), 1000);
 
       setRefreshSeed(s => s + 0.01);
     } catch (err) {
@@ -342,55 +319,6 @@ export default function OptionsChainPage() {
       setLoadProgress(0);
     }
   };
-
-  // Connect WS for live updates
-  useEffect(() => {
-    const ws = new WebSocket(getClientWsUrl());
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      const symbolList = subscribedSymbolsRef.current;
-      if (symbolList.length > 0) {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: symbolList,
-          feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
-        }));
-      }
-    };
-
-    ws.onmessage = (e) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type !== "FEED_DATA") return;
-      const data = msg.data as unknown[];
-      if (!Array.isArray(data)) return;
-      data.forEach(ev => {
-        const event = ev as Record<string, unknown>;
-        const sym = String(event.eventSymbol ?? "");
-        if (!sym) return;
-        if (!liveDataRef.current[sym]) liveDataRef.current[sym] = {};
-        const d = liveDataRef.current[sym];
-        d._ws = true;
-        const t = event.eventType;
-        if (t === "Greeks") {
-          if (event.volatility != null) d.iv    = event.volatility as number;
-          if (event.delta      != null) d.delta = event.delta as number;
-          if (event.gamma      != null) d.gamma = event.gamma as number;
-          if (event.theta      != null) d.theta = event.theta as number;
-          if (event.vega       != null) d.vega  = event.vega as number;
-        } else if (t === "Summary") {
-          if (event.openInterest != null) d.oi = event.openInterest as number;
-          if (event.dayVolume    != null) d.vol = event.dayVolume as number;
-        } else if (t === "Trade") {
-          if (event.dayVolume != null && (event.dayVolume as number) > 0) d.vol = event.dayVolume as number;
-        }
-      });
-      setRefreshSeed(s => s + 0.01); // trigger re-render without full refresh
-    };
-
-    return () => { ws.close(); };
-  }, []);
 
   useEffect(() => {
     setLastUpdate(

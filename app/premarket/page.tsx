@@ -7,7 +7,7 @@ import { usePageLoadStatus } from "@/lib/pageStatus";
 
 // ── Symbol definitions ───────────────────────────────────────────────────────
 
-// DXLink (TT proxy) — only symbols confirmed to stream: index futures + SPX/VIX
+// US Futures symbols
 const US_FUTURES = [
   { sym: "/ES:XCME",  label: "S&P 500",      wsKey: "/ES:XCME",  yahooSym: "ES=F" },
   { sym: "/NQ:XCME",  label: "Nasdaq 100",   wsKey: "/NQ:XCME",  yahooSym: "NQ=F" },
@@ -314,162 +314,12 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
 
 export default function PremarketPage() {
   usePageLoadStatus({ pageKey: "premarket", pageLabel: "Premarket", path: "/premarket" });
-  const wsLiveRef = useRef<Record<string, LiveRec>>({});
   const [quotes, setQuotes] = useState<QuoteMap>({});
   const [yahooQuotes, setYahooQuotes] = useState<QuoteMap>({});
   const [yahooTs, setYahooTs] = useState("");
   const [ts, setTs] = useState("");
-  const [wsLive, setWsLive] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
 
-  // ── DXLink WebSocket ────────────────────────────────────────────────────────
-  useEffect(() => {
-    function connect() {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
-      try {
-        const wsProto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws";
-        const wsHost = typeof window !== "undefined" ? window.location.host : "localhost:3001";
-        const ws = new WebSocket(
-          (process.env.NEXT_PUBLIC_WS_URL ?? `${wsProto}://${wsHost}`) + "/ws/dxlink"
-        );
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          setWsLive(true);
-          ws.send(JSON.stringify({
-            type: "FEED_SUBSCRIPTION",
-            add: ALL_WS.flatMap(({ wsKey }) => [
-              { type: "Quote",   symbol: wsKey },
-              { type: "Trade",   symbol: wsKey },
-              { type: "Summary", symbol: wsKey },
-            ]),
-          }));
-        };
-
-        ws.onclose = () => { setWsLive(false); wsRef.current = null; setTimeout(connect, 5000); };
-        ws.onerror = () => ws.close();
-
-        ws.onmessage = (ev) => {
-          try {
-            const msg = JSON.parse(ev.data);
-            if (msg.type !== "FEED_DATA") return;
-
-            (msg.data as unknown[]).forEach((raw) => {
-              const e = raw as Record<string, unknown>;
-              const sym   = String(e.eventSymbol || "");
-              const eType = String(e.eventType   || "");
-
-              const found = ALL_WS.find(s => s.wsKey === sym);
-              if (!found) return;
-
-              const key = found.sym;
-              if (!wsLiveRef.current[key]) {
-                wsLiveRef.current[key] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0, change: 0 };
-              }
-              const rec = wsLiveRef.current[key];
-
-              if (eType === "Quote") {
-                if (e.bidPrice != null) rec.bidPrice = Number(e.bidPrice);
-                if (e.askPrice != null) rec.askPrice = Number(e.askPrice);
-                if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
-              } else if (eType === "Trade") {
-                if (e.price != null && Number(e.price) > 0) rec.lastPrice = Number(e.price);
-                if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
-                if (e.change != null) rec.change = Number(e.change);
-              } else if (eType === "Summary") {
-                const pc = Number(e.prevDayClosePrice ?? e.prevClose ?? e.previousClose ?? 0);
-                if (pc > 0) rec.prevClose = pc;
-                if (e.dayPercentChange != null && Number(e.dayPercentChange) !== 0) rec.pctFeed = Number(e.dayPercentChange);
-              }
-            });
-
-            setQuotes(() => {
-              const next: QuoteMap = {};
-              ALL_WS.forEach(({ sym }) => {
-                const rec = wsLiveRef.current[sym];
-                if (!rec) return;
-
-                const price = rec.lastPrice || (rec.bidPrice > 0 && rec.askPrice > 0 ? (rec.bidPrice + rec.askPrice) / 2 : 0);
-                let pct: number | null = null;
-                let change: number | null = null;
-
-                if (rec.pctFeed !== 0 && Math.abs(rec.pctFeed) <= 50) {
-                  pct = rec.pctFeed;
-                } else if (price > 0 && rec.prevClose > 0 && Math.abs(price - rec.prevClose) / rec.prevClose < 0.30) {
-                  pct = ((price - rec.prevClose) / rec.prevClose) * 100;
-                }
-
-                if (rec.change !== 0) {
-                  change = rec.change;
-                } else if (price > 0 && rec.prevClose > 0) {
-                  change = price - rec.prevClose;
-                }
-
-                next[sym] = {
-                  price:  price > 0 ? price : null,
-                  change: change,
-                  pct:    pct,
-                };
-              });
-              return next;
-            });
-
-            const now = new Date();
-            setTs(`${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`);
-          } catch (_) {}
-        };
-      } catch (_) {}
-    }
-
-    connect();
-
-    // Seed prev closes from REST
-    async function seedRest() {
-      try {
-        const syms = ALL_WS.map(s => s.sym).join(",");
-        const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`);
-        if (!r.ok) return;
-        const d = await r.json();
-        const items: Array<Record<string, unknown>> = d?.data?.items || [];
-        items.forEach(q => {
-          const qsym = String(q.symbol || "");
-          const found = ALL_WS.find(s => s.sym === qsym || s.wsKey === qsym);
-          if (!found) return;
-          const key = found.sym;
-          const prev = Number(q["prev-close"] ?? 0);
-          const last = Number(q.last ?? q.mark ?? 0);
-          if (!wsLiveRef.current[key]) {
-            wsLiveRef.current[key] = { lastPrice: 0, prevClose: 0, pctFeed: 0, bidPrice: 0, askPrice: 0, change: 0 };
-          }
-          if (prev > 0) wsLiveRef.current[key].prevClose = prev;
-          if (last > 0 && wsLiveRef.current[key].lastPrice === 0) wsLiveRef.current[key].lastPrice = last;
-        });
-      } catch (_) {}
-    }
-    seedRest();
-
-    // Subscribe RTY/YM/VIX/SPX — ES/NQ are pre-subscribed by proxy
-    async function subscribeExtras() {
-      try {
-        const proxyBase = process.env.NEXT_PUBLIC_PROXY_URL ?? (typeof window !== "undefined" ? window.location.origin : "http://localhost:3001");
-        await fetch(
-          proxyBase + "/proxy/dxlink/subscribe",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              symbols: ["/RTY:XCME", "/YM:XCME", "SPX", "VIX"],
-              feedTypes: ["Quote", "Trade", "Summary"],
-            }),
-          }
-        );
-      } catch (_) {}
-    }
-    subscribeExtras();
-
-    return () => wsRef.current?.close();
-  }, []);
 
   // ── Yahoo Finance polling for Europe / Asia (60s interval) ─────────────────
   const pollYahoo = useCallback(async () => {

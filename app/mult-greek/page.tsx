@@ -3,8 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { ensureProxyLiveSubscription } from "@/lib/proxy/liveSubscription";
-import { getClientWsUrl } from "@/lib/clientRuntime";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -383,23 +381,9 @@ export default function MultGreekPage() {
   const [spots, setSpots]       = useState<Record<Ticker, number>>({ SPX: 0, SPY: 0, QQQ: 0 });
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
 
-  // WS ref
-  const wsRef = useRef<WebSocket | null>(null);
-  const subscribedSymbolsRef = useRef<string[]>([]);
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
-  const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pageIdRef = useRef(`mult-greek-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  const [renderTick, setRenderTick] = useState(0);
 
-  const scheduleRender = useCallback(() => {
-    if (renderTimerRef.current) return;
-    renderTimerRef.current = setTimeout(() => {
-      renderTimerRef.current = null;
-      setRenderTick(t => t + 1);
-      setLastUpdate(etTimeNow());
-    }, 150);
-  }, []);
 
   // Fetch expirations (from cache or API)
   useEffect(() => {
@@ -436,12 +420,11 @@ export default function MultGreekPage() {
     loadTokenRef.current += 1;
     const token = loadTokenRef.current;
     setStatus({ state: "loading", msg: "LOADING..." });
-    const pageId = pageIdRef.current;
 
     const bust = bustCache ? `&noCache=1` : "";
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
-        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all&pageId=${encodeURIComponent(pageId)}${bust}`)
+        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`)
           .then(async r => {
             const json = await r.json();
             return { ticker, json, ok: r.ok, status: r.status };
@@ -480,25 +463,6 @@ export default function MultGreekPage() {
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
 
-    const symbolList = [...allSymbols];
-    subscribedSymbolsRef.current = symbolList;
-    if (symbolList.length > 0) {
-      await ensureProxyLiveSubscription(
-        pageId,
-        symbolList,
-        Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
-        0.5,
-        6000,
-      );
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: "subscribe",
-          symbols: symbolList,
-          feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
-        }));
-      }
-    }
-
     activeExpiryRef.current = expDate;
     setActiveExpiry(expDate);
     if (successCount > 0) {
@@ -521,83 +485,9 @@ export default function MultGreekPage() {
     } else {
       setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "LIVE" : "CLOSED" });
     }
-    setRenderTick(t => t + 1);
     setLastUpdate(etTimeNow());
   }, []);
 
-  // Connect dxlink WS
-  useEffect(() => {
-    const ws = new WebSocket(getClientWsUrl());
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setStatus({ state: "live", msg: "LIVE" });
-      const symbolList = subscribedSymbolsRef.current;
-      if (symbolList.length > 0) {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: symbolList,
-          feedTypesBySymbol: Object.fromEntries(symbolList.map((symbol) => [symbol, ["Quote", "Trade", "Summary", "Greeks"]])),
-        }));
-      }
-    };
-
-    ws.onmessage = (e) => {
-      if (!isMarketOpen()) return;
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type !== "FEED_DATA") return;
-      const data = msg.data as unknown[];
-      if (!Array.isArray(data)) return;
-      let changed = false;
-      data.forEach(ev => {
-        const event = ev as Record<string, unknown>;
-        const sym = String(event.eventSymbol ?? "");
-        if (!sym) return;
-        if (!liveDataRef.current[sym]) liveDataRef.current[sym] = {};
-        const d = liveDataRef.current[sym];
-        d._ws = true;
-        const t = event.eventType;
-        if (t === "Greeks") {
-          if (event.volatility != null) d.iv    = event.volatility as number;
-          if (event.delta      != null) d.delta = event.delta as number;
-          if (event.gamma      != null) d.gamma = event.gamma as number;
-          if (event.theta      != null) d.theta = event.theta as number;
-          if (event.vega       != null) d.vega  = event.vega as number;
-          changed = true;
-        } else if (t === "Summary") {
-          if (event.openInterest != null) d.oi = event.openInterest as number;
-          if (event.dayVolume    != null) d.vol = event.dayVolume as number;
-          changed = true;
-        } else if (t === "Trade") {
-          if (event.dayVolume != null && (event.dayVolume as number) > 0) d.vol = event.dayVolume as number;
-          // spot updates
-          const SPOT_MAP: Record<string, Ticker> = { "$SPX": "SPX", "SPX": "SPX", "SPY": "SPY", "QQQ": "QQQ" };
-          const tk = SPOT_MAP[sym];
-          if (tk && (event.price as number) > 0) {
-            setSpots(prev => ({ ...prev, [tk]: event.price as number }));
-          }
-          changed = true;
-        } else if (t === "Quote") {
-          d.bid = event.bidPrice as number;
-          d.ask = event.askPrice as number;
-          const SPOT_MAP: Record<string, Ticker> = { "$SPX": "SPX", "SPX": "SPX", "SPY": "SPY", "QQQ": "QQQ" };
-          const tk = SPOT_MAP[sym];
-          if (tk && (event.bidPrice as number) > 0 && (event.askPrice as number) > 0) {
-            const mid = ((event.bidPrice as number) + (event.askPrice as number)) / 2;
-            setSpots(prev => ({ ...prev, [tk]: mid }));
-          }
-          changed = true;
-        }
-      });
-      if (changed) scheduleRender();
-    };
-
-    ws.onclose = () => setStatus({ state: "idle", msg: "DISCONNECTED" });
-    ws.onerror = () => setStatus({ state: "err", msg: "WS ERR" });
-
-    return () => { ws.close(); };
-  }, [scheduleRender]);
 
   const doGo = useCallback(() => {
     if (!selectedExpiry) return;
@@ -615,7 +505,7 @@ export default function MultGreekPage() {
   const doRefresh = useCallback(async () => {
     const exp = activeExpiryRef.current;
     if (!exp) throw new Error("No expiry selected");
-    await loadAll(exp, true); // bust proxy cache on manual refresh
+    await loadAll(exp, true);
   }, [loadAll]);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
@@ -623,9 +513,6 @@ export default function MultGreekPage() {
   const statusColors: Record<string, string> = {
     live: "#00e676", loading: "#ffb300", err: "#ff4757", idle: "#475569",
   };
-
-  // Suppress unused warning
-  void renderTick;
 
   const pageRef = useRef<HTMLDivElement>(null);
 

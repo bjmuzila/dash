@@ -6,8 +6,6 @@ import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
 import { type ChainRow, computeGEXProfile, findGEXFlip } from "@/lib/calculations/calculations";
-import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
-import { getClientWsUrl } from "@/lib/clientRuntime";
 
 type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
 type OptionSide = "call" | "put";
@@ -49,8 +47,6 @@ const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const OPTION_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const SIDEBAR_SYMBOLS = ["SPY", "QQQ", "SPX", "VIX", "IWM"];
 const INDEX_SYMBOLS = ["$SPX", "SPX", "/ESU26", "/ES:XCME", "VIX", ...SIDEBAR_SYMBOLS];
-const PAGE_ID_PREFIX = "home-gex";
-
 
 
 function fmtMoney(v: number) {
@@ -276,7 +272,6 @@ const SettingsIcon = () => (
 );
 
 export default function HomePage() {
-  const pageIdRef = useRef(`${PAGE_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const wsRef = useRef<WebSocket | null>(null);
   const gexWsRef = useRef<WebSocket | null>(null);
   const gexWsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -325,224 +320,7 @@ export default function HomePage() {
     setRenderTick((current) => current + 1);
   }, []);
 
-  const connectSocket = useCallback(() => {
-    if (unmountedRef.current) return;
-    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-    const wsUrl = getClientWsUrl();
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setStatus("LIVE");
-      ws.send(JSON.stringify({
-        type: "subscribe",
-        symbols: INDEX_SYMBOLS,
-        feedTypesBySymbol: Object.fromEntries(INDEX_SYMBOLS.map((symbol) => [symbol, FEED_TYPES])),
-      }));
-
-      if (subscribedSymbolsRef.current.length) {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: subscribedSymbolsRef.current,
-          feedTypesBySymbol: Object.fromEntries(subscribedSymbolsRef.current.map((symbol) => [symbol, OPTION_FEED_TYPES])),
-        }));
-      }
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message?.type !== "FEED_DATA" || !Array.isArray(message.data)) return;
-        const items = normalizeProxyFeedData(message.data);
-        let changed = false;
-        const nextQuotes = { ...quoteSnapshotsRef.current };
-
-        items.forEach((item) => {
-          const sym = String(item.eventSymbol ?? "");
-          const eventType = String(item.eventType ?? "");
-          if (!sym) return;
-
-          if (INDEX_SYMBOLS.includes(sym)) {
-            const bid = Number(item.bidPrice ?? 0);
-            const ask = Number(item.askPrice ?? 0);
-            const price = Number(item.price ?? 0);
-            const prev = Number(item.prevDayClosePrice ?? item.dayClosePrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : price;
-
-            if (sym === "$SPX" || sym === "SPX") {
-              if (eventType === "Quote" && mid > 0) setSpot(mid);
-              if (eventType === "Trade" && price > 0) setSpot(price);
-              const last = eventType === "Trade" ? price : mid;
-              if (last > 0) {
-                const prior = prev > 0 ? prev : nextQuotes.SPX?.prev ?? lastSpotRef.current;
-                nextQuotes.SPX = { last, prev: prior };
-                if (prior > 0) {
-                  setSpxChange(last - prior);
-                  setSpxChangePct(((last - prior) / prior) * 100);
-                }
-                if (lastSpotRef.current === 0) lastSpotRef.current = prior || last;
-              }
-            }
-            if ((sym === "/ESU26" || sym === "/ES:XCME") && (eventType === "Quote" || eventType === "Trade")) {
-              const last = eventType === "Trade" ? price : mid;
-              if (last > 0) {
-                setEsFut(last);
-                nextQuotes.ES = { last, prev: prev > 0 ? prev : nextQuotes.ES?.prev ?? last };
-              }
-            }
-            if (sym === "VIX" && (eventType === "Quote" || eventType === "Trade")) {
-              const last = eventType === "Trade" ? price : mid;
-              if (last > 0) {
-                setVix(last);
-                nextQuotes.VIX = { last, prev: prev > 0 ? prev : nextQuotes.VIX?.prev ?? last };
-              }
-            }
-            if (SIDEBAR_SYMBOLS.includes(sym) && (eventType === "Quote" || eventType === "Trade")) {
-              const last = eventType === "Trade" ? price : mid;
-              if (last > 0) {
-                nextQuotes[sym] = { last, prev: prev > 0 ? prev : nextQuotes[sym]?.prev ?? last };
-              }
-            }
-          }
-
-          if (!subscribedSymbolsRef.current.includes(sym)) return;
-          if (!liveDataRef.current[sym]) liveDataRef.current[sym] = {};
-          const live = liveDataRef.current[sym];
-          live._ws = true;
-          if (eventType === "Greeks") {
-            if (item.volatility != null) live.iv = Number(item.volatility);
-            if (item.delta != null) live.delta = Number(item.delta);
-            if (item.gamma != null) live.gamma = Number(item.gamma);
-            if (item.theta != null) live.theta = Number(item.theta);
-            if (item.vega != null) live.vega = Number(item.vega);
-            changed = true;
-          } else if (eventType === "Summary") {
-            if (item.openInterest != null) live.oi = Number(item.openInterest);
-            changed = true;
-          } else if (eventType === "Trade") {
-            if (item.dayVolume != null) live.vol = Number(item.dayVolume);
-            if (item.price != null && Number(item.price) > 0) {
-              live.bid = Number(item.price);
-              live.ask = Number(item.price);
-            }
-            changed = true;
-          } else if (eventType === "Quote") {
-            if (item.bidPrice != null) live.bid = Number(item.bidPrice);
-            if (item.askPrice != null) live.ask = Number(item.askPrice);
-            changed = true;
-          }
-        });
-
-        setQuoteSnapshots(nextQuotes);
-        setSidebarQuotes(makeSidebarQuotes(nextQuotes));
-        quoteSnapshotsRef.current = nextQuotes;
-        if (changed) scheduleRender();
-      } catch {
-        // ignore malformed frames
-      }
-    };
-
-    ws.onerror = () => setStatus("WS ERR");
-    ws.onclose = () => {
-      if (wsRef.current === ws) wsRef.current = null;
-      if (unmountedRef.current) return;
-      setStatus("RECONNECT");
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = setTimeout(() => {
-        reconnectTimerRef.current = null;
-        connectSocket();
-      }, 2500);
-    };
-  }, [scheduleRender]);
-
-  useEffect(() => {
-    connectSocket();
-    return () => {
-      unmountedRef.current = true;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      wsRef.current?.close();
-      wsRef.current = null;
-    };
-  }, [connectSocket]);
-
   // ── GEX WebSocket: connect to /ws/gex, receive pushed GEX_UPDATE from server loop ──
-  const connectGexWs = useCallback(() => {
-    if (unmountedRef.current) return;
-    if (gexWsRef.current && (gexWsRef.current.readyState === WebSocket.OPEN || gexWsRef.current.readyState === WebSocket.CONNECTING)) return;
-
-    const wsUrl = getClientWsUrl('/ws/gex');
-    const ws = new WebSocket(wsUrl);
-    gexWsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('[home] /ws/gex connected');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        if (msg.type === 'GEX_UPDATE') {
-          // Server pushed fresh GEX rows — update chart and heatmap
-          if (Array.isArray(msg.gexRows) && msg.gexRows.length) {
-            setGexChainRows(msg.gexRows as ChainRow[]);
-          }
-          if (msg.spot > 0) {
-            setGexSpot(msg.spot);
-            setSpot((prev) => prev > 0 ? prev : msg.spot); // don't override live SPX WS price
-          }
-          // Update expiry options from server's expirations list
-          if (Array.isArray(msg.expirations) && msg.expirations.length) {
-            const opts = buildExpiryOptions(msg.expirations);
-            setExpiryOptions(opts);
-            // Auto-select first expiry if none chosen yet
-            if (msg.expiry) {
-              setSelectedExpiry((cur) => cur || msg.expiry);
-            }
-          }
-          setStatus("LIVE");
-        }
-
-        if (msg.type === 'EXPIRATIONS') {
-          if (Array.isArray(msg.expirations) && msg.expirations.length) {
-            const opts = buildExpiryOptions(msg.expirations);
-            setExpiryOptions(opts);
-            if (msg.expiry) {
-              setSelectedExpiry((cur) => cur || msg.expiry);
-            }
-          }
-        }
-      } catch {
-        // ignore malformed frames
-      }
-    };
-
-    ws.onerror = () => {};
-    ws.onclose = () => {
-      if (gexWsRef.current === ws) gexWsRef.current = null;
-      if (unmountedRef.current) return;
-      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
-      gexWsReconnectRef.current = setTimeout(() => {
-        gexWsReconnectRef.current = null;
-        connectGexWs();
-      }, 3000);
-    };
-  }, []); // stable — no deps that change
-
-  useEffect(() => {
-    connectGexWs();
-    return () => {
-      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
-      gexWsRef.current?.close();
-      gexWsRef.current = null;
-    };
-  }, [connectGexWs]);
-
   // When user picks a different expiry, tell the server to switch
   const handleExpiry = useCallback((expiry: string) => {
     setSelectedExpiry(expiry);
@@ -554,9 +332,6 @@ export default function HomePage() {
   // Load chain symbols for heatmap WS subscription (separate from GEX chart data)
   const loadChain = useCallback(async (expiry: string) => {
     if (!expiry) return;
-    const pageId = pageIdRef.current;
-
-    void pageId;
     void expiry;
     setStrikeRows([]);
     subscribedSymbolsRef.current = [];

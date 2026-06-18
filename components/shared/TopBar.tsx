@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
-import { getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
 
 const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
@@ -159,9 +158,6 @@ export default function TopBar() {
 
   const [row2, setRow2] = useState<GexRow2>({ mvcOI: "—", mvcVol: "—", gexFlip: "--", peaks: [] });
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // mutable live data — not state, avoids render on every tick
   const live = useRef({
     esPrice:    0,   // from Trade or Quote mid
@@ -241,114 +237,10 @@ export default function TopBar() {
           } catch (_) {}
         }
 
-        // Fallback: if SPX price still 0 (e.g. weekend with empty dxLink cache), hit TT REST directly
-        if (live.current.spxPrice === 0) {
-          try {
-            const spxR = await fetch("/api/proxy/tt/quote/SPX");
-            if (spxR.ok) {
-              const spxD = await spxR.json();
-              const mm = spxD?.data?.items?.[0] ?? {};
-              const p = parseFloat(String(mm["last-price"] || mm["close-price"] || mm["mark-price"] || mm["last"] || mm["mark"] || 0));
-              if (p > 100) live.current.spxPrice = p;
-            }
-          } catch (_) {}
-        }
-
         pushPrices();
       } catch (_) {}
     }
     seed();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── WS dxlink ──
-  useEffect(() => {
-    const SYMS = [...ES_FEED_SYMBOLS, "SPX", "$SPX", "VIX"];
-
-    async function connect() {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
-      const liveFeedReady = await isLiveFeedReady();
-      if (!liveFeedReady) {
-        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 10000);
-        return;
-      }
-      try {
-        const ws = new WebSocket(getClientWsUrl());
-
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          setTtLive(true);
-          ws.send(JSON.stringify({
-            type: "FEED_SUBSCRIPTION",
-            add: SYMS.flatMap((sym) => [
-              { type: "Trade",   symbol: sym },
-              { type: "Quote",   symbol: sym },
-              { type: "Summary", symbol: sym },
-            ]),
-          }));
-        };
-
-        ws.onclose = () => {
-          setTtLive(false);
-          wsRef.current = null;
-          reconnectTimerRef.current = setTimeout(() => { void connect(); }, 5000);
-        };
-        ws.onerror = () => ws.close();
-
-        ws.onmessage = (ev) => {
-          try {
-            const msg = JSON.parse(ev.data);
-            if (msg.type !== "FEED_DATA") return;
-            (msg.data as unknown[]).forEach((raw) => {
-              const e = raw as Record<string, unknown>;
-              const sym   = String(e.eventSymbol || "");
-              const eType = String(e.eventType   || "");
-              const n = (k: string) => {
-                const v = Number(e[k]);
-                return isFinite(v) && v > 0 ? v : 0;
-              };
-
-              if (isEsuSymbol(sym)) {
-                if (eType === "Trade"   && n("price"))               live.current.esPrice = n("price");
-                if (eType === "Quote"   && n("bidPrice") && n("askPrice"))
-                  live.current.esPrice = (n("bidPrice") + n("askPrice")) / 2;
-                if (eType === "Summary" && n("prevDayClosePrice"))   live.current.esPrev  = n("prevDayClosePrice");
-              }
-              if (sym === "SPX" || sym === "$SPX") {
-                if (eType === "Trade"   && n("price"))               live.current.spxPrice = n("price");
-                if (eType === "Quote"   && n("bidPrice") && n("askPrice"))
-                  live.current.spxPrice = (n("bidPrice") + n("askPrice")) / 2;
-                if (eType === "Summary" && n("prevDayClosePrice"))   live.current.spxPrev  = n("prevDayClosePrice");
-              }
-              if (sym === "VIX") {
-                if (eType === "Trade"   && n("price"))               live.current.vixPrice = n("price");
-                if (eType === "Quote"   && n("bidPrice") && n("askPrice"))
-                  live.current.vixPrice = (n("bidPrice") + n("askPrice")) / 2;
-                if (eType === "Summary" && n("prevDayClosePrice"))   live.current.vixPrev  = n("prevDayClosePrice");
-              }
-
-              // Capture today's closes at 4pm window
-              if (isCloseCapture()) {
-                const esNow  = live.current.esPrice;
-                const spxNow = live.current.spxPrice;
-                if (esNow > 0 && spxNow > 0) {
-                  saveTodayCloses(esNow, spxNow);
-                  closesRef.current = { es: esNow, spx: spxNow };
-                }
-              }
-            });
-            pushPrices();
-          } catch (_) {}
-        };
-      } catch (_) {}
-    }
-
-    void connect();
-    return () => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      wsRef.current?.close();
-    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

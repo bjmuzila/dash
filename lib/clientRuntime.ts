@@ -26,16 +26,7 @@ export function getClientProxyBase(): string {
   return window.location.origin;
 }
 
-export function getClientWsUrl(path = "/ws/dxlink"): string {
-  if (typeof window === "undefined") return "";
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const envUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_WS_URL ?? "", "ws");
-  if (envUrl) {
-    return envUrl.endsWith(normalizedPath) ? envUrl : `${envUrl}${normalizedPath}`;
-  }
-  const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${wsProto}://${window.location.host}${normalizedPath}`;
-}
+export function getClientWsUrl(): string { return ""; }
 
 export async function isLiveFeedReady(force = false): Promise<boolean> {
   if (typeof window === "undefined") return false;

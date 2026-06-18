@@ -6,8 +6,6 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, queryPlaybookFeedToday, savePlaybookSignal, type EsCandleRecord } from "@/lib/snapdb";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import IbLogic from "@/components/insights/IbLogic";
-import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
-import { getClientWsUrl } from "@/lib/clientRuntime";
 
 type InsightsTab = "exposure" | "vix" | "ib";
 
@@ -37,7 +35,6 @@ interface VixData {
   [key: string]: unknown;
 }
 
-// Greeks intraday record from proxy
 interface GreeksRecord {
   ts: number;
   time: string;
@@ -398,8 +395,6 @@ function fmtNum(v: number | undefined | null, decimals = 2, prefix = ""): string
 
 // ── Sparkline canvas component ────────────────────────────────────────────────
 
-// WS URL resolved via shared helper (reads NEXT_PUBLIC_WS_URL, falls back to same-origin)
-const DXLINK_WS_URL = typeof window !== "undefined" ? getClientWsUrl() : "";
 
 function Sparkline({ data, color, height = 62 }: { data: { ts: number; value: number }[]; color: string; height?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -994,21 +989,7 @@ export default function InsightsPage() {
       signalIdRef.current = Math.max(...rows.map((row, index) => Number(row.id ?? index + 1)), signalIdRef.current);
     }).catch(() => {});
 
-    // Also poll candles via proxy every 60s
-    const candleInterval = setInterval(() => {
-      fetch("/api/insights/em", { cache: "no-store" })
-        .then(r => r.json())
-        .then(d => {
-          if (Array.isArray(d.candles) && d.candles.length) {
-            const sorted = sortCandles(d.candles as EsCandleRecord[]);
-            esCandleMapRef.current = new Map(sorted.map((row) => [row.slotKey, row]));
-            setEsCandles(sorted);
-          }
-        })
-        .catch(() => {});
-    }, 60_000);
-
-    return () => clearInterval(candleInterval);
+    return () => {};
   }, []);
 
   // Push signal (dedup + rate-limit)
@@ -1062,104 +1043,6 @@ export default function InsightsPage() {
     setLastRefresh(when);
   }, []);
 
-  // ── WebSocket: live GREEKS_INTRADAY broadcast + history on connect ────────
-  const wsRef = useRef<WebSocket | null>(null);
-  const pageIdRef = useRef(`insights-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  useEffect(() => {
-    if (!DXLINK_WS_URL || !mountedRef.current) return;
-    const ws = new WebSocket(DXLINK_WS_URL);
-    wsRef.current = ws;
-    const esSymbols = ["/ESU26", "/ES:XCME", "/ES"];
-    const esFeedTypes = esSymbols.reduce((acc, sym) => {
-      acc[sym] = ["Quote", "Trade", "TradeETH", "TimeAndSale", "Summary"];
-      return acc;
-    }, {} as Record<string, string[]>);
-
-    ws.onopen = () => {
-      try {
-        if (mountedRef.current) {
-          ws.send(JSON.stringify({
-            type: "subscribe",
-            symbols: ["/ESU26", "/ES:XCME", "/ES"],
-            feedTypesBySymbol: esFeedTypes,
-          }));
-        }
-      } catch { /* silent */ }
-      if (mountedRef.current) {
-        ensureProxyLiveSubscription(pageIdRef.current, esSymbols, esFeedTypes, 0.5, 6000).catch(() => {});
-      }
-    };
-
-    ws.onmessage = (e) => {
-      if (!mountedRef.current) return;
-      try {
-        const msg = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
-        if (msg?.type === "FEED_DATA" && Array.isArray(msg.data)) {
-          normalizeProxyFeedData(msg.data).forEach((item) => {
-            const sym = String(item.eventSymbol ?? "");
-            if (!sym.startsWith("/ES")) return;
-            if (item.eventType !== "TimeAndSale" && item.eventType !== "Trade" && item.eventType !== "TradeETH") return;
-            const price = Number(item.price ?? 0);
-            const size = Number(item.size ?? 0);
-            const ts = Number(item.time ?? Date.now());
-            if (!(price > 0) || !(size > 0) || !(ts > 0)) return;
-
-            const slotKey = getFiveMinuteSlotKey(ts);
-            const date = slotKey.slice(0, 10);
-            const time = slotKey.slice(11);
-            const prev = esCandleMapRef.current.get(slotKey);
-            const merged: EsCandleRecord = prev
-              ? {
-                  ...prev,
-                  timestamp: Math.max(prev.timestamp, ts),
-                  high: Math.max(prev.high, price),
-                  low: Math.min(prev.low, price),
-                  close: price,
-                  volume: Number(prev.volume || 0) + size,
-                }
-              : {
-                  timestamp: ts,
-                  date,
-                  time,
-                  slotKey,
-                  symbol: "/ES:XCME",
-                  intervalMinutes: 5,
-                  source: "dxlink",
-                  open: price,
-                  high: price,
-                  low: price,
-                  close: price,
-                  volume: size,
-                  avgVolume: 0,
-                };
-
-            const nextRows = sortCandles([
-              ...[...esCandleMapRef.current.values()].filter((row) => row.slotKey !== slotKey),
-              merged,
-            ]);
-            // Use historical average if available, otherwise compute from today's data
-            const histAvg = computeHistoricalAvg(historicalCandlesRef.current, slotKey);
-            const avgVol = histAvg > 0 ? histAvg : computeAvgVolume(nextRows, slotKey);
-            const finalRow = { ...merged, avgVolume: avgVol };
-            esCandleMapRef.current.set(slotKey, finalRow);
-            setEsCandles(sortCandles([...esCandleMapRef.current.values()]));
-          });
-        }
-      } catch { /* silent */ }
-    };
-
-    ws.onerror = () => { if (mountedRef.current && ws) ws.close(); };
-
-    return () => {
-      if (ws) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onerror = null;
-        ws.close();
-      }
-      wsRef.current = null;
-    };
-  }, [applySnapshot]);
 
   useEffect(() => {
     const saveCandles = () => {
