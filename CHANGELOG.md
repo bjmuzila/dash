@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-06-18 (session 29) — GEX Chart Full Feature Upgrade
+
+### `app/home/page.tsx`
+- **Fixed "only 3 strikes showing"**: GEX chart card lacked `display: flex, flexDirection: column` — canvas had no resolved height. Changed card from `padding: 24` flat div to flex-column layout with `height: 420` and `overflow: hidden` so the chart div (`flex: 1, minHeight: 0`) properly fills remaining space.
+- **Replaced inline toolbar with `GexToolbar`**: Removed the simplified inline DTE + mode buttons. Now mounts the full `GexToolbar` component with all controls wired up.
+- **DTE pillboxes**: Toolbar now shows up to 3 DTE expiry buttons, each with two-line layout — day-of-week (Mon/Tue/etc.) on top and M/D date below — matching the screenshot UI exactly.
+- **OI + Vol / Vol Only**: `dataMode` toggle wired through to `GexChart` — OI+Vol uses open interest × gamma, Vol Only uses volume × gamma.
+- **+OI Overlay toggle**: Added `showOI` state; wires to `GexChart` `showOI` prop — renders call/put OI area fills (green/pink) plus a cyan total-OI curve.
+- **+NET DEX toggle**: Added `showDex` state; wires to `GexChart` `showDex` prop — renders purple curved net delta exposure line centered on yZero.
+- **+GEX FLIP toggle**: Added `showFlipCurve` state; wires to `GexChart` `showFlipCurve` prop — renders orange gamma profile curve + dashed gamma-zero vertical line.
+- **Drag-to-pan / scroll-to-zoom**: Already implemented in `GexChart` canvas — hint label now visible in toolbar title row.
+- **MVC label**: Already rendered in `GexChart` — labeled box at peak absolute GEX strike (colored cyan for positive, amber for negative).
+- **Spot price line**: Light gray dashed vertical line with `SPX xxxx.xx` label at top — already in `GexChart`, now properly visible with correct chart height.
+- Added `handleRefresh` async callback passed to `GexToolbar` `onRefresh` prop.
+- Added `chartMode` / `gexToolbarOpen` / `showOI` / `showDex` / `showFlipCurve` state.
+- Added `gexContainerRef` passed to `GexToolbar` for snap/Discord screenshot targeting.
+
+### Files Modified
+- `app/home/page.tsx`
+
+---
+
 ## 2026-06-16 (session 25) — Options Chain: Fixed Missing Strikes & OI Display
 
 ### Modified Files

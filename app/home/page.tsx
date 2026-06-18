@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
+import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
+import GexToolbar from "@/components/dashboard/GexToolbar";
 import { type ChainRow, computeGEXProfile, findCallWall, findGEXFlip, findPutWall } from "@/lib/calculations/calculations";
 import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
 import { getClientWsUrl } from "@/lib/clientRuntime";
@@ -42,6 +44,7 @@ type HeatmapRow = {
 type ExpiryOption = { value: string; label: string };
 type GexMode = "net" | "call-put";
 type DataMode = "oi-vol" | "vol-only";
+type ChartMode = "line" | "bars";
 
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const OPTION_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
@@ -315,6 +318,12 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [gexMode, setGexMode] = useState<GexMode>("net");
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  const [chartMode, setChartMode] = useState<ChartMode>("bars");
+  const [showOI, setShowOI] = useState(false);
+  const [showDex, setShowDex] = useState(false);
+  const [showFlipCurve, setShowFlipCurve] = useState(false);
+  const [gexToolbarOpen, setGexToolbarOpen] = useState(true);
+  const gexContainerRef = useRef<HTMLDivElement>(null);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [strikeRows, setStrikeRows] = useState<StrikeRow[]>([]);
@@ -543,6 +552,10 @@ export default function HomePage() {
     loadChain(selectedExpiry).catch(() => setStatus("CHAIN ERR"));
   }, [loadChain, selectedExpiry]);
 
+  const handleRefresh = useCallback(async () => {
+    if (selectedExpiry) await loadChain(selectedExpiry);
+  }, [loadChain, selectedExpiry]);
+
   const chainRows = useMemo(() => {
     void renderTick;
     const liveSpot = spot > 0 ? spot : Number(quoteSnapshots.SPX?.last ?? 0);
@@ -608,27 +621,54 @@ export default function HomePage() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden" }}>
-            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, padding: 24, display: "flex", flexDirection: "column", height: 400, flexShrink: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexShrink: 0, gap: 12, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                  <span style={{ color: C.cyan }}><BarChart2 /></span>
-                  Net Strike Gamma Exposure
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  {expiryOptions.slice(0, 2).map((expiry, index) => (
-                    <button key={expiry.value} onClick={() => setSelectedExpiry(expiry.value)} style={{ background: selectedExpiry === expiry.value ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: selectedExpiry === expiry.value ? C.cyan : "#fff", border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>
-                      {index}DTE {expiry.value.slice(5)}
-                    </button>
-                  ))}
-                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button onClick={() => setGexMode("net")} style={{ color: gexMode === "net" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: gexMode === "net" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
-                  <button onClick={() => setGexMode("call-put")} style={{ color: gexMode === "call-put" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: gexMode === "call-put" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
-                  <button onClick={() => setDataMode("oi-vol")} style={{ color: dataMode === "oi-vol" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: dataMode === "oi-vol" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
-                  <button onClick={() => setDataMode("vol-only")} style={{ color: dataMode === "vol-only" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: dataMode === "vol-only" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
-                </div>
+            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", height: 420, flexShrink: 0, overflow: "hidden" }}>
+              {/* GEX title row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", flexShrink: 0 }}>
+                <span style={{ color: C.cyan }}><BarChart2 /></span>
+                <span style={{ color: "#fff", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.1em" }}>NET GEX</span>
+                <span style={{ marginLeft: "auto", fontSize: 9, color: "#4a6a88" }}>Drag to pan · Scroll to zoom</span>
               </div>
+              {/* Full-featured toolbar */}
+              <GexToolbar
+                gexMode={gexMode}
+                dataMode={dataMode}
+                chartMode={chartMode}
+                showOI={showOI}
+                showDex={showDex}
+                showFlipCurve={showFlipCurve}
+                flipPoint={flipPoint}
+                callWall={callWall ?? undefined}
+                putWall={putWall ?? undefined}
+                netGex={fmtMoney(netGex)}
+                expirations={expiryOptions.map(o => o.value)}
+                selectedExpiry={selectedExpiry}
+                onExpiry={setSelectedExpiry}
+                onGexMode={setGexMode}
+                onDataMode={setDataMode}
+                onChartMode={setChartMode}
+                onToggleOI={() => setShowOI(v => !v)}
+                onToggleDex={() => setShowDex(v => !v)}
+                onToggleFlip={() => setShowFlipCurve(v => !v)}
+                onRefresh={handleRefresh}
+                chartOpen={gexToolbarOpen}
+                onToggleChart={() => setGexToolbarOpen(v => !v)}
+                containerRef={gexContainerRef}
+                discordMessage={`NET GEX • ${selectedExpiry}`}
+              />
+              {/* Chart canvas */}
               <div style={{ flex: 1, minHeight: 0 }}>
-                <GexChart chain={chainRows} spotPrice={spot} flipPoint={flipPoint} gexProfile={gexProfile} mode={gexMode} dataMode={dataMode} showFlipCurve />
+                <GexChart
+                  chain={chainRows}
+                  spotPrice={spot}
+                  flipPoint={flipPoint}
+                  gexProfile={gexProfile}
+                  mode={gexMode}
+                  dataMode={dataMode}
+                  showOI={showOI}
+                  showDex={showDex}
+                  showFlipCurve={showFlipCurve}
+                  expiry={selectedExpiry}
+                />
               </div>
             </div>
 
@@ -646,10 +686,8 @@ export default function HomePage() {
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
                 {activeTab === "calendar" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                    <div style={{ fontSize: 11, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.1em" }}>Proxy status: {status}</div>
-                    <div style={{ fontSize: 13, color: "#fff" }}>The live Greeks path is now coming from the proxy-backed option subscription instead of the static GEX snapshot route.</div>
-                    <div style={{ fontSize: 12, color: "#94a3b8" }}>Selected expiry: {selectedExpiry || "—"} • Symbols loaded: {subscribedSymbolsRef.current.length}</div>
+                  <div style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <EconCalendarPanel />
                   </div>
                 )}
                 {activeTab === "snapshot" && (
