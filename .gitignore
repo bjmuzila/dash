@@ -17,3 +17,10 @@ build_spx_ohlc_5m/
 .turbo/
 .DS_Store
 *.log
+
+# secrets / keys / certs
+*.pem
+*.pfx
+*.key
+*credentials*.json
+_ARCHIVED_DO_NOT_EDIT/

@@ -81,6 +81,7 @@ const PAGE_SHORTCUTS = [
   { label: "Logs", href: "/logs" },
   { label: "Personal", href: "/personal" },
   { label: "Legacy", href: "/legacy" },
+  { label: "Changelog", href: "/changelog" },
   { label: "Econ Calendar", href: "/economic-calendar" },
 ];
 

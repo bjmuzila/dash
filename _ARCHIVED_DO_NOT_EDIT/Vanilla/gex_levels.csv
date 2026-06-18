@@ -1,4 +1,0 @@
-Symbol,Price,Label,Text Color,Line Color,Band Color,Band Offset,Show Label,Show Price
-ESM6,7550.00,Call Wall,#000000,RED,#80808027,10,TRUE,TRUE
-ESM6,7350.00,Put Wall,#000000,GREEN,#80808027,10,TRUE,TRUE
-ESM6,3400.00,Zero Gamma,#000000,WHITE,#80808027,10,TRUE,TRUE

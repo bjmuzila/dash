@@ -44,10 +44,10 @@ const REFRESH_ENV    = process.env.REFRESH_TOKEN || process.env.TT_REFRESH_TOKEN
 const CLIENT_SECRET  = process.env.CLIENT_SECRET  || process.env.TT_CLIENT_SECRET || '';
 const MASSIVE_API_KEY = process.env.MASSIVE_API_KEY || (process.env.POLYGON_API_KEY !== 'your_key_here' ? process.env.POLYGON_API_KEY : '') || '';
 const MASSIVE_BASE_URL = (process.env.MASSIVE_BASE_URL || process.env.POLYGON_BASE_URL || 'https://api.massive.com').replace(/\/+$/, '');
-const SCHWAB_CLIENT_ID = process.env.SCHWAB_CLIENT_ID || 'REDACTED';
-const SCHWAB_CLIENT_SECRET = process.env.SCHWAB_CLIENT_SECRET || 'REDACTED';
+const SCHWAB_CLIENT_ID = process.env.SCHWAB_CLIENT_ID || '';
+const SCHWAB_CLIENT_SECRET = process.env.SCHWAB_CLIENT_SECRET || '';
 const SCHWAB_BASE   = 'api.schwabapi.com';
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || 'https://discord.com/api/webhooks/1466249857122570454/REDACTED';
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || '';
 
 // Google OAuth — token stored in google_token.json after first auth
 const GOOGLE_TOKEN_FILE     = path.join(ROOT_DIR, 'google_token.json');
