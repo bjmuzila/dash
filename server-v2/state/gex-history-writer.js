@@ -85,8 +85,11 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
     let i = 0;
     for (const row of gexRows) {
       const strike = Number(row.strike);
-      const netGex = Number(row.netGEX);
+      let netGex = Number(row.netGEX);
       if (!(strike > 0) || !Number.isFinite(netGex)) continue;
+      // Postgres `real` cannot store subnormal floats (|x| < ~1.2e-38). Such
+      // values are negligible GEX anyway, so snap them to 0.
+      if (Math.abs(netGex) < 1e-30) netGex = 0;
       values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
       params.push(now, date, expiry, spot, strike, netGex);
     }
@@ -99,9 +102,14 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
     lastWriteAt = now; // only throttle after a successful write
   } catch (e) {
     console.warn('[gex-history] write failed (will retry next tick):', e.message);
-    // Drop the pool so a terminated/SSL-dropped connection is rebuilt next time.
-    try { pool?.end().catch(() => {}); } catch {}
-    pool = null;
+    // Only rebuild the pool on connection-level failures — a data/range error
+    // is not a broken connection and shouldn't tear it down every tick.
+    const msg = String(e?.message || '');
+    const connDropped = /terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed/i.test(msg);
+    if (connDropped) {
+      try { pool?.end().catch(() => {}); } catch {}
+      pool = null;
+    }
   }
 }
 
