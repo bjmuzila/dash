@@ -287,7 +287,7 @@ export default function HomePage() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
 
-  const [now, setNow] = useState(new Date());
+  const [now, setNow] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [gexMode, setGexMode] = useState<GexMode>("net");
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
@@ -316,6 +316,7 @@ export default function HomePage() {
   }, [quoteSnapshots]);
 
   useEffect(() => {
+    setNow(new Date());
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -639,13 +640,13 @@ export default function HomePage() {
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
 
-  const etTime = now.toLocaleTimeString("en-US", {
+  const etTime = now?.toLocaleTimeString("en-US", {
     timeZone: "America/New_York",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-  });
+  }) ?? "--:--:--";
 
   const C = {
     bg: "#05060A",
