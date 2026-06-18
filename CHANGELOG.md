@@ -3,13 +3,24 @@
 ## 2026-06-18 (session 33) — Fix GEX heatmap showing +$0 for all strikes
 
 ### Root cause (confirmed)
-TastyTrade REST `/option-chains` returns `open-interest=0` for ALL SPX options (documented in proxy comment at line 4371). Real OI only comes from `dxSummaryCache` — populated by dxLink Summary events. The chains endpoint had SPX/SPXW in a `PREWARM_SYMS_FRESH` bypass that **skipped subscribing symbols** on every chain fetch, trusting the startup prewarm exclusively. The prewarm subscribes only 160 nearest symbols centered on ATM at startup time — as SPX moves or if prewarm ran before dxLink was ready, most strikes have no `dxSummaryCache` entry → OI = 0 → GEX = 0 for all but ~3 pre-subscribed strikes.
+TastyTrade REST `/option-chains` always returns `open-interest=0` for SPX/SPXW options. The only OI sources are:
+1. `dxSummaryCache` — populated by dxLink Summary streaming events (takes minutes after boot, only for subscribed symbols)
+2. CBOE delayed quotes — `fetchCboeSpxOI()` was implemented in the proxy but **removed** from the chains path on 2026-06-11 with comment "REMOVED: Yahoo/CBOE fallbacks", leaving `oiFallbackMaps = new Map()` (always empty)
 
-### Fixes
-- **`Vanilla/proxy-tastytrade.js`**:
-  - Removed `isPrewarmedFresh` bypass for SPX/SPXW — chains endpoint now subscribes up to 200 symbols via `addAutoSubscription` on every fetch, ensuring `dxSummaryCache` gets populated for all strikes in the requested expiry.
-  - Cache hit path now reads live spot from `dxTradeCache`/`dxQuoteCache` instead of hardcoding `underlyingPrice: 0`.
-- **`app/api/gex/route.ts`**: Added `noCache=1` to proxy chains request so the GEX loop always gets fresh data with current OI, never stale cached values.
+Result: during the window between proxy boot and dxLink warming up (can be indefinite if subscriptions missed), ALL OI = 0 → ALL GEX = 0.
+
+Secondary issues also fixed:
+- SPX prewarm subscribed only ±$50 from ATM (20 strikes) — too narrow, many heatmap strikes unsubscribed
+- `isPrewarmedFresh` bypass prevented re-subscribing on chain fetches
+- Cache hit returned `underlyingPrice: 0`
+
+### Fixes — `Vanilla/proxy-tastytrade.js`
+- **Restored CBOE OI fallback** in chains endpoint: calls `fetchCboeSpxOI(exp)` for SPX/SPXW chains, uses result as third-priority OI source (`liveOI || restOI || cboeOI`). Also wires CBOE `volume` into `finalVol`.
+- **Fixed CBOE key matching**: `buildCboeOiMap` now registers both `C7500` and `C07500` key variants to match TT streamer symbol zero-padding format.
+- **Increased SPX prewarm range** from ±$50 to ±$300 (covers full ±60 strike heatmap window).
+- **Removed `isPrewarmedFresh` bypass** — chains endpoint now subscribes up to 200 symbols via `addAutoSubscription` on every fetch.
+- **Cache hit `underlyingPrice`** now reads from `dxTradeCache`/`dxQuoteCache` instead of hardcoding 0.
+- **`app/api/gex/route.ts`**: Added `noCache=1` so GEX loop always gets fresh OI, never stale cached values.
 
 ---
 

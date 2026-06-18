@@ -1841,10 +1841,17 @@ function buildCboeOiMap(options, expDate) {
     const vol = Math.round(Number(opt.volume) || 0);
     const item = { oi, volume: vol };
 
-    // Register under both dxFeed key variants (.SPX... and .SPXW...)
-    oiMap.set(`.${root}${yymmdd}${side}${strikeStr}`, item);
-    if (root === 'SPX')  oiMap.set(`.SPXW${yymmdd}${side}${strikeStr}`, item);
-    if (root === 'SPXW') oiMap.set(`.SPX${yymmdd}${side}${strikeStr}`,  item);
+    // Register under multiple key variants to match TT streamer symbol formats:
+    // TT uses zero-padded 5-digit strikes: .SPXW260618C07500
+    // CBOE OCC uses raw integer: 7500 → need both .SPXW260618C7500 and .SPXW260618C07500
+    const strikeInt = Math.round(strikeNum);
+    const strikeZeroPad = String(strikeInt).padStart(5, '0');
+    const strikeFrac = Number.isInteger(strikeNum) ? '' : String(strikeNum).replace(/^\d+/, '');
+    const strikeStrAlt = strikeZeroPad + strikeFrac; // e.g. "07500"
+    for (const r of [root, root === 'SPX' ? 'SPXW' : 'SPX']) {
+      oiMap.set(`.${r}${yymmdd}${side}${strikeStr}`,    item); // e.g. .SPXW260618C7500
+      oiMap.set(`.${r}${yymmdd}${side}${strikeStrAlt}`, item); // e.g. .SPXW260618C07500
+    }
     // Also store keyed by the raw OCC symbol for direct lookup
     oiMap.set(occSym, item);
   }
@@ -4349,10 +4356,19 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // REMOVED: Yahoo/CBOE fallbacks (2026-06-11)
-    // OI now comes from TastyTrade REST data directly (opt['open-interest'])
-    // Real-time updates via dxLink Summary.openInterest
-    const oiFallbackMaps = new Map();
+    // OI sources: dxLink Summary (real-time) > TT REST > CBOE delayed
+    // CBOE is the critical fallback for SPX/SPXW — TT REST always returns OI=0 for index options,
+    // and dxSummaryCache is empty until dxLink streams Summary events (can take minutes after boot).
+    let oiFallbackMaps = new Map();
+    const isSpxChain = /^SPX[W]?$/i.test(sym);
+    if (isSpxChain) {
+      try {
+        oiFallbackMaps = await fetchCboeSpxOI(exp || null);
+        log('CBOE OI loaded for', sym, exp || 'all', ':', oiFallbackMaps.size, 'entries');
+      } catch (e) {
+        log('CBOE OI fetch failed:', e.message);
+      }
+    }
 
     // Build nested structure: data.data.items = array of expGroups
     const expMap = {};
@@ -4390,17 +4406,17 @@ const server = http.createServer(async (req, res) => {
       const liveVega  = finiteNumber(greeks.vega, opt.vega, opt['vega']);
       const liveIv    = greeks.volatility > 0 ? greeks.volatility : firstFiniteNumber(opt['implied-volatility'], opt['iv']);
 
-      // OI: Priority chain (2026-06-11 fix)
-      // 1. dxLink Summary (real-time updates)
-      // 2. TastyTrade REST data (authoritative at fetch time)
-      // 3. Default to 0 (never use stale Yahoo/CBOE fallbacks)
+      // OI priority: dxLink Summary → TT REST → CBOE delayed
       const liveOI  = Number(summary.openInterest ?? summary['open-interest'] ?? summary.open_interest ?? 0) || 0;
       const restOI  = Number(opt['open-interest'] ?? opt.openInterest ?? opt['open-interest-quantity'] ?? 0) || 0;
-      const finalOI = liveOI || restOI;
-      // Volume: prefer TT REST day-volume, fall back to dxLink Trade dayVolume or Summary dayVolume
+      const cboeEntry = oiFallbackMaps.get(streamerSym) || oiFallbackMaps.get(opt.symbol || '') || null;
+      const cboeOI  = cboeEntry ? (Number(cboeEntry.oi) || 0) : 0;
+      const finalOI = liveOI || restOI || cboeOI;
+      // Volume: TT REST → dxLink Trade/Summary → CBOE delayed
       const restVol  = Number(opt['day-volume'] ?? opt['volume'] ?? opt.totalVolume ?? 0) || 0;
       const liveVol  = Number(trade.dayVolume ?? summary.dayVolume ?? 0) || 0;
-      const finalVol = restVol || liveVol;
+      const cboeVol  = cboeEntry ? (Number(cboeEntry.volume) || 0) : 0;
+      const finalVol = restVol || liveVol || cboeVol;
 
       expMap[expDate].strikes[strikePrice][side] = {
         symbol:               opt.symbol || '',
@@ -5586,8 +5602,8 @@ async function prewarmCache() {
         const quotePrice = await fetchUnderlyingLast(symbol).catch(() => 0);
         const underlyingPrice = quotePrice > 0 ? quotePrice : (symbol === 'SPY' ? 725 : symbol === 'QQQ' ? 700 : 5800);
 
-        // Range: $50 for SPX (tighter), 10% for stocks (much tighter for faster prewarm)
-        let rangeAbs = 50;
+        // Range: $300 for SPX (covers full ±60 strikes / heatmap window), 10% for stocks
+        let rangeAbs = 300;
         if (rangeType === 'pct20') {
           rangeAbs = underlyingPrice * 0.10;  // Changed from 0.20 to 0.10 for faster prewarm
         }
