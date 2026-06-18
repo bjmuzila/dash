@@ -44,6 +44,7 @@ const TOPBAR_ROW2_PADDING = "6px 14px";
 const TOPBAR_PILL_PADDING = "6px 12px";
 const TOPBAR_LABEL_SIZE = 10;
 const TOPBAR_VALUE_SIZE = 16;
+const TOPBAR_TIME_SIZE = 22;
 const TOPBAR_CHANGE_SIZE = 12;
 const ES_DISPLAY_LABEL = "ESU";
 const ES_DISPLAY_SYMBOL = "/ESU26";
@@ -469,7 +470,7 @@ export default function TopBar() {
 
         {/* Clock + VIX */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, padding: TOPBAR_PILL_PADDING, border: "1px solid #1e3050", borderRadius: 999, background: "rgba(7,16,27,.8)" }}>
-          <span suppressHydrationWarning style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", minWidth: 96, display: "inline-block" }}>
+          <span suppressHydrationWarning style={{ fontSize: TOPBAR_TIME_SIZE, fontWeight: 800, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", minWidth: 118, display: "inline-block" }}>
             {clock}
           </span>
           <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#5a7a99", letterSpacing: ".14em", textTransform: "uppercase", minWidth: 34 }}>

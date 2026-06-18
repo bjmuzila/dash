@@ -49,33 +49,133 @@ function includeTemplateEvent(ev: CalEvent): boolean {
   return ev.impact === "President" || ev.impact === "Medium" || (ev.impact === "High" && ev.country === "USD");
 }
 
-const HEADLINE_PRIORITY_RULES: RegExp[] = [
-  /\b(nonfarm payroll|nfp|unemployment rate|average hourly earnings|hourly earnings)\b/i,
-  /\b(cpi|consumer price index|headline cpi|core cpi)\b/i,
-  /\b(fomc|fed rate decision|federal funds rate|powell|dot plot|rate decision)\b/i,
-  /\b(gdp|gross domestic product|advance gdp|second estimate|third estimate)\b/i,
-  /\b(ppi|producer price index)\b/i,
-  /\bism manufacturing|manufacturing pmi\b/i,
-  /\bism services|services pmi|non-manufacturing pmi\b/i,
-  /\b(retail sales)\b/i,
-  /\b(adp)\b/i,
-  /\b(initial jobless claims|jobless claims)\b/i,
-  /\b(pce|personal consumption expenditures)\b/i,
-  /\b(durable goods)\b/i,
-  /\b(industrial production)\b/i,
-  /\b(housing starts|building permits)\b/i,
-  /\b(existing home sales)\b/i,
-  /\b(jolts|job openings)\b/i,
-  /\b(consumer confidence|michigan sentiment|consumer sentiment)\b/i,
-  /\b(factory orders)\b/i,
-  /\b(trade balance)\b/i,
-  /\b(ecb|boe|bank of england|central bank|global cpi|global gdp|global pmi|major global cpi|major global gdp|major global pmi)\b/i,
+const HEADLINE_PRIORITY_RULES: Array<{ rank: number; rules: RegExp[] }> = [
+  {
+    rank: 1,
+    rules: [
+      /\b(nonfarm payrolls?|nfp|unemployment rate|average hourly earnings|hourly earnings)\b/i,
+    ],
+  },
+  {
+    rank: 2,
+    rules: [
+      /\b(cpi|consumer price index|headline cpi|core cpi)\b/i,
+    ],
+  },
+  {
+    rank: 3,
+    rules: [
+      /\b(fomc|fed rate decision|federal funds rate|powell|dot plot|rate decision)\b/i,
+    ],
+  },
+  {
+    rank: 4,
+    rules: [
+      /\b(gdp|gross domestic product|advance gdp|second estimate|third estimate)\b/i,
+    ],
+  },
+  {
+    rank: 5,
+    rules: [
+      /\b(ppi|producer price index)\b/i,
+    ],
+  },
+  {
+    rank: 6,
+    rules: [
+      /\b(ism manufacturing|manufacturing pmi)\b/i,
+    ],
+  },
+  {
+    rank: 7,
+    rules: [
+      /\b(ism services|services pmi|non-manufacturing pmi)\b/i,
+    ],
+  },
+  {
+    rank: 8,
+    rules: [
+      /\b(retail sales)\b/i,
+    ],
+  },
+  {
+    rank: 9,
+    rules: [
+      /\b(adp|private payrolls?)\b/i,
+    ],
+  },
+  {
+    rank: 10,
+    rules: [
+      /\b(initial jobless claims|jobless claims)\b/i,
+    ],
+  },
+  {
+    rank: 11,
+    rules: [
+      /\b(pce|personal consumption expenditures)\b/i,
+    ],
+  },
+  {
+    rank: 12,
+    rules: [
+      /\b(durable goods)\b/i,
+    ],
+  },
+  {
+    rank: 13,
+    rules: [
+      /\b(industrial production)\b/i,
+    ],
+  },
+  {
+    rank: 14,
+    rules: [
+      /\b(housing starts|building permits)\b/i,
+    ],
+  },
+  {
+    rank: 15,
+    rules: [
+      /\b(existing home sales)\b/i,
+    ],
+  },
+  {
+    rank: 16,
+    rules: [
+      /\b(jolts|job openings)\b/i,
+    ],
+  },
+  {
+    rank: 17,
+    rules: [
+      /\b(consumer confidence|michigan sentiment|consumer sentiment)\b/i,
+    ],
+  },
+  {
+    rank: 18,
+    rules: [
+      /\b(factory orders)\b/i,
+    ],
+  },
+  {
+    rank: 19,
+    rules: [
+      /\b(trade balance)\b/i,
+    ],
+  },
+  {
+    rank: 20,
+    rules: [
+      /\b(ecb|boe|bank of england|bank of canada|boj|snb|rba|riksbank|central bank|global cpi|global gdp|global pmi|major global cpi|major global gdp|major global pmi)\b/i,
+    ],
+  },
 ];
 
 function headlinePriorityIndex(ev: CalEvent): number {
   const haystack = `${ev.title} ${ev.country} ${ev.impact}`.toLowerCase();
-  const idx = HEADLINE_PRIORITY_RULES.findIndex((rule) => rule.test(haystack));
-  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+  const match = HEADLINE_PRIORITY_RULES.find((group) => group.rules.some((rule) => rule.test(haystack)));
+  return match?.rank ?? Number.MAX_SAFE_INTEGER;
 }
 
 // ── Build the snapshot HTML (matches snapshot-template-example.html CSS) ──────

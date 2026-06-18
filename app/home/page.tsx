@@ -336,6 +336,9 @@ export default function HomePage() {
   const [quoteSnapshots, setQuoteSnapshots] = useState<Record<string, { last: number; prev: number }>>({});
   const [renderTick, setRenderTick] = useState(0);
   const [status, setStatus] = useState("READY");
+  // GEX chart rows come directly from /api/gex (fast gex-chain endpoint, pre-computed)
+  const [gexChainRows, setGexChainRows] = useState<ChainRow[]>([]);
+  const [gexSpot, setGexSpot] = useState(0);
 
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
@@ -516,13 +519,35 @@ export default function HomePage() {
     if (!expiry) return;
     setStatus("LOADING");
     const pageId = pageIdRef.current;
-    const json = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&pageId=${encodeURIComponent(pageId)}`, { cache: "no-store" }).then((res) => res.json());
+
+    // ── 1. Fast path: fetch pre-computed GEX chain for the chart ─────────────
+    // /api/gex uses the proxy's gex-chain endpoint which reads from dxGreeksCache
+    // and the full REST SPXW chain — returns all strikes with computed GEX fields.
+    const gexJson = await fetch(`/api/gex?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .catch(() => null);
+    if (gexJson?.chain?.length) {
+      setGexChainRows(gexJson.chain as ChainRow[]);
+      if (Number(gexJson.spotPrice) > 0) {
+        setGexSpot(Number(gexJson.spotPrice));
+        setSpot(Number(gexJson.spotPrice));
+      }
+    }
+
+    // ── 2. Fetch full chain for WS symbol subscription (heatmap live data) ───
+    // No pageId → hits the cache (fast). NoSubscribe=0 so proxy logs but doesn't auto-subscribe.
+    const json = await fetch(
+      `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`,
+      { cache: "no-store" }
+    ).then((r) => r.json()).catch(() => null);
     const items = Array.isArray(json?.data?.items) ? json.data.items : [];
-    const target = items.filter((item: Record<string, unknown>) => String(item["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10));
+    const target = items.filter((item: Record<string, unknown>) =>
+      String(item["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10)
+    );
     const nextStrikes = buildStrikes(target.length ? target : items, liveDataRef.current);
     const nextSpot = Number(json?.data?.underlyingPrice ?? 0);
     setStrikeRows(nextStrikes);
-    if (nextSpot > 0) setSpot(nextSpot);
+    if (nextSpot > 0 && !(gexJson?.spotPrice > 0)) setSpot(nextSpot);
 
     const symbols = nextStrikes.flatMap((row) => [row.callSym, row.putSym]).filter(Boolean) as string[];
     subscribedSymbolsRef.current = symbols;
@@ -568,14 +593,16 @@ export default function HomePage() {
     return toHeatmapRows(chainRows, spot);
   }, [chainRows, spot]);
 
+  // Chart uses the fast gex-chain data; heatmap uses live WS chain
+  const chartRows = gexChainRows.length > 0 ? gexChainRows : chainRows;
+  const chartSpot = gexSpot > 0 ? gexSpot : spot;
+
   const netGex = useMemo(
-    () => chainRows.reduce((sum, row) => sum + ((dataMode === "vol-only" ? row.netVolGEX : row.netGEX) ?? 0), 0),
-    [chainRows, dataMode]
+    () => chartRows.reduce((sum, row) => sum + ((dataMode === "vol-only" ? row.netVolGEX : row.netGEX) ?? 0), 0),
+    [chartRows, dataMode]
   );
-  const callWall = useMemo(() => findCallWall(chainRows) ?? null, [chainRows]);
-  const putWall = useMemo(() => findPutWall(chainRows) ?? null, [chainRows]);
-  const flipPoint = useMemo(() => findGEXFlip(chainRows, spot) ?? null, [chainRows, spot]);
-  const gexProfile = useMemo(() => computeGEXProfile(chainRows, spot), [chainRows, spot]);
+  const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
+  const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
 
   const etTime = now.toLocaleTimeString("en-US", {
     timeZone: "America/New_York",

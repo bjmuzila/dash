@@ -46,10 +46,22 @@ const SettingsIcon = () => (
 );
 
 const QUOTE_SYMBOLS = [
+  { sym: "/ES:XCME", label: "ESU" },
+  { sym: "/NQ:XCME", label: "NQU" },
+  { sym: "SPX", label: "SPX" },
   { sym: "SPY", label: "SPY" },
   { sym: "QQQ", label: "QQQ" },
-  { sym: "SPX", label: "SPX" },
   { sym: "VIX", label: "VIX" },
+  { sym: "AAPL", label: "AAPL" },
+  { sym: "AMD", label: "AMD" },
+  { sym: "AMZN", label: "AMZN" },
+  { sym: "GOOGL", label: "GOOGL" },
+  { sym: "META", label: "META" },
+  { sym: "MSFT", label: "MSFT" },
+  { sym: "NVDA", label: "NVDA" },
+  { sym: "SPCX", label: "SPCX" },
+  { sym: "TSLA", label: "TSLA" },
+  { sym: "SMH", label: "SMH" },
 ];
 
 const PAGE_SHORTCUTS = [
@@ -73,6 +85,12 @@ function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
     if (Number.isFinite(num) && num > 0) return num;
   }
   return 0;
+}
+
+function fmtPct(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
 }
 
 function useSidebarQuotes() {
@@ -148,10 +166,6 @@ export default function Sidebar() {
   const pathname = usePathname();
   const pcts = useSidebarQuotes();
   const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
-  const [pagesOpen, setPagesOpen] = useState(false);
-  const pagesBtnRef = useRef<HTMLButtonElement | null>(null);
-  const [pagesMenuPos, setPagesMenuPos] = useState<{ top: number; left: number } | null>(null);
-
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
 
   const goIntoIdle = async () => {
@@ -165,14 +179,6 @@ export default function Sidebar() {
       setIdleActionState("err");
       setTimeout(() => setIdleActionState("idle"), 2200);
     }
-  };
-
-  const openPagesMenu = () => {
-    if (!pagesOpen && pagesBtnRef.current) {
-      const r = pagesBtnRef.current.getBoundingClientRect();
-      setPagesMenuPos({ top: r.top, left: r.right + 8 });
-    }
-    setPagesOpen((open) => !open);
   };
 
   return (
@@ -214,10 +220,8 @@ export default function Sidebar() {
           <HomeIcon />
         </Link>
 
-        <button
-          ref={pagesBtnRef}
+        <div
           title="Overview"
-          onClick={openPagesMenu}
           style={{
             display: "flex",
             alignItems: "center",
@@ -227,64 +231,14 @@ export default function Sidebar() {
             borderRadius: 10,
             textDecoration: "none",
             transition: "all 0.15s",
-            background: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "rgba(0,229,255,0.12)" : "transparent",
-            border: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-            color: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? HOME_THEME.cyan : HOME_THEME.muted,
-            boxShadow: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
-            cursor: "pointer",
+            background: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "rgba(0,229,255,0.12)" : "transparent",
+            border: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+            color: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? HOME_THEME.cyan : HOME_THEME.muted,
+            boxShadow: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
           }}
         >
           <GridIcon />
-        </button>
-
-        {pagesOpen && pagesMenuPos && (
-          <>
-            <div style={{ position: "fixed", inset: 0, zIndex: 999998 }} onClick={() => setPagesOpen(false)} />
-            <div
-              style={{
-                position: "fixed",
-                left: pagesMenuPos.left,
-                top: pagesMenuPos.top,
-                zIndex: 999999,
-                minWidth: 180,
-                maxHeight: "70vh",
-                overflow: "auto",
-                background: "rgba(13,17,25,0.96)",
-                border: "1px solid rgba(0,229,255,0.20)",
-                borderRadius: 10,
-                boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
-                backdropFilter: "blur(16px)",
-              }}
-            >
-              <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                Pages
-              </div>
-              {PAGE_SHORTCUTS.map(({ label, href }) => {
-                const active = isActive(href);
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    onClick={() => setPagesOpen(false)}
-                    style={{
-                      display: "block",
-                      padding: "8px 14px",
-                      fontSize: 12,
-                      fontWeight: active ? 700 : 500,
-                      color: active ? HOME_THEME.cyan : HOME_THEME.muted,
-                      textDecoration: "none",
-                      background: active ? "rgba(0,229,255,0.08)" : "transparent",
-                      borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
-                      letterSpacing: "0.02em",
-                    }}
-                  >
-                    {label}
-                  </Link>
-                );
-              })}
-            </div>
-          </>
-        )}
+        </div>
 
         <Link
           href="/economic-calendar"
@@ -327,7 +281,7 @@ export default function Sidebar() {
           .map(({ sym, label }) => {
             const pct = pcts[sym] ?? null;
             const color = pct === null ? HOME_THEME.muted : pct < -0.01 ? "#ff4757" : "#00e676";
-            const isSpx = label === "SPX";
+            const isCore = label === "SPX" || label === "ESU" || label === "NQU";
             return (
               <div
                 key={sym}
@@ -336,13 +290,13 @@ export default function Sidebar() {
                   flexDirection: "column",
                   alignItems: "center",
                   padding: "4px 0",
-                  background: isSpx ? "rgba(0,229,255,0.06)" : "transparent",
-                  borderLeft: isSpx ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
+                  background: isCore ? "rgba(0,229,255,0.06)" : "transparent",
+                  borderLeft: isCore ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
                 }}
               >
-                <span style={{ fontSize: 11, fontWeight: 700, color: isSpx ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: isCore ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
-                  {pct !== null ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—"}
+                  {fmtPct(pct)}
                 </span>
               </div>
             );
