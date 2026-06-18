@@ -16,29 +16,47 @@ function normalizeFlipPoint(value: unknown, spotPrice: number): number | null {
   return num;
 }
 
-async function fetchGexChain(expiry: string): Promise<any> {
-  // Primary: use the full chains endpoint — has estimateOptionGreekFallback for every strike
-  // so GEX is non-zero across the whole chain even before dxGreeksCache is warm.
-  // noCache=1: bypass proxy in-memory cache so OI and Greeks are always fresh (not stale from cold-start).
-  const qs = new URLSearchParams({ range: "all", noCache: "1" });
-  if (expiry) qs.set("expiration", expiry);
+function todayEtYmd(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
 
-  const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?${qs.toString()}`, {
+async function resolveSpxExpiry(expiry: string): Promise<string> {
+  const today = todayEtYmd();
+  if (expiry && /^\d{4}-\d{2}-\d{2}$/.test(expiry) && expiry >= today) return expiry;
+
+  const res = await fetch(`${PROXY}/proxy/api/tt/expirations/SPX`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return expiry || today;
+
+  const json = await res.json().catch(() => null);
+  const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+  const next = items
+    .map((item: any) => String(item?.["expiration-date"] ?? ""))
+    .filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= today)
+    .sort()[0];
+
+  return next || expiry || today;
+}
+
+async function fetchGexChain(expiry: string): Promise<any> {
+  const resolvedExpiry = await resolveSpxExpiry(expiry);
+  const qs = new URLSearchParams();
+  if (resolvedExpiry) qs.set("expiry", resolvedExpiry);
+
+  const res = await fetch(`${PROXY}/proxy/api/tt/gex-chain${qs.toString() ? `?${qs.toString()}` : ""}`, {
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
-  if (res.ok) return res.json();
+  if (res.ok) return { ...(await res.json()), __resolvedExpiry: resolvedExpiry };
 
-  // Fallback: gex-chain (faster but only returns strikes with warm dxGreeksCache)
-  const fastQs = new URLSearchParams();
-  if (expiry) fastQs.set("expiry", expiry);
-  const fastRes = await fetch(`${PROXY}/proxy/api/tt/gex-chain?${fastQs.toString()}`, {
-    cache: "no-store",
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (fastRes.ok) return fastRes.json();
-
-  throw new Error(`Both gex endpoints failed`);
+  throw new Error("gex-chain endpoint failed");
 }
 
 function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {
@@ -86,8 +104,8 @@ function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {
 
       const callOI = Number(call?.["open-interest"] ?? call?.openInterest ?? 0);
       const putOI = Number(put?.["open-interest"] ?? put?.openInterest ?? 0);
-      const callVol = Number(call?.volume ?? call?.dayVolume ?? 0);
-      const putVol = Number(put?.volume ?? put?.dayVolume ?? 0);
+      const callVol = Number(call?.dayVolume ?? call?.volume ?? 0);
+      const putVol = Number(put?.dayVolume ?? put?.volume ?? 0);
       const callGamma = Math.abs(Number(call?.gamma ?? 0));
       const putGamma = Math.abs(Number(put?.gamma ?? 0));
       const callDelta = Number(call?.delta ?? 0);
@@ -116,7 +134,7 @@ function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {
         netVolGEX: callGamma * callVol * spot * spot - putGamma * putVol * spot * spot,
         netDEX: callDelta * callOI * spot * 100 - Math.abs(putDelta) * putOI * spot * 100,
         volNetDEX: callDelta * callVol * spot * 100 - Math.abs(putDelta) * putVol * spot * 100,
-        dte: exp ? Math.max(0, Math.round((new Date(`${exp}T00:00:00`).getTime() - new Date().setHours(0,0,0,0)) / 86400000)) : 0,
+        dte: exp ? Math.max(0, Math.round((new Date(`${exp}T00:00:00`).getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000)) : 0,
         callIV,
         putIV,
         type: "call",
@@ -132,6 +150,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const expiry = searchParams.get("expiry") ?? "";
     const data = await fetchGexChain(expiry);
+    const resolvedExpiry = String((data?.__resolvedExpiry ?? expiry) || "");
     const chain = flattenChain(data);
     const spotPrice = Number(data?.spot ?? data?.data?.underlyingPrice ?? data?.underlyingPrice ?? chain[0]?.spotPrice ?? 0);
 
@@ -145,7 +164,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       timestamp: Number(data?.ts ?? Date.now()),
       spotPrice,
-      expiration: expiry || null,
+      expiration: resolvedExpiry || null,
       callWall: summary.callWall ?? (Number(data?.callWall ?? data?.data?.callWall ?? 0) || null),
       putWall: summary.putWall ?? (Number(data?.putWall ?? data?.data?.putWall ?? 0) || null),
       gexFlip: resolvedGexFlip,

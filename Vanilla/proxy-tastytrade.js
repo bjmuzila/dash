@@ -3949,7 +3949,7 @@ const server = http.createServer(async (req, res) => {
       const gamma   = Math.abs(firstFiniteNumber(greeks.gamma, 0));
       const delta   = firstFiniteNumber(greeks.delta, 0);
       const oi      = maxWholeNumber(summary.openInterest);
-      const vol     = maxWholeNumber(summary.volume);
+      const vol     = maxWholeNumber(summary.dayVolume ?? summary.volume);
       const isCall  = /C\d{4,8}$/.test(sym);
       if (!strikeMap[strike]) strikeMap[strike] = { strike, callGamma: 0, callDelta: 0, callOI: 0, callVol: 0, putGamma: 0, putDelta: 0, putOI: 0, putVol: 0 };
       if (isCall) { strikeMap[strike].callGamma = gamma; strikeMap[strike].callDelta = delta;  strikeMap[strike].callOI = oi; strikeMap[strike].callVol = vol; }
@@ -3957,9 +3957,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     const rows = Object.values(strikeMap).map(r => {
-      const callGEX = r.callGamma * r.callOI * spxSpot * spxSpot;
-      const putGEX  = r.putGamma  * r.putOI  * spxSpot * spxSpot * -1;
-      return { ...r, callGEX, putGEX, netGEX: callGEX + putGEX };
+      const callGEX    = r.callGamma * r.callOI  * spxSpot * spxSpot;
+      const putGEX     = r.putGamma  * r.putOI   * spxSpot * spxSpot * -1;
+      const callVolGEX = r.callGamma * r.callVol * spxSpot * spxSpot;
+      const putVolGEX  = r.putGamma  * r.putVol  * spxSpot * spxSpot * -1;
+      return { ...r, callGEX, putGEX, netGEX: callGEX + putGEX, callVolGEX, putVolGEX, netVolGEX: callVolGEX + putVolGEX };
     }).sort((a, b) => a.strike - b.strike);
 
     return sendJSON(res, 200, {
