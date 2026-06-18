@@ -43,11 +43,24 @@ class FlowProcessor {
    * @param {number} [opts.windowMs] rolling window length (default 5 min)
    * @param {number} [opts.maxPrints] hard cap on retained prints
    */
-  constructor({ windowMs = 5 * 60 * 1000, maxPrints = 50000 } = {}) {
+  /**
+   * @param {object} [opts]
+   * @param {number} [opts.windowMs] rolling window length (default 5 min)
+   * @param {number} [opts.maxPrints] hard cap on retained prints
+   * @param {number} [opts.tapeCap] hard cap on the per-order tape (default 200)
+   */
+  constructor({ windowMs = 5 * 60 * 1000, maxPrints = 50000, tapeCap = 200 } = {}) {
     this.windowMs = windowMs;
     this.maxPrints = maxPrints;
+    this.tapeCap = tapeCap;
     /** @type {Array<{time,side,type,size,price,premium}>} */
     this.prints = [];
+    /**
+     * Capped FIFO of recent per-order tape entries, oldest-first. Each entry is
+     * already in the FlowOrder shape the dashboard's FlowTape consumes.
+     * @type {Array<object>}
+     */
+    this.tape = [];
   }
 
   /**
@@ -58,21 +71,57 @@ class FlowProcessor {
    * @param {number} args.size
    * @param {number} [args.time] epoch ms
    * @param {object|null} [args.quote] prevailing quote {bid,ask} for side inference
+   * @param {number} [args.spot] underlying spot at print time (for isOtm/bucket)
    */
-  addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null }) {
+  addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0 }) {
     const parsed = parseOptionSymbol(streamerSymbol);
     if (!parsed || !(price > 0) || !(size > 0)) return;
     const side = inferSide(price, quote);
+    const premium = price * size * 100;
     this.prints.push({
       time,
       side,
       type: parsed.type, // 'C' | 'P'
       size,
       price,
-      premium: price * size * 100,
+      premium,
     });
     if (this.prints.length > this.maxPrints) {
       this.prints.splice(0, this.prints.length - this.maxPrints);
+    }
+
+    // Build the FlowOrder-shaped tape entry. Only buy/sell prints get a
+    // directional action; mid/unknown collapse to a neutral 'FLOW' row.
+    const isCall = parsed.type === 'C';
+    const isOtm = spot > 0
+      ? (isCall ? parsed.strike > spot : parsed.strike < spot)
+      : false;
+    let action = 'FLOW';
+    let bucket = 'neutral';
+    if (side === 'buy' || side === 'sell') {
+      const verb = side === 'buy' ? 'BUY' : 'SELL';
+      action = `${verb} ${isCall ? 'CALL' : 'PUT'}`;
+      // Bull = buy calls / sell puts; Bear = buy puts / sell calls.
+      const bullish = (side === 'buy' && isCall) || (side === 'sell' && !isCall);
+      bucket = bullish ? 'bull' : 'bear';
+    }
+    this.tape.push({
+      ts: time,
+      symbol: streamerSymbol,
+      underlying: parsed.root,
+      expiration: parsed.expiration,
+      strike: parsed.strike,
+      type: parsed.type,
+      side: side === 'buy' || side === 'sell' ? side : 'buy',
+      action,
+      bucket,
+      price,
+      size,
+      premium,
+      isOtm,
+    });
+    if (this.tape.length > this.tapeCap) {
+      this.tape.splice(0, this.tape.length - this.tapeCap);
     }
   }
 
@@ -127,11 +176,16 @@ class FlowProcessor {
       netPremium,
       buyPct,
       prints: this.prints.length,
+      // Per-order tape (capped, oldest-first) for the dashboard FlowTape.
+      // SPX-only: the tape is an SPX flow view regardless of the active feed
+      // symbol, so non-SPX underlyings (e.g. NVDA) yield an empty tape.
+      tape: this.tape.filter((o) => o.underlying === 'SPX' || o.underlying === 'SPXW'),
     };
   }
 
   reset() {
     this.prints = [];
+    this.tape = [];
   }
 }
 

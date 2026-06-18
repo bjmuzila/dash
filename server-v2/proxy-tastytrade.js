@@ -608,7 +608,13 @@ class TastytradeProxy {
       const dv = firstFiniteNumber(ev.dayVolume);
       if (dv > 0) this.volumes.set(sym, dv);
       const quote = this.quotes.get(sym) || null;
-      this.flow.addPrint({ streamerSymbol: sym, price: Number(ev.price), size: Number(ev.size), quote });
+      this.flow.addPrint({
+        streamerSymbol: sym,
+        price: Number(ev.price),
+        size: Number(ev.size),
+        quote,
+        spot: this.spot,
+      });
       return;
     }
     if (ev.eventType === 'Greeks') {

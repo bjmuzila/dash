@@ -364,6 +364,11 @@ export default function PremarketPage() {
   const spxPrev = spxPrice != null && spxRow?.change != null ? spxPrice - spxRow.change : null;
   const esRow   = allQuotes["/ES:XCME"];
 
+  // Live badge: true once quote data is flowing (WS quotes or Yahoo poll).
+  // setQuotes/WS wiring for this page is not yet hooked up, so fall back to
+  // yahooTs as the authoritative "data is arriving" signal.
+  const wsLive = Object.keys(allQuotes).length > 0 || yahooTs !== "";
+
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const asOf = yahooTs ? `${dateStr} - ${yahooTs} ET` : `${dateStr} - fetching Yahoo...`;

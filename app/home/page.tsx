@@ -5,6 +5,8 @@ import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
+import FlowTape from "@/components/dashboard/FlowTape";
+import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, computeGEXProfile, findGEXFlip } from "@/lib/calculations/calculations";
 
 type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
@@ -332,6 +334,8 @@ export default function HomePage() {
   // GEX chart rows pushed from /ws/gex broadcaster (server-computed loop)
   const [gexChainRows, setGexChainRows] = useState<ChainRow[]>([]);
   const [gexSpot, setGexSpot] = useState(0);
+  // SPX flow tape (per-order) pushed from the server `flow` WS message.
+  const [flowOrders, setFlowOrders] = useState<FlowOrder[]>([]);
   // Heatmap intensity slider (0.2–3, default 0.4) — controls cell color opacity.
   const [intensity, setIntensity] = useState(0.4);
   // 30-min rolling net GEX per strike, pulled from the history DB.
@@ -404,6 +408,12 @@ export default function HomePage() {
         case "spot": {
           const s = Number(data.spot ?? 0);
           if (s > 0) setGexSpot(s);
+          break;
+        }
+        case "flow": {
+          // Server sends the full capped tape (oldest-first) each message.
+          const tape = data.tape as FlowOrder[] | undefined;
+          if (Array.isArray(tape)) setFlowOrders(tape);
           break;
         }
         case "EXPIRATIONS":
@@ -667,9 +677,8 @@ export default function HomePage() {
                   </div>
                 )}
                 {activeTab === "spxflow" && (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
+                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                    <FlowTape orders={flowOrders} connected={status === "LIVE"} />
                   </div>
                 )}
               </div>
