@@ -162,7 +162,7 @@ function buildChainRows(strikes: StrikeRow[], liveData: Record<string, LiveEntry
   });
 }
 
-function pickCenterRows(rows: ChainRow[], spot: number, count = 19): ChainRow[] {
+function pickCenterRows(rows: ChainRow[], spot: number, count = 41): ChainRow[] {
   if (!rows.length) return [];
   const sorted = [...rows].sort((a, b) => b.strike - a.strike);
   let atmIndex = 0;
@@ -180,7 +180,7 @@ function pickCenterRows(rows: ChainRow[], spot: number, count = 19): ChainRow[] 
 }
 
 function toHeatmapRows(rows: ChainRow[], spot: number): HeatmapRow[] {
-  const windowRows = pickCenterRows(rows, spot, 19);
+  const windowRows = pickCenterRows(rows, spot, 41);
   const byAbsPos = [...windowRows].filter((row) => (row.netGEX ?? 0) > 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
   const byAbsNeg = [...windowRows].filter((row) => (row.netGEX ?? 0) < 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
   const rankMap = new Map<number, { rank: number; rankColor: string }>();
@@ -662,7 +662,7 @@ export default function HomePage() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden" }}>
-            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", height: 420, flexShrink: 0, overflow: "hidden" }}>
+            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", height: 480, flexShrink: 0, overflow: "hidden" }}>
               {/* GEX title row */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", flexShrink: 0 }}>
                 <span style={{ color: C.cyan }}><BarChart2 /></span>
