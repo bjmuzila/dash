@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { ensureProxyLiveSubscription } from "@/lib/proxy/liveSubscription";
+import { getClientWsUrl } from "@/lib/clientRuntime";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -526,8 +527,7 @@ export default function MultGreekPage() {
 
   // Connect dxlink WS
   useEffect(() => {
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
-    const ws = new WebSocket(`${wsBase}/ws/dxlink`);
+    const ws = new WebSocket(getClientWsUrl());
     wsRef.current = ws;
 
     ws.onopen = () => {

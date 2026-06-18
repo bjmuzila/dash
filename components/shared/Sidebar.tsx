@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { getClientProxyBase, getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
+import { getClientProxyBase, getClientWsUrl } from "@/lib/clientRuntime";
 import { HOME_THEME } from "./homeTheme";
 
 const HomeIcon = () => (
@@ -149,24 +149,16 @@ function useSidebarQuotes() {
   };
 
   useEffect(() => {
-    async function connect() {
+    function connect() {
       if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) return;
-      if (!(await isLiveFeedReady())) {
-        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 10000);
-        return;
-      }
 
       const ws = new WebSocket(getClientWsUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {
         ws.send(JSON.stringify({
-          type: "FEED_SUBSCRIPTION",
-          add: QUOTE_SYMBOLS.flatMap(({ sym }) => ([
-            { type: "Quote", symbol: sym },
-            { type: "Trade", symbol: sym },
-            { type: "Summary", symbol: sym },
-          ])),
+          type: "subscribe",
+          symbols: QUOTE_SYMBOLS.map(s => s.sym),
         }));
       };
 
@@ -195,13 +187,13 @@ function useSidebarQuotes() {
 
       ws.onclose = () => {
         wsRef.current = null;
-        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 3000);
+        reconnectTimerRef.current = setTimeout(() => { connect(); }, 3000);
       };
 
       ws.onerror = () => ws.close();
     }
 
-    void connect();
+    connect();
     void refreshQuotes();
     const fallbackTimer = setInterval(() => {
       void refreshQuotes();

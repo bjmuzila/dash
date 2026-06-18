@@ -26,8 +26,8 @@ const PAD_T = 20;
 const PAD_B = 6;
 const PAD_L = 4;   // minimal — no axis border
 const PAD_R = 4;   // minimal — no axis border
-const MIN_COUNT = 10;
-// DEFAULT_COUNT is now computed dynamically as Math.round(300 / detectedStep) + 1
+const MIN_COUNT = 30;
+// DEFAULT_COUNT is now computed dynamically as Math.round(600 / detectedStep) + 1
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
@@ -126,7 +126,7 @@ export default function GexChart({
 
   // Viewport — matches vanilla ovViewport: { count, start }
   // count is set on first draw based on detected strike step (target ~$300 range)
-  const vpRef      = useRef({ start: null as number | null, count: 61 });
+  const vpRef      = useRef({ start: null as number | null, count: 121 });
   // Y scale — matches vanilla ovYScale (1 = auto, >1 = zoomed in, <1 = zoomed out)
   const yScaleRef  = useRef(1);
   // Drag
@@ -166,8 +166,8 @@ export default function GexChart({
     }
 
     // ── Viewport ──
-    // Target ~$300 visible range regardless of strike spacing
-    const targetRange = 300;
+    // Target ~$600 visible range regardless of strike spacing
+    const targetRange = 600;
     const dynCount    = Math.max(MIN_COUNT, Math.round(targetRange / detectedStep) + 1);
     const vp = vpRef.current;
     // On first draw (start===null), set count to match detected step
@@ -576,7 +576,7 @@ export default function GexChart({
         if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
       // Clear refs
-      vpRef.current = { start: null, count: 61 };
+      vpRef.current = { start: null, count: 121 };
       yScaleRef.current = 1;
       dragRef.current = null;
     };
@@ -586,7 +586,7 @@ export default function GexChart({
   useEffect(() => {
     if (!chain.length) return;
     const { rows, step } = densify(chain, spotPrice);
-    const initCount = Math.max(MIN_COUNT, Math.round(300 / step) + 1);
+    const initCount = Math.max(MIN_COUNT, Math.round(600 / step) + 1);
     vpRef.current    = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
     draw();
@@ -670,7 +670,7 @@ export default function GexChart({
   // ── Double-click: re-center on ATM + reset y-scale ──
   const onDblClick = useCallback(() => {
     const { rows, step } = densify(chain, spotPrice);
-    const initCount = Math.max(MIN_COUNT, Math.round(300 / step) + 1);
+    const initCount = Math.max(MIN_COUNT, Math.round(600 / step) + 1);
     vpRef.current     = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
     draw();

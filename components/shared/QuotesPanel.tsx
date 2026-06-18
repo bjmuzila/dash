@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getClientProxyBase, getClientWsUrl, isLiveFeedReady } from "@/lib/clientRuntime";
+import { getClientProxyBase, getClientWsUrl } from "@/lib/clientRuntime";
 
 // All symbols — indices/futures always streamed, equities subscribed on mount
 const ES_DISPLAY_SYMBOL = "/ESU26";
@@ -75,23 +75,15 @@ export default function QuotesPanel() {
   useEffect(() => {
     async function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
-      const liveFeedReady = await isLiveFeedReady();
-      if (!liveFeedReady) {
-        reconnectTimerRef.current = setTimeout(() => { void connect(); }, 10000);
-        return;
-      }
       try {
         const ws = new WebSocket(getClientWsUrl());
         wsRef.current = ws;
 
         ws.onopen = () => {
+          // Register with proxy's subscription filter
           ws.send(JSON.stringify({
-            type: "FEED_SUBSCRIPTION",
-            add: WS_SYMBOLS.flatMap(({ sym }) => [
-              { type: "Quote",   symbol: sym },
-              { type: "Trade",   symbol: sym },
-              { type: "Summary", symbol: sym },
-            ]),
+            type: "subscribe",
+            symbols: WS_SYMBOLS.map(s => s.sym),
           }));
         };
 

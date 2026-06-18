@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-06-18 (session 32) — Unified WS connection pattern across all pages
+
+All live-data consumers now use the same pattern:
+- `getClientWsUrl()` for the WS URL (reads `NEXT_PUBLIC_WS_URL`, falls back to same-origin `/ws/dxlink`)
+- `{ type: "subscribe", symbols }` on `onopen` to register with proxy's `subscriptionFilter`
+- No `isLiveFeedReady()` gate (was blocking on Render where 127.0.0.1:3001 is unreachable)
+
+### Files changed
+- `components/shared/Sidebar.tsx` — removed `isLiveFeedReady` gate + import; `FEED_SUBSCRIPTION` → `subscribe`; `connect` made sync
+- `components/shared/QuotesPanel.tsx` — (session 31) same fixes already applied
+- `app/insights/page.tsx` — replaced inline WS URL construction with `getClientWsUrl()`; added import
+- `app/mult-greek/page.tsx` — replaced inline WS URL construction with `getClientWsUrl()`; added import
+- `app/options-chain/page.tsx` — replaced inline WS URL construction with `getClientWsUrl()`; added import
+- `app/home/page.tsx` — already correct (no change)
+
+---
+
+## 2026-06-18 (session 31) — GEX Chart bars + QuotesPanel live quotes fix
+
+### GEX Chart sparse bars — `components/dashboard/GexChart.tsx`
+- `targetRange` 300 → 600, `MIN_COUNT` 10 → 30, default `vpRef.count` 61 → 121
+- All 4 call sites (draw loop, expiry reset, dblclick, initial ref) updated
+
+### QuotesPanel live quotes never connected — `components/shared/QuotesPanel.tsx`
+- **Root cause**: `isLiveFeedReady()` calls `/api/keepalive` → `127.0.0.1:3001/health`. On Render the proxy is a separate service, so this always returns `false`, blocking WS connection indefinitely (10s retry loop never succeeded).
+- **Fix**: Removed `isLiveFeedReady()` gate entirely — connect WS directly, let reconnect logic handle failures.
+- **Fix**: Subscription message changed from `FEED_SUBSCRIPTION` (dxFeed protocol, ignored by proxy) to `{ type: "subscribe", symbols }` which the proxy's `ws.on('message')` handler actually processes to register the client in `subscriptionFilter`.
+
+---
+
+### Root Cause
+`densify()` detected large step sizes (25–50pt) from the sparse server-pushed GEX rows, causing `dynCount = Math.round(300 / step) + 1` to resolve to as few as 7–13 bars.
+
+### Fix — `components/dashboard/GexChart.tsx`
+- `targetRange` increased from `300` → `600` (all 4 call sites: draw loop, expiry reset, dblclick reset, initial ref)
+- `MIN_COUNT` increased from `10` → `30`
+- Initial `vpRef.current.count` default increased `61` → `121`
+
+### Result
+Chart now shows 30–120 bars (depending on step), centering ~$600 of strikes around ATM by default.
+
+---
+
+## 2026-06-18 (session 30) — Push-Based GEX Architecture: Live on Render
+
+### Summary
+Completed and deployed the full server-push GEX architecture. The GEX loop runs server-side, pushing data to all clients via WebSocket every 5 seconds.
+
+### Root Causes Fixed
+- `fetchSpxwExpirations` called TT REST directly → 401 on Render (expired token). Fixed by deriving 0DTE expiry from `new Date()` — no TT auth needed.
+- dxLink WS bridge called `socket.destroy()` on all non-`/ws/dxlink` upgrades, silently blocking `/ws/gex` broadcaster. Fixed with `return` (pass-through).
+- React hydration error #418: `useState(new Date())` caused server/client timestamp mismatch. Fixed with `useState<Date | null>(null)` + `useEffect` init.
+- Heatmap `<>` fragment missing `key` prop → replaced with `<React.Fragment key={rowKey}>`.
+
+### Files Modified
+- `server/loops/gex-loop.js` — removed TT REST expiry fetch; derive 0DTE from date
+- `server/websocket-server.js` — fixed socket.destroy blocking /ws/gex
+- `app/home/page.tsx` — hydration fix, fragment key fix, React import
+
+### Result
+579 GEX rows pushed every 5s on Render. Chart renders with real bars, heatmap live. NET GEX +$808.12M, FLIP 7496.10. Deployed as v27.
+
+---
+
 ## 2026-06-18 (session 29) — GEX Chart Full Feature Upgrade
 
 ### `app/home/page.tsx`

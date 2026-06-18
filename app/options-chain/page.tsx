@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { ensureProxyLiveSubscription } from "@/lib/proxy/liveSubscription";
+import { getClientWsUrl } from "@/lib/clientRuntime";
 
 const QUOTE_PANEL_TICKERS = [
   "VIX",
@@ -344,8 +345,7 @@ export default function OptionsChainPage() {
 
   // Connect WS for live updates
   useEffect(() => {
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
-    const ws = new WebSocket(`${wsBase}/ws/dxlink`);
+    const ws = new WebSocket(getClientWsUrl());
     wsRef.current = ws;
 
     ws.onopen = () => {

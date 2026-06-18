@@ -7,6 +7,7 @@ import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeks
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import IbLogic from "@/components/insights/IbLogic";
 import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
+import { getClientWsUrl } from "@/lib/clientRuntime";
 
 type InsightsTab = "exposure" | "vix" | "ib";
 
@@ -397,11 +398,8 @@ function fmtNum(v: number | undefined | null, decimals = 2, prefix = ""): string
 
 // ── Sparkline canvas component ────────────────────────────────────────────────
 
-const DXLINK_WS_URL =
-  typeof window !== "undefined"
-    ? (process.env.NEXT_PUBLIC_WS_URL ??
-        `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/dxlink`)
-    : "";
+// WS URL resolved via shared helper (reads NEXT_PUBLIC_WS_URL, falls back to same-origin)
+const DXLINK_WS_URL = typeof window !== "undefined" ? getClientWsUrl() : "";
 
 function Sparkline({ data, color, height = 62 }: { data: { ts: number; value: number }[]; color: string; height?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
