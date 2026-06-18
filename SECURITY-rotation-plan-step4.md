@@ -57,18 +57,16 @@ git filter-repo --path "_ARCHIVED_DO_NOT_EDIT/Vanilla/bzila.pem" --invert-paths
 #   create secrets.txt with one literal==>REDACTED per line, then:
 git filter-repo --replace-text secrets.txt
 ```
-`secrets.txt` lines:
-```
-REDACTED==>REDACTED
-REDACTED==>REDACTED
-REDACTED==>REDACTED
-```
+`secrets.txt` (create at scrub time, do NOT commit — gitignored by `*.txt`? no, name it
+`secrets-scrub.txt` and delete after). One `LITERAL==>REDACTED` per line. The literals are
+the now-rotated Schwab secret, both Discord webhook tokens, and the bzila private key — pull
+them from your password manager / the pre-cleanup git history, not from this repo.
 Then force-push (`git push --force --all` / `--tags`). **Rewrites history** — coordinate, and note any forks/clones still hold the old commits, which is the real reason §A is non-negotiable.
 
 ## D. Verify
 
 ```
-git grep -n -I -i -E "BaBkhCG7|discord(app)?\.com/api/webhooks"   # expect: no live values
+git grep -n -i -E "discord(app)?\.com/api/webhooks/[0-9]"   # expect: no live values
 $env:SYMBOL="SPX"; npm run dev                                     # server-v2 boots with new .env.local
 ```
 Confirm GEX/flow snapshots return data, then proceed to Step 5 (your merge to `main`).

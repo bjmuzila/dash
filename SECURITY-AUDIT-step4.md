@@ -20,11 +20,11 @@ Every secret reads from environment variables with no hardcoded fallback:
 
 | # | Secret | Location | Notes |
 |---|--------|----------|-------|
-| 1 | Discord webhook — id `1466249857122570454`, token `REDACTED` | `server/proxy-tastytrade.js:50` | `\|\|` fallback after `process.env.DISCORD_WEBHOOK_URL`; OLD stack |
-| 2 | Schwab client secret `REDACTED` | `server/proxy-tastytrade.js:48` | hardcoded fallback; OLD stack |
+| 1 | Discord webhook — id `1466…854` (token `<REDACTED>`) | `server/proxy-tastytrade.js:50` | `\|\|` fallback after `process.env.DISCORD_WEBHOOK_URL`; OLD stack — ROTATED |
+| 2 | Schwab client secret `<REDACTED>` | `server/proxy-tastytrade.js:48` | hardcoded fallback; OLD stack — app deleted |
 | 3 | RSA private key (`-----BEGIN RSA PRIVATE KEY-----`) | `_ARCHIVED_DO_NOT_EDIT/Vanilla/bzila.pem` | full private key committed in tree |
 | 3b | TLS keystore / cert | `_ARCHIVED_DO_NOT_EDIT/Vanilla/cert.pfx` | binary cert (may hold private key) committed in tree |
-| 4 | Discord webhook — id `1513884964490444830`, token `REDACTED` | `_ARCHIVED_DO_NOT_EDIT/Vanilla/dashboard-server.js:9` | second distinct webhook |
+| 4 | Discord webhook — id `1513…830` (token `<REDACTED>`) | `_ARCHIVED_DO_NOT_EDIT/Vanilla/dashboard-server.js:9` | second distinct webhook — archive deleted |
 | 5 | Webhook `1466…` + Schwab secret (duplicates of #1/#2) | `_ARCHIVED_DO_NOT_EDIT/Vanilla/` — `proxy-tastytrade.js`, `proxy-tastytrade (1).js`, `MVC/estimated-moves.html`, `pages/old/estimated-moves (2).js`, `pages/old/estimated-moves1.html`, `pages/old/top10.html`, `pages/old/overview (1).js` | ~8 archived copies |
 
 ## 3. Env-based — rotate at provider only (code is clean)
@@ -44,9 +44,9 @@ Run in repo root (PowerShell), all read-only, then hand back output:
 git rev-parse --abbrev-ref HEAD
 git status --short
 git ls-files | Select-String -Pattern "bzila.pem|\.env|token.*\.json|credentials"
-git grep -n -I -i -E "discord(app)?\.com/api/webhooks|REDACTED" $(git rev-list --all) 2>$null | Select-Object -First 60
+git grep -n -I -i -E "discord(app)?\.com/api/webhooks|<SCHWAB_SECRET>" $(git rev-list --all) 2>$null | Select-Object -First 60
 git log --all --oneline -- "_ARCHIVED_DO_NOT_EDIT/Vanilla/bzila.pem"
-git log -p --all -S "REDACTED" --oneline | Select-Object -First 40
+git log -p --all -S "<SCHWAB_SECRET>" --oneline | Select-Object -First 40
 ```
 
 ## 5. Recommended next steps (NOT executed)
