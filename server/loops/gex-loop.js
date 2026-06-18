@@ -2,32 +2,52 @@
  * GEX computation loop.
  *
  * Every GEX_INTERVAL ms:
- *   1. Fetch SPXW chain from TT REST (or use cached if fresh)
- *   2. Fetch SPX spot price
- *   3. Compute GEX rows (pure function)
- *   4. Update market-state (triggers WS broadcast)
- *   5. Write snapshot to Postgres
+ *   1. Call /api/gex (Next.js route → proxy chains/SPX → OI + estimated Greeks)
+ *   2. Compute summary levels (flip, call wall, put wall)
+ *   3. Update market-state (triggers WS broadcast to all /ws/gex clients)
+ *   4. Write snapshot to Postgres
  *
- * No dxGreeksCache dependency. No per-client request handling.
- * Data is always available when clients connect.
+ * No direct TT REST chain fetching — delegates to /api/gex which already
+ * handles enrichment via the proxy's dxLink + estimateOptionGreekFallback.
  */
 'use strict';
 
-const { fetchChainRows, fetchSpxwExpirations, fetchSpxSpot } = require('../fetchers/tt-chain');
-const { computeGexRows, findGexFlip, findCallWall, findPutWall, totalNetGex } = require('../computation/gex-calculator');
+const { fetchSpxwExpirations } = require('../fetchers/tt-chain');
+const { findGexFlip, findCallWall, findPutWall, totalNetGex } = require('../computation/gex-calculator');
 const marketState = require('../state/market-state');
+const http = require('http');
 
-const GEX_INTERVAL        = 5_000;   // ms between GEX updates
-const EXPIRY_INTERVAL     = 60_000;  // ms between expiry list refreshes
-const CHAIN_CACHE_TTL     = 4_000;   // don't re-fetch if last fetch was < 4s ago
-const PG_WRITE_INTERVAL   = 30_000;  // write to Postgres at most every 30s
+const NEXT_PORT = process.env.PORT || 3002;
 
-let pgPool = null;         // set via init()
+/**
+ * Fetch fully-computed GEX chain from the Next.js /api/gex route.
+ * This route calls the proxy's chains/SPX endpoint which has OI + estimated Greeks.
+ */
+async function fetchGexFromApi(expiry) {
+  return new Promise((resolve, reject) => {
+    const url = `/api/gex?expiry=${encodeURIComponent(expiry)}`;
+    const req = http.get({ hostname: '127.0.0.1', port: NEXT_PORT, path: url, timeout: 20000 }, res => {
+      let raw = '';
+      res.on('data', c => raw += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)); }
+        catch (e) { reject(new Error('Invalid JSON from /api/gex')); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('/api/gex timeout')); });
+  });
+}
+
+const GEX_INTERVAL      = 5_000;   // ms between GEX updates
+const EXPIRY_INTERVAL   = 60_000;  // ms between expiry list refreshes
+const PG_WRITE_INTERVAL = 30_000;  // write to Postgres at most every 30s
+
+let pgPool = null;
 let loopTimer = null;
 let expiryTimer = null;
-let lastFetchAt = 0;
 let lastPgWriteAt = 0;
-let cachedRows = [];       // raw option rows from last fetch
+let cachedRows = [];       // last known GEX rows (used as fallback if fetch fails)
 let isRunning = false;
 
 // ── Postgres write (non-blocking, fire-and-forget) ───────────────────────────
@@ -62,41 +82,35 @@ async function tick() {
   }
 
   try {
-    // 1. Fetch chain (use cached rows if fresh)
-    const now = Date.now();
-    if (now - lastFetchAt > CHAIN_CACHE_TTL || !cachedRows.length) {
-      cachedRows = await fetchChainRows(expiry, 0); // spot=0, underlyingPrice comes from chain
-      lastFetchAt = now;
-      console.log(`[gex-loop] Fetched ${cachedRows.length} option rows for ${expiry}`);
-    }
+    // 1. Fetch GEX data from /api/gex (Next.js route that calls proxy w/ OI+Greeks)
+    // Response shape: { chain: ChainRow[], spotPrice, callWall, putWall, gexFlip, summary }
+    const apiResult = await fetchGexFromApi(expiry);
+    const gexRows = Array.isArray(apiResult.chain) && apiResult.chain.length
+      ? apiResult.chain
+      : cachedRows;
+    const spot    = Number(apiResult.spotPrice ?? 0) > 0
+      ? Number(apiResult.spotPrice)
+      : marketState.getState().spot;
 
-    if (!cachedRows.length) {
-      marketState.setError(`No chain rows returned for ${expiry}`);
+    if (!gexRows.length) {
+      marketState.setError(`No GEX rows returned for ${expiry}`);
       return;
     }
-
-    // 2. Derive spot from chain data, fall back to separate call or last known
-    let spot = cachedRows.find(r => r.underlyingPrice > 0)?.underlyingPrice ?? 0;
-    if (!(spot > 0)) spot = await fetchSpxSpot();
-    if (!(spot > 0)) spot = marketState.getState().spot;
     if (!(spot > 0)) {
-      // Last resort: use a hardcoded reasonable value so we can still compute GEX shape
-      // This only happens at startup before any price data arrives
-      console.warn('[gex-loop] Spot still unknown — will retry next tick');
+      console.warn('[gex-loop] Spot unknown — will retry next tick');
       return;
     }
-    console.log(`[gex-loop] Spot: ${spot}`);
 
-    // 3. Compute GEX
-    const gexRows = computeGexRows(cachedRows, spot);
+    console.log(`[gex-loop] ${gexRows.length} GEX rows for ${expiry}, spot: ${spot}`);
+    cachedRows = gexRows;
 
-    // 4. Compute summary levels
-    const flip    = findGexFlip(gexRows, spot);
-    const cw      = findCallWall(gexRows, spot);
-    const pw      = findPutWall(gexRows, spot);
-    const netGex  = totalNetGex(gexRows);
+    // 2. Compute summary levels
+    const flip   = findGexFlip(gexRows, spot);
+    const cw     = findCallWall(gexRows, spot);
+    const pw     = findPutWall(gexRows, spot);
+    const netGex = totalNetGex(gexRows);
 
-    // 5. Update state (triggers WS broadcast via onChange listener in broadcaster)
+    // 3. Update state (triggers WS broadcast via onChange listener in broadcaster)
     marketState.setGexUpdate({
       gexRows,
       spot,
@@ -107,7 +121,7 @@ async function tick() {
       totalNetGex: netGex,
     });
 
-    // 6. Write to Postgres (rate-limited)
+    // 4. Write to Postgres (rate-limited)
     pgWriteGexSnapshot(gexRows, spot, expiry).catch(() => {});
 
   } catch (err) {
@@ -181,8 +195,7 @@ function stop() {
 async function setExpiry(expiry) {
   if (!expiry) return;
   marketState.setExpiry(expiry);
-  cachedRows  = [];    // force re-fetch
-  lastFetchAt = 0;
+  cachedRows = [];    // clear so tick falls back to fresh fetch
   await tick();
 }
 

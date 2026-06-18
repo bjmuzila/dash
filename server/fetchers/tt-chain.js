@@ -1,13 +1,17 @@
 /**
  * Fetches the SPXW option chain for a given expiry from TastyTrade REST.
- * Returns a flat array of raw option rows — no GEX math, no side effects.
+ * Uses /option-chains/SPXW/nested which returns OI data for all strikes.
+ * Greeks are estimated analytically (Gaussian) since REST doesn't include them.
  *
- * Each row:
+ * Each returned row:
  *   { strike, expDate, side, oi, volume, delta, gamma, iv, streamerSymbol, underlyingPrice }
  */
 'use strict';
 
 const { ttGet } = require('./tt-auth');
+const http = require('http');
+
+const PROXY_PORT = process.env.PROXY_PORT || 3001;
 
 /**
  * Estimate Greeks analytically when TT REST doesn't return them.
@@ -34,7 +38,7 @@ function estimateGreeks(strike, underlyingPrice, expDate, side) {
 }
 
 /**
- * Fetch today's SPXW expirations, return as sorted date strings.
+ * Fetch today's SPXW expirations from /nested endpoint.
  */
 async function fetchSpxwExpirations() {
   const { status, data } = await ttGet('/option-chains/SPXW/nested');
@@ -50,76 +54,96 @@ async function fetchSpxwExpirations() {
 }
 
 /**
- * Fetch all options for a single SPXW expiry date.
- * Returns flat array of raw option objects from TT REST.
- */
-async function fetchSpxwOptionsForExpiry(expDate) {
-  const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${expDate}`);
-  if (status !== 200) throw new Error(`TT chain for ${expDate} returned ${status}`);
-
-  // TT returns items = array of expiration objects.
-  // Each expiration has an 'option-chains' array of individual option rows.
-  const expItems = Array.isArray(data?.data?.items) ? data.data.items : [];
-  const options = [];
-
-  for (const exp of expItems) {
-    const chain = exp['option-chains'];
-    if (Array.isArray(chain)) {
-      // Copy expiration-date onto each option row for reference
-      for (const opt of chain) {
-        if (!opt['expiration-date']) opt['expiration-date'] = exp['expiration-date'] ?? expDate;
-        options.push(opt);
-      }
-    }
-  }
-
-  console.log(`[tt-chain] SPXW chain: ${expItems.length} expiry groups → ${options.length} options, sample opt keys: ${Object.keys(options[0] ?? {}).slice(0, 6).join(', ')}`);
-  return options;
-}
-
-/**
- * Fetch SPX spot price.
+ * Fetch SPX spot price from the proxy's market-data cache (already running on port 3001).
+ * Falls back to TT REST if proxy isn't ready.
  */
 async function fetchSpxSpot() {
+  // Try proxy first (fast, already has live data)
   try {
-    const { status, data } = await ttGet('/market-data/by-type?type=Quote&symbols%5B%5D=%24SPX.X&symbols%5B%5D=SPX');
+    const spot = await new Promise((resolve, reject) => {
+      const req = http.get(`http://127.0.0.1:${PROXY_PORT}/proxy/api/tt/market-data/SPX`, { timeout: 3000 }, res => {
+        let raw = '';
+        res.on('data', c => raw += c);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(raw);
+            // Proxy returns { data: { items: [...] } } or { spotPrice: N }
+            const price = Number(
+              json?.spotPrice ??
+              json?.data?.items?.[0]?.last ??
+              json?.data?.items?.[0]?.['last-price'] ??
+              0
+            );
+            resolve(price > 0 ? price : 0);
+          } catch { resolve(0); }
+        });
+      });
+      req.on('error', () => resolve(0));
+      req.on('timeout', () => { req.destroy(); resolve(0); });
+    });
+    if (spot > 0) return spot;
+  } catch {}
+
+  // Fall back to TT REST market-data endpoint
+  try {
+    const { status, data } = await ttGet('/market-data/by-type?index%5B%5D=SPX');
     if (status === 200 && Array.isArray(data?.data?.items)) {
       for (const item of data.data.items) {
-        const bid = Number(item['bid-price'] ?? 0);
-        const ask = Number(item['ask-price'] ?? 0);
-        if (bid > 0 && ask > 0) return (bid + ask) / 2;
-        const last = Number(item['last-price'] ?? 0);
+        const last = Number(item.last ?? item['last-price'] ?? 0);
         if (last > 0) return last;
       }
     }
   } catch (e) {
-    console.error('[tt-chain] fetchSpxSpot error:', e.message);
+    console.error('[tt-chain] fetchSpxSpot REST error:', e.message);
   }
   return 0;
 }
 
 /**
+ * Fetch all options for a single SPXW expiry using /nested endpoint.
+ * Returns flat array with OI data included.
+ */
+async function fetchSpxwOptionsForExpiry(expDate) {
+  const { status, data } = await ttGet('/option-chains/SPXW/nested');
+  if (status !== 200) throw new Error(`TT nested chain returned ${status}`);
+
+  // The /nested endpoint only has streamer symbols, not OI/Greeks.
+  // Use the flat endpoint which has all named fields including open-interest.
+  const flatResp = await ttGet(`/option-chains/SPXW?expiration-date=${expDate}`);
+  if (flatResp.status !== 200) throw new Error(`TT flat chain returned ${flatResp.status}`);
+
+  const flatItems = Array.isArray(flatResp.data?.data?.items) ? flatResp.data.data.items : [];
+  // The flat endpoint returns options across all expirations — filter to our target date
+  const options = flatItems.filter(opt => {
+    const d = String(opt['expiration-date'] ?? '');
+    return !d || d.slice(0, 10) === expDate;
+  });
+
+  console.log(`[tt-chain] Flat chain ${expDate}: ${flatItems.length} total, ${options.length} filtered. Keys: ${Object.keys(options[0] ?? {}).slice(0, 10).join(', ')}`);
+  return options;
+}
+
+/**
  * Main export: fetch full chain for given expiry, return normalized rows.
- *
- * @param {string} expDate  - 'YYYY-MM-DD'
- * @param {number} spot     - SPX spot price (used for Greek fallback)
- * @returns {Promise<Array>} normalized option rows
  */
 async function fetchChainRows(expDate, spot) {
   const rawOptions = await fetchSpxwOptionsForExpiry(expDate);
   if (!rawOptions.length) return [];
 
-  // Infer underlying price from option data if spot not provided
+  // Use provided spot, or infer from option data
   let underlyingPrice = spot || 0;
   if (!(underlyingPrice > 0)) {
+    underlyingPrice = rawOptions[0]?._underlyingPrice ?? 0;
+  }
+  if (!(underlyingPrice > 0)) {
     for (const opt of rawOptions.slice(0, 20)) {
-      const p = Number(opt['underlying-price'] ?? opt.underlyingPrice ?? 0);
+      const p = Number(opt['underlying-price'] ?? opt._underlyingPrice ?? 0);
       if (p > 0) { underlyingPrice = p; break; }
     }
   }
 
   return rawOptions.map(opt => {
-    const strike    = Number(opt['strike-price'] ?? 0);
+    const strike    = Number(opt['strike-price'] ?? opt.strike ?? 0);
     const rawType   = String(opt['option-type'] ?? '').toUpperCase();
     const side      = rawType === 'C' ? 'call' : 'put';
     const oi        = Number(opt['open-interest'] ?? opt.openInterest ?? 0) || 0;
@@ -128,7 +152,6 @@ async function fetchChainRows(expDate, spot) {
     const restGamma = Math.abs(Number(opt.gamma ?? 0)) || 0;
     const iv        = Number(opt['implied-volatility'] ?? opt.impliedVolatility ?? 0) || 0;
 
-    // Use REST Greeks if present, otherwise estimate analytically
     const fallback  = (!restGamma) ? estimateGreeks(strike, underlyingPrice, expDate, side) : null;
     const delta     = restDelta || (fallback?.delta ?? 0);
     const gamma     = restGamma || (fallback?.gamma ?? 0);
@@ -142,7 +165,7 @@ async function fetchChainRows(expDate, spot) {
       delta,
       gamma,
       iv,
-      streamerSymbol: opt['streamer-symbol'] ?? '',
+      streamerSymbol: opt['streamer-symbol'] ?? opt.symbol ?? '',
       underlyingPrice,
     };
   }).filter(r => r.strike > 0);

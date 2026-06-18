@@ -221,7 +221,20 @@ export default function Sidebar() {
   const pathname = usePathname();
   const pcts = useSidebarQuotes();
   const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const [pagesOpen, setPagesOpen] = useState(false);
+  const pagesBtnRef = useRef<HTMLButtonElement | null>(null);
+  const pagesMenuRef = useRef<HTMLDivElement | null>(null);
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
+
+  useEffect(() => {
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (pagesBtnRef.current?.contains(target) || pagesMenuRef.current?.contains(target)) return;
+      setPagesOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
 
   const goIntoIdle = async () => {
     setIdleActionState("busy");
@@ -275,9 +288,10 @@ export default function Sidebar() {
           <HomeIcon />
         </Link>
 
-        <Link
-          href="/overview"
+        <button
+          ref={pagesBtnRef}
           title="Overview"
+          onClick={() => setPagesOpen((v) => !v)}
           style={{
             display: "flex",
             alignItems: "center",
@@ -291,10 +305,58 @@ export default function Sidebar() {
             border: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
             color: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? HOME_THEME.cyan : HOME_THEME.muted,
             boxShadow: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+            cursor: "pointer",
+            backgroundColor: pagesOpen ? "rgba(0,229,255,0.12)" : undefined,
           }}
         >
           <GridIcon />
-        </Link>
+        </button>
+
+        {pagesOpen && (
+          <div
+            ref={pagesMenuRef}
+            style={{
+              position: "absolute",
+              left: 84,
+              top: 12,
+              zIndex: 10001,
+              minWidth: 180,
+              background: "rgba(13,17,25,0.96)",
+              border: "1px solid rgba(0,229,255,0.20)",
+              borderRadius: 10,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+              backdropFilter: "blur(16px)",
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ padding: "8px 12px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              Pages
+            </div>
+            {PAGE_SHORTCUTS.map(({ label, href }) => {
+              const active = isActive(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={() => setPagesOpen(false)}
+                  style={{
+                    display: "block",
+                    padding: "8px 12px",
+                    fontSize: 12,
+                    fontWeight: active ? 700 : 500,
+                    color: active ? HOME_THEME.cyan : HOME_THEME.muted,
+                    textDecoration: "none",
+                    background: active ? "rgba(0,229,255,0.08)" : "transparent",
+                    borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  {label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
 
         <Link
           href="/economic-calendar"
