@@ -154,6 +154,36 @@ export default function DevPage() {
   }, [optionSide, selectedStrikeRow]);
 
   const effectiveSymbol = useMemo(() => manualSymbol.trim() || builtSymbol, [builtSymbol, manualSymbol]);
+  const dataPaths = useMemo(() => {
+    const cleanTicker = ticker.trim().toUpperCase();
+    const cleanSymbol = effectiveSymbol.trim().toUpperCase();
+    const encodedTicker = encodeURIComponent(cleanTicker);
+    const encodedSymbol = encodeURIComponent(cleanSymbol);
+    return [
+      {
+        label: "Ticker quote / volume / prev close",
+        path: `/api/quotes-batch?symbols=${encodedTicker}`,
+        note: "Best quick lookup for the selected ticker's latest quote, volume, and yesterday close.",
+      },
+      {
+        label: "Ticker yesterday close cache",
+        path: "/api/prev-closes",
+        note: "Returns the cached prior-session closes used by the dashboard.",
+      },
+      {
+        label: "Option quote / OI / volume",
+        path: cleanSymbol ? `/api/proxy/tt/quote/${encodedSymbol}` : "/api/proxy/tt/quote/:symbol",
+        note: "Use the built option symbol to pull contract-level open interest and volume.",
+      },
+      {
+        label: "Ticker chain snapshot",
+        path: expiry
+          ? `/api/chains?ticker=${encodedTicker}&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`
+          : `/api/chains?ticker=${encodedTicker}&range=all&noSubscribe=1`,
+        note: "Chain payload includes option-level open interest and volume for the selected expiry.",
+      },
+    ];
+  }, [effectiveSymbol, expiry, ticker]);
 
   useEffect(() => {
     let cancelled = false;
@@ -548,6 +578,30 @@ export default function DevPage() {
         <InfoCard label="Selected Symbol" value={effectiveSymbol || "-"} />
         <InfoCard label="Feed Type" value={feedType} />
         <InfoCard label="Elapsed" value={result ? `${result.elapsedMs} ms` : "-"} />
+      </div>
+
+      <div
+        style={{
+          borderRadius: 14,
+          border: "1px solid rgba(0,229,255,0.14)",
+          background: "rgba(10,15,22,0.72)",
+          padding: 16,
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8da8c2", marginBottom: 10 }}>
+          Data Paths
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          {dataPaths.map((item) => (
+            <div key={item.label} style={{ padding: 12, borderRadius: 10, background: "rgba(5,8,13,0.72)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#f5fbff", marginBottom: 6 }}>{item.label}</div>
+              <div style={{ fontFamily: "Consolas, 'Courier New', monospace", fontSize: 12, color: "#00e5ff", wordBreak: "break-word" }}>
+                {item.path}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "#8da8c2" }}>{item.note}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div
