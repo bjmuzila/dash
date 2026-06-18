@@ -47,16 +47,24 @@ async function resolveSpxExpiry(expiry: string): Promise<string> {
 
 async function fetchGexChain(expiry: string): Promise<any> {
   const resolvedExpiry = await resolveSpxExpiry(expiry);
-  const qs = new URLSearchParams();
-  if (resolvedExpiry) qs.set("expiry", resolvedExpiry);
+  const chainQs = new URLSearchParams({ range: "all", noCache: "1", noSubscribe: "1" });
+  if (resolvedExpiry) chainQs.set("expiration", resolvedExpiry);
 
-  const res = await fetch(`${PROXY}/proxy/api/tt/gex-chain${qs.toString() ? `?${qs.toString()}` : ""}`, {
+  const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?${chainQs.toString()}`, {
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
-  if (res.ok) return { ...(await res.json()), __resolvedExpiry: resolvedExpiry };
+  if (res.ok) return { ...(await res.json()), __resolvedExpiry: resolvedExpiry, __source: "chains" };
 
-  throw new Error("gex-chain endpoint failed");
+  const fastQs = new URLSearchParams();
+  if (resolvedExpiry) fastQs.set("expiry", resolvedExpiry);
+  const fastRes = await fetch(`${PROXY}/proxy/api/tt/gex-chain${fastQs.toString() ? `?${fastQs.toString()}` : ""}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (fastRes.ok) return { ...(await fastRes.json()), __resolvedExpiry: resolvedExpiry, __source: "gex-chain" };
+
+  throw new Error("chains and gex-chain endpoints failed");
 }
 
 function flattenChain(data: any, fallbackSpot = 0): ChainRow[] {
