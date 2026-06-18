@@ -100,7 +100,9 @@ async function tick() {
       return;
     }
 
-    console.log(`[gex-loop] ${gexRows.length} GEX rows for ${expiry}, spot: ${spot}`);
+    const nonZero = gexRows.filter(r => r.netGEX !== 0).length;
+    const sample = gexRows.slice(0, 3).map(r => `${r.strike}:oi=${r.callOI}/${r.putOI}:gex=${r.netGEX?.toFixed(0)}`).join(' | ');
+    console.log(`[gex-loop] ${gexRows.length} rows (${nonZero} non-zero GEX) for ${expiry}, spot: ${spot} | sample: ${sample}`);
     cachedRows = gexRows;
 
     // 2. Compute summary levels
