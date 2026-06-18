@@ -1,7 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
+import { useState, useEffect, useRef, useCallback } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
+import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import GexChart from "@/components/dashboard/GexChart";
+import Subscriber, { type SubscriberState } from "@/lib/subscriber";
+import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
+
+type GexProfile = { levels: number[]; values: number[]; flipPoint: number | null } | null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function etNow() {
@@ -24,6 +33,180 @@ function fmtMoney(v: number) {
   if (a >= 1e6) return s + "$" + (a / 1e6).toFixed(2) + "M";
   if (a >= 1e3) return s + "$" + (a / 1e3).toFixed(1) + "K";
   return s + "$" + a.toFixed(0);
+}
+
+function fmtExpiryDate(value: string) {
+  const d = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function ymdET(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function pickDashboardExpiries(
+  items: Array<{ date: string; strikeCount: number }>
+): { "0dte": string; "1dte": string } {
+  const seen = new Set<string>();
+  const unique = items
+    .filter((item) => {
+      if (!item.date || seen.has(item.date)) return false;
+      seen.add(item.date);
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const today = etNow();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = ymdET(today);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = ymdET(tomorrow);
+
+  const zero = unique.find((item) => item.date >= todayStr)?.date ?? unique[0]?.date ?? "";
+  const one =
+    unique.find((item) => item.date >= tomorrowStr)?.date ??
+    unique.find((item) => item.date > zero)?.date ??
+    zero;
+
+  return { "0dte": zero, "1dte": one };
+}
+
+function flattenChainResponse(data: any): SubscriberState["chain"] {
+  if (Array.isArray(data?.chain)) {
+    return data.chain
+      .map((row: any): SubscriberState["chain"][number] => ({
+        strike: Number(row?.strike ?? 0),
+        spotPrice: Number(row?.spotPrice ?? row?.spot ?? data?.spotPrice ?? 0),
+        callOI: Number(row?.callOI ?? 0),
+        putOI: Number(row?.putOI ?? 0),
+        callVolume: Number(row?.callVolume ?? row?.callVol ?? 0),
+        putVolume: Number(row?.putVolume ?? row?.putVol ?? 0),
+        callGamma: Number(row?.callGamma ?? 0),
+        putGamma: Number(row?.putGamma ?? 0),
+        callDelta: Number(row?.callDelta ?? 0),
+        putDelta: Number(row?.putDelta ?? 0),
+        callGEX: Number(row?.callGEX ?? 0),
+        putGEX: Number(row?.putGEX ?? 0),
+        netGEX: Number(row?.netGEX ?? 0),
+        netVolGEX: Number(row?.netVolGEX ?? 0),
+        netDEX: Number(row?.netDEX ?? 0),
+        volNetDEX: Number(row?.volNetDEX ?? 0),
+        dte: Number(row?.dte ?? 0),
+        callIV: Number(row?.callIV ?? 0),
+        putIV: Number(row?.putIV ?? 0),
+      }))
+      .filter((row: SubscriberState["chain"][number]) => row.strike > 0)
+      .sort(
+        (a: SubscriberState["chain"][number], b: SubscriberState["chain"][number]) =>
+          a.strike - b.strike
+      );
+  }
+
+  const items = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.items) ? data.items : [];
+  const out: SubscriberState["chain"] = [];
+
+  for (const expGroup of items) {
+    const strikes = Array.isArray(expGroup?.strikes) ? expGroup.strikes : [];
+    for (const strikeRow of strikes) {
+      const strike = Number(strikeRow?.["strike-price"] ?? strikeRow?.strikePrice ?? strikeRow?.strike ?? 0);
+      const call = strikeRow?.call ?? null;
+      const put = strikeRow?.put ?? null;
+      if (!(strike > 0)) continue;
+
+      const spotPrice = Number(data?.data?.underlyingPrice ?? data?.underlyingPrice ?? strike);
+      const pickNum = (...values: unknown[]) => {
+        for (const value of values) {
+          const num = Number(value);
+          if (Number.isFinite(num) && num !== 0) return num;
+        }
+        return 0;
+      };
+      const callOI = pickNum(
+        call?.["open-interest"],
+        call?.openInterest,
+        call?.open_interest,
+        call?.["open-interest-quantity"],
+        call?.oi,
+        call?.["oi"],
+        strikeRow?.callOI,
+        strikeRow?.callOi,
+        strikeRow?.call_open_interest
+      );
+      const putOI = pickNum(
+        put?.["open-interest"],
+        put?.openInterest,
+        put?.open_interest,
+        put?.["open-interest-quantity"],
+        put?.oi,
+        put?.["oi"],
+        strikeRow?.putOI,
+        strikeRow?.putOi,
+        strikeRow?.put_open_interest
+      );
+      const callVolume = pickNum(call?.volume, call?.dayVolume, call?.day_volume, strikeRow?.callVolume, strikeRow?.callVol);
+      const putVolume = pickNum(put?.volume, put?.dayVolume, put?.day_volume, strikeRow?.putVolume, strikeRow?.putVol);
+      const callGamma = Math.abs(pickNum(call?.gamma, call?.["gamma"], strikeRow?.callGamma, strikeRow?.call_gamma));
+      const putGamma = Math.abs(pickNum(put?.gamma, put?.["gamma"], strikeRow?.putGamma, strikeRow?.put_gamma));
+      const callDelta = pickNum(call?.delta, call?.["delta"], strikeRow?.callDelta, strikeRow?.call_delta);
+      const putDelta = pickNum(put?.delta, put?.["delta"], strikeRow?.putDelta, strikeRow?.put_delta);
+      const callIV = pickNum(call?.["implied-volatility"], call?.impliedVolatility, call?.iv, strikeRow?.callIV, strikeRow?.call_iv);
+      const putIV = pickNum(put?.["implied-volatility"], put?.impliedVolatility, put?.iv, strikeRow?.putIV, strikeRow?.put_iv);
+      const callGEX = callGamma * callOI * spotPrice * spotPrice;
+      const putGEX = putGamma * putOI * spotPrice * spotPrice * -1;
+
+      out.push({
+        strike,
+        spotPrice,
+        callOI,
+        putOI,
+        callVolume,
+        putVolume,
+        callGamma,
+        putGamma,
+        callDelta,
+        putDelta,
+        callGEX,
+        putGEX,
+        netGEX: callGEX + putGEX,
+        netVolGEX: callGamma * callVolume * spotPrice * spotPrice - putGamma * putVolume * spotPrice * spotPrice,
+        netDEX: callDelta * callOI * spotPrice * 100 - Math.abs(putDelta) * putOI * spotPrice * 100,
+        volNetDEX: callDelta * callVolume * spotPrice * 100 - Math.abs(putDelta) * putVolume * spotPrice * 100,
+        dte: 0,
+        callIV,
+        putIV,
+      });
+    }
+  }
+
+  return out.sort((a, b) => a.strike - b.strike);
+}
+
+function buildChainDebug(rows: SubscriberState["chain"], source: string, expiry: string) {
+  let callOI = 0;
+  let putOI = 0;
+  let nonZeroGex = 0;
+
+  for (const row of rows) {
+    if ((row.callOI ?? 0) > 0) callOI += 1;
+    if ((row.putOI ?? 0) > 0) putOI += 1;
+    if (Number(row.netGEX ?? 0) !== 0) nonZeroGex += 1;
+  }
+
+  return {
+    strikes: rows.length,
+    callOI,
+    putOI,
+    nonZeroGex,
+    source,
+    expiry,
+  };
 }
 
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
@@ -68,19 +251,57 @@ const RotateCcwIcon = () => (
   </svg>
 );
 
+const ES_SYMBOL_ALIASES = ["/ESU26", "/ESU6", "/ES:XCME", "/ES"];
+
+function findQuote(items: Array<Record<string, unknown>>, symbols: string[]) {
+  return items.find((item) => symbols.includes(String(item.symbol ?? "")));
+}
+
+function quoteNumber(q: Record<string, unknown> | undefined, ...keys: string[]) {
+  if (!q) return 0;
+  for (const key of keys) {
+    const num = Number(q[key]);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return 0;
+}
+
+function quotePrev(q: Record<string, unknown> | undefined, fallback = 0) {
+  return quoteNumber(
+    q,
+    "prev-close",
+    "prevClose",
+    "previousClose",
+    "prevDayClose",
+    "prev-day-close",
+    "prevDayClosePrice",
+    "prev-day-close-price",
+    "close-price",
+    "closePrice"
+  ) || fallback;
+}
+
+async function fetchPrevCloseFallbacks(): Promise<{ ES: number; NQ: number; SPX: number; VIX: number }> {
+  try {
+    const res = await fetch("/api/prev-closes", { cache: "no-store" });
+    if (!res.ok) return { ES: 0, NQ: 0, SPX: 0, VIX: 0 };
+    const json = await res.json();
+    const data = json?.data ?? {};
+    const saved = json?.debug?.savedDailyCloses ?? {};
+    return {
+      ES: Number(data.ES ?? saved.ES ?? 0),
+      NQ: Number(data.NQ ?? saved.NQ ?? 0),
+      SPX: Number(data.SPX ?? saved.SPX ?? 0),
+      VIX: Number(data.VIX ?? saved.VIX ?? 0),
+    };
+  } catch {
+    return { ES: 0, NQ: 0, SPX: 0, VIX: 0 };
+  }
+}
+
 // ── Data ──────────────────────────────────────────────────────────────────────
-const QUOTES = [
-  { sym: "AMD",   chg: "+6.92%", pos: true },
-  { sym: "META",  chg: "+4.63%", pos: true },
-  { sym: "SMH",   chg: "+4.16%", pos: true },
-  { sym: "NVDA",  chg: "+3.36%", pos: true },
-  { sym: "AMZN",  chg: "+3.27%", pos: true },
-  { sym: "NQU",   chg: "+3.01%", pos: true, active: true },
-  { sym: "QQQ",   chg: "+2.98%", pos: true },
-  { sym: "GOOGL", chg: "+2.71%", pos: true },
-  { sym: "MSFT",  chg: "+2.31%", pos: true },
-  { sym: "AAPL",  chg: "+1.76%", pos: true },
-];
+const SIDEBAR_SYMBOLS = ["SPY", "QQQ", "NQU", "SPX", "VIX"];
+const DEFAULT_QUOTES = SIDEBAR_SYMBOLS.map(sym => ({ sym, chg: "—", pos: true, active: sym === "NQU" }));
 
 const HEATMAP_ROWS = [
   { strike: "7,600", rank: 2, rankColor: "#8B94A7", netGex: "$63.72M", volOnly: "$63.72M", dex: "$25.82M", vex: "$73.62M", dwGex: "$9.90M", type: "pos-strong" },
@@ -105,16 +326,67 @@ const HEATMAP_ROWS = [
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function HomePage() {
+  const shellRef = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(new Date());
+  const [sidebarQuotes, setSidebarQuotes] = useState(DEFAULT_QUOTES);
   const [spx, setSpx] = useState(7554.29);
   const [spxChg, setSpxChg] = useState(122.83);
   const [spxChgPct, setSpxChgPct] = useState(1.65);
   const [esFut, setEsFut] = useState(7562.0);
+  const [esChg, setEsChg] = useState(0);
+  const [esChgPct, setEsChgPct] = useState(0);
   const [netGex, setNetGex] = useState(15790000000);
   const [vix, setVix] = useState(16.20);
+  const [callWall, setCallWall] = useState<number | null>(null);
+  const [putWall, setPutWall] = useState<number | null>(null);
+  const [gexFlip, setGexFlip] = useState<number | null>(null);
+  const [gexProfile, setGexProfile] = useState<GexProfile>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
-  const wsRef = useRef<WebSocket | null>(null);
+  const [showPageMenu, setShowPageMenu] = useState(false);
+  const [rawChain, setRawChain] = useState<SubscriberState["chain"]>([]);
+  const [heatmapData, setHeatmapData] = useState<{ strike: string; netGex: string; volOnly: string; dex: string; gexVex: string; rollingNetGex: string; type: string; rank?: number; rankColor?: string; atm?: boolean }[]>(HEATMAP_ROWS.map((row) => ({
+    strike: row.strike,
+    netGex: row.netGex,
+    volOnly: row.volOnly,
+    dex: row.dex,
+    gexVex: row.vex,
+    rollingNetGex: "—",
+    type: row.type,
+    rank: row.rank,
+    rankColor: row.rankColor,
+    atm: row.atm,
+  })));
+  const [gexMode, setGexMode] = useState<"net-gex" | "call-put">("net-gex");
+  const [dataMode, setDataMode] = useState<"oi-vol" | "vol-only">("oi-vol");
+  const [showOiOverlay, setShowOiOverlay] = useState(false);
+  const [showNetDex, setShowNetDex] = useState(false);
+  const [showGexFlip, setShowGexFlip] = useState(false);
+  const [selectedExpiry, setSelectedExpiry] = useState<"0dte" | "1dte">("0dte");
+  const [expiryMap, setExpiryMap] = useState<{ "0dte": string; "1dte": string }>({ "0dte": "", "1dte": "" });
+  const expiryCandidatesRef = useRef<Array<{ date: string; strikeCount: number }>>([]);
+  const [rollingNetGexByStrike, setRollingNetGexByStrike] = useState<Record<number, number>>({});
+  const [intensity, setIntensity] = useState(0.4);
+  const [zoomHalf, setZoomHalf] = useState(40); // strikes each side
+  const [panOffset, setPanOffset] = useState(0); // strike offset for drag-pan
+  const [hoverBar, setHoverBar] = useState<{ x: number; y: number; strike: number; val: number; isPos: boolean } | null>(null);
+  const [chainDebug, setChainDebug] = useState({
+    strikes: 0,
+    callOI: 0,
+    putOI: 0,
+    nonZeroGex: 0,
+    source: "-",
+    expiry: "-",
+  });
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragRef = useRef<{ startX: number; startPan: number } | null>(null);
   const prevSpxRef = useRef(0);
+  const gexChartRef = useRef<HTMLDivElement>(null);
+  const heatmapRef = useRef<HTMLDivElement>(null);
+  const spxFlowRef = useRef<HTMLDivElement>(null);
+  const [mvcSaving, setMvcSaving] = useState<"idle" | "saving" | "ok" | "err">("idle");
+  const [spxFlowRenderTick, setSpxFlowRenderTick] = useState(0);
+  const [viewportScale, setViewportScale] = useState(1);
+  const lastRollingPersistRef = useRef<{ expiry: string; stamp: number }>({ expiry: "", stamp: 0 });
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -122,65 +394,671 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onopen = () => {
-      try {
-        ws.send(JSON.stringify({
-          type: "subscribe",
-          symbols: ["$SPX", "SPX", "/ESU26", "/ES:XCME", "VIX"],
-          feedTypesBySymbol: { "$SPX": ["Quote","Trade","Summary"], "SPX": ["Quote","Trade","Summary"], "/ESU26": ["Quote","Trade"], "/ES:XCME": ["Quote","Trade"], "VIX": ["Quote","Trade"] },
-        }));
-      } catch {}
+    if (!shellRef.current || typeof ResizeObserver === "undefined") return;
+
+    const BASE_WIDTH = 1680;
+    const BASE_HEIGHT = 980;
+    const MIN_SCALE = 0.78;
+
+    const updateScale = () => {
+      const rect = shellRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const nextScale = Math.min(
+        1,
+        Math.max(MIN_SCALE, Math.min(rect.width / BASE_WIDTH, rect.height / BASE_HEIGHT))
+      );
+      setViewportScale((current) => Math.abs(current - nextScale) < 0.01 ? current : nextScale);
     };
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type !== "FEED_DATA") return;
-        (msg.data as Array<Record<string, unknown>>).forEach(ev => {
-          const sym = String(ev.eventSymbol ?? "");
-          const t = ev.eventType;
-          if ((sym === "$SPX" || sym === "SPX") && t === "Quote") {
-            const bid = Number(ev.bidPrice ?? 0), ask = Number(ev.askPrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (mid > 100) {
-              if (prevSpxRef.current > 0) { const chg = mid - prevSpxRef.current; setSpxChg(chg); setSpxChgPct((chg / prevSpxRef.current) * 100); }
-              if (prevSpxRef.current === 0) prevSpxRef.current = mid;
-              setSpx(mid);
-            }
-          }
-          if ((sym === "/ESU26" || sym === "/ES:XCME") && t === "Quote") {
-            const bid = Number(ev.bidPrice ?? 0), ask = Number(ev.askPrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (mid > 100) setEsFut(mid);
-          }
-          if (sym === "VIX" && t === "Quote") {
-            const v = Number(ev.bidPrice ?? ev.lastPrice ?? 0);
-            if (v > 0) setVix(v);
-          }
-        });
-      } catch {}
-    };
-    ws.onclose = () => {};
-    return () => { ws.close(); };
+
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(shellRef.current);
+    updateScale();
+
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    const load = () => {
-      fetch("/api/gex", { cache: "no-store" })
-        .then(r => r.json())
-        .then(j => { const g = j?.summary?.totalNetGEX ?? j?.totalNetGEX ?? 0; if (isFinite(g) && g !== 0) setNetGex(g); })
-        .catch(() => {});
+    const fetchTopBarQuotes = async () => {
+      try {
+        const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const prevFallbacks = await fetchPrevCloseFallbacks();
+        const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
+        const spxQuote = findQuote(items, ["SPX"]);
+        const esQuote = findQuote(items, ES_SYMBOL_ALIASES);
+
+        if (spxQuote) {
+          const last = quoteNumber(spxQuote, "last", "mark");
+          let prev = quotePrev(spxQuote, prevFallbacks.SPX);
+          if (prevFallbacks.SPX > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.SPX;
+          if (last > 100 && prev > 0) {
+            const change = last - prev;
+            setSpxChg(change);
+            setSpxChgPct((change / prev) * 100);
+          }
+        }
+
+        if (esQuote) {
+          const last = quoteNumber(esQuote, "last", "mark");
+          let prev = quotePrev(esQuote, prevFallbacks.ES);
+          if (prevFallbacks.ES > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.ES;
+          if (last > 100 && prev > 0) {
+            const change = last - prev;
+            setEsChg(change);
+            setEsChgPct((change / prev) * 100);
+          }
+        }
+      } catch {
+        // no-op
+      }
     };
-    load();
-    const t = setInterval(load, 60_000);
+
+    fetchTopBarQuotes().catch(() => {});
+    const t = setInterval(() => { fetchTopBarQuotes().catch(() => {}); }, 15000);
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const seedGex = async () => {
+      try {
+        const res = await fetch("/api/gex", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const chain = flattenChainResponse(json);
+        if (chain.length) setRawChain(chain);
+        const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? json?.spotPrice ?? 0);
+        if (spot > 100) setSpx(spot);
+        const nextNetGex = chain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
+        if (Number.isFinite(nextNetGex) && chain.length) setNetGex(nextNetGex);
+        setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
+        setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
+        setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+        setGexProfile(json?.profile ?? null);
+        setChainDebug(buildChainDebug(chain, "/api/gex", String(json?.data?.expiration ?? json?.expiration ?? "-")));
+      } catch {
+        // no-op
+      }
+    };
+    seedGex();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const subscriber = Subscriber.getInstance();
+    subscriber.init();
+
+    // Subscribe to state updates
+    const unsubscribe = subscriber.subscribe((state: SubscriberState) => {
+      if (state.spotPrice > 100) {
+        const prev = prevSpxRef.current;
+        if (prev > 0) {
+          const chg = state.spotPrice - prev;
+          setSpxChg(chg);
+          setSpxChgPct((chg / prev) * 100);
+        }
+        if (prev === 0) prevSpxRef.current = state.spotPrice;
+        setSpx(state.spotPrice);
+      }
+      setEsFut(state.esFutures);
+      setVix(state.vix);
+      setNetGex(state.netGex);
+      setCallWall(state.callWall);
+      setPutWall(state.putWall);
+      setGexFlip(state.gexFlip);
+
+    });
+
+    return () => {
+      unsubscribe();
+      subscriber.disconnect();
+    };
+  }, []);
+
+  // ── Task #13: Sidebar quotes poll ─────────────────────────────────────────────
+  const handleMvcSnapshot = useCallback(async () => {
+    if (mvcSaving === "saving") return;
+    setMvcSaving("saving");
+    try {
+      await saveManualMvcSnapshot();
+      setMvcSaving("ok");
+      setTimeout(() => setMvcSaving("idle"), 1800);
+    } catch {
+      setMvcSaving("err");
+      setTimeout(() => setMvcSaving("idle"), 2000);
+    }
+  }, [mvcSaving]);
+
+  const refreshGexPanels = useCallback(async () => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    const requests: Promise<Response>[] = [
+      fetch(`/api/quotes-batch?symbols=${encodeURIComponent(["SPX", "VIX", ...ES_SYMBOL_ALIASES].join(","))}`, { cache: "no-store" }),
+    ];
+    if (actualExpiry) {
+      requests.unshift(fetch(`/api/gex?expiry=${encodeURIComponent(actualExpiry)}`, { cache: "no-store" }));
+    }
+    const responses = await Promise.all(requests);
+    let updated = false;
+
+    const chainRes = actualExpiry ? responses[0] : null;
+    const quotesRes = responses[actualExpiry ? 1 : 0];
+
+    if (chainRes?.ok) {
+      const json = await chainRes.json();
+      const nextChain = flattenChainResponse(json);
+      if (nextChain.length) setRawChain(nextChain);
+      setChainDebug(buildChainDebug(nextChain, "/api/gex", actualExpiry || "-"));
+      const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? json?.spotPrice ?? 0);
+      if (spot > 100) setSpx(spot);
+      const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
+      if (Number.isFinite(nextNetGex)) setNetGex(nextNetGex);
+      setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
+      setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
+      setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+      setGexProfile(json?.profile ?? null);
+      updated = true;
+    }
+
+    if (quotesRes?.ok) {
+      const json = await quotesRes.json();
+      const prevFallbacks = await fetchPrevCloseFallbacks();
+      const items: Array<Record<string, unknown>> = Array.isArray(json?.data?.items) ? json.data.items : [];
+      const spxQuote = findQuote(items, ["SPX"]);
+      const esQuote = findQuote(items, ES_SYMBOL_ALIASES);
+      const vixQuote = findQuote(items, ["VIX"]);
+
+      if (spxQuote) {
+        const last = quoteNumber(spxQuote, "last", "mark");
+        let prev = quotePrev(spxQuote, prevFallbacks.SPX);
+        if (prevFallbacks.SPX > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.SPX;
+        if (last > 100) {
+          setSpx(last);
+        }
+        if (last > 100 && prev > 0) {
+          const change = last - prev;
+          setSpxChg(change);
+          setSpxChgPct((change / prev) * 100);
+        }
+      }
+
+      if (esQuote) {
+        const last = quoteNumber(esQuote, "last", "mark");
+        let prev = quotePrev(esQuote, prevFallbacks.ES);
+        if (prevFallbacks.ES > 0 && Math.abs(prev - last) < 0.01) prev = prevFallbacks.ES;
+        if (last > 100) {
+          setEsFut(last);
+        }
+        if (last > 100 && prev > 0) {
+          const change = last - prev;
+          setEsChg(change);
+          setEsChgPct((change / prev) * 100);
+        }
+      }
+
+      if (vixQuote) {
+        const last = Number(vixQuote.last ?? vixQuote.mark ?? 0);
+        if (last > 0) {
+          setVix(last);
+        }
+      }
+
+      updated = true;
+    }
+
+    if (!updated) {
+      throw new Error("Refresh failed");
+    }
+  }, [expiryMap, selectedExpiry]);
+
+  useEffect(() => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    if (!actualExpiry) {
+      setRollingNetGexByStrike({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const nextMap = Object.fromEntries(
+      rawChain
+        .map((row) => [Number(row.strike ?? 0), Number(row.netGEX ?? 0)] as const)
+        .filter((entry: readonly [number, number]): entry is readonly [number, number] => entry[0] > 0 && Number.isFinite(entry[1]))
+    );
+
+    if (!cancelled) setRollingNetGexByStrike(nextMap);
+    return () => {
+      cancelled = true;
+    };
+  }, [expiryMap, selectedExpiry]);
+
+  useEffect(() => {
+    if (rawChain.length === 0) return;
+    const actualExpiry = expiryMap[selectedExpiry];
+
+    const now = Date.now();
+    const last = lastRollingPersistRef.current;
+    if (last.expiry === actualExpiry && now - last.stamp < 25000) return;
+
+    const rows = rawChain
+      .map((row) => ({
+        timestamp: now,
+        expiry: actualExpiry,
+        spot: Number(row.spotPrice ?? spx ?? 0),
+        strike: Number(row.strike ?? 0),
+        net_gex: Number(row.netGEX ?? 0),
+      }))
+      .filter((row) => row.strike > 0 && Number.isFinite(row.net_gex));
+
+    if (!rows.length) return;
+    setRollingNetGexByStrike((current) =>
+      Object.keys(current).length
+        ? current
+        : Object.fromEntries(rows.map((row) => [row.strike, row.net_gex]))
+    );
+    lastRollingPersistRef.current = { expiry: actualExpiry, stamp: now };
+
+    // Keep rolling values local so the dashboard stays functional even if persistence is unavailable.
+  }, [expiryMap, rawChain, selectedExpiry, spx]);
+
+  const refreshSpxFlowPanel = useCallback(async () => {
+    setSpxFlowRenderTick((tick) => tick + 1);
+    await Promise.resolve();
+  }, []);
+
+  const chartRefresh = useRefreshButton(refreshGexPanels);
+  const heatmapRefresh = useRefreshButton(refreshGexPanels);
+  const spxFlowRefresh = useRefreshButton(refreshSpxFlowPanel);
+
+  useEffect(() => {
+    const fetchQuotes = async () => {
+      try {
+        const syms = SIDEBAR_SYMBOLS.join(",");
+        const res = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(syms)}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const items: Array<Record<string, unknown> & { symbol: string }> = Array.isArray(json?.data?.items) ? json.data.items : [];
+        if (!items.length) return;
+        setSidebarQuotes(SIDEBAR_SYMBOLS.map(sym => {
+          const q = items.find(i => i.symbol === sym || i.symbol === `${sym}:XCIS`);
+          if (!q) return { sym, chg: "—", pos: true, active: sym === "NQU" };
+          const price = quoteNumber(q, "mark", "last");
+          const prev = quotePrev(q);
+          const pct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+          const pos = pct >= 0;
+          return { sym, chg: `${pos ? "+" : ""}${pct.toFixed(2)}%`, pos, active: sym === "NQU" };
+        }));
+      } catch { /* non-fatal */ }
+    };
+    fetchQuotes();
+    const t = setInterval(fetchQuotes, 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchExpirations = async () => {
+      try {
+        const res = await fetch("/api/gex/expirations", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const rawItems = Array.isArray(json?.items) ? json.items as Array<Record<string, unknown>> : [];
+        const rawExpirations = Array.isArray(json?.expirations) ? json.expirations as string[] : [];
+
+        const today = etNow();
+        today.setHours(0, 0, 0, 0);
+        const items = rawItems.length
+          ? rawItems
+              .map((item) => ({
+                date: String(item.date ?? ""),
+                strikeCount: Number(item.strikeCount ?? 0),
+              }))
+              .filter((item) => item.date)
+          : rawExpirations.map((date) => ({ date, strikeCount: 0 }));
+
+        const upcoming = items
+          .filter((item) => {
+            const d = new Date(`${item.date}T00:00:00`);
+            d.setHours(0, 0, 0, 0);
+            return d.getTime() >= today.getTime();
+          })
+          .sort((a, b) => a.date.localeCompare(b.date));
+
+        if (!upcoming.length) return;
+        expiryCandidatesRef.current = upcoming;
+        const picked = pickDashboardExpiries(upcoming);
+        if (!cancelled) setExpiryMap(picked);
+      } catch {
+        // no-op
+      }
+    };
+
+    fetchExpirations().catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const actualExpiry = expiryMap[selectedExpiry];
+    if (!actualExpiry) return;
+    let cancelled = false;
+
+    const fetchExpiryChain = async () => {
+      try {
+        const fetchChainForExpiry = async (expiry: string) => {
+          const res = await fetch(`/api/gex?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store" });
+          if (!res.ok) return null;
+          return res.json();
+        };
+
+        const json = await fetchChainForExpiry(actualExpiry);
+        if (!json) return;
+
+        if (cancelled) return;
+        const nextChain = flattenChainResponse(json);
+        if (nextChain.length) setRawChain(nextChain);
+        setChainDebug(buildChainDebug(nextChain, "/api/gex", actualExpiry));
+        const spot = Number(json?.data?.underlyingPrice ?? json?.underlyingPrice ?? json?.spotPrice ?? 0);
+        if (spot > 100) setSpx(spot);
+        const nextNetGex = nextChain.reduce((sum, row) => sum + Number(row.netGEX ?? 0) + Number(row.netVolGEX ?? 0), 0);
+        if (Number.isFinite(nextNetGex)) setNetGex(nextNetGex);
+        setCallWall(Number(json?.data?.callWall ?? json?.callWall ?? 0) || null);
+        setPutWall(Number(json?.data?.putWall ?? json?.putWall ?? 0) || null);
+        setGexFlip(Number(json?.data?.gexFlip ?? json?.gexFlip ?? 0) || null);
+        setGexProfile(json?.profile ?? null);
+      } catch {
+        // no-op
+      }
+    };
+
+    fetchExpiryChain().catch(() => {});
+    const t = setInterval(() => { fetchExpiryChain().catch(() => {}); }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [expiryMap, selectedExpiry]);
+
+  // ── Task #7 Step 3 + Task #9: Filter heatmap by expiry, apply live colors ────
+  useEffect(() => {
+    if (rawChain.length === 0) {
+      setHeatmapData([]);
+      return;
+    }
+
+    const spot = spx || 7554;
+
+    // Always use the full merged chain for the heatmap — the API merges all
+    // expirations into per-strike totals. DTE filtering is only meaningful for
+    // the chart bars (which have their own filter). Filtering here drops strikes
+    // that only have data in the next expiry, leaving mostly $0 rows.
+    const source = rawChain;
+
+    // Find ATM: closest strike at or below spot (floor), ties go to lower strike
+    const atmStrike = source.reduce((best, r) => {
+      const dBest = spot - best.strike; // positive = best is below spot
+      const dR    = spot - r.strike;
+      // Prefer strike just below or at spot; among equal distance pick the lower one
+      const absBest = Math.abs(dBest);
+      const absR    = Math.abs(dR);
+      if (absR < absBest) return r;
+      if (absR === absBest) return r.strike < best.strike ? r : best; // pick lower
+      return best;
+    }).strike;
+
+    // Sort descending (highest strike first) for display
+    const sortedAll = [...source].sort((a, b) => b.strike - a.strike);
+
+    const aboveAtm = sortedAll.filter((r) => r.strike > atmStrike).slice(-20);
+    const atmAndBelow = sortedAll.filter((r) => r.strike <= atmStrike).slice(0, 21);
+    const sorted = [...aboveAtm, ...atmAndBelow];
+
+    const combinedGex = (r: typeof sorted[0]) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
+    const displayNetGex = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.netVolGEX ?? 0)
+        : combinedGex(r)
+    );
+    const displayDexValue = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.volNetDEX ?? 0)
+        : (r.netDEX ?? 0) + (r.volNetDEX ?? 0)
+    );
+
+    // Find top pos/neg for rank badges using the active data mode.
+    const effGex = (r: typeof sorted[0]) => displayNetGex(r);
+    const sorted_by_abs_gex = [...sorted].sort((a, b) => Math.abs(effGex(b)) - Math.abs(effGex(a)));
+    const topPos = sorted_by_abs_gex.filter(r => effGex(r) > 0).slice(0, 5).map(r => r.strike);
+    const topNeg = sorted_by_abs_gex.filter(r => effGex(r) < 0).slice(0, 5).map(r => r.strike);
+    const posRanks = Object.fromEntries(topPos.map((s, i) => [s, i + 1]));
+    const negRanks = Object.fromEntries(topNeg.map((s, i) => [s, i + 1]));
+
+    const fmt = (v: number) => {
+      const a = Math.abs(v);
+      const sign = v < 0 ? "-" : "";
+      if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+      if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+      if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(1)}K`;
+      return `${sign}$${a.toFixed(0)}`;
+    };
+
+    const rows = sorted.map(r => {
+      const isAtm = r.strike === atmStrike;
+
+      const displayGex = displayNetGex(r);
+      const displayDex = displayDexValue(r);
+
+      const isPosTop = posRanks[r.strike] === 1;
+      const isNegTop = negRanks[r.strike] === 1;
+      const rank = posRanks[r.strike] ?? negRanks[r.strike];
+      const rankColor = rank && rank <= 2 ? "#F97316" : rank ? "#8B94A7" : undefined;
+
+      let type = "neutral";
+      if (isAtm) type = "atm";
+      else if (isPosTop) type = "pos-top";
+      else if (isNegTop) type = "neg-top";
+      else if (displayGex > 0 && posRanks[r.strike]) type = "pos-strong";
+      else if (displayGex < 0 && negRanks[r.strike]) type = "neg-red";
+      else if (displayGex < 0) type = "neg";
+
+      const vannaValue = dataMode === "vol-only"
+        ? (r.netVolVanna ?? r.netVanna ?? 0)
+        : (r.netVanna ?? 0) + (r.netVolVanna ?? 0);
+      return {
+        strike: r.strike.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
+        netGex: fmt(displayGex),
+        volOnly: fmt(r.netVolGEX),
+        dex: fmt(displayDex),
+        gexVex: fmt(displayGex + vannaValue),
+        rollingNetGex: Number.isFinite(rollingNetGexByStrike[r.strike]) ? fmt(rollingNetGexByStrike[r.strike]) : "—",
+        type,
+        rank: rank ?? undefined,
+        rankColor,
+        atm: isAtm,
+      };
+    });
+
+    // Drop strikes where ALL data is zero — truly empty strikes (not just OI=0)
+    const nonEmpty = rows.filter(r =>
+      r.type === "atm" ||
+      r.netGex !== "$0" || r.volOnly !== "$0" || r.dex !== "$0" || r.gexVex !== "$0"
+    );
+
+    setHeatmapData(nonEmpty);
+  }, [dataMode, rawChain, rollingNetGexByStrike, selectedExpiry, spx]);
+
+
   const etTime = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
+  // ── Task #8: Compute GEX chart bars from live chain ───────────────────────────
+  const chartBars = (() => {
+    if (rawChain.length === 0) return null;
+
+    // Use full merged chain — DTE per-strike is unreliable after cross-expiry merge
+    const source = rawChain;
+    const sorted = [...source].sort((a, b) => a.strike - b.strike);
+    // Base chart uses one GEX mode plus one data mode, with optional overlays.
+    const getSpot = (r: typeof sorted[0]) => r.spotPrice || spx || r.strike;
+    const getCallVolGex = (r: typeof sorted[0]) => (r.callGamma ?? 0) * (r.callVolume ?? 0) * getSpot(r) * getSpot(r);
+    const getPutVolGex = (r: typeof sorted[0]) => -Math.abs((r.putGamma ?? 0) * (r.putVolume ?? 0) * getSpot(r) * getSpot(r));
+    const getCallVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? getCallVolGex(r)
+        : (r.callGEX ?? 0) + getCallVolGex(r)
+    );
+    const getPutVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? getPutVolGex(r)
+        : (r.putGEX ?? 0) + getPutVolGex(r)
+    );
+    const getNetVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.netVolGEX ?? 0)
+        : (r.netGEX ?? 0) + (r.netVolGEX ?? 0)
+    );
+    const getDexVal = (r: typeof sorted[0]) => (
+      dataMode === "vol-only"
+        ? (r.volNetDEX ?? 0)
+        : (r.netDEX ?? 0) + (r.volNetDEX ?? 0)
+    );
+    const getVal = (r: typeof sorted[0]) => (
+      gexMode === "call-put" ? getCallVal(r) + getPutVal(r) : getNetVal(r)
+    );
+
+    const vals = sorted.map(r => getVal(r));
+    const maxAbs = Math.max(...vals.map(Math.abs), 1);
+
+    // Trim to zoomHalf strikes each side of ATM, with drag pan offset
+    const spot = spx || sorted[Math.floor(sorted.length / 2)]?.strike || 7500;
+    const atmIdx = sorted.reduce((bi, r, i) => Math.abs(r.strike - spot) < Math.abs(sorted[bi].strike - spot) ? i : bi, 0);
+    const half = zoomHalf;
+    const centerIdx = Math.max(half, Math.min(sorted.length - 1 - half, atmIdx + panOffset));
+    const start = Math.max(0, centerIdx - half);
+    const end = Math.min(sorted.length - 1, centerIdx + half);
+    const slice = sorted.slice(start, end + 1);
+    const sliceVals = vals.slice(start, end + 1);
+
+    const CHART_W = 800;
+    const CHART_H = 400; // match SVG viewBox height
+    const ZERO_Y = CHART_H / 2;
+    const spacing = CHART_W / (slice.length + 1);
+    // Bar width: fill ~80% of spacing, never overlap (cap at spacing-1), min 2px
+    const BAR_W = Math.max(2, Math.min(spacing * 0.8, spacing - 1));
+
+    // Find peak bar (highest absolute GEX, pos or neg) for label
+    let peakPosBar: { x: number; y: number; barH: number; strike: number; isPos: boolean } | null = null as { x: number; y: number; barH: number; strike: number; isPos: boolean } | null;
+    let peakPosVal = 0;
+
+    // For call-put mode, build two bar arrays (call=cyan above zero, put=gold below zero)
+    const isCallPut = gexMode === "call-put";
+    const callPutBars: { x: number; callH: number; putH: number; barW: number; strike: number; callVal: number; putVal: number }[] = [];
+
+    const bars = slice.map((r, i) => {
+      const v = sliceVals[i];
+      const x = spacing * (i + 1);
+
+      if (isCallPut) {
+        const callVal = getCallVal(r);
+        const putVal = getPutVal(r);
+        const callH = Math.max(2, (Math.abs(callVal) / maxAbs) * (CHART_H / 2 - 24));
+        const putH  = Math.max(2, (Math.abs(putVal)  / maxAbs) * (CHART_H / 2 - 24));
+        callPutBars.push({ x, callH, putH, barW: BAR_W, strike: r.strike, callVal, putVal });
+      }
+
+      const heightPct = Math.abs(v) / maxAbs;
+      const barH = Math.max(2, heightPct * (CHART_H / 2 - 24));
+      const isPos = v >= 0;
+      const y = isPos ? ZERO_Y - barH : ZERO_Y;
+      const fill = isPos ? "url(#cyanBarGrad)" : "url(#goldBarGrad)";
+      const glow = isPos
+        ? "drop-shadow(0 0 6px rgba(0,240,255,0.5))"
+        : "drop-shadow(0 0 6px rgba(234,179,8,0.5))";
+      const highlight = Math.abs(v) > maxAbs * 0.5;
+
+      if (Math.abs(v) > peakPosVal) {
+        peakPosVal = Math.abs(v);
+        peakPosBar = { x, y, barH, strike: r.strike, isPos };
+      }
+
+      return { x, y, barH, barW: BAR_W, fill: highlight ? (isPos ? "#00F0FF" : "url(#goldBarBright)") : fill, glow: highlight ? glow : undefined, strike: r.strike, isPos, val: v };
+    });
+
+    // OI overlay — call OI (green) and put OI (red/gold) as bars rising from bottom
+    // Scaled independently so peaks reach ~40% of half-chart height
+    const oiCallMax = Math.max(...slice.map(r => r.callOI), 1);
+    const oiPutMax  = Math.max(...slice.map(r => r.putOI),  1);
+    const OI_MAX_H  = CHART_H * 0.42; // max bar height from bottom
+    const oiBars = showOiOverlay ? slice.map((r, i) => {
+      const x = spacing * (i + 1);
+      const callH = Math.max(1, (r.callOI / oiCallMax) * OI_MAX_H);
+      const putH  = Math.max(1, (r.putOI  / oiPutMax)  * OI_MAX_H);
+      return { x, callH, putH, barW: BAR_W, strike: r.strike };
+    }) : null;
+
+    // Net DEX — smooth cubic-bezier curve overlay, scaled to chart half-height
+    const dexMaxAbs = Math.max(...slice.map(r => Math.abs(getDexVal(r))), 1);
+    const dexPoints = showNetDex ? slice.map((r, i) => ({
+      x: spacing * (i + 1),
+      y: ZERO_Y - (getDexVal(r) / dexMaxAbs) * (CHART_H / 2 - 24),
+    })) : null;
+
+    // GEX Flip / Gamma-zero profile from server-side spot sweep, clipped to +/-5% around spot.
+    const gexFlipSeries = showGexFlip ? (() => {
+      if (!(spot > 0)) return null;
+      const lo = spot * 0.95;
+      const hi = spot * 1.05;
+      const profilePoints = gexProfile?.levels?.length && gexProfile?.values?.length
+        ? gexProfile.levels
+            .map((level, i) => ({ level, value: Number(gexProfile.values[i] ?? 0) }))
+            .filter((point) => point.level >= lo && point.level <= hi && Number.isFinite(point.value))
+        : [];
+      const points = profilePoints.length >= 2
+        ? profilePoints
+        : sorted
+            .filter((row) => row.strike >= lo && row.strike <= hi)
+            .map((row) => ({ level: row.strike, value: getNetVal(row) }))
+            .filter((point) => Number.isFinite(point.value));
+      if (points.length < 2) return null;
+      const flipMaxAbs = Math.max(...points.map((point) => Math.abs(point.value)), 1);
+      const crossings: number[] = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (a.value === 0) crossings.push(a.level);
+        else if ((a.value > 0 && b.value < 0) || (a.value < 0 && b.value > 0)) {
+          crossings.push(a.level + (b.level - a.level) * (Math.abs(a.value) / (Math.abs(a.value) + Math.abs(b.value))));
+        }
+      }
+      const flipPoint = crossings.length
+        ? crossings.reduce((best, value) => Math.abs(value - spot) < Math.abs(best - spot) ? value : best)
+        : null;
+      return {
+        points: points.map((point, i) => ({
+          x: 24 + ((CHART_W - 48) * i) / Math.max(points.length - 1, 1),
+          y: ZERO_Y - (point.value / flipMaxAbs) * (CHART_H / 2 - 24),
+          isPos: point.value >= 0,
+        })),
+        flipPoint,
+      };
+    })() : null;
+
+    // Peak label — always use the actual peak bar's strike so label matches position
+    const peakLabel = peakPosBar ? peakPosBar.strike.toLocaleString() : null;
+
+    return {
+      bars,
+      callPutBars: isCallPut ? callPutBars : null,
+      oiBars,
+      dexPoints,
+      gexFlipPoints: gexFlipSeries?.points ?? null,
+      gexFlipPoint: gexFlipSeries?.flipPoint ?? null,
+      peakPosBar,
+      peakLabel,
+      spot,
+      ZERO_Y,
+    };
+  })();
 
   // ── Styles ──────────────────────────────────────────────────────────────────
   const C = {
@@ -206,8 +1084,8 @@ export default function HomePage() {
   };
 
   return (
-    <div style={{
-      height: "100%", width: "100%", overflow: "hidden",
+    <div ref={shellRef} style={{
+      height: "100%", width: "100%", overflow: "auto",
       background: C.bg,
       backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)",
       fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
@@ -216,202 +1094,172 @@ export default function HomePage() {
       flexDirection: "row",
     }}>
 
-      {/* ── SIDEBAR ────────────────────────────────────────────────────────── */}
-      <aside style={{
-        width: 85, flexShrink: 0, display: "flex", flexDirection: "column",
-        padding: "24px 0", alignItems: "center", zIndex: 20, position: "relative",
-        background: "rgba(0,0,0,0.10)", backdropFilter: "blur(12px)",
-        borderRight: "1px solid rgba(255,255,255,0.05)",
-      }}>
-        {/* Logo */}
-        <div style={{
-          width: 48, height: 48, background: "rgba(0,240,255,0.10)", borderRadius: 12,
-          display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-          boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", border: "1px solid rgba(0,240,255,0.2)",
-          marginBottom: 24, color: C.cyan,
-        }}>
-          <HomeIcon />
-        </div>
-
-        {/* Nav */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: "#fff", marginBottom: 20 }}>
-          <span style={{ color: "#fff", cursor: "pointer" }}><GridIcon /></span>
-          <span style={{ cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
-            <CalendarIcon />
-          </span>
-        </div>
-        <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", marginBottom: 16 }} />
-
-        {/* Quotes */}
-        <div style={{ flex: 1, width: "100%", overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 0, scrollbarWidth: "none" }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.15em", position: "sticky", top: 0, background: "rgba(5,6,10,0.8)", backdropFilter: "blur(8px)", width: "100%", textAlign: "center", padding: "8px 0", zIndex: 10 }}>Quotes</div>
-          {QUOTES.map(q => (
-            <div key={q.sym} style={{
-              display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer",
-              padding: "6px 0", width: "100%", transition: "background 0.15s",
-              background: q.active ? "rgba(255,255,255,0.05)" : "transparent",
-              borderLeft: q.active ? `2px solid ${C.cyan}` : "2px solid transparent",
-            }}
-              onMouseEnter={e => { if (!q.active) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
-              onMouseLeave={e => { if (!q.active) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-            >
-              <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff" }}>{q.sym}</span>
-              <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: q.pos ? C.green : C.red }}>{q.chg}</span>
-            </div>
-          ))}
-          <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", padding: "6px 0", width: "100%" }}>
-            <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: C.red }}>VIX</span>
-            <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: C.red }}>-8.37%</span>
-          </div>
-          <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
-          <div style={{ fontSize: 9, fontWeight: 700, color: C.purple, textTransform: "uppercase", letterSpacing: "0.12em", textAlign: "center", padding: "4px 0" }}>Sigma</div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "4px 0", marginBottom: 8, width: "100%" }}>
-            {[
-              { label: "1σ", val: "7,595", color: C.cyan },
-              { label: "2σ", val: "7,636", color: C.purple },
-              { label: "-1σ", val: "7,513", color: C.cyan },
-              { label: "-2σ", val: "7,472", color: C.purple },
-            ].map(s => (
-              <div key={s.label} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <span style={{ fontFamily: "monospace", fontSize: 9, fontWeight: 700, color: s.color, opacity: 0.7 }}>{s.label}</span>
-                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: "#fff" }}>{s.val}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Bottom */}
-        <div className="grad-divider-sidebar-t" style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, paddingTop: 16, width: "100%" }}>
-          <span style={{ color: "#fff", cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
-            <SettingsIcon />
-          </span>
-          <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg, ${C.purple}, ${C.cyan})`, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)", cursor: "pointer" }} />
-        </div>
-      </aside>
-
       {/* ── MAIN ──────────────────────────────────────────────────────────── */}
+      <div
+        style={{
+          width: `${100 / viewportScale}%`,
+          height: `${100 / viewportScale}%`,
+          minWidth: viewportScale < 1 ? 1680 : "100%",
+          minHeight: viewportScale < 1 ? 980 : "100%",
+          transform: `scale(${viewportScale})`,
+          transformOrigin: "top left",
+          transition: "transform 0.18s ease-out",
+          display: "flex",
+          flex: 1,
+        }}
+      >
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
 
         {/* ── BODY ──────────────────────────────────────────────────────────── */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "clamp(14px, 2vw, 24px)", gap: "clamp(16px, 2vw, 32px)", minHeight: 0, overflow: "hidden" }}>
 
           {/* LEFT COLUMN */}
           <div style={{ width: "55%", display: "flex", flexDirection: "column", gap: 0, minWidth: 0, height: "100%", overflow: "hidden" }}>
 
             {/* GEX CHART */}
-            <div style={{
-              background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
-              height: 400, flexShrink: 0,
-            }}>
-              {/* Chart Header */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                  <span style={{ color: C.cyan }}><BarChart2 /></span>
-                  Net Strike Gamma Exposure
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", width: "100%" }}>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE 6/15</button>
-                  <button style={{ background: "rgba(0,240,255,0.25)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", textTransform: "uppercase", fontWeight: 600 }}>1DTE 6/16</button>
-                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
-                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ OI Overlay</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ Net DEX</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ GEX Flip</button>
-                </div>
-              </div>
+            {(() => {
+              // Dynamic date labels
+              const d0 = expiryMap["0dte"] ? fmtExpiryDate(expiryMap["0dte"]) : "--/--";
+              const d1 = expiryMap["1dte"] ? fmtExpiryDate(expiryMap["1dte"]) : "--/--";
 
-              {/* Legend */}
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "monospace", marginBottom: 8, padding: "0 8px", flexShrink: 0 }}>
-                <div style={{ display: "flex", gap: 16 }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: C.cyan }}>
-                    <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(0,240,255,0.8)" }} />
-                    + GEX
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308" }}>
-                    <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(234,179,8,0.7)" }} />
-                    - GEX
-                  </span>
-                </div>
-                <span style={{ color: "#fff" }}>Units in Billions ($B)</span>
-              </div>
+              const CHART_W = 800, CHART_H = 400;
+              const ZERO_Y = CHART_H / 2;
 
-              {/* Chart */}
-              <div style={{ flex: 1, position: "relative", width: "100%", minHeight: 0 }}>
-                {/* Y-axis */}
-                <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace", color: "#fff", alignItems: "flex-end", zIndex: 20, pointerEvents: "none", paddingBottom: 20 }}>
-                  {["+$6.00B","+$4.00B","+$2.00B","0","-$2.00B","-$4.00B","-$6.00B"].map((l, i) => (
-                    <span key={i} style={{ color: i < 3 ? C.cyan : i === 3 ? "#fff" : C.orange }}>{l}</span>
-                  ))}
+              const handleWheel = (e: React.WheelEvent) => {
+                e.preventDefault();
+                setZoomHalf(prev => Math.max(5, Math.min(80, prev + (e.deltaY > 0 ? 5 : -5))));
+              };
+
+              const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+                dragRef.current = { startX: e.clientX, startPan: panOffset };
+              };
+
+              const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+                // Drag pan
+                if (dragRef.current && e.buttons === 1) {
+                  const dx = e.clientX - dragRef.current.startX;
+                  const svgW = svgRef.current?.getBoundingClientRect().width ?? CHART_W;
+                  const strikesPerPx = (zoomHalf * 2) / svgW;
+                  const newPan = dragRef.current.startPan - Math.round(dx * strikesPerPx);
+                  setPanOffset(Math.max(-60, Math.min(60, newPan)));
+                  setHoverBar(null);
+                  return;
+                }
+                // Hover tooltip
+                if (!chartBars || !svgRef.current) return;
+                const rect = svgRef.current.getBoundingClientRect();
+                // SVG has paddingRight:48 paddingBottom:24 — drawable area is narrower.
+                // Use getBoundingClientRect on the SVG then map via the SVG's own
+                // coordinate transform (handles CSS padding correctly).
+                const pt = svgRef.current.createSVGPoint();
+                pt.x = e.clientX;
+                pt.y = e.clientY;
+                const svgPt = pt.matrixTransform(svgRef.current.getScreenCTM()!.inverse());
+                const svgX = svgPt.x;
+                let closest: typeof chartBars.bars[0] | null = null;
+                let minDist = Infinity;
+                for (const b of chartBars.bars) {
+                  const d = Math.abs(b.x - svgX);
+                  if (d < minDist) { minDist = d; closest = b; }
+                }
+                if (closest && minDist < chartBars.bars[0]?.barW * 2 + 4) {
+                  setHoverBar({ x: closest.x, y: closest.y, strike: closest.strike, val: closest.val, isPos: closest.isPos });
+                } else {
+                  setHoverBar(null);
+                }
+              };
+
+              const handleMouseUp = () => { dragRef.current = null; };
+
+              return (
+              <div
+                ref={gexChartRef}
+                style={{
+                  background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
+                  borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
+                  height: 580, flexShrink: 0,
+                }}
+              >
+                {/* Chart Header */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em", flexShrink: 0 }}>
+                    <span style={{ color: C.cyan }}><BarChart2 /></span>
+                    Net GEX
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button onClick={() => { setSelectedExpiry("0dte"); setPanOffset(0); }} style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: selectedExpiry === "0dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Today {d0}</button>
+                    <button onClick={() => { setSelectedExpiry("1dte"); setPanOffset(0); }} style={{ background: selectedExpiry === "1dte" ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Tomorrow {d1}</button>
+                    <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
+                    {(["net-gex","call-put"] as const).map(m => (
+                      <button key={m} onClick={() => { setGexMode(m); setPanOffset(0); }} style={{ color: gexMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: gexMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
+                    ))}
+                    <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
+                    {(["oi-vol","vol-only"] as const).map(m => (
+                      <button key={m} onClick={() => { setDataMode(m); setPanOffset(0); }} style={{ color: dataMode === m ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: dataMode === m ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{m.replace("-"," ")}</button>
+                    ))}
+                    <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
+                    {([{ key: "oi-overlay", label: "+oi overlay", active: showOiOverlay, onClick: () => setShowOiOverlay(v => !v) }, { key: "net-dex", label: "+net dex", active: showNetDex, onClick: () => setShowNetDex(v => !v) }, { key: "gex-flip", label: "+gex flip", active: showGexFlip, onClick: () => setShowGexFlip(v => !v) }] as const).map(({ key, label, active, onClick }) => (
+                      <button key={key} onClick={() => { onClick(); setPanOffset(0); }} style={{ color: active ? C.cyan : "#fff", padding: "4px 8px", fontSize: 10, background: active ? "rgba(0,240,255,0.10)" : "rgba(255,255,255,0.02)", border: "none", borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>{label}</button>
+                    ))}
+                    <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 2px" }} />
+                    <button onClick={chartRefresh.trigger} style={{ ...chartRefresh.style, fontSize: 10, padding: "4px 8px", borderRadius: 4 }}>
+                      {chartRefresh.label}
+                    </button>
+                    <BoxSnapBtn targetRef={gexChartRef} />
+                    <BoxDiscordBtn
+                      targetRef={gexChartRef}
+                      message={`📸 GEX Chart — ${selectedExpiry.toUpperCase()}${expiryMap[selectedExpiry] ? ` ${fmtExpiryDate(expiryMap[selectedExpiry])}` : ""} — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`}
+                    />
+                  </div>
                 </div>
-                <svg viewBox="0 0 800 300" preserveAspectRatio="none" style={{ width: "100%", height: "100%", paddingRight: 48, paddingBottom: 24, boxSizing: "border-box" }}>
-                  <defs>
-                    <linearGradient id="cyanBarGrad" x1="0" y1="1" x2="0" y2="0">
-                      <stop offset="0%" stopColor="#0284C7"/><stop offset="100%" stopColor="#00F0FF"/>
-                    </linearGradient>
-                    <linearGradient id="goldBarGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#CA8A04"/><stop offset="100%" stopColor="#EAB308"/>
-                    </linearGradient>
-                    <linearGradient id="goldBarBright" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#D97706"/><stop offset="100%" stopColor="#FCD34D"/>
-                    </linearGradient>
-                  </defs>
-                  <line x1="0" y1="50" x2="800" y2="50" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="0" y1="100" x2="800" y2="100" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="0" y1="200" x2="800" y2="200" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="0" y1="250" x2="800" y2="250" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="380" y1="0" x2="380" y2="300" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4 4"/>
-                  <line x1="0" y1="150" x2="800" y2="150" stroke="rgba(255,255,255,0.2)" strokeWidth="2"/>
-                  <g fill="url(#cyanBarGrad)">
-                    <rect x="30" y="145" width="25" height="5"/><rect x="65" y="140" width="25" height="10"/>
-                    <rect x="100" y="140" width="25" height="10"/><rect x="135" y="130" width="25" height="20"/>
-                    <rect x="170" y="135" width="25" height="15"/><rect x="205" y="120" width="25" height="30"/>
-                    <rect x="240" y="130" width="25" height="20"/><rect x="275" y="140" width="25" height="10"/>
-                    <rect x="310" y="140" width="25" height="10"/>
-                    <rect x="345" y="20" width="25" height="130" fill="#00F0FF" style={{ filter: "drop-shadow(0 0 8px rgba(0,240,255,0.6))" }}/>
-                    <rect x="380" y="80" width="25" height="70"/><rect x="415" y="90" width="25" height="60"/>
-                    <rect x="450" y="110" width="25" height="40"/><rect x="485" y="60" width="25" height="90"/>
-                    <rect x="520" y="50" width="25" height="100"/><rect x="555" y="30" width="25" height="120"/>
-                    <rect x="590" y="80" width="25" height="70"/><rect x="625" y="110" width="25" height="40"/>
-                    <rect x="660" y="100" width="25" height="50"/><rect x="695" y="25" width="25" height="125" fill="#00F0FF"/>
-                  </g>
-                  <g fill="url(#goldBarGrad)">
-                    <rect x="30" y="150" width="25" height="30"/>
-                    <rect x="65" y="150" width="25" height="25"/>
-                    <rect x="100" y="150" width="25" height="30"/>
-                    <rect x="135" y="150" width="25" height="45"/>
-                    <rect x="170" y="150" width="25" height="50"/>
-                    <rect x="310" y="150" width="25" height="35"/>
-                    <rect x="345" y="150" width="25" height="10"/>
-                  </g>
-                  {/* Bigger gold bars — brighter gradient */}
-                  <g fill="url(#goldBarBright)">
-                    <rect x="205" y="150" width="25" height="60" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.5))" }}/>
-                    <rect x="240" y="150" width="25" height="55" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.4))" }}/>
-                    <rect x="275" y="150" width="25" height="40"/>
-                  </g>
-                </svg>
-                {/* X-axis labels */}
-                <div className="grad-divider-t" style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "8px 30px 0", fontSize: 10, fontFamily: "monospace", color: "#fff" }}>
-                  {["7450","7500","7554","7600","7650"].map((l, i) => (
-                    <span key={i} style={{ color: i === 2 ? "#fff" : "#fff", fontWeight: i === 2 ? 700 : 400 }}>{l}</span>
-                  ))}
+
+                {/* Legend */}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "monospace", marginBottom: 6, padding: "0 8px", flexShrink: 0 }}>
+                  <div style={{ display: "flex", gap: 16 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, color: C.cyan }}>
+                      <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: 2, display: "inline-block" }} />{gexMode === "call-put" ? "Call GEX" : "+ GEX"}
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308" }}>
+                      <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block" }} />{gexMode === "call-put" ? "Put GEX" : "- GEX"}
+                    </span>
+                    <span style={{ color: "#3a5570" }}>Drag to pan · Scroll to zoom ({zoomHalf*2} strikes)</span>
+                  </div>
+                  <span style={{ color: "#fff" }}>Units in $B</span>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", padding: "0 8px 8px", fontSize: 10, fontFamily: "monospace", color: "#8B94A7" }}>
+                  <span>chain: {chainDebug.strikes}</span>
+                  <span>call OI: {chainDebug.callOI}</span>
+                  <span>put OI: {chainDebug.putOI}</span>
+                  <span>nonzero GEX: {chainDebug.nonZeroGex}</span>
+                  <span>src: {chainDebug.source}</span>
+                  <span>exp: {chainDebug.expiry || "-"}</span>
+                </div>
+                {/* Chart */}
+                <div style={{ flex: 1, position: "relative", width: "100%", minHeight: 0 }}>
+                  <GexChart
+                    chain={rawChain}
+                    spotPrice={spx}
+                    flipPoint={gexFlip}
+                    gexProfile={gexProfile}
+                    mode={gexMode === "call-put" ? "call-put" : "net"}
+                    dataMode={dataMode}
+                    showOI={showOiOverlay}
+                    showDex={showNetDex}
+                    showFlipCurve={showGexFlip}
+                    expiry={expiryMap[selectedExpiry]}
+                  />
                 </div>
               </div>
-            </div>
+              );
+            })()}
 
             {/* TABS */}
             <div style={{
               background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: 24,
+              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: "clamp(14px, 2vw, 24px)",
             }}>
               {/* Tab headers */}
-              <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0, overflowX: "auto", overflowY: "hidden" }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
@@ -425,6 +1273,8 @@ export default function HomePage() {
                     borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent",
                     marginBottom: -1,
                     transition: "color 0.15s",
+                    flexShrink: 0,
+                    whiteSpace: "nowrap",
                   }}>
                     {tab.icon}{tab.label}
                   </button>
@@ -432,48 +1282,41 @@ export default function HomePage() {
               </div>
 
               {/* Tab content */}
-              <div style={{ flex: 1, overflowY: "auto", padding: 24, scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: activeTab === "spxflow" ? 24 : 0, minHeight: 0, scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
                 {activeTab === "calendar" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, fontFamily: "monospace", color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                        Date: 2026-06-15
-                        <span style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700 }}>TODAY</span>
-                      </div>
-                      <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)", color: "#fff", fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer" }}>Sync Now</button>
-                    </div>
-                    {[
-                      { time: "2:41", ampm: "AM", title: "The President departs The White House", desc: "en route to Joint Base Andrews" },
-                      { time: "3:01", ampm: "AM", title: "The President arrives", desc: "at Joint Base Andrews" },
-                      { time: "9:56", ampm: "AM", title: "The President arrives at Geneva Airport", desc: "en route to Evian Resort, France" },
-                    ].map((ev, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 40, paddingTop: 2 }}>
-                          <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#fff" }}>{ev.time}</span>
-                          <span style={{ fontSize: 8, textTransform: "uppercase", fontWeight: 700, color: "#fff" }}>{ev.ampm}</span>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0, borderLeft: "1px solid rgba(255,255,255,0.10)", paddingLeft: 16, position: "relative", paddingBottom: 4 }}>
-                          <div style={{ position: "absolute", left: -3.5, top: 6, width: 6, height: 6, borderRadius: "50%", background: C.purple, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)" }} />
-                          <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
-                            <span style={{ fontSize: 8, background: "rgba(139,92,246,0.20)", color: C.purple, padding: "2px 6px", borderRadius: 3, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>PRESIDENT</span>
-                            <span style={{ fontSize: 8, background: "rgba(255,255,255,0.10)", color: "#fff", padding: "2px 6px", borderRadius: 3, fontWeight: 700 }}>USD</span>
-                          </div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: "#fff", marginBottom: 2 }}>{ev.title}</div>
-                          <div style={{ fontSize: 10, color: "#fff" }}>{ev.desc}</div>
-                        </div>
-                      </div>
-                    ))}
+                  <div style={{ height: "100%", minHeight: 0 }}>
+                    <EconCalendarPanel />
                   </div>
                 )}
                 {activeTab === "snapshot" && (
-                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                  <div style={{ height: "100%", minHeight: 0 }}>
                     <SnapshotPanel />
                   </div>
                 )}
                 {activeTab === "spxflow" && (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
+                  <div ref={spxFlowRef} key={spxFlowRenderTick} style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                        <span style={{ color: C.cyan }}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                        </span>
+                        SPX Flow
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button onClick={spxFlowRefresh.trigger} style={{ ...spxFlowRefresh.style, fontSize: 10, padding: "4px 8px", borderRadius: 4 }}>
+                          {spxFlowRefresh.label}
+                        </button>
+                        <BoxSnapBtn targetRef={spxFlowRef} />
+                        <BoxDiscordBtn
+                          targetRef={spxFlowRef}
+                          message={`📊 SPX Flow — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -483,77 +1326,99 @@ export default function HomePage() {
           {/* RIGHT COLUMN */}
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
 
-            {/* 2-row ticker — top of right panel */}
-            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
-              {/* Row 1 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 12, marginBottom: 12, position: "relative" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
                     SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
                   </span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#fff" }}>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0 }}>
                     {etTime}
                   </div>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                    {vix > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: C.red }}>{spxChg < 0 ? "+" : "-"}{Math.abs(vix * 0.05).toFixed(2)} ({spxChg < 0 ? "+" : "-"}{(Math.abs(vix * 0.05) / vix * 100).toFixed(2)}%)</span>}
+                  </div>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
+                    {esFut > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: esChg >= 0 ? C.green : C.red }}>{esChg >= 0 ? "+" : ""}{esChg.toFixed(2)} ({esChgPct >= 0 ? "+" : ""}{esChgPct.toFixed(2)}%)</span>}
+                  </div>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#8da8c2", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</span>
+                    {spx > 0 && <span style={{ fontFamily: "monospace", fontSize: 11, color: spxChg >= 0 ? C.green : C.red }}>{spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)</span>}
+                  </div>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{vix.toFixed(2)}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flexWrap: "wrap", rowGap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 8, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>CW</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.cyan }}>{callWall ? callWall.toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>PW</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.orange }}>{putWall ? putWall.toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700 }}>Flip</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#F97316" }}>{chartBars?.gexFlipPoint != null ? chartBars.gexFlipPoint.toLocaleString(undefined, { maximumFractionDigits: 1 }) : gexFlip != null ? gexFlip.toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <button
+                      onClick={() => { handleMvcSnapshot().catch(() => {}); }}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: 6,
+                        border: `1px solid ${mvcSaving === "ok" ? "rgba(0,230,118,.35)" : mvcSaving === "err" ? "rgba(255,71,87,.35)" : "rgba(0,229,255,.25)"}`,
+                        background: "linear-gradient(180deg,rgba(0,229,255,.12),rgba(0,229,255,.04))",
+                        color: mvcSaving === "ok" ? "#00e676" : mvcSaving === "err" ? "#ff4757" : C.cyan,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        cursor: mvcSaving === "saving" ? "default" : "pointer",
+                      }}
+                    >
+                      {mvcSaving === "saving" ? "Saving" : mvcSaving === "ok" ? "Saved" : mvcSaving === "err" ? "Error" : "MVC Snapshot"}
+                    </button>
+                    <Link
+                      href="/database"
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: 6,
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(255,255,255,0.04)",
+                        color: "#fff",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        textDecoration: "none",
+                      }}
+                    >
+                      MVC Database
+                    </Link>
+                  </div>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
-                </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
-                    {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
-                  </span>
-                </div>
-              </div>
-              {/* Row 2 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                {/* MVC */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,600</span>
-                </div>
-                {/* OI & Vol Only */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>OI</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,570</span>
-                </div>
-                {/* GEX Zero/Flip */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,491</span>
-                </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                </div>
-                {/* MVC Snapshot button — right aligned */}
-                <button style={{
-                  background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)",
-                  color: C.cyan, fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 4,
-                  cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.1em",
-                  display: "flex", alignItems: "center", gap: 5,
-                }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  MVC Snapshot
-                </button>
               </div>
             </div>
 
             {/* Heatmap */}
-            <div style={{
-              background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden",
-            }}>
+            <div
+              ref={heatmapRef}
+              style={{
+                background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
+                borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden",
+              }}
+            >
               {/* Heatmap header */}
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -561,150 +1426,158 @@ export default function HomePage() {
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     LIVE GEX HEATMAP
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff" }}>
-                    {/* camera icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                    {/* message icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    {/* x icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#fff" }}>
+                    <button onClick={heatmapRefresh.trigger} style={{ ...heatmapRefresh.style, fontSize: 10, padding: "4px 8px", borderRadius: 4 }}>
+                      {heatmapRefresh.label}
+                    </button>
+                    <BoxSnapBtn targetRef={heatmapRef} />
+                    <BoxDiscordBtn
+                      targetRef={heatmapRef}
+                      message={`📸 GEX Heatmap — ${selectedExpiry.toUpperCase()}${expiryMap[selectedExpiry] ? ` ${fmtExpiryDate(expiryMap[selectedExpiry])}` : ""} — ${new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET`}
+                    />
                   </div>
                 </div>
                 {/* Intensity slider */}
-                <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                  <span style={{ color: "#fff" }}>Intensity</span>
-                  <div style={{ flex: 1, height: 4, background: "rgba(0,0,0,0.4)", borderRadius: 4, position: "relative", border: "1px solid rgba(255,255,255,0.05)" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, height: "100%", width: "80%", background: C.cyan, borderRadius: 4, boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)" }} />
-                    <div style={{ position: "absolute", top: "50%", left: "80%", transform: "translate(-50%,-50%)", width: 12, height: 12, background: "#fff", borderRadius: "50%", boxShadow: "0 0 10px rgba(255,255,255,0.8)", cursor: "pointer" }} />
-                  </div>
-                  <span style={{ color: C.cyan }}>0.40x</span>
-                  <span style={{ color: C.cyan, cursor: "pointer" }}><RotateCcwIcon /></span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  <span style={{ color: "#fff", flexShrink: 0 }}>Intensity</span>
+                  <input
+                    type="range" min={0.05} max={1} step={0.05}
+                    value={intensity}
+                    onChange={e => setIntensity(Number(e.target.value))}
+                    style={{ flex: 1, accentColor: C.cyan, cursor: "pointer", height: 4 }}
+                  />
+                  <span style={{ color: C.cyan, width: 36, textAlign: "right", flexShrink: 0 }}>{intensity.toFixed(2)}x</span>
+                  <span style={{ color: C.cyan, cursor: "pointer" }} onClick={() => setIntensity(0.4)}><RotateCcwIcon /></span>
                 </div>
               </div>
 
-              {/* Table */}
-              <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
-                <table style={{ width: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse" }}>
-                  <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
-                    <tr>
-                      {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff" }}>{h}</th>
+              {/* Grid heatmap */}
+              {(() => {
+                function parseVal(s: string): number {
+                  if (!s || s === "—") return 0;
+                  const neg = s.startsWith("-");
+                  const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+                  const mult = s.includes("B") ? 1e9 : s.includes("M") ? 1e6 : s.includes("K") ? 1e3 : 1;
+                  return (neg ? -1 : 1) * n * mult;
+                }
+
+                // Cell bg: rank-boosted intensity
+                function cellBg(val: number, colMax: number, ci: number): string {
+                  if (val === 0) return "transparent";
+                  const abs = Math.abs(val);
+                  const ratio = Math.min(abs / colMax, 1);
+                  // Check rank within this column
+                  const top3 = colTop3[ci];
+                  const rank = top3.indexOf(abs) + 1; // 1,2,3 or 0 if not in top3
+                  // Top-3 get a guaranteed high floor, scaled by rank
+                  let op: number;
+                  if (rank === 1)      op = Math.max(0.82, intensity * 0.92);
+                  else if (rank === 2) op = Math.max(0.60, intensity * 0.78);
+                  else if (rank === 3) op = Math.max(0.40, intensity * 0.62);
+                  else                 op = Math.pow(ratio, 0.65) * intensity * 0.55;
+                  return val > 0
+                    ? `rgba(32,178,220,${Math.min(op, 0.95).toFixed(3)})`
+                    : `rgba(220,50,60,${Math.min(op, 0.95).toFixed(3)})`;
+                }
+
+                const COLS = [
+                  { key: "netGex", label: "NET GEX" },
+                  { key: "volOnly", label: "VOL ONLY GEX" },
+                  { key: "dex", label: "DEX" },
+                  { key: "gexVex", label: "GEX + VEX" },
+                  { key: "rollingNetGex", label: "30 MIN ROLLING NET GEX" },
+                ];
+
+                const colMaxes = COLS.map(c =>
+                  Math.max(...heatmapData.map(r => Math.abs(parseVal(r[c.key as keyof typeof r] as string))), 1)
+                );
+
+                // Per-column top-3 absolute values for rank-floor boosting
+                const colTop3 = COLS.map(c =>
+                  heatmapData
+                    .map(r => Math.abs(parseVal(r[c.key as keyof typeof r] as string)))
+                    .filter(v => v > 0)
+                    .sort((a, b) => b - a)
+                    .slice(0, 3)
+                );
+
+                const totals = COLS.map(c =>
+                  heatmapData.reduce((s, r) => s + parseVal(r[c.key as keyof typeof r] as string), 0)
+                );
+
+                const fmtTotal = (v: number) => {
+                  const a = Math.abs(v);
+                  const sign = v < 0 ? "-" : "+";
+                  if (a >= 1e9) return `${sign}$${(a/1e9).toFixed(2)}B`;
+                  if (a >= 1e6) return `${sign}$${(a/1e6).toFixed(2)}M`;
+                  if (a >= 1e3) return `${sign}$${(a/1e3).toFixed(1)}K`;
+                  return `${sign}$${a.toFixed(0)}`;
+                };
+
+                const gridCols = `44px repeat(${COLS.length}, 1fr)`;
+                const hdrStyle: React.CSSProperties = { padding: "5px 4px", fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "right" };
+                const cellStyle: React.CSSProperties = { padding: "3px 4px", fontSize: 10, fontFamily: "monospace", textAlign: "right" };
+
+                return (
+                  <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.04) transparent", background: "#0a0e17" }}>
+                    {/* Header */}
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, position: "sticky", top: 0, zIndex: 10, background: "#0a0e17", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ ...hdrStyle, textAlign: "left" }}>STRIKE</div>
+                      {COLS.map(c => <div key={c.key} style={hdrStyle}>{c.label}</div>)}
+                    </div>
+
+                    {/* TOTAL row */}
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)" }}>
+                      <div style={{ ...cellStyle, textAlign: "left", color: "#fff", fontWeight: 700, fontSize: 9 }}>TOTAL</div>
+                      {totals.map((v, ci) => (
+                        <div key={ci} style={{ ...cellStyle, fontWeight: 700, color: "#fff" }}>
+                          {fmtTotal(v)}
+                        </div>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {HEATMAP_ROWS.map((row, idx) => {
+                    </div>
+
+                    {/* Data rows */}
+                    {heatmapData.map((row) => {
                       const isAtm = row.type === "atm";
-                      const isPosTop = row.type === "pos-top";
-                      const isNegTop = row.type === "neg-top";
-                      const isPosStrong = row.type === "pos-strong";
-                      const isNegRed = row.type === "neg-red";
-                      const isNeg = row.type === "neg" || row.type === "neg-red" || row.type === "neg-top";
-
-                      // Gradient divider after ATM row
-                      const showDivider = idx > 0 && HEATMAP_ROWS[idx - 1]?.type === "atm";
-
-                      const rowStyle: React.CSSProperties = {
-                        borderBottom: isAtm
-                          ? "none"
-                          : "none",
-                        background: isAtm
-                          ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))"
-                          : "transparent",
-                        transition: "background 0.15s",
-                        position: "relative",
-                      };
-
-                      const cellVal = (val: string, colIdx: number) => {
-                        const isNegVal = val.startsWith("-");
-                        const isPosVal = !isNegVal && val !== "—";
-                        const base: React.CSSProperties = { padding: "10px 16px", textAlign: colIdx === 0 ? "left" : "right" };
-
-                        if (colIdx === 0) {
-                          return (
-                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : "#fff" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                {val}
-                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
-                                {row.rank && (
-                                  <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>
-                                )}
-                              </div>
-                            </td>
-                          );
-                        }
-
-                        const v = val;
-                        const isNegV = v?.startsWith("-");
-                        const isPosV = v && !isNegV;
-
-                        let cellBg = "transparent";
-                        let cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
-                        let cellBorder = "none";
-                        let cellFw: React.CSSProperties["fontWeight"] = 400;
-
-                        // Highlight hotspot cells
-                        if ((isPosTop || isPosStrong) && !isNegV && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(14,116,144,0.30)";
-                          cellBorder = "1px solid rgba(0,240,255,0.20)";
-                          cellColor = isPosTop ? "#fff" : "#00D9FF";
-                          cellFw = 700;
-                        }
-                        if (isNegRed && isNegV && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(0,60,100,0.45)";
-                          cellBorder = "1px solid rgba(0,180,255,0.15)";
-                          cellColor = C.cyan;
-                          cellFw = 700;
-                        }
-                        if (isNegTop && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(0,60,100,0.45)";
-                          cellBorder = "1px solid rgba(0,180,255,0.15)";
-                          cellColor = colIdx === 1 ? C.cyan : "#fff";
-                          cellFw = 700;
-                        }
-                        if (isAtm) { cellFw = 700; }
-                        if (colIdx === 5) {
-                          cellBg = "rgba(0,0,0,0.20)";
-                          cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : isNeg ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
-                        }
-
-                        return (
-                          <td key={colIdx} style={{ ...base, background: cellBg, border: cellBorder, fontWeight: cellFw, color: cellColor, borderRadius: cellBorder !== "none" ? 4 : 0 }}>
-                            {v}
-                          </td>
-                        );
-                      };
-
                       return (
-                        <>
-                          {showDivider && (
-                            <tr key={`div-${idx}`}>
-                              <td colSpan={6} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
-                            </tr>
-                          )}
-                          <tr key={row.strike}
-                            className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
-                            style={rowStyle}
-                            onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(0,200,255,0.04)"; }}
-                            onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                          >
-                            {cellVal(row.strike, 0)}
-                            {cellVal(row.netGex, 1)}
-                            {cellVal(row.volOnly, 2)}
-                            {cellVal(row.dex, 3)}
-                            {cellVal(row.vex, 4)}
-                            {cellVal(row.dwGex, 5)}
-                          </tr>
-                        </>
+                        <div key={row.strike} style={{
+                          display: "grid", gridTemplateColumns: gridCols,
+                          borderBottom: isAtm ? "none" : "1px solid rgba(255,255,255,0.03)",
+                          background: "transparent",
+                          outline: isAtm ? "1px solid rgba(41,182,246,0.7)" : "none",
+                          outlineOffset: isAtm ? "-1px" : undefined,
+                          position: "relative",
+                          zIndex: isAtm ? 2 : undefined,
+                        }}>
+                          {/* Strike */}
+                          <div style={{
+                            ...cellStyle, textAlign: "left", fontWeight: 700,
+                            color: isAtm ? "#29b6f6" : "#fff",
+                          }}>
+                            {row.strike}
+                          </div>
+                          {/* Value cells */}
+                          {COLS.map((c, ci) => {
+                            const raw = row[c.key as keyof typeof row] as string;
+                            const val = parseVal(raw);
+                            const bg = isAtm ? "transparent" : cellBg(val, colMaxes[ci], ci);
+                            return (
+                              <div key={c.key} style={{ ...cellStyle, background: bg, color: "#fff" }}>
+                                {raw}
+                              </div>
+                            );
+                          })}
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
       </main>
+      </div>
 
       <style>{`
         @keyframes pulse {
