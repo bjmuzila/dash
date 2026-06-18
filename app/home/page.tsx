@@ -51,18 +51,7 @@ const SIDEBAR_SYMBOLS = ["SPY", "QQQ", "SPX", "VIX", "IWM"];
 const INDEX_SYMBOLS = ["$SPX", "SPX", "/ESU26", "/ES:XCME", "VIX", ...SIDEBAR_SYMBOLS];
 const PAGE_ID_PREFIX = "home-gex";
 
-function etNow() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-}
 
-function todayEt(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
 
 function fmtMoney(v: number) {
   if (!isFinite(v)) return "--";
@@ -82,23 +71,6 @@ function formatStrikeValue(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
 }
 
-function extractExpirations(payload: unknown): string[] {
-  const json = payload as {
-    expirations?: unknown;
-    items?: Array<Record<string, unknown>>;
-    data?: { items?: Array<Record<string, unknown>> };
-  };
-  const out = new Set<string>();
-  const add = (value: unknown) => {
-    const date = String(value ?? "");
-    if (date.length === 10) out.add(date);
-  };
-  if (Array.isArray(json?.expirations)) json.expirations.forEach(add);
-  if (Array.isArray(json?.items)) json.items.forEach((item) => add(item.date ?? item["expiration-date"]));
-  if (Array.isArray(json?.data?.items)) json.data.items.forEach((item) => add(item.date ?? item["expiration-date"]));
-  const today = todayEt();
-  return [...out].filter((date) => date >= today).sort();
-}
 
 function buildExpiryOptions(dates: string[]): ExpiryOption[] {
   return dates.slice(0, 8).map((value, index) => ({
@@ -497,44 +469,92 @@ export default function HomePage() {
     };
   }, [connectSocket]);
 
+  // ── GEX WebSocket: connect to /ws/gex, receive pushed GEX_UPDATE from server loop ──
+  const connectGexWs = useCallback(() => {
+    if (unmountedRef.current) return;
+    if (gexWsRef.current && (gexWsRef.current.readyState === WebSocket.OPEN || gexWsRef.current.readyState === WebSocket.CONNECTING)) return;
+
+    const wsUrl = getClientWsUrl('/ws/gex');
+    const ws = new WebSocket(wsUrl);
+    gexWsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('[home] /ws/gex connected');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'GEX_UPDATE') {
+          // Server pushed fresh GEX rows — update chart and heatmap
+          if (Array.isArray(msg.gexRows) && msg.gexRows.length) {
+            setGexChainRows(msg.gexRows as ChainRow[]);
+          }
+          if (msg.spot > 0) {
+            setGexSpot(msg.spot);
+            setSpot((prev) => prev > 0 ? prev : msg.spot); // don't override live SPX WS price
+          }
+          // Update expiry options from server's expirations list
+          if (Array.isArray(msg.expirations) && msg.expirations.length) {
+            const opts = buildExpiryOptions(msg.expirations);
+            setExpiryOptions(opts);
+            // Auto-select first expiry if none chosen yet
+            if (msg.expiry) {
+              setSelectedExpiry((cur) => cur || msg.expiry);
+            }
+          }
+          setStatus("LIVE");
+        }
+
+        if (msg.type === 'EXPIRATIONS') {
+          if (Array.isArray(msg.expirations) && msg.expirations.length) {
+            const opts = buildExpiryOptions(msg.expirations);
+            setExpiryOptions(opts);
+            if (msg.expiry) {
+              setSelectedExpiry((cur) => cur || msg.expiry);
+            }
+          }
+        }
+      } catch {
+        // ignore malformed frames
+      }
+    };
+
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      if (gexWsRef.current === ws) gexWsRef.current = null;
+      if (unmountedRef.current) return;
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      gexWsReconnectRef.current = setTimeout(() => {
+        gexWsReconnectRef.current = null;
+        connectGexWs();
+      }, 3000);
+    };
+  }, []); // stable — no deps that change
+
   useEffect(() => {
-    let cancelled = false;
-    const loadExpirations = async () => {
-      const primary = await fetch("/api/gex/expirations", { cache: "no-store" }).then((res) => res.json()).catch(() => null);
-      const fallback = primary ? null : await fetch("/api/expirations?ticker=SPX", { cache: "no-store" }).then((res) => res.json()).catch(() => null);
-      const dates = extractExpirations(primary ?? fallback);
-      if (cancelled) return;
-      const options = buildExpiryOptions(dates);
-      setExpiryOptions(options);
-      if (options[0]) setSelectedExpiry((current) => current || options[0].value);
-    };
-    loadExpirations().catch(() => {});
+    connectGexWs();
     return () => {
-      cancelled = true;
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      gexWsRef.current?.close();
+      gexWsRef.current = null;
     };
+  }, [connectGexWs]);
+
+  // When user picks a different expiry, tell the server to switch
+  const handleExpiry = useCallback((expiry: string) => {
+    setSelectedExpiry(expiry);
+    if (gexWsRef.current?.readyState === WebSocket.OPEN) {
+      gexWsRef.current.send(JSON.stringify({ type: 'SET_EXPIRY', expiry }));
+    }
   }, []);
 
+  // Load chain symbols for heatmap WS subscription (separate from GEX chart data)
   const loadChain = useCallback(async (expiry: string) => {
     if (!expiry) return;
-    setStatus("LOADING");
     const pageId = pageIdRef.current;
 
-    // ── 1. Fast path: fetch pre-computed GEX chain for the chart ─────────────
-    // /api/gex uses the proxy's gex-chain endpoint which reads from dxGreeksCache
-    // and the full REST SPXW chain — returns all strikes with computed GEX fields.
-    const gexJson = await fetch(`/api/gex?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .catch(() => null);
-    if (gexJson?.chain?.length) {
-      setGexChainRows(gexJson.chain as ChainRow[]);
-      if (Number(gexJson.spotPrice) > 0) {
-        setGexSpot(Number(gexJson.spotPrice));
-        setSpot(Number(gexJson.spotPrice));
-      }
-    }
-
-    // ── 2. Fetch full chain for WS symbol subscription (heatmap live data) ───
-    // No pageId → hits the cache (fast). NoSubscribe=0 so proxy logs but doesn't auto-subscribe.
     const json = await fetch(
       `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`,
       { cache: "no-store" }
@@ -546,7 +566,7 @@ export default function HomePage() {
     const nextStrikes = buildStrikes(target.length ? target : items, liveDataRef.current);
     const nextSpot = Number(json?.data?.underlyingPrice ?? 0);
     setStrikeRows(nextStrikes);
-    if (nextSpot > 0 && !(gexJson?.spotPrice > 0)) setSpot(nextSpot);
+    if (nextSpot > 0 && !(gexSpot > 0)) setSpot(nextSpot);
 
     const symbols = nextStrikes.flatMap((row) => [row.callSym, row.putSym]).filter(Boolean) as string[];
     subscribedSymbolsRef.current = symbols;
@@ -567,13 +587,12 @@ export default function HomePage() {
       }));
     }
 
-    setStatus("LIVE");
     scheduleRender();
-  }, [scheduleRender]);
+  }, [gexSpot, scheduleRender]);
 
   useEffect(() => {
     if (!selectedExpiry) return;
-    loadChain(selectedExpiry).catch(() => setStatus("CHAIN ERR"));
+    loadChain(selectedExpiry).catch(() => {});
   }, [loadChain, selectedExpiry]);
 
   const handleRefresh = useCallback(async () => {
@@ -588,7 +607,7 @@ export default function HomePage() {
     return buildChainRows(strikeRows, liveDataRef.current, liveSpot);
   }, [quoteSnapshots.SPX?.last, renderTick, spot, strikeRows]);
 
-  // Both chart and heatmap use the pre-computed chain from /api/gex (full strikes + fallback Greeks).
+  // Both chart and heatmap use the server-pushed GEX rows (from /ws/gex broadcaster).
   // WS chain kicks in once live data arrives and overrides at least a few strikes.
   const chartRows = gexChainRows.length > 0 ? gexChainRows : wsChainRows;
   const chartSpot = gexSpot > 0 ? gexSpot : spot;
@@ -658,7 +677,7 @@ export default function HomePage() {
                 showFlipCurve={showFlipCurve}
                 expirations={expiryOptions.map(o => o.value)}
                 selectedExpiry={selectedExpiry}
-                onExpiry={setSelectedExpiry}
+                onExpiry={handleExpiry}
                 onGexMode={setGexMode}
                 onDataMode={setDataMode}
                 onToggleOI={() => setShowOI(v => !v)}
