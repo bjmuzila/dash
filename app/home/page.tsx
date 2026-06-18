@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
@@ -807,6 +807,7 @@ export default function HomePage() {
                     {heatmapRows.map((row, index) => {
                       const isAtm = row.type === "atm";
                       const showDivider = index > 0 && heatmapRows[index - 1]?.type === "atm";
+                      const rowKey = `${row.strike}-${index}`;
                       const rowStyle: React.CSSProperties = {
                         background: isAtm ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))" : "transparent",
                         transition: "background 0.15s",
@@ -856,13 +857,13 @@ export default function HomePage() {
                       };
 
                       return (
-                        <>
+                        <React.Fragment key={rowKey}>
                           {showDivider && (
-                            <tr key={`div-${row.strike}`}>
+                            <tr>
                               <td colSpan={6} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
                             </tr>
                           )}
-                          <tr key={row.strike} className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
+                          <tr className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
                             {cellVal(row.strike, 0)}
                             {cellVal(row.netGex, 1)}
                             {cellVal(row.volOnly, 2)}
@@ -870,7 +871,7 @@ export default function HomePage() {
                             {cellVal(row.vex, 4)}
                             {cellVal(row.dwGex, 5)}
                           </tr>
-                        </>
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
