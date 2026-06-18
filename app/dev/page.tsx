@@ -28,6 +28,13 @@ type PathProbe = {
   body?: unknown;
 };
 
+type DataPath = {
+  label: string;
+  path: string;
+  note: string;
+  kind: "plain" | "chain-spx-200";
+};
+
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const PROBE_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const TICKERS = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "SMH"] as const;
@@ -165,7 +172,7 @@ export default function DevPage() {
   }, [optionSide, selectedStrikeRow]);
 
   const effectiveSymbol = useMemo(() => manualSymbol.trim() || builtSymbol, [builtSymbol, manualSymbol]);
-  const dataPaths = useMemo(() => {
+  const dataPaths = useMemo<DataPath[]>(() => {
     const cleanTicker = ticker.trim().toUpperCase();
     const cleanSymbol = effectiveSymbol.trim().toUpperCase();
     const encodedTicker = encodeURIComponent(cleanTicker);
@@ -175,28 +182,33 @@ export default function DevPage() {
         label: "Ticker quote / volume / prev close",
         path: `/api/quotes-batch?symbols=${encodedTicker}`,
         note: "Best quick lookup for the selected ticker's latest quote, volume, and yesterday close.",
+        kind: "plain",
       },
       {
         label: "Ticker yesterday close cache",
         path: "/api/prev-closes",
         note: "Returns the cached prior-session closes used by the dashboard.",
+        kind: "plain",
       },
       {
         label: "Option quote / OI / volume",
         path: cleanSymbol ? `/api/proxy/tt/quote/${encodedSymbol}` : "/api/proxy/tt/quote/:symbol",
         note: "Use the built option symbol to pull contract-level open interest and volume.",
+        kind: "plain",
       },
       {
         label: "Ticker chain snapshot",
         path: expiry
           ? `/api/chains?ticker=${encodedTicker}&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`
           : `/api/chains?ticker=${encodedTicker}&range=all&noSubscribe=1`,
-        note: "Chain payload includes option-level open interest and volume for the selected expiry.",
+        note: "Chain payload filtered to strikes within $200 of SPX spot for the selected expiry.",
+        kind: "chain-spx-200",
       },
     ];
   }, [effectiveSymbol, expiry, ticker]);
 
-  const probePath = useCallback(async (label: string, path: string) => {
+  const probePath = useCallback(async (item: DataPath) => {
+    const { label, path, kind } = item;
     const started = performance.now();
     setPathProbes((current) => ({
       ...current,
@@ -237,6 +249,39 @@ export default function DevPage() {
         }
       }
 
+      if (kind === "chain-spx-200") {
+        const spotResp = await fetch("/api/quotes-batch?symbols=SPX", { cache: "no-store" });
+        const spotJson = await spotResp.json().catch(() => null) as { data?: { items?: Array<Record<string, unknown>> } } | null;
+        const spot = Number(spotJson?.data?.items?.[0]?.last ?? spotJson?.data?.items?.[0]?.close ?? 0);
+        const bodyJson = body as { data?: { items?: Array<Record<string, unknown>>; [key: string]: unknown }; [key: string]: unknown };
+        const items = Array.isArray(bodyJson?.data?.items) ? bodyJson.data.items : [];
+        if (spot > 0 && items.length) {
+          const filteredItems = items.map((group) => {
+            const strikes = Array.isArray(group?.strikes) ? group.strikes : [];
+            const filteredStrikes = strikes.filter((row) => {
+              const strike = Number(row?.["strike-price"] ?? row?.strikePrice ?? row?.strike ?? 0);
+              return strike > 0 && strike >= spot - 200 && strike <= spot + 200;
+            });
+            return { ...group, strikes: filteredStrikes };
+          });
+          body = {
+            ...((body as Record<string, unknown>) ?? {}),
+            meta: {
+              ...(typeof bodyJson.meta === "object" && bodyJson.meta ? bodyJson.meta as Record<string, unknown> : {}),
+              spot,
+              window: 200,
+              lowerBound: spot - 200,
+              upperBound: spot + 200,
+            },
+            data: {
+              ...(bodyJson.data as Record<string, unknown>),
+              items: filteredItems,
+            },
+          };
+          summary = `${summary} - SPX spot=${spot}, window=±200, items=${filteredItems.length}`;
+        }
+      }
+
       setPathProbes((current) => ({
         ...current,
         [label]: {
@@ -264,7 +309,7 @@ export default function DevPage() {
 
   const probeAllPaths = useCallback(async () => {
     for (const item of dataPaths) {
-      await probePath(item.label, item.path);
+      await probePath(item);
     }
   }, [dataPaths, probePath]);
 
@@ -684,9 +729,9 @@ export default function DevPage() {
             <div key={item.label} style={{ padding: 12, borderRadius: 10, background: "rgba(5,8,13,0.72)", border: "1px solid rgba(255,255,255,0.06)" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#f5fbff" }}>{item.label}</div>
-                <button onClick={() => void probePath(item.label, item.path)} style={{ ...buttonStyle, height: 32, padding: "0 10px", fontSize: 10 }}>
-                  Probe
-                </button>
+              <button onClick={() => void probePath(item)} style={{ ...buttonStyle, height: 32, padding: "0 10px", fontSize: 10 }}>
+                Probe
+              </button>
               </div>
               <div style={{ fontFamily: "Consolas, 'Courier New', monospace", fontSize: 12, color: "#00e5ff", wordBreak: "break-word" }}>
                 {item.path}
