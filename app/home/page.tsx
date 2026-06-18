@@ -1,19 +1,63 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
+import GexChart from "@/components/dashboard/GexChart";
+import { type ChainRow, computeGEXProfile, findCallWall, findGEXFlip, findPutWall } from "@/lib/calculations/calculations";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
+type OptionSide = "call" | "put";
+type LiveEntry = {
+  iv?: number | null;
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  oi?: number;
+  vol?: number;
+  bid?: number;
+  ask?: number;
+  _ws?: boolean;
+};
+type StrikeRow = {
+  strike: number;
+  callSym: string | null;
+  putSym: string | null;
+};
+type QuoteTile = { sym: string; chg: string; pos: boolean; active?: boolean };
+type HeatmapRow = {
+  strike: string;
+  netGex: string;
+  volOnly: string;
+  dex: string;
+  vex: string;
+  dwGex: string;
+  type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
+  rank?: number;
+  rankColor?: string;
+  atm?: boolean;
+};
+type ExpiryOption = { value: string; label: string };
+type GexMode = "net" | "call-put";
+type DataMode = "oi-vol" | "vol-only";
+
+const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
+const OPTION_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
+const SIDEBAR_SYMBOLS = ["SPY", "QQQ", "SPX", "VIX", "IWM"];
+const INDEX_SYMBOLS = ["$SPX", "SPX", "/ESU26", "/ES:XCME", "VIX", ...SIDEBAR_SYMBOLS];
+const PAGE_ID_PREFIX = "home-gex";
+
 function etNow() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
 
-function isMarketOpen() {
-  const d = etNow();
-  const day = d.getDay();
-  if (day === 0 || day === 6) return false;
-  const mins = d.getHours() * 60 + d.getMinutes();
-  return mins >= 570 && mins < 960;
+function todayEt(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 function fmtMoney(v: number) {
@@ -26,443 +70,609 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
-// ── SVG Icons ─────────────────────────────────────────────────────────────────
+function fmtExpiryLabel(dateStr: string, label: string) {
+  return label || dateStr;
+}
+
+function formatStrikeValue(value: number): string {
+  return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
+}
+
+function normalizeFeedData(data: unknown[]): Array<Record<string, unknown>> {
+  if (!Array.isArray(data) || !data.length) return [];
+  if (typeof data[0] === "object" && data[0] !== null && !Array.isArray(data[0])) {
+    return data as Array<Record<string, unknown>>;
+  }
+
+  const eventType = data[0] as string;
+  const rows = data[1] as unknown[];
+  if (typeof eventType !== "string" || !Array.isArray(rows)) return [];
+
+  const fieldsByType: Record<string, string[]> = {
+    Quote: ["bidPrice", "askPrice", "bidSize", "askSize"],
+    Trade: ["price", "dayVolume", "size"],
+    Summary: ["dayId", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "dayClosePrice", "prevDayId", "prevDayClosePrice", "openInterest"],
+    Greeks: ["volatility", "delta", "gamma", "theta", "rho", "vega"],
+  };
+
+  const fields = fieldsByType[eventType];
+  if (!fields) return [];
+
+  const hasType = rows[0] === eventType;
+  const step = fields.length + (hasType ? 2 : 1);
+  const out: Array<Record<string, unknown>> = [];
+
+  for (let i = 0; i <= rows.length - step; i += step) {
+    const base = i + (hasType ? 2 : 1);
+    const item: Record<string, unknown> = {
+      eventType: hasType ? rows[i] : eventType,
+      eventSymbol: hasType ? rows[i + 1] : rows[i],
+    };
+    fields.forEach((field, index) => {
+      item[field] = rows[base + index];
+    });
+    out.push(item);
+  }
+
+  return out;
+}
+
+function extractExpirations(payload: unknown): string[] {
+  const json = payload as {
+    expirations?: unknown;
+    items?: Array<Record<string, unknown>>;
+    data?: { items?: Array<Record<string, unknown>> };
+  };
+  const out = new Set<string>();
+  const add = (value: unknown) => {
+    const date = String(value ?? "");
+    if (date.length === 10) out.add(date);
+  };
+  if (Array.isArray(json?.expirations)) json.expirations.forEach(add);
+  if (Array.isArray(json?.items)) json.items.forEach((item) => add(item.date ?? item["expiration-date"]));
+  if (Array.isArray(json?.data?.items)) json.data.items.forEach((item) => add(item.date ?? item["expiration-date"]));
+  const today = todayEt();
+  return [...out].filter((date) => date >= today).sort();
+}
+
+function buildExpiryOptions(dates: string[]): ExpiryOption[] {
+  return dates.slice(0, 8).map((value, index) => ({
+    value,
+    label: `${index}DTE ${value.slice(5)}`,
+  }));
+}
+
+function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeRow[] {
+  const map: Record<string, StrikeRow> = {};
+  (expGroups as Array<{ strikes?: unknown[] }>).forEach((expGroup) => {
+    (expGroup.strikes || []).forEach((item: unknown) => {
+      const row = item as Record<string, unknown>;
+      const strike = Number(row["strike-price"] ?? row.strikePrice ?? row.strike ?? 0);
+      if (!(strike > 0)) return;
+      const key = strike.toFixed(2);
+      if (!map[key]) map[key] = { strike, callSym: null, putSym: null };
+      const next = map[key];
+      for (const side of ["call", "put"] as const) {
+        const option = row[side] as Record<string, unknown> | undefined;
+        if (!option) continue;
+        const sym = String(option["streamer-symbol"] ?? option.symbol ?? "");
+        if (side === "call") next.callSym = sym;
+        else next.putSym = sym;
+
+        if (sym && !liveData[sym]?._ws) {
+          liveData[sym] = {
+            iv: Number(option["implied-volatility"] ?? option.impliedVolatility ?? 0) || undefined,
+            delta: Number(option.delta ?? 0) || undefined,
+            gamma: Number(option.gamma ?? 0) || undefined,
+            theta: Number(option.theta ?? 0) || undefined,
+            vega: Number(option.vega ?? 0) || undefined,
+            oi: Number(option["open-interest"] ?? option.openInterest ?? 0) || 0,
+            vol: Number(option.volume ?? option.dayVolume ?? 0) || 0,
+          };
+        }
+      }
+    });
+  });
+  return Object.values(map).sort((a, b) => a.strike - b.strike);
+}
+
+function buildChainRows(strikes: StrikeRow[], liveData: Record<string, LiveEntry>, spot: number): ChainRow[] {
+  return strikes.map((row) => {
+    const call = liveData[row.callSym ?? ""] || {};
+    const put = liveData[row.putSym ?? ""] || {};
+    const callOI = call.oi ?? 0;
+    const putOI = put.oi ?? 0;
+    const callVolume = call.vol ?? 0;
+    const putVolume = put.vol ?? 0;
+    const callGamma = Math.abs(call.gamma ?? 0);
+    const putGamma = Math.abs(put.gamma ?? 0);
+    const callDelta = call.delta ?? 0;
+    const putDelta = Math.abs(put.delta ?? 0);
+    const callGEX = callGamma * callOI * spot * spot;
+    const putGEX = -putGamma * putOI * spot * spot;
+    const netGEX = callGEX + putGEX;
+    const netVolGEX = callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot;
+    const netDEX = callDelta * callOI * spot * 100 - putDelta * putOI * spot * 100;
+    const volNetDEX = callDelta * callVolume * spot * 100 - putDelta * putVolume * spot * 100;
+    const netVanna = ((call.vega ?? 0) * callOI - (put.vega ?? 0) * putOI) * 100;
+    const netVolVanna = ((call.vega ?? 0) * callVolume - (put.vega ?? 0) * putVolume) * 100;
+
+    return {
+      strike: row.strike,
+      spotPrice: spot,
+      callOI,
+      putOI,
+      callVolume,
+      putVolume,
+      callGamma,
+      putGamma,
+      callDelta,
+      putDelta,
+      callGEX,
+      putGEX,
+      netGEX,
+      netVolGEX,
+      netDEX,
+      volNetDEX,
+      netVanna,
+      netVolVanna,
+      callIV: call.iv ?? 0,
+      putIV: put.iv ?? 0,
+      dte: 0,
+      bid: call.bid,
+      ask: call.ask,
+    };
+  });
+}
+
+function pickCenterRows(rows: ChainRow[], spot: number, count = 19): ChainRow[] {
+  if (!rows.length) return [];
+  const sorted = [...rows].sort((a, b) => b.strike - a.strike);
+  let atmIndex = 0;
+  let minDist = Infinity;
+  sorted.forEach((row, index) => {
+    const dist = Math.abs(row.strike - spot);
+    if (dist < minDist) {
+      minDist = dist;
+      atmIndex = index;
+    }
+  });
+  const start = Math.max(0, atmIndex - Math.floor(count / 2));
+  const end = Math.min(sorted.length, start + count);
+  return sorted.slice(start, end);
+}
+
+function toHeatmapRows(rows: ChainRow[], spot: number): HeatmapRow[] {
+  const windowRows = pickCenterRows(rows, spot, 19);
+  const byAbsPos = [...windowRows].filter((row) => (row.netGEX ?? 0) > 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
+  const byAbsNeg = [...windowRows].filter((row) => (row.netGEX ?? 0) < 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
+  const rankMap = new Map<number, { rank: number; rankColor: string }>();
+  byAbsPos.forEach((row, index) => rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#F97316" : "#8B94A7" }));
+  byAbsNeg.forEach((row, index) => {
+    if (!rankMap.has(row.strike)) rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#F97316" : "#8B94A7" });
+  });
+
+  const atmStrike = windowRows.reduce((best, row) => (
+    Math.abs(row.strike - spot) < Math.abs(best - spot) ? row.strike : best
+  ), windowRows[0]?.strike ?? 0);
+
+  return windowRows.map((row) => {
+    const net = row.netGEX ?? 0;
+    const volOnly = row.netVolGEX ?? 0;
+    const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
+    const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);
+    const dwGex = net - volOnly;
+    const isAtm = row.strike === atmStrike;
+    let type: HeatmapRow["type"] = "neutral";
+    if (isAtm) type = "atm";
+    else if (net >= 0 && rankMap.get(row.strike)?.rank === 1) type = "pos-top";
+    else if (net >= 0 && (rankMap.get(row.strike)?.rank ?? 99) <= 3) type = "pos-strong";
+    else if (net < 0 && rankMap.get(row.strike)?.rank === 1) type = "neg-top";
+    else if (net < 0 && (rankMap.get(row.strike)?.rank ?? 99) <= 3) type = "neg-red";
+    else if (net < 0) type = "neg";
+
+    return {
+      strike: formatStrikeValue(row.strike),
+      netGex: fmtMoney(net),
+      volOnly: fmtMoney(volOnly),
+      dex: fmtMoney(dex),
+      vex: fmtMoney(vex),
+      dwGex: fmtMoney(dwGex),
+      type,
+      rank: rankMap.get(row.strike)?.rank,
+      rankColor: rankMap.get(row.strike)?.rankColor,
+      atm: isAtm,
+    };
+  });
+}
+
+function makeSidebarQuotes(quotes: Record<string, { last: number; prev: number }>): QuoteTile[] {
+  return SIDEBAR_SYMBOLS.map((sym) => {
+    const entry = quotes[sym];
+    if (!entry || !(entry.prev > 0) || !(entry.last > 0)) {
+      return { sym, chg: "—", pos: true, active: sym === "SPX" };
+    }
+    const pct = ((entry.last - entry.prev) / entry.prev) * 100;
+    return {
+      sym,
+      chg: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+      pos: pct >= 0,
+      active: sym === "SPX",
+    };
+  });
+}
+
 const BarChart2 = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+    <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
   </svg>
 );
 const CalendarIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
   </svg>
 );
 const ActivityIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
   </svg>
 );
 const LayersIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
+    <polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" />
   </svg>
 );
 const HomeIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" />
   </svg>
 );
 const GridIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+    <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
   </svg>
 );
 const SettingsIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-  </svg>
-);
-const RotateCcwIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.91"/>
+    <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </svg>
 );
 
-// ── Data ──────────────────────────────────────────────────────────────────────
-const QUOTES = [
-  { sym: "AMD",   chg: "+6.92%", pos: true },
-  { sym: "META",  chg: "+4.63%", pos: true },
-  { sym: "SMH",   chg: "+4.16%", pos: true },
-  { sym: "NVDA",  chg: "+3.36%", pos: true },
-  { sym: "AMZN",  chg: "+3.27%", pos: true },
-  { sym: "NQU",   chg: "+3.01%", pos: true, active: true },
-  { sym: "QQQ",   chg: "+2.98%", pos: true },
-  { sym: "GOOGL", chg: "+2.71%", pos: true },
-  { sym: "MSFT",  chg: "+2.31%", pos: true },
-  { sym: "AAPL",  chg: "+1.76%", pos: true },
-];
-
-const HEATMAP_ROWS = [
-  { strike: "7,600", rank: 2, rankColor: "#8B94A7", netGex: "$63.72M", volOnly: "$63.72M", dex: "$25.82M", vex: "$73.62M", dwGex: "$9.90M", type: "pos-strong" },
-  { strike: "7,595", netGex: "$8.01M",   volOnly: "$8.01M",   dex: "$3.46M",   vex: "$9.47M",   dwGex: "$1.47M",   type: "neutral" },
-  { strike: "7,590", rank: 3, rankColor: "#F97316", netGex: "-$21.77M", volOnly: "$10.16M", dex: "-$50.32M", vex: "$12.32M", dwGex: "$2.15M", type: "neg-red" },
-  { strike: "7,585", netGex: "$9.86M",   volOnly: "$9.86M",   dex: "$4.70M",   vex: "$12.13M",  dwGex: "$2.27M",   type: "neutral" },
-  { strike: "7,580", netGex: "$9.38M",   volOnly: "$9.38M",   dex: "$4.80M",   vex: "$11.97M",  dwGex: "$2.59M",   type: "neutral" },
-  { strike: "7,575", rank: 5, rankColor: "#8B94A7", netGex: "$13.32M",  volOnly: "$13.32M",  dex: "$6.05M",   vex: "$16.63M",  dwGex: "$3.31M",   type: "neutral" },
-  { strike: "7,570", rank: 1, rankColor: "#F97316", netGex: "$200.41M", volOnly: "$11.71M",  dex: "$118.50M", vex: "$15.84M",  dwGex: "$4.13M",   type: "pos-top" },
-  { strike: "7,565", netGex: "$12.04M",  volOnly: "$12.04M",  dex: "$7.73M",   vex: "$16.77M",  dwGex: "$4.74M",   type: "neutral" },
-  { strike: "7,560", rank: 4, rankColor: "#8B94A7", netGex: "$13.65M",  volOnly: "$13.65M",  dex: "$8.65M",   vex: "$19.04M",  dwGex: "$5.39M",   type: "neutral" },
-  { strike: "7,555", atm: true, rank: 2, rankColor: "#8B94A7", netGex: "$20.27M", volOnly: "$20.27M", dex: "$14.26M", vex: "$29.17M", dwGex: "$8.90M", type: "atm" },
-  { strike: "7,550", rank: 4, rankColor: "#8B94A7", netGex: "-$11.19M", volOnly: "-$11.19M", dex: "-$8.14M",  vex: "-$16.22M", dwGex: "-$5.03M",  type: "neg" },
-  { strike: "7,545", netGex: "-$1.82M",  volOnly: "-$1.82M",  dex: "-$1.33M",  vex: "-$2.63M",  dwGex: "-$803.30K", type: "neg" },
-  { strike: "7,540", netGex: "-$2.19M",  volOnly: "-$2.19M",  dex: "-$1.25M",  vex: "-$2.91M",  dwGex: "-$724.10K", type: "neg" },
-  { strike: "7,535", netGex: "$420.98K", volOnly: "$420.98K", dex: "$878.09K", vex: "$798.86K", dwGex: "$377.88K",  type: "neutral" },
-  { strike: "7,530", rank: 3, rankColor: "#F97316", netGex: "-$19.35M", volOnly: "-$19.35M", dex: "-$11.95M", vex: "-$25.73M", dwGex: "-$6.38M",  type: "neg-red" },
-  { strike: "7,525", rank: 5, rankColor: "#8B94A7", netGex: "-$9.03M",  volOnly: "-$9.03M",  dex: "-$5.17M",  vex: "-$11.61M", dwGex: "-$2.57M",  type: "neg" },
-  { strike: "7,520", rank: 1, rankColor: "#F97316", netGex: "-$47.34M", volOnly: "-$3.92M",  dex: "-$27.74M", vex: "-$5.00M",  dwGex: "-$1.08M",  type: "neg-top" },
-  { strike: "7,515", netGex: "-$3.28M",  volOnly: "-$3.28M",  dex: "-$1.87M",  vex: "-$4.09M",  dwGex: "-$811.00K", type: "neg" },
-];
-
-// ── Component ─────────────────────────────────────────────────────────────────
 export default function HomePage() {
-  const [now, setNow] = useState(new Date());
-  const [spx, setSpx] = useState(7554.29);
-  const [spxChg, setSpxChg] = useState(122.83);
-  const [spxChgPct, setSpxChgPct] = useState(1.65);
-  const [esFut, setEsFut] = useState(7562.0);
-  const [netGex, setNetGex] = useState(15790000000);
-  const [vix, setVix] = useState(16.20);
-  const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
+  const pageIdRef = useRef(`${PAGE_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const wsRef = useRef<WebSocket | null>(null);
-  const prevSpxRef = useRef(0);
+  const liveDataRef = useRef<Record<string, LiveEntry>>({});
+  const subscribedSymbolsRef = useRef<string[]>([]);
+  const lastSpotRef = useRef(0);
+
+  const [now, setNow] = useState(new Date());
+  const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
+  const [gexMode, setGexMode] = useState<GexMode>("net");
+  const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
+  const [selectedExpiry, setSelectedExpiry] = useState("");
+  const [strikeRows, setStrikeRows] = useState<StrikeRow[]>([]);
+  const [spot, setSpot] = useState(0);
+  const [esFut, setEsFut] = useState(0);
+  const [vix, setVix] = useState(0);
+  const [spxChange, setSpxChange] = useState(0);
+  const [spxChangePct, setSpxChangePct] = useState(0);
+  const [sidebarQuotes, setSidebarQuotes] = useState<QuoteTile[]>(SIDEBAR_SYMBOLS.map((sym) => ({ sym, chg: "—", pos: true, active: sym === "SPX" })));
+  const [quoteSnapshots, setQuoteSnapshots] = useState<Record<string, { last: number; prev: number }>>({});
+  const [renderTick, setRenderTick] = useState(0);
+  const [status, setStatus] = useState("READY");
 
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
+  const scheduleRender = useCallback(() => {
+    setRenderTick((current) => current + 1);
+  }, []);
+
+  const connectSocket = useCallback(() => {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ? process.env.NEXT_PUBLIC_WS_URL + "/ws/dxlink"
+      ? `${process.env.NEXT_PUBLIC_WS_URL}/ws/dxlink`
       : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dxlink`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+
     ws.onopen = () => {
-      try {
+      setStatus("LIVE");
+      ws.send(JSON.stringify({
+        type: "subscribe",
+        symbols: INDEX_SYMBOLS,
+        feedTypesBySymbol: Object.fromEntries(INDEX_SYMBOLS.map((symbol) => [symbol, FEED_TYPES])),
+      }));
+
+      if (subscribedSymbolsRef.current.length) {
         ws.send(JSON.stringify({
           type: "subscribe",
-          symbols: ["$SPX", "SPX", "/ESU26", "/ES:XCME", "VIX"],
-          feedTypesBySymbol: { "$SPX": ["Quote","Trade","Summary"], "SPX": ["Quote","Trade","Summary"], "/ESU26": ["Quote","Trade"], "/ES:XCME": ["Quote","Trade"], "VIX": ["Quote","Trade"] },
+          symbols: subscribedSymbolsRef.current,
+          feedTypesBySymbol: Object.fromEntries(subscribedSymbolsRef.current.map((symbol) => [symbol, OPTION_FEED_TYPES])),
         }));
-      } catch {}
+      }
     };
-    ws.onmessage = (e) => {
+
+    ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(e.data);
-        if (msg.type !== "FEED_DATA") return;
-        (msg.data as Array<Record<string, unknown>>).forEach(ev => {
-          const sym = String(ev.eventSymbol ?? "");
-          const t = ev.eventType;
-          if ((sym === "$SPX" || sym === "SPX") && t === "Quote") {
-            const bid = Number(ev.bidPrice ?? 0), ask = Number(ev.askPrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (mid > 100) {
-              if (prevSpxRef.current > 0) { const chg = mid - prevSpxRef.current; setSpxChg(chg); setSpxChgPct((chg / prevSpxRef.current) * 100); }
-              if (prevSpxRef.current === 0) prevSpxRef.current = mid;
-              setSpx(mid);
+        const message = JSON.parse(event.data);
+        if (message?.type !== "FEED_DATA" || !Array.isArray(message.data)) return;
+        const items = normalizeFeedData(message.data);
+        let changed = false;
+        const nextQuotes = { ...quoteSnapshots };
+
+        items.forEach((item) => {
+          const sym = String(item.eventSymbol ?? "");
+          const eventType = String(item.eventType ?? "");
+          if (!sym) return;
+
+          if (INDEX_SYMBOLS.includes(sym)) {
+            const bid = Number(item.bidPrice ?? 0);
+            const ask = Number(item.askPrice ?? 0);
+            const price = Number(item.price ?? 0);
+            const prev = Number(item.prevDayClosePrice ?? item.dayClosePrice ?? 0);
+            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : price;
+
+            if (sym === "$SPX" || sym === "SPX") {
+              if (eventType === "Quote" && mid > 0) setSpot(mid);
+              if (eventType === "Trade" && price > 0) setSpot(price);
+              const last = eventType === "Trade" ? price : mid;
+              if (last > 0) {
+                const prior = prev > 0 ? prev : nextQuotes.SPX?.prev ?? lastSpotRef.current;
+                nextQuotes.SPX = { last, prev: prior };
+                if (prior > 0) {
+                  setSpxChange(last - prior);
+                  setSpxChangePct(((last - prior) / prior) * 100);
+                }
+                if (lastSpotRef.current === 0) lastSpotRef.current = prior || last;
+              }
+            }
+            if ((sym === "/ESU26" || sym === "/ES:XCME") && (eventType === "Quote" || eventType === "Trade")) {
+              const last = eventType === "Trade" ? price : mid;
+              if (last > 0) {
+                setEsFut(last);
+                nextQuotes.ES = { last, prev: prev > 0 ? prev : nextQuotes.ES?.prev ?? last };
+              }
+            }
+            if (sym === "VIX" && (eventType === "Quote" || eventType === "Trade")) {
+              const last = eventType === "Trade" ? price : mid;
+              if (last > 0) {
+                setVix(last);
+                nextQuotes.VIX = { last, prev: prev > 0 ? prev : nextQuotes.VIX?.prev ?? last };
+              }
+            }
+            if (SIDEBAR_SYMBOLS.includes(sym) && (eventType === "Quote" || eventType === "Trade")) {
+              const last = eventType === "Trade" ? price : mid;
+              if (last > 0) {
+                nextQuotes[sym] = { last, prev: prev > 0 ? prev : nextQuotes[sym]?.prev ?? last };
+              }
             }
           }
-          if ((sym === "/ESU26" || sym === "/ES:XCME") && t === "Quote") {
-            const bid = Number(ev.bidPrice ?? 0), ask = Number(ev.askPrice ?? 0);
-            const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (mid > 100) setEsFut(mid);
-          }
-          if (sym === "VIX" && t === "Quote") {
-            const v = Number(ev.bidPrice ?? ev.lastPrice ?? 0);
-            if (v > 0) setVix(v);
+
+          if (!subscribedSymbolsRef.current.includes(sym)) return;
+          if (!liveDataRef.current[sym]) liveDataRef.current[sym] = {};
+          const live = liveDataRef.current[sym];
+          live._ws = true;
+          if (eventType === "Greeks") {
+            if (item.volatility != null) live.iv = Number(item.volatility);
+            if (item.delta != null) live.delta = Number(item.delta);
+            if (item.gamma != null) live.gamma = Number(item.gamma);
+            if (item.theta != null) live.theta = Number(item.theta);
+            if (item.vega != null) live.vega = Number(item.vega);
+            changed = true;
+          } else if (eventType === "Summary") {
+            if (item.openInterest != null) live.oi = Number(item.openInterest);
+            changed = true;
+          } else if (eventType === "Trade") {
+            if (item.dayVolume != null) live.vol = Number(item.dayVolume);
+            if (item.price != null && Number(item.price) > 0) {
+              live.bid = Number(item.price);
+              live.ask = Number(item.price);
+            }
+            changed = true;
+          } else if (eventType === "Quote") {
+            if (item.bidPrice != null) live.bid = Number(item.bidPrice);
+            if (item.askPrice != null) live.ask = Number(item.askPrice);
+            changed = true;
           }
         });
-      } catch {}
+
+        setQuoteSnapshots(nextQuotes);
+        setSidebarQuotes(makeSidebarQuotes(nextQuotes));
+        if (changed) scheduleRender();
+      } catch {
+        // ignore malformed frames
+      }
     };
-    ws.onclose = () => {};
-    return () => { ws.close(); };
-  }, []);
+
+    ws.onerror = () => setStatus("WS ERR");
+    ws.onclose = () => {
+      setStatus("RECONNECT");
+      setTimeout(connectSocket, 2500);
+    };
+  }, [quoteSnapshots, scheduleRender]);
 
   useEffect(() => {
-    const load = () => {
-      fetch("/api/gex", { cache: "no-store" })
-        .then(r => r.json())
-        .then(j => { const g = j?.summary?.totalNetGEX ?? j?.totalNetGEX ?? 0; if (isFinite(g) && g !== 0) setNetGex(g); })
-        .catch(() => {});
+    connectSocket();
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-    load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
+  }, [connectSocket]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadExpirations = async () => {
+      const primary = await fetch("/api/gex/expirations", { cache: "no-store" }).then((res) => res.json()).catch(() => null);
+      const fallback = primary ? null : await fetch("/api/expirations?ticker=SPX", { cache: "no-store" }).then((res) => res.json()).catch(() => null);
+      const dates = extractExpirations(primary ?? fallback);
+      if (cancelled) return;
+      const options = buildExpiryOptions(dates);
+      setExpiryOptions(options);
+      if (options[0]) setSelectedExpiry((current) => current || options[0].value);
+    };
+    loadExpirations().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const etTime = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const loadChain = useCallback(async (expiry: string) => {
+    if (!expiry) return;
+    setStatus("LOADING");
+    const pageId = pageIdRef.current;
+    const json = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&pageId=${encodeURIComponent(pageId)}`, { cache: "no-store" }).then((res) => res.json());
+    const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+    const target = items.filter((item: Record<string, unknown>) => String(item["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10));
+    const nextStrikes = buildStrikes(target.length ? target : items, liveDataRef.current);
+    const nextSpot = Number(json?.data?.underlyingPrice ?? 0);
+    setStrikeRows(nextStrikes);
+    if (nextSpot > 0) setSpot(nextSpot);
 
-  // ── Styles ──────────────────────────────────────────────────────────────────
+    const symbols = nextStrikes.flatMap((row) => [row.callSym, row.putSym]).filter(Boolean) as string[];
+    subscribedSymbolsRef.current = symbols;
+
+    await fetch("/api/proxy/subscription-ready", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageId, symbols, timeout: 8000, threshold: 1 }),
+    }).catch(() => null);
+
+    await fetch("/api/proxy/dxlink-subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbols,
+        feedTypesBySymbol: Object.fromEntries(symbols.map((symbol) => [symbol, OPTION_FEED_TYPES])),
+      }),
+    }).catch(() => null);
+
+    if (wsRef.current?.readyState === WebSocket.OPEN && symbols.length) {
+      wsRef.current.send(JSON.stringify({
+        type: "subscribe",
+        symbols,
+        feedTypesBySymbol: Object.fromEntries(symbols.map((symbol) => [symbol, OPTION_FEED_TYPES])),
+      }));
+    }
+
+    setStatus("LIVE");
+    scheduleRender();
+  }, [scheduleRender]);
+
+  useEffect(() => {
+    if (!selectedExpiry) return;
+    loadChain(selectedExpiry).catch(() => setStatus("CHAIN ERR"));
+  }, [loadChain, selectedExpiry]);
+
+  const chainRows = useMemo(() => {
+    void renderTick;
+    const liveSpot = spot > 0 ? spot : Number(quoteSnapshots.SPX?.last ?? 0);
+    if (!(liveSpot > 0) || !strikeRows.length) return [] as ChainRow[];
+    return buildChainRows(strikeRows, liveDataRef.current, liveSpot);
+  }, [quoteSnapshots.SPX?.last, renderTick, spot, strikeRows]);
+
+  const heatmapRows = useMemo(() => {
+    if (!(spot > 0) || !chainRows.length) return [] as HeatmapRow[];
+    return toHeatmapRows(chainRows, spot);
+  }, [chainRows, spot]);
+
+  const netGex = useMemo(
+    () => chainRows.reduce((sum, row) => sum + ((dataMode === "vol-only" ? row.netVolGEX : row.netGEX) ?? 0), 0),
+    [chainRows, dataMode]
+  );
+  const callWall = useMemo(() => findCallWall(chainRows) ?? null, [chainRows]);
+  const putWall = useMemo(() => findPutWall(chainRows) ?? null, [chainRows]);
+  const flipPoint = useMemo(() => findGEXFlip(chainRows, spot) ?? null, [chainRows, spot]);
+  const gexProfile = useMemo(() => computeGEXProfile(chainRows, spot), [chainRows, spot]);
+
+  const etTime = now.toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
   const C = {
     bg: "#05060A",
-    panel: "#0D1119",
     cyan: "#00F0FF",
     purple: "#8B5CF6",
     orange: "#F97316",
     green: "#10B981",
     red: "#EF4444",
-    muted: "#8B94A7",
-  };
-
-  const floatSection: React.CSSProperties = {
-    position: "relative",
-    padding: "0",
-  };
-
-  const gradDivider: React.CSSProperties = {
-    height: 1,
-    background: "linear-gradient(to right, transparent, rgba(0,240,255,0.08), rgba(139,92,246,0.08), transparent)",
-    margin: "0",
   };
 
   return (
-    <div style={{
-      height: "100%", width: "100%", overflow: "hidden",
-      background: C.bg,
-      backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)",
-      fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
-      color: "#fff",
-      display: "flex",
-      flexDirection: "row",
-    }}>
-
-      {/* ── SIDEBAR ────────────────────────────────────────────────────────── */}
-      <aside style={{
-        width: 85, flexShrink: 0, display: "flex", flexDirection: "column",
-        padding: "24px 0", alignItems: "center", zIndex: 20, position: "relative",
-        background: "rgba(0,0,0,0.10)", backdropFilter: "blur(12px)",
-        borderRight: "1px solid rgba(255,255,255,0.05)",
-      }}>
-        {/* Logo */}
-        <div style={{
-          width: 48, height: 48, background: "rgba(0,240,255,0.10)", borderRadius: 12,
-          display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-          boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", border: "1px solid rgba(0,240,255,0.2)",
-          marginBottom: 24, color: C.cyan,
-        }}>
-          <HomeIcon />
-        </div>
-
-        {/* Nav */}
+    <div style={{ height: "100%", width: "100%", overflow: "hidden", background: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "row" }}>
+      <aside style={{ width: 85, flexShrink: 0, display: "flex", flexDirection: "column", padding: "24px 0", alignItems: "center", zIndex: 20, position: "relative", background: "rgba(0,0,0,0.10)", backdropFilter: "blur(12px)", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+        <div style={{ width: 48, height: 48, background: "rgba(0,240,255,0.10)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", border: "1px solid rgba(0,240,255,0.2)", marginBottom: 24, color: C.cyan }}><HomeIcon /></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", alignItems: "center", color: "#fff", marginBottom: 20 }}>
-          <span style={{ color: "#fff", cursor: "pointer" }}><GridIcon /></span>
-          <span style={{ cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
-            <CalendarIcon />
-          </span>
+          <span><GridIcon /></span>
+          <span><CalendarIcon /></span>
         </div>
         <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", marginBottom: 16 }} />
-
-        {/* Quotes */}
-        <div style={{ flex: 1, width: "100%", overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 0, scrollbarWidth: "none" }}>
+        <div style={{ flex: 1, width: "100%", overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", scrollbarWidth: "none" }}>
           <div style={{ fontSize: 9, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.15em", position: "sticky", top: 0, background: "rgba(5,6,10,0.8)", backdropFilter: "blur(8px)", width: "100%", textAlign: "center", padding: "8px 0", zIndex: 10 }}>Quotes</div>
-          {QUOTES.map(q => (
-            <div key={q.sym} style={{
-              display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer",
-              padding: "6px 0", width: "100%", transition: "background 0.15s",
-              background: q.active ? "rgba(255,255,255,0.05)" : "transparent",
-              borderLeft: q.active ? `2px solid ${C.cyan}` : "2px solid transparent",
-            }}
-              onMouseEnter={e => { if (!q.active) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
-              onMouseLeave={e => { if (!q.active) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-            >
+          {sidebarQuotes.map((q) => (
+            <div key={q.sym} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "6px 0", width: "100%", background: q.active ? "rgba(255,255,255,0.05)" : "transparent", borderLeft: q.active ? `2px solid ${C.cyan}` : "2px solid transparent" }}>
               <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#fff" }}>{q.sym}</span>
               <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: q.pos ? C.green : C.red }}>{q.chg}</span>
             </div>
           ))}
-          <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", padding: "6px 0", width: "100%" }}>
-            <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: C.red }}>VIX</span>
-            <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: C.red }}>-8.37%</span>
-          </div>
-          <div style={{ width: 32, height: 1, background: "rgba(255,255,255,0.10)", margin: "8px 0" }} />
-          <div style={{ fontSize: 9, fontWeight: 700, color: C.purple, textTransform: "uppercase", letterSpacing: "0.12em", textAlign: "center", padding: "4px 0" }}>Sigma</div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "4px 0", marginBottom: 8, width: "100%" }}>
-            {[
-              { label: "1σ", val: "7,595", color: C.cyan },
-              { label: "2σ", val: "7,636", color: C.purple },
-              { label: "-1σ", val: "7,513", color: C.cyan },
-              { label: "-2σ", val: "7,472", color: C.purple },
-            ].map(s => (
-              <div key={s.label} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <span style={{ fontFamily: "monospace", fontSize: 9, fontWeight: 700, color: s.color, opacity: 0.7 }}>{s.label}</span>
-                <span style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 700, color: "#fff" }}>{s.val}</span>
-              </div>
-            ))}
-          </div>
         </div>
-
-        {/* Bottom */}
         <div className="grad-divider-sidebar-t" style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, paddingTop: 16, width: "100%" }}>
-          <span style={{ color: "#fff", cursor: "pointer", transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "#fff")} onMouseLeave={e => (e.currentTarget.style.color = "#fff")}>
-            <SettingsIcon />
-          </span>
-          <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg, ${C.purple}, ${C.cyan})`, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)", cursor: "pointer" }} />
+          <span><SettingsIcon /></span>
+          <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg, ${C.purple}, ${C.cyan})` }} />
         </div>
       </aside>
 
-      {/* ── MAIN ──────────────────────────────────────────────────────────── */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
-
-        {/* ── BODY ──────────────────────────────────────────────────────────── */}
         <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
-
-          {/* LEFT COLUMN */}
-          <div style={{ width: "55%", display: "flex", flexDirection: "column", gap: 0, minWidth: 0, height: "100%", overflow: "hidden" }}>
-
-            {/* GEX CHART */}
-            <div style={{
-              background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, padding: 24, display: "flex", flexDirection: "column",
-              height: 400, flexShrink: 0,
-            }}>
-              {/* Chart Header */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
+          <div style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden" }}>
+            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, padding: 24, display: "flex", flexDirection: "column", height: 400, flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexShrink: 0, gap: 12, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   <span style={{ color: C.cyan }}><BarChart2 /></span>
                   Net Strike Gamma Exposure
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", width: "100%" }}>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>0DTE 6/15</button>
-                  <button style={{ background: "rgba(0,240,255,0.25)", color: C.cyan, border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)", textTransform: "uppercase", fontWeight: 600 }}>1DTE 6/16</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {expiryOptions.slice(0, 2).map((expiry, index) => (
+                    <button key={expiry.value} onClick={() => setSelectedExpiry(expiry.value)} style={{ background: selectedExpiry === expiry.value ? "rgba(0,240,255,0.25)" : "rgba(255,255,255,0.02)", color: selectedExpiry === expiry.value ? C.cyan : "#fff", border: "none", padding: "4px 10px", fontSize: 10, borderRadius: 4, cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>
+                      {index}DTE {expiry.value.slice(5)}
+                    </button>
+                  ))}
                   <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
-                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.10)", margin: "0 4px" }} />
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ OI Overlay</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ Net DEX</button>
-                  <button style={{ color: "#fff", padding: "4px 10px", fontSize: 10, background: "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>+ GEX Flip</button>
+                  <button onClick={() => setGexMode("net")} style={{ color: gexMode === "net" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: gexMode === "net" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Net GEX</button>
+                  <button onClick={() => setGexMode("call-put")} style={{ color: gexMode === "call-put" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: gexMode === "call-put" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Call - Put</button>
+                  <button onClick={() => setDataMode("oi-vol")} style={{ color: dataMode === "oi-vol" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: dataMode === "oi-vol" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>OI + Vol</button>
+                  <button onClick={() => setDataMode("vol-only")} style={{ color: dataMode === "vol-only" ? C.cyan : "#fff", padding: "4px 10px", fontSize: 10, background: dataMode === "vol-only" ? "rgba(0,240,255,0.14)" : "rgba(255,255,255,0.02)", border: "none", cursor: "pointer", textTransform: "uppercase", fontWeight: 600 }}>Vol Only</button>
                 </div>
               </div>
-
-              {/* Legend */}
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "monospace", marginBottom: 8, padding: "0 8px", flexShrink: 0 }}>
-                <div style={{ display: "flex", gap: 16 }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: C.cyan }}>
-                    <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(0,240,255,0.8)" }} />
-                    + GEX
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308" }}>
-                    <span style={{ width: 8, height: 8, background: "#EAB308", borderRadius: 2, display: "inline-block", boxShadow: "0 0 8px rgba(234,179,8,0.7)" }} />
-                    - GEX
-                  </span>
-                </div>
-                <span style={{ color: "#fff" }}>Units in Billions ($B)</span>
-              </div>
-
-              {/* Chart */}
-              <div style={{ flex: 1, position: "relative", width: "100%", minHeight: 0 }}>
-                {/* Y-axis */}
-                <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace", color: "#fff", alignItems: "flex-end", zIndex: 20, pointerEvents: "none", paddingBottom: 20 }}>
-                  {["+$6.00B","+$4.00B","+$2.00B","0","-$2.00B","-$4.00B","-$6.00B"].map((l, i) => (
-                    <span key={i} style={{ color: i < 3 ? C.cyan : i === 3 ? "#fff" : C.orange }}>{l}</span>
-                  ))}
-                </div>
-                <svg viewBox="0 0 800 300" preserveAspectRatio="none" style={{ width: "100%", height: "100%", paddingRight: 48, paddingBottom: 24, boxSizing: "border-box" }}>
-                  <defs>
-                    <linearGradient id="cyanBarGrad" x1="0" y1="1" x2="0" y2="0">
-                      <stop offset="0%" stopColor="#0284C7"/><stop offset="100%" stopColor="#00F0FF"/>
-                    </linearGradient>
-                    <linearGradient id="goldBarGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#CA8A04"/><stop offset="100%" stopColor="#EAB308"/>
-                    </linearGradient>
-                    <linearGradient id="goldBarBright" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#D97706"/><stop offset="100%" stopColor="#FCD34D"/>
-                    </linearGradient>
-                  </defs>
-                  <line x1="0" y1="50" x2="800" y2="50" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="0" y1="100" x2="800" y2="100" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="0" y1="200" x2="800" y2="200" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="0" y1="250" x2="800" y2="250" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
-                  <line x1="380" y1="0" x2="380" y2="300" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4 4"/>
-                  <line x1="0" y1="150" x2="800" y2="150" stroke="rgba(255,255,255,0.2)" strokeWidth="2"/>
-                  <g fill="url(#cyanBarGrad)">
-                    <rect x="30" y="145" width="25" height="5"/><rect x="65" y="140" width="25" height="10"/>
-                    <rect x="100" y="140" width="25" height="10"/><rect x="135" y="130" width="25" height="20"/>
-                    <rect x="170" y="135" width="25" height="15"/><rect x="205" y="120" width="25" height="30"/>
-                    <rect x="240" y="130" width="25" height="20"/><rect x="275" y="140" width="25" height="10"/>
-                    <rect x="310" y="140" width="25" height="10"/>
-                    <rect x="345" y="20" width="25" height="130" fill="#00F0FF" style={{ filter: "drop-shadow(0 0 8px rgba(0,240,255,0.6))" }}/>
-                    <rect x="380" y="80" width="25" height="70"/><rect x="415" y="90" width="25" height="60"/>
-                    <rect x="450" y="110" width="25" height="40"/><rect x="485" y="60" width="25" height="90"/>
-                    <rect x="520" y="50" width="25" height="100"/><rect x="555" y="30" width="25" height="120"/>
-                    <rect x="590" y="80" width="25" height="70"/><rect x="625" y="110" width="25" height="40"/>
-                    <rect x="660" y="100" width="25" height="50"/><rect x="695" y="25" width="25" height="125" fill="#00F0FF"/>
-                  </g>
-                  <g fill="url(#goldBarGrad)">
-                    <rect x="30" y="150" width="25" height="30"/>
-                    <rect x="65" y="150" width="25" height="25"/>
-                    <rect x="100" y="150" width="25" height="30"/>
-                    <rect x="135" y="150" width="25" height="45"/>
-                    <rect x="170" y="150" width="25" height="50"/>
-                    <rect x="310" y="150" width="25" height="35"/>
-                    <rect x="345" y="150" width="25" height="10"/>
-                  </g>
-                  {/* Bigger gold bars — brighter gradient */}
-                  <g fill="url(#goldBarBright)">
-                    <rect x="205" y="150" width="25" height="60" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.5))" }}/>
-                    <rect x="240" y="150" width="25" height="55" style={{ filter: "drop-shadow(0 0 6px rgba(251,191,36,0.4))" }}/>
-                    <rect x="275" y="150" width="25" height="40"/>
-                  </g>
-                </svg>
-                {/* X-axis labels */}
-                <div className="grad-divider-t" style={{ position: "absolute", bottom: 0, left: 0, right: 48, display: "flex", justifyContent: "space-between", padding: "8px 30px 0", fontSize: 10, fontFamily: "monospace", color: "#fff" }}>
-                  {["7450","7500","7554","7600","7650"].map((l, i) => (
-                    <span key={i} style={{ color: i === 2 ? "#fff" : "#fff", fontWeight: i === 2 ? 700 : 400 }}>{l}</span>
-                  ))}
-                </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <GexChart chain={chainRows} spotPrice={spot} flipPoint={flipPoint} gexProfile={gexProfile} mode={gexMode} dataMode={dataMode} showFlipCurve />
               </div>
             </div>
 
-            {/* TABS */}
-            <div style={{
-              background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: 24,
-            }}>
-              {/* Tab headers */}
-              <div className="grad-divider-b" style={{ display: "flex", padding: "0 0", flexShrink: 0 }}>
+            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
+              <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
-                  { id: "spxflow", label: "SPX Flow", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg> },
-                ] as const).map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    padding: "12px 16px", fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em",
-                    background: "none", border: "none", cursor: "pointer",
-                    color: activeTab === tab.id ? C.cyan : "#fff",
-                    borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent",
-                    marginBottom: -1,
-                    transition: "color 0.15s",
-                  }}>
+                  { id: "spxflow", label: "SPX Flow", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg> },
+                ] as const).map((tab) => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
                   </button>
                 ))}
               </div>
-
-              {/* Tab content */}
-              <div style={{ flex: 1, overflowY: "auto", padding: 24, scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
                 {activeTab === "calendar" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, fontFamily: "monospace", color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                        Date: 2026-06-15
-                        <span style={{ background: "rgba(0,240,255,0.20)", color: C.cyan, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700 }}>TODAY</span>
-                      </div>
-                      <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)", color: "#fff", fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer" }}>Sync Now</button>
-                    </div>
-                    {[
-                      { time: "2:41", ampm: "AM", title: "The President departs The White House", desc: "en route to Joint Base Andrews" },
-                      { time: "3:01", ampm: "AM", title: "The President arrives", desc: "at Joint Base Andrews" },
-                      { time: "9:56", ampm: "AM", title: "The President arrives at Geneva Airport", desc: "en route to Evian Resort, France" },
-                    ].map((ev, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 40, paddingTop: 2 }}>
-                          <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#fff" }}>{ev.time}</span>
-                          <span style={{ fontSize: 8, textTransform: "uppercase", fontWeight: 700, color: "#fff" }}>{ev.ampm}</span>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0, borderLeft: "1px solid rgba(255,255,255,0.10)", paddingLeft: 16, position: "relative", paddingBottom: 4 }}>
-                          <div style={{ position: "absolute", left: -3.5, top: 6, width: 6, height: 6, borderRadius: "50%", background: C.purple, boxShadow: "0 0 20px -5px rgba(139,92,246,0.3)" }} />
-                          <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
-                            <span style={{ fontSize: 8, background: "rgba(139,92,246,0.20)", color: C.purple, padding: "2px 6px", borderRadius: 3, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>PRESIDENT</span>
-                            <span style={{ fontSize: 8, background: "rgba(255,255,255,0.10)", color: "#fff", padding: "2px 6px", borderRadius: 3, fontWeight: 700 }}>USD</span>
-                          </div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: "#fff", marginBottom: 2 }}>{ev.title}</div>
-                          <div style={{ fontSize: 10, color: "#fff" }}>{ev.desc}</div>
-                        </div>
-                      </div>
-                    ))}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                    <div style={{ fontSize: 11, color: "#8da8c2", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.1em" }}>Proxy status: {status}</div>
+                    <div style={{ fontSize: 13, color: "#fff" }}>The live Greeks path is now coming from the proxy-backed option subscription instead of the static GEX snapshot route.</div>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>Selected expiry: {selectedExpiry || "—"} • Symbols loaded: {subscribedSymbolsRef.current.length}</div>
                   </div>
                 )}
                 {activeTab === "snapshot" && (
@@ -472,7 +682,7 @@ export default function HomePage() {
                 )}
                 {activeTab === "spxflow" && (
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, opacity: 0.4 }}>
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.cyan} strokeWidth="1.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>
                     <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.15em" }}>Coming Soon</span>
                   </div>
                 )}
@@ -480,197 +690,128 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* RIGHT COLUMN */}
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
-
-            {/* 2-row ticker — top of right panel */}
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
-              {/* Row 1 */}
               <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span>
-                  </span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#fff" }}>
-                    {etTime}
-                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#fff" }}>{etTime}</div>
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{vix.toFixed(2)}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: C.red }}>-1.48 (-8.37%)</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "7,562.00"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spx > 0 ? spx.toFixed(2) : "7,554.29"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: spxChg >= 0 ? C.green : C.red }}>
-                    {spxChg >= 0 ? "+" : ""}{spxChg.toFixed(2)} ({spxChgPct >= 0 ? "+" : ""}{spxChgPct.toFixed(2)}%)
-                  </span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
                 </div>
               </div>
-              {/* Row 2 */}
               <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                {/* MVC */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,600</span>
+                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CW</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PW</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                  </div>
                 </div>
-                {/* OI & Vol Only */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>OI</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,570</span>
-                </div>
-                {/* GEX Zero/Flip */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>7,491</span>
-                </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
-                </div>
-                {/* MVC Snapshot button — right aligned */}
-                <button style={{
-                  background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)",
-                  color: C.cyan, fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 4,
-                  cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.1em",
-                  display: "flex", alignItems: "center", gap: 5,
-                }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  MVC Snapshot
+                <button style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: C.cyan, fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  Proxy Live
                 </button>
               </div>
             </div>
 
-            {/* Heatmap */}
-            <div style={{
-              background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)",
-              borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden",
-            }}>
-              {/* Heatmap header */}
+            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    LIVE GEX HEATMAP
+                    Live GEX Heatmap
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff" }}>
-                    {/* camera icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                    {/* message icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    {/* x icon */}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ cursor: "pointer" }}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  </div>
+                  <div style={{ fontSize: 10, color: "#8da8c2", fontWeight: 700 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                 </div>
-                {/* Intensity slider */}
                 <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                  <span style={{ color: "#fff" }}>Intensity</span>
-                  <div style={{ flex: 1, height: 4, background: "rgba(0,0,0,0.4)", borderRadius: 4, position: "relative", border: "1px solid rgba(255,255,255,0.05)" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, height: "100%", width: "80%", background: C.cyan, borderRadius: 4, boxShadow: "0 0 20px -5px rgba(0,240,255,0.3)" }} />
-                    <div style={{ position: "absolute", top: "50%", left: "80%", transform: "translate(-50%,-50%)", width: 12, height: 12, background: "#fff", borderRadius: "50%", boxShadow: "0 0 10px rgba(255,255,255,0.8)", cursor: "pointer" }} />
-                  </div>
-                  <span style={{ color: C.cyan }}>0.40x</span>
-                  <span style={{ color: C.cyan, cursor: "pointer" }}><RotateCcwIcon /></span>
+                  <span style={{ color: "#fff" }}>Stream</span>
+                  <span style={{ color: C.cyan }}>{subscribedSymbolsRef.current.length} option symbols</span>
                 </div>
               </div>
 
-              {/* Table */}
               <div style={{ flex: 1, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
                 <table style={{ width: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse" }}>
                   <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike","Net GEX","Vol Only","DEX","VEX","Delta W. GEX"].map((h, i) => (
-                        <th key={h} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: i === 0 ? "left" : "right", color: i === 5 ? C.cyan : "#fff" }}>{h}</th>
+                      {["Strike", "Net GEX", "Vol Only", "DEX", "VEX", "Delta W. GEX"].map((header, index) => (
+                        <th key={header} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {HEATMAP_ROWS.map((row, idx) => {
+                    {heatmapRows.map((row, index) => {
                       const isAtm = row.type === "atm";
-                      const isPosTop = row.type === "pos-top";
-                      const isNegTop = row.type === "neg-top";
-                      const isPosStrong = row.type === "pos-strong";
-                      const isNegRed = row.type === "neg-red";
-                      const isNeg = row.type === "neg" || row.type === "neg-red" || row.type === "neg-top";
-
-                      // Gradient divider after ATM row
-                      const showDivider = idx > 0 && HEATMAP_ROWS[idx - 1]?.type === "atm";
-
+                      const showDivider = index > 0 && heatmapRows[index - 1]?.type === "atm";
                       const rowStyle: React.CSSProperties = {
-                        borderBottom: isAtm
-                          ? "none"
-                          : "none",
-                        background: isAtm
-                          ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))"
-                          : "transparent",
+                        background: isAtm ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))" : "transparent",
                         transition: "background 0.15s",
                         position: "relative",
                       };
 
                       const cellVal = (val: string, colIdx: number) => {
                         const isNegVal = val.startsWith("-");
-                        const isPosVal = !isNegVal && val !== "—";
                         const base: React.CSSProperties = { padding: "10px 16px", textAlign: colIdx === 0 ? "left" : "right" };
-
                         if (colIdx === 0) {
                           return (
-                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : isPosTop || isPosStrong ? "#fff" : "#fff" }}>
+                            <td key={colIdx} style={{ ...base, fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {val}
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
-                                {row.rank && (
-                                  <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>
-                                )}
+                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>}
                               </div>
                             </td>
                           );
                         }
 
-                        const v = val;
-                        const isNegV = v?.startsWith("-");
-                        const isPosV = v && !isNegV;
-
                         let cellBg = "transparent";
-                        let cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
+                        let cellColor = isAtm ? "#fff" : isNegVal ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
                         let cellBorder = "none";
                         let cellFw: React.CSSProperties["fontWeight"] = 400;
-
-                        // Highlight hotspot cells
-                        if ((isPosTop || isPosStrong) && !isNegV && (colIdx === 1 || colIdx === 3)) {
+                        if ((row.type === "pos-top" || row.type === "pos-strong") && !isNegVal && (colIdx === 1 || colIdx === 3)) {
                           cellBg = "rgba(14,116,144,0.30)";
                           cellBorder = "1px solid rgba(0,240,255,0.20)";
-                          cellColor = isPosTop ? "#fff" : "#00D9FF";
+                          cellColor = row.type === "pos-top" ? "#fff" : "#00D9FF";
                           cellFw = 700;
                         }
-                        if (isNegRed && isNegV && (colIdx === 1 || colIdx === 3)) {
+                        if ((row.type === "neg-red" || row.type === "neg-top") && isNegVal && (colIdx === 1 || colIdx === 3)) {
                           cellBg = "rgba(0,60,100,0.45)";
                           cellBorder = "1px solid rgba(0,180,255,0.15)";
                           cellColor = C.cyan;
                           cellFw = 700;
                         }
-                        if (isNegTop && (colIdx === 1 || colIdx === 3)) {
-                          cellBg = "rgba(0,60,100,0.45)";
-                          cellBorder = "1px solid rgba(0,180,255,0.15)";
-                          cellColor = colIdx === 1 ? C.cyan : "#fff";
-                          cellFw = 700;
-                        }
-                        if (isAtm) { cellFw = 700; }
+                        if (isAtm) cellFw = 700;
                         if (colIdx === 5) {
                           cellBg = "rgba(0,0,0,0.20)";
-                          cellColor = isAtm ? "#fff" : isNegV ? "rgba(0,180,255,0.55)" : isNeg ? "rgba(0,180,255,0.55)" : "rgba(255,255,255,0.80)";
                         }
-
                         return (
                           <td key={colIdx} style={{ ...base, background: cellBg, border: cellBorder, fontWeight: cellFw, color: cellColor, borderRadius: cellBorder !== "none" ? 4 : 0 }}>
-                            {v}
+                            {val}
                           </td>
                         );
                       };
@@ -678,16 +819,11 @@ export default function HomePage() {
                       return (
                         <>
                           {showDivider && (
-                            <tr key={`div-${idx}`}>
+                            <tr key={`div-${row.strike}`}>
                               <td colSpan={6} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
                             </tr>
                           )}
-                          <tr key={row.strike}
-                            className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
-                            style={rowStyle}
-                            onMouseEnter={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "rgba(0,200,255,0.04)"; }}
-                            onMouseLeave={e => { if (!isAtm) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                          >
+                          <tr key={row.strike} className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
                             {cellVal(row.strike, 0)}
                             {cellVal(row.netGex, 1)}
                             {cellVal(row.volOnly, 2)}
@@ -707,10 +843,6 @@ export default function HomePage() {
       </main>
 
       <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
         .grad-divider-b {
           position: relative;
         }
@@ -720,25 +852,6 @@ export default function HomePage() {
           bottom: 0; left: 0; right: 0;
           height: 1px;
           background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.10) 30%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.10) 70%, transparent 100%);
-          pointer-events: none;
-        }
-        .grad-divider-t {
-          position: relative;
-        }
-        .grad-divider-t::before {
-          content: '';
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          height: 1px;
-          background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.10) 30%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.10) 70%, transparent 100%);
-          pointer-events: none;
-        }
-        .grad-divider-sidebar-b::after {
-          content: '';
-          position: absolute;
-          bottom: 0; left: 12px; right: 12px;
-          height: 1px;
-          background: linear-gradient(to right, transparent, rgba(255,255,255,0.10) 50%, transparent);
           pointer-events: none;
         }
         .grad-divider-sidebar-t {
@@ -751,12 +864,6 @@ export default function HomePage() {
           height: 1px;
           background: linear-gradient(to right, transparent, rgba(255,255,255,0.10) 50%, transparent);
           pointer-events: none;
-        }
-        .tab-active-border {
-          border-bottom: 2px solid #00F0FF !important;
-        }
-        .tab-inactive-border {
-          border-bottom: 2px solid transparent !important;
         }
         .heatmap-row {
           position: relative;
