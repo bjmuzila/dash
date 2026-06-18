@@ -2682,6 +2682,9 @@ function connectDxLink() {
           Summary: ['eventType','eventSymbol','openInterest','dayVolume','dayOpenPrice','dayHighPrice','dayLowPrice','dayClosePriceType','dayLowPrice','dayClosePrice','prevClosePriceType','prevDayVolume','prevDayClosePrice']
         }
       }));
+      // Force re-send ALL subscriptions on channel open (handles reconnects where pendingNewSubscriptions=false)
+      activeAutoSubscriptionKeys.clear();
+      pendingNewSubscriptions = true;
       sendSubscriptions();
     }
     else if (msg.type === 'CHANNEL_OPENED' && msg.channel === DX_CHANNEL_HISTORY) {

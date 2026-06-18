@@ -25,6 +25,7 @@ type PathProbe = {
   ok?: boolean;
   summary?: string;
   error?: string;
+  body?: unknown;
 };
 
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
@@ -205,9 +206,11 @@ export default function DevPage() {
     try {
       const response = await fetch(path, { cache: "no-store" });
       const text = await response.text();
+      let body: unknown = text;
       let summary = `HTTP ${response.status}`;
       try {
         const json = JSON.parse(text) as Record<string, unknown>;
+        body = json;
         if (json?.error && typeof json.error === "string") {
           summary = `${summary} - ${json.error}`;
         } else if (json?.data && typeof json.data === "object" && json.data) {
@@ -242,6 +245,7 @@ export default function DevPage() {
           elapsedMs: Math.round(performance.now() - started),
           ok: response.ok,
           summary,
+          body,
         },
       }));
     } catch (error) {
@@ -252,6 +256,7 @@ export default function DevPage() {
           elapsedMs: Math.round(performance.now() - started),
           ok: false,
           error: error instanceof Error ? error.message : String(error),
+          body: null,
         },
       }));
     }
@@ -696,6 +701,30 @@ export default function DevPage() {
                       ? `Error: ${pathProbes[item.label]?.error}`
                       : `${pathProbes[item.label]?.summary}${pathProbes[item.label]?.elapsedMs != null ? ` (${pathProbes[item.label]?.elapsedMs} ms)` : ""}`}
               </div>
+              {pathProbes[item.label]?.body !== undefined ? (
+                <pre
+                  style={{
+                    marginTop: 10,
+                    marginBottom: 0,
+                    maxHeight: 240,
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontSize: 11,
+                    lineHeight: 1.45,
+                    padding: 10,
+                    borderRadius: 8,
+                    background: "rgba(0,0,0,0.28)",
+                    border: "1px solid rgba(255,255,255,0.05)",
+                    color: "#d7e6f5",
+                    fontFamily: "Consolas, 'Courier New', monospace",
+                  }}
+                >
+                  {typeof pathProbes[item.label]?.body === "string"
+                    ? String(pathProbes[item.label]?.body)
+                    : JSON.stringify(pathProbes[item.label]?.body, null, 2)}
+                </pre>
+              ) : null}
             </div>
           ))}
         </div>

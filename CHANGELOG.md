@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-18 (session 34) — Fix dxLink subscriptions not sent after reconnect (root cause of zero OI/GEX)
+
+### Root cause (definitive)
+The boot sequence in `proxy-tastytrade.js` calls `ensureTodaySpxOptionSubscriptions()` → `sendSubscriptionsRateLimited()` BEFORE `connectDxLink()`. At that point `dxSocket` is null, so `sendSubscriptionsRateLimited` breaks immediately with "WebSocket not open". The 160 SPX option symbols are queued but never sent.
+
+When `connectDxLink()` eventually fires and `CHANNEL_OPENED` arrives, `sendSubscriptions()` is called — but it checks `pendingNewSubscriptions` which is already `false` (reset when the prewarm queued symbols). So **zero subscriptions are sent to dxLink on every boot and every reconnect**.
+
+dxLink only has the 2-3 symbols subscribed by browser clients via the WS bridge, explaining exactly 3 non-zero GEX rows.
+
+### Fix — `Vanilla/proxy-tastytrade.js`
+On `CHANNEL_OPENED`: clear `activeAutoSubscriptionKeys` and set `pendingNewSubscriptions = true` before calling `sendSubscriptions()`. This forces all queued subscriptions to be re-sent on every channel open (boot + reconnects).
+
+---
+
 ## 2026-06-18 (session 33) — Fix GEX heatmap showing +$0 for all strikes
 
 ### Root cause (confirmed)
