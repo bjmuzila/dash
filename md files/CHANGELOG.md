@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-17 (session 28) - Sidebar Page Shortcuts Moved Into Grid Menu
+
+### `components/shared/Sidebar.tsx`
+- Moved the page shortcut list into the 4-box grid button popout
+- Removed the separate shortcuts block from the sidebar rail so the left column stays compact
+- The grid button now highlights when the page menu is open or when one of the listed pages is active
+
 ## 2026-06-17 (session 27) - Dashboard Route Removed from Navigation
 
 ### `app/dashboard/page.tsx`

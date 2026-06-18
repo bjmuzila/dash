@@ -52,6 +52,21 @@ const QUOTE_SYMBOLS = [
   { sym: "VIX", label: "VIX" },
 ];
 
+const PAGE_SHORTCUTS = [
+  { label: "Overview", href: "/overview" },
+  { label: "Premarket", href: "/premarket" },
+  { label: "Database", href: "/database" },
+  { label: "Insights", href: "/insights" },
+  { label: "Est. Move", href: "/estimated-move" },
+  { label: "Options Chain", href: "/options-chain" },
+  { label: "Multi Greek", href: "/mult-greek" },
+  { label: "Trading", href: "/trading" },
+  { label: "Logs", href: "/logs" },
+  { label: "Personal", href: "/personal" },
+  { label: "Legacy", href: "/legacy" },
+  { label: "Econ Calendar", href: "/economic-calendar" },
+];
+
 function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {
     const num = Number(q[key]);
@@ -133,6 +148,9 @@ export default function Sidebar() {
   const pathname = usePathname();
   const pcts = useSidebarQuotes();
   const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const [pagesOpen, setPagesOpen] = useState(false);
+  const pagesBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [pagesMenuPos, setPagesMenuPos] = useState<{ top: number; left: number } | null>(null);
 
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
 
@@ -147,6 +165,14 @@ export default function Sidebar() {
       setIdleActionState("err");
       setTimeout(() => setIdleActionState("idle"), 2200);
     }
+  };
+
+  const openPagesMenu = () => {
+    if (!pagesOpen && pagesBtnRef.current) {
+      const r = pagesBtnRef.current.getBoundingClientRect();
+      setPagesMenuPos({ top: r.top, left: r.right + 8 });
+    }
+    setPagesOpen((open) => !open);
   };
 
   return (
@@ -188,9 +214,10 @@ export default function Sidebar() {
           <HomeIcon />
         </Link>
 
-        <Link
-          href="/overview"
+        <button
+          ref={pagesBtnRef}
           title="Overview"
+          onClick={openPagesMenu}
           style={{
             display: "flex",
             alignItems: "center",
@@ -200,14 +227,64 @@ export default function Sidebar() {
             borderRadius: 10,
             textDecoration: "none",
             transition: "all 0.15s",
-            background: isActive("/overview") ? "rgba(0,229,255,0.12)" : "transparent",
-            border: isActive("/overview") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-            color: isActive("/overview") ? HOME_THEME.cyan : HOME_THEME.muted,
-            boxShadow: isActive("/overview") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+            background: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "rgba(0,229,255,0.12)" : "transparent",
+            border: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+            color: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? HOME_THEME.cyan : HOME_THEME.muted,
+            boxShadow: pagesOpen || PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+            cursor: "pointer",
           }}
         >
           <GridIcon />
-        </Link>
+        </button>
+
+        {pagesOpen && pagesMenuPos && (
+          <>
+            <div style={{ position: "fixed", inset: 0, zIndex: 999998 }} onClick={() => setPagesOpen(false)} />
+            <div
+              style={{
+                position: "fixed",
+                left: pagesMenuPos.left,
+                top: pagesMenuPos.top,
+                zIndex: 999999,
+                minWidth: 180,
+                maxHeight: "70vh",
+                overflow: "auto",
+                background: "rgba(13,17,25,0.96)",
+                border: "1px solid rgba(0,229,255,0.20)",
+                borderRadius: 10,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.06)",
+                backdropFilter: "blur(16px)",
+              }}
+            >
+              <div style={{ padding: "8px 14px 6px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                Pages
+              </div>
+              {PAGE_SHORTCUTS.map(({ label, href }) => {
+                const active = isActive(href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    onClick={() => setPagesOpen(false)}
+                    style={{
+                      display: "block",
+                      padding: "8px 14px",
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 500,
+                      color: active ? HOME_THEME.cyan : HOME_THEME.muted,
+                      textDecoration: "none",
+                      background: active ? "rgba(0,229,255,0.08)" : "transparent",
+                      borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
+                      letterSpacing: "0.02em",
+                    }}
+                  >
+                    {label}
+                  </Link>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         <Link
           href="/economic-calendar"
@@ -270,29 +347,6 @@ export default function Sidebar() {
               </div>
             );
           })}
-      </div>
-
-      <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px" }} />
-
-      <div style={{ padding: "6px 12px 4px" }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>
-          Shortcuts
-        </div>
-        <Link
-          href="/mult-greek"
-          style={{
-            display: "block",
-            padding: "4px 0",
-            fontSize: 10,
-            color: isActive("/mult-greek") ? HOME_THEME.cyan : HOME_THEME.muted,
-            textDecoration: "none",
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-          }}
-        >
-          Multi Greek
-        </Link>
       </div>
 
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px 0" }} />
