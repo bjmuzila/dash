@@ -2859,6 +2859,31 @@ const server = http.createServer(async (req, res) => {
   else log(req.method, p);
 
   // ── HEALTH CHECK ──────────────────────────────────────────────
+  if (p === '/proxy/api/tt/raw-chain-sample') {
+    // Returns raw TT REST fields for 3 ATM options — lets us see what open-interest looks like
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const { status, data } = await ttGet(`/option-chains/SPXW?expiration-date=${today}`);
+      if (status !== 200) return sendJSON(res, 200, { error: 'TT chain fetch failed', status });
+      const items = data?.data?.items || [];
+      const sample = items.slice(0, 5).map(o => ({
+        symbol: o.symbol,
+        'streamer-symbol': o['streamer-symbol'],
+        'strike-price': o['strike-price'],
+        'option-type': o['option-type'],
+        'open-interest': o['open-interest'],
+        openInterest: o.openInterest,
+        'open-interest-quantity': o['open-interest-quantity'],
+        delta: o.delta,
+        gamma: o.gamma,
+        _allKeys: Object.keys(o),
+      }));
+      return sendJSON(res, 200, { count: items.length, sample });
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
   if (p === '/debug-oi') {
     const today = new Date().toISOString().slice(0, 10);
     let cboeResult = { error: 'not run' };
