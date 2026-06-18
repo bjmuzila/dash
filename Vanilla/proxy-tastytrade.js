@@ -4315,27 +4315,25 @@ const server = http.createServer(async (req, res) => {
       log('chains total options fetched:', allOptions.length, '→ returned full strike set:', filteredOptions.length, '(underlyingPrice:', underlyingPrice, ')');
     }
 
-    // Only subscribe the selected expiration's symbols — prevents dxLink flooding.
-    // SPX/SPY/QQQ 0DTE are handled by prewarm (200/100/100 cap) — skip re-subscribing.
-    // On-demand symbols (everything else) get subscribed here, capped at 200 per request.
-    const PREWARM_SYMS_FRESH = new Set(['SPX', 'SPXW', 'SPY', 'QQQ']);
-    const isPrewarmedFresh = PREWARM_SYMS_FRESH.has(sym.toUpperCase());
+    // Subscribe the selected expiration's symbols so dxSummaryCache gets OI for all strikes.
+    // Cap at 200 to prevent dxLink flooding. SPX/SPXW are included — prewarm alone is not
+    // sufficient because it subscribes ~160 symbols centered on ATM at startup time, which
+    // can drift as the market moves and leaves far-OTM strikes with no OI → zero GEX.
     const subscribeOptions = exp
       ? filteredOptions.filter(o => o['expiration-date'] === exp)
       : filteredOptions;
-    let streamerSyms = noSubscribe || isPrewarmedFresh ? [] : subscribeOptions.map(o => o['streamer-symbol']).filter(Boolean);
+    let streamerSyms = noSubscribe ? [] : subscribeOptions.map(o => o['streamer-symbol']).filter(Boolean);
     // Cap on-demand subscriptions at 200 to prevent dxLink flooding
     const ON_DEMAND_CAP = 200;
     if (streamerSyms.length > ON_DEMAND_CAP) {
       log('Cap: trimming on-demand streamer syms from', streamerSyms.length, 'to', ON_DEMAND_CAP, 'for', sym);
       streamerSyms = streamerSyms.slice(0, ON_DEMAND_CAP);
     }
-    // DISABLED: Do NOT auto-subscribe on-demand chain fetches to prevent symbol explosion
-    // Frontend can explicitly subscribe via /api/proxy/dxlink-subscribe if needed
-    if (isPrewarmedFresh) {
-      log('Chain fetch for pre-warmed', sym, '— skipping subscribe (prewarm handles it)');
-    } else {
-      log('Chain fetch for', sym, 'expiry', exp || 'nearest', '— NOT auto-subscribing', streamerSyms.length, 'symbols (use explicit subscribe endpoint)');
+    if (streamerSyms.length) {
+      log('Chain fetch for', sym, 'expiry', exp || 'nearest', '— subscribing', streamerSyms.length, 'symbols');
+      streamerSyms.forEach(s => addAutoSubscription(s, ['Quote','Trade','Greeks','Summary']));
+      // Fire-and-forget — don't block the response waiting for dxLink flush
+      sendSubscriptionsRateLimited().catch(() => {});
     }
 
     // awaitDX: wait for live dxLink data — but only if cache is cold (< 20% already populated)

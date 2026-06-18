@@ -2,14 +2,14 @@
 
 ## 2026-06-18 (session 33) — Fix GEX heatmap showing +$0 for all strikes
 
-### Root cause
-The proxy caches 0DTE SPX chains for 10 minutes. On cold start, the cache was populated before `dxSummaryCache` was warm (OI = 0) and with no live Greeks. The GEX loop calls `/api/gex` every 5s → `/api/gex` calls proxy without `noCache=1` → proxy served stale 0-OI cached data → `netGEX = gamma × 0 × spot² = 0` for every strike.
-
-Secondary issue: the cache hit path returned `underlyingPrice: 0`, so even if gamma was non-zero, `spot` fell back to strike value (minor accuracy issue).
+### Root cause (confirmed)
+TastyTrade REST `/option-chains` returns `open-interest=0` for ALL SPX options (documented in proxy comment at line 4371). Real OI only comes from `dxSummaryCache` — populated by dxLink Summary events. The chains endpoint had SPX/SPXW in a `PREWARM_SYMS_FRESH` bypass that **skipped subscribing symbols** on every chain fetch, trusting the startup prewarm exclusively. The prewarm subscribes only 160 nearest symbols centered on ATM at startup time — as SPX moves or if prewarm ran before dxLink was ready, most strikes have no `dxSummaryCache` entry → OI = 0 → GEX = 0 for all but ~3 pre-subscribed strikes.
 
 ### Fixes
-- **`app/api/gex/route.ts`**: Added `noCache=1` to proxy chains request so the GEX loop always gets fresh data (current OI + live/estimated Greeks), never stale cache.
-- **`Vanilla/proxy-tastytrade.js`**: Cache hit path now reads live spot from `dxTradeCache`/`dxQuoteCache` instead of hardcoding `underlyingPrice: 0`.
+- **`Vanilla/proxy-tastytrade.js`**:
+  - Removed `isPrewarmedFresh` bypass for SPX/SPXW — chains endpoint now subscribes up to 200 symbols via `addAutoSubscription` on every fetch, ensuring `dxSummaryCache` gets populated for all strikes in the requested expiry.
+  - Cache hit path now reads live spot from `dxTradeCache`/`dxQuoteCache` instead of hardcoding `underlyingPrice: 0`.
+- **`app/api/gex/route.ts`**: Added `noCache=1` to proxy chains request so the GEX loop always gets fresh data with current OI, never stale cached values.
 
 ---
 
