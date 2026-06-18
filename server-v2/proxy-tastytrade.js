@@ -22,6 +22,7 @@
 const WebSocket = require('ws');
 
 const marketState = require('./state/market-state');
+const { writeGexSnapshot } = require('./state/gex-history-writer');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
 const { FlowProcessor } = require('./computation/flow-processor');
@@ -41,11 +42,15 @@ const TT_CLIENT_SECRET = process.env.TT_CLIENT_SECRET || process.env.CLIENT_SECR
 const TT_REFRESH_TOKEN = process.env.TT_REFRESH_TOKEN || process.env.REFRESH_TOKEN;
 const DXLINK_WS_URL = process.env.DXFEED_WS_URL || 'wss://tasty-openapi-ws.dxfeed.com/realtime';
 
-const SYMBOL = 'SPX';
+const SYMBOL = (process.env.SYMBOL || 'SPX').toUpperCase();
 const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
-// Strike window around spot (in points) to subscribe — keeps dxLink load sane.
-const STRIKE_WINDOW = Number(process.env.STRIKE_WINDOW || 400);
+// Strike window around spot to subscribe — keeps dxLink load sane. SPX trades in
+// hundreds of points; equities like NVDA in tens, so a percentage band is safer
+// than a fixed point window. Default: 8% of spot.
+const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
+const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
+const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
 
 // ---------------------------------------------------------------------------
 // OAuth
@@ -70,14 +75,6 @@ async function getAccessToken() {
   const csecret = String(TT_CLIENT_SECRET).trim();
   const rtoken = String(TT_REFRESH_TOKEN).trim();
 
-  console.log('[OAUTH] lens', {
-    base: TT_BASE_URL,
-    cid: cid.length,
-    csecret: csecret.length,
-    rtoken: rtoken.length,
-    cidHead: cid.slice(0, 8),
-  });
-
   const basic = Buffer.from(`${cid}:${csecret}`).toString('base64');
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -90,6 +87,9 @@ async function getAccessToken() {
       Authorization: `Basic ${basic}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       Accept: 'application/json',
+      // nginx/WAF in front of Tastytrade 401s requests with undici's default
+      // User-Agent; a conventional UA (as PowerShell/curl send) passes.
+      'User-Agent': process.env.TT_USER_AGENT || 'spx-gex-dashboard/1.0',
     },
     body,
   });
@@ -104,10 +104,17 @@ async function getAccessToken() {
   return accessToken;
 }
 
+const TT_UA = process.env.TT_USER_AGENT || 'spx-gex-dashboard/1.0';
+
 async function ttGet(path) {
   const token = await getAccessToken();
   const res = await fetch(`${TT_BASE_URL}${path}`, {
-    headers: { Authorization: token, Accept: 'application/json' },
+    headers: {
+      // OAuth2 access tokens use the Bearer scheme.
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'User-Agent': TT_UA,
+    },
   });
   if (!res.ok) {
     throw new Error(`TT GET ${path} -> ${res.status} ${await res.text().catch(() => '')}`);
@@ -142,6 +149,7 @@ async function fetchChain() {
         if (strikeObj['call-streamer-symbol']) {
           contracts.push({
             streamerSymbol: strikeObj['call-streamer-symbol'],
+            occSymbol: strikeObj['call'], // OCC symbol for REST market-data
             expiration,
             strike,
             type: 'C',
@@ -151,6 +159,7 @@ async function fetchChain() {
         if (strikeObj['put-streamer-symbol']) {
           contracts.push({
             streamerSymbol: strikeObj['put-streamer-symbol'],
+            occSymbol: strikeObj['put'],
             expiration,
             strike,
             type: 'P',
@@ -165,6 +174,49 @@ async function fetchChain() {
   return { expirations, contracts };
 }
 
+/**
+ * Resolve an underlying symbol to its instrument class, REST market-data param,
+ * and the authoritative dxLink streamer symbol.
+ *
+ * The three classes use different symbols on Tastytrade REST AND different
+ * streamer symbols on dxLink — and futures additionally rewrite the year and
+ * append an exchange suffix (e.g. /ESU6 -> /ESU26:XCME). The only reliable
+ * streamer symbol is the instrument record's `streamer-symbol` field, so we
+ * read it rather than construct it.
+ *
+ * @param {string} symbol user symbol, e.g. "SPX", "NVDA", "/ESU6"
+ * @returns {Promise<{symbol,klass,marketDataParam,streamerSymbol}>}
+ */
+async function resolveUnderlying(symbol) {
+  const sym = symbol.trim().toUpperCase();
+
+  // Future: leading slash.
+  if (sym.startsWith('/')) {
+    const enc = encodeURIComponent(sym);
+    const json = await ttGet(`/instruments/futures?symbol[]=${enc}`);
+    const item = json?.data?.items?.[0];
+    const streamerSymbol = item?.['streamer-symbol'];
+    if (!streamerSymbol) throw new Error(`No streamer-symbol for future ${sym}`);
+    return { symbol: sym, klass: 'future', marketDataParam: `future=${enc}`, streamerSymbol };
+  }
+
+  // Index: known index roots. Tastytrade indices stream under the plain symbol.
+  const INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
+  if (INDEX_ROOTS.has(sym)) {
+    return { symbol: sym, klass: 'index', marketDataParam: `index=${sym}`, streamerSymbol: sym };
+  }
+
+  // Equity: look up the instrument record for the real streamer symbol.
+  try {
+    const json = await ttGet(`/instruments/equities/${encodeURIComponent(sym)}`);
+    const streamerSymbol = json?.data?.['streamer-symbol'] || sym;
+    return { symbol: sym, klass: 'equity', marketDataParam: `equity=${sym}`, streamerSymbol };
+  } catch {
+    // Fall back to plain symbol if the lookup fails.
+    return { symbol: sym, klass: 'equity', marketDataParam: `equity=${sym}`, streamerSymbol: sym };
+  }
+}
+
 /** Get a dxLink API quote token + url from Tastytrade. */
 async function getQuoteToken() {
   const json = await ttGet('/api-quote-tokens');
@@ -172,6 +224,53 @@ async function getQuoteToken() {
   const url = json?.data?.['dxlink-url'] || DXLINK_WS_URL;
   if (!token) throw new Error('No dxLink quote token returned');
   return { token, url };
+}
+
+/**
+ * REST backfill for open interest + volume across a set of OCC option symbols.
+ * dxFeed Summary snapshots are unreliable per-strike, so we pull OI/volume for
+ * the whole active chain from Tastytrade's market-data endpoint in batches.
+ *
+ * @param {string[]} occSymbols
+ * @returns {Promise<Map<string,{oi:number,volume:number}>>} keyed by OCC symbol
+ */
+/** Normalize an OCC symbol for matching (strip all whitespace, upper-case). */
+function normalizeOcc(sym) {
+  return String(sym || '').replace(/\s+/g, '').toUpperCase();
+}
+
+async function fetchOpenInterest(occSymbols) {
+  const out = new Map();
+  const symbols = occSymbols.filter(Boolean);
+  const BATCH = 100; // keep query string within limits
+  for (let i = 0; i < symbols.length; i += BATCH) {
+    const chunk = symbols.slice(i, i + BATCH);
+    const qs = chunk.map((s) => `equity-option[]=${encodeURIComponent(s)}`).join('&');
+    let json;
+    try {
+      json = await ttGet(`/market-data/by-type?${qs}`);
+    } catch (err) {
+      console.warn('[OI] batch failed:', err.message.slice(0, 200));
+      continue;
+    }
+    const items = json?.data?.items || [];
+    for (const it of items) {
+      const sym = it.symbol;
+      if (!sym) continue;
+      // Key by normalized symbol (strip all whitespace) so OCC padding
+      // differences between the chain and market-data responses can't break
+      // the lookup. SPX padding happened to match; NVDA's did not.
+      // Capture a REST price (mark, else mid) as a fallback for greeks when no
+      // live stream quote has arrived for a contract.
+      const mark = firstFiniteNumber(it.mark) || firstFiniteNumber(it.mid);
+      out.set(normalizeOcc(sym), {
+        oi: firstFiniteNumber(it['open-interest']),
+        volume: firstFiniteNumber(it.volume),
+        mark: mark > 0 ? mark : 0,
+      });
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,25 +442,55 @@ class TastytradeProxy {
     this.flow = new FlowProcessor();
     this.contracts = new Map(); // streamerSymbol -> contract meta
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
-    this.summaries = new Map(); // streamerSymbol -> { oi, volume }
+    this.summaries = new Map(); // streamerSymbol -> { oi, prevClose }
+    this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
+    this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
+    this.oiTimer = null;
     this.spot = 0;
-    this.spotSymbol = null; // underlying SPX streamer symbol
+    this.spotSymbol = null; // resolved dxLink streamer symbol for the underlying
+    this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
     this.expiry = '';
     this.recomputeTimer = null;
   }
 
   async start() {
     await getAccessToken();
+
+    // Resolve underlying class + real dxLink streamer symbol BEFORE subscribing.
+    // Futures/indices/equities differ on both Tastytrade and dxLink; the
+    // instrument record's streamer-symbol is the only reliable source.
+    this.underlying = await resolveUnderlying(SYMBOL);
+    console.log(`[FEED] ${SYMBOL} resolved: class=${this.underlying.klass} streamer=${this.underlying.streamerSymbol}`);
+
+    // Underlying prev close + last from REST (uses class-correct param).
+    try {
+      const md = await ttGet(`/market-data/by-type?${this.underlying.marketDataParam}`);
+      const it = md?.data?.items?.[0];
+      if (it) {
+        marketState.setState({
+          prevClose: firstFiniteNumber(it['prev-close']),
+          prevCloseDate: it['prev-close-date'] || null,
+        });
+        console.log(`[FEED] ${SYMBOL} prev-close=${it['prev-close']} last=${it.last}`);
+      }
+    } catch (err) {
+      console.warn('[FEED] prev-close fetch failed:', err.message.slice(0, 120));
+    }
+
     const { expirations, contracts } = await fetchChain();
+    marketState.setState({ symbol: SYMBOL });
     marketState.setExpirations(expirations);
+    console.log(`[FEED] ${SYMBOL}: ${contracts.length} contracts, ${expirations.length} expirations`);
+    console.log(`[FEED] expirations: ${expirations.slice(0, 8).join(', ')}${expirations.length > 8 ? ' …' : ''}`);
 
     // Default expiry = nearest (0DTE if present).
     const { ymd } = todayYmd();
     this.expiry = expirations.find((e) => e >= ymd) || expirations[0] || '';
     marketState.setExpiry(this.expiry);
 
-    // dxLink streamer symbol for the SPX index itself.
-    this.spotSymbol = 'SPX'; // index quote symbol on dxFeed
+    // Use the resolved dxLink streamer symbol for the underlying quote.
+    // e.g. /ESU6 -> /ESU26:XCME ; SPX -> SPX ; NVDA -> NVDA
+    this.spotSymbol = this.underlying.streamerSymbol;
     for (const c of contracts) this.contracts.set(c.streamerSymbol, c);
 
     const { token, url } = await getQuoteToken();
@@ -376,17 +505,41 @@ class TastytradeProxy {
     // Subscribe to spot + the active-expiry contracts in the strike window.
     this._resubscribe();
 
+    // Backfill OI/volume from REST now, then refresh periodically (OI only
+    // changes once per day, but volume drifts — refresh every 60s).
+    await this._refreshOI();
+    this.oiTimer = setInterval(() => this._refreshOI(), OI_REFRESH_MS);
+
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
     return this;
+  }
+
+  /** Pull OI + volume for the active chain from REST into this.restOI. */
+  async _refreshOI() {
+    const active = this._activeContracts();
+    if (!active.length) return;
+    const occ = active.map((c) => c.occSymbol).filter(Boolean);
+    const byOcc = await fetchOpenInterest(occ);
+    let filled = 0;
+    for (const c of active) {
+      const m = byOcc.get(normalizeOcc(c.occSymbol));
+      if (m) {
+        this.restOI.set(c.streamerSymbol, m);
+        if (m.oi > 0) filled++;
+      }
+    }
+    console.log(`[OI] REST backfill: ${filled}/${active.length} strikes with OI`);
   }
 
   /** Pick contracts for the active expiry within the strike window of spot. */
   _activeContracts() {
     const center = this.spot > 0 ? this.spot : null;
+    // Fixed point window if set, else a percentage band around spot.
+    const band = STRIKE_WINDOW != null ? STRIKE_WINDOW : (center ? center * STRIKE_WINDOW_PCT : Infinity);
     const out = [];
     for (const c of this.contracts.values()) {
       if (c.expiration !== this.expiry) continue;
-      if (center && Math.abs(c.strike - center) > STRIKE_WINDOW) continue;
+      if (center && Math.abs(c.strike - center) > band) continue;
       out.push(c);
     }
     return out;
@@ -428,10 +581,14 @@ class TastytradeProxy {
     }
 
     if (ev.eventType === 'Summary') {
+      // Open interest is the authoritative per-day value from Summary. dxFeed
+      // pushes it once (and on day rollover); never overwrite a known OI with
+      // an empty later Summary.
+      const prev = this.summaries.get(sym) || {};
+      const oi = firstFiniteNumber(ev.openInterest);
       this.summaries.set(sym, {
-        oi: firstFiniteNumber(ev.openInterest),
-        volume: firstFiniteNumber(ev.dayVolume),
-        prevClose: firstFiniteNumber(ev.prevDayClosePrice),
+        oi: oi > 0 ? oi : prev.oi || 0,
+        prevClose: firstFiniteNumber(ev.prevDayClosePrice) || prev.prevClose || 0,
       });
       return;
     }
@@ -445,6 +602,10 @@ class TastytradeProxy {
         }
         return;
       }
+      // dayVolume on the Trade event is the running daily volume for the
+      // contract — the correct source for per-strike volume (Summary has none).
+      const dv = firstFiniteNumber(ev.dayVolume);
+      if (dv > 0) this.volumes.set(sym, dv);
       const quote = this.quotes.get(sym) || null;
       this.flow.addPrint({ streamerSymbol: sym, price: Number(ev.price), size: Number(ev.size), quote });
       return;
@@ -456,30 +617,67 @@ class TastytradeProxy {
   /** Build flat rows, compute greeks locally, write GEX + flow to state. */
   _recompute() {
     if (!(this.spot > 0)) return;
-    const rows = [];
+
+    // Pass 1: gather each contract's price/OI/volume and solve IV where the
+    // price supports it. Track ATM IV (nearest strike with a good solve) to use
+    // as a fallback for deep-ITM / illiquid legs whose IV can't be solved from a
+    // near-intrinsic mark — those legs carry big OI and matter for GEX.
+    const staged = [];
+    let atmIV = 0;
+    let atmDist = Infinity;
 
     for (const c of this._activeContracts()) {
       const q = this.quotes.get(c.streamerSymbol);
       const s = this.summaries.get(c.streamerSymbol);
-      const mid = q?.mid;
-      if (!(mid > 0)) continue;
+      const rest = this.restOI.get(c.streamerSymbol);
+      const oi = (rest?.oi ?? 0) || (s?.oi ?? 0);
+      const vol = this.volumes.get(c.streamerSymbol) || rest?.volume || 0;
+      const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
+
+      // Skip only if there's truly nothing to contribute.
+      if (!(mid > 0) && !(oi > 0) && !(vol > 0)) continue;
 
       const T = yearsToExpiry(c.expiration);
-      const iv = impliedVol({ price: mid, S: this.spot, K: c.strike, T, r: RISK_FREE, type: c.type });
-      if (!(iv > 0)) continue;
-      const g = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
+      let iv = 0;
+      if (mid > 0) {
+        iv = impliedVol({ price: mid, S: this.spot, K: c.strike, T, r: RISK_FREE, type: c.type });
+      }
+      if (iv > 0) {
+        const dist = Math.abs(c.strike - this.spot);
+        if (dist < atmDist) {
+          atmDist = dist;
+          atmIV = iv;
+        }
+      }
+      staged.push({ c, oi, vol, T, iv });
+    }
 
+    if (!staged.length) return;
+
+    // Pass 2: compute greeks. Deep-ITM/illiquid legs (iv unsolved) fall back to
+    // ATM IV so their gamma is non-zero and their OI counts toward GEX.
+    const rows = [];
+    for (const st of staged) {
+      const { c, oi, vol, T } = st;
+      const iv = st.iv > 0 ? st.iv : atmIV;
+      let g = { gamma: 0, delta: 0, theta: 0, vega: 0, vanna: 0, charm: 0 };
+      if (iv > 0) {
+        g = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
+      }
+      // Normalize to conventional reporting units:
+      //   theta/charm: per-year -> per-day  (÷365)
+      //   vega/vanna : per 1.00 vol -> per 1% vol  (÷100)
       rows.push({
         strike: c.strike,
         side: c.type === 'C' ? 'call' : 'put',
-        oi: s?.oi ?? 0,
-        volume: s?.volume ?? 0,
+        oi,
+        volume: vol,
         gamma: g.gamma,
         delta: g.delta,
-        theta: g.theta,
-        vega: g.vega,
-        vanna: g.vanna,
-        charm: g.charm,
+        theta: g.theta / 365,
+        vega: g.vega / 100,
+        vanna: g.vanna / 100,
+        charm: g.charm / 365,
         iv,
         dte: c.dte,
       });
@@ -518,11 +716,18 @@ class TastytradeProxy {
     });
 
     marketState.setFlow(this.flow.bucket(SYMBOL));
+
+    // Persist per-strike net GEX history (rate-limited, fire-and-forget).
+    // Feeds the dashboard's rolling-net-GEX view via
+    // /api/snapshots/option-strike-gex-history. No-ops without DATABASE_URL.
+    writeGexSnapshot(gexRows, this.spot, this.expiry).catch(() => {});
   }
 
   stop() {
     if (this.recomputeTimer) clearInterval(this.recomputeTimer);
+    if (this.oiTimer) clearInterval(this.oiTimer);
     this.recomputeTimer = null;
+    this.oiTimer = null;
     this.client?.close();
   }
 }

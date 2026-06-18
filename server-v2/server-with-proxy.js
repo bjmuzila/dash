@@ -19,7 +19,7 @@
  */
 
 const { createServer } = require('http');
-const { parse } = require('url');
+// WHATWG URL is used instead of the deprecated url.parse().
 const path = require('path');
 const dotenv = require('dotenv');
 
@@ -54,7 +54,7 @@ function sendJson(res, code, obj) {
  * @returns {boolean}
  */
 function handleProxyRest(req, res) {
-  const { pathname } = parse(req.url, true);
+  const { pathname } = new URL(req.url || '/', 'http://localhost');
   if (!pathname || !pathname.startsWith('/proxy/')) return false;
 
   const state = marketState.getState();
@@ -67,6 +67,8 @@ function handleProxyRest(req, res) {
       sendJson(res, 200, {
         symbol: state.symbol,
         spot: state.spot,
+        prevClose: state.prevClose,
+        prevCloseDate: state.prevCloseDate,
         expiry: state.expiry,
         gexRows: state.gexRows,
         totals: state.totals,
@@ -111,7 +113,8 @@ async function main() {
       sendJson(res, 500, { error: String(err?.message || err) });
       return;
     }
-    handle(req, res, parse(req.url, true));
+    // Next's handler parses the URL itself when not provided one.
+    handle(req, res);
   });
 
   // Attach WS broadcaster (/ws/gex).
@@ -128,8 +131,12 @@ async function main() {
   }
 
   // Route client commands (e.g. expiry switch) to the live proxy.
+  // Dashboard sends { type:'SET_EXPIRY', expiry }; also accept 'setExpiry'.
   wss.on('client-message', ({ parsed }) => {
-    if (parsed?.type === 'setExpiry' && proxy) proxy.setExpiry(parsed.expiry);
+    const t = parsed?.type;
+    if ((t === 'SET_EXPIRY' || t === 'setExpiry') && proxy) {
+      proxy.setExpiry(parsed.expiry);
+    }
   });
 
   server.listen(PORT, () => {

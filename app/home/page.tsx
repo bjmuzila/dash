@@ -292,6 +292,7 @@ export default function HomePage() {
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
+  const selectedExpiryRef = useRef("");
   const [strikeRows, setStrikeRows] = useState<StrikeRow[]>([]);
   const [spot, setSpot] = useState(0);
   const [esFut, setEsFut] = useState(0);
@@ -311,6 +312,10 @@ export default function HomePage() {
   }, [quoteSnapshots]);
 
   useEffect(() => {
+    selectedExpiryRef.current = selectedExpiry;
+  }, [selectedExpiry]);
+
+  useEffect(() => {
     setNow(new Date());
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
@@ -327,6 +332,110 @@ export default function HomePage() {
     if (gexWsRef.current?.readyState === WebSocket.OPEN) {
       gexWsRef.current.send(JSON.stringify({ type: 'SET_EXPIRY', expiry }));
     }
+  }, []);
+
+  // Connect to /ws/gex and consume server-computed GEX state.
+  // Tolerates both the server-v2 envelope ({ type, data }) and the legacy
+  // flat broadcaster format ({ type:'GEX_UPDATE', gexRows, ... }) so the same
+  // consumer works against either stack during migration.
+  useEffect(() => {
+    unmountedRef.current = false;
+
+    // Apply a GEX payload (server-v2 `data` block OR legacy flat message).
+    const applyGex = (p: Record<string, unknown>) => {
+      if (Array.isArray(p.gexRows)) setGexChainRows(p.gexRows as ChainRow[]);
+      const s = Number(p.spot ?? 0);
+      if (s > 0) setGexSpot(s);
+      const exps = p.expirations as string[] | undefined;
+      if (Array.isArray(exps) && exps.length) {
+        setExpiryOptions(buildExpiryOptions(exps));
+        setSelectedExpiry((cur) => cur || String(p.expiry ?? exps[0] ?? ""));
+      } else if (p.expiry) {
+        setSelectedExpiry((cur) => cur || String(p.expiry));
+      }
+    };
+
+    const handleMessage = (raw: string) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(raw); } catch { return; }
+      const type = String(msg.type ?? "");
+      // server-v2 nests under `data`; legacy puts fields on the message itself.
+      const data = (msg.data && typeof msg.data === "object"
+        ? msg.data
+        : msg) as Record<string, unknown>;
+
+      switch (type) {
+        case "snapshot":
+        case "gex":
+        case "GEX_UPDATE":
+          applyGex(data);
+          setStatus("LIVE");
+          break;
+        case "spot": {
+          const s = Number(data.spot ?? 0);
+          if (s > 0) setGexSpot(s);
+          break;
+        }
+        case "EXPIRATIONS":
+        case "status": {
+          const exps = data.expirations as string[] | undefined;
+          if (Array.isArray(exps) && exps.length) {
+            setExpiryOptions(buildExpiryOptions(exps));
+            setSelectedExpiry((cur) => cur || String(data.expiry ?? exps[0] ?? ""));
+          }
+          break;
+        }
+        default:
+          break; // flow/other handled elsewhere
+      }
+    };
+
+    const connect = () => {
+      if (unmountedRef.current) return;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const url = `${proto}//${window.location.host}/ws/gex`;
+      let ws: WebSocket;
+      try { ws = new WebSocket(url); } catch { scheduleReconnect(); return; }
+      gexWsRef.current = ws;
+
+      ws.onopen = () => {
+        setStatus("LIVE");
+        // Re-assert the chosen expiry on (re)connect so the server matches the UI.
+        const exp = selectedExpiryRef.current;
+        if (exp) {
+          try { ws.send(JSON.stringify({ type: "SET_EXPIRY", expiry: exp })); } catch {}
+        }
+      };
+      ws.onmessage = (evt) => handleMessage(String(evt.data));
+      ws.onerror = () => { try { ws.close(); } catch {} };
+      ws.onclose = () => {
+        setStatus("RECONNECTING");
+        scheduleReconnect();
+      };
+    };
+
+    const scheduleReconnect = () => {
+      if (unmountedRef.current) return;
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      gexWsReconnectRef.current = setTimeout(connect, 2000);
+    };
+
+    connect();
+
+    return () => {
+      unmountedRef.current = true;
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      const ws = gexWsRef.current;
+      gexWsRef.current = null;
+      if (ws) {
+        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+        try { ws.close(); } catch {}
+      }
+    };
+    // Run once: the socket lives for the page's lifetime. The current expiry is
+    // read from selectedExpiryRef on each (re)connect, so we never tear down the
+    // socket on expiry changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load chain symbols for heatmap WS subscription (separate from GEX chart data)

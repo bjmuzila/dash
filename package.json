@@ -4,11 +4,13 @@
     "private": true,
     "workspaces": [],
     "scripts": {
-        "dev": "node server/server-with-proxy.js",
-        "dev:full": "node server/server-with-proxy.js",
+        "dev": "node server-v2/server-with-proxy.js",
+        "dev:full": "node server-v2/server-with-proxy.js",
+        "dev:old": "node server/server-with-proxy.js",
         "build": "next build",
         "test": "tsx --test tests/**/*.test.ts",
-        "start": "node server/server-with-proxy.js",
+        "start": "node server-v2/server-with-proxy.js",
+        "start:old": "node server/server-with-proxy.js",
         "bot": "node discord-bot.js",
         "bot:register": "node register-commands.js"
     },

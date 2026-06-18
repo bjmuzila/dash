@@ -64,8 +64,9 @@ function computeGexRows(rows, spot) {
     const volNetDEX =
       callDelta * callVolume * spot * 100 - putDelta * putVolume * spot * 100;
 
-    // VEX / CHEX (vanna / charm exposure) computed by sibling module
-    const { vex, chex } = computeVexChexRow({ call, put, spot });
+    // Vanna / charm exposure computed by sibling module.
+    // Field names match the dashboard's ChainRow: netVanna, netVolVanna.
+    const { netVanna, netVolVanna, chex } = computeVexChexRow({ call, put, spot });
 
     result.push({
       strike,
@@ -84,7 +85,8 @@ function computeGexRows(rows, spot) {
       netVolGEX,
       netDEX,
       volNetDEX,
-      vex,
+      netVanna,
+      netVolVanna,
       chex,
       callIV,
       putIV,

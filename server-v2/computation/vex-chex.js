@@ -92,14 +92,20 @@ function computeVexChexRow({ call, put, spot }) {
   const mult = spot * 100;
   const callOI = Number(call?.oi ?? 0);
   const putOI = Number(put?.oi ?? 0);
+  const callVol = Number(call?.volume ?? 0);
+  const putVol = Number(put?.volume ?? 0);
   const callVanna = Number(call?.vanna ?? 0);
   const putVanna = Number(put?.vanna ?? 0);
   const callCharm = Number(call?.charm ?? 0);
   const putCharm = Number(put?.charm ?? 0);
 
-  const vex = callVanna * callOI * mult - putVanna * putOI * mult;
+  // Vanna exposure (OI-weighted) — dashboard field name: netVanna
+  const netVanna = callVanna * callOI * mult - putVanna * putOI * mult;
+  // Vanna exposure (volume-weighted) — dashboard field name: netVolVanna
+  const netVolVanna = callVanna * callVol * mult - putVanna * putVol * mult;
+  // Charm exposure (OI-weighted)
   const chex = callCharm * callOI * mult - putCharm * putOI * mult;
-  return { vex, chex };
+  return { netVanna, netVolVanna, chex, vex: netVanna };
 }
 
 /** Sum VEX / CHEX across already-computed GEX rows. */
