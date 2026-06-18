@@ -116,51 +116,9 @@
       var expSel = el('mg-expiry-select');
       if (expSel) expSel.innerHTML = '<option value="">Loading...</option>';
 
-      fetch('/proxy/api/tt/expirations/SPX')
-        .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP ' + r.status); })
-        .then(function(json) {
-          var items = (json.data && json.data.items) ? json.data.items : [];
-          var seen = {};
-          _expirations = [];
-          items.forEach(function(item) {
-            var d = item['expiration-date'] || '';
-            if (!d || seen[d]) return;
-            seen[d] = true;
-            var dt = daysTo(d);
-            _expirations.push({ date: d, daysTo: dt, label: dt + 'DTE  ' + d.slice(5), type: item['expiration-type'] || '' });
-          });
-          _expirations.sort(function(a, b) { return a.daysTo - b.daysTo; });
-
-          var filtered = _expirations.filter(function(e) {
-            if (e.daysTo <= 7) return true;
-            var expType = (e.type || '').toLowerCase();
-            if (expType === 'weekly' || expType === 'monthly') return true;
-            var parts = e.date.split('-');
-            var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            return d.getDay() === 5;
-          });
-
-          if (expSel) {
-            expSel.innerHTML = '<option value="" style="background:#0a0e14;color:#e4e4e7">-- Expiry --</option>';
-            filtered.forEach(function(exp) {
-              var opt = document.createElement('option');
-              opt.value = exp.date;
-              opt.textContent = exp.label;
-              opt.style.background = '#0a0e14';
-              opt.style.color = '#e4e4e7';
-              expSel.appendChild(opt);
-            });
-            var dte0 = filtered.filter(function(e) { return e.daysTo === 0; })[0];
-            var autoSelect = dte0 || filtered[0];
-            if (autoSelect) { expSel.value = autoSelect.date; _activeExpiry = autoSelect.date; }
-          }
-          setStatus('idle', 'READY');
-          if (cb) cb();
-        })
-        .catch(function(e) {
-          setStatus('err', 'ERR: ' + e);
-          if (expSel) expSel.innerHTML = '<option value="">Error loading</option>';
-        });
+      // proxy removed — expirations not available until rebuilt
+      setStatus('err', 'Proxy offline');
+      if (expSel) expSel.innerHTML = '<option value="">Proxy offline</option>';
     }
 
     function bindExpirySelect() {
@@ -210,53 +168,8 @@
     function fetchChain(ticker, expDate, token, done) {
       var pageId = 'mult-greek-' + Date.now();
 
-      fetch('/proxy/api/tt/chains/' + encodeURIComponent(ticker) + '?expiration=' + expDate + '&range=all&pageId=' + encodeURIComponent(pageId))
-        .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP ' + r.status); })
-        .then(function(json) {
-          if (token !== _loadToken) return;
-          var items = (json.data && json.data.items) ? json.data.items : [];
-          var target = items.filter(function(i) {
-            var d = i['expiration-date'] || i.expirationDate || '';
-            return d && String(d).slice(0, 10) === String(expDate).slice(0, 10);
-          });
-          _strikes[ticker] = buildStrikes(target.length ? target : items);
-          // Seed spot from REST immediately; live dxlink WS will override
-          var rawSpot = json.data && json.data.underlyingPrice ? parseFloat(json.data.underlyingPrice) : 0;
-          if (isFinite(rawSpot) && rawSpot > 0) _spot[ticker] = rawSpot;
-
-          var syms = [];
-          _strikes[ticker].forEach(function(r) {
-            if (r.callSym) syms.push(r.callSym);
-            if (r.putSym) syms.push(r.putSym);
-          });
-          _subSymbols[ticker] = syms;
-
-          // Wait for subscription to be ready (use manager instead of hoping)
-          if (syms.length > 0) {
-            fetch('/proxy/api/subscription-ready', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                pageId: pageId,
-                symbols: syms,
-                timeout: 2000,
-                threshold: 0.5
-              })
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(readyData) {
-              console.log('[MultGreek] ' + ticker + ' subscription ready:', readyData);
-              done(null);
-            })
-            .catch(function(e) {
-              console.warn('[MultGreek] subscription-ready call failed:', e);
-              done(null);  // Continue anyway
-            });
-          } else {
-            done(null);
-          }
-        })
-        .catch(function(e) { done(e); });
+      // proxy removed — chain fetch not available until rebuilt
+      done(new Error('Proxy offline'));
     }
 
     function loadAll(expDate) {
@@ -375,12 +288,7 @@
     function sendSubscriptions() {
       var symbols = allSubSymbols();
       if (!symbols.length) return;
-      // REST POST — the WS path is gated and blocks non-SPXW option symbols
-      fetch('/proxy/dxlink/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols: symbols, feedTypesBySymbol: feedTypesFor(symbols) })
-      }).catch(function(e) { console.warn('[MultGreek] subscribe POST failed:', e); });
+      // proxy removed — dxlink/subscribe REST POST disabled
       wsSubscribe();
     }
 
@@ -817,7 +725,7 @@
     };
 
     // ── screenshot / share (snapshot.md pattern) ───────────────────────────────
-    var MG_DISCORD_WEBHOOK = '/proxy/api/discord-webhook';
+    var MG_DISCORD_WEBHOOK = ''; // proxy removed
     var html2canvasPromise = null;
 
     function loadHtml2Canvas() {

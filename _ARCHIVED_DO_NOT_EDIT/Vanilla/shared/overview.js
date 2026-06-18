@@ -1045,22 +1045,8 @@ function submitManualUrl(){
 }
 
 async function doTokenExchange(code,redirectUri){
-  if(_exchanging)return; _exchanging=true;
-  try{
-    const res=await fetch(PROXY + '/proxy/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,redirectUri})});
-    if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err.error_description||err.error||'HTTP '+res.status);}
-    const data=await res.json();
-    accessToken=data.access_token; refreshToken=data.refresh_token;
-    fetch(PROXY + '/proxy/store-tokens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_in:data.expires_in||1800})}).catch(()=>{});
-    const statusEl=document.getElementById('auth-polling-status');if(statusEl)statusEl.style.display='none';
-    const mw=document.getElementById('auth-manual-wrap');if(mw)mw.style.display='none';
-    forceShowTopbar();
-    try{ showContent(); }catch(e){ console.error('showContent:',e); }
-    setTimeout(()=>{ try{fetchGEX();}catch(e){} },400);
-  }catch(e){
-    showAuthError('Token exchange failed: '+e.message);
-    const btn=document.getElementById('auth-step1-btn');btn.disabled=false;btn.textContent='Connect to TastyTrade ↗';btn.disabled=false;;
-  }finally{_exchanging=false;}
+  // proxy removed — token exchange disabled
+  showAuthError('Proxy offline — rebuild pending');
 }
 
 function showContent(){
@@ -1099,11 +1085,10 @@ function doLogout(){
   try{stopAutoRefresh();}catch(e){}
   try{if(typeof chartStopAutoRefresh==='function')chartStopAutoRefresh();}catch(e){}
   accessToken=null; refreshToken=null;
-  fetch(PROXY + '/proxy/clear-tokens',{method:'POST'}).catch(()=>{}).finally(()=>{
-    // Show auth panel again
+  // proxy removed — clear-tokens fetch disabled
+  Promise.resolve().then(()=>{
     const ap=document.getElementById('auth-panel');
     if(ap){ ap.style.display='flex'; }
-    // Reset button state
     const btn=document.getElementById('auth-step1-btn');
     if(btn){ btn.disabled=false; btn.textContent='Connect to TastyTrade ↗'; }
     const err=document.getElementById('auth-error');
@@ -1115,16 +1100,9 @@ function doLogout(){
   });
 }
 
-// ── PROXY GET ──────────────────────────────────────────────────────
+// proxy removed — proxyGet disabled
 async function proxyGet(path){
-  let res=await fetch(PROXY + '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});
-  if(res.status===401){
-    log('Token expired — refreshing…','warn');
-    const ref=await fetch(PROXY + '/proxy/refresh',{method:'POST'});
-    if(ref.ok){const td=await ref.json();if(td.access_token){accessToken=td.access_token;res=await fetch(PROXY + '/proxy/api'+path,{headers:{'Authorization':'Bearer '+accessToken}});}}
-  }
-  if(!res.ok){let d='';try{const j=await res.json();d=j.error_description||j.error||j.message||JSON.stringify(j).slice(0,120);}catch{}throw new Error(res.status+' — '+d);}
-  return res;
+  throw new Error('Proxy removed — rebuild pending');
 }
 
 // ── FETCH GEX ──────────────────────────────────────────────────────
@@ -1140,21 +1118,11 @@ async function fetchGEX(){
   else if(overlay)overlay.classList.add('visible');
   log('Refreshing…');
   try{
-    // REST API for quotes
+    // proxy removed — REST quote fetch disabled; spot price from dxLink only
     {
-      // Fallback to REST API for quotes
-      try {
-        const quoteRes = await fetch(PROXY + + '/proxy/api/marketdata/v1/quotes?symbols=%24SPX');
-        const quoteData = await quoteRes.json();
-        const spxQuote = quoteData.SPX?.quote || quoteData['$SPX']?.quote || quoteData.data?.quotes?.[0] || {};
-        spotPrice = spxQuote.lastPrice || spxQuote.last || spotPrice || 5250;
-        updateSPXDisplay({
-          change: spxQuote.netChange || spxQuote.change || 0,
-          changePercent: spxQuote.netPercentChange || spxQuote.changePercent || 0
-        });
-      } catch(e) {
-        console.warn('REST quote fallback failed:', e);
-      }
+      const dxQ = (window.dxQuoteCache||{})['SPX'] || (window.dxQuoteCache||{})['$SPX'] || {};
+      const dxP = parseFloat(dxQ.last || dxQ.bidPrice || 0);
+      if (dxP > 0) spotPrice = dxP;
     }
     
     // Fetch near-term SPX chains; DTE clicks select the expiry used for both charts.
@@ -1188,11 +1156,8 @@ async function fetchGEX(){
       return allowed;
     };
     
-    const t0 = performance.now();
-    const chainRes = await fetch(PROXY + + '/proxy/api/tt/chains/SPX?range=all');
-    const chainData = await chainRes.json();
-    const t1 = performance.now();
-    console.log(`[GEX] Chain fetch: ${(t1-t0).toFixed(0)}ms`);
+    // proxy removed — chain fetch disabled; new proxy rebuild pending
+    throw new Error('Proxy offline — chain fetch disabled');
     
     // Build allow-list of expirations from data
     const allExpDates = chainData.data?.items 
@@ -1311,8 +1276,8 @@ async function fetchLazyDTEChain(expiryDate) {
   if (gexExpiryFetchCache.has(expiryDate)) return gexExpiryFetchCache.get(expiryDate);
   console.log('[GEX] Lazy-fetching chain for', expiryDate);
   const fetchPromise = (async () => {
-    const res = await fetch(`${PROXY}/proxy/api/tt/chains/SPX?range=all&expiration=${encodeURIComponent(expiryDate)}`);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    // proxy removed — lazy DTE chain fetch disabled
+    throw new Error('Proxy offline — lazy chain fetch disabled');
     const chainData = await res.json();
     if (!chainData.data?.items) throw new Error('No items in lazy chain response');
     chainData.data.items.forEach(expGroup => {
@@ -1967,7 +1932,7 @@ function finishGEXCompute(dateKey){
     const snap = window.pendingDiscordSnap;
     window.pendingDiscordSnap = null;
     const text = `Current SPX MVC (${snap.strike})`;
-    fetch(window.location.origin + '/proxy/discord-webhook', {
+    fetch('', {  // proxy removed — discord-webhook disabled
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text })
@@ -3104,7 +3069,7 @@ async function shareHeatmapShot(platform){
 
 (() => {
   let html2canvasPromise = null;
-  const DISCORD_WEBHOOK_URL = '/proxy/api/webhooks/1466249857122570454/REDACTED';
+  const DISCORD_WEBHOOK_URL = ''; // proxy removed
 
 
   function loadHtml2CanvasSafe() {
@@ -3363,21 +3328,8 @@ const quotePrevCloseCache = {};
 let quotePrevCloseLoadPromise = null;
 
 async function preloadQuotePrevCloses() {
-  if (quotePrevCloseLoadPromise) return quotePrevCloseLoadPromise;
-  quotePrevCloseLoadPromise = (async () => {
-    try {
-      const res = await proxyGet(+ '/proxy/api/tt/quotes-batch');
-      const json = await res.json();
-      const items = Array.isArray(json?.data?.items) ? json.data.items : [];
-      items.forEach(item => {
-        const symbol = String(item.symbol || item.ticker || '').trim();
-        const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
-        if (symbol && prev > 0) {
-          quotePrevCloseCache[normalizeQuoteSessionKey(symbol)] = prev;
-        }
-      });
-    } catch (_) {}
-  })();
+  // proxy removed — prev-close preload disabled; prev-closes come from dxLink Summary stream
+  if (!quotePrevCloseLoadPromise) quotePrevCloseLoadPromise = Promise.resolve();
   return quotePrevCloseLoadPromise;
 }
 
@@ -3466,83 +3418,16 @@ async function fetchQuotes(){
       if (rootSym.startsWith('/ES')) { data['/ESU26'] = entry; esPrice = price; if (prev > 0) esPrevClose = prev; if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose; updateESPriceDisplay(); }
       if (rootSym.startsWith('/NQ')) { data['/NQM26'] = entry; }
     });
-    if (!Object.keys(data).length) {
-      const fallback = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
-      const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
-      items.forEach(item => {
-        const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
-        if (!sym) return;
-        const price = quoteNum(item.last, item.mark, item.mid, item.price, item.lastPrice, item['last-price']);
-        const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
-        if (!price) return;
-        const chg = quoteNum(item.change, item.netChange, price - prev);
-        const pct = quoteNum(item['percent-change'], item.changePercent, item.netPercentChange, item.netPercentChangeInDouble, prev > 0 ? (chg / prev) * 100 : 0);
-        data[sym] = {
-          quote: {
-            symbol: sym,
-            lastPrice: price,
-            netChange: chg,
-            netPercentChange: pct,
-            netPercentChangeInDouble: pct,
-            closePrice: prev,
-            prevClose: prev,
-            previousClose: prev,
-            totalVolume: parseInt(item.volume || item.dayVolume || 0),
-            bidPrice: quoteNum(item.bid),
-            askPrice: quoteNum(item.ask),
-          }
-        };
-      });
-    }
+    // proxy removed — quotes-batch fallbacks disabled; dxLink cache is sole source
     quotesData = data;
     window.quotesReady = true;
-    const expectedSymbols = ['SPX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA','/ESU26','/NQM26'];
-    const needsFallback = !window.__quoteFallbackLoaded && expectedSymbols.some(sym => !resolveQuoteEntry(sym));
-    if (needsFallback || !Object.keys(data).length) {
-      const fallback = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch?index[]=SPX&equity[]=SPY&equity[]=QQQ&equity[]=SMH&equity[]=AAPL&equity[]=AMD&equity[]=AMZN&equity[]=GOOGL&equity[]=META&equity[]=MSFT&equity[]=NVDA&equity[]=TSLA&future[]=%2FES').then(r => r.ok ? r.json() : null).catch(() => null);
-      const items = Array.isArray(fallback?.data?.items) ? fallback.data.items : [];
-      items.forEach(item => {
-        const sym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
-        if (!sym) return;
-        const price = quoteNum(item.last, item.mark, item.mid, item.price, item.lastPrice, item['last-price']);
-        const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
-        if (!price) return;
-        const chg = quoteNum(item.change, item.netChange, price - prev);
-        const pct = quoteNum(item['percent-change'], item.changePercent, item.netPercentChange, item.netPercentChangeInDouble, prev > 0 ? (chg / prev) * 100 : 0);
-        const entry = {
-          quote: {
-            symbol: sym,
-            lastPrice: price,
-            netChange: chg,
-            netPercentChange: pct,
-            netPercentChangeInDouble: pct,
-            closePrice: prev,
-            prevClose: prev,
-            previousClose: prev,
-            totalVolume: parseInt(item.volume || item.dayVolume || 0),
-            bidPrice: quoteNum(item.bid),
-            askPrice: quoteNum(item.ask),
-          }
-        };
-        data[sym] = entry;
-        if (sym === 'SPX' || sym === '$SPX') { data['$SPX'] = entry; data['SPX'] = entry; }
-        if (sym === '/ESU26' || sym === '/ES') { data['/ESU26'] = entry; }
-      });
-      window.__quoteFallbackLoaded = true;
-    }
     renderQuotes();
   }catch(e){ console.error('fetchQuotes error:', e.message, e); }
 }
 
-// Test quotes immediately when called
+// proxy removed — testQuotes disabled
 async function testQuotes(){
-  if(!accessToken){ console.log('No token'); return; }
-  try{
-    const res = await proxyGet('/marketdata/v1/quotes?symbols=%24SPX,SPY');
-    const data = await res.json();
-    console.log('Quote test response keys:', Object.keys(data));
-    console.log('Quote test sample:', JSON.stringify(Object.values(data)[0]).slice(0,200));
-  }catch(e){ console.error('Quote test failed:', e.message); }
+  // proxy/marketdata/v1/quotes removed
 }
 
 
@@ -3699,7 +3584,7 @@ document.addEventListener('DOMContentLoaded', startEconCalendar);
 
 
 // ── NEWS FEED (Twitter/X via proxy) ───────────────────────────────
-const TWITTER_PROXY = window.location.origin + '/proxy/twitter';
+const TWITTER_PROXY = ''; // proxy removed
 let newsTab = 'all';
 let newsInterval = null;
 let cachedTweets = []; // all tweets cached, filtered on tab switch
@@ -3944,31 +3829,15 @@ const _st0=document.getElementById('status-tag'); if(_st0) _st0.style.display='n
 const _rs0=document.getElementById('right-stats'); if(_rs0) _rs0.style.display='none';
 
 
+// proxy removed — auto-connect and status checks disabled
 (async function(){
-  // Auth panel is visible by default - hide it only if we have a valid token
-  for(let i=0;i<8;i++){
-    try{ const t=await fetch(PROXY + '/proxy/api/status'); if(t.ok) break; }catch(e){}
-    await new Promise(r=>setTimeout(r,500));
-  }
   try{
-    const r=await fetch(PROXY + '/proxy/api/auto-connect');
-    const d=await r.json();
-    if(d.connected && d.access_token){
-      accessToken=d.access_token;
-      document.getElementById('auth-panel').style.display='none';
-      forceShowTopbar();
-      try{ showContent(); }catch(e){}
-      startAutoRefresh();
-      
-
-      setTimeout(()=>{ try{ if(typeof startQuotesFeed==='function') startQuotesFeed(); }catch(e){} }, 1000);
-    }
-    // else: auth panel stays visible (CSS default)
-  }catch(e){
-    // Proxy not running - show error
-    const err=document.getElementById('auth-error');
-    if(err){err.textContent='⚠ Proxy not running';err.style.display='block';}
-  }
+    document.getElementById('auth-panel').style.display='none';
+    forceShowTopbar();
+    try{ showContent(); }catch(e){}
+    startAutoRefresh();
+    setTimeout(()=>{ try{ if(typeof startQuotesFeed==='function') startQuotesFeed(); }catch(e){} }, 1000);
+  }catch(e){}
 })();
 
 
@@ -5057,45 +4926,10 @@ function getCompareExpirationForDTE(selectedDTEValue) {
 }
 
 async function fetchOverviewCompareGEX() {
+  // proxy removed — compare chain fetch disabled
   const ticker = overviewCompareTicker || 'SPY';
-  try {
-    const selectedCompareExpiration = getCompareExpirationForDTE(window.AppState?.selectedDTE ?? gexSelectedDTE);
-    const compareChainUrl = selectedCompareExpiration
-      ? `window.location.origin/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all&expiration=${encodeURIComponent(selectedCompareExpiration)}`
-      : `window.location.origin/proxy/api/tt/chains/${encodeURIComponent(ticker)}?range=all`;
-    const [chainResp, quoteResp] = await Promise.all([
-      fetch(compareChainUrl),
-      fetch(`window.location.origin/proxy/api/tt/quotes-batch?equity[]=${encodeURIComponent(ticker)}`)
-    ]);
-    if (!chainResp.ok) throw new Error('Compare chain HTTP ' + chainResp.status);
-    const chainRaw = await chainResp.json();
-    let price = 0;
-    if (quoteResp.ok) {
-      const quoteRaw = await quoteResp.json();
-      const qItem = (quoteRaw?.data?.items || []).find(item => item.symbol === ticker) || (quoteRaw?.data?.items || [])[0] || {};
-      price = parseFloat(
-        qItem.last || qItem.mark || qItem.mid ||
-        qItem['last-price'] || qItem['mark-price'] || qItem['mid-price'] ||
-        qItem['last-trade-price'] || 0
-      ) || 0;
-    }
-    // Fallback to underlying price from chain response
-    if (!price && chainRaw?.data?.underlyingPrice) {
-      price = chainRaw.data.underlyingPrice;
-    }
-    compareSpotPrice = price || GEX_SPOTS?.[ticker] || 0;
-    console.log(`[GEX] Compare ${ticker}: spot=${compareSpotPrice}, items=${(chainRaw?.data?.items||[]).length}, strikes=${(chainRaw?.data?.items||[]).reduce((s,g)=>(s+(g.strikes||[]).length),0)}`);
-    compareRawChain = buildTTChainRows(filterCompareExpirations(chainRaw?.data?.items), compareSpotPrice);
-    if (!compareRawChain.length) {
-      compareRawChain = buildFallbackCompareRows(ticker);
-    }
-    if (compareSpotPrice > 0 && GEX_SPOTS) {
-      GEX_SPOTS[ticker] = compareSpotPrice;
-    }
-  } catch (e) {
-    compareRawChain = buildFallbackCompareRows(ticker);
-    compareSpotPrice = GEX_SPOTS?.[ticker] || 0;
-  }
+  compareRawChain = buildFallbackCompareRows(ticker);
+  compareSpotPrice = GEX_SPOTS?.[ticker] || 0;
 }
 
 async function refreshCompareChain() {
@@ -6438,34 +6272,12 @@ async function getBuySellHistoryRows() {
 }
 
 async function backupBuySellScore(record) {
-  try {
-    await fetch(+ '/proxy/api/backup/buy-sell-scores', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ record })
-    });
-  } catch (err) {
-    console.warn('Buy/Sell file backup failed:', err);
-  }
+  // proxy removed — buy-sell-scores backup POST disabled
 }
 
 let buySellBackupRestoreStarted = false;
 async function restoreBuySellScoresFromBackup() {
-  if (buySellBackupRestoreStarted) return;
-  buySellBackupRestoreStarted = true;
-  if (typeof DB === 'undefined' || !DB?.db || typeof DB.saveBuySellScore !== 'function') return;
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const res = await fetch(`/proxy/api/backup/buy-sell-scores?date=${today}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const records = Array.isArray(data.records) ? data.records : [];
-    for (const record of records) {
-      await DB.saveBuySellScore(record);
-    }
-  } catch (err) {
-    console.warn('Buy/Sell backup restore failed:', err);
-  }
+  // proxy removed — buy-sell-scores restore disabled
 }
 
 function niceAxisRange(values, padPct = 0.08) {
@@ -7323,30 +7135,18 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
     // Fall through to mock if no live data
   }
 
-  // SPY and QQQ: fetch live chain from TastyTrade
+  // SPY and QQQ: proxy removed — chain fetch disabled
   if (ticker === 'SPY' || ticker === 'QQQ') {
     return (async () => {
       try {
-        const ttSym = encodeURIComponent(ticker);
-        const selectedExpiration = getCompareExpirationForDTE(selectedDTEValue);
-        const chainUrl = selectedExpiration
-          ? `window.location.origin/proxy/api/tt/chains/${ttSym}?expiration=${encodeURIComponent(selectedExpiration)}`
-          : `window.location.origin/proxy/api/tt/chains/${ttSym}`;
-        const resp = await fetch(chainUrl);
-        if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
-        const raw = await resp.json();
-        const items = (raw?.data?.items) || [];
+        // proxy removed — chain/quotes-batch fetch disabled for SPY/QQQ
+        const items = [];
 
-        // Fetch spot price
+        // Spot price from dxLink cache only
         let spot = GEX_SPOTS[ticker] || 0;
-        try {
-          const qr = await fetch(`window.location.origin/proxy/api/tt/quotes-batch?equity[]=${ticker}`);
-          const qd = await qr.json();
-          const qItems = (qd?.data?.items) || [];
-          const q = qItems.find(i => i.symbol === ticker) || qItems[0] || {};
-          const p = parseFloat(q.last || q.mark || q.mid || 0);
-          if (p > 0) { spot = p; GEX_SPOTS[ticker] = p; }
-        } catch(e) { /* use cached spot */ }
+        const dxQ = (window.dxQuoteCache || {})[ticker] || {};
+        const dxP = parseFloat(dxQ.last || dxQ.bidPrice || 0);
+        if (dxP > 0) { spot = dxP; GEX_SPOTS[ticker] = dxP; }
 
         function getDTELocal(dateStr) {
           const t = new Date(); t.setHours(0,0,0,0);
@@ -7397,27 +7197,15 @@ async function loadGexData(ticker, selectedDTEOverride = gexSelectedDTE) {
     })();
   }
 
-  // Try TastyTrade live chain for any equity ticker
+  // proxy removed — live chain disabled for equity tickers
   try {
-    const ttSym4 = encodeURIComponent(ticker);
-    const selectedExpiration4 = getCompareExpirationForDTE(selectedDTEValue);
-    const chainUrl4 = selectedExpiration4
-      ? `window.location.origin/proxy/api/tt/chains/${ttSym4}?expiration=${encodeURIComponent(selectedExpiration4)}`
-      : `window.location.origin/proxy/api/tt/chains/${ttSym4}`;
-    const resp4 = await fetch(chainUrl4);
-    if (resp4.ok) {
-      const raw4 = await resp4.json();
-      const items4 = (raw4?.data?.items) || [];
+    if (false) {
+      const items4 = [];
       if (items4.length) {
         let spot4 = GEX_SPOTS[ticker] || 0;
-        try {
-          const qr4 = await fetch(`window.location.origin/proxy/api/tt/quotes-batch?equity[]=${ttSym4}`);
-          const qd4 = await qr4.json();
-          const qItems4 = (qd4?.data?.items) || [];
-          const q4 = qItems4.find(i => i.symbol === ticker) || qItems4[0] || {};
-          const p4 = parseFloat(q4.last || q4.mark || q4.mid || 0);
-          if (p4 > 0) { spot4 = p4; GEX_SPOTS[ticker] = p4; }
-        } catch(e) { /* use cached */ }
+        const dxQ4 = (window.dxQuoteCache || {})[ticker] || {};
+        const p4 = parseFloat(dxQ4.last || dxQ4.bidPrice || 0);
+        if (p4 > 0) { spot4 = p4; GEX_SPOTS[ticker] = p4; }
 
         function getDTE4(dateStr) {
           const t = new Date(); t.setHours(0,0,0,0);
@@ -8700,13 +8488,8 @@ if (false) {}
       const OV_TICKER_API = { 'SPX': '$SPX', 'NQM6': '/NQ' };
       const apiTicker = OV_TICKER_API[ticker] || ticker;
       const tickerEncoded = encodeURIComponent(apiTicker);
-      // noSubscribe=1 for non-SPX to avoid dxLink flooding (chain data is still returned)
-      const noSubParam = ticker !== 'SPX' ? '&noSubscribe=1' : '';
-      const _t0 = performance.now();
-      const resp = await fetch(`window.location.origin/proxy/api/tt/chains/${tickerEncoded}?range=all${noSubParam}`);
-      if (!resp.ok) throw new Error('Chain HTTP ' + resp.status);
-      const raw = await resp.json();
-      console.log(`[GEX] Chain fetch: ${(performance.now()-_t0).toFixed(0)}ms`);
+      // proxy removed — chain fetch disabled; new proxy rebuild pending
+      throw new Error('Proxy offline — chain fetch disabled');
 
       // Build callExpDateMap / putExpDateMap from TT nested chain format
       const callExpDateMap = {};
@@ -8805,41 +8588,12 @@ if (false) {}
         });
       });
 
-      // Get spot price for selected ticker
+      // proxy removed — quotes-batch spot price fetch disabled; use dxLink cache
       try {
-        // Map display ticker → quotes-batch param type and cache lookup key
-        const OV_QUOTE_PARAM = {
-          'SPX':  { param: 'index[]=SPX',      key: 'SPX' },
-          'NQM6': { param: 'future[]=/NQM26',   key: '/NQM26' },
-          'SPY':  { param: 'equity[]=SPY',      key: 'SPY' },
-          'QQQ':  { param: 'equity[]=QQQ',      key: 'QQQ' },
-          'AAPL': { param: 'equity[]=AAPL',     key: 'AAPL' },
-          'AMD':  { param: 'equity[]=AMD',      key: 'AMD' },
-          'AMZN': { param: 'equity[]=AMZN',     key: 'AMZN' },
-          'GOOGL':{ param: 'equity[]=GOOGL',    key: 'GOOGL' },
-          'META': { param: 'equity[]=META',     key: 'META' },
-          'MSFT': { param: 'equity[]=MSFT',     key: 'MSFT' },
-          'NVDA': { param: 'equity[]=NVDA',     key: 'NVDA' },
-          'TSLA': { param: 'equity[]=TSLA',     key: 'TSLA' },
-        };
-        const qInfo = OV_QUOTE_PARAM[ticker] || { param: `equity[]=${ticker}`, key: ticker };
-        const qr = await fetch(`window.location.origin/proxy/api/tt/quotes-batch?${qInfo.param}`);
-        const qd = await qr.json();
-        const qItems = (qd?.data?.items) || [];
-        const q = qItems.find(i => i.symbol === qInfo.key) || qItems[0] || {};
-        const price = parseFloat(q.last || q.mark || q.mid || 0);
-        if (price > 0) {
-          spotPrice = price;
-          const change = parseFloat(q.change || 0);
-          if (typeof updateSPXDisplay === 'function') {
-            updateSPXDisplay({
-              lastPrice: price,
-              netChange: change,
-              closePrice: parseFloat(q.close || q['close-price'] || q.prevClose || q['previous-close'] || 0)
-            });
-          }
-        }
-      } catch (e) { console.warn('TT quote fetch failed:', e); }
+        const dxQ = (window.dxQuoteCache || {})[ticker] || (window.dxQuoteCache || {})['$SPX'] || {};
+        const price = parseFloat(dxQ.last || dxQ.bidPrice || 0);
+        if (price > 0) { spotPrice = price; }
+      } catch (e) {}
 
       processChain({ callExpDateMap, putExpDateMap });
       if (typeof renderInsights0DTE === 'function') {
@@ -9040,7 +8794,7 @@ if (false) {}
         footer: { text: m.updated ? `Updated ${m.updated}` : 'SPX GEX Dashboard' }
       }]
     };
-    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || window.location.origin + '/proxy/discord-webhook';
+    const webhook = window.DISCORD_WEBHOOK_URL || localStorage.getItem('DISCORD_WEBHOOK_URL') || ''; // proxy removed
     const blob = await getInsightsShareBlob();
     const form = new FormData();
     form.append('payload_json', JSON.stringify(payload));
@@ -9428,44 +9182,7 @@ function quoteDisplayPercent(sym, q, price, rawChange) {
         }
         if (sym === '/NQM26') { data['/NQM26'] = entry; }
       });
-      try {
-        const batchRes = await fetch(window.location.origin + '/proxy/api/tt/quotes-batch');
-        const batchJson = await batchRes.json();
-        const batchItems = Array.isArray(batchJson?.data?.items) ? batchJson.data.items : [];
-        batchItems.forEach(item => {
-          const rawSym = String(item.symbol || item.ticker || '').replace(/^\$/, '');
-          if (!rawSym) return;
-          const mapped = rawSym === 'SPX' ? ['SPX', '$SPX']
-            : rawSym === '/ES' || rawSym === '/ES:XCME' || rawSym === '/ESU26' ? ['/ESU26']
-            : rawSym === '/NQ' || rawSym === '/NQ:XCME' || rawSym === '/NQM26' ? ['/NQM26']
-            : [rawSym];
-          const prev = quoteNum(item['prev-close'], item.prevClose, item.previousClose, item.prevDayClosePrice, item['prev-day-close-price'], item.closePrice, item['close-price']);
-          const pct = quoteNum(item['percent-change'], item.changePercent, item.netPercentChange, item.netPercentChangeInDouble);
-          const last = quoteNum(item.last, item.mark, item.price, item.lastPrice);
-          const chg = quoteNum(item.change, item.netChange, last - prev);
-          mapped.forEach(sym => {
-            const existing = data[sym]?.quote || {};
-            data[sym] = {
-              quote: {
-                ...existing,
-                symbol: sym,
-                lastPrice: last || existing.lastPrice || 0,
-                netChange: chg || existing.netChange || 0,
-                netPercentChange: pct || existing.netPercentChange || 0,
-                netPercentChangeInDouble: pct || existing.netPercentChangeInDouble || 0,
-                changePercent: pct || existing.changePercent || 0,
-                percentChange: pct || existing.percentChange || 0,
-                closePrice: prev || existing.closePrice || 0,
-                prevClose: prev || existing.prevClose || 0,
-                previousClose: prev || existing.previousClose || 0,
-                ['prev-close']: prev || existing['prev-close'] || 0,
-                bidPrice: existing.bidPrice || quoteNum(item.bid),
-                askPrice: existing.askPrice || quoteNum(item.ask)
-              }
-            };
-          });
-        });
-      } catch (_) {}
+      // proxy removed — quotes-batch augmentation disabled
       const storedPair = getStoredClosePair();
       if (storedPair?.es > 0 && storedPair?.spx > 0) esBasis = storedPair.es - storedPair.spx;
       else if (esPrevClose > 0 && spxPrevClose > 0) esBasis = esPrevClose - spxPrevClose;

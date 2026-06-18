@@ -229,23 +229,8 @@ function normalizeExposureFromRecord(record) {
 }
 
 async function fetchLatestExposureSnapshot() {
-  try {
-    const resp = await fetch('/proxy/api/greeks-intraday', { cache: 'no-store' });
-    if (!resp.ok) return null;
-    const payload = await resp.json();
-    const records = Array.isArray(payload?.records) ? payload.records : [];
-    if (!records.length) return null;
-    const latest = records[records.length - 1];
-    if (!latest) return null;
-    const snapshot = normalizeExposureFromRecord(latest);
-    if (!snapshot) return null;
-    snapshot.buyScore = Number(latest.buyPct || latest.buyScore || snapshot.buyScore || 0);
-    snapshot.sellScore = Number(latest.sellScore || snapshot.sellScore || 0);
-    window.__liveExposureSnapshot = snapshot;
-    return snapshot;
-  } catch (err) {
-    return null;
-  }
+  // proxy removed — no-op until rebuilt
+  return null;
 }
 
 async function fetchLatestExposureSnapshotFromDB() {
@@ -541,19 +526,8 @@ async function ensureDBReady() {
 }
 
 async function getEsDayVolumeFromServer() {
-  try {
-    const symbols = ['/ESM26', '/ES:XCME', '/ES', '/ESU26', '/ESZ26'];
-    for (const sym of symbols) {
-      const r = await fetch(`/proxy/api/quote/${encodeURIComponent(sym)}`);
-      if (!r.ok) continue;
-      const d = await r.json();
-      const vol = Number(d?.quote?.dayVolume || d?.quote?.totalVolume || d?.quote?.volume || 0);
-      if (vol > 0) return vol;
-    }
-    return 0;
-  } catch (e) {
-    return 0;
-  }
+  // proxy removed — no-op until rebuilt
+  return 0;
 }
 
 async function updateRelativeVolumeCard(when) {
@@ -918,7 +892,7 @@ async function shareExposure(platform) {
     const form = new FormData();
     form.append('payload_json', JSON.stringify({ content: 'SPX Exposure Stack' }));
     form.append('files[0]', blob, 'exposure-stack.png');
-    const res = await fetch('/proxy/api/webhooks/1466249857122570454/REDACTED', {
+    const res = await fetch('', { // proxy removed — discord webhook disabled
       method: 'POST',
       body: form
     });
@@ -936,11 +910,8 @@ async function _seedCandlesFromProxy(symbol, saveMethod, daysBack, retries = 2) 
   for (let attempt = 0; attempt < retries; attempt++) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 5000));
     try {
-      const resp = await fetch(`/proxy/api/dxlink/candles?symbol=${encodeURIComponent(symbol)}&start=${start}&count=1000`);
-      if (!resp.ok) continue;
-      const payload = await resp.json();
-      const candles = Array.isArray(payload?.candles) ? payload.candles : [];
-      if (!candles.length) continue;
+      // proxy removed — candle seeding not available until rebuilt
+      continue;
       for (const candle of candles) {
         const ts = Number(candle?.datetime ?? candle?.time ?? candle?.timestamp);
         if (!ts || !Number(candle?.volume)) continue;

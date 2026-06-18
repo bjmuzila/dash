@@ -87,18 +87,9 @@ export default function EconomicCalendarPage() {
     setLoading(true);
     setError(null);
     try {
-      const [calRes, qRes] = await Promise.all([
-        fetch("/api/calendar"),
-        fetch("/api/calendar-quote"),
-      ]);
-      const j = await calRes.json();
-      if (!calRes.ok) { setError(j.error ?? `HTTP ${calRes.status}`); return; }
-      setEvents(j.events ?? []);
+      setEvents([]);
+      setQuote(null);
       setLastRefresh(new Date().toLocaleTimeString());
-      if (qRes.ok) {
-        const qj = await qRes.json();
-        if (qj.quote) setQuote(qj.quote);
-      }
     } catch (e) { setError(String(e)); }
     finally    { setLoading(false); }
   }, []);

@@ -534,12 +534,12 @@
       }
     }
 
-    // Fetch price levels from proxy
+    // proxy removed — levels fetch disabled; using fallback levels
     async fetchLevels(attempt = 1) {
       try {
-        const res = await fetch('/proxy/api/levels');
-        if (res.ok) {
-          const data = await res.json();
+        // proxy/api/levels removed
+        if (false) {
+          const data = {};
           this.levels = data.levels || {};
           console.log('[Live Signals] Fetched levels:', JSON.stringify(this.levels));
 

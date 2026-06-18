@@ -244,11 +244,9 @@ const FuturesFlowDashboard = () => {
   useEffect(() => {
     const fetchInitialPrices = async () => {
       try {
-        const resp = await fetch('http://localhost:3001/proxy/api/tt/quotes-batch?future[]=/ESU26&future[]=/NQM26');
-        if (resp.ok) {
-          const data = await resp.json();
-          const items = data?.data?.items || [];
-          items.forEach(q => {
+        // proxy removed — initial prices from dxLink cache only
+        const items = [];
+        items.forEach(q => {
             const sym = q.symbol || '';
             const price = parseFloat(q.last || q.mark || q.mid || 0);
             if (sym.startsWith('/ES') && price > 0) setEsPrice(price);

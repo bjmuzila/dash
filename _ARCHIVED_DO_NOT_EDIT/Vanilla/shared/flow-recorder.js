@@ -166,19 +166,7 @@
   }
 
   async function fetchInitialPrices() {
-    try {
-      const resp = await fetch('''/proxy/api/tt/quotes-batch?future[]=%2FESM6&index[]=SPX');
-      const data = await resp.json();
-      const items = data?.data?.items || [];
-      items.forEach(q => {
-        const sym = q.symbol || '';
-        const price = parseFloat(q.last || q.mark || q.mid || 0);
-        if (sym.startsWith('/ES') && price > 0) state.esPrice = price;
-        if (sym === 'SPX' && price > 0) state.spxPrice = price;
-      });
-    } catch (err) {
-      console.warn('Flow recorder initial price fetch failed:', err);
-    }
+    // proxy removed — prices come from dxLink stream
   }
 
   async function flushMinute() {
@@ -207,7 +195,7 @@
     const ws = new WebSocket((window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/ws/dxlink');
     state.ws = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'subscribe', symbols: ['/ESM26', 'SPX'], spxSubscribe: true }));
+      ws.send(JSON.stringify({ type: 'subscribe', symbols: ['/ESU26', 'SPX'], spxSubscribe: true }));
     };
     ws.onmessage = event => {
       try {

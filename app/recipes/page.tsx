@@ -41,48 +41,11 @@ export default function RecipesPage() {
   );
 
   const handleImport = async () => {
-    const input = importUrl.trim();
-    if (!input) return;
-
-    setLoading(true);
-    try {
-      const response = await fetch('/api/recipes/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: input, url: input.startsWith('http') ? input : undefined }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Import failed');
-      }
-
-      const imported = await response.json();
-      setRecipes([imported, ...recipes]);
-      setImportUrl('');
-      setShowImporter(false);
-    } catch (error) {
-      console.error('Import error:', error);
-      alert(error instanceof Error ? error.message : 'Failed to import recipe');
-    } finally {
-      setLoading(false);
-    }
+    setLoading(false);
   };
 
   useEffect(() => {
-    const fetchRecipes = async () => {
-      try {
-        const response = await fetch('/api/recipes');
-        if (response.ok) {
-          const data = await response.json();
-          setRecipes(data);
-        }
-      } catch (error) {
-        console.error('Fetch error:', error);
-      }
-    };
-
-    fetchRecipes();
+    setRecipes([]);
   }, []);
 
   return (

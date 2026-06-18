@@ -192,10 +192,10 @@
     console.log('[DailyEM] Fetching for date key:', fetchDateKey);
 
     try {
-      // ── 3. Get closes (ESM6, SPX, NQM6, NDX) ──────────────────────────────
-      const r1 = await fetch(PROXY + '/proxy/api/tt/quotes-batch');
-      if (!r1.ok) throw new Error('quotes-batch ' + r1.status);
-      const items = ((await r1.json()).data || {}).items || [];
+      // proxy removed — quotes-batch/chain fetches disabled; daily EM update pending proxy rebuild
+      throw new Error('Proxy offline — daily EM update disabled');
+      // eslint-disable-next-line no-unreachable
+      const items = [];
 
       let spxClose = 0, esClose = 0, ndxClose = 0, nqClose = 0;
       items.forEach(q => {

@@ -290,66 +290,9 @@
       var expSel = el('chain-expiry-select');
       if (expSel) expSel.innerHTML = '<option value="">Loading...</option>';
 
-      fetch('/proxy/api/tt/expirations/' + encodeURIComponent(_activeTicker))
-        .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP '+r.status); })
-        .then(function(json) {
-          var items = (json.data && json.data.items) ? json.data.items : [];
-
-          var seen = {};
-          _expirations = [];
-          items.forEach(function(item) {
-            var d = item['expiration-date'] || '';
-            if (!d || seen[d]) return;
-            seen[d] = true;
-            var dt = daysTo(d);
-            var mmdd = d.slice(5);
-            var dte  = dt + 'DTE';
-            var label = dte + '  ' + mmdd;
-            _expirations.push({ date:d, daysTo:dt, label:label, type: item['expiration-type'] || '' });
-          });
-          _expirations.sort(function(a,b){ return a.daysTo - b.daysTo; });
-
-          // Holiday exclusions (6/19 is holiday, so include 6/18)
-          var holidayExclusions = { '2026-06-19': true };
-          var holidayInclusions = { '2026-06-18': true };
-
-          var filtered = _expirations.filter(function(e) {
-            // Exclude holiday dates (except those in inclusions list)
-            if (holidayExclusions[e.date] && !holidayInclusions[e.date]) return false;
-
-            if (e.daysTo <= 7) return true;
-            if (holidayInclusions[e.date]) return true; // Always include forced holiday dates
-            var expType = (e.type || '').toLowerCase();
-            if (expType === 'weekly' || expType === 'monthly') return true;
-            var parts = e.date.split('-');
-            var d = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]));
-            return d.getDay() === 5; // include all Friday expirations
-          });
-
-          if (expSel) {
-            expSel.innerHTML = '<option value="" style="background:#0a0e14;color:#e4e4e7">-- Expiry --</option>';
-            var validFiltered = filtered.filter(isExpiryValid);
-            validFiltered.forEach(function(exp) {
-              var opt = document.createElement('option');
-              opt.value = exp.date;
-              opt.textContent = exp.label;
-              opt.style.background = '#0a0e14';
-              opt.style.color = '#e4e4e7';
-              expSel.appendChild(opt);
-            });
-            var dte0 = validFiltered.filter(function(e){ return e.daysTo===0; })[0];
-            var autoSelect = dte0 || validFiltered[0];
-            if (autoSelect) { expSel.value = autoSelect.date; _activeExpiry = autoSelect.date; }
-          }
-
-          setStatus('idle', 'READY');
-          _expiryCache[_activeTicker] = _expirations.slice();
-          if (cb) cb(items, json);
-        })
-        .catch(function(e) {
-          setStatus('err', 'ERR: '+e);
-          if (expSel) expSel.innerHTML = '<option value="">Error loading</option>';
-        });
+      // proxy removed — expirations not available until rebuilt
+      setStatus('err', 'Proxy offline');
+      if (expSel) expSel.innerHTML = '<option value="">Proxy offline</option>';
     }
 
     // ── fetch strikes for a specific expiry ────────────────────────────────────
@@ -364,140 +307,9 @@
       var _cacheHit = false;
       startFetch();
 
-      var pageId = 'options-chain-' + Date.now();
-      var baseUrl = '/proxy/api/tt/chains/' + encodeURIComponent(_activeTicker) + '?expiration=' + expDate + '&pageId=' + encodeURIComponent(pageId);
-      var rangeParam = _rangePercent === 'all' ? 'all' : String(_rangePercent);
-
-      function startFetch() { fetch(baseUrl + '&range=' + rangeParam)
-        .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP '+r.status); })
-        .then(function(json) {
-          if (token !== _pendingToken) return;
-          var items = (json.data && json.data.items) ? json.data.items : [];
-          var targetItems = items.filter(function(i){
-            return i['expiration-date'] === expDate ||
-                   i.expirationDate === expDate ||
-                   i['expirationDate'] === expDate;
-          });
-          if (!targetItems.length) {
-            targetItems = items.filter(function(i) {
-              var d = i['expiration-date'] || i.expirationDate || i['expirationDate'] || '';
-              return d && String(d).slice(0, 10) === String(expDate).slice(0, 10);
-            });
-          }
-          var rawSpot = json.data && json.data.underlyingPrice ? parseFloat(json.data.underlyingPrice) : 0;
-          var spotPrice = (rawSpot > 10) ? rawSpot : 0;
-          var preStrikes = buildStrikes(targetItems.length ? targetItems : items, spotPrice);
-          _pendingStrikes = preStrikes;
-          updateSpot(json.data && json.data.underlyingPrice);
-
-          var allSyms = [];
-          preStrikes.forEach(function(r) {
-            if (r.callSym) allSyms.push(r.callSym);
-            if (r.putSym)  allSyms.push(r.putSym);
-          });
-          var hasRestSnapshot = hasSnapshotData(preStrikes);
-
-          if (!allSyms.length) {
-            window._chainStrikesReady = preStrikes;
-            connectDxLink();
-            if (_cacheHit) {
-              finalizeLoad(preStrikes, token, 'LIVE');
-            } else {
-              if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Collecting quotes...</div>';
-              setStatus('loading', 'SUBSCRIBING...');
-              startWaitCountdown(_minWaitForWsMs, token);
-              var waitUntil = Date.now() + _minWaitForWsMs;
-              var pollCount = 0;
-              var checkReady = function() {
-                if (token !== _pendingToken) return;
-                var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
-                var greeksCount = Object.keys(_liveData).filter(function(sym) { return _liveData[sym] && _liveData[sym].delta != null; }).length;
-                var minGreeksNeeded = Math.max(5, Math.floor(preStrikes.length * 0.1)); // At least 5 or 10% of strikes
-
-                // Update progress counter in toolbar
-                var progressEl = el('chain-progress-count');
-                if (progressEl) progressEl.textContent = greeksCount + '/' + minGreeksNeeded;
-
-                // Refresh display every 2 seconds (every 20 x 100ms polls) if we have some data
-                if (greeksCount >= minGreeksNeeded && pollCount > 0 && pollCount % 20 === 0) {
-                  renderTable();
-                  setStatus('loading', 'Collecting... ' + greeksCount + '/' + minGreeksNeeded);
-                }
-
-                if (elapsed >= _minWaitForWsMs && greeksCount >= minGreeksNeeded) {
-                  finalizeLoad(preStrikes, token, 'LIVE');
-                }
-                else if (elapsed >= _minWaitForWsMs) {
-                  finalizeLoad(preStrikes, token, 'LIVE (Collecting...' + greeksCount + '/' + minGreeksNeeded + ')');
-                }
-                else {
-                  pollCount++;
-                  setTimeout(checkReady, 100);
-                }
-              };
-              setTimeout(checkReady, 5000);
-            }
-            return;
-          }
-
-          // Use subscription manager instead of hardcoded waits
-          window._chainSymbolsToSubscribe = allSyms;
-          window._chainStrikesReady = preStrikes;
-          connectDxLink();
-
-          if (_cacheHit) {
-            finalizeLoad(preStrikes, token, 'LIVE');
-          } else {
-            if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Collecting quotes...</div>';
-            setStatus('loading', 'SUBSCRIBING...');
-
-            // Wait for subscription manager to report ready
-            var subscriptionReady = false;
-            fetch('/proxy/api/subscription-ready', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                pageId: pageId,
-                symbols: allSyms,
-                timeout: _minWaitForWsMs,
-                threshold: 0.5
-              })
-            })
-            .then(function(r) {
-              if (!r.ok) throw new Error('HTTP ' + r.status);
-              return r.json();
-            })
-            .then(function(readyData) {
-              if (token !== _pendingToken) return;
-              subscriptionReady = true;
-              console.log('[ChainOptions] subscription ready:', readyData);
-              stopWaitCountdown();
-              finalizeLoad(preStrikes, token, readyData.ready ? 'LIVE' : 'LIVE (Partial)');
-            })
-            .catch(function(e) {
-              if (token !== _pendingToken) return;
-              console.warn('[ChainOptions] subscription-ready failed:', e.message || e);
-              // Fall back to waiting min time if server fails
-              if (!subscriptionReady) {
-                var checkFallback = function() {
-                  if (token !== _pendingToken) return;
-                  var elapsed = Date.now() - (waitUntil - _minWaitForWsMs);
-                  if (_wsDataStartTime && elapsed >= _minWaitForWsMs) { finalizeLoad(preStrikes, token, 'LIVE (Fallback)'); }
-                  else if (elapsed >= _minWaitForWsMs) { finalizeLoad(preStrikes, token, 'LIVE (Static Fallback)'); }
-                  else { setTimeout(checkFallback, 50); }
-                };
-                setTimeout(checkFallback, 50);
-              }
-            });
-          }
-        })
-        .catch(function(e) {
-          if (token !== _pendingToken) return;
-          stopWaitCountdown();
-          _renderBlocked = false;
-          setStatus('err', 'ERR: '+e);
-        });
-      } // end startFetch
+      // proxy removed — chain fetch not available until rebuilt
+      setStatus('err', 'Proxy offline');
+      if (bodyEl) bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;font-size:13px;color:#64748b;font-family:Arial">Proxy offline</div>';
     }
 
     // ── parse response items into strike rows ──────────────────────────────────
@@ -965,15 +777,9 @@
       if (!symbols.length) return;
       _subSymbols = symbols.slice();
       window._chainSymbolsToSubscribe = null;
-      // Use REST POST — the WS path is gated by shouldAcceptBrowserSubscription
-      // which blocks non-SPXW option symbols. The POST endpoint has no such filter.
+      // proxy removed — dxlink/subscribe REST POST disabled
       var feedTypesBySymbol = {};
       symbols.forEach(function(s) { feedTypesBySymbol[s] = ['Quote','Greeks','Summary','Trade']; });
-      fetch('/proxy/dxlink/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols: symbols, feedTypesBySymbol: feedTypesBySymbol })
-      }).catch(function(e) { console.warn('[Chain] subscribe POST failed:', e); });
       if (_ws && _ws.readyState === 1) {
         try {
           _ws.send(JSON.stringify({ type: 'subscribe', symbols: symbols, feedTypesBySymbol: feedTypesBySymbol }));
@@ -1128,7 +934,7 @@
     window.chainLoad = window.chainGo;
 
     // ── screenshot / share ─────────────────────────────────────────────────────
-    var CHAIN_DISCORD_WEBHOOK = '/proxy/api/discord-webhook';
+    var CHAIN_DISCORD_WEBHOOK = ''; // proxy removed
     var html2canvasPromise = null;
 
     function loadHtml2Canvas() {

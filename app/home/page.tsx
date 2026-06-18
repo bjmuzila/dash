@@ -556,38 +556,10 @@ export default function HomePage() {
     if (!expiry) return;
     const pageId = pageIdRef.current;
 
-    const json = await fetch(
-      `/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all`,
-      { cache: "no-store" }
-    ).then((r) => r.json()).catch(() => null);
-    const items = Array.isArray(json?.data?.items) ? json.data.items : [];
-    const target = items.filter((item: Record<string, unknown>) =>
-      String(item["expiration-date"] ?? "").slice(0, 10) === expiry.slice(0, 10)
-    );
-    const nextStrikes = buildStrikes(target.length ? target : items, liveDataRef.current);
-    const nextSpot = Number(json?.data?.underlyingPrice ?? 0);
-    setStrikeRows(nextStrikes);
-    if (nextSpot > 0 && !(gexSpot > 0)) setSpot(nextSpot);
-
-    const symbols = nextStrikes.flatMap((row) => [row.callSym, row.putSym]).filter(Boolean) as string[];
-    subscribedSymbolsRef.current = symbols;
-
-    await ensureProxyLiveSubscription(
-      pageId,
-      symbols,
-      Object.fromEntries(symbols.map((symbol) => [symbol, OPTION_FEED_TYPES])),
-      1,
-      8000,
-    ).catch(() => null);
-
-    if (wsRef.current?.readyState === WebSocket.OPEN && symbols.length) {
-      wsRef.current.send(JSON.stringify({
-        type: "subscribe",
-        symbols,
-        feedTypesBySymbol: Object.fromEntries(symbols.map((symbol) => [symbol, OPTION_FEED_TYPES])),
-      }));
-    }
-
+    void pageId;
+    void expiry;
+    setStrikeRows([]);
+    subscribedSymbolsRef.current = [];
     scheduleRender();
   }, [gexSpot, scheduleRender]);
 

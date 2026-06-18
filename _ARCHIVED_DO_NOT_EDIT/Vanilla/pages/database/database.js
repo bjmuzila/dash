@@ -726,46 +726,18 @@ window.DB = {
       session: candle?.session || 'RTH'
     };
 
-    try {
-      const response = await fetch('/proxy/api/db/insert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ table: 'es_5m_candles', data: { timestamp: record.timestamp, date: record.date, slot_key: record.slotKey, data: record } })
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return record.slotKey;
-    } catch (err) {
-      console.warn('[DB] 5m candle write failed:', err);
-      return null;
-    }
+    // proxy removed — server-side DB insert not available until rebuilt
+    return null;
   },
 
   async queryES5mCandles(daysBack = 3) {
-    const cutoff = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
-    try {
-      const url = `/proxy/api/db/query?table=es_5m_candles&limit=5000`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json();
-      const rows = result.data || [];
-      return rows
-        .map(r => { try { return typeof r.data === 'string' ? JSON.parse(r.data) : r; } catch (_) { return r; } })
-        .filter(r => Number(r.timestamp || 0) >= cutoff)
-        .sort((a, b) => a.timestamp - b.timestamp);
-    } catch (err) {
-      console.warn('[DB] 5m candle query failed:', err);
-      return [];
-    }
+    // proxy removed — server DB query not available until rebuilt
+    return [];
   },
 
   async clearES5mCandles() {
-    try {
-      const url = `/proxy/api/db/query?table=es_5m_candles&limit=1`;
-      const response = await fetch(url);
-      if (!response.ok) return 0;
-      // Use cleanup endpoint with 0 days (today only kept)
-      return 0;
-    } catch (_) { return 0; }
+    // proxy removed
+    return 0;
   },
 
   async clearES15mCandles() {

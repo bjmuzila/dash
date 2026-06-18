@@ -114,41 +114,12 @@ export default function DatabasePage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ table: t, limit: String(lim) });
-      if (date) params.set("date", date);
-      const res = await fetch(`/api/db?${params}`);
-      const json = await res.json();
-      if (json.error) throw new Error(json.error + (json.detail ? `: ${json.detail}` : ""));
-      let data = (json.rows ?? []) as Record<string, unknown>[];
-
-      if (t === "bzila_snapshots") {
-        data = data.map((r) => {
-          try {
-            return {
-              ...r,
-              orders: typeof r.orders === "string" ? JSON.parse(r.orders) : r.orders,
-              stats: typeof r.stats === "string" ? JSON.parse(r.stats) : r.stats,
-            };
-          } catch {
-            return r;
-          }
-        });
-      } else if (t === "page_load_status") {
-        data = data.map((r) => ({
-          ...r,
-          is_loaded: typeof r.is_loaded === "boolean" ? r.is_loaded : String(r.is_loaded) === "true",
-        }));
-      }
-
-      setRows(data);
-      setCount(data.length);
-      if (data.length > 0) {
-        const keySet = new Set<string>();
-        data.slice(0, 10).forEach((r) => Object.keys(r).forEach((k) => keySet.add(k)));
-        setCols([...keySet]);
-      } else {
-        setCols([]);
-      }
+      void t;
+      void date;
+      void lim;
+      setRows([]);
+      setCount(0);
+      setCols([]);
     } catch (e) {
       setError(String(e));
       setRows([]);

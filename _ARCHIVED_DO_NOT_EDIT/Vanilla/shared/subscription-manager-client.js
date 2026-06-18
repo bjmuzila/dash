@@ -39,26 +39,13 @@ window.SubscriptionManagerClient = (function() {
         return { ready: true, timeout: false, count: 0, total: 0 };
       }
 
+      // proxy removed — resolve immediately using dxGreeksCache
       try {
-        const response = await fetch(`${API_BASE}/proxy/api/subscription-ready`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pageId,
-            symbols,
-            timeout,
-            threshold
-          })
-        });
-
-        if (!response.ok) {
-          console.warn(`[SubMgrClient] API error: ${response.status}`);
-          return { ready: false, timeout: false, count: 0, total: symbols.length };
-        }
-
-        return await response.json();
+        const cache = window.dxGreeksCache || {};
+        const count = symbols.filter(s => cache[s] != null).length;
+        const ready = symbols.length === 0 || (count / symbols.length) >= threshold;
+        return { ready, timeout: false, count, total: symbols.length };
       } catch (e) {
-        console.error('[SubMgrClient] Request failed:', e.message);
         return { ready: false, timeout: false, count: 0, total: symbols.length };
       }
     },

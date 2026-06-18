@@ -23,22 +23,7 @@ window.QuotesManager = (function() {
   }
 
   async function loadPrevCloses() {
-    try {
-      const response = await fetch('/proxy/api/spx-prevclose');
-      if (!response.ok) return;
-      const data = await response.json();
-      if (data && typeof data === 'object') {
-        state.prevCloses = data.prevClose ? {
-          '/ES': data.prevClose,
-          '/NQ': data.prevClose,
-          'SPX': data.prevClose,
-          'VIX': data.prevClose
-        } : data;
-        console.log('[QM] Prev closes loaded');
-      }
-    } catch (e) {
-      console.warn('[QM] loadPrevCloses error:', e.message);
-    }
+    // proxy removed — no-op until rebuilt
   }
 
   function subscribeToDXLink() {
@@ -133,49 +118,7 @@ window.QuotesManager = (function() {
       const futures = symbols.filter(s => s.startsWith('/'));
       const equities = symbols.filter(s => !s.startsWith('/'));
 
-      if (futures.length > 0) {
-        try {
-          const response = await fetch('/proxy/api/tt/quotes-batch?symbols=' + futures.join(','));
-          if (response.ok) {
-            const data = await response.json();
-            if (Array.isArray(data)) {
-              data.forEach(q => {
-                if (q && q.symbol) {
-                  updateQuote({ symbol: q.symbol, bid: q.bid, ask: q.ask, last: q.last });
-                }
-              });
-            }
-          }
-        } catch (e) {
-          console.warn('[QM] Futures fetch error:', e.message);
-        }
-      }
-
-      if (equities.length > 0) {
-        try {
-          const params = new URLSearchParams({ equity: equities.join(',') });
-          const response = await fetch('/proxy/api/tt/market-data/by-type?' + params);
-          if (response.ok) {
-            const data = await response.json();
-            const items = data?.data?.items || [];
-            items.forEach(q => {
-              if (!q?.symbol) return;
-              updateQuote({
-                symbol: q.symbol,
-                bid: parseFloat(q.bid),
-                ask: parseFloat(q.ask),
-                last: parseFloat(q.last)
-              });
-              // Use prev-close from response directly
-              if (q['prev-close']) {
-                state.prevCloses[q.symbol] = parseFloat(q['prev-close']);
-              }
-            });
-          }
-        } catch (e) {
-          console.warn('[QM] Equity batch fetch error:', e.message);
-        }
-      }
+      // proxy removed — quotes come from dxLink cache only
     } catch (e) {
       console.warn('[QM] fetchQuotesAPI error:', e.message);
     }
