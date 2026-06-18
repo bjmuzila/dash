@@ -18,7 +18,6 @@ const COL_LABELS: Record<NetCol, string> = {
   gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", vex: "NET VEX",
 };
 
-const STRIKES_PER_SIDE = 25;
 const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -159,7 +158,6 @@ function computeRows(
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol",
-  movePercent: number = 10,
 ): ComputedResult {
   let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
   let atmStrike = 0;
@@ -170,31 +168,6 @@ function computeRows(
       if (d < minDist) { minDist = d; atmIdx = i; }
     });
     atmStrike = rows[atmIdx].strike;
-
-    // Filter strikes within move % range
-    const moveAmount = (spot * movePercent) / 100;
-    const lowerBound = spot - moveAmount;
-    const upperBound = spot + moveAmount;
-    rows = rows.filter(r => r.strike >= lowerBound && r.strike <= upperBound);
-
-    // Re-find ATM in filtered rows
-    atmIdx = 0;
-    minDist = Infinity;
-    rows.forEach((r, i) => {
-      const d = Math.abs(r.strike - spot);
-      if (d < minDist) { minDist = d; atmIdx = i; }
-    });
-    if (rows.length) atmStrike = rows[atmIdx].strike;
-
-    // Center view on ATM
-    let start = Math.max(0, atmIdx - STRIKES_PER_SIDE);
-    let end   = Math.min(rows.length, atmIdx + STRIKES_PER_SIDE + 1);
-    const want = STRIKES_PER_SIDE * 2 + 1;
-    if (end - start < want) {
-      if (start === 0) end = Math.min(rows.length, want);
-      else if (end === rows.length) start = Math.max(0, rows.length - want);
-    }
-    rows = rows.slice(start, end);
   }
 
   const out: ComputedRow[] = rows.map(r => {
@@ -234,18 +207,11 @@ function computeTotals(
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol",
-  movePercent: number = 10,
 ): Record<NetCol, number> {
   const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
   const volOnly = contractMode === "vol";
 
-  // Filter strikes within move % range
-  const moveAmount = (spot * movePercent) / 100;
-  const lowerBound = spot - moveAmount;
-  const upperBound = spot + moveAmount;
-  const filteredStrikes = strikes.filter(r => r.strike >= lowerBound && r.strike <= upperBound);
-
-  filteredStrikes.forEach(r => {
+  strikes.forEach(r => {
     const cd = liveData[r.callSym ?? ""] || {};
     const pd = liveData[r.putSym  ?? ""] || {};
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
@@ -261,7 +227,7 @@ function computeTotals(
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
-  ticker, strikes, liveData, spot, contractMode, intensity, movePercent,
+  ticker, strikes, liveData, spot, contractMode, intensity,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -269,17 +235,16 @@ function TickerPanel({
   spot: number;
   contractMode: "oivol" | "vol";
   intensity: number;
-  movePercent: number;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
   const computed = strikes.length
-    ? computeRows(strikes, liveData, spot, contractMode, movePercent)
+    ? computeRows(strikes, liveData, spot, contractMode)
     : null;
 
   const totals = strikes.length && spot > 0
-    ? computeTotals(strikes, liveData, spot, contractMode, movePercent)
+    ? computeTotals(strikes, liveData, spot, contractMode)
     : null;
 
   // Auto-scroll to ATM
@@ -311,9 +276,6 @@ function TickerPanel({
           {spot > 0 && (
             <>
               <span style={{ color: "#00e5ff", fontWeight: 700 }}>{spot.toFixed(2)}</span>
-              <span style={{ color: "#64748b" }}>
-                {movePercent}%: {((spot * movePercent) / 100).toFixed(2)}
-              </span>
             </>
           )}
           {spot === 0 && <span style={{ color: "#475569" }}>--</span>}
@@ -412,7 +374,6 @@ export default function MultGreekPage() {
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
   const [intensity, setIntensity] = useState(1.75);
-  const [movePercent, setMovePercent] = useState(10);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>({ state: "idle", msg: "READY" });
   const [lastUpdate, setLastUpdate] = useState("");
 
@@ -746,25 +707,6 @@ export default function MultGreekPage() {
           {intensity.toFixed(2)}x
         </span>
 
-        <span style={{ color: "#1e3050" }}>|</span>
-
-        {/* Move % selector */}
-        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Move %</span>
-        <select
-          value={movePercent}
-          onChange={e => setMovePercent(Number(e.target.value))}
-          style={{
-            background: "#0a1220", color: "#e4e4e7", border: "1px solid #1e3050",
-            borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer",
-            fontFamily: "monospace",
-          }}
-        >
-          <option value={5}>5%</option>
-          <option value={10}>10%</option>
-          <option value={15}>15%</option>
-          <option value={20}>20%</option>
-        </select>
-
         {/* Refresh / Snap / Discord */}
         <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>{btnLabel}</button>
         <BoxSnapBtn targetRef={pageRef} label="📷" />
@@ -786,7 +728,6 @@ export default function MultGreekPage() {
             spot={spots[ticker]}
             contractMode={contractMode}
             intensity={intensity}
-            movePercent={movePercent}
           />
         ))}
       </div>

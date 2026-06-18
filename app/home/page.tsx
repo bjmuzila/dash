@@ -5,7 +5,7 @@ import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
-import { type ChainRow, computeGEXProfile, findCallWall, findGEXFlip, findPutWall } from "@/lib/calculations/calculations";
+import { type ChainRow, computeGEXProfile, findGEXFlip } from "@/lib/calculations/calculations";
 import { ensureProxyLiveSubscription, normalizeProxyFeedData } from "@/lib/proxy/liveSubscription";
 import { getClientWsUrl } from "@/lib/clientRuntime";
 
@@ -44,7 +44,6 @@ type HeatmapRow = {
 type ExpiryOption = { value: string; label: string };
 type GexMode = "net" | "call-put";
 type DataMode = "oi-vol" | "vol-only";
-type ChartMode = "line" | "bars";
 
 const FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
 const OPTION_FEED_TYPES: FeedType[] = ["Quote", "Trade", "Summary", "Greeks"];
@@ -318,11 +317,9 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [gexMode, setGexMode] = useState<GexMode>("net");
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
-  const [chartMode, setChartMode] = useState<ChartMode>("bars");
   const [showOI, setShowOI] = useState(false);
   const [showDex, setShowDex] = useState(false);
   const [showFlipCurve, setShowFlipCurve] = useState(false);
-  const [gexToolbarOpen, setGexToolbarOpen] = useState(true);
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
@@ -659,34 +656,26 @@ export default function HomePage() {
               <GexToolbar
                 gexMode={gexMode}
                 dataMode={dataMode}
-                chartMode={chartMode}
                 showOI={showOI}
                 showDex={showDex}
                 showFlipCurve={showFlipCurve}
-                flipPoint={flipPoint}
-                callWall={callWall ?? undefined}
-                putWall={putWall ?? undefined}
-                netGex={fmtMoney(netGex)}
                 expirations={expiryOptions.map(o => o.value)}
                 selectedExpiry={selectedExpiry}
                 onExpiry={setSelectedExpiry}
                 onGexMode={setGexMode}
                 onDataMode={setDataMode}
-                onChartMode={setChartMode}
                 onToggleOI={() => setShowOI(v => !v)}
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
                 onRefresh={handleRefresh}
-                chartOpen={gexToolbarOpen}
-                onToggleChart={() => setGexToolbarOpen(v => !v)}
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
-              {/* Chart canvas */}
+              {/* Chart canvas — uses fast gex-chain data */}
               <div style={{ flex: 1, minHeight: 0 }}>
                 <GexChart
-                  chain={chainRows}
-                  spotPrice={spot}
+                  chain={chartRows}
+                  spotPrice={chartSpot}
                   flipPoint={flipPoint}
                   gexProfile={gexProfile}
                   mode={gexMode}
@@ -760,16 +749,8 @@ export default function HomePage() {
                 <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                   <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
                     <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CW</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PW</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.orange }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
                     <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
