@@ -391,8 +391,23 @@ export default function Sidebar() {
           />
         </div>
 
-        <div style={{ fontSize: 8, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", textAlign: "center" }}>
-          {idleActionState === "busy" ? "Idle..." : idleActionState === "ok" ? "Idle on" : idleActionState === "err" ? "Error" : "Idle"}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, textAlign: "center" }}>
+          <div style={{
+            fontSize: 8,
+            color: idleActionState === "ok" ? HOME_THEME.text : idleActionState === "err" ? HOME_THEME.red : "#ff4d4d",
+            textTransform: "uppercase",
+            letterSpacing: "0.12em",
+          }}>
+            {idleActionState === "busy" ? "Going live" : idleActionState === "ok" ? "Live" : idleActionState === "err" ? "Error" : "Idle"}
+          </div>
+          <div style={{
+            fontSize: 8,
+            color: idleActionState === "ok" ? HOME_THEME.green : HOME_THEME.green,
+            textTransform: "uppercase",
+            letterSpacing: "0.12em",
+          }}>
+            Live
+          </div>
         </div>
       </div>
     </nav>

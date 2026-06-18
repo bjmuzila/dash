@@ -622,7 +622,6 @@ let subscriptionErrorCount = 0;
 let pendingNewSubscriptions = false;  // Track if there are new subscriptions to send
 
 // ─── Subscription Lifecycle Tracking ─────────────────────────────────────
-const subscriptionCreatedAt = new Map(); // symbol → creation timestamp
 const IDLE_SUBSCRIPTION_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60 * 1000; // Check every minute
 const OVERNIGHT_IDLE_LIMIT_MS = parseInt(process.env.OVERNIGHT_IDLE_LIMIT_MS || String(30 * 60 * 1000), 10);
@@ -6062,3 +6061,4 @@ server.listen(PORT, async () => {
     }
   }, 30 * 1000);
 });
+
