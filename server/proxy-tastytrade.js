@@ -29,6 +29,7 @@ const {
   buildGexLevels,
   spxLevelToEs: sharedSpxLevelToEs
 } = require('./computation/gex-calculator');
+const marketState = require('./market-state');
 // const Database  = require('better-sqlite3');  // Optional - comment out if build fails
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -583,11 +584,36 @@ let dxHistoryChannelOpen = false;
 let dxHistoryConfigured = false;
 
 // ── Subscription rate-limiting ──────────────────────────────────────────
-const subscriptionQueue = [];
-let subscriptionSending = false;
-const queuedSubscriptionKeys = new Set();
-const activeAutoSubscriptionKeys = new Set();
-const activeCandleSubscriptionKeys = new Set();
+const {
+  dxClients,
+  subscriptions,
+  subscriptionTypesBySymbol,
+  candleSubscriptions,
+  subscriptionCreatedAt,
+  subscriptionQueue,
+  subscriptionSendingRef,
+  queuedSubscriptionKeys,
+  activeAutoSubscriptionKeys,
+  activeCandleSubscriptionKeys,
+  dxGreeksCache,
+  dxSummaryCache,
+  dxQuoteCache,
+  dxTradeCache,
+  dxCandleCache,
+  dxOpenInterestCache,
+  marketDataPrevCloseCache,
+  marketDataSnapshotCache,
+  prevCloseFallbackCache,
+  historyDailyCache,
+  historyDailyInFlight,
+  intradayGreeksHistory,
+  gexLevelCache,
+  putCallCache,
+  spxBootstrapPromiseRef,
+  spyBootstrapPromiseRef,
+  qqqBootstrapPromiseRef,
+  livePrevCloses
+} = marketState;
 const SUBSCRIPTION_BATCH_SIZE = 50;     // dxLink limit ~100, use 50 to be safe
 const SUBSCRIPTION_BATCH_DELAY_BASE = 1000;  // 1 second between batches
 const SUBSCRIPTION_BATCH_DELAY_MAX = 5000;   // 5 second max backoff
@@ -856,8 +882,8 @@ function addAutoSubscription(sym, types = null) {
 
 async function sendSubscriptionsRateLimited() {
   if (enterOvernightIdleMode()) return;
-  if (subscriptionSending || subscriptionQueue.length === 0) return;
-  subscriptionSending = true;
+  if (subscriptionSendingRef.value || subscriptionQueue.length === 0) return;
+  subscriptionSendingRef.value = true;
 
   try {
     while (subscriptionQueue.length > 0) {
@@ -922,7 +948,7 @@ async function sendSubscriptionsRateLimited() {
       }
     }
   } finally {
-    subscriptionSending = false;
+    subscriptionSendingRef.value = false;
   }
 }
 
@@ -959,12 +985,6 @@ function startSubscriptionPruning() {
   log('[PRUNE] Idle subscription pruning started (interval: ' + (PRUNE_INTERVAL_MS/1000) + 's)');
 }
 
-const dxClients     = new Set();
-const subscriptions = new Set();
-const subscriptionTypesBySymbol = new Map();
-const candleSubscriptions = new Set();  // separate set for candle symbols
-const dxCandleCache = {};
-
 // ─── Persistent daily closes (survives proxy restarts) ───────────────────────
 // Saved to data/daily-closes.json whenever dxLink streams a close after 4pm ET
 let savedDailyCloses = { date: '', ES: 0, SPX: 0, VIX: 0 };
@@ -986,14 +1006,6 @@ function saveDailyCloses() {
 loadDailyCloses();
 
 // ─── Live prev-close cache (auto-refreshed daily, no manual updates needed) ───
-const livePrevCloses = {
-  VIX:  0,   // ^VIX
-  ES:   0,   // /ESU26
-  SPX:  0,   // $SPX
-  NQ:   0,   // /NQM26
-  date: '',  // ET date string for which these closes were fetched
-};
-
 async function refreshLivePrevCloses() {
   try {
     const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -1091,20 +1103,6 @@ async function refreshLivePrevCloses() {
 // Startup call is deferred to after log() is defined — see schedulePrevCloseRefresh() below
 
 // ─── dxLink market data cache (Greeks + Summary per streamer-symbol) ──────────
-const dxGreeksCache  = {};   // streamer-symbol → {delta, gamma, theta, vega, iv}
-const marketDataPrevCloseCache = {}; // symbol → prev-close from TastyTrade market-data
-const dxSummaryCache = {};   // streamer-symbol → {openInterest, dayVolume}
-const dxQuoteCache   = {};   // streamer-symbol → {bid, ask, last}
-const dxTradeCache   = {};   // streamer-symbol → {price, dayVolume, size}
-const dxOpenInterestCache = {}; // streamer-symbol → last known non-zero open interest
-const marketDataSnapshotCache = {}; // symbol → { value, ts }
-const prevCloseFallbackCache = {}; // symbol -> { value, ts }
-const historyDailyCache = new Map(); // symbol -> { ts, payload }
-const historyDailyInFlight = new Map(); // symbol -> Promise<payload>
-let spxBootstrapPromise = null;
-let spyBootstrapPromise = null;
-let qqqBootstrapPromise = null;
-let putCallCache = { ratio: 0, date: '', source: '', ts: 0 };
 
 // ─── Cache TTL Management ─────────────────────────────────────────────────
 const CACHE_MAX_AGE_MS = 60000; // 1 minute max age
@@ -1300,13 +1298,11 @@ setInterval(() => {
 
 // ─── MotiveWave GEX Level Export ──────────────────────────────────────────────
 const GEX_CSV_PATH = path.join(ROOT_DIR, 'gex_levels.csv');
-let gexLevelCache = { callWall: 0, putWall: 0, zeroGamma: 0, spot: 0, esSpot: 0, basis: 0, ts: 0 };
 
 // ─── Intraday Greeks History ──────────────────────────────────────────────────
 // Stores GEX/DEX/CHEX/VEX snapshots every 30s during market hours
 // Cleared at midnight ET each day
 const INTRADAY_FILE = path.join(ROOT_DIR, 'data', 'intraday-greeks.json');
-let intradayGreeksHistory = [];  // [{ time, ts, gex, dex, chex, vex, buyPct, spot }]
 let lastIntradayDate = '';
 
 function loadIntradayHistory() {
@@ -1315,13 +1311,14 @@ function loadIntradayHistory() {
     if (fs.existsSync(INTRADAY_FILE)) {
       const data = JSON.parse(fs.readFileSync(INTRADAY_FILE, 'utf8'));
       if (Array.isArray(data.records) && data.date === new Date().toISOString().split('T')[0]) {
-        intradayGreeksHistory = data.records;
+        intradayGreeksHistory.length = 0;
+        intradayGreeksHistory.push(...data.records);
         lastIntradayDate = data.date;
         return;
       }
     }
   } catch(e) {}
-  intradayGreeksHistory = [];
+  intradayGreeksHistory.length = 0;
   lastIntradayDate = new Date().toISOString().split('T')[0];
 }
 
@@ -1518,7 +1515,7 @@ function computeAndCacheGexLevels(underlyingPrice, esBasis = esBasisCache.basis)
 
   const esSpot = spot + esBasis;
   const levels = { callWall, putWall, zeroGamma, spot, esSpot, basis: esBasis, ts: Date.now() };
-  gexLevelCache = levels;
+  Object.assign(gexLevelCache, levels);
   writeGexCsvFile(levels);
   log(`GEX levels → SPX: CW=${callWall} PW=${putWall} ZG=${zeroGamma.toFixed(2)} | basis=${esBasis.toFixed(2)} | ES: CW=${spxLevelToEs(callWall,esBasis)} PW=${spxLevelToEs(putWall,esBasis)} ZG=${spxLevelToEs(zeroGamma,esBasis)}`);
 }
@@ -2412,8 +2409,8 @@ async function bootstrapOptionSubscriptionsForUnderlying(symbol, {
 }
 
 async function ensureStartupOptionSubscriptions() {
-  if (spxBootstrapPromise) return spxBootstrapPromise;
-  spxBootstrapPromise = (async () => {
+  if (spxBootstrapPromiseRef.value) return spxBootstrapPromiseRef.value;
+  spxBootstrapPromiseRef.value = (async () => {
     const [spxCount, spyCount, qqqCount] = await Promise.all([
       bootstrapOptionSubscriptionsForUnderlying('SPX', {
         preferredRoot: 'SPXW',
@@ -2421,26 +2418,26 @@ async function ensureStartupOptionSubscriptions() {
         maxSymbolsPerExpiry: MAX_BOOTSTRAP_SPX_OPTION_SYMBOLS_PER_EXPIRY,
       }),
       (async () => {
-        if (spyBootstrapPromise) return spyBootstrapPromise;
-        spyBootstrapPromise = bootstrapOptionSubscriptionsForUnderlying('SPY', {
+        if (spyBootstrapPromiseRef.value) return spyBootstrapPromiseRef.value;
+        spyBootstrapPromiseRef.value = bootstrapOptionSubscriptionsForUnderlying('SPY', {
           expirationCount: 1,
           maxSymbolsPerExpiry: MAX_BOOTSTRAP_SPY_OPTION_SYMBOLS,
-        }).finally(() => { spyBootstrapPromise = null; });
-        return spyBootstrapPromise;
+        }).finally(() => { spyBootstrapPromiseRef.value = null; });
+        return spyBootstrapPromiseRef.value;
       })(),
       (async () => {
-        if (qqqBootstrapPromise) return qqqBootstrapPromise;
-        qqqBootstrapPromise = bootstrapOptionSubscriptionsForUnderlying('QQQ', {
+        if (qqqBootstrapPromiseRef.value) return qqqBootstrapPromiseRef.value;
+        qqqBootstrapPromiseRef.value = bootstrapOptionSubscriptionsForUnderlying('QQQ', {
           expirationCount: 1,
           maxSymbolsPerExpiry: MAX_BOOTSTRAP_QQQ_OPTION_SYMBOLS,
-        }).finally(() => { qqqBootstrapPromise = null; });
-        return qqqBootstrapPromise;
+        }).finally(() => { qqqBootstrapPromiseRef.value = null; });
+        return qqqBootstrapPromiseRef.value;
       })(),
     ]);
     log(`[BOOT] Option bootstrap totals | SPX=${spxCount} SPY=${spyCount} QQQ=${qqqCount}`);
     return spxCount + spyCount + qqqCount;
-  })().finally(() => { spxBootstrapPromise = null; });
-  return spxBootstrapPromise;
+  })().finally(() => { spxBootstrapPromiseRef.value = null; });
+  return spxBootstrapPromiseRef.value;
 }
 
 function normalizeRestSymbol(symbol) {

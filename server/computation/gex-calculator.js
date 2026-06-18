@@ -7,6 +7,7 @@ const {
   isSpxwSymbol
 } = require('./utils');
 const { accumulateExposureTotals } = require('./vex-chex');
+const marketState = require('../market-state');
 
 function computeIntradaySnapshot({ dxGreeksCache, dxSummaryCache, readBuySellBackup, spot }) {
   const totals = {
@@ -20,11 +21,14 @@ function computeIntradaySnapshot({ dxGreeksCache, dxSummaryCache, readBuySellBac
   };
 
   const todayCompact = todayYmd().compact;
-  for (const [symbol, greeks] of Object.entries(dxGreeksCache)) {
+  const greeksCache = dxGreeksCache || marketState.dxGreeksCache;
+  const summaryCache = dxSummaryCache || marketState.dxSummaryCache;
+
+  for (const [symbol, greeks] of Object.entries(greeksCache)) {
     if (!isSpxwSymbol(symbol)) continue;
     if (optionExpirationCompact(symbol) !== todayCompact) continue;
 
-    const summary = dxSummaryCache[symbol] || {};
+    const summary = summaryCache[symbol] || {};
     const oi = maxWholeNumber(summary.openInterest) || 0;
     const vol = maxWholeNumber(summary.dayVolume) || 0;
     const contracts = oi + vol;
@@ -66,11 +70,13 @@ function spxLevelToEs(spxLevel, basis) {
 }
 
 function buildGexLevels({ dxGreeksCache, dxSummaryCache, underlyingPrice, fallbackSpot = 0, esBasis = 0 }) {
+  const greeksCache = dxGreeksCache || marketState.dxGreeksCache;
+  const summaryCache = dxSummaryCache || marketState.dxSummaryCache;
   const strikes = [];
-  for (const [symbol, greeks] of Object.entries(dxGreeksCache)) {
+  for (const [symbol, greeks] of Object.entries(greeksCache)) {
     if (!isSpxwSymbol(symbol)) continue;
 
-    const summary = dxSummaryCache[symbol] || {};
+    const summary = summaryCache[symbol] || {};
     const gamma = Math.abs(firstFiniteNumber(greeks.gamma, 0));
     const oi = maxWholeNumber(summary.openInterest);
     const isCall = /C\d{4,8}$/.test(symbol);

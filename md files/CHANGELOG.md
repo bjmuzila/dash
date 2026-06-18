@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-17 (session 26) - Global Sidebar Replaced with Home-Style Rail
+
+### `components/shared/Sidebar.tsx`
+- Replaced the old expanded sidebar with the compact home-style rail so the same left navigation now appears on every page
+- Kept the home icon, page shortcuts, live quotes stack, settings cog, and logo circle in the new layout
+- Wired the cog button to the existing idle proxy action so the idle control stays available from every route
+
+### `components/shared/LayoutShell.tsx`
+- Continues to mount the shared sidebar globally through the app shell, so the updated rail is now the persistent left sidebar site-wide
+
 ## 2026-06-17 (session 25) - Proxy Live Data Wiring + Initial Server Modularization
 
 ### Live Proxy Subscription Wiring
