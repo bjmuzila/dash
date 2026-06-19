@@ -97,12 +97,18 @@ function toET(iso: string): { date: string; time: string; time_formatted: string
 }
 
 const TRUMP_EXCLUDE = ["executive time", "pool call", "in-town pool"];
+let trumpCache: { body: CalEvent[]; ts: number } = { body: [], ts: 0 };
+const TRUMP_CACHE_TTL = 30 * 60 * 1000;
 
 async function fetchTrumpEvents(): Promise<CalEvent[]> {
+  if (trumpCache.body.length && Date.now() - trumpCache.ts < TRUMP_CACHE_TTL) {
+    return trumpCache.body;
+  }
+
   try {
     const res = await fetch("https://media-cdn.factba.se/rss/json/trump/calendar-full.json", {
       headers: { "User-Agent": "Mozilla/5.0" },
-      next: { revalidate: 3600 },
+      cache: "no-store",
     });
     if (!res.ok) return [];
     const raw: FactbaEvent[] | { events: FactbaEvent[] } = await res.json();
@@ -151,6 +157,7 @@ async function fetchTrumpEvents(): Promise<CalEvent[]> {
       });
     }
 
+    trumpCache = { body: mapped, ts: Date.now() };
     return mapped;
   } catch {
     return [];

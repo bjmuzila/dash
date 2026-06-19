@@ -23,6 +23,14 @@ const state = {
   gexRows: [],
   // Spot price
   spot: 0,
+  // Underlying prior close (for change calc) and date.
+  prevClose: 0,
+  prevCloseDate: null,
+  // Auxiliary live quotes: VIX index + front ES future, with prior closes.
+  vix: 0,
+  esFut: 0,
+  vixPrevClose: 0,
+  esFutPrevClose: 0,
   // Active expiry 'YYYY-MM-DD'
   expiry: '',
   // All available expiries for the toolbar
@@ -43,6 +51,7 @@ const state = {
     contractsSubscribed: 0,
     lastFeedAt: null,
     lastError: null,
+    idle: false,
   },
   // Last successful update timestamp
   updatedAt: 0,
@@ -119,6 +128,16 @@ function setSpot(spot) {
   if (spot > 0) setState({ spot });
 }
 
+/** Update auxiliary VIX / ES future quotes (and their prior closes). */
+function setAux(patch) {
+  const next = {};
+  if (patch.vix > 0) next.vix = patch.vix;
+  if (patch.esFut > 0) next.esFut = patch.esFut;
+  if (patch.vixPrevClose > 0) next.vixPrevClose = patch.vixPrevClose;
+  if (patch.esFutPrevClose > 0) next.esFutPrevClose = patch.esFutPrevClose;
+  if (Object.keys(next).length) setState(next);
+}
+
 /** Update available expirations list. */
 function setExpirations(expirations) {
   setState({ expirations });
@@ -153,6 +172,7 @@ module.exports = {
   setGexUpdate,
   setFlow,
   setSpot,
+  setAux,
   setExpirations,
   setExpiry,
   setStatus,

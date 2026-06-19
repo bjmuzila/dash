@@ -47,11 +47,7 @@ const SettingsIcon = () => (
 
 const QUOTE_SYMBOLS = [
   { sym: "/ESU26", label: "ESU" },
-  { sym: "/ESU6", label: "ESU" },
-  { sym: "/ES:XCME", label: "ESU" },
   { sym: "/NQU26", label: "NQU" },
-  { sym: "/NQU6", label: "NQU" },
-  { sym: "/NQ:XCME", label: "NQU" },
   { sym: "SPX", label: "SPX" },
   { sym: "SPY", label: "SPY" },
   { sym: "QQQ", label: "QQQ" },
@@ -99,21 +95,36 @@ function normalizeSym(sym: string) {
   return sym;
 }
 
-function pctFromQuote(q: Record<string, unknown>) {
-  const directPct = quoteNumber(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
-  if (directPct && Math.abs(directPct) <= 20) return directPct;
+function rawNum(q: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const n = Number(q[key]);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
 
+function pctFromQuote(q: Record<string, unknown>) {
+  // Prefer recomputing from last vs prev-close so the % always matches the
+  // displayed price (avoids stale/percentless feed fields). The quotes-batch
+  // API already returns correct Yahoo last + prev-close.
   const last = quoteNumber(q, "last", "lastPrice", "mark", "mark-price", "price", "close", "closePrice");
   const prev = quoteNumber(q, "prev-close", "prevClose", "previousClose", "prevDayClosePrice", "close-price", "closePrice");
   if (last > 0 && prev > 0) {
     const pct = ((last - prev) / prev) * 100;
-    if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+    if (Number.isFinite(pct)) return pct;
   }
 
-  const change = quoteNumber(q, "change", "netChange", "dayChange", "tradeChange");
-  if (change && prev > 0) {
-    const pct = (change / prev) * 100;
-    if (Number.isFinite(pct) && Math.abs(pct) <= 20) return pct;
+  // Fall back to a feed-supplied percent. Guard against fractional (0.0108)
+  // vs whole-number (1.08) conventions: scale up if it looks fractional.
+  let directPct = rawNum(q, "percent-change", "changePercent", "netPercentChange", "netPercentChangeInDouble", "pctChange", "dayPercentChange");
+  if (directPct !== null && directPct !== 0) {
+    if (Math.abs(directPct) < 1 && Math.abs(directPct) > 0) directPct *= 100;
+    return directPct;
+  }
+
+  const change = rawNum(q, "change", "netChange", "dayChange", "tradeChange");
+  if (change !== null && change !== 0 && prev > 0) {
+    return (change / prev) * 100;
   }
 
   return null;
@@ -169,22 +180,52 @@ export default function Sidebar() {
   const pathname = usePathname();
   const pcts = useSidebarQuotes();
   const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const [isIdle, setIsIdle] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [pagesOpen, setPagesOpen] = useState(false);
   const pagesBtnRef = useRef<HTMLButtonElement | null>(null);
   const pagesMenuRef = useRef<HTMLDivElement | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
 
   useEffect(() => {
     const onDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (pagesBtnRef.current?.contains(target) || pagesMenuRef.current?.contains(target)) return;
-      setPagesOpen(false);
+      if (!pagesBtnRef.current?.contains(target) && !pagesMenuRef.current?.contains(target)) setPagesOpen(false);
+      if (!settingsBtnRef.current?.contains(target) && !settingsMenuRef.current?.contains(target)) setSettingsOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  const goIntoIdle = async () => {};
+  // Reflect current idle state on mount.
+  useEffect(() => {
+    fetch("/proxy/idle").then(r => r.ok ? r.json() : null).then(j => {
+      if (j && typeof j.idle === "boolean") setIsIdle(j.idle);
+    }).catch(() => {});
+  }, []);
+
+  const toggleIdle = async () => {
+    const next = !isIdle;
+    setIdleActionState("busy");
+    try {
+      const r = await fetch("/proxy/idle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idle: next }),
+      });
+      if (!r.ok) throw new Error(String(r.status));
+      const j = await r.json();
+      setIsIdle(typeof j.idle === "boolean" ? j.idle : next);
+      setIdleActionState("ok");
+    } catch {
+      setIdleActionState("err");
+    } finally {
+      setTimeout(() => setIdleActionState("idle"), 1500);
+      setSettingsOpen(false);
+    }
+  };
 
   return (
     <nav
@@ -319,7 +360,7 @@ export default function Sidebar() {
 
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px" }} />
 
-      <div style={{ padding: "8px 12px 4px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+      <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
         Quotes
       </div>
 
@@ -349,8 +390,8 @@ export default function Sidebar() {
                   borderLeft: isCore ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
                 }}
               >
-                <span style={{ fontSize: 11, fontWeight: 700, color: isCore ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: isCore ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color, letterSpacing: "0.02em" }}>
                   {fmtPct(pct)}
                 </span>
               </div>
@@ -361,25 +402,84 @@ export default function Sidebar() {
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px 0" }} />
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 0 14px" }}>
-        <button
-          title="Settings"
-          onClick={goIntoIdle}
-          disabled={idleActionState === "busy"}
-          style={{
-            background: "none",
-            border: "none",
-            color: idleActionState === "err" ? "#ff4757" : idleActionState === "ok" ? "#00e676" : HOME_THEME.muted,
-            cursor: idleActionState === "busy" ? "wait" : "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 6,
-            borderRadius: 8,
-            transition: "color 0.15s",
-          }}
-        >
-          <SettingsIcon />
-        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            ref={settingsBtnRef}
+            title="Settings"
+            onClick={() => setSettingsOpen((v) => !v)}
+            disabled={idleActionState === "busy"}
+            style={{
+              background: "none",
+              border: "none",
+              // Red when idle is active; otherwise muted (or status color while busy).
+              color: isIdle ? "#ff4757"
+                : idleActionState === "err" ? "#ff4757"
+                : idleActionState === "ok" ? "#00e676"
+                : HOME_THEME.muted,
+              cursor: idleActionState === "busy" ? "wait" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 6,
+              borderRadius: 8,
+              transition: "color 0.15s",
+            }}
+          >
+            <SettingsIcon />
+          </button>
+
+          {settingsOpen && (
+            <div
+              ref={settingsMenuRef}
+              style={{
+                position: "absolute",
+                left: 52,
+                bottom: 0,
+                zIndex: 10001,
+                minWidth: 160,
+                background: "rgba(13,17,25,0.96)",
+                border: "1px solid rgba(0,229,255,0.20)",
+                borderRadius: 10,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+                backdropFilter: "blur(16px)",
+                overflow: "hidden",
+              }}
+            >
+              <div style={{ padding: "8px 12px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                Settings
+              </div>
+              <button
+                onClick={toggleIdle}
+                disabled={idleActionState === "busy"}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  width: "100%",
+                  padding: "10px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: isIdle ? "#ff4757" : "#fff",
+                  background: isIdle ? "rgba(255,71,87,0.08)" : "transparent",
+                  border: "none",
+                  borderLeft: isIdle ? "2px solid #ff4757" : "2px solid transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span>Idle Proxy</span>
+                <span style={{
+                  fontSize: 9, fontWeight: 800, letterSpacing: "0.08em",
+                  padding: "2px 6px", borderRadius: 3,
+                  background: isIdle ? "#ff4757" : "rgba(255,255,255,0.08)",
+                  color: isIdle ? "#05080d" : HOME_THEME.muted,
+                }}>
+                  {idleActionState === "busy" ? "…" : isIdle ? "ON" : "OFF"}
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
 
         <div
           style={{
@@ -402,12 +502,12 @@ export default function Sidebar() {
 
         <div style={{
           fontSize: 8,
-          color: idleActionState === "err" ? HOME_THEME.red : HOME_THEME.muted,
+          color: isIdle || idleActionState === "err" ? HOME_THEME.red : HOME_THEME.muted,
           textTransform: "uppercase",
           letterSpacing: "0.12em",
           textAlign: "center",
         }}>
-          {idleActionState === "busy" ? "Working" : "Ready"}
+          {idleActionState === "busy" ? "Working" : isIdle ? "Idle" : "Ready"}
         </div>
       </div>
     </nav>

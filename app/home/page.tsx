@@ -6,6 +6,8 @@ import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
 import FlowTape from "@/components/dashboard/FlowTape";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, computeGEXProfile, findGEXFlip } from "@/lib/calculations/calculations";
 
@@ -318,6 +320,16 @@ export default function HomePage() {
   const [showDex, setShowDex] = useState(false);
   const [showFlipCurve, setShowFlipCurve] = useState(false);
   const gexContainerRef = useRef<HTMLDivElement>(null);
+  const heatmapContainerRef = useRef<HTMLDivElement>(null);
+  // Snapshot-to-DB button state for the heatmap header.
+  const [snapDbState, setSnapDbState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const recordSnapshot = useCallback(async () => {
+    if (snapDbState === "busy") return;
+    setSnapDbState("busy");
+    try { await saveManualMvcSnapshot(); setSnapDbState("ok"); }
+    catch { setSnapDbState("err"); }
+    finally { setTimeout(() => setSnapDbState("idle"), 1800); }
+  }, [snapDbState]);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const selectedExpiryRef = useRef("");
@@ -334,8 +346,24 @@ export default function HomePage() {
   // GEX chart rows pushed from /ws/gex broadcaster (server-computed loop)
   const [gexChainRows, setGexChainRows] = useState<ChainRow[]>([]);
   const [gexSpot, setGexSpot] = useState(0);
+  // Summary levels from server gex message.
+  const [callWall, setCallWall] = useState<number | null>(null);
+  const [putWall, setPutWall] = useState<number | null>(null);
+  // Prior closes for VIX / ESU from the proxy (Tastytrade) for day-change %.
+  const [vixPrevClose, setVixPrevClose] = useState(0);
+  const [esuPrevClose, setEsuPrevClose] = useState(0);
+  // Fallback prior-closes from /api/quotes-batch (Yahoo) when the server feed
+  // doesn't supply them — keeps VIX/ESU day-change % populated and sane.
+  const [vixPrevFallback, setVixPrevFallback] = useState(0);
+  const [esuPrevFallback, setEsuPrevFallback] = useState(0);
+  const vixPrevEff = vixPrevClose > 0 ? vixPrevClose : vixPrevFallback;
+  const esuPrevEff = esuPrevClose > 0 ? esuPrevClose : esuPrevFallback;
+  const vixPct = vix > 0 && vixPrevEff > 0 ? ((vix - vixPrevEff) / vixPrevEff) * 100 : null;
+  const esuPct = esFut > 0 && esuPrevEff > 0 ? ((esFut - esuPrevEff) / esuPrevEff) * 100 : null;
   // SPX flow tape (per-order) pushed from the server `flow` WS message.
   const [flowOrders, setFlowOrders] = useState<FlowOrder[]>([]);
+  // Full server flow bucket (vols/premium) for the Snapshot panel.
+  const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
   // Heatmap intensity slider (0.2–3, default 0.4) — controls cell color opacity.
   const [intensity, setIntensity] = useState(0.4);
   // 30-min rolling net GEX per strike, pulled from the history DB.
@@ -344,6 +372,31 @@ export default function HomePage() {
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
   }, [quoteSnapshots]);
+
+  // Poll Yahoo-backed quotes-batch for VIX/ESU prior closes as a fallback when
+  // the /ws/gex feed doesn't deliver them (keeps top-bar day-change % correct).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/quotes-batch?symbols=VIX,/ESU26", { cache: "no-store" });
+        if (!r.ok) return;
+        const json = await r.json();
+        const items: Array<Record<string, unknown>> = json?.data?.items ?? [];
+        if (cancelled) return;
+        for (const it of items) {
+          const sym = String(it.symbol ?? "");
+          const prev = Number(it["prev-close"] ?? 0);
+          if (!(prev > 0)) continue;
+          if (sym === "VIX") setVixPrevFallback(prev);
+          else if (sym.startsWith("/ES")) setEsuPrevFallback(prev);
+        }
+      } catch { /* ignore */ }
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   useEffect(() => {
     selectedExpiryRef.current = selectedExpiry;
@@ -354,6 +407,7 @@ export default function HomePage() {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
 
   const scheduleRender = useCallback(() => {
     setRenderTick((current) => current + 1);
@@ -376,10 +430,28 @@ export default function HomePage() {
     unmountedRef.current = false;
 
     // Apply a GEX payload (server-v2 `data` block OR legacy flat message).
+    // Update SPX spot + change vs prior close, plus aux VIX/ESU quotes.
+    const applySpot = (s: number, prevClose: number) => {
+      if (s > 0) {
+        setSpot(s);
+        if (prevClose > 0) {
+          setSpxChange(s - prevClose);
+          setSpxChangePct(((s - prevClose) / prevClose) * 100);
+        }
+      }
+    };
+
     const applyGex = (p: Record<string, unknown>) => {
       if (Array.isArray(p.gexRows)) setGexChainRows(p.gexRows as ChainRow[]);
       const s = Number(p.spot ?? 0);
       if (s > 0) setGexSpot(s);
+      applySpot(s, Number(p.prevClose ?? 0));
+      if (Number(p.vix ?? 0) > 0) setVix(Number(p.vix));
+      if (Number(p.esFut ?? 0) > 0) setEsFut(Number(p.esFut));
+      if (Number(p.vixPrevClose ?? 0) > 0) setVixPrevClose(Number(p.vixPrevClose));
+      if (Number(p.esFutPrevClose ?? 0) > 0) setEsuPrevClose(Number(p.esFutPrevClose));
+      if (p.callWall != null) setCallWall(Number(p.callWall) || null);
+      if (p.putWall != null) setPutWall(Number(p.putWall) || null);
       const exps = p.expirations as string[] | undefined;
       if (Array.isArray(exps) && exps.length) {
         setExpiryOptions(buildExpiryOptions(exps));
@@ -408,12 +480,21 @@ export default function HomePage() {
         case "spot": {
           const s = Number(data.spot ?? 0);
           if (s > 0) setGexSpot(s);
+          applySpot(s, Number(data.prevClose ?? 0));
+          break;
+        }
+        case "aux": {
+          if (Number(data.vix ?? 0) > 0) setVix(Number(data.vix));
+          if (Number(data.esFut ?? 0) > 0) setEsFut(Number(data.esFut));
+          if (Number(data.vixPrevClose ?? 0) > 0) setVixPrevClose(Number(data.vixPrevClose));
+          if (Number(data.esFutPrevClose ?? 0) > 0) setEsuPrevClose(Number(data.esFutPrevClose));
           break;
         }
         case "flow": {
           // Server sends the full capped tape (oldest-first) each message.
           const tape = data.tape as FlowOrder[] | undefined;
           if (Array.isArray(tape)) setFlowOrders(tape);
+          setFlowBucket(data);
           break;
         }
         case "EXPIRATIONS":
@@ -586,6 +667,16 @@ export default function HomePage() {
     return () => clearInterval(id);
   }, []);
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
+  // MVC = strike carrying the peak |net GEX| (most valuable concentration).
+  const mvcStrike = useMemo(() => {
+    let best: number | null = null;
+    let bestAbs = 0;
+    for (const r of chartRows) {
+      const v = Math.abs(r.netGEX ?? 0);
+      if (v > bestAbs) { bestAbs = v; best = r.strike; }
+    }
+    return best;
+  }, [chartRows]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
 
   const etTime = now?.toLocaleTimeString("en-US", {
@@ -606,16 +697,16 @@ export default function HomePage() {
   };
 
   return (
-    <div style={{ height: "100%", width: "100%", overflow: "hidden", background: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100%", width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
-            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1 1 0", minHeight: 0, overflow: "hidden" }}>
+            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
               {/* GEX title row */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", flexShrink: 0 }}>
                 <span style={{ color: C.cyan }}><BarChart2 /></span>
-                <span style={{ color: "#fff", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.1em" }}>NET GEX</span>
-                <span style={{ marginLeft: "auto", fontSize: 9, color: "#4a6a88" }}>Drag to pan · Scroll to zoom</span>
+                <span style={{ color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>NET GEX</span>
+                <span style={{ marginLeft: "auto", fontSize: 11, color: "#4a6a88" }}>Drag to pan · Scroll to zoom</span>
               </div>
               {/* Full-featured toolbar */}
               <GexToolbar
@@ -660,7 +751,7 @@ export default function HomePage() {
                   { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
                   { id: "spxflow", label: "SPX Flow", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg> },
                 ] as const).map((tab) => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 15, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
                   </button>
                 ))}
@@ -673,7 +764,7 @@ export default function HomePage() {
                 )}
                 {activeTab === "snapshot" && (
                   <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
-                    <SnapshotPanel />
+                    <SnapshotPanel orders={flowOrders} bucket={flowBucket} />
                   </div>
                 )}
                 {activeTab === "spxflow" && (
@@ -689,54 +780,78 @@ export default function HomePage() {
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "3px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#fff" }}>{etTime}</div>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "6px 16px", borderRadius: 6, fontFamily: "monospace", fontSize: 20, fontWeight: 700, color: "#fff", letterSpacing: "0.04em" }}>{etTime}</div>
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                  <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                  {vixPct != null && <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
+                  <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
+                  {esuPct != null && <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
                 </div>
                 <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
+                  <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-                  <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)", flexShrink: 0 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                 </div>
-                <button style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: C.cyan, fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                  Proxy Live
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
+                  </div>
+                  <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
+                    style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer" }}>
+                    {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+            <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     Live GEX Heatmap
                   </div>
-                  <div style={{ fontSize: 10, color: "#8da8c2", fontWeight: 700 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
+                    <button onClick={handleRefresh} title="Refresh heatmap"
+                      style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
+                    <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
+                      style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>{snapDbState === "busy" ? "…" : snapDbState === "ok" ? "✓" : snapDbState === "err" ? "✕" : "📸"}</button>
+                    <BoxSnapBtn targetRef={heatmapContainerRef} label="GEX Heatmap" />
+                    <BoxDiscordBtn targetRef={heatmapContainerRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} />
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   <span style={{ color: "#fff" }}>Stream</span>
                   <span style={{ color: C.cyan }}>{subscribedSymbolsRef.current.length} option symbols</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
@@ -756,7 +871,7 @@ export default function HomePage() {
               </div>
 
               <div style={{ flex: 1, minHeight: 0, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
-                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 13, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "10%" }} />
                     <col style={{ width: "18%" }} />
@@ -765,7 +880,7 @@ export default function HomePage() {
                     <col style={{ width: "18%" }} />
                     <col style={{ width: "18%" }} />
                   </colgroup>
-                  <thead style={{ fontSize: 9, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
+                  <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike", "Net GEX", "Vol Only GEX", "DEX", "GEX + VEX", "30 Min Rolling Net GEX"].map((header, index) => (
                         <th key={header} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
@@ -810,8 +925,8 @@ export default function HomePage() {
                             <td style={{ padding: "4px 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {row.strike}
-                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 10, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
-                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700 }}>#{row.rank}</span>}
+                                {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
+                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700 }}>#{row.rank}</span>}
                               </div>
                             </td>
                             {dataCell(row.netGex, row.netGexVal, "netGexVal", 1)}

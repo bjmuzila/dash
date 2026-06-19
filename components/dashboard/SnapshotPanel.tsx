@@ -238,9 +238,40 @@ function hydrateOrder(order: BzilaLiveSnapshotOrder): FlowOrder | null {
   };
 }
 
-export default function SnapshotPanel() {
+interface SnapshotPanelProps {
+  /** Per-order tape from the server `flow` WS message (oldest-first). */
+  orders?: FlowOrder[];
+  /** Full server flow bucket (vols/premium) from the `flow` WS message. */
+  bucket?: Record<string, unknown> | null;
+}
+
+export default function SnapshotPanel({ orders: serverOrders, bucket: serverBucket }: SnapshotPanelProps = {}) {
   const { flow, seed } = useSpxFlow(true);
   const [, setNow] = useState(0);
+
+  // Drive the panel from the server-pushed flow (new proxy) when provided.
+  // useSpxFlow has no socket of its own, so without this the panel stays empty.
+  useEffect(() => {
+    if (!serverOrders && !serverBucket) return;
+    const b = (serverBucket ?? {}) as Record<string, number>;
+    const callBuyVol = Number(b.callBuyVol ?? 0);
+    const callSellVol = Number(b.callSellVol ?? 0);
+    const putBuyVol = Number(b.putBuyVol ?? 0);
+    const putSellVol = Number(b.putSellVol ?? 0);
+    // Bull = buy calls + sell puts; Bear = sell calls + buy puts.
+    const bullVol = callBuyVol + putSellVol;
+    const bearVol = callSellVol + putBuyVol;
+    seed({
+      orders: serverOrders ?? [],
+      callVol: callBuyVol + callSellVol,
+      putVol: putBuyVol + putSellVol,
+      buyVol: callBuyVol + putBuyVol,
+      sellVol: callSellVol + putSellVol,
+      bullVol,
+      bearVol,
+      netPremium: Number(b.netPremium ?? 0),
+    });
+  }, [serverOrders, serverBucket, seed]);
   const accumRef = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef<Set<string>>(new Set());

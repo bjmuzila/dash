@@ -1,5 +1,87 @@
 # Changelog
 
+## 2026-06-18 (session 4) — Home dashboard UI/wiring pass (v2026.6.18-v42)
+
+Worked on server-v2 stack. Version bumped to `2026.6.18-v42`.
+
+### Home page (`app/home/page.tsx`)
+- Live GEX heatmap header: added refresh (↻), record-snapshot-to-DB (📸), screenshot snap, and Discord buttons.
+- Bumped all inline fonts +2 across the page.
+- Top toolbar: larger clock font + box; wired live VIX, ESU, SPX prices; SPX day-change from prevClose.
+- 2nd toolbar row rebuilt: NET GEX, Call Wall, Put Wall, Flip + right-aligned MVC + Snapshot button.
+- Taller GEX chart (flex 1.6); SnapshotPanel now fed by server `flow` message.
+- VIX/ESU day-change % computed live from Tastytrade prev-close (no Yahoo dependency).
+
+### GEX chart (`components/dashboard/GexChart.tsx`)
+- Flip line uses gamma-zero only, 0DTE-only; removed spurious bar-zero-crossing fallback.
+- Profile curve plotted on the same dollar axis as the bars (removed independent renormalization).
+- OI overlay = shaded red/green gradient; removed blue total-OI line.
+- Axis labels white + bigger (11px).
+- DEX line convention matched to heatmap (OI+Vol → netDEX+volNetDEX).
+
+### Econ calendar (`components/dashboard/EconCalendarPanel.tsx`)
+- Bigger fonts; confirmed 7-day rolling window (≥5 days ahead) + stale events grayed/moved to bottom.
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- Deduped quotes (removed triple ESU/NQU); cogwheel settings popup with Idle Proxy toggle, turns red when idle.
+
+### Backend (server-v2)
+- `proxy-tastytrade.js`: subscribe VIX + front ES future; fetch their prev-closes; 500ms flow aggregation loop; `setIdle()` pausing compute/flow/OI loops.
+- `state/market-state.js`: `prevClose`/`vix`/`esFut`/`vixPrevClose`/`esFutPrevClose` + `idle` status, `setAux()`.
+- `websocket-server.js`: broadcasts aux quotes + prev-closes (`aux` message) and prevClose in `spot`.
+- `server-with-proxy.js`: `/proxy/idle` GET/POST + WS `SET_IDLE` routing.
+
+### Bug fixes
+- `app/database/page.tsx`: `load()` was stubbed (always empty) — wired to `/api/db` so saved snapshots render.
+- `app/api/quotes-batch/route.ts`: was a 501 stub — implemented over Yahoo for the sidebar's ~20 symbols.
+
+⚠️ Not type-checked/built this session (sandbox unavailable). Run `npm run build` before relying on prod.
+
+## 2026-06-18 (session 3) — Step 4 secret rotation/scrub + Step 5 merge to main (migration complete)
+
+Branch: `server-v2-wirein` → merged to `main`, pushed. Deployed to Render (`00fe33f`).
+
+### Step 4 — rotate & scrub exposed secrets (✓)
+- Read-only audit first: found live secrets not only in git history but hardcoded as
+  fallbacks in tracked current files — `server/proxy-tastytrade.js` (Schwab client id+secret,
+  Discord webhook) and `_ARCHIVED_DO_NOT_EDIT/Vanilla/` (bzila.pem RSA key, cert.pfx, dup
+  webhooks/secrets). Active `server-v2/` stack confirmed clean (all env-based).
+- Rotated at providers: Discord webhook + bot token, Tastytrade client secret + refresh
+  token (covers dxLink — token fetched at runtime via /api-quote-tokens), Postgres password.
+  Dropped/deleted: Schwab app, Massive key (no longer used).
+- Stripped hardcoded fallbacks in `server/proxy-tastytrade.js` (Schwab id/secret + webhook
+  → empty strings).
+- Deleted `_ARCHIVED_DO_NOT_EDIT/` entirely (dead vanilla stack; held keys/certs/dup secrets).
+- Hardened `.gitignore`: `*.pem *.pfx *.key *credentials*.json _ARCHIVED_DO_NOT_EDIT/`.
+- Deleted stale `.env` (all live config lives in `.env.local`, which is gitignored).
+- Added + redacted `SECURITY-AUDIT-step4.md` and `SECURITY-rotation-plan-step4.md`.
+- Git history scrub (git-filter-repo): removed bzila.pem/cert.pfx from BOTH paths
+  (`_ARCHIVED_DO_NOT_EDIT/Vanilla/` and older `Vanilla/`), replace-text redacted secret
+  strings. Verified zero hits across `git rev-list --all`. Mirror backup at
+  `../spx-gex-backup.git`. Force-pushed `main` + `server-v2-wirein`.
+
+### Step 5 — merge to main (✓)
+- `server-v2-wirein` → `main` fast-forward to `00fe33f`; `npm run build` clean (76/76 pages);
+  pushed to origin/main.
+- Build gotcha: stale `.next` cache caused phantom `PageNotFoundError` for
+  `/api/cache/expirations`, `/api/chains`, `/api/dxlink/candles`. Fix: `Remove-Item -Recurse
+  -Force .next` then rebuild. Not a source issue.
+
+### Deploy status
+- Render service `dash` (srv-d8mk8se7r5hc739t138g) auto-deployed `00fe33f` → live at
+  dash-1fa2.onrender.com.
+- KNOWN: deployed feed is empty ("Fetching SPX chain…", 0 OPTION SYMBOLS) because Render's
+  env vars still hold the OLD rotated secrets. `.env.local` does not propagate to Render.
+  TODO before go-live (planned Saturday): update Render Environment vars — TT_CLIENT_SECRET,
+  TT_REFRESH_TOKEN, DATABASE_URL, DISCORD_WEBHOOK_URL, DISCORD_BOT_TOKEN — then redeploy.
+- Staying on local dev until ~Sat 2026-06-20 to finish bringing everything up to date.
+
+### Still open (optional follow-ups)
+- Premarket page dead WS state (`setQuotes`/`setTs`) — finish or remove.
+- Home header chip "0 OPTION SYMBOLS / $TREAM" — unwired display binding, worth a look.
+
+---
+
 ## 2026-06-18 (session 2) — verify raw greeks, build fix, restore SPX Flow tab
 
 Branch: `server-v2-wirein` (still ahead of `main`; not merged or pushed)

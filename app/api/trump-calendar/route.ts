@@ -33,7 +33,7 @@ export async function GET() {
   try {
     const res = await fetch("https://media-cdn.factba.se/rss/json/trump/calendar-full.json", {
       headers: { "User-Agent": "Mozilla/5.0" },
-      next: { revalidate: 1800 },
+      cache: "no-store",
     });
 
     if (!res.ok) {

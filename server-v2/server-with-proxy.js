@@ -106,8 +106,28 @@ async function main() {
   const handle = app.getRequestHandler();
   await app.prepare();
 
+  // Forward-declared so the request handler can reference the live proxy.
+  let proxy = null;
+
   const server = createServer((req, res) => {
     try {
+      // Idle control (POST /proxy/idle { idle: true|false }) — toggles the feed.
+      const { pathname } = new URL(req.url || '/', 'http://localhost');
+      if (pathname === '/proxy/idle' && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let idle = true;
+          try { idle = !!JSON.parse(body || '{}').idle; } catch {}
+          proxy?.setIdle(idle);
+          sendJson(res, 200, { ok: true, idle: marketState.getState().status.idle });
+        });
+        return;
+      }
+      if (pathname === '/proxy/idle' && req.method === 'GET') {
+        sendJson(res, 200, { idle: marketState.getState().status.idle });
+        return;
+      }
       if (handleProxyRest(req, res)) return;
     } catch (err) {
       sendJson(res, 500, { error: String(err?.message || err) });
@@ -121,7 +141,6 @@ async function main() {
   const { wss } = createGexWsServer(server, { log: console });
 
   // Start the live feed.
-  let proxy = null;
   try {
     proxy = await new TastytradeProxy().start();
     console.log('[SERVER-V2] Tastytrade/dxLink feed started');
@@ -136,6 +155,9 @@ async function main() {
     const t = parsed?.type;
     if ((t === 'SET_EXPIRY' || t === 'setExpiry') && proxy) {
       proxy.setExpiry(parsed.expiry);
+    }
+    if ((t === 'SET_IDLE' || t === 'setIdle') && proxy) {
+      proxy.setIdle(!!parsed.idle);
     }
   });
 

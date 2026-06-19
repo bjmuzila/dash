@@ -339,9 +339,9 @@ async function copyImageToClipboard(imageBase64: string): Promise<void> {
 
 async function buildCalendarTemplateImage(): Promise<string> {
   const [calRes, quoteRes, logoRes] = await Promise.all([
-    fetch("/api/calendar"),
-    fetch("/api/calendar-quote").catch(() => null),
-    fetch("/bzilatrades-logo.png").catch(() => null),
+    fetch("/api/calendar", { cache: "no-store" }),
+    fetch("/api/calendar-quote", { cache: "no-store" }).catch(() => null),
+    fetch("/bzilatrades-logo.png", { cache: "no-store" }).catch(() => null),
   ]);
   const calJson = calRes.ok ? await calRes.json() : {};
   const quoteJson = quoteRes?.ok ? await quoteRes.json() : {};

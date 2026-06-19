@@ -51,6 +51,9 @@ const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
+// SPX flow tape is aggregated and broadcast on this cadence (default 500ms),
+// independent of the heavier GEX recompute loop.
+const FLOW_AGGREGATE_MS = Number(process.env.FLOW_AGGREGATE_MS || 500);
 
 // ---------------------------------------------------------------------------
 // OAuth
@@ -215,6 +218,23 @@ async function resolveUnderlying(symbol) {
     // Fall back to plain symbol if the lookup fails.
     return { symbol: sym, klass: 'equity', marketDataParam: `equity=${sym}`, streamerSymbol: sym };
   }
+}
+
+/**
+ * Resolve the front (nearest-expiry, active) /ES future's dxLink streamer symbol.
+ * Uses the futures list for the ES product and picks the soonest non-expired
+ * contract. Returns e.g. "/ESU25:XCME".
+ */
+async function resolveFrontEsSymbol() {
+  const json = await ttGet(`/instruments/futures?product-code[]=ES`);
+  const items = json?.data?.items || [];
+  const today = todayYmd().ymd;
+  const active = items
+    .filter((it) => it['streamer-symbol'] && (it['expiration-date'] || '') >= today)
+    .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
+  const front = active[0] || items.find((it) => it['streamer-symbol']);
+  if (!front?.['streamer-symbol']) throw new Error('No active ES future found');
+  return front['streamer-symbol'];
 }
 
 /** Get a dxLink API quote token + url from Tastytrade. */
@@ -447,9 +467,13 @@ class TastytradeProxy {
     this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
     this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
     this.oiTimer = null;
+    this.flowTimer = null;
+    this.idle = false;
     this.spot = 0;
     this.spotSymbol = null; // resolved dxLink streamer symbol for the underlying
     this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
+    this.vixSymbol = null;  // resolved dxLink streamer symbol for VIX
+    this.esSymbol = null;   // resolved dxLink streamer symbol for front ES future
     this.expiry = '';
     this.recomputeTimer = null;
   }
@@ -462,6 +486,39 @@ class TastytradeProxy {
     // instrument record's streamer-symbol is the only reliable source.
     this.underlying = await resolveUnderlying(SYMBOL);
     console.log(`[FEED] ${SYMBOL} resolved: class=${this.underlying.klass} streamer=${this.underlying.streamerSymbol}`);
+
+    // Resolve auxiliary quotes: VIX index + front ES future (best-effort).
+    try {
+      const vix = await resolveUnderlying('VIX');
+      this.vixSymbol = vix.streamerSymbol;
+      // Prior close for VIX day-change (same REST source as the underlying).
+      try {
+        const md = await ttGet(`/market-data/by-type?${vix.marketDataParam}`);
+        const it = md?.data?.items?.[0];
+        const pc = firstFiniteNumber(it?.['prev-close']);
+        if (pc > 0) marketState.setAux({ vixPrevClose: pc });
+      } catch (err) {
+        console.warn('[FEED] VIX prev-close failed:', err.message.slice(0, 120));
+      }
+    } catch (err) {
+      console.warn('[FEED] VIX resolve failed:', err.message.slice(0, 120));
+    }
+    try {
+      this.esSymbol = await resolveFrontEsSymbol();
+      console.log(`[FEED] ES front streamer=${this.esSymbol}`);
+      // Prior close for ES future day-change.
+      try {
+        const enc = encodeURIComponent(this.esSymbol.replace(/:.*/, '')); // /ESU25:XCME -> /ESU25
+        const md = await ttGet(`/market-data/by-type?future=${enc}`);
+        const it = md?.data?.items?.[0];
+        const pc = firstFiniteNumber(it?.['prev-close']);
+        if (pc > 0) marketState.setAux({ esFutPrevClose: pc });
+      } catch (err) {
+        console.warn('[FEED] ES prev-close failed:', err.message.slice(0, 120));
+      }
+    } catch (err) {
+      console.warn('[FEED] ES resolve failed:', err.message.slice(0, 120));
+    }
 
     // Underlying prev close + last from REST (uses class-correct param).
     try {
@@ -512,6 +569,10 @@ class TastytradeProxy {
     this.oiTimer = setInterval(() => this._refreshOI(), OI_REFRESH_MS);
 
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
+    // Aggregate + broadcast the SPX flow tape every 500ms (independent of GEX).
+    this.flowTimer = setInterval(() => {
+      marketState.setFlow(this.flow.bucket(SYMBOL));
+    }, FLOW_AGGREGATE_MS);
     return this;
   }
 
@@ -549,6 +610,8 @@ class TastytradeProxy {
   _resubscribe() {
     if (!this.client) return;
     const syms = new Set([this.spotSymbol]);
+    if (this.vixSymbol) syms.add(this.vixSymbol);
+    if (this.esSymbol) syms.add(this.esSymbol);
     for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
     this.client.subscribe([...syms]);
     marketState.setStatus({ contractsSubscribed: syms.size });
@@ -559,6 +622,28 @@ class TastytradeProxy {
     this.expiry = expiry;
     marketState.setExpiry(expiry);
     this._resubscribe();
+  }
+
+  /**
+   * Idle mode: pause the recompute/flow/OI loops to quiet the feed without a
+   * full teardown. Resuming restarts the loops. Reflected in market-state status
+   * (`idle`) so the dashboard can show the cogwheel red.
+   * @param {boolean} idle
+   */
+  setIdle(idle) {
+    const next = !!idle;
+    if (next === this.idle) return;
+    this.idle = next;
+    if (next) {
+      if (this.recomputeTimer) { clearInterval(this.recomputeTimer); this.recomputeTimer = null; }
+      if (this.flowTimer) { clearInterval(this.flowTimer); this.flowTimer = null; }
+      if (this.oiTimer) { clearInterval(this.oiTimer); this.oiTimer = null; }
+    } else {
+      if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
+      if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
+      if (!this.oiTimer) this.oiTimer = setInterval(() => this._refreshOI(), OI_REFRESH_MS);
+    }
+    marketState.setStatus({ idle: next });
   }
 
   _onEvent(ev) {
@@ -575,6 +660,14 @@ class TastytradeProxy {
           this.spot = mid;
           marketState.setSpot(mid);
         }
+        return;
+      }
+      if (sym === this.vixSymbol) {
+        if (mid > 0) marketState.setAux({ vix: mid });
+        return;
+      }
+      if (sym === this.esSymbol) {
+        if (mid > 0) marketState.setAux({ esFut: mid });
         return;
       }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize) });
@@ -601,6 +694,16 @@ class TastytradeProxy {
           this.spot = px;
           marketState.setSpot(px);
         }
+        return;
+      }
+      if (sym === this.vixSymbol) {
+        const px = Number(ev.price);
+        if (px > 0) marketState.setAux({ vix: px });
+        return;
+      }
+      if (sym === this.esSymbol) {
+        const px = Number(ev.price);
+        if (px > 0) marketState.setAux({ esFut: px });
         return;
       }
       // dayVolume on the Trade event is the running daily volume for the
@@ -750,7 +853,7 @@ class TastytradeProxy {
       totalNetGex,
     });
 
-    marketState.setFlow(this.flow.bucket(SYMBOL));
+    // Flow is aggregated + broadcast on its own 500ms loop (see flowTimer).
 
     // Persist per-strike net GEX history (rate-limited, fire-and-forget).
     // Feeds the dashboard's rolling-net-GEX view via
@@ -761,8 +864,10 @@ class TastytradeProxy {
   stop() {
     if (this.recomputeTimer) clearInterval(this.recomputeTimer);
     if (this.oiTimer) clearInterval(this.oiTimer);
+    if (this.flowTimer) clearInterval(this.flowTimer);
     this.recomputeTimer = null;
     this.oiTimer = null;
+    this.flowTimer = null;
     this.client?.close();
   }
 }

@@ -114,15 +114,19 @@ export default function DatabasePage() {
     setLoading(true);
     setError(null);
     try {
-      void t;
-      void date;
-      void lim;
-      setRows([]);
-      setCount(0);
-      setCols([]);
+      const params = new URLSearchParams({ table: t, limit: String(lim) });
+      if (date) params.set("date", date);
+      const res = await fetch(`/api/db?${params.toString()}`, { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || json.error || `HTTP ${res.status}`);
+      const fetched = (json.rows ?? []) as Record<string, unknown>[];
+      setRows(fetched);
+      setCount(json.count ?? fetched.length);
+      setCols(fetched.length ? Object.keys(fetched[0]) : []);
     } catch (e) {
       setError(String(e));
       setRows([]);
+      setCount(0);
       setCols([]);
     } finally {
       setLoading(false);

@@ -106,8 +106,8 @@ export default function EconCalendarPanel() {
   const doLoad = useCallback(async () => {
     setError(null);
     const [econRes, qRes] = await Promise.all([
-      fetch("/api/calendar"),
-      fetch("/api/calendar-quote"),
+      fetch("/api/calendar", { cache: "no-store" }),
+      fetch("/api/calendar-quote", { cache: "no-store" }),
     ]);
     const econJson = await econRes.json();
     if (!econRes.ok) {
@@ -189,7 +189,7 @@ export default function EconCalendarPanel() {
           borderRight: "1px solid #0d1520",
           gap: 2,
         }}>
-          <span style={{ fontSize: 11, color: faded ? "#1e2a38" : "#fff", fontFamily: "monospace" }}>
+          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : "#fff", fontFamily: "monospace" }}>
             {ev.time_formatted || ev.time || "TBD"}
           </span>
         </div>
@@ -198,16 +198,16 @@ export default function EconCalendarPanel() {
         <div style={{ padding: "6px 8px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 3 }}>
           {/* Impact + country */}
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ fontSize: 8, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: "0.1em" }}>
               {ev.impact}
             </span>
-            <span style={{ fontSize: 9, color: faded ? "#1e2a38" : "#fff", fontWeight: 600 }}>
+            <span style={{ fontSize: 11, color: faded ? "#1e2a38" : "#fff", fontWeight: 600 }}>
               {ev.country}
             </span>
           </div>
 
           {/* Title */}
-          <div style={{ fontSize: 12, color: faded ? "#1e2a38" : "#fff", fontWeight: ev.impact === "High" ? 700 : 500, lineHeight: 1.3 }}>
+          <div style={{ fontSize: 14, color: faded ? "#1e2a38" : "#fff", fontWeight: ev.impact === "High" ? 700 : 500, lineHeight: 1.3 }}>
             {ev.title}
           </div>
 
@@ -215,17 +215,17 @@ export default function EconCalendarPanel() {
           {(ev.actual || ev.forecast || ev.previous) && (
             <div style={{ display: "flex", gap: 10, marginTop: 1 }}>
               {ev.actual && (
-                <span style={{ fontSize: 10, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "monospace" }}>
                   A: <strong>{ev.actual}</strong>
                 </span>
               )}
               {ev.forecast && (
-                <span style={{ fontSize: 10, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "monospace" }}>
                   F: {ev.forecast}
                 </span>
               )}
               {ev.previous && (
-                <span style={{ fontSize: 10, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "monospace" }}>
                   P: {ev.previous}
                 </span>
               )}
@@ -255,7 +255,7 @@ export default function EconCalendarPanel() {
               display: "flex", alignItems: "center", gap: 8,
             }}
           >
-            <span style={{ fontSize: 9, fontWeight: 800, color: isToday ? "#00e5ff" : "#3a5570", letterSpacing: "0.1em" }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: isToday ? "#00e5ff" : "#3a5570", letterSpacing: "0.1em" }}>
               {label}
             </span>
             {isToday && (

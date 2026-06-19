@@ -23,6 +23,11 @@ function buildSnapshot(state) {
   return {
     symbol: state.symbol,
     spot: state.spot,
+    prevClose: state.prevClose,
+    vix: state.vix,
+    esFut: state.esFut,
+    vixPrevClose: state.vixPrevClose,
+    esFutPrevClose: state.esFutPrevClose,
     expiry: state.expiry,
     expirations: state.expirations,
     updatedAt: state.updatedAt,
@@ -105,7 +110,18 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       }, state.symbol));
     }
     if (changed.has('flow')) out.push(msg('flow', state.flow, state.symbol));
-    if (changed.has('spot')) out.push(msg('spot', { spot: state.spot }, state.symbol));
+    if (changed.has('spot') || changed.has('prevClose')) {
+      out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose }, state.symbol));
+    }
+    if (changed.has('vix') || changed.has('esFut') ||
+        changed.has('vixPrevClose') || changed.has('esFutPrevClose')) {
+      out.push(msg('aux', {
+        vix: state.vix,
+        esFut: state.esFut,
+        vixPrevClose: state.vixPrevClose,
+        esFutPrevClose: state.esFutPrevClose,
+      }, state.symbol));
+    }
     if (changed.has('status')) out.push(msg('status', state.status, state.symbol));
     if (changed.has('expirations') || changed.has('expiry')) {
       out.push(msg('status', { ...state.status, expirations: state.expirations, expiry: state.expiry }, state.symbol));

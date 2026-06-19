@@ -183,7 +183,6 @@ export default function GexChart({
     const isCallPut = mode === "call-put";
 
     const getNet  = (r: ChainRow) => isVol ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
-    const getOITotal = (r: ChainRow) => (r.callOI ?? 0) + (r.putOI ?? 0);
     const getCall = (r: ChainRow) => isVol
       ? (r.callGamma ?? 0) * (r.callVolume ?? 0) * spotPrice * spotPrice
       : (r.callGEX ?? 0);
@@ -198,6 +197,19 @@ export default function GexChart({
     const gap   = cW / data.length;
     const barW  = Math.max(2, gap * 0.82);
     const xAt   = (i: number) => PAD_L + (i + 0.5) * gap;
+    // Shared strike→X on the SAME index/bar axis (so curve, spot, and flip line
+    // all align with the bars). Interpolates a strike value into the bar grid.
+    const xForStrike = (strike: number): number => {
+      if (!data.length) return PAD_L;
+      if (strike <= data[0].strike) return xAt(0);
+      if (strike >= data[data.length - 1].strike) return xAt(data.length - 1);
+      const i = data.findIndex(r => r.strike >= strike);
+      if (i <= 0) return xAt(0);
+      const prev = data[i - 1], curr = data[i];
+      const span = curr.strike - prev.strike;
+      const t = span > 0 ? (strike - prev.strike) / span : 0;
+      return xAt(i - 1) + t * gap;
+    };
 
     // ── Y scale: robustMax * 1.10 / yScaleRef ──
     const vals = isCallPut
@@ -240,14 +252,14 @@ export default function GexChart({
       if (yP >= PAD_T - 1 && yP <= PAD_T + cH + 1) {
         ctx.strokeStyle = "rgba(30,48,80,0.45)";
         ctx.beginPath(); ctx.moveTo(PAD_L, yP); ctx.lineTo(PAD_L + cW, yP); ctx.stroke();
-        ctx.fillStyle = "#3d5c7a"; ctx.font = "bold 9px Arial"; ctx.textAlign = "right";
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.font = "bold 11px Arial"; ctx.textAlign = "right";
         ctx.fillText(fmtGex(g),  PAD_L + cW - 3, yP - 2);
       }
       // negative line
       if (yN >= PAD_T - 1 && yN <= PAD_T + cH + 1) {
         ctx.strokeStyle = "rgba(30,48,80,0.45)";
         ctx.beginPath(); ctx.moveTo(PAD_L, yN); ctx.lineTo(PAD_L + cW, yN); ctx.stroke();
-        ctx.fillStyle = "#3d5c7a"; ctx.font = "bold 9px Arial"; ctx.textAlign = "right";
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.font = "bold 11px Arial"; ctx.textAlign = "right";
         ctx.fillText(fmtGex(-g), PAD_L + cW - 3, yN - 2);
       }
     }
@@ -326,35 +338,19 @@ export default function GexChart({
         g.addColorStop(0, c0); g.addColorStop(1, c1);
         ctx.fillStyle = g; ctx.fill();
       };
-      drawOIArea(data.map(r => r.callOI ?? 0), "rgba(144,238,144,0.32)", "rgba(144,238,144,0.06)");
-      drawOIArea(data.map(r => r.putOI  ?? 0), "rgba(255,182,193,0.32)", "rgba(255,182,193,0.06)");
-      const oiPts = data.map((r, i) => ({ x: xAt(i), y: yOI(getOITotal(r)) }));
-      if (oiPts.length > 1) {
-        ctx.save();
-        ctx.strokeStyle = "rgba(0,229,255,0.95)";
-        ctx.lineWidth = 2.2;
-        ctx.shadowColor = "rgba(0,229,255,0.35)";
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.moveTo(oiPts[0].x, oiPts[0].y);
-        for (let i = 0; i < oiPts.length - 1; i++) {
-          const midX = (oiPts[i].x + oiPts[i + 1].x) / 2;
-          const midY = (oiPts[i].y + oiPts[i + 1].y) / 2;
-          ctx.quadraticCurveTo(oiPts[i].x, oiPts[i].y, midX, midY);
-        }
-        ctx.lineTo(oiPts[oiPts.length - 1].x, oiPts[oiPts.length - 1].y);
-        ctx.stroke();
-        ctx.restore();
-        ctx.fillStyle = "rgba(0,229,255,0.70)";
-        ctx.font = "bold 8px Arial";
-        ctx.textAlign = "left";
-        ctx.fillText("+OI", PAD_L + 3, oiPts[0].y - 4);
-      }
+      // Shaded gradient only: green = call OI, red = put OI. No outline line.
+      drawOIArea(data.map(r => r.callOI ?? 0), "rgba(16,185,129,0.40)", "rgba(16,185,129,0.05)");
+      drawOIArea(data.map(r => r.putOI  ?? 0), "rgba(239,68,68,0.40)",  "rgba(239,68,68,0.05)");
     }
 
     // ── DEX line — white, 60% height scale centered on yZero ──
+    // Match the heatmap's DEX column convention:
+    //   OI + Vol mode → netDEX + volNetDEX   (OI-based plus volume-based)
+    //   Vol Only mode → volNetDEX            (volume-based alone)
     if (showDex) {
-      const dexVals = data.map(r => isVol ? (r.volNetDEX ?? 0) : (r.netDEX ?? 0));
+      const dexVals = data.map(r => isVol
+        ? (r.volNetDEX ?? 0)
+        : (r.netDEX ?? 0) + (r.volNetDEX ?? 0));
       const maxDex  = Math.max(...dexVals.map(Math.abs).filter(v => v > 0), 1);
       const yDex    = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6;
       ctx.strokeStyle = "rgba(139,92,246,0.95)";
@@ -403,22 +399,17 @@ export default function GexChart({
 
       if (gexProfile && gexProfile.levels.length > 1) {
         const profMin = data[0].strike, profMax = data[data.length - 1].strike;
-        const strikeRange = profMax - profMin || 1;
-        const barsMaxB = (netMax * 1.10) / yScaleRef.current;
-        const visibleVals: number[] = [];
-        for (let i = 0; i < gexProfile.levels.length; i++) {
-          if (gexProfile.levels[i] >= profMin && gexProfile.levels[i] <= profMax)
-            visibleVals.push(Math.abs(gexProfile.values[i]));
-        }
-        const profMaxAbs = Math.max(...visibleVals, 1e-9) * 1e9;
-        const profScale  = barsMaxB / profMaxAbs;
+        // Plot the profile on the SAME index/bar X axis (via xForStrike) AND the
+        // same dollar Y axis (via yFor). Profile values are in $B, so convert to
+        // raw dollars to match the bar scale. This keeps the curve, its gamma-zero
+        // crossing, the spot line, and the flip line all aligned with the bars.
         const pts: { x: number; y: number }[] = [];
         for (let i = 0; i < gexProfile.levels.length; i++) {
           const lvl = gexProfile.levels[i];
           if (lvl < profMin || lvl > profMax) continue;
           pts.push({
-            x: PAD_L + ((lvl - profMin) / strikeRange) * cW,
-            y: clamp(yFor(gexProfile.values[i] * 1e9 * profScale), PAD_T, PAD_T + cH),
+            x: xForStrike(lvl),
+            y: clamp(yFor(gexProfile.values[i] * 1e9), PAD_T, PAD_T + cH),
           });
         }
         drawSmoothCurve(pts);
@@ -428,29 +419,18 @@ export default function GexChart({
         drawSmoothCurve(pts);
       }
 
-      // ── Gamma flip marker ──
-      let flip = flipPoint ?? gexProfile?.flipPoint ?? null;
-      // Compute flip from zero crossing if not provided
-      if ((flip == null || !Number.isFinite(flip) || flip <= 0) && zeroCrossX !== null) {
-        // Reverse-engineer strike from zeroCrossX position
-        const frac = (zeroCrossX - PAD_L) / cW;
-        const strikeRange = data[data.length - 1].strike - data[0].strike;
-        flip = data[0].strike + frac * strikeRange;
-      }
-      if (flip != null && Number.isFinite(flip) && flip > 0) {
-        const leftIdx = data.findIndex(r => r.strike >= flip);
-        let flipX: number | null = null;
-        if (leftIdx === 0) {
-          flipX = xAt(0);
-        } else if (leftIdx > 0) {
-          const prev = data[leftIdx - 1];
-          const curr = data[leftIdx];
-          const span = curr.strike - prev.strike;
-          const t = span > 0 ? clamp((flip - prev.strike) / span, 0, 1) : 0;
-          flipX = xAt(leftIdx - 1) + t * gap;
-        } else if (data.length && flip >= data[data.length - 1].strike) {
-          flipX = xAt(data.length - 1);
-        }
+      // ── Gamma-zero flip marker ──
+      // Use ONLY the gamma-zero (γ=0) flip point — the spot-sweep BS profile
+      // flip, else the per-strike net-GEX zero crossing. No bar-zero-crossing
+      // fallback (that produced a spurious line on non-0DTE expiries).
+      // Only draw the flip line for the 0DTE expiry.
+      const todayIso = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const is0DTE = !expiry || expiry === todayIso;
+      const usingProfile = !!(gexProfile && gexProfile.levels.length > 1);
+      const flip = (usingProfile ? gexProfile!.flipPoint : null) ?? flipPoint ?? null;
+      if (is0DTE && flip != null && Number.isFinite(flip) && flip > 0) {
+        // Same strike→X mapping as the curve, spot line, and bars.
+        const flipX: number | null = xForStrike(flip);
 
         if (flipX !== null) {
           ctx.save();
@@ -541,7 +521,7 @@ export default function GexChart({
     }
 
     // ── X labels: multiples of 50 only — drawn inside chart near bottom ──
-    ctx.fillStyle = "#4a6a88"; ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.font = "bold 11px Arial"; ctx.textAlign = "center";
     data.forEach((r, i) => {
       if (r.strike % 50 !== 0) return;
       ctx.fillText(r.strike.toLocaleString(), xAt(i), PAD_T + cH - 18);
@@ -564,7 +544,7 @@ export default function GexChart({
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
     ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, tooltip?.row.strike]);
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, tooltip?.row.strike]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
