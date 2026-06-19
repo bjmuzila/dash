@@ -377,24 +377,100 @@ async function probeRest({ ticker, expiry, type, strike }) {
     resolvedStrike: best.strike,
   };
 
-  // Contract-level market data (quote, OI, volume) for the OCC symbol.
+  // Contract-level market data for the OCC symbol. The by-type item carries
+  // quote, trade, summary AND greek fields — group them into the four feed
+  // types the dev page renders, and pass the raw item through so nothing hides.
   const qs = `equity-option[]=${encodeURIComponent(best.occSymbol)}`;
   const json = await ttGet(`/market-data/by-type?${qs}`);
   const it = json?.data?.items?.[0] || null;
   if (!it) {
     return { ...meta, found: false, status: 'no-data', source: 'rest' };
   }
+  const n = firstFiniteNumber;
+  const bid = n(it.bid);
+  const ask = n(it.ask);
+  const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
+
+  const feeds = {
+    Quote: {
+      bid,
+      ask,
+      mid,
+      mark: n(it.mark) || mid,
+      bidSize: n(it['bid-size']),
+      askSize: n(it['ask-size']),
+    },
+    Trade: {
+      last: n(it.last),
+      lastSize: n(it['last-size']),
+      volume: n(it.volume),
+      dayOpen: n(it.open),
+      dayHigh: n(it['day-high-price']) || n(it.high),
+      dayLow: n(it['day-low-price']) || n(it.low),
+    },
+    Summary: {
+      openInterest: n(it['open-interest']),
+      prevClose: n(it['prev-close']),
+      prevCloseDate: it['prev-close-date'] ?? null,
+      close: n(it.close),
+    },
+    Greeks: {
+      iv: n(it['implied-volatility']) || n(it.volatility),
+      delta: n(it.delta),
+      gamma: n(it.gamma),
+      theta: n(it.theta),
+      vega: n(it.vega),
+      rho: n(it.rho),
+    },
+  };
+
+  // Underlying spot — needed for net-greek exposures. Best-effort; if it fails
+  // the exposures fall back to null rather than throwing the whole probe.
+  let spot = null;
+  try {
+    const root = chainTicker(ticker);
+    const INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
+    const param = INDEX_ROOTS.has(root) ? `index=${encodeURIComponent(root)}` : `equity=${encodeURIComponent(root)}`;
+    const uj = await ttGet(`/market-data/by-type?${param}`);
+    const u = uj?.data?.items?.[0];
+    spot = n(u?.mark) || n(u?.last) || n(u?.['prev-close']) || null;
+  } catch { /* spot stays null */ }
+
+  // Per-contract NET GREEKS, using the dashboard's exact conventions
+  // (vex-chex.js / gex-calculator.js):
+  //   GEX  = |gamma| × OI × spot²        (call +, put −)
+  //   DEX  = |delta| × OI × 100 × spot   (call +, put −)
+  //   VEX(vega exposure) = vega × OI × 100 × spot   (call +, put −)
+  //   ThetaExp           = theta × OI × 100 × spot  (sign per dashboard charm split)
+  // Vanna/charm exposure need vanna/charm greeks, which this REST feed does not
+  // provide → reported as null.
+  const isCall = type === 'C';
+  const sign = isCall ? 1 : -1;
+  const oi = n(it['open-interest']);
+  const vol = n(it.volume);
+  const g = feeds.Greeks;
+  const exposures = (spot > 0)
+    ? {
+        spot,
+        oi,
+        volume: vol,
+        gex: sign * Math.abs(g.gamma || 0) * oi * spot * spot,
+        gexVol: sign * Math.abs(g.gamma || 0) * vol * spot * spot,
+        dex: sign * Math.abs(g.delta || 0) * oi * 100 * spot,
+        vex: sign * (g.vega || 0) * oi * 100 * spot,
+        thetaExp: sign * (g.theta || 0) * oi * 100 * spot,
+        vannaExp: null, // no vanna in REST greeks
+        charmExp: null, // no charm in REST greeks
+      }
+    : { spot: null, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
+
   const result = {
     eventType: 'REST',
     eventSymbol: best.streamerSymbol,
     occSymbol: best.occSymbol,
-    bid: firstFiniteNumber(it.bid),
-    ask: firstFiniteNumber(it.ask),
-    mark: firstFiniteNumber(it.mark) || firstFiniteNumber(it.mid),
-    last: firstFiniteNumber(it.last),
-    openInterest: firstFiniteNumber(it['open-interest']),
-    volume: firstFiniteNumber(it.volume),
-    prevClose: firstFiniteNumber(it['prev-close']),
+    feeds,
+    exposures,
+    raw: it, // full unmodified market-data item — every field, nothing dropped
   };
   return { ...meta, found: true, status: 'ready', source: 'rest', result };
 }

@@ -388,25 +388,38 @@ export default function MultGreekPage() {
   // Fetch expirations (from cache or API)
   useEffect(() => {
     const loadExpirations = async () => {
-      // Always fetch fresh from /api/expirations (TT format: { data: { items: [...] } })
+      // Primary: /api/expirations (TT format: { data: { items: [...] } }).
+      // Fallback: derive expirations from the chain itself — the expirations
+      // endpoint can return empty when the proxy's TT session is cold while the
+      // market is closed; the chain endpoint stays populated (0DTE prewarmed).
+      const collect = (items: Record<string, unknown>[]): Expiry[] => {
+        const seen = new Set<string>();
+        const list: Expiry[] = [];
+        items.forEach((item) => {
+          const d = String(item["expiration-date"] ?? "");
+          if (!d || seen.has(d)) return;
+          seen.add(d);
+          const dt = daysTo(d);
+          if (dt < 0) return;
+          const expType = String(item["expiration-type"] ?? "").toLowerCase();
+          const keep = dt <= 7 || expType === "weekly" || expType === "monthly" || new Date(d + "T12:00:00").getDay() === 5;
+          if (!keep) return;
+          list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}` });
+        });
+        return list.sort((a, b) => a.daysTo - b.daysTo);
+      };
+
+      let list: Expiry[] = [];
       const json = await fetch("/api/expirations?ticker=SPX").then(r => r.json()).catch(() => null);
+      if (json?.data?.items?.length) list = collect(json.data.items);
 
-      if (!json) return;
+      if (!list.length) {
+        const cj = await fetch("/api/chains?ticker=SPX&range=all").then(r => r.json()).catch(() => null);
+        const items = (cj?.data?.items ?? []) as Record<string, unknown>[];
+        if (items.length) list = collect(items);
+      }
 
-      const items = json.data?.items ?? [];
-      const seen = new Set<string>();
-      const list: Expiry[] = [];
-      items.forEach((item: Record<string, unknown>) => {
-        const d = String(item["expiration-date"] ?? "");
-        if (!d || seen.has(d)) return;
-        seen.add(d);
-        const dt = daysTo(d);
-        const expType = String(item["expiration-type"] ?? "").toLowerCase();
-        const keep = dt <= 7 || expType === "weekly" || expType === "monthly" || new Date(d).getDay() === 5;
-        if (!keep) return;
-        list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}` });
-      });
-      list.sort((a, b) => a.daysTo - b.daysTo);
+      if (!list.length) return;
       setExpirations(list);
       const dte0 = list.find(e => e.daysTo === 0) ?? list[0];
       if (dte0) { setSelectedExpiry(dte0.date); }
@@ -501,6 +514,22 @@ export default function MultGreekPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExpiry]);
+
+  // Safety net: if expirations never resolved (cold proxy / market closed),
+  // still auto-load the prewarmed 0DTE SPX/SPY/QQQ chains by deriving the
+  // nearest expiration from the chain response itself.
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      if (selectedExpiry || activeExpiryRef.current) return;
+      const cj = await fetch("/api/chains?ticker=SPX&range=all").then(r => r.json()).catch(() => null);
+      const items = (cj?.data?.items ?? []) as { "expiration-date"?: string }[];
+      const dates = items.map(i => String(i["expiration-date"] ?? "")).filter(Boolean).sort();
+      const nearest = dates.find(d => daysTo(d) >= 0) ?? dates[0];
+      if (nearest) { setSelectedExpiry(nearest); }
+    }, 2500);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const doRefresh = useCallback(async () => {
     const exp = activeExpiryRef.current;

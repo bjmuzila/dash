@@ -636,9 +636,13 @@ export default function EstimatedMoves() {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             raw = (raw as any[]).map((e) => e["expiration-date"] || e.expirationDate || e.expiration || e.date || e);
           }
+          // Keep any expiration dated today or later. Compare date-only (ET)
+          // so a same-day expiration isn't dropped just because the cash
+          // session has closed (market-closed / after-hours / weekend).
+          const todayET = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
           return (raw as string[])
             .filter((e) => typeof e === "string")
-            .filter((e) => new Date(e + "T16:00:00") >= new Date())
+            .filter((e) => e.slice(0, 10) >= todayET)
             .sort();
         };
 

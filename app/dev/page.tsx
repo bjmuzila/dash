@@ -14,6 +14,82 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+const FEED_ORDER = ["Quote", "Trade", "Summary", "Greeks"] as const;
+
+function fmt(v: unknown): string {
+  if (v == null || v === "") return "—";
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(+v.toFixed(6));
+  return String(v);
+}
+
+// Compact formatter for big exposure numbers (B/M/K), signed.
+function fmtExp(v: unknown): string {
+  if (v == null || v === "") return "—";
+  if (typeof v !== "number" || !Number.isFinite(v)) return String(v);
+  const a = Math.abs(v);
+  const s = v < 0 ? "-" : "";
+  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(3)}B`;
+  if (a >= 1e6) return `${s}${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(1)}K`;
+  return `${s}${a.toFixed(2)}`;
+}
+
+const EXPOSURE_ROWS: { key: string; label: string }[] = [
+  { key: "gex", label: "GEX (γ·OI·S²)" },
+  { key: "dex", label: "DEX (δ·OI·100·S)" },
+  { key: "vex", label: "VEX (vega·OI·100·S)" },
+  { key: "thetaExp", label: "Theta exp" },
+  { key: "gexVol", label: "GEX (vol)" },
+  { key: "vannaExp", label: "Vanna exp" },
+  { key: "charmExp", label: "Charm exp" },
+];
+
+// 5th panel: net-greek exposures for the single contract.
+function ExposurePanel({ data }: { data: Record<string, unknown> | undefined }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#ffb300", textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Net Greeks</div>
+      {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
+      {data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {EXPOSURE_ROWS.map(({ key, label }) => {
+            const v = data[key];
+            const na = v == null;
+            return (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
+                <span style={{ color: C.label }}>{label}</span>
+                <span style={{ color: na ? "#5d7388" : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
+              </div>
+            );
+          })}
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 12, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+            <span>spot</span><span>{fmt(data.spot)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One feed-type panel: a titled card listing its key/value rows.
+function FeedPanel({ name, data }: { name: string; data: Record<string, unknown> | undefined }) {
+  const entries = data ? Object.entries(data) : [];
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>{name}</div>
+      {entries.length === 0 && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {entries.map(([k, v]) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
+            <span style={{ color: C.label }}>{k}</span>
+            <span style={{ color: v == null || v === "" ? "#5d7388" : "#cfe", fontWeight: 700 }}>{fmt(v)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function DevPage() {
   const [ticker, setTicker] = useState("SPXW");
   const [side, setSide] = useState<"CALL" | "PUT">("PUT");
@@ -94,9 +170,12 @@ export default function DevPage() {
 
       if (d?.found) {
         setResult(d.result);
-        setStatusMsg(`REST quote/OI/volume${snapNote}`);
+        setStatusMsg(`REST — all feeds${snapNote}`);
         if (d?.snapped) log("warn", `↪ snapped ${d?.requestedStrike} → ${d?.resolvedStrike} (${d?.resolvedSymbol})`);
-        log("ok", `✔ OI=${d?.result?.openInterest ?? "—"} vol=${d?.result?.volume ?? "—"} mark=${d?.result?.mark ?? "—"}`);
+        const f = d?.result?.feeds || {};
+        const ex = d?.result?.exposures || {};
+        log("ok", `✔ OI=${f?.Summary?.openInterest ?? "—"} vol=${f?.Trade?.volume ?? "—"} mark=${f?.Quote?.mark ?? "—"} iv=${f?.Greeks?.iv ?? "—"}`);
+        log("ok", `Σ GEX=${fmtExp(ex?.gex)} DEX=${fmtExp(ex?.dex)} VEX=${fmtExp(ex?.vex)} spot=${ex?.spot ?? "—"}`);
       } else if (d?.error) {
         setError(d.error);
         log("err", `✖ ${d.error}`);
@@ -184,12 +263,22 @@ export default function DevPage() {
         </Field>
       </div>
 
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>Result</div>
-        <pre style={{ margin: 0, fontSize: 14, fontFamily: "monospace", color: "#cfe", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+      {/* All feed types at once */}
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {FEED_ORDER.map((name) => {
+          const feeds = (result as { feeds?: Record<string, Record<string, unknown>> } | null)?.feeds;
+          return <FeedPanel key={name} name={name} data={feeds?.[name]} />;
+        })}
+        <ExposurePanel data={(result as { exposures?: Record<string, unknown> } | null)?.exposures} />
+      </div>
+
+      {/* Raw market-data item — every field, nothing dropped */}
+      <details style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
+        <summary style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em", cursor: "pointer" }}>Raw response</summary>
+        <pre style={{ margin: "10px 0 0", fontSize: 13, fontFamily: "monospace", color: "#cfe", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {result != null ? JSON.stringify(result, null, 2) : "—"}
         </pre>
-      </div>
+      </details>
 
       {/* Log panel */}
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
