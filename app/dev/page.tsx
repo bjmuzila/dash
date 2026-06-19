@@ -84,7 +84,14 @@ export default function DevPage() {
           setResult(d.result);
           setWaited(Number.isFinite(d?.waitedMs) ? d.waitedMs : null);
           setElapsed(Math.round(performance.now() - t0));
-          setStatusMsg(d.source === "active" ? "Live (active chart window)" : d.source === "probe" ? "Filled via on-demand subscription" : "Cached");
+          if (d.source === "stale") {
+            const at = Number(d?.staleAt);
+            const when = Number.isFinite(at) ? new Date(at).toLocaleString() : "earlier";
+            const ageMin = Number.isFinite(d?.staleAgeMs) ? Math.round(d.staleAgeMs / 60000) : null;
+            setStatusMsg(`⚠ Stale — last seen ${when}${ageMin != null ? ` (${ageMin}m ago)` : ""}. Market likely closed; no live feed.`);
+          } else {
+            setStatusMsg(d.source === "active" ? "Live (active chart window)" : d.source === "probe" ? "Filled via on-demand subscription" : "Cached");
+          }
           break;
         }
         if (performance.now() - t0 > DEADLINE_MS) {
@@ -144,7 +151,7 @@ export default function DevPage() {
       </div>
 
       {error && <div style={{ color: "#ef4444", fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{error}</div>}
-      {statusMsg && !error && <div style={{ color: loading ? "#ffb300" : C.cyan, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{statusMsg}</div>}
+      {statusMsg && !error && <div style={{ color: loading || statusMsg.startsWith("⚠") ? "#ffb300" : C.cyan, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{statusMsg}</div>}
 
       {/* Readout */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>

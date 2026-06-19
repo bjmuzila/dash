@@ -112,7 +112,7 @@ async function main() {
   // Forward-declared so the request handler can reference the live proxy.
   let proxy = null;
 
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       // Idle control (POST /proxy/idle { idle: true|false }) — toggles the feed.
       const { pathname } = new URL(req.url || '/', 'http://localhost');
@@ -142,7 +142,7 @@ async function main() {
           sendJson(res, 503, { error: 'proxy not ready', symbol, feed, elapsedMs: Date.now() - t0 });
           return;
         }
-        const probe = proxy.probeSymbol(symbol, feed);
+        const probe = await proxy.probeSymbol(symbol, feed);
         sendJson(res, 200, { ...probe, symbol, elapsedMs: Date.now() - t0 });
         return;
       }

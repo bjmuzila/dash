@@ -53,6 +53,9 @@ const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WIND
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
+// How long to wait for a LIVE event before the probe serves a remembered
+// (stale) value. Keeps fresh data winning during RTH; falls back overnight.
+const PROBE_STALE_GRACE_MS = Number(process.env.PROBE_STALE_GRACE_MS || 4000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
 // Hold the first GEX broadcast until OI backfill covers this fraction of active
 // strikes — avoids rendering a half-filled chart while REST backfill completes.
@@ -721,6 +724,18 @@ class TastytradeProxy {
     const ps = this.probeSubs.get(sym);
     if (ps && ps.gotAt == null) ps.gotAt = Date.now();
 
+    // Persist the last event per (symbol, feedType) so the /dev probe can recall
+    // a value overnight when the market is closed and no new events arrive.
+    if (ev.eventType) {
+      // Defer one tick so the per-branch map writes below have landed, then
+      // store the normalized feed object the probe will read back.
+      const evType = ev.eventType;
+      queueMicrotask(() => {
+        const normalized = this._readFeed(sym, evType);
+        if (normalized) lastEventStore.record(sym, evType, normalized);
+      });
+    }
+
     if (ev.eventType === 'Quote') {
       const bid = Number(ev.bidPrice);
       const ask = Number(ev.askPrice);
@@ -1029,7 +1044,7 @@ class TastytradeProxy {
    * subscribed, subscribes on demand and returns a pending status the /dev page
    * can poll. Reports how long data took to arrive (waitedMs).
    */
-  probeSymbol(builtSymbol, feedType = 'Greeks') {
+  async probeSymbol(builtSymbol, feedType = 'Greeks') {
     const sym = String(builtSymbol || '').trim();
     const ft = String(feedType || 'Greeks');
     const active = this._isActiveSub(sym);
@@ -1042,10 +1057,32 @@ class TastytradeProxy {
       return { found: true, status: 'ready', feedType: ft, result, waitedMs, source: active ? 'active' : (sub ? 'probe' : 'cache') };
     }
 
-    // Not cached yet — subscribe on demand if needed and report pending.
+    // Subscribe on demand so a live value can fill in if the feed is open.
     if (!active) this._ensureProbeSub(sym);
     const since = this.probeSubs.get(sym)?.since ?? Date.now();
-    return { found: false, status: 'pending', feedType: ft, result: null, waitedMs: Date.now() - since, ttlMs: PROBE_TTL_MS };
+    const waited = Date.now() - since;
+
+    // Give the on-demand sub a short grace window to deliver a LIVE event before
+    // we fall back to a remembered value. During RTH this lets fresh data win;
+    // overnight (feed closed) nothing arrives and we serve the stale value.
+    if (waited >= PROBE_STALE_GRACE_MS) {
+      const stale = lastEventStore.getMem(sym, ft) || await lastEventStore.getDb(sym, ft);
+      if (stale && stale.result != null) {
+        return {
+          found: true,
+          status: 'stale',
+          feedType: ft,
+          result: stale.result,
+          waitedMs: 0,
+          source: 'stale',
+          staleAt: stale.seenAt,
+          staleAgeMs: Date.now() - stale.seenAt,
+        };
+      }
+    }
+
+    // Still within grace, or nothing cached anywhere — report pending; poll on.
+    return { found: false, status: 'pending', feedType: ft, result: null, waitedMs: waited, ttlMs: PROBE_TTL_MS };
   }
 
   stop() {

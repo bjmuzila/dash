@@ -150,8 +150,31 @@ function buildExpiryList(payload: unknown): Expiry[] {
   return list.sort((a, b) => a.daysTo - b.daysTo);
 }
 
+/** ET hour (0–23) right now. */
+function etHourNow(): number {
+  const h = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", hour12: false,
+  }).formatToParts(new Date()).find((p) => p.type === "hour")?.value ?? "0";
+  // Intl can emit "24" for midnight in some runtimes — normalize to 0.
+  return Number(h) % 24;
+}
+
+/**
+ * Pick the active expiry for the Exposure Stack.
+ *
+ * During the session we want 0DTE (today's contract). But after the 0DTE
+ * settles at 5pm ET it's dead, so from 17:00 ET onward we roll forward to the
+ * next non-expired contract instead of staying pinned to today's date. The
+ * list is pre-sorted ascending by daysTo, so "first expiry that is still live"
+ * falls out naturally.
+ */
 function getPreferredExpiry(list: Expiry[]): Expiry | undefined {
-  return list.find((exp) => exp.daysTo === 0) ?? list[0];
+  if (!list.length) return undefined;
+  const rolled = etHourNow() >= 17;
+  // After 5pm ET, treat today's (and any past) expiry as expired and roll on.
+  const live = list.filter((exp) => (rolled ? exp.daysTo >= 1 : exp.daysTo >= 0));
+  const pool = live.length ? live : list;
+  return pool.find((exp) => exp.daysTo === (rolled ? 1 : 0)) ?? pool[0];
 }
 
 function sortCandles(rows: EsCandleRecord[]) {

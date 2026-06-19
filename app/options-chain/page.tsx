@@ -196,10 +196,15 @@ interface StrikeRow {
 }
 
 export default function OptionsChainPage() {
-  const expiries = useMemo(() => buildExpiries(), []);
+  // Fallback calendar list (used only until/if the per-ticker expirations
+  // fetch resolves). Real listings come from /api/expirations so we never
+  // offer a date the ticker doesn't actually trade (e.g. NVDA has no Monday
+  // weeklies — picking one returned an empty chain).
+  const fallbackExpiries = useMemo(() => buildExpiries(), []);
+  const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>(fallbackExpiries);
   const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
-  const [selectedExpiry, setSelectedExpiry] = useState(expiries[0]?.value ?? "");
+  const [selectedExpiry, setSelectedExpiry] = useState(fallbackExpiries[0]?.value ?? "");
   const [displayPercent, setDisplayPercent] = useState<number>(10);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [intensity, setIntensity] = useState(0.4);
@@ -215,6 +220,12 @@ export default function OptionsChainPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const loadTokenRef = useRef(0);
   const subscribedSymbolsRef = useRef<string[]>([]);
+  // Set by GO when the ticker changes; consumed by the expirations effect to
+  // load the chain only after a valid expiry for the new ticker is resolved.
+  const pendingGoRef = useRef(false);
+  // Live mirror of selectedExpiry so the expirations effect (which only re-runs
+  // on ticker change) always validates against the user's current choice.
+  const selectedExpiryRef = useRef("");
 
   // Build strikes from chain JSON
   const buildStrikes = (expGroups: unknown[]): StrikeRow[] => {
@@ -343,9 +354,21 @@ export default function OptionsChainPage() {
   const doGo = useCallback(() => {
     if (!tickerInput || !selectedExpiry) return;
     const ticker = (tickerInput || "SPX").toUpperCase();
+    const tickerChanged = ticker !== activeTicker;
     setActiveTicker(ticker);
-    loadChain(ticker, selectedExpiry);
-  }, [tickerInput, selectedExpiry, loadChain]);
+    // If the ticker changed, the expirations effect will refetch this ticker's
+    // real listings and snap selectedExpiry to a valid date; the pendingGo flag
+    // makes that effect fire the chain load once the expiry is confirmed valid.
+    // This avoids loading against a date the new ticker may not list (e.g. a
+    // Monday weekly that exists for SPX but not NVDA).
+    if (tickerChanged) {
+      pendingGoRef.current = true;
+    } else {
+      loadChain(ticker, selectedExpiry);
+    }
+  }, [tickerInput, selectedExpiry, activeTicker, loadChain]);
+
+  useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
 
   // Auto-load SPX on mount
   useEffect(() => {
@@ -354,6 +377,61 @@ export default function OptionsChainPage() {
       loadChain("SPX", defaultExpiry);
     }
   }, []);
+
+  // Fetch the ticker's REAL listed expirations whenever the active ticker
+  // changes. Replaces the fabricated calendar list so the dropdown only ever
+  // offers dates the symbol actually trades.
+  useEffect(() => {
+    let cancelled = false;
+    const ticker = (activeTicker || "SPX").toUpperCase();
+
+    (async () => {
+      try {
+        const json = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        const items: Array<Record<string, unknown>> = json?.data?.items ?? [];
+        if (cancelled || !items.length) return;
+
+        const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const seen = new Set<string>();
+        const list = items
+          .map((it) => String(it["expiration-date"] ?? ""))
+          .filter((d) => d && !seen.has(d) && (seen.add(d), true))
+          .sort()
+          .map((value) => {
+            const dt = new Date(value + "T12:00:00");
+            const mm = String(dt.getMonth() + 1).padStart(2, "0");
+            const dd = String(dt.getDate()).padStart(2, "0");
+            return { value, label: `${dayNames[dt.getDay()]}, ${mm}-${dd}` };
+          });
+        if (!list.length) return;
+
+        setExpiries(list);
+        // If the current selection isn't a real listing for this ticker, snap
+        // to the nearest valid one (prefer today's 0DTE when present).
+        const today = etDateKey(etToday());
+        const cur = selectedExpiryRef.current;
+        const validExpiry = list.some((e) => e.value === cur)
+          ? cur
+          : (list.find((e) => e.value === today)?.value ?? list[0].value);
+        setSelectedExpiry(validExpiry);
+
+        // A ticker-change GO is waiting on a valid expiry — load the chain now.
+        if (pendingGoRef.current) {
+          pendingGoRef.current = false;
+          loadChain(ticker, validExpiry);
+        }
+      } catch {
+        /* keep fallback calendar list */
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // selectedExpiry intentionally omitted: we read its latest value to decide
+    // whether to keep it, but the effect should only re-run on ticker change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTicker, loadChain]);
 
   const [underlyingPrice, setUnderlyingPrice] = useState(0);
 
