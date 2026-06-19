@@ -211,12 +211,14 @@ export default function GexChart({
       return xAt(i - 1) + t * gap;
     };
 
-    // ── Y scale: robustMax * 1.10 / yScaleRef ──
+    // ── Y scale: robustMax * 1.25 / yScaleRef ──
+    // 1.25 headroom keeps the tallest bar at ~80% of the half-height so it never
+    // touches the top/bottom border (and the MVC label clears the frame edge).
     const vals = isCallPut
       ? data.flatMap(r => [Math.abs(getCall(r)), Math.abs(getPut(r))])
       : data.map(r => Math.abs(getNet(r)));
     const netMax = Math.max(...vals.filter(v => v > 0), 1);
-    const maxG   = (netMax * 1.10) / yScaleRef.current;
+    const maxG   = (netMax * 1.25) / yScaleRef.current;
     // yFor maps a GEX value to canvas Y — 0 maps to yZero, +maxG maps to PAD_T
     const yFor   = (v: number) => yZero - (v / maxG) * (cH / 2);
 
@@ -399,20 +401,25 @@ export default function GexChart({
 
       if (gexProfile && gexProfile.levels.length > 1) {
         const profMin = data[0].strike, profMax = data[data.length - 1].strike;
-        // Plot the profile on the SAME index/bar X axis (via xForStrike) AND the
-        // same dollar Y axis (via yFor). Profile values are in $B, so convert to
-        // raw dollars to match the bar scale. This keeps the curve, its gamma-zero
-        // crossing, the spot line, and the flip line all aligned with the bars.
-        const pts: { x: number; y: number }[] = [];
+        // Collect the profile points within the visible strike window first so we
+        // can scale the curve to ITS OWN magnitude. The cumulative spot-sweep
+        // profile is far larger than per-strike net GEX, so plotting it on the
+        // bar's yFor() axis saturates it into a flat-railed step. Instead give it
+        // an independent symmetric Y scale centered on the zero line.
+        const visible: { x: number; v: number }[] = [];
         for (let i = 0; i < gexProfile.levels.length; i++) {
           const lvl = gexProfile.levels[i];
           if (lvl < profMin || lvl > profMax) continue;
-          pts.push({
-            x: xForStrike(lvl),
-            y: clamp(yFor(gexProfile.values[i] * 1e9), PAD_T, PAD_T + cH),
-          });
+          visible.push({ x: xForStrike(lvl), v: gexProfile.values[i] });
         }
-        drawSmoothCurve(pts);
+        if (visible.length > 1) {
+          // Symmetric scale around 0 so the zero-crossing (flip) stays on yZero.
+          const profAbsMax = Math.max(...visible.map(p => Math.abs(p.v)), 1e-9);
+          // Use ~92% of the half-height so the curve breathes inside the frame.
+          const yProf = (v: number) => yZero - (v / profAbsMax) * (cH / 2) * 0.92;
+          const pts = visible.map(p => ({ x: p.x, y: clamp(yProf(p.v), PAD_T, PAD_T + cH) }));
+          drawSmoothCurve(pts);
+        }
       } else {
         // Fallback: per-strike smooth curve
         const pts = data.map((r, i) => ({ x: xAt(i), y: clamp(yFor(getNet(r)), PAD_T, PAD_T + cH) }));
