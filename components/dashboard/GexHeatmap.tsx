@@ -45,6 +45,8 @@ interface Props {
   intensity?: number;
   window?: number;
   rollingNetGexByStrike?: Record<number, number>;
+  /** Fired when a strike row/cell is clicked. Carries the full ChainRow + click pos. */
+  onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
 }
 
 export default function GexHeatmap({
@@ -55,12 +57,14 @@ export default function GexHeatmap({
   intensity = 1.4,
   window: win = 20,
   rollingNetGexByStrike = {},
+  onStrikeClick,
 }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const useVol = dataMode === "vol-only";
 
   const denseChain = densifyChainRows(chain);
+  const rowByStrike = new Map(denseChain.map(r => [r.strike, r]));
   const allStrikes = [...new Set(denseChain.map(r => r.strike))].sort((a, b) => b - a);
   const atmStrike = spotPrice > 0
     ? allStrikes.reduce((best, s) => Math.abs(s - spotPrice) < Math.abs(best - spotPrice) ? s : best, allStrikes[0] ?? spotPrice)
@@ -204,6 +208,10 @@ export default function GexHeatmap({
             <div
               key={row.strike}
               data-strike={row.strike}
+              onClick={onStrikeClick ? (e) => {
+                const full = rowByStrike.get(row.strike);
+                if (full) onStrikeClick(full, { x: e.clientX, y: e.clientY });
+              } : undefined}
               style={{
                 display: "grid",
                 gridTemplateColumns: "68px repeat(5, 1fr)",
@@ -212,6 +220,7 @@ export default function GexHeatmap({
                 outlineOffset: isATM ? "-1px" : "0",
                 position: "relative",
                 zIndex: isATM ? 1 : 0,
+                cursor: onStrikeClick ? "pointer" : "default",
               }}
             >
               <div style={{

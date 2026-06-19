@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-06-19 (session 16) — Footprint page: live ES big-order bubbles + delta profile
+
+New **Footprint → Big Orders** page (`/footprint`) showing real-time large prints on the front ES future (ESU6) as a Big Trade Bubbles lane + a Delta Profile lane, fed by a new server-v2 trade-classification pipeline. Includes an offline seed-replay path for reviewing a past session's transcribed time & sales.
+
+### Server-v2 (live ES big-order pipeline)
+- **`server-v2/proxy-tastytrade.js`** — capture the front-ES bid/ask (`this.esQuote`) instead of discarding it; classify each ES `Trade` tick as aggressive **buy** (≥ ask) / **sell** (≤ bid) via `_recordEsPrint()`. Ring buffer of big prints (≥`ES_BIG_TRADE_MIN`=25 contracts, cap 80) + per-minute signed-delta buckets; flushed to state every 1s by `_flushEsFootprint()` (`seeded:false`). New env tunables `ES_BIG_TRADE_MIN`, `ES_BIG_TRADES_MAX`, `ES_DELTA_BUCKET_MS`, `ES_DELTA_BUCKETS_MAX`. Timer started/stopped alongside the candle flush (incl. idle path).
+- **`server-v2/state/market-state.js`** — new `esBigTrades` state key.
+- **`server-v2/websocket-server.js`** — `esBigTrades` added to the snapshot + broadcast on change (new `esBigTrades` WS message).
+- **`server-v2/es-seed-loader.js`** (new) — `ES_SEED=1` loads a transcribed T&S file, rebuilds ET timestamps + big-print/delta payload with the same thresholds, and pushes to `esBigTrades`; re-applies every 10s and backs off once the live feed publishes real prints. Wired into `server-v2/server-with-proxy.js`.
+- **`server-v2/data/es-seed-ts.json`** (new) — ~165 transcribed ESU6 prints (session Jun-18), side from tape color.
+
+### Client
+- **`hooks/useEsBigTrades.ts`** (new) — connects `/ws/gex`, ingests `esBigTrades` snapshot + live messages; exposes `trades`, `delta`, `seeded`, `connected`.
+- **`app/footprint/page.tsx`** (new) — two canvas lanes with a shared 30-min time axis:
+  - **Big Trade Bubbles** — one bubble per 1-minute bar, aggregated by total volume, colored by dominant side. Solid diagonal-gradient orbs (green buys / red sells) with a soft glow; **session-wide** size reference so a bubble means the same in any window; non-overlap radius cap; small gray dot on every empty minute; hover tooltip (buy/sell split, net, count, time).
+  - **Delta Profile** — per-minute cumulative net bars, **session-wide** height reference, active (forming) minute highlighted.
+  - 30-minute viewport with click-drag to pan history + Live/Jump-to-latest button; SEEDED/REPLAY badges; accent-colored stat cards (net delta, buy/sell orders, biggest print).
+- **`components/shared/Sidebar.tsx`** — added **Big Orders** (`/footprint`) under the Footprint nav group.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection; confirm with `npm run build`.
+- Entry point is `node server-v2/server-with-proxy.js`; requires a restart for the proxy changes. Live bubbles need an active ES quote (RTH); use `ES_SEED=1` (PowerShell: `$env:ES_SEED=1; node server-v2/server-with-proxy.js`) to replay the seed after hours.
+
 ## 2026-06-19 (session 15) — Market Quality Terminal (new Insights tab) + live VIX data + VIX regime interpretation
 
 Added a **Market Quality Terminal** as its own Insights tab, wired the VIX/Vol meters to live data, and replaced the VIX Interpretation block with a regime-based if-this-then-that engine.

@@ -19,6 +19,8 @@ interface GexChartProps {
   showDex?:       boolean;
   showFlipCurve?: boolean;
   expiry?:        string;
+  /** Fired when a bar/strike is clicked. Carries the row + click position. */
+  onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
 }
 
 // ─── Padding — matches vanilla exactly ────────────────────────────────────────
@@ -120,6 +122,7 @@ export default function GexChart({
   showOI     = false,
   showDex    = false,
   showFlipCurve = false,
+  onStrikeClick,
 }: GexChartProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -138,6 +141,8 @@ export default function GexChart({
   } | null>(null);
   // Tooltip
   const [tooltip, setTooltip] = useState<{ x: number; y: number; row: ChainRow } | null>(null);
+  // Track pointer-down position so a drag (pan) isn't treated as a click.
+  const downPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // ── draw ───────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -166,8 +171,8 @@ export default function GexChart({
     }
 
     // ── Viewport ──
-    // Target ~$600 visible range regardless of strike spacing
-    const targetRange = 600;
+    // Target ~$200 visible range ($100 either side of ATM) regardless of spacing
+    const targetRange = 200;
     const dynCount    = Math.max(MIN_COUNT, Math.round(targetRange / detectedStep) + 1);
     const vp = vpRef.current;
     // On first draw (start===null), set count to match detected step
@@ -582,7 +587,7 @@ export default function GexChart({
   useEffect(() => {
     if (!chain.length) return;
     const { rows, step } = densify(chain, spotPrice);
-    const initCount = Math.max(MIN_COUNT, Math.round(600 / step) + 1);
+    const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
     vpRef.current    = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
     draw();
@@ -610,6 +615,7 @@ export default function GexChart({
   // ── Pointer down ──
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    downPosRef.current = { x: e.clientX, y: e.clientY };
     const vp = vpRef.current;
     const W  = containerRef.current?.clientWidth ?? 1;
     dragRef.current = {
@@ -663,10 +669,30 @@ export default function GexChart({
     setTooltip(null);
   }, []);
 
+  // ── Click: open strike detail (only on a genuine click, not a pan-drag) ──
+  const onClick = useCallback((e: React.MouseEvent) => {
+    if (!onStrikeClick) return;
+    const down = downPosRef.current;
+    if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const { rows } = densify(chain, spotPrice);
+    if (!rows.length) return;
+    const vp   = vpRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    if (mx < PAD_L || mx > rect.width - PAD_R) return;
+    const visible = rows.slice(vp.start ?? 0, (vp.start ?? 0) + vp.count);
+    const g2  = (rect.width - PAD_L - PAD_R) / visible.length;
+    const idx = clamp(Math.floor((mx - PAD_L) / g2), 0, visible.length - 1);
+    const picked = visible[idx];
+    if (picked) onStrikeClick(picked, { x: e.clientX, y: e.clientY });
+  }, [onStrikeClick, chain, spotPrice]);
+
   // ── Double-click: re-center on ATM + reset y-scale ──
   const onDblClick = useCallback(() => {
     const { rows, step } = densify(chain, spotPrice);
-    const initCount = Math.max(MIN_COUNT, Math.round(600 / step) + 1);
+    const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
     vpRef.current     = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
     draw();
@@ -681,6 +707,7 @@ export default function GexChart({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerUp}
+      onClick={onClick}
       onDoubleClick={onDblClick}
     >
       <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />

@@ -47,6 +47,10 @@ const state = {
   // 5-minute ES futures candles (raw OHLCV bars, ~15 sessions). Client computes
   // relative-volume baselines + IB levels from these.
   esCandles: [],
+  // Front ES future big-order footprint: { symbol, updatedAt, trades[], delta[] }.
+  // trades = recent large prints (size + buy/sell aggressor); delta = per-minute
+  // signed-volume buckets. Powers the Footprint page bubbles + delta profile.
+  esBigTrades: null,
   // Feed health
   status: {
     ttAuthenticated: false,

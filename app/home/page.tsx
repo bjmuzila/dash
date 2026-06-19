@@ -5,6 +5,8 @@ import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
+import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
+import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import FlowTape from "@/components/dashboard/FlowTape";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
@@ -318,6 +320,10 @@ export default function HomePage() {
   const [showOI, setShowOI] = useState(false);
   const [showDex, setShowDex] = useState(false);
   const [showFlipCurve, setShowFlipCurve] = useState(false);
+  // Strike-detail popup: selected strike, click anchor, and which popup style to
+  // preview (card | drawer | modal — toggled in the toolbar so all 3 can be tested).
+  const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
+  const [popupStyle, setPopupStyle] = useState<PopupStyle>("card");
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const heatmapContainerRef = useRef<HTMLDivElement>(null);
   // Snapshot-to-DB button state for the heatmap header.
@@ -626,7 +632,7 @@ export default function HomePage() {
 
   // Column maxes + top-3 magnitudes for intensity coloring (per visible column).
   const heatmapColorMeta = useMemo(() => {
-    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal", "rollingVal"] as const;
+    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal"] as const;
     const max: Record<string, number> = {};
     const top3: Record<string, number[]> = {};
     for (const c of cols) {
@@ -680,6 +686,16 @@ export default function HomePage() {
     const id = setInterval(() => setNetGexDisplay(netGexLiveRef.current), 1000);
     return () => clearInterval(id);
   }, []);
+  // Point-in-time net GEX baselines (open / 5 / 15 / 30 min) for the popup's
+  // rolling-difference boxes. Only polls while a strike is selected.
+  const strikeBaselines = useStrikeGexHistory(selectedStrike ? selectedExpiry : "", [5, 15, 30]);
+
+  // Strike → full ChainRow lookup so the heatmap rows can open the same popup.
+  const chartRowByStrike = useMemo(
+    () => new Map(chartRows.map((r) => [r.strike, r])),
+    [chartRows]
+  );
+
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   // MVC = strike carrying the peak |net GEX| (most valuable concentration).
   // Must follow the active dataMode: Vol-Only uses volume-based net GEX, otherwise
@@ -743,6 +759,8 @@ export default function HomePage() {
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
                 onRefresh={handleRefresh}
+                popupStyle={popupStyle}
+                onPopupStyle={(v) => setPopupStyle(v as PopupStyle)}
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
@@ -762,6 +780,7 @@ export default function HomePage() {
                     showDex={showDex}
                     showFlipCurve={showFlipCurve}
                     expiry={selectedExpiry}
+                    onStrikeClick={(row, pos) => setSelectedStrike({ row, pos })}
                   />
                 ) : (
                   <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "#05080d" }}>
@@ -808,59 +827,59 @@ export default function HomePage() {
 
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 6, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "6px 16px", borderRadius: 6, fontFamily: "monospace", fontSize: 20, fontWeight: 700, color: "#fff", letterSpacing: "0.04em" }}>{etTime}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px, 1.4vw, 20px)", marginBottom: 6, flexWrap: "nowrap", whiteSpace: "nowrap", minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "clamp(5px, 0.7vw, 10px)", flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(10px, 1.1vw, 16px)", fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "clamp(3px,0.4vw,6px) clamp(8px,1.1vw,16px)", borderRadius: 6, fontFamily: "monospace", fontSize: "clamp(12px, 1.4vw, 20px)", fontWeight: 700, color: "#fff", letterSpacing: "0.04em" }}>{etTime}</div>
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
-                  {vixPct != null && <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.4vw,6px)", flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(9px, 0.9vw, 13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(11px, 1.25vw, 18px)", fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                  {vixPct != null && <span style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.85vw, 12px)", fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
-                  {esuPct != null && <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.4vw,6px)", flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(9px, 0.9vw, 13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(11px, 1.25vw, 18px)", fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
+                  {esuPct != null && <span style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.85vw, 12px)", fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.4vw,6px)", flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(9px, 0.9vw, 13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(11px, 1.25vw, 18px)", fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(9px, 1vw, 14px)", fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "clamp(8px,1.2vw,18px)", flexWrap: "nowrap", whiteSpace: "nowrap", justifyContent: "space-between", minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "clamp(8px,1.2vw,18px)", flexShrink: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
+                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
                   </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
+                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
                   </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
+                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
                   </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
+                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,0.7vw,10px)", marginLeft: "auto", flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)" }}>
+                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>
                   <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
-                    style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer" }}>
+                    style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: "clamp(8px,0.78vw,11px)", fontWeight: 700, padding: "4px clamp(6px,0.9vw,12px)", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
                     {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
                   </button>
                 </div>
@@ -905,16 +924,15 @@ export default function HomePage() {
                 <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "10%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "22.5%" }} />
+                    <col style={{ width: "22.5%" }} />
+                    <col style={{ width: "22.5%" }} />
+                    <col style={{ width: "22.5%" }} />
                   </colgroup>
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX", "30 Min Rolling Net GEX"].map((header, index) => (
-                        <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
+                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX"].map((header, index) => (
+                        <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: "#fff" }}>{header}</th>
                       ))}
                     </tr>
                   </thead>
@@ -946,7 +964,7 @@ export default function HomePage() {
                           ? { borderTop: atmBorder, borderBottom: atmBorder, ...(colIdx === 5 ? { borderRight: atmBorder } : {}) }
                           : {};
                         return (
-                          <td key={colIdx} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: "#fff" }}>
+                          <td key={colIdx} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
                             {text}
                           </td>
                         );
@@ -956,10 +974,17 @@ export default function HomePage() {
                         <React.Fragment key={rowKey}>
                           {showDivider && (
                             <tr>
-                              <td colSpan={6} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
+                              <td colSpan={5} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
                             </tr>
                           )}
-                          <tr className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
+                          <tr
+                            className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
+                            style={{ ...rowStyle, cursor: "pointer" }}
+                            onClick={(e) => {
+                              const full = chartRowByStrike.get(row.strike);
+                              if (full) setSelectedStrike({ row: full, pos: { x: e.clientX, y: e.clientY } });
+                            }}
+                          >
                             <td style={{ padding: "0 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder, borderLeft: atmBorder } : {}) }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {row.strike}
@@ -971,7 +996,6 @@ export default function HomePage() {
                             {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
                             {dataCell(row.dex, row.dexVal, "dexVal", 3)}
                             {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
-                            {dataCell(row.rolling, row.rollingVal, "rollingVal", 5)}
                           </tr>
                         </React.Fragment>
                       );
@@ -983,6 +1007,18 @@ export default function HomePage() {
           </div>
         </div>
       </main>
+
+      {/* Strike detail popup — style switchable via the toolbar toggle. */}
+      {selectedStrike && (
+        <StrikeDetailPopup
+          row={selectedStrike.row}
+          spotPrice={chartSpot}
+          baselines={strikeBaselines}
+          popupStyle={popupStyle}
+          anchor={selectedStrike.pos}
+          onClose={() => setSelectedStrike(null)}
+        />
+      )}
 
       <style>{`
         .grad-divider-b {

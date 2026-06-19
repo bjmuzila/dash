@@ -34,6 +34,7 @@ const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations } = require('./proxy-tastytrade');
+const { startEsSeed } = require('./es-seed-loader');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -238,6 +239,9 @@ async function main() {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
     // In-process MVC auto-collector: writes a snapshot every 30m during RTH.
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
+    // Optional: seed the Footprint page from a transcribed ES T&S file when the
+    // live ES feed is quiet (after hours). Enabled with ES_SEED=1.
+    startEsSeed({ log: console });
   });
 
   const shutdown = () => {

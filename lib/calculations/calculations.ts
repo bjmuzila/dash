@@ -23,6 +23,9 @@ export interface ChainRow {
   netVolVanna?: number;
   bid?: number;
   ask?: number;
+  // Per-side contract price (mark, else bid/ask mid) for the strike-detail popup.
+  callMark?: number;
+  putMark?: number;
   type?: "call" | "put";
   // For GEX profile sweep (Black-Scholes gamma recomputed at each spot level)
   callIV?: number;  // as decimal (0.20 = 20%)

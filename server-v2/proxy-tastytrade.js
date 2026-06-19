@@ -52,6 +52,12 @@ const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
 const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
+// ES footprint: a print must be at least this many contracts to count as a "big
+// order" bubble. Delta buckets aggregate signed contracts over BUCKET_MS windows.
+const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 25);
+const ES_BIG_TRADES_MAX = Number(process.env.ES_BIG_TRADES_MAX || 80);
+const ES_DELTA_BUCKET_MS = Number(process.env.ES_DELTA_BUCKET_MS || 60_000);
+const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 60);
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
@@ -930,6 +936,14 @@ class TastytradeProxy {
     this.esCandles = new Map(); // slotKey -> { timestamp, date, slotKey, time, open, high, low, close, volume }
     this.esCandlesDirty = false; // set when a candle slot changed since last flush
     this.candleFlushTimer = null;
+    // Big-order footprint on the front ES future. We classify each ES Trade tick
+    // as buy (lifted ask) / sell (hit bid) using the live ES bid/ask, keep a ring
+    // buffer of the largest recent prints, and bucket signed delta over time.
+    this.esQuote = null;          // { bid, ask, mid } for the front ES future
+    this.esBigTrades = [];        // ring buffer of recent big ES prints (newest last)
+    this.esDeltaBuckets = new Map(); // bucketStartMs -> { ts, buy, sell }
+    this.esFootprintDirty = false;
+    this.footprintFlushTimer = null;
     this.expiry = '';
     this.recomputeTimer = null;
     // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
@@ -1038,6 +1052,11 @@ class TastytradeProxy {
       console.log(`[FEED] subscribed ES candles ${this.esCandleSymbol} from ${new Date(fromTime).toISOString()}`);
       // Flush aggregated candles to state + DB on a steady cadence.
       this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
+    }
+    // Flush the ES big-order footprint (bubbles + delta buckets) every second so
+    // the Footprint page tape stays live without spamming a broadcast per tick.
+    if (!this.footprintFlushTimer) {
+      this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
     }
 
     // Backfill OI/volume from REST now, then refresh periodically (OI only
@@ -1167,11 +1186,13 @@ class TastytradeProxy {
       if (this.flowTimer) { clearInterval(this.flowTimer); this.flowTimer = null; }
       if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
       if (this.candleFlushTimer) { clearInterval(this.candleFlushTimer); this.candleFlushTimer = null; }
+      if (this.footprintFlushTimer) { clearInterval(this.footprintFlushTimer); this.footprintFlushTimer = null; }
     } else {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
       if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
       if (!this.oiTimer) this._scheduleOiRefresh();
       if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
+      if (!this.footprintFlushTimer) this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
     }
     marketState.setStatus({ idle: next });
   }
@@ -1193,6 +1214,60 @@ class TastytradeProxy {
     marketState.setState({ esCandles: rows });
     // Persist only bars with real volume (skip empty forming snapshots).
     writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+  }
+
+  /**
+   * Classify one front-ES Trade tick and fold it into the footprint state.
+   *
+   * Aggressor side comes from the live ES bid/ask: a print at/above the ask is an
+   * aggressive BUY (lifted offer); at/below the bid an aggressive SELL (hit bid).
+   * Inside the spread we fall back to mid (>= mid -> buy). Each tick's signed size
+   * accrues into a per-minute delta bucket; prints >= ES_BIG_TRADE_MIN contracts
+   * are also kept individually for the bubble row.
+   */
+  _recordEsPrint(price, size) {
+    if (!(size > 0)) return;
+    const q = this.esQuote;
+    let side;
+    if (q && q.ask > 0 && price >= q.ask) side = 'buy';
+    else if (q && q.bid > 0 && price <= q.bid) side = 'sell';
+    else if (q && q.mid > 0) side = price >= q.mid ? 'buy' : 'sell';
+    else return; // no quote context yet — can't classify
+    const ts = Date.now();
+    const signed = side === 'buy' ? size : -size;
+
+    // Per-minute signed-delta bucket.
+    const bucketStart = Math.floor(ts / ES_DELTA_BUCKET_MS) * ES_DELTA_BUCKET_MS;
+    const b = this.esDeltaBuckets.get(bucketStart) || { ts: bucketStart, buy: 0, sell: 0 };
+    if (side === 'buy') b.buy += size; else b.sell += size;
+    this.esDeltaBuckets.set(bucketStart, b);
+    if (this.esDeltaBuckets.size > ES_DELTA_BUCKETS_MAX) {
+      const oldest = [...this.esDeltaBuckets.keys()].sort((a, c) => a - c)[0];
+      this.esDeltaBuckets.delete(oldest);
+    }
+
+    // Big-print ring buffer for the bubbles.
+    if (size >= ES_BIG_TRADE_MIN) {
+      this.esBigTrades.push({ ts, price, size, side, signed });
+      if (this.esBigTrades.length > ES_BIG_TRADES_MAX) this.esBigTrades.shift();
+    }
+    this.esFootprintDirty = true;
+  }
+
+  /** Push the current footprint (bubbles + delta buckets) to market-state. */
+  _flushEsFootprint() {
+    if (!this.esFootprintDirty) return;
+    this.esFootprintDirty = false;
+    const buckets = [...this.esDeltaBuckets.values()].sort((a, b) => a.ts - b.ts);
+    marketState.setState({
+      esBigTrades: {
+        symbol: this.esSymbol,
+        updatedAt: Date.now(),
+        seeded: false,
+        trades: [...this.esBigTrades],
+        delta: buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell, net: x.buy - x.sell })),
+      },
+    });
   }
 
   _onEvent(ev) {
@@ -1232,6 +1307,9 @@ class TastytradeProxy {
         return;
       }
       if (sym === this.esSymbol) {
+        // Keep the live bid/ask so ES Trade ticks can be classified as
+        // aggressive-buy (>= ask) vs aggressive-sell (<= bid) for the footprint.
+        if (bid > 0 || ask > 0) this.esQuote = { bid, ask, mid };
         if (mid > 0) marketState.setAux({ esFut: mid });
         return;
       }
@@ -1268,7 +1346,10 @@ class TastytradeProxy {
       }
       if (sym === this.esSymbol) {
         const px = Number(ev.price);
-        if (px > 0) marketState.setAux({ esFut: px });
+        if (px > 0) {
+          marketState.setAux({ esFut: px });
+          this._recordEsPrint(px, Number(ev.size));
+        }
         return;
       }
       // dayVolume on the Trade event is the running daily volume for the
@@ -1377,7 +1458,7 @@ class TastytradeProxy {
           atmIV = iv;
         }
       }
-      staged.push({ c, oi, vol, T, iv, gk });
+      staged.push({ c, oi, vol, T, iv, gk, mark: mid });
     }
 
     if (!staged.length) return;
@@ -1386,7 +1467,7 @@ class TastytradeProxy {
     // ATM IV so their gamma is non-zero and their OI counts toward GEX.
     const rows = [];
     for (const st of staged) {
-      const { c, oi, vol, T, gk } = st;
+      const { c, oi, vol, T, gk, mark } = st;
       const iv = st.iv > 0 ? st.iv : atmIV;
 
       // BS is used to source vanna/charm (dxFeed Greeks has neither) and as the
@@ -1420,6 +1501,7 @@ class TastytradeProxy {
         vanna: bs.vanna / 100,   // always BS-derived (not in broker feed)
         charm: bs.charm / 365,   // always BS-derived
         iv,
+        mark,                    // live contract price (quote mid, else REST mark)
         dte: c.dte,
       });
     }

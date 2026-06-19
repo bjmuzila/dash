@@ -1,0 +1,74 @@
+**Comprehensive Trading Logic Table**  
+Covering all 3 boxes across different levels/regimes
+
+| Regime / Scenario | VIX Spot (30D) | VIX1D Proxy (1D) | 10D Realized Vol | Overall Interpretation | Recommended Trading Logic (for your style) |
+|-------------------|----------------|------------------|------------------|------------------------|-------------------------------------------|
+| **Current Situation** | **16.78** (Normal) | **15.68** (Normal) | **21.78** (Elevated) | Short-term calm expected, but recent price action has been hot (negative VRP) | Selective bias. Prioritize momentum scalps on strong GEX/flow setups. Tight risk. Avoid aggressive short premium. Watch for IV expansion. |
+| **Low Vol Calm** | < 15 | < 14 | < 15 | All calm — strong mean reversion environment | Heavy short premium (0DTE credit spreads, iron condors). Long scalps on dips. High conviction at GEX support. |
+| **Normal Balanced** | 15 – 20 | 14 – 19 | 15 – 20 | Healthy market, normal risk premium | Balanced approach. Mix of scalps + moderate premium selling. Follow premium flow & GEX flips. |
+| **Elevated RV (like now)** | Normal/Low | Normal/Low | > 20 | Market moving faster than priced (inverted VRP) | Reduce short vol exposure. Favor directional/gamma trades, tight stops on NQ/ES. Hedge with GEX awareness. Prepare for potential vol expansion. |
+| **High Fear** | > 25 | > 22 | > 25 | Crisis / high uncertainty | Defensive. Long vol or protective puts. Scalp only with very tight risk. Avoid short premium. |
+| **Term Structure Inversion** (VIX1D >> VIX) | Normal | Much Higher | Any | Immediate turbulence expected | Very cautious. Reduce size, focus on quick scalps or long gamma. High risk of big moves. |
+| **Strong Calm Discount** (VIX1D << VIX) | Normal/High | Much Lower | Any | Strong near-term calm expected | Excellent for short-dated premium selling and mean-reversion trades. |
+
+### Key Combined Rules (Covering All 3)
+1. **When VIX1D < VIX + RV Elevated** (your current setup) → **Cautious Momentum Mode**  
+   - Best for flow-following scalps (premium flow, auction imbalance).  
+   - Avoid naked short options. Use defined risk or long options for directional bets.
+
+2. **VIX1D / VIX Ratio**:
+   - < 0.90 → Strong near-term calm bias.
+   - 0.90 – 1.05 → Normal (current zone).
+   - > 1.10 → Imminent volatility spike likely.
+
+3. **VRP / RV vs IV**:
+   - Positive +2 or higher → Classic edge for premium sellers.
+   - Negative -3 or worse (like -5 now) → Risk-on regime, protect capital, favor gamma.
+
+4. **General Priority for Your Tools**:
+   - Always cross-check with **GEX/DEX walls, flips, MVC levels**, and premium flow.
+   - Elevated 10D RV + low VIX1D = “Coiled spring” setup — calm now but potential for explosive move when catalyst hits.
+
+**If-This-Then-That Trading Logic**  
+(Plain English Rules Covering All 3 Volatility Boxes)
+
+### 1. High Fear Regime
+- **If** VIX 30D > 25 **OR** VIX1D > 22 **OR** 10D Realized Vol > 30  
+- **Then** → Switch to Defensive Mode  
+  - Reduce position size significantly  
+  - Focus on long volatility or protective hedges  
+  - Avoid short premium entirely  
+  - Only take very high-conviction scalps with tight stops
+
+### 2. Elevated RV + Near-Term Calm (Your Current Regime)
+- **If** 10D Realized Vol > 20 **AND** VIX1D < VIX 30D (ratio around 0.93)  
+- **Then** → Cautious Momentum Mode  
+  - Prioritize directional scalps (NQ/ES/SPX) following strong GEX, premium flow, or auction imbalance  
+  - Use tight stops and smaller size  
+  - Avoid naked short options or heavy premium selling  
+  - Favor defined-risk trades or long gamma setups  
+  - Watch closely for IV expansion or GEX flips
+
+### 3. Low Volatility Calm Regime
+- **If** VIX 30D < 15 **AND** VIX1D < 14 **AND** 10D Realized Vol < 15  
+- **Then** → Aggressive Premium Mode  
+  - Sell short-dated premium aggressively (0DTE credit spreads, iron condors)  
+  - Look for mean-reversion scalps on dips  
+  - Higher position sizing allowed when GEX supports
+
+### 4. Normal Balanced Regime
+- **If** VIX 30D between 15–20 **AND** VIX1D between 14–19 **AND** 10D Realized Vol between 15–20  
+- **Then** → Balanced Trading Mode  
+  - Mix of directional scalps and moderate premium selling  
+  - Follow premium flow and GEX levels as primary signals  
+  - Normal risk parameters
+
+### Extra Quick Rules (Combine with Above)
+- **If** VIX1D / VIX ratio < 0.90 → Boost short-term premium selling (strong calm signal)
+- **If** VIX1D / VIX ratio > 1.10 → Expect immediate turbulence, reduce size
+- **If** VRP is negative (like -5 now) → Reduce short volatility exposure, increase hedging
+- **If** big gap between VIX1D and VIX 30D → Watch for mean reversion or breakout
+
+These rules are designed to plug directly into your AI logic bot. You can use the 3 volatility values as inputs and let the bot output the recommended bias + action.
+
+Would you like me to add more rules (GEX, MVC levels, premium flow, etc.) or make any section more aggressive/conservative?

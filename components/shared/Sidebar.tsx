@@ -63,7 +63,9 @@ const NAV_GROUPS: NavGroup[] = [
     id: "footprint",
     label: "Footprint",
     emoji: "👣",
-    items: [],
+    items: [
+      { label: "Big Orders", href: "/footprint" },
+    ],
   },
   {
     id: "stock-market",

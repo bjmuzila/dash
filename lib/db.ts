@@ -973,6 +973,58 @@ export async function getOptionStrikeRollingNetGex(
   }));
 }
 
+/**
+ * Per-strike net GEX as it read at the most recent snapshot AT OR BEFORE
+ * `asOfTimestamp` (point-in-time, not an average). Used by the strike-detail
+ * popup to compute rolling differences (current − reading N minutes ago).
+ * Returns the single nearest row per strike via DISTINCT ON.
+ */
+export async function getOptionStrikeNetGexAsOf(
+  date: string,
+  expiry: string,
+  asOfTimestamp: number
+): Promise<Array<{ strike: number; net_gex: number; timestamp: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON (strike) strike, net_gex, timestamp
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND expiry = $2
+        AND timestamp <= $3
+      ORDER BY strike ASC, timestamp DESC`,
+    [date, expiry, asOfTimestamp]
+  );
+  return result.rows.map((row) => ({
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+    timestamp: Number(row.timestamp ?? 0),
+  }));
+}
+
+/**
+ * Per-strike net GEX at the FIRST snapshot of the session (RTH open baseline).
+ * "Open" = earliest reading recorded for `date`/`expiry`.
+ */
+export async function getOptionStrikeNetGexAtOpen(
+  date: string,
+  expiry: string
+): Promise<Array<{ strike: number; net_gex: number; timestamp: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON (strike) strike, net_gex, timestamp
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND expiry = $2
+      ORDER BY strike ASC, timestamp ASC`,
+    [date, expiry]
+  );
+  return result.rows.map((row) => ({
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+    timestamp: Number(row.timestamp ?? 0),
+  }));
+}
+
 export interface BudgetProfileRecord {
   id: number;
   name: string;

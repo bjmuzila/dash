@@ -50,6 +50,15 @@ function computeGexRows(rows, spot) {
     const callIV = Number(call?.iv ?? 0);
     const putIV = Number(put?.iv ?? 0);
 
+    // Contract price (mark, falling back to bid/ask mid) per side, so the
+    // strike-detail popup can show the OTM contract price without a 2nd fetch.
+    const midOf = (q) => {
+      const b = Number(q?.bid ?? 0), a = Number(q?.ask ?? 0);
+      return b > 0 && a > 0 ? (b + a) / 2 : 0;
+    };
+    const callMark = Number(call?.mark ?? 0) || midOf(call);
+    const putMark = Number(put?.mark ?? 0) || midOf(put);
+
     // GEX = gamma × OI × spot² (calls positive, puts negative)
     const callGEX = callGamma * callOI * spot * spot;
     const putGEX = -(putGamma * putOI * spot * spot);
@@ -90,6 +99,8 @@ function computeGexRows(rows, spot) {
       chex,
       callIV,
       putIV,
+      callMark,
+      putMark,
       dte: call?.dte ?? put?.dte ?? 0,
     });
   }
