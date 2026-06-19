@@ -23,6 +23,7 @@ const WebSocket = require('ws');
 
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
+const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
 const { FlowProcessor } = require('./computation/flow-processor');

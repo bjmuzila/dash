@@ -42,8 +42,18 @@ export default function DevPage() {
   const [sentSymbol, setSentSymbol] = useState("");
   const [result, setResult] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
+  const [liveMs, setLiveMs] = useState(0);
 
   const builtSymbol = buildSymbol(expiry, side, strike);
+
+  // Live "page is alive" counter — ticks up while polling so a stalled tab is obvious.
+  useEffect(() => {
+    if (!loading) return;
+    const start = performance.now();
+    setLiveMs(0);
+    const id = setInterval(() => setLiveMs(Math.round(performance.now() - start)), 100);
+    return () => clearInterval(id);
+  }, [loading]);
 
   // Load available expiries from the proxy (same source the chart uses).
   useEffect(() => {
@@ -143,7 +153,11 @@ export default function DevPage() {
         <Field label="Built Symbol">{builtSymbol || "—"}</Field>
         <Field label="Selected Symbol">{sentSymbol || builtSymbol || "—"}</Field>
         <Field label="Feed Type">{feed}</Field>
-        <Field label="Elapsed">{elapsed != null ? `${elapsed} ms` : "—"}</Field>
+        <Field label="Elapsed">
+          {loading
+            ? <span style={{ color: "#ffb300" }}>{(liveMs / 1000).toFixed(1)}s ⏱</span>
+            : elapsed != null ? `${elapsed} ms` : "—"}
+        </Field>
         <Field label="Data Wait">{waited != null ? `${waited} ms` : "—"}</Field>
       </div>
 

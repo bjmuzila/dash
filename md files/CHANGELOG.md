@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-18 (session 30) - Heatmap/Snapshot UI, Vol-GEX Fix & Dev Symbol Probe
+
+### `app/home/page.tsx`
+- GEX heatmap intensity slider min lowered `0.2` → `0.1` (range now .1–3.0)
+- Removed the duplicate 📸 record-snapshot button from the heatmap header (kept the camera screenshot button)
+- `GEX + VEX` column replaced with `Net VEX` (vanna only)
+- Top toolbar: added visible `│` spacers between quotes (VIX/ESU/SPX) and between NET GEX / CALL WALL / PUT WALL / FLIP
+- ATM heatmap row now framed with a light white border across all columns (heatmap only, not snapshot)
+- **MVC bug fix:** header MVC now respects the active `dataMode` (Vol-Only uses `netVolGEX`, OI+Vol uses the composite) instead of always using OI-based `netGEX`
+
+### `components/dashboard/SnapshotPanel.tsx`
+- Top metrics grid and Option Flow Tops grid changed from 2-across to 4-across to fit one screen
+
+### `components/dashboard/FlowTape.tsx`
+- Added a `Side` column showing explicit `BUY` (ask/aggressive buyer, green) / `SELL` (bid/aggressive seller, red) with rule-of-thumb sentiment tooltips
+
+### Vol-GEX volume source fix — `server-v2/proxy-tastytrade.js`
+- Root cause of false MVC (7475 ranked #1 vol-GEX with ~0 live volume): per-strike volume fell back to the REST `volume` field, which carries stale prior-session cumulative volume
+- Now stores live `dayVolume` even when 0 (presence = authoritative), and only falls back to REST volume when the stream has never delivered a print
+
+### Dev symbol probe (rebuilt) — `app/dev/page.tsx`, `server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`
+- Rebuilt `/dev` (was `return null`): pick Side/Strike/Expiry/Feed → builds `.SPXW…` symbol → `GET /proxy/probe` returns raw feed data + timing
+- Reads the same live proxy maps the GEX chart uses (greeks/quotes/volumes/summaries)
+- On-demand subscribe for uncached symbols: subscribes, page polls until data arrives, reports server-measured `waitedMs`, auto-unsubscribes after 15 min (`DxLinkClient.unsubscribe`, `probeSubs` TTL map)
+
+### Version
+- `package.json` bumped `2026.6.18-v50` → `v52` across the session
+
 ## 2026-06-18 (session 29) - Proxy Removal & Vanilla Archive
 
 ### Objective
