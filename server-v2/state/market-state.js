@@ -52,6 +52,11 @@ const state = {
     lastFeedAt: null,
     lastError: null,
     idle: false,
+    // Chart-readiness gate: false until OI + broker greeks are warm. The client
+    // shows a loader and withholds the GEX chart until this flips true.
+    chartReady: false,
+    oiCoverage: 0,
+    greeksCoverage: 0,
   },
   // Last successful update timestamp
   updatedAt: 0,

@@ -57,8 +57,45 @@ const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
 // Hold the first GEX broadcast until OI backfill covers this fraction of active
 // strikes — avoids rendering a half-filled chart while REST backfill completes.
 const OI_READY_RATIO = Number(process.env.OI_READY_RATIO || 0.85);
+// Plateau release for OI (mirrors the greeks plateau): far-OTM strikes often
+// carry no OI, so coverage can stall below the ratio. Once it stops climbing
+// above a floor for OI_PLATEAU_HITS consecutive backfills, release.
+const OI_PLATEAU_EPS = Number(process.env.OI_PLATEAU_EPS || 0.01);
+const OI_PLATEAU_HITS = Number(process.env.OI_PLATEAU_HITS || 3);
+// (OI and greeks share one DTE-scaled plateau floor.)
+// DTE-scaled plateau floor: SPX OI/volume thins out the further the expiry is,
+// so a far-dated chain that's fully backfilled may still sit well below a
+// near-dated one. The floor a plateau must clear therefore decreases with DTE.
+// Tiers are [maxDte, floorFraction] — first match wins; last is the catch-all.
+// Tune these once real per-DTE coverage is known.
+const PLATEAU_FLOOR_TIERS = [
+  [1, 0.80],   // 0–1 DTE (0DTE / next session): liquid, expect high coverage
+  [3, 0.65],   // 2–3 DTE
+  [7, 0.50],   // up to ~1 week
+  [14, 0.40],  // up to ~2 weeks
+  [Infinity, 0.30], // 2+ weeks out: accept a low plateau as complete
+];
+function plateauFloor(dte) {
+  const d = Number.isFinite(dte) ? dte : 0;
+  for (const [maxDte, floor] of PLATEAU_FLOOR_TIERS) {
+    if (d <= maxDte) return floor;
+  }
+  return 0.30;
+}
+// Hold the first GEX broadcast until this fraction of in-window strikes carry a
+// REAL streamed broker gamma (not the BS/ATM-IV fallback). Before greeks arrive,
+// far/near-OTM strikes compute with fallback gamma and produce inflated bars —
+// this gate prevents that half-warmed frame from ever reaching the chart.
+const GREEKS_READY_RATIO = Number(process.env.GREEKS_READY_RATIO || 0.85);
+// Plateau release: on thin expiries greeks coverage may never reach the ratio
+// above. Once coverage stops climbing meaningfully (gain < PLATEAU_EPS) for
+// PLATEAU_HITS consecutive recomputes AND a minimum floor is met, release the
+// chart — the remaining strikes simply aren't going to stream a gamma.
+const GREEKS_PLATEAU_EPS = Number(process.env.GREEKS_PLATEAU_EPS || 0.01); // <1% gain = flat
+const GREEKS_PLATEAU_HITS = Number(process.env.GREEKS_PLATEAU_HITS || 3);  // ~6s at 2s recompute
+// Plateau floors are DTE-scaled — see plateauFloor() below.
 // Safety valve: broadcast anyway after this long, even if coverage is still low
-// (some far-OTM strikes legitimately never report OI and shouldn't block forever).
+// (some far-OTM strikes legitimately never report OI/greeks and shouldn't block forever).
 const OI_READY_GRACE_MS = Number(process.env.OI_READY_GRACE_MS || 90000);
 // SPX flow tape is aggregated and broadcast on this cadence (default 500ms),
 // independent of the heavier GEX recompute loop.
@@ -668,7 +705,12 @@ class TastytradeProxy {
     this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
     this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
     this.oiCoverage = 0;      // 0..1 fraction of active strikes that have OI (last backfill)
-    this.oiReady = false;     // true once coverage crosses threshold or grace elapses
+    this.oiReady = false;     // true once OI coverage crosses threshold, plateaus, or grace elapses
+    this.oiPlateauHits = 0;   // consecutive backfills with negligible OI-coverage gain
+    this.greeksCoverage = 0;  // 0..1 fraction of in-window legs with a real streamed gamma
+    this.chartReady = false;  // true once OI + greeks are warm (or grace elapses) — gates broadcast
+    this.prevGreeksCoverage = 0; // greeks coverage at the previous recompute (plateau detection)
+    this.greeksPlateauHits = 0;  // consecutive recomputes with negligible coverage gain
     this.firstSubAt = 0;      // ms timestamp of first subscribe (grace-period anchor)
     this.oiTimer = null;
     this.flowTimer = null;
@@ -771,6 +813,10 @@ class TastytradeProxy {
     // Subscribe to spot + the active-expiry contracts in the strike window.
     this.firstSubAt = Date.now();
     this.oiReady = false;
+    this.oiPlateauHits = 0;
+    this.chartReady = false;
+    this.prevGreeksCoverage = 0;
+    this.greeksPlateauHits = 0;
     this._resubscribe();
 
     // Backfill OI/volume from REST now, then refresh periodically (OI only
@@ -802,11 +848,28 @@ class TastytradeProxy {
         if (m.oi > 0) filled++;
       }
     }
+    const prevOiCoverage = this.oiCoverage;
     this.oiCoverage = active.length ? filled / active.length : 0;
     // Mark ready once coverage crosses the threshold (latched — never flips back).
     if (!this.oiReady && this.oiCoverage >= OI_READY_RATIO) {
       this.oiReady = true;
+      this.oiPlateauHits = 0;
       console.log(`[OI] coverage ${(this.oiCoverage * 100).toFixed(0)}% ≥ ${(OI_READY_RATIO * 100).toFixed(0)}% — GEX broadcast enabled`);
+    } else if (!this.oiReady) {
+      // Plateau: some expiries (esp. thinner ones) never reach the ratio because
+      // far-OTM strikes legitimately carry no OI. Once coverage stops climbing
+      // above a DTE-scaled floor, treat the backfill as complete and release.
+      const floor = plateauFloor(dteFromIso(this.expiry));
+      const gain = this.oiCoverage - prevOiCoverage;
+      if (this.oiCoverage >= floor && gain < OI_PLATEAU_EPS) {
+        this.oiPlateauHits = (this.oiPlateauHits || 0) + 1;
+      } else {
+        this.oiPlateauHits = 0;
+      }
+      if (this.oiPlateauHits >= OI_PLATEAU_HITS) {
+        this.oiReady = true;
+        console.log(`[OI] coverage plateaued at ${(this.oiCoverage * 100).toFixed(0)}% (floor ${(floor * 100).toFixed(0)}% @ ${dteFromIso(this.expiry)}DTE) — GEX broadcast enabled`);
+      }
     }
     console.log(`[OI] REST backfill: ${filled}/${active.length} strikes with OI`);
   }
@@ -854,8 +917,13 @@ class TastytradeProxy {
     if (!expiry || expiry === this.expiry) return;
     this.expiry = expiry;
     marketState.setExpiry(expiry);
-    // Re-gate: the new expiry's OI must backfill before we broadcast its chart.
+    // Re-gate: the new expiry's OI + greeks must warm up before we broadcast its chart.
     this.oiReady = false;
+    this.oiPlateauHits = 0;
+    this.chartReady = false;
+    this.prevGreeksCoverage = 0;
+    this.greeksPlateauHits = 0;
+    marketState.setStatus({ chartReady: false });
     this.firstSubAt = Date.now();
     this._resubscribe();
     // Backfill the new expiry's OI immediately, and resume fast polling until the
@@ -1107,17 +1175,51 @@ class TastytradeProxy {
 
     const { rows: gexRows, callWall, putWall, gexFlip, totalNetGex } = computeGexSummary(rows, this.spot);
 
-    // Gate: don't broadcast the GEX chart until OI backfill has substantially
-    // filled in (avoids the half-rendered chart on connect). A grace timer
-    // releases the gate so far-OTM strikes that never report OI can't stall it.
-    if (!this.oiReady) {
-      const graceElapsed = this.firstSubAt && (Date.now() - this.firstSubAt) >= OI_READY_GRACE_MS;
-      if (graceElapsed) {
-        this.oiReady = true;
-        console.log(`[OI] grace elapsed at ${(this.oiCoverage * 100).toFixed(0)}% coverage — GEX broadcast enabled`);
+    // Greeks coverage: fraction of in-window legs that carried a REAL streamed
+    // broker gamma this pass. Legs without one fall back to BS/ATM-IV gamma,
+    // which is the source of the inflated cold-start bars — so we hold the chart
+    // until most legs have a genuine gamma.
+    const greekLegs = staged.reduce(
+      (n, st) => n + (st.gk && Number.isFinite(st.gk.gamma) && st.gk.gamma !== 0 ? 1 : 0),
+      0
+    );
+    this.greeksCoverage = staged.length ? greekLegs / staged.length : 0;
+
+    // Gate: don't broadcast the GEX chart until BOTH OI backfill AND broker
+    // greeks have substantially filled in (avoids the half-rendered / inflated
+    // chart on connect).
+    if (!this.chartReady) {
+      // Plateau detection: thin expiries (e.g. far-dated, illiquid) may never
+      // reach GREEKS_READY_RATIO. Count consecutive recomputes where coverage
+      // barely moved; once it's been flat long enough above a floor, the data
+      // has effectively arrived and we release rather than wait out the grace.
+      const greeksFloor = plateauFloor(dteFromIso(this.expiry));
+      const gain = this.greeksCoverage - this.prevGreeksCoverage;
+      if (this.greeksCoverage >= greeksFloor && gain < GREEKS_PLATEAU_EPS) {
+        this.greeksPlateauHits += 1;
       } else {
-        return; // hold the frame until OI is ready
+        this.greeksPlateauHits = 0;
       }
+      this.prevGreeksCoverage = this.greeksCoverage;
+
+      const graceElapsed = this.firstSubAt && (Date.now() - this.firstSubAt) >= OI_READY_GRACE_MS;
+      const covered = this.oiReady && this.greeksCoverage >= GREEKS_READY_RATIO;
+      const plateaued = this.oiReady && this.greeksPlateauHits >= GREEKS_PLATEAU_HITS;
+
+      if (covered) {
+        this.chartReady = true;
+        console.log(`[READY] OI ${(this.oiCoverage * 100).toFixed(0)}% + greeks ${(this.greeksCoverage * 100).toFixed(0)}% — GEX broadcast enabled`);
+      } else if (plateaued) {
+        this.chartReady = true;
+        console.log(`[READY] greeks plateaued at ${(this.greeksCoverage * 100).toFixed(0)}% (OI ${(this.oiCoverage * 100).toFixed(0)}%) — GEX broadcast enabled`);
+      } else if (graceElapsed) {
+        this.chartReady = true;
+        console.log(`[READY] grace elapsed at OI ${(this.oiCoverage * 100).toFixed(0)}% / greeks ${(this.greeksCoverage * 100).toFixed(0)}% — GEX broadcast enabled`);
+      } else {
+        marketState.setStatus({ chartReady: false, oiCoverage: this.oiCoverage, greeksCoverage: this.greeksCoverage });
+        return; // hold the frame until both OI and greeks are ready
+      }
+      marketState.setStatus({ chartReady: true });
     }
 
     marketState.setGexUpdate({

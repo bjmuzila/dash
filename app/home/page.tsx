@@ -342,6 +342,9 @@ export default function HomePage() {
   const [quoteSnapshots, setQuoteSnapshots] = useState<Record<string, { last: number; prev: number }>>({});
   const [renderTick, setRenderTick] = useState(0);
   const [status, setStatus] = useState("READY");
+  // True once the server reports OI + greeks are warm. Until then the GEX chart
+  // shows a loader so a half-warmed / inflated frame never renders.
+  const [chartReady, setChartReady] = useState(false);
   // GEX chart rows pushed from /ws/gex broadcaster (server-computed loop)
   const [gexChainRows, setGexChainRows] = useState<ChainRow[]>([]);
   const [gexSpot, setGexSpot] = useState(0);
@@ -416,6 +419,8 @@ export default function HomePage() {
   // When user picks a different expiry, tell the server to switch
   const handleExpiry = useCallback((expiry: string) => {
     setSelectedExpiry(expiry);
+    // New expiry re-gates on the server; show the loader until it warms again.
+    setChartReady(false);
     if (gexWsRef.current?.readyState === WebSocket.OPEN) {
       gexWsRef.current.send(JSON.stringify({ type: 'SET_EXPIRY', expiry }));
     }
@@ -472,10 +477,19 @@ export default function HomePage() {
       switch (type) {
         case "snapshot":
         case "gex":
-        case "GEX_UPDATE":
+        case "GEX_UPDATE": {
           applyGex(data);
           setStatus("LIVE");
+          // A `gex`/`GEX_UPDATE` broadcast only happens once the server is warm,
+          // so it implies ready. A `snapshot` carries readiness in status.
+          const st = (data.status ?? msg.status) as Record<string, unknown> | undefined;
+          if (type === "snapshot") {
+            if (st && typeof st.chartReady === "boolean") setChartReady(st.chartReady);
+          } else {
+            setChartReady(true);
+          }
           break;
+        }
         case "spot": {
           const s = Number(data.spot ?? 0);
           if (s > 0) setGexSpot(s);
@@ -503,6 +517,7 @@ export default function HomePage() {
             setExpiryOptions(buildExpiryOptions(exps));
             setSelectedExpiry((cur) => cur || String(data.expiry ?? exps[0] ?? ""));
           }
+          if (typeof data.chartReady === "boolean") setChartReady(data.chartReady);
           break;
         }
         default:
@@ -731,20 +746,31 @@ export default function HomePage() {
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
-              {/* Chart canvas — uses fast gex-chain data */}
-              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-                <GexChart
-                  chain={chartRows}
-                  spotPrice={chartSpot}
-                  flipPoint={flipPoint}
-                  gexProfile={gexProfile}
-                  mode={gexMode}
-                  dataMode={dataMode}
-                  showOI={showOI}
-                  showDex={showDex}
-                  showFlipCurve={showFlipCurve}
-                  expiry={selectedExpiry}
-                />
+              {/* Chart canvas — uses fast gex-chain data. Held behind a loader
+                  until the server reports OI + greeks are warm, so a half-built
+                  / inflated frame never renders. */}
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+                {chartReady && chartRows.length > 0 ? (
+                  <GexChart
+                    chain={chartRows}
+                    spotPrice={chartSpot}
+                    flipPoint={flipPoint}
+                    gexProfile={gexProfile}
+                    mode={gexMode}
+                    dataMode={dataMode}
+                    showOI={showOI}
+                    showDex={showDex}
+                    showFlipCurve={showFlipCurve}
+                    expiry={selectedExpiry}
+                  />
+                ) : (
+                  <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "#05080d" }}>
+                    <style>{`@keyframes gexspin{to{transform:rotate(360deg)}}`}</style>
+                    <div style={{ width: 44, height: 44, borderRadius: "50%", border: `3px solid rgba(0,240,255,0.15)`, borderTopColor: C.cyan, animation: "gexspin 0.8s linear infinite" }} />
+                    <div style={{ color: C.cyan, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>Loading SPX chain…</div>
+                    <div style={{ color: "#5a6b85", fontSize: 11, letterSpacing: "0.06em" }}>Warming OI &amp; greeks for accurate GEX</div>
+                  </div>
+                )}
               </div>
             </div>
 
