@@ -24,8 +24,8 @@ interface GexChartProps {
 // ─── Padding — matches vanilla exactly ────────────────────────────────────────
 const PAD_T = 20;
 const PAD_B = 6;
-const PAD_L = 4;   // minimal — no axis border
-const PAD_R = 4;   // minimal — no axis border
+const PAD_L = 16;  // gap between bars and the left panel border
+const PAD_R = 16;  // gap between bars and the right panel border
 const MIN_COUNT = 30;
 // DEFAULT_COUNT is now computed dynamically as Math.round(600 / detectedStep) + 1
 
