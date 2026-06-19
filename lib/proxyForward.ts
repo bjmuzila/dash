@@ -7,7 +7,14 @@ import { NextResponse } from "next/server";
  * incoming browser requests, not server fetch()).
  */
 export function proxyBase(): string {
-  return (process.env.PROXY_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
+  // server-v2 runs Next + the /proxy/* handlers in ONE process on PORT (3002 by
+  // default per .env.local). Older notes say "proxy on 3001", but that was the
+  // legacy dual-port stack. Default to the same-origin PORT so server-side
+  // forwards hit the live process — hardcoding 3001 pointed at a dead port and
+  // made /api/chains + /api/expirations fail (empty chain / empty expiry list).
+  const base = process.env.PROXY_URL
+    || `http://127.0.0.1:${process.env.PORT || "3002"}`;
+  return base.replace(/\/$/, "");
 }
 
 /**

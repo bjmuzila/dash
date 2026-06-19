@@ -428,10 +428,11 @@ export default function OptionsChainPage() {
     })();
 
     return () => { cancelled = true; };
-    // selectedExpiry intentionally omitted: we read its latest value to decide
-    // whether to keep it, but the effect should only re-run on ticker change.
+    // Only re-run on ticker change. loadChain is recreated every render, so
+    // listing it here caused an infinite fetch loop (effect → setState →
+    // render → new loadChain → effect …). selectedExpiry is read via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTicker, loadChain]);
+  }, [activeTicker]);
 
   const [underlyingPrice, setUnderlyingPrice] = useState(0);
 
@@ -757,7 +758,7 @@ export default function OptionsChainPage() {
         ) : visibleRows.map((row) => {
           const isATM = row.strike === nearestStrike;
           const rowStyle = isATM
-            ? { background: "rgba(255,179,0,.07)", borderTop: "1px solid rgba(255,179,0,.25)", borderBottom: "1px solid rgba(255,179,0,.25)" }
+            ? { background: "rgba(255,179,0,.07)", outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
 
           const greekValue = row[greekMode];

@@ -321,12 +321,14 @@ function TickerPanel({
         ) : computed.rows.map(r => {
           const strikeColor = r.isATM ? "#ffb300" : "#94a3b8";
           const rowBg = r.isATM ? "rgba(255,179,0,.07)" : "transparent";
-          const rowBorder = r.isATM ? "1px solid rgba(255,179,0,.25)" : "1px solid rgba(30,48,80,.35)";
+          const atmOutline = r.isATM
+            ? { outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
+            : { borderBottom: "1px solid rgba(30,48,80,.35)" };
           return (
             <div
               key={r.strike}
               data-strike={r.strike}
-              style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, borderBottom: rowBorder }}
+              style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, ...atmOutline }}
             >
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "monospace",

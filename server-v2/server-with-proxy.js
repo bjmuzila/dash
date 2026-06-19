@@ -33,7 +33,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
-const { TastytradeProxy, probeRest } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations } = require('./proxy-tastytrade');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -167,6 +167,40 @@ async function main() {
         }
         return;
       }
+      // ── Legacy nested chain adapters ─────────────────────────────────────
+      // The options-chain / mult-greek / insights pages fetch /api/chains and
+      // /api/expirations, which forward here as /proxy/api/tt/chains/:ticker and
+      // /proxy/api/tt/expirations/:ticker. server-v2 didn't implement these
+      // (only the single-symbol live feed routes), so both pages got a 404 and
+      // showed no data / an empty expiry dropdown. These adapters rebuild the
+      // legacy nested payload from REST for ANY ticker, after-hours included.
+      {
+        const expMatch = pathname.match(/^\/proxy\/api\/tt\/expirations\/(.+)$/);
+        if (req.method === 'GET' && expMatch) {
+          const ticker = decodeURIComponent(expMatch[1]).split('?')[0];
+          try {
+            const data = await fetchExpirations(ticker);
+            sendJson(res, 200, { data });
+          } catch (e) {
+            sendJson(res, 502, { error: String(e?.message || e), ticker });
+          }
+          return;
+        }
+        const chainMatch = pathname.match(/^\/proxy\/api\/tt\/chains\/(.+)$/);
+        if (req.method === 'GET' && chainMatch) {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const ticker = decodeURIComponent(chainMatch[1]).split('?')[0];
+          const expiration = url.searchParams.get('expiration') || '';
+          try {
+            const data = await fetchChainFull(ticker, expiration);
+            sendJson(res, 200, { data, context: 'rest' });
+          } catch (e) {
+            sendJson(res, 502, { error: String(e?.message || e), ticker });
+          }
+          return;
+        }
+      }
+
       if (handleProxyRest(req, res)) return;
     } catch (err) {
       sendJson(res, 500, { error: String(err?.message || err) });

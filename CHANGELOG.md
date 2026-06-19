@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-06-19 (session 8) — Options Chain + Multi-Greek wired to server-v2; proxy port fix; ATM row outline (v2026.6.19-v1)
+
+Fixed the Options Chain and Multi-Greek pages (no data / empty expiry dropdown) and added an ATM-row highlight.
+
+### Root cause — proxy port mismatch
+- server-v2 runs Next **and** `/proxy/*` in one process on `PORT` (`.env.local` = **3002**), but `next.config.js` rewrite and `lib/proxyForward.ts` both defaulted `/proxy/*` to a dead **3001** → every `/api/chains` + `/api/expirations` forward failed → "No live chain payload" / empty dropdown.
+- `lib/proxyForward.ts` + `next.config.js` now default to `127.0.0.1:${PORT||3002}`; added explicit `PROXY_URL=http://127.0.0.1:3002` to `.env.local`.
+
+### Server (`server-v2/proxy-tastytrade.js`, `server-with-proxy.js`)
+- server-v2 never implemented `/proxy/api/tt/chains/:ticker` or `/proxy/api/tt/expirations/:ticker` (only the single-symbol live-feed routes) → those forwards 404'd.
+- Added **`fetchChainFull(ticker, expiration)`** + **`fetchExpirations(ticker)`**: rebuild the legacy nested payload (`{ items:[{ "expiration-date", strikes:[{ "strike-price", call, put }] }], underlyingPrice, rootSymbol }`) from `getChainCached` contracts + batched `/market-data/by-type` (greeks, OI, volume, mark); spot via `index=`/`equity=`. Works after-hours (REST, not live dxLink).
+- Wired both `GET /proxy/api/tt/{chains,expirations}/:ticker` routes in `server-with-proxy.js`.
+
+### Pages (`app/options-chain/page.tsx`, `app/mult-greek/page.tsx`)
+- **Fixed infinite `/api/expirations` fetch loop** on options-chain: the expirations `useEffect` listed `loadChain` (recreated every render) as a dep → setState → render → re-fire. Dep array reduced to `[activeTicker]`.
+- **ATM row**: single clean white outline around the whole row (`outline: 1px solid rgba(255,255,255,.55)`, `outlineOffset: -1px`, `position: relative`, `zIndex: 1`) on both pages, replacing the old amber top/bottom borders.
+
+### Notes
+- Reverted exploratory edits to the dead legacy `server/proxy-tastytrade.js`.
+- Sandbox shell was unavailable this session (`HYPERVISOR_VIRT_DISABLED`); `node --check` not run — verify clean boot on restart. server-v2 + next.config + .env.local do **not** hot-reload.
+
+## 2026-06-19 (session 7) — Dev Symbol Probe rebuilt on REST: any ticker, all feeds, net greeks (v2026.6.18-v56)
+
+Reworked the `/dev` Symbol Probe so it actually loads. Root cause of "nothing loads" was a chain of dead paths: the live `/proxy/probe` needs the symbol subscribed in the SPX-only feed (empty overnight / for other tickers), and the old page's `/api/prev-closes`, `/api/proxy/tt/quote`, and the `/api/chains` forward target are now 501/missing stubs. Switched the page to a single REST request that has no feed dependency. Version `2026.6.18-v55` → `2026.6.18-v56`.
+
+### Server (`server-v2/proxy-tastytrade.js`, `server-with-proxy.js`)
+- New **`GET /proxy/probe-rest`** route (any ticker): fetch nested chain (cached 60s) → snap to nearest real strike → `/market-data/by-type` for the contract → underlying spot. Returns `{ found, resolvedSymbol, snapped, requestedStrike, resolvedStrike, result }`.
+- `result.feeds` groups the market-data item into **Quote / Trade / Summary / Greeks**, plus `raw` (full unmodified item).
+- `result.exposures` = per-contract **net greeks** using dashboard conventions: `GEX=|γ|·OI·S²`, `DEX=|δ|·OI·100·S`, `VEX=vega·OI·100·S`, `ThetaExp`, `GEX(vol)`. Vanna/charm = `n/a` (not in REST greeks).
+- `chainTicker()` maps weekly roots to chain roots (`SPXW→SPX`, `NDXP→NDX`, `RUTW→RUT`). `fetchChain()` parameterized by underlying.
+- `_resolveChainSymbol()` + earlier live-feed work (overnight **stale recall** via new `last_events` table, `last-event-store.js`) retained but no longer on the page's hot path.
+
+### Page (`app/dev/page.tsx`)
+- **Ticker** input (any symbol). All probes go through `/proxy/probe-rest` — one request, no polling.
+- Renders **all five panels at once**: Quote, Trade, Summary, Greeks, **Net Greeks**, + collapsible Raw response.
+- **Stop** button (AbortController), live **Elapsed** counter, color-coded **Log panel** (timestamped, 200-line cap, Clear).
+- Clear miss reporting: `no-expiry` (lists valid expirations) / `no-strike`.
+
+### Docs
+- Added `md files/DEV_SYMBOL_PROBE.md` documenting the data path, formulas, panels, endpoints, and the restart-the-proxy gotcha.
+
+### Verify on restart (sandbox unavailable — not syntax-checked here)
+- **Restart the proxy (port 3001)** — `server-v2/*.js` is not hot-reloaded; a stale process returns `404 unknown proxy route`.
+- Hit `/proxy/probe-rest?ticker=SPXW&expiry=<valid>&type=P&strike=7490` → expect `200` with feeds + exposures. Confirmed working in-session (OI/vol/mark/iv + greeks populated).
+
+
 ## 2026-06-19 (session 6) — GEX chart readiness gating: greeks-coverage + DTE-scaled plateau release (v2026.6.19-v1)
 
 Investigated a reported GEX mismatch on the 7490 strike, traced it to stale prior-session data in the manual check (live `dayVolume`/gamma were correct), then hardened the chart's cold-start so it never renders a half-warmed/inflated frame. Version `2026.6.18-v56` → `2026.6.19-v1`.

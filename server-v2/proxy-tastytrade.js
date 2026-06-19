@@ -513,6 +513,162 @@ async function probeRest({ ticker, expiry, type, strike }) {
 }
 
 // ---------------------------------------------------------------------------
+// Full nested chain for the React pages (/api/chains, /api/expirations)
+// The options-chain and mult-greek pages expect the legacy nested shape:
+//   { data: { items: [{ "expiration-date", strikes: [{ "strike-price",
+//     call:{...greeks/oi/vol}, put:{...} }] }], underlyingPrice, rootSymbol } }
+// We rebuild it from the cached contracts + a batched /market-data/by-type pull
+// (which carries greeks, OI, volume, mark per OCC option). Index-wide; works for
+// any ticker, after-hours included (REST snapshot, not the live dxLink feed).
+// ---------------------------------------------------------------------------
+
+const INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
+
+/** Best-effort underlying spot via REST market-data. Returns 0 on failure. */
+async function fetchUnderlyingSpot(ticker) {
+  const n = firstFiniteNumber;
+  try {
+    const root = chainTicker(ticker);
+    const param = INDEX_ROOTS.has(root) ? `index=${encodeURIComponent(root)}` : `equity=${encodeURIComponent(root)}`;
+    const uj = await ttGet(`/market-data/by-type?${param}`);
+    const u = uj?.data?.items?.[0];
+    return n(u?.mark) || n(u?.last) || n(u?.['prev-close']) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Fetch market-data (greeks + OI + volume + mark) for a list of OCC option
+ * symbols, batched. Keyed by normalized OCC symbol.
+ * @param {string[]} occSymbols
+ * @returns {Promise<Map<string, object>>}
+ */
+async function fetchOptionMarketData(occSymbols) {
+  const out = new Map();
+  const n = firstFiniteNumber;
+  const symbols = occSymbols.filter(Boolean);
+  const BATCH = 100;
+  for (let i = 0; i < symbols.length; i += BATCH) {
+    const chunk = symbols.slice(i, i + BATCH);
+    const qs = chunk.map((s) => `equity-option[]=${encodeURIComponent(s)}`).join('&');
+    let json;
+    try {
+      json = await ttGet(`/market-data/by-type?${qs}`);
+    } catch (err) {
+      console.warn('[CHAIN-MD] batch failed:', String(err.message).slice(0, 160));
+      continue;
+    }
+    for (const it of json?.data?.items || []) {
+      if (!it.symbol) continue;
+      const bid = n(it.bid), ask = n(it.ask);
+      out.set(normalizeOcc(it.symbol), {
+        oi: n(it['open-interest']),
+        volume: n(it.volume),
+        delta: n(it.delta),
+        gamma: n(it.gamma),
+        theta: n(it.theta),
+        vega: n(it.vega),
+        iv: n(it['implied-volatility']) || n(it.volatility),
+        bid,
+        ask,
+        mark: n(it.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Build the legacy nested chain payload for a ticker + optional expiration.
+ * @param {string} ticker
+ * @param {string} [expiration] YYYY-MM-DD; when omitted, includes the nearest
+ *   expiration plus up to two more (0DTE prioritized).
+ * @returns {Promise<{items:Array, underlyingPrice:number, rootSymbol:string, symbol:string}>}
+ */
+async function fetchChainFull(ticker, expiration = '') {
+  const root = chainTicker(ticker);
+  const { expirations, contracts } = await getChainCached(ticker);
+
+  // Decide which expirations to include.
+  let targetExps;
+  if (expiration) {
+    targetExps = expirations.filter((e) => e === expiration);
+    if (!targetExps.length) targetExps = [expiration];
+  } else {
+    const today = todayYmd().ymd;
+    const future = expirations.filter((e) => e >= today);
+    if (future[0] === today) {
+      targetExps = [today, ...future.filter((e) => e !== today).slice(0, 2)];
+    } else {
+      targetExps = future.slice(0, 3);
+    }
+  }
+  const expSet = new Set(targetExps);
+
+  const scoped = contracts.filter((c) => expSet.has(c.expiration));
+  const mdMap = await fetchOptionMarketData(scoped.map((c) => c.occSymbol));
+  const underlyingPrice = await fetchUnderlyingSpot(ticker);
+
+  // Group into nested expGroups -> strikes -> { call, put }.
+  const expMap = new Map();
+  for (const c of scoped) {
+    if (!expMap.has(c.expiration)) {
+      expMap.set(c.expiration, { 'expiration-date': c.expiration, _strikes: new Map() });
+    }
+    const eg = expMap.get(c.expiration);
+    const key = String(c.strike);
+    if (!eg._strikes.has(key)) eg._strikes.set(key, { 'strike-price': key });
+    const md = mdMap.get(normalizeOcc(c.occSymbol)) || {};
+    const side = c.type === 'C' ? 'call' : 'put';
+    eg._strikes.get(key)[side] = {
+      symbol: c.occSymbol || '',
+      'streamer-symbol': c.streamerSymbol || '',
+      'open-interest': md.oi || 0,
+      openInterest: md.oi || 0,
+      volume: md.volume || 0,
+      delta: md.delta || 0,
+      gamma: md.gamma || 0,
+      theta: md.theta || 0,
+      vega: md.vega || 0,
+      'implied-volatility': md.iv || 0,
+      bid: md.bid || 0,
+      ask: md.ask || 0,
+      mark: md.mark || 0,
+    };
+  }
+
+  const items = [...expMap.values()]
+    .map((eg) => ({
+      'expiration-date': eg['expiration-date'],
+      strikes: [...eg._strikes.values()].sort(
+        (a, b) => parseFloat(a['strike-price']) - parseFloat(b['strike-price'])
+      ),
+    }))
+    .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
+
+  return { items, underlyingPrice, rootSymbol: root, symbol: root };
+}
+
+/**
+ * Build the expirations list in the legacy shape:
+ *   { items: [{ "expiration-date", "expiration-type", "root-symbol" }], ... }
+ */
+async function fetchExpirations(ticker) {
+  const root = chainTicker(ticker);
+  const { expirations } = await getChainCached(ticker);
+  const today = todayYmd().ymd;
+  const items = expirations
+    .filter((e) => e >= today)
+    .map((d) => ({
+      'expiration-date': d,
+      'expiration-type': 'Weekly',
+      'root-symbol': root,
+    }));
+  return { items, symbol: root, rootSymbol: root };
+}
+
+// ---------------------------------------------------------------------------
 // dxLink client
 // ---------------------------------------------------------------------------
 
@@ -1430,4 +1586,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, probeRest, getAccessToken, getQuoteToken, DxLinkClient };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, probeRest, getAccessToken, getQuoteToken, DxLinkClient };
