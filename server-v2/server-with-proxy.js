@@ -131,6 +131,21 @@ async function main() {
         sendJson(res, 200, { idle: marketState.getState().status.idle });
         return;
       }
+      // Dev probe: raw feed data for a single built symbol from the live maps
+      // (same source as the GEX chart). GET /proxy/probe?symbol=...&feed=Greeks
+      if (pathname === '/proxy/probe' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const symbol = url.searchParams.get('symbol') || '';
+        const feed = url.searchParams.get('feed') || 'Greeks';
+        const t0 = Date.now();
+        if (!proxy || typeof proxy.probeSymbol !== 'function') {
+          sendJson(res, 503, { error: 'proxy not ready', symbol, feed, elapsedMs: Date.now() - t0 });
+          return;
+        }
+        const probe = proxy.probeSymbol(symbol, feed);
+        sendJson(res, 200, { ...probe, symbol, elapsedMs: Date.now() - t0 });
+        return;
+      }
       if (handleProxyRest(req, res)) return;
     } catch (err) {
       sendJson(res, 500, { error: String(err?.message || err) });

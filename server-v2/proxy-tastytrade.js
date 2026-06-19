@@ -50,6 +50,8 @@ const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
 const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
+// Dev-probe on-demand subscriptions auto-expire after this long.
+const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
 // Hold the first GEX broadcast until OI backfill covers this fraction of active
 // strikes — avoids rendering a half-filled chart while REST backfill completes.
@@ -429,6 +431,25 @@ class DxLinkClient {
     }
   }
 
+  /** Remove feed subscriptions for the given streamer symbols (all event types). */
+  unsubscribe(symbols) {
+    if (!this.channelOpen) {
+      this.pending = (this.pending || []).filter((s) => {
+        const sym = typeof s === 'string' ? s : s.symbol;
+        return !symbols.includes(sym);
+      });
+      return;
+    }
+    const remove = symbols.flatMap((s) => {
+      const sym = typeof s === 'string' ? s : s.symbol;
+      return ['Quote', 'Greeks', 'Summary', 'Trade'].map((type) => ({ type, symbol: sym }));
+    });
+    const CHUNK = 500;
+    for (let i = 0; i < remove.length; i += CHUNK) {
+      this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, remove: remove.slice(i, i + CHUNK) });
+    }
+  }
+
   _startKeepalive() {
     this._stopKeepalive();
     this.keepalive = setInterval(() => this._send({ type: 'KEEPALIVE', channel: 0 }), 30000);
@@ -485,6 +506,10 @@ class TastytradeProxy {
     this.esSymbol = null;   // resolved dxLink streamer symbol for front ES future
     this.expiry = '';
     this.recomputeTimer = null;
+    // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
+    // These are strikes/expiries NOT in the active GEX window that the /dev page
+    // asked to inspect. Auto-removed after PROBE_TTL_MS.
+    this.probeSubs = new Map();
   }
 
   async start() {
@@ -691,6 +716,10 @@ class TastytradeProxy {
     const sym = ev.eventSymbol;
     if (!sym) return;
 
+    // Record first-arrival time for dev-probe on-demand subscriptions.
+    const ps = this.probeSubs.get(sym);
+    if (ps && ps.gotAt == null) ps.gotAt = Date.now();
+
     if (ev.eventType === 'Quote') {
       const bid = Number(ev.bidPrice);
       const ask = Number(ev.askPrice);
@@ -748,8 +777,11 @@ class TastytradeProxy {
       }
       // dayVolume on the Trade event is the running daily volume for the
       // contract — the correct source for per-strike volume (Summary has none).
+      // Store live dayVolume even when it's 0: presence in the map means the
+      // stream has delivered an authoritative current-session figure, so the
+      // recompute can trust it over the stale prior-session REST volume.
       const dv = firstFiniteNumber(ev.dayVolume);
-      if (dv > 0) this.volumes.set(sym, dv);
+      if (Number.isFinite(dv)) this.volumes.set(sym, dv);
       const quote = this.quotes.get(sym) || null;
       this.flow.addPrint({
         streamerSymbol: sym,
@@ -795,7 +827,14 @@ class TastytradeProxy {
       const rest = this.restOI.get(c.streamerSymbol);
       const gk = this.greeks.get(c.streamerSymbol); // raw broker greeks (if any)
       const oi = (rest?.oi ?? 0) || (s?.oi ?? 0);
-      const vol = this.volumes.get(c.streamerSymbol) || rest?.volume || 0;
+      // Current-session volume = live dayVolume from the Trade stream. SPX trades
+      // ~23h/day, so this is the authoritative source. The REST `volume` field
+      // carries PRIOR-session cumulative volume that hasn't reset for the new
+      // session (esp. on near-untraded future expiries), which previously made
+      // stale strikes spike vol-GEX and wrongly rank as MVC — only fall back to
+      // it when the live stream has genuinely never delivered a print.
+      const liveVol = this.volumes.get(c.streamerSymbol);
+      const vol = liveVol != null ? liveVol : (rest?.volume || 0);
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.
@@ -914,7 +953,103 @@ class TastytradeProxy {
     writeGexSnapshot(gexRows, this.spot, this.expiry).catch(() => {});
   }
 
+  /**
+   * Dev probe: return the latest cached feed event for a single built streamer
+   * symbol, drawn from the SAME live maps that feed the GEX chart. Used by the
+   * /dev test page to inspect raw proxy data per strike.
+   * @param {string} builtSymbol e.g. ".SPXW260618P7265"
+   * @param {string} feedType "Greeks" | "Quote" | "Trade" | "Summary"
+   * @returns {{ found: boolean, feedType: string, result: object|null }}
+   */
+  /** True if the symbol is already covered by the active GEX-window subscription. */
+  _isActiveSub(sym) {
+    for (const c of this._activeContracts()) {
+      if (c.streamerSymbol === sym) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Subscribe to a single symbol on demand (for the dev probe) if it isn't
+   * already in the active GEX window. Records the subscribe time and schedules
+   * an auto-unsubscribe after PROBE_TTL_MS. Idempotent.
+   */
+  _ensureProbeSub(sym) {
+    if (!sym || this._isActiveSub(sym) || this.probeSubs.has(sym)) return;
+    const entry = { since: Date.now(), gotAt: null, timer: null };
+    entry.timer = setTimeout(() => this._dropProbeSub(sym), PROBE_TTL_MS);
+    this.probeSubs.set(sym, entry);
+    try { this.client?.subscribe([sym]); } catch { /* noop */ }
+    console.log(`[PROBE] subscribed ${sym} (auto-drop in ${Math.round(PROBE_TTL_MS / 60000)}m)`);
+  }
+
+  /** Remove a dev-probe on-demand subscription and its cached data. */
+  _dropProbeSub(sym) {
+    const e = this.probeSubs.get(sym);
+    if (!e) return;
+    if (e.timer) clearTimeout(e.timer);
+    this.probeSubs.delete(sym);
+    // Don't tear down a symbol the chart is now using.
+    if (!this._isActiveSub(sym)) {
+      try { this.client?.unsubscribe([sym]); } catch { /* noop */ }
+      this.quotes.delete(sym);
+      this.greeks.delete(sym);
+      this.summaries.delete(sym);
+      this.volumes.delete(sym);
+    }
+    console.log(`[PROBE] unsubscribed ${sym}`);
+  }
+
+  _readFeed(sym, ft) {
+    switch (ft) {
+      case 'Greeks': {
+        const g = this.greeks.get(sym);
+        return g ? { eventType: 'Greeks', eventSymbol: sym, volatility: g.iv, delta: g.delta, gamma: g.gamma, theta: g.theta, vega: g.vega } : null;
+      }
+      case 'Quote': {
+        const q = this.quotes.get(sym);
+        return q ? { eventType: 'Quote', eventSymbol: sym, bid: q.bid, ask: q.ask, mid: q.mid } : null;
+      }
+      case 'Trade': {
+        const v = this.volumes.get(sym);
+        return v != null ? { eventType: 'Trade', eventSymbol: sym, dayVolume: v } : null;
+      }
+      case 'Summary': {
+        const s = this.summaries.get(sym);
+        const rest = this.restOI.get(sym);
+        return (s || rest) ? { eventType: 'Summary', eventSymbol: sym, openInterest: s?.oi ?? rest?.oi ?? null, prevClose: s?.prevClose ?? null, restVolume: rest?.volume ?? null } : null;
+      }
+      default: return null;
+    }
+  }
+
+  /**
+   * Dev probe. Returns cached feed data for a built symbol; if not yet
+   * subscribed, subscribes on demand and returns a pending status the /dev page
+   * can poll. Reports how long data took to arrive (waitedMs).
+   */
+  probeSymbol(builtSymbol, feedType = 'Greeks') {
+    const sym = String(builtSymbol || '').trim();
+    const ft = String(feedType || 'Greeks');
+    const active = this._isActiveSub(sym);
+    const result = this._readFeed(sym, ft);
+    const sub = this.probeSubs.get(sym);
+
+    if (result != null) {
+      // Time from on-demand subscribe to first event (0 if it was already live).
+      const waitedMs = sub && sub.gotAt != null ? sub.gotAt - sub.since : 0;
+      return { found: true, status: 'ready', feedType: ft, result, waitedMs, source: active ? 'active' : (sub ? 'probe' : 'cache') };
+    }
+
+    // Not cached yet — subscribe on demand if needed and report pending.
+    if (!active) this._ensureProbeSub(sym);
+    const since = this.probeSubs.get(sym)?.since ?? Date.now();
+    return { found: false, status: 'pending', feedType: ft, result: null, waitedMs: Date.now() - since, ttlMs: PROBE_TTL_MS };
+  }
+
   stop() {
+    for (const [, e] of this.probeSubs) { if (e.timer) clearTimeout(e.timer); }
+    this.probeSubs.clear();
     if (this.recomputeTimer) clearInterval(this.recomputeTimer);
     if (this.oiTimer) clearTimeout(this.oiTimer);
     if (this.flowTimer) clearInterval(this.flowTimer);

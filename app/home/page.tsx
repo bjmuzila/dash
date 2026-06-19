@@ -667,15 +667,20 @@ export default function HomePage() {
   }, []);
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   // MVC = strike carrying the peak |net GEX| (most valuable concentration).
+  // Must follow the active dataMode: Vol-Only uses volume-based net GEX, otherwise
+  // the OI + Vol composite — same metric as netGexLive above.
   const mvcStrike = useMemo(() => {
     let best: number | null = null;
     let bestAbs = 0;
     for (const r of chartRows) {
-      const v = Math.abs(r.netGEX ?? 0);
+      const metric = dataMode === "vol-only"
+        ? (r.netVolGEX ?? 0)
+        : (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
+      const v = Math.abs(metric);
       if (v > bestAbs) { bestAbs = v; best = r.strike; }
     }
     return best;
-  }, [chartRows]);
+  }, [chartRows, dataMode]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
 
   const etTime = now?.toLocaleTimeString("en-US", {
@@ -901,14 +906,21 @@ export default function HomePage() {
                         height: heatmapRows.length ? `${100 / heatmapRows.length}%` : undefined,
                       };
 
+                      // Light white frame drawn around the full ATM row (top/bottom on
+                      // every cell, plus a right edge on the final column).
+                      const atmBorder = "1px solid rgba(255,255,255,0.55)";
+
                       // Numeric cell: background opacity from metricBg (intensity-scaled).
                       const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
                         const base: React.CSSProperties = { padding: "0 16px", textAlign: "right", lineHeight: 1.1, overflow: "hidden" };
                         const bg = value == null
                           ? "transparent"
                           : metricBg(value, heatmapColorMeta.max[colKey] ?? 1, intensity, heatmapColorMeta.top3[colKey] ?? []);
+                        const atmEdges: React.CSSProperties = isAtm
+                          ? { borderTop: atmBorder, borderBottom: atmBorder, ...(colIdx === 5 ? { borderRight: atmBorder } : {}) }
+                          : {};
                         return (
-                          <td key={colIdx} style={{ ...base, background: bg, fontWeight: isAtm ? 700 : 400, color: "#fff" }}>
+                          <td key={colIdx} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: "#fff" }}>
                             {text}
                           </td>
                         );
@@ -922,7 +934,7 @@ export default function HomePage() {
                             </tr>
                           )}
                           <tr className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
-                            <td style={{ padding: "0 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff", lineHeight: 1.1, overflow: "hidden" }}>
+                            <td style={{ padding: "0 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder, borderLeft: atmBorder } : {}) }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {row.strike}
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
