@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-06-19 (session 9) — Public landing page + Clerk auth gating + Google Sheets waitlist export
+
+Added a public marketing landing page, Clerk-based authentication gating the paid dashboard, and real-time export of waitlist signups to both Postgres and Google Sheets.
+
+### Landing page (`/`)
+- `app/page.tsx` is now a server component: signed-in users redirect to `/home`; signed-out users see the landing page.
+- `components/landing/LandingClient.tsx` — blurred, unreadable decorative dashboard mock behind a glass card; explainer copy + feature grid; "Notify me at launch" email form; **Sign in** (Clerk modal) and a disabled **"Sign up — coming soon"** button.
+- `components/landing/DashboardMock.tsx` — static, data-free decorative dashboard (fake chart/heatmap/panels) rendered blurred behind the overlay.
+
+### Auth — Clerk (`@clerk/nextjs` ^6, `@clerk/themes`)
+- `middleware.ts` (new): `/`, `/sign-in`, `/sign-up`, `/api/waitlist` public; all else requires login. Signed-out users hitting a protected route are redirected to `/` (the front door).
+- `app/layout.tsx` wrapped in `ClerkProvider` (dark theme, cyan accent).
+- `app/sign-in/[[...sign-in]]/page.tsx` + `app/sign-up/[[...sign-up]]/page.tsx` fallback pages.
+- `components/shared/LayoutShell.tsx` renders bare (no sidebar) on `/`, `/sign-in`, `/sign-up`.
+- `components/shared/Sidebar.tsx` — old bottom logo replaced with Clerk `UserButton` (sign-out, `afterSignOutUrl="/"`).
+
+### Waitlist capture
+- `app/api/waitlist/route.ts` (new): POST validates + stores email; GET (admin-secret guarded) exports JSON.
+- `lib/db.ts` — new `waitlist` table + `addWaitlistEmail` / `listWaitlist` helpers (dedupe on unique email).
+- `lib/google-sheets.ts` (new): service-account JWT auth, appends each NEW signup to a Google Sheet (Email, Source, Referrer, User Agent, Signed Up); auto-creates header row; safe no-op when unconfigured. Wired into the route as fire-and-forget so a Sheets failure never breaks signup.
+
+### Config / deps
+- `package.json` — added `@clerk/nextjs`, `@clerk/themes`, `googleapis`.
+- `.env.local` — Clerk keys, `WAITLIST_ADMIN_SECRET`, Google Sheets vars (`WAITLIST_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`).
+- `LANDING-SETUP.md` (new) — full Clerk + Google service-account setup steps.
+
+### Notes
+- Verified working end-to-end: test signup appended to the Google Sheet in real time.
+- Paid-tier gating NOT yet wired — any signed-in user reaches the dashboard. Next step: gate on a Clerk `publicMetadata.paid` flag set from a payment-provider webhook.
+- **Security:** Clerk dev key + the Google service-account private key were pasted into chat this session and must be rotated. `.env.local` is gitignored.
+- Sandbox shell unavailable this session (`HYPERVISOR_VIRT_DISABLED`); `npm install` + clean boot must be run/verified locally. Run `npm install` for the new deps.
+
 ## 2026-06-19 (session 8) — Options Chain + Multi-Greek wired to server-v2; proxy port fix; ATM row outline (v2026.6.19-v1)
 
 Fixed the Options Chain and Multi-Greek pages (no data / empty expiry dropdown) and added an ATM-row highlight.

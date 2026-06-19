@@ -182,7 +182,53 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_budget_entries_profile ON budget_entries(profile_id);
     CREATE INDEX IF NOT EXISTS idx_budget_entries_occurred ON budget_entries(occurred_at);
+
+    CREATE TABLE IF NOT EXISTS waitlist (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      source TEXT DEFAULT 'landing',
+      referrer TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);
   `);
+}
+
+// ── Waitlist (launch email capture) ────────────────────────────────────────
+
+export interface WaitlistRecord {
+  id?: number;
+  email: string;
+  source?: string | null;
+  referrer?: string | null;
+  user_agent?: string | null;
+  created_at?: string | null;
+}
+
+/** Insert an email; returns true if newly added, false if it already existed. */
+export async function addWaitlistEmail(input: {
+  email: string;
+  source?: string | null;
+  referrer?: string | null;
+  user_agent?: string | null;
+}): Promise<{ added: boolean }> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO waitlist (email, source, referrer, user_agent)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (email) DO NOTHING
+     RETURNING id`,
+    [input.email, input.source ?? "landing", input.referrer ?? null, input.user_agent ?? null]
+  );
+  return { added: (result.rowCount ?? 0) > 0 };
+}
+
+export async function listWaitlist(limit = 1000): Promise<WaitlistRecord[]> {
+  return queryAll<WaitlistRecord>(
+    "SELECT * FROM waitlist ORDER BY created_at DESC LIMIT ?",
+    [limit]
+  );
 }
 
 /** No-op: pg writes are immediate, no file persistence needed */

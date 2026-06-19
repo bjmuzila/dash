@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { UserButton } from "@clerk/nextjs";
 
 import { HOME_THEME } from "./homeTheme";
 
@@ -481,22 +482,10 @@ export default function Sidebar() {
           )}
         </div>
 
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: "50%",
-            overflow: "hidden",
-            background: "#0b1220",
-            boxShadow: "0 0 12px rgba(0,229,255,0.35)",
-            flexShrink: 0,
-            border: "1px solid rgba(0,229,255,0.35)",
-          }}
-        >
-          <img
-            src="/sidebar-logo.jpg"
-            alt="Logo"
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <UserButton
+            afterSignOutUrl="/"
+            appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }}
           />
         </div>
 

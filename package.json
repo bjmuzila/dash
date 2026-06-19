@@ -15,9 +15,12 @@
         "bot:register": "node register-commands.js"
     },
     "dependencies": {
+        "@clerk/nextjs": "^6.33.4",
+        "@clerk/themes": "^2.4.43",
         "clsx": "^2.1.1",
         "discord.js": "^14.16.3",
         "dotenv": "^17.4.2",
+        "googleapis": "^144.0.0",
         "html2canvas": "^1.4.1",
         "lightweight-charts": "^5.0.0",
         "next": "^15.3.3",

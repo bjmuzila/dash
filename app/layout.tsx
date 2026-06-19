@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import { ClerkProvider } from "@clerk/nextjs";
+import { dark } from "@clerk/themes";
 import "./globals.css";
 import LayoutShell from "@/components/shared/LayoutShell";
 
@@ -19,10 +21,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
-        <LayoutShell>{children}</LayoutShell>
-      </body>
-    </html>
+    <ClerkProvider
+      appearance={{ baseTheme: dark, variables: { colorPrimary: "#00F0FF" } }}
+    >
+      <html lang="en" suppressHydrationWarning>
+        <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
+          <LayoutShell>{children}</LayoutShell>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }
