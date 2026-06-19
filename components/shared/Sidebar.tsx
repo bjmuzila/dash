@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { UserButton } from "@clerk/nextjs";
+import { UserButton, useUser } from "@clerk/nextjs";
 
 import { HOME_THEME } from "./homeTheme";
 
@@ -11,31 +11,6 @@ const HomeIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     <polyline points="9 22 9 12 15 12 15 22" />
-  </svg>
-);
-
-const GridIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="7" height="7" />
-    <rect x="14" y="3" width="7" height="7" />
-    <rect x="14" y="14" width="7" height="7" />
-    <rect x="3" y="14" width="7" height="7" />
-  </svg>
-);
-
-const CalendarIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-    <line x1="16" y1="2" x2="16" y2="6" />
-    <line x1="8" y1="2" x2="8" y2="6" />
-    <line x1="3" y1="10" x2="21" y2="10" />
-  </svg>
-);
-
-const UserIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M20 21a8 8 0 0 0-16 0" />
-    <circle cx="12" cy="7" r="4" />
   </svg>
 );
 
@@ -65,22 +40,64 @@ const QUOTE_SYMBOLS = [
   { sym: "SMH", label: "SMH" },
 ];
 
-const PAGE_SHORTCUTS = [
-  { label: "Overview", href: "/overview" },
-  { label: "Premarket", href: "/premarket" },
-  { label: "Database", href: "/database" },
-  { label: "Insights", href: "/insights" },
-  { label: "Est. Move", href: "/estimated-move" },
-  { label: "Options Chain", href: "/options-chain" },
-  { label: "Multi Greek", href: "/mult-greek" },
-  { label: "Trading", href: "/trading" },
-  { label: "Budget", href: "/budget" },
-  { label: "Logs", href: "/logs" },
-  { label: "Personal", href: "/personal" },
-  { label: "Legacy", href: "/legacy" },
-  { label: "Changelog", href: "/changelog" },
-  { label: "Econ Calendar", href: "/economic-calendar" },
+type NavItem = { label: string; href: string };
+type NavGroup = { id: string; label: string; emoji: string; devOnly?: boolean; items: NavItem[] };
+
+// Seeded from the prior flat PAGE_SHORTCUTS list. Item order within each group
+// is user-reorderable at runtime (drag) and persisted to localStorage.
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "gex",
+    label: "Gex",
+    emoji: "📊",
+    items: [
+      { label: "Overview", href: "/overview" },
+      { label: "Est. Move", href: "/estimated-move" },
+      { label: "Options Chain", href: "/options-chain" },
+      { label: "Multi Greek", href: "/mult-greek" },
+      { label: "Insights", href: "/insights" },
+    ],
+  },
+  {
+    id: "footprint",
+    label: "Footprint",
+    emoji: "👣",
+    items: [],
+  },
+  {
+    id: "stock-market",
+    label: "Stock Market",
+    emoji: "📈",
+    items: [
+      { label: "Premarket", href: "/premarket" },
+      { label: "Database", href: "/database" },
+      { label: "Econ Calendar", href: "/economic-calendar" },
+    ],
+  },
+  {
+    id: "personal",
+    label: "Personal",
+    emoji: "🧑",
+    items: [
+      { label: "Trading", href: "/trading" },
+      { label: "Budget", href: "/budget" },
+    ],
+  },
+  {
+    id: "dev",
+    label: "Dev",
+    emoji: "🛠️",
+    devOnly: true,
+    items: [
+      { label: "Legacy", href: "/legacy" },
+      { label: "Dev", href: "/dev" },
+      { label: "Logs", href: "/logs" },
+      { label: "Changelog", href: "/changelog" },
+    ],
+  },
 ];
+
+const ORDER_STORAGE_KEY = "sidebar-nav-order-v1";
 
 function quoteNumber(q: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {
@@ -177,23 +194,89 @@ function useSidebarQuotes() {
   return pcts;
 }
 
+// Returns per-group item lists ordered by the user's saved preference, plus a
+// reorder callback that persists the new order to localStorage.
+function useNavOrder() {
+  const [order, setOrder] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(ORDER_STORAGE_KEY);
+      if (raw) setOrder(JSON.parse(raw));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const orderedItems = (group: NavGroup): NavItem[] => {
+    const saved = order[group.id];
+    if (!saved?.length) return group.items;
+    const byHref = new Map(group.items.map((i) => [i.href, i]));
+    const result: NavItem[] = [];
+    saved.forEach((href) => {
+      const it = byHref.get(href);
+      if (it) {
+        result.push(it);
+        byHref.delete(href);
+      }
+    });
+    // Append any new items not yet in the saved order.
+    byHref.forEach((it) => result.push(it));
+    return result;
+  };
+
+  const reorder = (groupId: string, fromHref: string, toHref: string) => {
+    setOrder((prev) => {
+      const group = NAV_GROUPS.find((g) => g.id === groupId);
+      if (!group) return prev;
+      const current = (prev[groupId]?.length
+        ? prev[groupId].filter((h) => group.items.some((i) => i.href === h))
+        : group.items.map((i) => i.href)
+      ).slice();
+      group.items.forEach((i) => {
+        if (!current.includes(i.href)) current.push(i.href);
+      });
+      const from = current.indexOf(fromHref);
+      const to = current.indexOf(toHref);
+      if (from === -1 || to === -1 || from === to) return prev;
+      current.splice(to, 0, current.splice(from, 1)[0]);
+      const next = { ...prev, [groupId]: current };
+      try {
+        localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  return { orderedItems, reorder };
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const pcts = useSidebarQuotes();
+  const { isSignedIn } = useUser();
+  const { orderedItems, reorder } = useNavOrder();
   const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const [isIdle, setIsIdle] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [pagesOpen, setPagesOpen] = useState(false);
-  const pagesBtnRef = useRef<HTMLButtonElement | null>(null);
-  const pagesMenuRef = useRef<HTMLDivElement | null>(null);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [dragHref, setDragHref] = useState<string | null>(null);
+  const groupBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const groupMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
 
+  const visibleGroups = NAV_GROUPS.filter((g) => !g.devOnly || isSignedIn);
+
   useEffect(() => {
     const onDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (!pagesBtnRef.current?.contains(target) && !pagesMenuRef.current?.contains(target)) setPagesOpen(false);
+      const inBtn = Object.values(groupBtnRefs.current).some((el) => el?.contains(target));
+      const inMenu = Object.values(groupMenuRefs.current).some((el) => el?.contains(target));
+      if (!inBtn && !inMenu) setOpenGroup(null);
       if (!settingsBtnRef.current?.contains(target) && !settingsMenuRef.current?.contains(target)) setSettingsOpen(false);
     };
     document.addEventListener("mousedown", onDown);
@@ -245,7 +328,7 @@ export default function Sidebar() {
         fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0 8px" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "12px 0 8px" }}>
         <Link
           href="/home"
           title="Home"
@@ -267,96 +350,107 @@ export default function Sidebar() {
           <HomeIcon />
         </Link>
 
-        <button
-          ref={pagesBtnRef}
-          title="Overview"
-          onClick={() => setPagesOpen((v) => !v)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            textDecoration: "none",
-            transition: "all 0.15s",
-            background: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "rgba(0,229,255,0.12)" : "transparent",
-            border: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-            color: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? HOME_THEME.cyan : HOME_THEME.muted,
-            boxShadow: PAGE_SHORTCUTS.some((item) => isActive(item.href)) ? "0 0 12px rgba(0,229,255,0.18)" : "none",
-            cursor: "pointer",
-            backgroundColor: pagesOpen ? "rgba(0,229,255,0.12)" : undefined,
-          }}
-        >
-          <GridIcon />
-        </button>
+        {visibleGroups.map((group) => {
+          const groupActive = group.items.some((item) => isActive(item.href));
+          const isOpen = openGroup === group.id;
+          return (
+            <div key={group.id} style={{ position: "relative", display: "flex", justifyContent: "center", width: "100%" }}>
+              <button
+                ref={(el) => { groupBtnRefs.current[group.id] = el; }}
+                title={group.label}
+                onClick={() => setOpenGroup((v) => (v === group.id ? null : group.id))}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 40,
+                  height: 40,
+                  borderRadius: 10,
+                  fontSize: 18,
+                  lineHeight: 1,
+                  transition: "all 0.15s",
+                  background: groupActive || isOpen ? "rgba(0,229,255,0.12)" : "transparent",
+                  border: groupActive ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
+                  boxShadow: groupActive ? "0 0 12px rgba(0,229,255,0.18)" : "none",
+                  cursor: "pointer",
+                }}
+              >
+                <span role="img" aria-label={group.label}>{group.emoji}</span>
+              </button>
 
-        {pagesOpen && (
-          <div
-            ref={pagesMenuRef}
-            style={{
-              position: "absolute",
-              left: 84,
-              top: 12,
-              zIndex: 10001,
-              minWidth: 180,
-              background: "rgba(13,17,25,0.96)",
-              border: "1px solid rgba(0,229,255,0.20)",
-              borderRadius: 10,
-              boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-              backdropFilter: "blur(16px)",
-              overflow: "hidden",
-            }}
-          >
-            <div style={{ padding: "8px 12px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-              Pages
-            </div>
-            {PAGE_SHORTCUTS.map(({ label, href }) => {
-              const active = isActive(href);
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  onClick={() => setPagesOpen(false)}
+              {isOpen && (
+                <div
+                  ref={(el) => { groupMenuRefs.current[group.id] = el; }}
                   style={{
-                    display: "block",
-                    padding: "8px 12px",
-                    fontSize: 12,
-                    fontWeight: active ? 700 : 500,
-                    color: active ? HOME_THEME.cyan : HOME_THEME.muted,
-                    textDecoration: "none",
-                    background: active ? "rgba(0,229,255,0.08)" : "transparent",
-                    borderLeft: active ? "2px solid #00e5ff" : "2px solid transparent",
-                    letterSpacing: "0.02em",
+                    position: "absolute",
+                    left: 52,
+                    top: 0,
+                    zIndex: 10001,
+                    width: 240,
+                    background: "rgba(13,17,25,0.96)",
+                    border: "1px solid rgba(0,229,255,0.20)",
+                    borderRadius: 10,
+                    boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+                    backdropFilter: "blur(16px)",
+                    overflow: "hidden",
                   }}
                 >
-                  {label}
-                </Link>
-              );
-            })}
-          </div>
-        )}
-
-        <Link
-          href="/dev"
-          title="Dev"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            textDecoration: "none",
-            transition: "all 0.15s",
-            background: isActive("/dev") ? "rgba(0,229,255,0.12)" : "transparent",
-            border: isActive("/dev") ? "1px solid rgba(0,229,255,0.30)" : "1px solid transparent",
-            color: isActive("/dev") ? HOME_THEME.cyan : HOME_THEME.muted,
-            boxShadow: isActive("/dev") ? "0 0 12px rgba(0,229,255,0.18)" : "none",
-          }}
-        >
-          <CalendarIcon />
-        </Link>
+                  <div style={{ padding: "8px 12px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                    {group.label}
+                  </div>
+                  {group.items.length === 0 && (
+                    <div style={{ padding: "20px 12px", textAlign: "center", fontSize: 12, fontWeight: 600, color: HOME_THEME.muted, letterSpacing: "0.04em" }}>
+                      Coming soon
+                    </div>
+                  )}
+                  <div style={{ display: group.items.length === 0 ? "none" : "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: 8 }}>
+                    {orderedItems(group).map((item) => {
+                      const active = isActive(item.href);
+                      const isDragging = dragHref === item.href;
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          draggable
+                          onDragStart={() => setDragHref(item.href)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (dragHref && dragHref !== item.href) reorder(group.id, dragHref, item.href);
+                            setDragHref(null);
+                          }}
+                          onDragEnd={() => setDragHref(null)}
+                          onClick={() => setOpenGroup(null)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            textAlign: "center",
+                            minHeight: 44,
+                            padding: "8px 6px",
+                            fontSize: 12,
+                            fontWeight: active ? 700 : 500,
+                            color: "#fff",
+                            textDecoration: "none",
+                            background: active ? "rgba(0,229,255,0.14)" : "rgba(255,255,255,0.04)",
+                            border: active ? "1px solid rgba(0,229,255,0.35)" : "1px solid rgba(255,255,255,0.08)",
+                            borderRadius: 8,
+                            letterSpacing: "0.02em",
+                            cursor: "grab",
+                            opacity: isDragging ? 0.4 : 1,
+                            transition: "opacity 0.12s",
+                          }}
+                        >
+                          {item.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px" }} />

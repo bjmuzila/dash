@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 async function loadChangelog() {
-  const filePath = path.join(process.cwd(), "md files", "CHANGELOG.md");
+  const filePath = path.join(process.cwd(), "CHANGELOG.md");
   return readFile(filePath, "utf8");
 }
 
@@ -32,7 +32,7 @@ export default async function ChangelogPage() {
           Changelog
         </h1>
         <p style={{ margin: "0 0 20px", fontSize: 13, color: "#8da8c2" }}>
-          This page shows the current contents of <span style={{ color: "#00e5ff" }}>md files/CHANGELOG.md</span> directly.
+          This page shows the current contents of <span style={{ color: "#00e5ff" }}>CHANGELOG.md</span> directly.
           When that file changes, this page reflects it on the next load.
         </p>
 
@@ -50,7 +50,7 @@ export default async function ChangelogPage() {
               Source File
             </span>
             <span style={{ fontSize: 12, color: "#00e5ff", fontWeight: 700 }}>
-              md files/CHANGELOG.md
+              CHANGELOG.md
             </span>
           </div>
           <pre
