@@ -390,8 +390,8 @@ export default function Sidebar() {
                   borderLeft: isCore ? "2px solid rgba(0,229,255,0.40)" : "2px solid transparent",
                 }}
               >
-                <span style={{ fontSize: 13, fontWeight: 700, color: isCore ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color, letterSpacing: "0.02em" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: isCore ? HOME_THEME.cyan : HOME_THEME.muted, letterSpacing: "0.04em" }}>{label}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: "0.02em" }}>
                   {fmtPct(pct)}
                 </span>
               </div>

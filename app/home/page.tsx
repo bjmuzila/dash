@@ -870,8 +870,8 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div style={{ flex: 1, minHeight: 0, overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.05) transparent" }}>
-                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 13, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "10%" }} />
                     <col style={{ width: "18%" }} />
@@ -883,7 +883,7 @@ export default function HomePage() {
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike", "Net GEX", "Vol Only GEX", "DEX", "GEX + VEX", "30 Min Rolling Net GEX"].map((header, index) => (
-                        <th key={header} style={{ padding: "12px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
+                        <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
                       ))}
                     </tr>
                   </thead>
@@ -903,7 +903,7 @@ export default function HomePage() {
 
                       // Numeric cell: background opacity from metricBg (intensity-scaled).
                       const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
-                        const base: React.CSSProperties = { padding: "4px 16px", textAlign: "right" };
+                        const base: React.CSSProperties = { padding: "0 16px", textAlign: "right", lineHeight: 1.1, overflow: "hidden" };
                         const bg = value == null
                           ? "transparent"
                           : metricBg(value, heatmapColorMeta.max[colKey] ?? 1, intensity, heatmapColorMeta.top3[colKey] ?? []);
@@ -922,7 +922,7 @@ export default function HomePage() {
                             </tr>
                           )}
                           <tr className={isAtm ? "heatmap-row-atm" : "heatmap-row"} style={rowStyle}>
-                            <td style={{ padding: "4px 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff" }}>
+                            <td style={{ padding: "0 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff", lineHeight: 1.1, overflow: "hidden" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {row.strike}
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}

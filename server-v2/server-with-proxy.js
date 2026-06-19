@@ -24,8 +24,11 @@ const path = require('path');
 const dotenv = require('dotenv');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: false });
-dotenv.config({ path: path.join(ROOT_DIR, '.env'), override: false });
+// .env.local is the single source of truth. Load it with override:true so its
+// values win over any leftover shell environment variables (e.g. a stray
+// SYMBOL=NVDA that would otherwise hijack the SPX home-page feed). The legacy
+// .env is intentionally NOT loaded — it held stale tokens/PORT that conflicted.
+dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 
 const next = require('next');
 const marketState = require('./state/market-state');
