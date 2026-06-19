@@ -7,8 +7,9 @@ import { queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirat
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import IbLogic from "@/components/insights/IbLogic";
+import MarketQualityTerminal from "@/components/insights/MarketQualityTerminal";
 
-type InsightsTab = "exposure" | "vix" | "ib";
+type InsightsTab = "exposure" | "vix" | "ib" | "mqt";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -880,12 +881,125 @@ function VixMeter({ label, value, color, max = 80 }: { label: string; value?: nu
         <span style={{ fontSize: 14, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
         <span style={{ fontSize: 11, fontWeight: 800, color: levelColor, background: `${levelColor}22`, padding: "2px 6px", borderRadius: 3 }}>{level}</span>
       </div>
-      <div style={{ fontSize: 44, fontWeight: 900, color, fontFamily: "monospace", lineHeight: 1 }}>{value != null ? value.toFixed(2) : "—"}</div>
-      <div style={{ height: 6, background: "#1a2a3a", borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ fontSize: 44, fontWeight: 900, color, fontFamily: "monospace", lineHeight: 1.1, paddingBottom: 2 }}>{value != null ? value.toFixed(2) : "—"}</div>
+      <div style={{ height: 6, background: "#1a2a3a", borderRadius: 3, overflow: "hidden", flexShrink: 0, marginTop: "auto" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 3, transition: "width 0.4s" }} />
       </div>
     </div>
   );
+}
+
+// ── VIX regime interpretation (if-this-then-that, per vix.txt) ─────────────────
+
+interface VixRegime {
+  name: string;
+  mode: string;
+  color: string;
+  interpretation: string;
+  actions: string[];
+}
+
+/**
+ * Classify the volatility regime from the three boxes.
+ * Priority order matters: High Fear first, then term-structure inversion,
+ * then the elevated-RV / calm / balanced bands.
+ */
+function classifyVixRegime(vixSpot?: number | null, vix1d?: number | null, rv10?: number | null): VixRegime | null {
+  if (vixSpot == null && vix1d == null && rv10 == null) return null;
+  const spot = vixSpot ?? 0;
+  const d1 = vix1d ?? spot;
+  const rv = rv10 ?? 0;
+  const ratio = spot > 0 ? d1 / spot : 1;
+
+  // 1. High Fear
+  if (spot > 25 || d1 > 22 || rv > 30) {
+    return {
+      name: "High Fear",
+      mode: "Defensive Mode",
+      color: "#ef4444",
+      interpretation: "Crisis / high uncertainty — volatility is rich across the curve.",
+      actions: [
+        "Reduce position size significantly",
+        "Favor long volatility or protective hedges",
+        "Avoid short premium entirely",
+        "Only take very high-conviction scalps with tight stops",
+      ],
+    };
+  }
+
+  // 2. Term Structure Inversion (imminent turbulence)
+  if (ratio > 1.10) {
+    return {
+      name: "Term Structure Inversion",
+      mode: "Turbulence Watch",
+      color: "#f97316",
+      interpretation: "VIX1D well above 30D — immediate turbulence expected, high risk of large moves.",
+      actions: [
+        "Reduce size; focus on quick scalps or long gamma",
+        "Expect an imminent volatility spike",
+        "Avoid naked short options",
+      ],
+    };
+  }
+
+  // 3. Elevated RV + near-term calm (coiled spring)
+  if (rv > 20 && ratio < 1.0) {
+    return {
+      name: "Elevated RV + Near-Term Calm",
+      mode: "Cautious Momentum Mode",
+      color: "#faad14",
+      interpretation: "Market is moving faster than priced (inverted VRP). Calm now but a coiled spring — potential for an explosive move on a catalyst.",
+      actions: [
+        "Prioritize directional scalps (NQ/ES/SPX) on strong GEX, premium flow, or auction imbalance",
+        "Use tight stops and smaller size",
+        "Avoid naked short options / heavy premium selling",
+        "Favor defined-risk or long-gamma setups; watch for IV expansion or GEX flips",
+      ],
+    };
+  }
+
+  // 4. Low Vol Calm
+  if (spot < 15 && d1 < 14 && rv < 15) {
+    return {
+      name: "Low Volatility Calm",
+      mode: "Aggressive Premium Mode",
+      color: "#22c55e",
+      interpretation: "All calm — strong mean-reversion environment with healthy risk premium.",
+      actions: [
+        "Sell short-dated premium aggressively (0DTE credit spreads, iron condors)",
+        "Look for mean-reversion scalps on dips",
+        "Higher position sizing allowed when GEX supports",
+      ],
+    };
+  }
+
+  // 5. Strong Calm Discount
+  if (ratio < 0.90) {
+    return {
+      name: "Strong Calm Discount",
+      mode: "Premium-Selling Favored",
+      color: "#86efac",
+      interpretation: "VIX1D well below 30D — strong near-term calm expected.",
+      actions: [
+        "Excellent for short-dated premium selling",
+        "Favor mean-reversion trades",
+        "Boost short-term premium selling while the calm signal holds",
+      ],
+    };
+  }
+
+  // 6. Normal Balanced (default)
+  return {
+    name: "Normal Balanced",
+    mode: "Balanced Trading Mode",
+    color: "#00e5ff",
+    interpretation: "Healthy market with normal risk premium.",
+    actions: [
+      "Mix of directional scalps and moderate premium selling",
+      "Follow premium flow and GEX levels as primary signals",
+      "Use normal risk parameters",
+    ],
+  };
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -893,12 +1007,15 @@ function VixMeter({ label, value, color, max = 80 }: { label: string; value?: nu
 const TABS: { id: InsightsTab; label: string }[] = [
   { id: "exposure", label: "Exposure Stack" },
   { id: "vix",      label: "VIX / Vol" },
+  { id: "mqt",      label: "Market Quality" },
   { id: "ib",       label: "IB Logic & AI" },
 ];
 
 export default function InsightsPage() {
   usePageLoadStatus({ pageKey: "insights", pageLabel: "Insights", path: "/insights" });
   const exposureRef = useRef<HTMLDivElement>(null);
+  const vixRef = useRef<HTMLDivElement>(null);
+  const mqtRef = useRef<HTMLDivElement>(null);
   const [tab, setTab]   = useState<InsightsTab>("exposure");
   const [gex, setGex]   = useState<GexData | null>(null);
   const [vix, setVix]   = useState<VixData | null>(null);
@@ -1202,6 +1319,10 @@ export default function InsightsPage() {
 
   const comboStr = gexVal != null && vexVal != null ? fmtB(gexVal + vexVal / 1000) : "--";
 
+  const vixRegime = classifyVixRegime(vix?.vix_spot, vix?.vix_1d, vix?.realized_10d);
+  const vixRatio = vix?.vix_spot != null && vix.vix_1d != null ? vix.vix_1d / vix.vix_spot : null;
+  const vrp = vix?.vix_spot != null && vix.realized_10d != null ? vix.vix_spot - vix.realized_10d : null;
+
   const regime = gexVal != null && dexVal != null ? getRegime(gexVal, dexVal) : null;
 
   return (
@@ -1432,11 +1553,20 @@ export default function InsightsPage() {
 
         {/* ── VIX TAB ──────────────────────────────────────────────────────── */}
         {tab === "vix" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 800 }}>
+          <div ref={vixRef} style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 1480, width: "100%" }}>
 
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>VIX / Volatility</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <BoxSnapBtn targetRef={vixRef} />
+                <BoxDiscordBtn targetRef={vixRef} message={`📊 VIX / Vol — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%" }}>
             {gexBn != null && <GexGauge value={gexBn} label="Net Gamma Exposure (Billions)" />}
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
               <MetricCard
                 icon="▮" label="Net GEX" subtitle="Gamma Exposure"
                 color={posGamma ? "#00e676" : "#ef4444"}
@@ -1474,16 +1604,72 @@ export default function InsightsPage() {
               <VixMeter label="10D Realized Vol"  value={vix?.realized_10d} color="#a78bfa" max={60} />
             </div>
 
+            <div className="card-hover" style={{ background: "#070c14", border: `1px solid ${vixRegime ? vixRegime.color + "55" : "#1a2a3a"}`, borderRadius: 8, padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Interpretation</div>
+                {vixRegime && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: vixRegime.color, background: `${vixRegime.color}1f`, border: `1px solid ${vixRegime.color}55`, padding: "3px 10px", borderRadius: 4, textTransform: "uppercase", letterSpacing: ".06em" }}>{vixRegime.name}</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: "#eef7ff" }}>→ {vixRegime.mode}</span>
+                  </div>
+                )}
+              </div>
+
+              {vixRegime ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ fontSize: 14, color: "#d7e6e8", lineHeight: 1.55 }}>{vixRegime.interpretation}</div>
+
+                  {/* Signal readouts */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {vixRatio != null && (
+                      <div style={{ fontSize: 13, color: "#ffffff", background: "rgba(255,255,255,.04)", border: "1px solid #1a2a3a", borderRadius: 6, padding: "6px 10px" }}>
+                        <span style={{ color: "#faad14", fontWeight: 700 }}>VIX1D / VIX:</span>{" "}
+                        <span style={{ fontFamily: "monospace" }}>{vixRatio.toFixed(3)}</span>{" "}
+                        <span style={{ color: "#9fb3c8" }}>
+                          ({vixRatio < 0.90 ? "calm bias" : vixRatio > 1.10 ? "spike likely" : "normal zone"})
+                        </span>
+                      </div>
+                    )}
+                    {vrp != null && (
+                      <div style={{ fontSize: 13, color: "#ffffff", background: "rgba(255,255,255,.04)", border: "1px solid #1a2a3a", borderRadius: 6, padding: "6px 10px" }}>
+                        <span style={{ color: "#a78bfa", fontWeight: 700 }}>VRP (IV−RV):</span>{" "}
+                        <span style={{ fontFamily: "monospace", color: vrp >= 2 ? "#22c55e" : vrp <= -3 ? "#ef4444" : "#ffffff" }}>{vrp >= 0 ? "+" : ""}{vrp.toFixed(2)}</span>{" "}
+                        <span style={{ color: "#9fb3c8" }}>
+                          ({vrp >= 2 ? "seller edge" : vrp <= -3 ? "protect capital, favor gamma" : "neutral"})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Recommended actions */}
+                  <div>
+                    <div style={{ fontSize: 10, color: vixRegime.color, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 6 }}>Recommended Trading Logic</div>
+                    <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+                      {vixRegime.actions.map((a, i) => (
+                        <li key={i} style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{a}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div style={{ fontSize: 11, color: "#6b8298", fontStyle: "italic", borderTop: "1px solid #1a2a3a", paddingTop: 8 }}>
+                    Always cross-check with GEX/DEX walls, flips, MVC levels, and premium flow.
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: "#6b8298" }}>Waiting for VIX data…</div>
+              )}
+            </div>
+
             {(vix?.iv_rank != null || vix?.iv_percentile != null) && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10 }}>
                 {vix.iv_rank != null && (
-                  <div style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16 }}>
+                  <div className="card-hover" style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>IV Rank (1Y)</div>
                     <div style={{ fontSize: 40, fontWeight: 900, color: "#00e5ff", fontFamily: "monospace" }}>{vix.iv_rank.toFixed(1)}<span style={{ fontSize: 18 }}>%</span></div>
                   </div>
                 )}
                 {vix.iv_percentile != null && (
-                  <div style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16 }}>
+                  <div className="card-hover" style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>IV Percentile</div>
                     <div style={{ fontSize: 40, fontWeight: 900, color: "#00b4ff", fontFamily: "monospace" }}>{vix.iv_percentile.toFixed(1)}<span style={{ fontSize: 18 }}>%</span></div>
                   </div>
@@ -1491,35 +1677,26 @@ export default function InsightsPage() {
               </div>
             )}
 
-            <div style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Interpretation</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {vix?.vix_spot != null && vix.vix_1d != null && (
-                  <div style={{ fontSize: 15, color: "#ffffff" }}>
-                    <span style={{ color: "#faad14", fontWeight: 700 }}>VIX1D / VIX ratio:</span>{" "}
-                    <span style={{ fontFamily: "monospace", color: "#ffffff" }}>{(vix.vix_1d / vix.vix_spot).toFixed(3)}</span>
-                    {" — "}{(vix.vix_1d / vix.vix_spot) > 1
-                      ? "Short-term vol elevated vs 30D: near-term event risk or elevated 0DTE buying."
-                      : "Short-term vol discounted vs 30D: near-term market calm expected."}
-                  </div>
-                )}
-                {vix?.vix_spot != null && vix.realized_10d != null && (
-                  <div style={{ fontSize: 15, color: "#ffffff" }}>
-                    <span style={{ color: "#a78bfa", fontWeight: 700 }}>IV - RV spread (VRP):</span>{" "}
-                    <span style={{ fontFamily: "monospace", color: "#ffffff" }}>{(vix.vix_spot - vix.realized_10d).toFixed(2)}</span>
-                    {" — "}{(vix.vix_spot - vix.realized_10d) > 0
-                      ? "Implied vol > realized: dealers collect positive variance risk premium. Short vol bias."
-                      : "Realized vol > implied: market moving faster than priced. Risk premium inverted."}
-                  </div>
-                )}
-              </div>
-            </div>
-
             {gex?.strikes_cached != null && (
               <div style={{ fontSize: 13, color: "#ffffff", fontFamily: "monospace", fontWeight: 500 }}>
                 Strikes in cache: {gex.strikes_cached.toLocaleString()}
               </div>
             )}
+            </div>{/* end VIX block */}
+          </div>
+        )}
+
+        {/* ── MARKET QUALITY TAB ───────────────────────────────────────────── */}
+        {tab === "mqt" && (
+          <div ref={mqtRef} style={{ maxWidth: 1480, width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Market Quality</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <BoxSnapBtn targetRef={mqtRef} />
+                <BoxDiscordBtn targetRef={mqtRef} message={`📊 Market Quality Terminal — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+              </div>
+            </div>
+            <MarketQualityTerminal />
           </div>
         )}
 

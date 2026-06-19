@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-06-19 (session 15) — Market Quality Terminal (new Insights tab) + live VIX data + VIX regime interpretation
+
+Added a **Market Quality Terminal** as its own Insights tab, wired the VIX/Vol meters to live data, and replaced the VIX Interpretation block with a regime-based if-this-then-that engine.
+
+### Market Quality Terminal
+- **`app/api/insights/market-quality/route.ts`** (new) — computes a 0–100 Global Market Score from five weighted pillars: **Volatility 25% / Trend 20% / Breadth 20% / Momentum 25% / Macro 10%**. All inputs from the Yahoo Finance v8 chart endpoint (same source as `/api/quotes-batch`) — `^VIX`, `^GSPC`, `TLT`, `UUP`, and 11 sector ETFs. Computes SMAs, RSI-14, annualized realized vol, sector 5-day performance, sizing band (FULL/REDUCED/MINIMAL), banner (CLEAR/CAUTION/DANGER), and a rule-based market assessment paragraph. No Google Sheets / credentials needed.
+- **`components/insights/MarketQualityTerminal.tsx`** (new) — self-fetching (60s refresh) UI: banner + global score block, 5 animated **ring gauges** (gradient stroke, glow filter, dashed track texture, sweeping white end-cap dot), 5 detail panels, sector-performance bars, scoring-weights table, and the generated assessment. `.card-hover` on all cards.
+- **`app/insights/page.tsx`** — new **"Market Quality"** tab (between VIX/Vol and IB Logic & AI) with Snap/Discord share buttons via a `mqtRef` wrapper.
+
+### Live VIX data
+- **`app/api/insights/vix/route.ts`** — replaced the 501 stub with a real Yahoo-backed route returning `vix_spot` (`^VIX`), `vix_1d` (`^VIX1D`, falls back to spot), `realized_10d` (SPX 10D annualized RV), and `iv_rank` / `iv_percentile` from trailing 1Y VIX history. The existing `setVix` wiring consumes it unchanged.
+
+### VIX tab layout + regime interpretation
+- **VIX/Vol tab** — top 4 GEX MetricCards now 4-across; 3 VIX meters in an even 3-col row (fixed the scrunched layout); fixed the `VixMeter` progress bar overlapping the value text (`flexShrink:0` + `marginTop:auto`). Added Snap/Discord buttons + `.card-hover` on Interpretation/IV Rank/IV Percentile cards.
+- **`classifyVixRegime()`** (new, in `app/insights/page.tsx`) — if-this-then-that engine from `vix.txt`: High Fear → Term-Structure Inversion → Elevated RV + Near-Term Calm → Low Vol Calm → Strong Calm Discount → Normal Balanced. Renders active regime badge, mode, interpretation, VIX1D/VIX ratio + VRP readouts with zone labels, and recommended trading actions.
+
+### Styling
+- Market Quality terminal: muted gray/blue text → white; enlarged fonts throughout (assessment 13→17px, panels, sector bars, weights table, section headers); ring gauge accents.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection; confirm with `npm run build`.
+- Market Quality pillars + live VIX derive from Yahoo daily closes, not the internal dxLink/server-v2 feed. The "AI assessment" is deterministic template prose (no LLM key in repo).
+
+## 2026-06-19 (session 14) — Strike-detail popup + GEX chart default $200 window + heatmap tweaks
+
+Added a click-to-open **strike-detail popup** on the GEX chart and heatmap, defaulted the GEX chart to a $200 (±$100 ATM) window, removed the heatmap's 30-min rolling column, and dimmed the heatmap value text.
+
+### Strike-detail popup
+- **`components/dashboard/StrikeDetailPopup.tsx`** (new) — click a bar/cell to open a popup showing: SPX strike, live composite **net GEX (OI+Vol)** headline, a **2×2 rolling-difference grid** (Δ from open / 5m / 15m / 30m; cyan = building, red = unwinding), and the **OTM contract price** (call mark if strike > spot, put mark if strike < spot). Three switchable styles — **card | drawer | modal** — toggled live from the toolbar (`PopupStyle`). Esc/outside-click closes; `window` access guarded for SSR.
+- **`hooks/useStrikeGexHistory.ts`** (new) — polls point-in-time net GEX baselines (open + each age) for the active expiry; only polls while a popup is open. Baselines are OI-based (matches the history writer), so the diff compares against the live row's `netGEX`.
+- **API `app/api/snapshots/option-strike-gex-history/route.ts`** — added `mode=point&ages=5,15,30` returning per-strike `baselines[strike] = { open, "5", "15", "30" }`.
+- **`lib/db.ts`** — added `getOptionStrikeNetGexAsOf` (nearest reading ≤ N min ago via `DISTINCT ON`) and `getOptionStrikeNetGexAtOpen` (first reading of the session).
+- **Contract price passthrough** — `server-v2/computation/gex-calculator.js` + `server-v2/proxy-tastytrade.js` now thread the live contract price (quote mid, else REST mark) onto each row as `callMark`/`putMark`; added to `ChainRow` in `lib/calculations/calculations.ts`.
+- **Wiring** — `onStrikeClick` added to `GexChart` (drag-vs-click guarded), the home-page heatmap `<tr>`, and the standalone `GexHeatmap` component; popup state + style toggle wired in `app/home/page.tsx` and `components/dashboard/GexToolbar.tsx`.
+
+### GEX chart default window
+- **`components/dashboard/GexChart.tsx`** — default visible range changed from $600 to **$200** ($100 either side of ATM) in all three spots: initial draw, expiry-reset effect, and double-click recenter. Scroll-zoom still adjusts from there.
+
+### Heatmap tweaks (home page)
+- Removed the **30 Min Rolling Net GEX** column (header, data cell, colgroup, divider `colSpan` 6→5, and the coloring `cols` array). Remaining 4 data columns rebalanced to 22.5% each. (`rollingByStrike` state/poll left in place, now unused.)
+- Dimmed numeric value text from `#fff` → ~62% white (ATM rows ~82%) for a softer look; cell background intensity coloring untouched.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection; confirm with `npm run build`.
+- Rolling-difference boxes require the Postgres `option_strike_gex_history` table populated (`DATABASE_URL` + gex-history writer running); they show "—" gracefully until snapshots exist. "From open" needs ≥1 snapshot from session start. Strike, headline GEX, and OTM contract price work immediately from live data.
+- Mobile/bzila popup wiring intentionally skipped per request.
+
 ## 2026-06-19 (session 13) — Confidence Score page + MVC import/auto-collection + dashboard card hover
 
 Built a new **Confidence Score** page (`/confidence-score`) that scores the current MVC level 0–100 for **Hit / Pivot / Chop**, backfilled historical MVC data, added in-process 30-min auto-collection, and applied a standard card hover effect dashboard-wide.
