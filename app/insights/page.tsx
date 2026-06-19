@@ -852,7 +852,7 @@ function MetricCard({ icon, label, subtitle, value, subvalue, color, borderColor
   color: string; borderColor: string; description: string;
 }) {
   return (
-    <div style={{ border: `1px solid ${borderColor}`, background: `linear-gradient(180deg, ${color}10 0%, rgba(5,8,13,0.9) 100%)`, borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className="card-hover" style={{ border: `1px solid ${borderColor}`, background: `linear-gradient(180deg, ${color}10 0%, rgba(5,8,13,0.9) 100%)`, borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${borderColor}`, display: "flex", alignItems: "center", justifyContent: "center", color, fontSize: 16, fontWeight: 800, background: `${color}18` }}>{icon}</div>
         <div>
@@ -875,7 +875,7 @@ function VixMeter({ label, value, color, max = 80 }: { label: string; value?: nu
   const level = value == null ? "—" : value < 15 ? "LOW" : value < 20 ? "NORM" : value < 30 ? "ELEV" : value < 40 ? "HIGH" : "EXTR";
   const levelColor = value == null ? "#ffffff" : value < 15 ? "#22c55e" : value < 20 ? "#86efac" : value < 30 ? "#faad14" : value < 40 ? "#f97316" : "#ef4444";
   return (
-    <div style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className="card-hover" style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 14, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
         <span style={{ fontSize: 11, fontWeight: 800, color: levelColor, background: `${levelColor}22`, padding: "2px 6px", borderRadius: 3 }}>{level}</span>

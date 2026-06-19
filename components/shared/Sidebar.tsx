@@ -56,6 +56,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Options Chain", href: "/options-chain" },
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Insights", href: "/insights" },
+      { label: "Confidence", href: "/confidence-score" },
     ],
   },
   {

@@ -9,9 +9,11 @@
  * reference table remains below so the page is useful even with no live data.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { saveIbLevels, queryIbLevels, type IbLevelsRecord } from "@/lib/snapdb";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 function todayETStr(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -57,14 +59,25 @@ interface IbState {
   doubleBreak: boolean;
   firstBreak: "high" | "low" | null;
   firstBreakMins: number | null; // ET minutes of first break
+  brokeHighTs: number | null;    // epoch ms of IB High break candle
+  brokeLowTs: number | null;     // epoch ms of IB Low break candle
   aboveMid: boolean | null;
+}
+
+/** "9:42 AM ET" style label from an epoch-ms timestamp. */
+function etTimeLabel(ts: number | null): string {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "numeric", minute: "2-digit",
+  }) + " ET";
 }
 
 function computeIb(candles: EsCandle[]): IbState {
   const empty: IbState = {
     hasData: false, done: false, high: 0, low: 0, mid: 0, range: 0, rangePct: 0,
     lowFirst: null, openPrice: 0, lastClose: 0, brokeHigh: false, brokeLow: false,
-    doubleBreak: false, firstBreak: null, firstBreakMins: null, aboveMid: null,
+    doubleBreak: false, firstBreak: null, firstBreakMins: null,
+    brokeHighTs: null, brokeLowTs: null, aboveMid: null,
   };
   const ibBars = candles
     .filter((c) => { const m = slotMinsOf(c); return m >= IB_OPEN && m < IB_CLOSE; })
@@ -86,9 +99,10 @@ function computeIb(candles: EsCandle[]): IbState {
     .filter((c) => slotMinsOf(c) >= IB_CLOSE)
     .sort((a, b) => a.timestamp - b.timestamp);
   let brokeHigh = false, brokeLow = false, firstBreak: "high" | "low" | null = null, firstBreakMins: number | null = null;
+  let brokeHighTs: number | null = null, brokeLowTs: number | null = null;
   for (const b of postBars) {
-    if (!brokeHigh && b.high > high) { brokeHigh = true; if (!firstBreak) { firstBreak = "high"; firstBreakMins = slotMinsOf(b); } }
-    if (!brokeLow && b.low < low) { brokeLow = true; if (!firstBreak) { firstBreak = "low"; firstBreakMins = slotMinsOf(b); } }
+    if (!brokeHigh && b.high > high) { brokeHigh = true; brokeHighTs = b.timestamp; if (!firstBreak) { firstBreak = "high"; firstBreakMins = slotMinsOf(b); } }
+    if (!brokeLow && b.low < low) { brokeLow = true; brokeLowTs = b.timestamp; if (!firstBreak) { firstBreak = "low"; firstBreakMins = slotMinsOf(b); } }
   }
   const lastClose = (postBars[postBars.length - 1] ?? ibBars[ibBars.length - 1]).close;
 
@@ -105,6 +119,8 @@ function computeIb(candles: EsCandle[]): IbState {
     doubleBreak: brokeHigh && brokeLow,
     firstBreak,
     firstBreakMins,
+    brokeHighTs,
+    brokeLowTs,
     aboveMid: lastClose ? lastClose >= mid : null,
   };
 }
@@ -177,6 +193,16 @@ function applicableRules(ib: IbState): AppliedRule[] {
 
 function fmt(v: number, dp = 2) { return Number.isFinite(v) && v !== 0 ? v.toFixed(dp) : "—"; }
 
+/** Render a detail string with percentage values one size larger and bold. */
+function highlightPct(text: string): ReactNode {
+  const parts = text.split(/(\d+(?:\.\d+)?%)/g);
+  return parts.map((p, i) =>
+    /^\d+(?:\.\d+)?%$/.test(p)
+      ? <strong key={i} style={{ fontSize: "1.0833em", fontWeight: 900 }}>{p}</strong>
+      : <span key={i}>{p}</span>
+  );
+}
+
 /**
  * Overlay a locked DB record onto live break detection: the high/low/mid/range,
  * formed-first and open are taken from the immutable locked row, while
@@ -189,9 +215,10 @@ function mergeLocked(live: IbState, locked: IbLevelsRecord, candles: EsCandle[])
     .filter((c) => slotMinsOf(c) >= IB_CLOSE)
     .sort((a, b) => a.timestamp - b.timestamp);
   let brokeHigh = false, brokeLow = false, firstBreak: "high" | "low" | null = null, firstBreakMins: number | null = null;
+  let brokeHighTs: number | null = null, brokeLowTs: number | null = null;
   for (const b of postBars) {
-    if (!brokeHigh && b.high > high) { brokeHigh = true; if (!firstBreak) { firstBreak = "high"; firstBreakMins = slotMinsOf(b); } }
-    if (!brokeLow && b.low < low) { brokeLow = true; if (!firstBreak) { firstBreak = "low"; firstBreakMins = slotMinsOf(b); } }
+    if (!brokeHigh && b.high > high) { brokeHigh = true; brokeHighTs = b.timestamp; if (!firstBreak) { firstBreak = "high"; firstBreakMins = slotMinsOf(b); } }
+    if (!brokeLow && b.low < low) { brokeLow = true; brokeLowTs = b.timestamp; if (!firstBreak) { firstBreak = "low"; firstBreakMins = slotMinsOf(b); } }
   }
   const lastClose = postBars.length ? postBars[postBars.length - 1].close : (live.lastClose || locked.mid);
   return {
@@ -204,6 +231,7 @@ function mergeLocked(live: IbState, locked: IbLevelsRecord, candles: EsCandle[])
     brokeHigh, brokeLow,
     doubleBreak: brokeHigh && brokeLow,
     firstBreak, firstBreakMins,
+    brokeHighTs, brokeLowTs,
     aboveMid: lastClose ? lastClose >= locked.mid : null,
   };
 }
@@ -212,6 +240,26 @@ function LiveIb() {
   const { candles } = useEsCandles();
   const [locked, setLocked] = useState<IbLevelsRecord | null>(null);
   const savedRef = useRef(false);
+
+  // Idle tracker — the alert flash runs only while the user is active. After
+  // 60s of no mouse/keyboard activity the flash goes static; any activity
+  // restarts it (while a break is still in play).
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      setIdle(false);
+      clearTimeout(timer);
+      timer = setTimeout(() => setIdle(true), 60_000);
+    };
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "wheel"] as const;
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, []);
 
   const computed = computeIb(candles);
   // Prefer the immutable locked record once it exists; otherwise show live compute.
@@ -245,9 +293,11 @@ function LiveIb() {
     saveIbLevels(rec).then((stored) => { if (stored) setLocked(stored); }).catch(() => {});
   }, [computed, locked, candles]);
 
-  const breakLabel = ib.doubleBreak ? "DOUBLE BREAK"
-    : ib.brokeHigh ? "IB HIGH BROKEN"
-    : ib.brokeLow ? "IB LOW BROKEN"
+  const broke = ib.brokeHigh || ib.brokeLow;
+  const flashing = broke && !idle; // flash only while user is active
+  const breakLabel = ib.doubleBreak ? "🚨 DOUBLE BREAK"
+    : ib.brokeHigh ? "🚨 IB HIGH BROKEN"
+    : ib.brokeLow ? "🚨 IB LOW BROKEN"
     : ib.done ? "INSIDE (no break yet)"
     : "FORMING";
   const breakColor = ib.doubleBreak ? "#ff1744"
@@ -255,15 +305,22 @@ function LiveIb() {
     : ib.brokeLow ? "#ff5252"
     : "#94a3b8";
 
+  // Timestamp of the first IB break (earliest of high/low breaks).
+  const firstBreakTs = (() => {
+    const ts = [ib.brokeHighTs, ib.brokeLowTs].filter((t): t is number => t != null);
+    return ts.length ? Math.min(...ts) : null;
+  })();
+  const breakTimeLabel = etTimeLabel(firstBreakTs);
+
   const stat = (label: string, value: string, color = "#eef7ff") => (
-    <div style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, padding: "10px 12px", background: "rgba(255,255,255,.02)" }}>
-      <div style={{ fontSize: 9, color: "#5a7a99", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 900, color, fontFamily: "monospace", marginTop: 4 }}>{value}</div>
+    <div style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, padding: "18px 20px", background: "rgba(255,255,255,.02)" }}>
+      <div style={{ fontSize: 11, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace", marginTop: 8 }}>{value}</div>
     </div>
   );
 
   return (
-    <div style={{
+    <div className="card-hover" style={{
       border: `1px solid ${ib.done ? "rgba(0,230,118,.28)" : "rgba(0,229,255,.22)"}`,
       background: "linear-gradient(180deg,rgba(0,26,38,.5),rgba(0,0,0,.3))",
       borderRadius: 10, padding: 16, marginBottom: 4,
@@ -273,8 +330,27 @@ function LiveIb() {
           <div style={{ fontSize: 11, color: "#00e5ff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
           <div style={{ fontSize: 20, color: "#eef7ff", fontWeight: 800 }}>Initial Balance (9:30–10:30 ET)</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: breakColor, border: `1px solid ${breakColor}55`, background: `${breakColor}1a`, padding: "5px 10px", borderRadius: 6 }}>{breakLabel}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {flashing && (
+            <style>{`
+              @keyframes ibAlertFlash {
+                0%, 100% { box-shadow: 0 0 0 0 ${breakColor}00; background: ${breakColor}1a; }
+                50%      { box-shadow: 0 0 14px 2px ${breakColor}aa; background: ${breakColor}40; }
+              }
+              @media (prefers-reduced-motion: reduce) { .ib-alert-flash { animation: none !important; } }
+            `}</style>
+          )}
+          <span className={flashing ? "ib-alert-flash" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: breakColor, border: `1px solid ${breakColor}55`, background: `${breakColor}1a`, padding: "5px 10px", borderRadius: 6, animation: flashing ? "ibAlertFlash 1.1s ease-in-out infinite" : undefined }}>
+            {breakLabel}
+            {broke && breakTimeLabel && (
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", textTransform: "none", color: breakColor, opacity: .9, fontFamily: "monospace", paddingLeft: 6, borderLeft: `1px solid ${breakColor}55` }}>{breakTimeLabel}</span>
+            )}
+          </span>
+          {ib.doubleBreak && (
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: "#9fb3c8", border: "1px solid rgba(255,255,255,.12)", padding: "5px 10px", borderRadius: 6, fontFamily: "monospace" }}>
+              ⬆ {etTimeLabel(ib.brokeHighTs) || "—"} · ⬇ {etTimeLabel(ib.brokeLowTs) || "—"}
+            </span>
+          )}
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: ib.done ? "#00e676" : "#ffb300", border: `1px solid ${ib.done ? "#00e676" : "#ffb300"}55`, padding: "5px 10px", borderRadius: 6 }}>{ib.done ? "IB Done" : "Forming"}</span>
           {locked && <span title="IB high/low frozen in database — will not reset" style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#00e5ff", border: "1px solid #00e5ff55", background: "#00e5ff1a", padding: "5px 10px", borderRadius: 6 }}>🔒 Locked</span>}
         </div>
@@ -286,7 +362,7 @@ function LiveIb() {
         </div>
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
             {stat("IB High", fmt(ib.high), "#00e676")}
             {stat("IB Low", fmt(ib.low), "#ff5252")}
             {stat("Midpoint", fmt(ib.mid), "#00e5ff")}
@@ -306,7 +382,7 @@ function LiveIb() {
             ) : rules.map((r) => (
               <div key={r.title} style={{ borderLeft: `3px solid ${r.color}`, paddingLeft: 10 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: r.color }}>{r.title}</div>
-                <div style={{ fontSize: 12, color: "#9fb3c8", lineHeight: 1.5, marginTop: 2 }}>{r.detail}</div>
+                <div style={{ fontSize: 12, color: "#ffffff", lineHeight: 1.5, marginTop: 2 }}>{highlightPct(r.detail)}</div>
               </div>
             ))}
           </div>
@@ -418,10 +494,29 @@ const LOGIC_ROWS: { title: string; color: string; items: string[] }[] = [
 ];
 
 export default function IbLogic() {
+  const ibRef = useRef<HTMLDivElement>(null);
+  const { refresh } = useEsCandles();
+  const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(refresh);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div ref={ibRef} id="ib-board" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Title row — refresh / screenshot / discord, matching other tabs */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2, flexShrink: 0 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>IB Logic &amp; AI</div>
+          <div style={{ fontSize: 10, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>Initial Balance · ES Futures</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={trigger} style={btnStyle}>{btnLabel}</button>
+          <BoxSnapBtn targetRef={ibRef} label="📷" />
+          <BoxDiscordBtn targetRef={ibRef} message={`📊 IB Logic — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        </div>
+      </div>
+
       <LiveIb />
 
+      {/* Static IB Logic Reference hidden from user view */}
+      <div style={{ display: "none" }}>
       <div style={{ marginBottom: 6, marginTop: 8 }}>
         <div style={{ fontSize: 11, color: "#5a7a99", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Static IB Logic Reference
@@ -471,6 +566,7 @@ export default function IbLogic() {
             </ul>
           </div>
         ))}
+      </div>
       </div>
     </div>
   );

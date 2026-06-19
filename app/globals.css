@@ -43,6 +43,44 @@ textarea {
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
 
+/* ── Card hover lift (dashboard-wide) ──────────────────────────────────────
+   Subtle rise + soft shadow + faint cyan border on hover for panel-like cards.
+   Opt-in via the .card-hover class (added to the shared panel helper) so it
+   never catches nav, headers, table rows, or inputs. */
+.card-hover {
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  border-color: rgba(0, 240, 255, .35);
+}
+
+/* Dashboard-wide: auto-apply the lift to panel-like cards inside page content.
+   Keys on the shared panel signature (rounded 16px glass) so it catches cards
+   built with inline styles without touching nav, headers, tables, or inputs.
+   Scoped to <main> to never affect the sidebar. */
+main [style*="border-radius: 16px"],
+main [style*="border-radius:16px"] {
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+main [style*="border-radius: 16px"]:hover,
+main [style*="border-radius:16px"]:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  border-color: rgba(0, 240, 255, .35);
+}
+
+/* Insights page cards (.greek-card) use 8/12px radius — give them the same lift. */
+.greek-card {
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.greek-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  border-color: rgba(0, 240, 255, .35);
+}
+
 /* Mobile responsive */
 @media (max-width: 767px) {
   /* Hide GEX Row 2 on small screens */

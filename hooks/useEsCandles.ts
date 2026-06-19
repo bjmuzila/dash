@@ -12,7 +12,7 @@
  * Consumed by the Relative Volume card and the live IB Logic component.
  */
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import {
   queryEsCandlesToday,
   queryEsCandlesHistorical,
@@ -80,19 +80,30 @@ export function useEsCandles() {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
 
-  // Initial SQLite load.
-  useEffect(() => {
-    Promise.all([queryEsCandlesToday(), queryEsCandlesHistorical(20)])
-      .then(([today, hist]) => {
-        if (unmountedRef.current) return;
-        setHistorical(hist);
-        if (today.length) {
-          liveMapRef.current = new Map(today.map((r) => [r.slotKey, r]));
-          setTodayRows([...liveMapRef.current.values()]);
-        }
-      })
-      .catch(() => {});
+  // SQLite load (today + history). Reused by mount and manual reload.
+  const loadFromDb = useCallback(async () => {
+    const [today, hist] = await Promise.all([queryEsCandlesToday(), queryEsCandlesHistorical(20)]);
+    if (unmountedRef.current) return;
+    if (hist.length) setHistorical(hist);
+    if (today.length) {
+      // Merge — never wipe live bars already in the map.
+      for (const r of today) if (!liveMapRef.current.has(r.slotKey)) liveMapRef.current.set(r.slotKey, r);
+      setTodayRows([...liveMapRef.current.values()]);
+    }
   }, []);
+
+  // Initial SQLite load.
+  useEffect(() => { loadFromDb().catch(() => {}); }, [loadFromDb]);
+
+  /**
+   * Manual refresh — re-pulls from SQLite ONLY when nothing is loaded yet.
+   * Never clears existing bars and never resets the IB window; if data is
+   * already present this is a no-op so the live range keeps running.
+   */
+  const refresh = useCallback(async () => {
+    if (liveMapRef.current.size > 0) return;
+    await loadFromDb();
+  }, [loadFromDb]);
 
   // Live WS merge.
   useEffect(() => {
@@ -162,5 +173,5 @@ export function useEsCandles() {
       });
   }, [todayRows, historical]);
 
-  return { candles, historical, connected };
+  return { candles, historical, connected, refresh };
 }

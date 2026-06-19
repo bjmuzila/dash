@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-19 (session 13) — Confidence Score page + MVC import/auto-collection + dashboard card hover
+
+Built a new **Confidence Score** page (`/confidence-score`) that scores the current MVC level 0–100 for **Hit / Pivot / Chop**, backfilled historical MVC data, added in-process 30-min auto-collection, and applied a standard card hover effect dashboard-wide.
+
+### Confidence Score
+- **`lib/confidenceScore.ts`** — pure scoring engine. Blends a live structural prior (proximity-to-EM, GEX dominance, gamma regime, DEX bias, flip proximity, time weight) with historical analog rates. History weight saturates `0.65 · n/(n+10)`, capped at 65%, so it works day one and strengthens as data grows.
+- **`app/api/confidence/route.ts`** — reads latest `mvc_snapshots` for the date; finds prior days with the same gamma regime + similar GEX dominance; replays each day's **SPX series** (no ES-candle dependency) to classify hit/pivot/chop around that day's MVC strike; returns blended scores, analogs, thresholds, and a debug block.
+  - Fixed `pickLevel` to use the **strike** (price) as the level, not the $B GEX value.
+  - SPX-driven throughout (ES kept only as a display reference).
+  - Tunables: `HIT_PTS=8`, `PIVOT_PTS=10`, `CHOP_BAND=15`, `ANALOG_GEX_TOL=0.25`.
+- **`app/confidence-score/page.tsx`** — gauges (per-metric color identity: Hit=cyan, Pivot=purple, Chop=orange), pulse/glow on Hit ≥85%, LIVE/PAUSED indicator + timestamp, Auto-refresh toggle (10 min, default off), significant-shift banner, factor bars with tooltips, actionable Bias line, analog badges with outcome icons, color-coded Read bullets, collapsible Tuning Reference.
+- Registered **Confidence** in the Sidebar **Gex** group.
+
+### MVC data import + auto-collection
+- **`scripts/import-mvc.js`** — backfills daily `server-v2/MVC/*.xlsx` into `mvc_snapshots`. Maps human-readable headers → DB columns, synthesizes `timestamp` from Date+Time, falls back ES→SPX and Vol→OI totals, dedupes on `(date,timestamp)`, dry-run by default (`--commit` to write). Loads `.env.local` then `.env`. **Imported 196 rows.**
+- **`server-v2/mvc-auto-snapshot.js`** — in-process collector started from `server-with-proxy.js` after `server.listen`. Every 30 min during RTH (Mon–Fri 9:30–4:00 ET), self-calls `/api/gex` → `/api/snapshots/mvc` (`triggerType: auto-30m`), aligned to :00/:30 with a ~20s startup test run. No browser / no Claude app needed. Replaces the disabled Claude scheduled task.
+
+### Dashboard-wide card hover
+- **`app/globals.css`** — added `.card-hover` (translateY -2px + soft shadow + faint cyan border, .15s ease) and an auto-rule for 16px-radius panels inside `<main>` (scoped away from the sidebar).
+- Applied to Insights `.greek-card`, VIX/Vol `MetricCard`/`VixMeter`, and the live IB card (`components/insights/IbLogic.tsx`).
+- Documented the pattern in `md files/HOME_PAGE_DESIGN_SYSTEM.md` (new subsection + template + checklist) so new pages inherit it.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection against `lib/db.ts` schema; confirm with `npm run build`.
+- Confidence history pool is small (≈9 days at session end) — scores lean on the live prior until the auto-collector accumulates more. Thresholds are reasonable defaults, not yet calibrated.
+
 ## 2026-06-19 (session 12) — Estimated Moves: NDX/NQU blank-row fixes (in progress)
 
 Investigated why NDX and NQU render blank on the Estimated Moves tab (`components/dashboard/EstimatedMoves.tsx`). Server data confirmed healthy (chains + expirations return for NDX; pinned 6/26 chain returns full bid/ask/iv when fetched WITHOUT forceSub). Four fixes applied; still blank as of session end — likely holiday/closed-market data, revisit when NDXP weeklies quote cleanly.

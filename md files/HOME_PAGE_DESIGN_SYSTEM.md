@@ -446,6 +446,47 @@ cursor: "pointer"
 filter: "brightness(1.1)"  // or opacity change
 ```
 
+### Card Hover Lift & Highlight (standard for all cards)
+
+Every panel-like card gets a subtle lift + soft shadow + faint cyan border on
+hover. This is the dashboard-wide standard — apply it to any card you create.
+
+**The class** (defined once in `app/globals.css`):
+```css
+.card-hover {
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);                 /* lift ~2px */
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);   /* soft drop shadow */
+  border-color: rgba(0, 240, 255, .35);        /* faint cyan highlight */
+}
+```
+
+**Two ways it applies:**
+
+1. **Automatic** — any card inside `<main>` with `borderRadius: 16` (the
+   standard panel radius) gets the lift via a global rule in `globals.css`.
+   So a card built from the standard panel recipe needs nothing extra.
+
+2. **Opt-in** — for cards with a non-16px radius (e.g. 8px/10px/12px), add the
+   class explicitly:
+   ```tsx
+   <div className="card-hover" style={{ /* ...panel styles... */ }}>
+   ```
+
+**Self-contained version** (if a page injects its own `<style>` instead of
+relying on `globals.css`):
+```tsx
+<style>{`
+  .card-hover { transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+  .card-hover:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.35); border-color: rgba(0,240,255,.35); }
+`}</style>
+```
+
+**Rule of thumb:** put `className="card-hover"` on the OUTER container of each
+card — not on inner badges, table rows, inputs, or nav chrome.
+
 ### Loading State
 ```typescript
 @keyframes pulse {
@@ -617,8 +658,8 @@ export default function NewPage() {
         minHeight: 0,
         overflow: "hidden",
       }}>
-        {/* Card Panel */}
-        <div style={{
+        {/* Card Panel — `card-hover` adds the standard lift + cyan highlight */}
+        <div className="card-hover" style={{
           background: "rgba(13,17,25,0.45)",
           backdropFilter: "blur(16px)",
           borderRadius: 16,
@@ -642,6 +683,16 @@ export default function NewPage() {
           background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.10) 30%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.10) 70%, transparent 100%);
           pointer-events: none;
         }
+
+        /* Standard card hover lift + highlight (see States & Animations). */
+        .card-hover {
+          transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+        }
+        .card-hover:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 18px rgba(0,0,0,.35);
+          border-color: rgba(0,240,255,.35);
+        }
       `}</style>
     </div>
   );
@@ -661,6 +712,7 @@ export default function NewPage() {
 - [ ] Button styles (primary, secondary, toggle)
 - [ ] SVG gradients (cyan, gold)
 - [ ] Hover/active states
+- [ ] Card hover lift (`.card-hover` on every card — auto for 16px-radius panels)
 - [ ] Scrollbar styling
 - [ ] Responsive clamps for padding/gaps
 - [ ] Icon colors (currentColor or C.cyan)

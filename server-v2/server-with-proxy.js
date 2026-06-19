@@ -236,6 +236,8 @@ async function main() {
 
   server.listen(PORT, () => {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
+    // In-process MVC auto-collector: writes a snapshot every 30m during RTH.
+    require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
   });
 
   const shutdown = () => {
