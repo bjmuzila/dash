@@ -22,6 +22,7 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider
+      signUpUrl="/"
       appearance={{ baseTheme: dark, variables: { colorPrimary: "#00F0FF" } }}
     >
       <html lang="en" suppressHydrationWarning>

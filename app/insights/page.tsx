@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { queryEsCandlesToday, saveEsCandleSnapshot, queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryEsCandlesHistorical, queryPlaybookFeedToday, savePlaybookSignal, type EsCandleRecord } from "@/lib/snapdb";
+import { queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryPlaybookFeedToday, savePlaybookSignal } from "@/lib/snapdb";
 import { usePageLoadStatus } from "@/lib/pageStatus";
+import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import IbLogic from "@/components/insights/IbLogic";
 
 type InsightsTab = "exposure" | "vix" | "ib";
@@ -177,26 +178,6 @@ function getPreferredExpiry(list: Expiry[]): Expiry | undefined {
   return pool.find((exp) => exp.daysTo === (rolled ? 1 : 0)) ?? pool[0];
 }
 
-function sortCandles(rows: EsCandleRecord[]) {
-  return [...rows].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
-}
-
-function computeAvgVolume(rows: EsCandleRecord[], slotKey: string) {
-  const completed = rows.filter((row) => row.slotKey !== slotKey && Number(row.volume) > 0);
-  if (!completed.length) return 0;
-  return completed.reduce((sum, row) => sum + Number(row.volume || 0), 0) / completed.length;
-}
-
-/** Compute average volume for a slot across historical candles */
-function computeHistoricalAvg(historicalCandles: EsCandleRecord[], slotKey: string): number {
-  const slotTime = slotKey.slice(11); // extract "HH:MM" from "YYYY-MM-DDTHH:MM"
-  const matching = historicalCandles.filter(row => {
-    const t = row.slotKey ?? "";
-    return t.endsWith(slotTime) && Number(row.volume || 0) > 0;
-  });
-  if (!matching.length) return 0;
-  return matching.reduce((sum, row) => sum + Number(row.volume || 0), 0) / matching.length;
-}
 
 function computeExposureSnapshot(chain: ChainResponse, fallbackSpot?: number, ts = Date.now()): GreeksRecord {
   const chainSpot = Number(chain.data?.underlyingPrice ?? 0);
@@ -598,10 +579,12 @@ function getRegime(gex: number, dex: number) {
 
 // ── Relative Volume Sparkline ─────────────────────────────────────────────────
 
-function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
-  candles: EsCandleRecord[];
+function RelativeVolumeSparkline({ candles, etClock, lastRefresh, baseline, onToggleBaseline }: {
+  candles: EsCandle[];
   etClock: string;
   lastRefresh: string;
+  baseline: 5 | 14;
+  onToggleBaseline: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const SESSION_OPEN  = 9 * 60 + 30;
@@ -614,7 +597,7 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
   const sessionPct = Math.round(Math.max(0, Math.min(100, (elapsedMins / (SESSION_CLOSE - SESSION_OPEN)) * 100)));
   const isActive = etMins >= SESSION_OPEN && etMins <= SESSION_CLOSE;
 
-  // Build 15m slot bars: 28 slots 9:30–16:00
+  // Build 5m slot bars: 78 slots 9:30–16:00. avg = chosen baseline (5 or 14 day).
   const slots = Array.from({ length: 78 }, (_, i) => {
     const slotMins = SESSION_OPEN + i * 5;
     const h = Math.floor(slotMins / 60);
@@ -624,7 +607,8 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
       const t = c.slotKey ?? c.time ?? "";
       return t.includes(label) || t.endsWith(label);
     });
-    return { label, vol: candle?.volume ?? 0, avg: candle?.avgVolume ?? 0, isCurrent: slotMins <= etMins && etMins < slotMins + 5 };
+    const avg = baseline === 5 ? (candle?.avg5 ?? 0) : (candle?.avg14 ?? 0);
+    return { label, vol: candle?.volume ?? 0, avg, isCurrent: slotMins <= etMins && etMins < slotMins + 5 };
   });
 
   const maxVol = Math.max(1, ...slots.map(s => Math.max(s.vol, s.avg)));
@@ -784,7 +768,16 @@ function RelativeVolumeSparkline({ candles, etClock, lastRefresh }: {
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff5b5b", display: "inline-block" }} />
             <span>{etClock}</span>
           </div>
-          <div style={{ fontSize: 9, color: "#ff5b5b", border: "1px solid rgba(255,91,91,.38)", padding: "4px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>ES Futures</div>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button
+              onClick={onToggleBaseline}
+              title="Toggle baseline lookback (previous 5 vs 14 trading days)"
+              style={{ fontSize: 9, color: "#ff5b5b", border: "1px solid rgba(255,91,91,.55)", background: "rgba(255,91,91,.12)", padding: "4px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", cursor: "pointer" }}
+            >
+              vs {baseline}d avg
+            </button>
+            <div style={{ fontSize: 9, color: "#ff5b5b", border: "1px solid rgba(255,91,91,.38)", padding: "4px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>ES Futures</div>
+          </div>
           {totalVol > 0 && <div style={{ marginTop: 4, fontSize: 9, color: "#ffd0d0", fontFamily: "monospace" }}>{activeSlots} slots · {totalVol >= 1e6 ? (totalVol / 1e6).toFixed(2) + "M" : (totalVol / 1e3).toFixed(0) + "K"} vol</div>}
         </div>
       </div>
@@ -917,18 +910,16 @@ export default function InsightsPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastRefresh, setLastRefresh] = useState<string>("--");
   const [etClock, setEtClock] = useState<string>("—");
-  const [esCandles, setEsCandles] = useState<EsCandleRecord[]>([]);
+  const [relVolBaseline, setRelVolBaseline] = useState<5 | 14>(14);
+  // Live 5m ES candles (server WS + SQLite history) with 5/14-day slot averages.
+  const { candles: esCandles } = useEsCandles();
   const signalIdRef = useRef(0);
   const prevRegimeRef = useRef<string | undefined>(undefined);
   const prevGammaSignalRef = useRef<string | undefined>(undefined);
-  const esCandleMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
   const activeExpiryRef = useRef("");
-  const historicalCandlesRef = useRef<EsCandleRecord[]>([]);
   const initialExpirySetRef = useRef(false);
   const mountedRef = useRef(true);
   const latestRef = useRef<GreeksRecord | null>(null);
-
-  const lastEsCandleSaveRef = useRef(0);
 
   // ── On mount: load expirations (from cache or API) + ES candles + Greeks history ──────────────
   useEffect(() => {
@@ -966,23 +957,7 @@ export default function InsightsPage() {
 
     loadExpirations().catch(() => {});
 
-    // Load ES candles from SQLite + compute historical averages
-    Promise.all([
-      queryEsCandlesToday(),
-      queryEsCandlesHistorical(20), // past 20 trading days
-    ]).then(([todayRows, historicalRows]) => {
-      historicalCandlesRef.current = historicalRows;
-      if (todayRows.length) {
-        // Enrich today's candles with historical averages
-        const enriched = todayRows.map(row => ({
-          ...row,
-          avgVolume: computeHistoricalAvg(historicalRows, row.slotKey),
-        }));
-        const sorted = sortCandles(enriched);
-        esCandleMapRef.current = new Map(sorted.map((row) => [row.slotKey, row]));
-        setEsCandles(sorted);
-      }
-    }).catch(() => {});
+    // ES candles (today + history + 5/14-day slot averages) come from useEsCandles.
 
     // Load greeks history from SQLite
     queryGreeksToday().then(rows => {
@@ -1067,22 +1042,7 @@ export default function InsightsPage() {
   }, []);
 
 
-  useEffect(() => {
-    const saveCandles = () => {
-      const now = Date.now();
-      if (now - lastEsCandleSaveRef.current < 5000) return;
-      const rows = sortCandles([...esCandleMapRef.current.values()]).filter((row) => Number(row.volume || 0) > 0);
-      if (!rows.length) return;
-      lastEsCandleSaveRef.current = now;
-      Promise.all(rows.map((row) => saveEsCandleSnapshot(row)))
-        .then(() => {
-          window.dispatchEvent(new CustomEvent("db-mvc-updated", { detail: { triggerType: "es-candle" } }));
-        })
-        .catch(() => {});
-    };
-    const id = setInterval(saveCandles, 5000);
-    return () => clearInterval(id);
-  }, []);
+  // ES candles are persisted server-side by the proxy; no client save loop needed.
 
   // Build a GreeksRecord snapshot from the server-computed exposure totals
   // (/api/insights/gex → /proxy/gex). These greeks are the SAME ones the GEX
@@ -1397,7 +1357,13 @@ export default function InsightsPage() {
               </section>
 
               {/* Relative Volume */}
-              <RelativeVolumeSparkline candles={esCandles} etClock={etClock} lastRefresh={lastRefresh} />
+              <RelativeVolumeSparkline
+                candles={esCandles}
+                etClock={etClock}
+                lastRefresh={lastRefresh}
+                baseline={relVolBaseline}
+                onToggleBaseline={() => setRelVolBaseline((b) => (b === 14 ? 5 : 14))}
+              />
 
               {/* Institutional Analysis */}
               <section className="greek-card" style={{ border: "1px solid rgba(0,180,200,.26)", background: "linear-gradient(180deg,rgba(0,40,45,.5),rgba(0,0,0,.28))", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>

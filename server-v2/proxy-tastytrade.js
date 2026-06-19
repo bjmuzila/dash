@@ -23,6 +23,7 @@ const WebSocket = require('ws');
 
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
+const { writeEsCandles } = require('./state/es-candle-writer');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
@@ -265,6 +266,29 @@ async function resolveUnderlying(symbol) {
     // Fall back to plain symbol if the lookup fails.
     return { symbol: sym, klass: 'equity', marketDataParam: `equity=${sym}`, streamerSymbol: sym };
   }
+}
+
+/**
+ * Compute an ET 5-minute slot descriptor for an epoch-ms timestamp.
+ * Returns { slotKey:'YYYY-MM-DDTHH:MM', date:'YYYY-MM-DD', time:'HH:MM', slotMs }
+ * where slotMs is the epoch-ms of the slot start (floored to the 5-min boundary).
+ */
+function etFiveMinSlot(ts) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(ts));
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const hour = map.hour === '24' ? '00' : map.hour;
+  const slotMin = String(Math.floor(Number(map.minute || '0') / 5) * 5).padStart(2, '0');
+  const date = `${map.year}-${map.month}-${map.day}`;
+  const time = `${hour}:${slotMin}`;
+  const slotKey = `${date}T${time}`;
+  // Floor the original timestamp to the 5-min boundary for a stable slotMs.
+  const slotMs = Math.floor(ts / 300000) * 300000;
+  return { slotKey, date, time, slotMs };
 }
 
 /**
@@ -739,11 +763,18 @@ class DxLinkClient {
               Greeks: ['eventType', 'eventSymbol', 'volatility', 'delta', 'gamma', 'theta', 'vega', 'rho'],
               Summary: ['eventType', 'eventSymbol', 'openInterest', 'dayVolume', 'prevDayClosePrice'],
               Trade: ['eventType', 'eventSymbol', 'price', 'size', 'dayVolume'],
+              Candle: ['eventType', 'eventSymbol', 'time', 'open', 'high', 'low', 'close', 'volume'],
             },
           });
           this.channelOpen = true;
           if (this.pending.length) {
-            this.subscribe(this.pending.splice(0));
+            const queued = this.pending.splice(0);
+            const candleSubs = queued.filter((q) => q && q.__candle);
+            const regular = queued.filter((q) => !(q && q.__candle));
+            if (regular.length) this.subscribe(regular);
+            for (const c of candleSubs) {
+              this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [c.sub] });
+            }
           }
         }
         break;
@@ -798,6 +829,24 @@ class DxLinkClient {
     }
   }
 
+  /**
+   * Subscribe to a Candle stream for one symbol. dxLink candle symbols carry a
+   * period suffix, e.g. "/ESU26:XCME{=5m}". Passing fromTime (epoch ms) makes
+   * dxFeed replay a historical snapshot of bars since that time, then stream
+   * live updates for the forming bar.
+   * @param {string} candleSymbol full candle symbol incl. {=5m}
+   * @param {number} [fromTime] epoch ms for historical snapshot start
+   */
+  subscribeCandle(candleSymbol, fromTime) {
+    const sub = { type: 'Candle', symbol: candleSymbol };
+    if (fromTime != null) sub.fromTime = fromTime;
+    if (!this.channelOpen) {
+      this.pending.push({ __candle: true, sub });
+      return;
+    }
+    this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [sub] });
+  }
+
   /** Remove feed subscriptions for the given streamer symbols (all event types). */
   unsubscribe(symbols) {
     if (!this.channelOpen) {
@@ -844,6 +893,7 @@ const COMPACT_FIELDS = {
   Greeks: ['eventType', 'eventSymbol', 'volatility', 'delta', 'gamma', 'theta', 'vega', 'rho'],
   Summary: ['eventType', 'eventSymbol', 'openInterest', 'dayVolume', 'prevDayClosePrice'],
   Trade: ['eventType', 'eventSymbol', 'price', 'size', 'dayVolume'],
+  Candle: ['eventType', 'eventSymbol', 'time', 'open', 'high', 'low', 'close', 'volume'],
 };
 
 // ---------------------------------------------------------------------------
@@ -876,6 +926,10 @@ class TastytradeProxy {
     this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
     this.vixSymbol = null;  // resolved dxLink streamer symbol for VIX
     this.esSymbol = null;   // resolved dxLink streamer symbol for front ES future
+    this.esCandleSymbol = null; // candle stream symbol, e.g. "/ESU26:XCME{=5m}"
+    this.esCandles = new Map(); // slotKey -> { timestamp, date, slotKey, time, open, high, low, close, volume }
+    this.esCandlesDirty = false; // set when a candle slot changed since last flush
+    this.candleFlushTimer = null;
     this.expiry = '';
     this.recomputeTimer = null;
     // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
@@ -911,7 +965,8 @@ class TastytradeProxy {
     }
     try {
       this.esSymbol = await resolveFrontEsSymbol();
-      console.log(`[FEED] ES front streamer=${this.esSymbol}`);
+      this.esCandleSymbol = `${this.esSymbol}{=5m}`;
+      console.log(`[FEED] ES front streamer=${this.esSymbol} candle=${this.esCandleSymbol}`);
       // Prior close for ES future day-change.
       try {
         const enc = encodeURIComponent(this.esSymbol.replace(/:.*/, '')); // /ESU25:XCME -> /ESU25
@@ -974,6 +1029,16 @@ class TastytradeProxy {
     this.prevGreeksCoverage = 0;
     this.greeksPlateauHits = 0;
     this._resubscribe();
+
+    // Subscribe to the 5-minute ES candle stream. fromTime requests a historical
+    // snapshot of the past ~15 sessions of 5m bars, then live forming-bar updates.
+    if (this.esCandleSymbol) {
+      const fromTime = Date.now() - 15 * 86400_000;
+      this.client.subscribeCandle(this.esCandleSymbol, fromTime);
+      console.log(`[FEED] subscribed ES candles ${this.esCandleSymbol} from ${new Date(fromTime).toISOString()}`);
+      // Flush aggregated candles to state + DB on a steady cadence.
+      this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
+    }
 
     // Backfill OI/volume from REST now, then refresh periodically (OI only
     // changes once per day, but volume drifts — refresh every 60s once ready).
@@ -1101,12 +1166,33 @@ class TastytradeProxy {
       if (this.recomputeTimer) { clearInterval(this.recomputeTimer); this.recomputeTimer = null; }
       if (this.flowTimer) { clearInterval(this.flowTimer); this.flowTimer = null; }
       if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
+      if (this.candleFlushTimer) { clearInterval(this.candleFlushTimer); this.candleFlushTimer = null; }
     } else {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
       if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
       if (!this.oiTimer) this._scheduleOiRefresh();
+      if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
     }
     marketState.setStatus({ idle: next });
+  }
+
+  /**
+   * Push the current 5m ES candle map into market-state (for WS broadcast) and
+   * persist changed bars to Postgres. Throttled by the 5s flush timer; only does
+   * work when a candle slot changed since the last flush. Per-slot avgVolume
+   * (5/14-day baselines) is computed client-side from SQLite history, so the
+   * server stores raw bars only.
+   */
+  _flushEsCandles() {
+    if (!this.esCandlesDirty) return;
+    this.esCandlesDirty = false;
+    const rows = [...this.esCandles.values()]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-600); // cap payload: ~15 sessions of RTH 5m bars
+    // Broadcast a fresh array reference so market-state emits a change.
+    marketState.setState({ esCandles: rows });
+    // Persist only bars with real volume (skip empty forming snapshots).
+    writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
   _onEvent(ev) {
@@ -1202,6 +1288,34 @@ class TastytradeProxy {
       });
       return;
     }
+    if (ev.eventType === 'Candle') {
+      // 5-minute ES bars (historical snapshot on subscribe, then live forming bar).
+      // dxFeed Candle `time` is the bar-start epoch ms. NaN volume on a forming
+      // bar is treated as 0.
+      const barTime = Number(ev.time);
+      const open = Number(ev.open);
+      const high = Number(ev.high);
+      const low = Number(ev.low);
+      const close = Number(ev.close);
+      let volume = Number(ev.volume);
+      if (!Number.isFinite(volume)) volume = 0;
+      if (!(barTime > 0) || !(open > 0) || !(high > 0) || !(low > 0) || !(close > 0)) return;
+      const { slotKey, date, time, slotMs } = etFiveMinSlot(barTime);
+      const prev = this.esCandles.get(slotKey);
+      const merged = prev
+        ? {
+            ...prev,
+            high: Math.max(prev.high, high),
+            low: Math.min(prev.low, low),
+            close, // last close wins
+            volume: Math.max(prev.volume, volume), // dxFeed candle volume is cumulative-per-bar
+          }
+        : { timestamp: slotMs, date, slotKey, time, symbol: '/ES', intervalMinutes: 5, source: 'dxlink', open, high, low, close, volume };
+      this.esCandles.set(slotKey, merged);
+      this.esCandlesDirty = true;
+      return;
+    }
+
     if (ev.eventType === 'Greeks') {
       // Raw broker greeks from dxFeed. Preferred over locally-solved BS greeks:
       // the broker's IV is far less noisy than solving IV from a tick price.

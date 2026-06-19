@@ -44,6 +44,9 @@ const state = {
   totalNetGex: 0,
   // Latest flow bucket
   flow: null,
+  // 5-minute ES futures candles (raw OHLCV bars, ~15 sessions). Client computes
+  // relative-volume baselines + IB levels from these.
+  esCandles: [],
   // Feed health
   status: {
     ttAuthenticated: false,

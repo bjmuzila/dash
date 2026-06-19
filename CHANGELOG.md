@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-06-19 (session 10) — Live ES 5m candle pipeline → Relative Volume + live IB Logic (locked)
+
+Wired a real live + historical 5-minute ES futures OHLCV feed through server-v2 and built it into the Insights page: a working Relative Volume card (5/14-day baseline toggle) and a live Initial Balance tracker that locks the IB high/low into the database at 10:30 ET so it never resets. Also blocked public sign-up pre-launch.
+
+### Sign-up lockdown
+- `app/sign-up/[[...sign-up]]/page.tsx` now redirects to `/` (no public registration pre-launch).
+- `app/layout.tsx` — `ClerkProvider` given `signUpUrl="/"` so the modal's sign-up link goes to the landing page. (Still need to disable public sign-ups in the Clerk Dashboard for a hard lock.)
+
+### Live ES 5m candle pipeline (server-v2)
+- `server-v2/proxy-tastytrade.js` — dxLink client now subscribes to the front ES future's 5m Candle stream (`${esSymbol}{=5m}`) with a 15-day `fromTime` for a historical snapshot on connect. Added `Candle` to FEED_SETUP/COMPACT_FIELDS, a `subscribeCandle()` method, mixed pending-queue flush, ET 5-min slot aggregation (`etFiveMinSlot`, `this.esCandles`), and `_flushEsCandles()` (5s cadence → state + DB; cleaned up on idle).
+- `server-v2/state/es-candle-writer.js` (new) — lazy-pool Postgres writer upserting into `es_candles` (no-op without DATABASE_URL).
+- `server-v2/state/market-state.js` — new `esCandles` field.
+- `server-v2/websocket-server.js` — `esCandles` added to snapshot + new targeted `esCandles` WS message on `/ws/gex`.
+
+### Client — Insights
+- `hooks/useEsCandles.ts` (new) — connects `/ws/gex`, merges live bars with SQLite history (today + 20d), computes per-slot avg volume over previous **5 and 14** trading days (`avg5`/`avg14`).
+- `app/insights/page.tsx` — Relative Volume now reads real candles + true relVol%; added **5d/14d baseline toggle**. Removed the broken client-side candle loader/saver and dead helpers.
+- `components/insights/IbLogic.tsx` — new live IB panel: computes 9:30–10:30 ET high/low/mid/range from ES candles, marks IB done at 10:30, detects breaks (high/low/double/inside), formed-first, compression, timing; surfaces which reference rules apply. Static reference retained below.
+
+### IB locking (never resets)
+- `lib/db.ts` — new `ib_levels` table (one row/day, unique date) + `upsertIbLevels` (no-op once `locked=1`, via `WHERE locked = 0`) + `getIbLevels`.
+- `app/api/snapshots/ib/route.ts` (new) — GET/POST; refuses to overwrite a locked row.
+- `lib/snapdb.ts` — `saveIbLevels` / `queryIbLevels` client helpers.
+- `IbLogic.tsx` — at 10:30 ET freezes the IB once (`locked=1`); thereafter reads the immutable locked row (survives refresh/restart/ET rollover) and runs break detection live against the frozen levels. 🔒 Locked badge in the UI.
+
+**Notes:** requires a server-v2 restart; 5/14-day averages + IB history accumulate as `es_candles` fills. Couldn't run tsc/lint (sandbox unavailable) — recommend `npm run build` before deploy.
+
 ## 2026-06-19 (session 9) — Public landing page + Clerk auth gating + Google Sheets waitlist export
 
 Added a public marketing landing page, Clerk-based authentication gating the paid dashboard, and real-time export of waitlist signups to both Postgres and Google Sheets.

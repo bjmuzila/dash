@@ -1,18 +1,7 @@
-import { SignUp } from "@clerk/nextjs";
+import { redirect } from "next/navigation";
 
+// Public sign-up is disabled pre-launch. Anyone hitting /sign-up is sent to
+// the landing page (waitlist + sign-in only).
 export default function SignUpPage() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#05060A",
-      }}
-    >
-      <SignUp />
-    </div>
-  );
+  redirect("/");
 }

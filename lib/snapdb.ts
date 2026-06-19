@@ -373,6 +373,52 @@ export async function queryEsCandlesHistorical(daysBack = 20): Promise<EsCandleR
   return (json.rows ?? []) as EsCandleRecord[];
 }
 
+// ── IB Levels (locked Initial Balance per day) ──────────────────────────────────
+
+export interface IbLevelsRecord {
+  date:       string;
+  symbol?:    string;
+  timestamp:  number;
+  locked:     number;           // 1 once frozen at/after 10:30 ET
+  high:       number;
+  low:        number;
+  mid:        number;
+  range:      number;
+  rangePct:   number;
+  openPrice:  number;
+  lowFirst:   number | null;
+  barCount:   number;
+}
+
+/**
+ * Persist the day's IB levels. Server upsert is a no-op once the row is locked,
+ * so a later call can never overwrite a frozen IB. Returns the authoritative
+ * stored row (so the caller can adopt the locked values).
+ */
+export async function saveIbLevels(rec: IbLevelsRecord): Promise<IbLevelsRecord | null> {
+  try {
+    const res = await fetch("/api/snapshots/ib", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rec),
+    });
+    const json = await res.json();
+    return (json.row ?? null) as IbLevelsRecord | null;
+  } catch {
+    return null;
+  }
+}
+
+export async function queryIbLevels(date = etDateStr()): Promise<IbLevelsRecord | null> {
+  try {
+    const res  = await fetch(`/api/snapshots/ib?date=${date}`);
+    const json = await res.json();
+    return (json.row ?? null) as IbLevelsRecord | null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Expirations Cache ─────────────────────────────────────────────────────────
 
 export async function saveExpirationCache(

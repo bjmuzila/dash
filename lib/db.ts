@@ -80,6 +80,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles("slotKey");
 
+    CREATE TABLE IF NOT EXISTS ib_levels (
+      id SERIAL PRIMARY KEY, date TEXT NOT NULL UNIQUE, symbol TEXT DEFAULT '/ES',
+      timestamp BIGINT NOT NULL, locked INTEGER DEFAULT 0,
+      high REAL, low REAL, mid REAL, range REAL, "rangePct" REAL,
+      "openPrice" REAL, "lowFirst" INTEGER, "barCount" INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_ib_date ON ib_levels(date);
+
     CREATE TABLE IF NOT EXISTS bzila_snapshots (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       time TEXT, ticker TEXT, session TEXT DEFAULT 'rth', orders TEXT, stats TEXT
@@ -666,6 +674,53 @@ export async function getEsCandles(date?: string, daysBack?: number, limit = 200
     `SELECT * FROM es_candles ORDER BY timestamp DESC LIMIT ?`,
     [limit]
   );
+}
+
+// ── IB Levels (locked Initial Balance per day) ──────────────────────────────────
+
+export interface IbLevelsRecord {
+  id?: number;
+  date: string;
+  symbol?: string;
+  timestamp: number;
+  locked: number;          // 1 once frozen at/after 10:30 ET — never overwritten after
+  high: number;
+  low: number;
+  mid: number;
+  range: number;
+  rangePct: number;
+  openPrice: number;
+  lowFirst: number | null; // 1 = low formed first, 0 = high first, null = tie/unknown
+  barCount: number;
+}
+
+/**
+ * Upsert the day's IB levels. Once a row is `locked=1`, this is a no-op for that
+ * date (the IB is frozen post-10:30 and must never be recomputed/overwritten).
+ * While unlocked (still forming), the row is updated freely.
+ */
+export async function upsertIbLevels(r: Omit<IbLevelsRecord, "id">): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO ib_levels (date,symbol,timestamp,locked,high,low,mid,range,"rangePct","openPrice","lowFirst","barCount")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT(date) DO UPDATE SET
+       symbol=EXCLUDED.symbol, timestamp=EXCLUDED.timestamp, locked=EXCLUDED.locked,
+       high=EXCLUDED.high, low=EXCLUDED.low, mid=EXCLUDED.mid, range=EXCLUDED.range,
+       "rangePct"=EXCLUDED."rangePct", "openPrice"=EXCLUDED."openPrice",
+       "lowFirst"=EXCLUDED."lowFirst", "barCount"=EXCLUDED."barCount"
+     WHERE ib_levels.locked = 0`,
+    [r.date, r.symbol ?? "/ES", r.timestamp, r.locked ?? 0, r.high, r.low, r.mid,
+     r.range, r.rangePct, r.openPrice, r.lowFirst, r.barCount]
+  );
+}
+
+export async function getIbLevels(date: string): Promise<IbLevelsRecord | null> {
+  const rows = await queryAll<IbLevelsRecord>(
+    `SELECT * FROM ib_levels WHERE date = ? LIMIT 1`,
+    [date]
+  );
+  return rows[0] ?? null;
 }
 
 // ── Bzila Live Snapshots ──────────────────────────────────────────────────────

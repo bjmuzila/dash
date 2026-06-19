@@ -38,6 +38,7 @@ function buildSnapshot(state) {
     gexFlip: state.gexFlip,
     totalNetGex: state.totalNetGex,
     flow: state.flow,
+    esCandles: state.esCandles,
     status: state.status,
   };
 }
@@ -110,6 +111,7 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       }, state.symbol));
     }
     if (changed.has('flow')) out.push(msg('flow', state.flow, state.symbol));
+    if (changed.has('esCandles')) out.push(msg('esCandles', state.esCandles, state.symbol));
     if (changed.has('spot') || changed.has('prevClose')) {
       out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose }, state.symbol));
     }
