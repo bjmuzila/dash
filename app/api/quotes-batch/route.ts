@@ -47,11 +47,25 @@ async function fetchOne(yahooSym: string): Promise<YahooQuote> {
     if (!meta) return { price: null, prevClose: null, change: null, pct: null };
 
     const closes = result?.indicators?.quote?.[0]?.close;
-    const lastClose = Array.isArray(closes)
-      ? [...closes].reverse().find((v) => typeof v === "number" && Number.isFinite(v))
-      : null;
+    // Valid daily closes, oldest→newest. The last is today's (or latest) close;
+    // the one before it is the true prior-session close.
+    const validCloses = Array.isArray(closes)
+      ? closes.filter((v) => typeof v === "number" && Number.isFinite(v))
+      : [];
+    const lastClose = validCloses.length ? validCloses[validCloses.length - 1] : null;
+    const seriesPrevClose = validCloses.length >= 2 ? validCloses[validCloses.length - 2] : null;
+
     const price = meta.regularMarketPrice ?? lastClose ?? null;
-    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+    // IMPORTANT: meta.chartPreviousClose is the close BEFORE the chart's range
+    // window (≈a week ago for range=5d) — NOT yesterday. Using it inflates the
+    // day %. Prefer Yahoo's actual prior-session close, then the second-to-last
+    // candle, and only fall back to chartPreviousClose as a last resort.
+    const prevClose =
+      meta.regularMarketPreviousClose ??
+      meta.previousClose ??
+      seriesPrevClose ??
+      meta.chartPreviousClose ??
+      null;
     const change = price != null && prevClose != null ? price - prevClose : null;
     const pct = change != null && prevClose ? (change / prevClose) * 100 : null;
     return { price, prevClose, change, pct };

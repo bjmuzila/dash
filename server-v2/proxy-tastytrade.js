@@ -51,6 +51,12 @@ const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
+// Hold the first GEX broadcast until OI backfill covers this fraction of active
+// strikes — avoids rendering a half-filled chart while REST backfill completes.
+const OI_READY_RATIO = Number(process.env.OI_READY_RATIO || 0.85);
+// Safety valve: broadcast anyway after this long, even if coverage is still low
+// (some far-OTM strikes legitimately never report OI and shouldn't block forever).
+const OI_READY_GRACE_MS = Number(process.env.OI_READY_GRACE_MS || 90000);
 // SPX flow tape is aggregated and broadcast on this cadence (default 500ms),
 // independent of the heavier GEX recompute loop.
 const FLOW_AGGREGATE_MS = Number(process.env.FLOW_AGGREGATE_MS || 500);
@@ -466,6 +472,9 @@ class TastytradeProxy {
     this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
     this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
     this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
+    this.oiCoverage = 0;      // 0..1 fraction of active strikes that have OI (last backfill)
+    this.oiReady = false;     // true once coverage crosses threshold or grace elapses
+    this.firstSubAt = 0;      // ms timestamp of first subscribe (grace-period anchor)
     this.oiTimer = null;
     this.flowTimer = null;
     this.idle = false;
@@ -561,12 +570,16 @@ class TastytradeProxy {
     this.client.connect();
 
     // Subscribe to spot + the active-expiry contracts in the strike window.
+    this.firstSubAt = Date.now();
+    this.oiReady = false;
     this._resubscribe();
 
     // Backfill OI/volume from REST now, then refresh periodically (OI only
-    // changes once per day, but volume drifts — refresh every 60s).
+    // changes once per day, but volume drifts — refresh every 60s once ready).
+    // Until coverage is ready, poll fast (every RECOMPUTE_MS) so a partial first
+    // backfill fills in within seconds instead of waiting a full 60s cycle.
     await this._refreshOI();
-    this.oiTimer = setInterval(() => this._refreshOI(), OI_REFRESH_MS);
+    this._scheduleOiRefresh();
 
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
     // Aggregate + broadcast the SPX flow tape every 500ms (independent of GEX).
@@ -590,7 +603,28 @@ class TastytradeProxy {
         if (m.oi > 0) filled++;
       }
     }
+    this.oiCoverage = active.length ? filled / active.length : 0;
+    // Mark ready once coverage crosses the threshold (latched — never flips back).
+    if (!this.oiReady && this.oiCoverage >= OI_READY_RATIO) {
+      this.oiReady = true;
+      console.log(`[OI] coverage ${(this.oiCoverage * 100).toFixed(0)}% ≥ ${(OI_READY_RATIO * 100).toFixed(0)}% — GEX broadcast enabled`);
+    }
     console.log(`[OI] REST backfill: ${filled}/${active.length} strikes with OI`);
+  }
+
+  /**
+   * Self-rescheduling OI refresh. Polls quickly (RECOMPUTE_MS) while the chart
+   * is still gated on coverage, then settles to the normal OI_REFRESH_MS cadence
+   * once ready. Keeps a single timer handle in this.oiTimer.
+   */
+  _scheduleOiRefresh() {
+    if (this.oiTimer) clearTimeout(this.oiTimer);
+    const delay = this.oiReady ? OI_REFRESH_MS : RECOMPUTE_MS;
+    this.oiTimer = setTimeout(async () => {
+      if (this.idle) { this._scheduleOiRefresh(); return; }
+      try { await this._refreshOI(); } catch {}
+      this._scheduleOiRefresh();
+    }, delay);
   }
 
   /** Pick contracts for the active expiry within the strike window of spot. */
@@ -621,7 +655,13 @@ class TastytradeProxy {
     if (!expiry || expiry === this.expiry) return;
     this.expiry = expiry;
     marketState.setExpiry(expiry);
+    // Re-gate: the new expiry's OI must backfill before we broadcast its chart.
+    this.oiReady = false;
+    this.firstSubAt = Date.now();
     this._resubscribe();
+    // Backfill the new expiry's OI immediately, and resume fast polling until the
+    // new expiry's coverage is ready again.
+    this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
   }
 
   /**
@@ -637,11 +677,11 @@ class TastytradeProxy {
     if (next) {
       if (this.recomputeTimer) { clearInterval(this.recomputeTimer); this.recomputeTimer = null; }
       if (this.flowTimer) { clearInterval(this.flowTimer); this.flowTimer = null; }
-      if (this.oiTimer) { clearInterval(this.oiTimer); this.oiTimer = null; }
+      if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
     } else {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
       if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
-      if (!this.oiTimer) this.oiTimer = setInterval(() => this._refreshOI(), OI_REFRESH_MS);
+      if (!this.oiTimer) this._scheduleOiRefresh();
     }
     marketState.setStatus({ idle: next });
   }
@@ -842,6 +882,19 @@ class TastytradeProxy {
 
     const { rows: gexRows, callWall, putWall, gexFlip, totalNetGex } = computeGexSummary(rows, this.spot);
 
+    // Gate: don't broadcast the GEX chart until OI backfill has substantially
+    // filled in (avoids the half-rendered chart on connect). A grace timer
+    // releases the gate so far-OTM strikes that never report OI can't stall it.
+    if (!this.oiReady) {
+      const graceElapsed = this.firstSubAt && (Date.now() - this.firstSubAt) >= OI_READY_GRACE_MS;
+      if (graceElapsed) {
+        this.oiReady = true;
+        console.log(`[OI] grace elapsed at ${(this.oiCoverage * 100).toFixed(0)}% coverage — GEX broadcast enabled`);
+      } else {
+        return; // hold the frame until OI is ready
+      }
+    }
+
     marketState.setGexUpdate({
       gexRows,
       spot: this.spot,
@@ -863,7 +916,7 @@ class TastytradeProxy {
 
   stop() {
     if (this.recomputeTimer) clearInterval(this.recomputeTimer);
-    if (this.oiTimer) clearInterval(this.oiTimer);
+    if (this.oiTimer) clearTimeout(this.oiTimer);
     if (this.flowTimer) clearInterval(this.flowTimer);
     this.recomputeTimer = null;
     this.oiTimer = null;
