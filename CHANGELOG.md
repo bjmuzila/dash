@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-06-19 (session 12) — Estimated Moves: NDX/NQU blank-row fixes (in progress)
+
+Investigated why NDX and NQU render blank on the Estimated Moves tab (`components/dashboard/EstimatedMoves.tsx`). Server data confirmed healthy (chains + expirations return for NDX; pinned 6/26 chain returns full bid/ask/iv when fetched WITHOUT forceSub). Four fixes applied; still blank as of session end — likely holiday/closed-market data, revisit when NDXP weeklies quote cleanly.
+
+### Fixes
+- **Dropped `&forceSub=1`** from the primary chain fetch in `estimateMove`. On server-v2 the forceSub path returns an all-zero (bid/ask/mark/iv = 0) chain for index weeklies (NDXP), zeroing every straddle → row dropped. Plain `&noSubscribe=1` returns full pricing.
+- **Priced-quote picker** in `fetchQuoteDetail`: `/api/quotes-batch` returns an all-null `$NDX`/`NQM` row (Yahoo `^NDX`/futures fail) alongside priced `NDX`/`/NQU26`. Now scores candidates and picks the first with a real price.
+- **Futures price fallback**: when `/api/em/em-closes` 404s (not implemented on server-v2), futures fall back to `q.last`/`q.mark`/`prev-close` instead of leaving `close` NaN.
+- **All-unpriced snap**: if a pinned expiration returns all-zero options, refetch unpinned and snap to the nearest PRICED expiration.
+- **Title fix**: `targetDateLabel` now uses `getTargetExpiration` (prefers Friday) instead of `weeklyExps[0]` (first Thu/Fri), so the header shows 6/26 not 6/25.
+
+### Notes
+- `tsc` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verify with `npm run build`.
+- Open item: NDX/NQU still blank on 2026-06-19 (holiday). Re-test with live quotes; use `/dev` probe on the targeted expiration to diagnose.
+
+## 2026-06-19 (session 11) — Sidebar nav restructured into emoji pop-out groups
+
+Reworked the left sidebar (`components/shared/Sidebar.tsx`) from a single "Pages" pop-out into a Home button followed by five emoji-labeled group buttons, each opening a 2×2 grid pop-out. Pop-out items use white font, are drag-reorderable, and persist their order to `localStorage` (`sidebar-nav-order-v1`). Bumped version to `2026.6.19-v2`.
+
+### Sidebar groups
+- **📊 Gex** — Overview, Est. Move, Options Chain, Multi Greek, Insights
+- **👣 Footprint** — empty; shows a centered "Coming soon" placeholder instead of the grid
+- **📈 Stock Market** — Premarket, Database, Econ Calendar
+- **🧑 Personal** — Trading, Budget
+- **🛠️ Dev** — Legacy, Dev, Logs, Changelog; `devOnly` flag gates it to signed-in users via Clerk `useUser()` (not yet locked to a specific account)
+
+### Implementation
+- `NAV_GROUPS` typed config (`NavItem`/`NavGroup`); empty `items` renders the "Coming soon" state.
+- `useNavOrder()` hook reads/writes per-group order to `localStorage`, appends any new items not yet in saved order.
+- Drag-and-drop reorder via native `draggable` + `onDragStart/onDragOver/onDrop`.
+- Removed the old single-list Grid pop-out, the standalone Dev link, and unused `GridIcon`/`CalendarIcon`/`UserIcon` components.
+- Note: `tsc` not run this session (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verify with `npm run build`.
+
 ## 2026-06-19 (session 10) — Live ES 5m candle pipeline → Relative Volume + live IB Logic (locked)
 
 Wired a real live + historical 5-minute ES futures OHLCV feed through server-v2 and built it into the Insights page: a working Relative Volume card (5/14-day baseline toggle) and a live Initial Balance tracker that locks the IB high/low into the database at 10:30 ET so it never resets. Also blocked public sign-up pre-launch.

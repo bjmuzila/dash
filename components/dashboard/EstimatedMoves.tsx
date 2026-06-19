@@ -379,9 +379,20 @@ async function fetchQuoteDetail(ticker: string, engine: EMEngine) {
   const dxSym = API_SYMBOL[ticker] || ticker;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const quotes: Record<string, any> = await fetchAllQuotes(engine);
-  const q = quotes[dxSym] || quotes[ticker]
-    || quotes[String(dxSym).replace(/^\//, "")]
-    || quotes[String(ticker).replace(/^\//, "")];
+  // A quote is only usable if it carries a real price. Yahoo intermittently
+  // returns an all-null row for index symbols ($NDX), which would otherwise win
+  // the lookup over a sibling key (NDX) that has the price. Prefer a priced row.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const priced = (x: any) =>
+    x && Number.isFinite(Number(x.last ?? x.mark ?? x["prev-close"] ?? x.prevClose ?? x["day-close"]))
+      && Number(x.last ?? x.mark ?? x["prev-close"] ?? x.prevClose ?? x["day-close"]) > 0;
+  const candidates = [
+    quotes[dxSym], quotes[ticker],
+    quotes[String(dxSym).replace(/^\//, "")],
+    quotes[String(ticker).replace(/^\//, "")],
+    quotes[String(dxSym).replace(/^\$/, "")],
+  ];
+  const q = candidates.find(priced) || candidates.find(Boolean);
   if (!q) throw new Error(`${ticker} not in quotes-batch`);
   const prevClose = Number(q["prev-close"] || q.prevClose || 0);
   const dayClose = Number(q["day-close"] || 0);
@@ -400,6 +411,13 @@ async function fetchQuoteDetail(ticker: string, engine: EMEngine) {
       const yahooClose = ticker === "ESM" ? engine.emClosesCache!.es : engine.emClosesCache!.nq;
       if (yahooClose > 0) close = yahooClose;
     } catch {}
+  }
+  // Futures fallback: /api/em/em-closes is 404 on server-v2, so when it gives us
+  // nothing, use the future's own last/prev-close from quotes-batch (/NQU26,
+  // /ESU26) rather than letting `close` stay NaN and dropping the row.
+  if (isFutures && (!Number.isFinite(close) || close <= 0)) {
+    const fallback = Number(q.last ?? q.mark ?? q["prev-close"] ?? q.prevClose ?? 0);
+    if (fallback > 0) close = fallback;
   }
   if (!Number.isFinite(close) || close <= 0) throw new Error(`Invalid price for ${ticker}: ${close}`);
   return { quote: q, close, prevClose };
@@ -470,18 +488,47 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
   const lookupSym = isFuture ? FUTURE_PROXY[ticker] : (CHAIN_SYMBOL[ticker] || ticker);
   const chainSym = (lookupSym || "SPX").replace(/^\$/, "");
 
-  const chainUrl = API.chain(chainSym, targetExp, "&noSubscribe=1&forceSub=1");
+  // NOTE: do NOT pass forceSub here. On server-v2 the forceSub path returns an
+  // all-zero (unpriced) chain for index weeklies like NDXP; the plain pinned
+  // fetch returns full bid/ask/mark/iv. forceSub was the cause of NDX/NQU blanks.
+  const chainUrl = API.chain(chainSym, targetExp, "&noSubscribe=1");
   const chain = await Promise.race([
     fetch(chainUrl).then((r) => r.ok ? r.json() : { options: [] }).catch(() => ({ options: [] })),
     new Promise<{ options: [] }>((res) => setTimeout(() => res({ options: [] }), 10000)),
   ]);
 
-  const options = normalizeOptions(chain);
-  let expOptions = options.filter((o) => o.expiration === targetExp);
+  let options = normalizeOptions(chain);
+  // A priced option carries a usable bid/ask, mark, or IV. NDX/NDXP weeklies
+  // that are still far out (e.g. next Friday) are LISTED but the broker isn't
+  // quoting them yet, so the chain comes back all-zero — which would zero out
+  // every straddle and drop the row. Treat an all-unpriced expiration the same
+  // as a missing one: refetch unpinned and snap to the nearest PRICED date.
+  const isPriced = (o: OptionData) =>
+    (o.bid > 0 && o.ask > 0) || o.mark > 0 || Number(o.iv || 0) > 0;
+  let effectiveExp = targetExp;
+  let expOptions = options.filter((o) => o.expiration === effectiveExp);
+  if (!expOptions.length || !expOptions.some(isPriced)) {
+    // Refetch unpinned so the server returns the nearest expirations this ticker
+    // actually lists, then snap to the nearest date that has live pricing.
+    const unpinned = await fetch(`/api/chains?ticker=${encodeURIComponent(chainSym)}`)
+      .then((r) => (r.ok ? r.json() : { options: [] }))
+      .catch(() => ({ options: [] }));
+    const merged = normalizeOptions(unpinned);
+    if (merged.length) options = merged;
+    const pricedExps = [...new Set(options.filter(isPriced).map((o) => o.expiration))]
+      .filter(Boolean).sort();
+    const allExps = [...new Set(options.map((o) => o.expiration))].filter(Boolean).sort();
+    const pool = pricedExps.length ? pricedExps : allExps;
+    const snapped = pool.find((e) => e >= targetExp) || pool[pool.length - 1];
+    if (snapped) {
+      effectiveExp = snapped;
+      expOptions = options.filter((o) => o.expiration === effectiveExp);
+    }
+  }
   if (!expOptions.length) throw new Error("No options for expiration");
 
   if (expOptions.every((o) => Number(o.iv || 0) === 0)) {
-    const direct = await fetchChainDirect(chainSym, targetExp, engine);
+    const direct = await fetchChainDirect(chainSym, effectiveExp, engine);
     if (direct) expOptions = direct;
   }
 
@@ -489,17 +536,17 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
   const indexClose = isFuture ? (indexQuote!.prevClose > 0 ? indexQuote!.prevClose : indexQuote!.close) : close;
 
   const allIvZero = expOptions.every((o) => Number(o.iv || 0) === 0);
-  const metricsIv = allIvZero ? await fetchMetricsIv(chainSym, targetExp) : 0;
+  const metricsIv = allIvZero ? await fetchMetricsIv(chainSym, effectiveExp) : 0;
 
   const strikes = [...new Set(expOptions.map((o) => o.strike))]
     .sort((a, b) => Math.abs(a - indexClose) - Math.abs(b - indexClose));
 
   if (!strikes.length || (allIvZero && metricsIv > 0 && expOptions.length === 0)) {
     if (metricsIv > 0) {
-      const dte = daysTo(targetExp);
+      const dte = daysTo(effectiveExp);
       const em = 0.84 * metricsIv * indexClose * Math.sqrt(dte / 365);
       if (Number.isFinite(em) && em > 0) {
-        return { ticker, close, em, up: indexClose + em, down: indexClose - em, expiration: targetExp, strike: Math.round(indexClose) };
+        return { ticker, close, em, up: indexClose + em, down: indexClose - em, expiration: effectiveExp, strike: Math.round(indexClose) };
       }
     }
     throw new Error("No strikes found");
@@ -513,7 +560,7 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
     let p = expOptions.find((o) => o.strike === candidateStrike && o.type === "PUT");
     if (!c || !p) continue;
 
-    const candidateDte = c.dte || p.dte || daysTo(targetExp);
+    const candidateDte = c.dte || p.dte || daysTo(effectiveExp);
     let avgIV = (Number(c.iv || 0) + Number(p.iv || 0)) / 2;
 
     if (avgIV === 0 && metricsIv > 0) avgIV = metricsIv;
@@ -557,7 +604,7 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
 
   const basis = isFuture ? close - indexClose : 0;
   void prevClose;
-  return { ticker, close, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: targetExp, strike };
+  return { ticker, close, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: effectiveExp, strike };
 }
 
 async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
@@ -668,7 +715,9 @@ export default function EstimatedMoves() {
             return day === 5 || day === 4;
           });
           setFridayExpirations(weeklyExps.length ? weeklyExps : exps);
-          const first = weeklyExps[0] || exps[0];
+          // Title must match the expiration the EM calc actually targets, which
+          // prefers Friday (getTargetExpiration) — not merely the first Thu/Fri.
+          const first = getTargetExpiration(exps, "") || weeklyExps[0] || exps[0];
           if (first) setTargetDateLabel(labelForDate(first));
         }
       } catch (e) {
