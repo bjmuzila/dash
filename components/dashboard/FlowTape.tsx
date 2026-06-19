@@ -24,6 +24,18 @@ function fmtAction(action: string): string {
     .replace(/^SELL/, "BID");
 }
 
+// Aggressor side: "buy" = lifted the ask (aggressive buyer), "sell" = hit the bid (aggressive seller).
+const SIDE_COLORS: Record<string, string> = { buy: "#22c55e", sell: "#ef4444" };
+
+// Trader rule-of-thumb sentiment from action (side + call/put).
+function sideTitle(side: string, type: string): string {
+  if (side === "buy" && type === "C") return "Call buying at ASK → Strong bullish";
+  if (side === "buy" && type === "P") return "Put buying at ASK → Strong bearish";
+  if (side === "sell" && type === "C") return "Call selling at BID → Bearish / profit-taking";
+  if (side === "sell" && type === "P") return "Put selling at BID → Bullish";
+  return "";
+}
+
 function fmtPremium(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
   if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
@@ -128,12 +140,13 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
       <div
         className="grid text-xs px-3 py-1 border-b flex-shrink-0"
         style={{
-          gridTemplateColumns: "55px 1fr 60px 70px 65px",
+          gridTemplateColumns: "55px 48px 1fr 60px 70px 65px",
           borderColor: "var(--border)",
           color: "var(--muted)",
         }}
       >
         <span>Time</span>
+        <span>Side</span>
         <span>Action</span>
         <span className="text-right">Strike</span>
         <span className="text-right">Size</span>
@@ -151,11 +164,17 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
               key={i}
               className="grid text-xs px-3 py-1 font-mono border-b hover:bg-[var(--border)] transition-colors"
               style={{
-                gridTemplateColumns: "55px 1fr 60px 70px 65px",
+                gridTemplateColumns: "55px 48px 1fr 60px 70px 65px",
                 borderColor: "var(--border)",
               }}
             >
               <span style={{ color: "var(--muted)" }}>{fmtTime(o.ts)}</span>
+              <span
+                title={sideTitle(o.side, o.type)}
+                style={{ color: SIDE_COLORS[o.side] ?? "var(--text)", fontWeight: 700 }}
+              >
+                {o.side === "buy" ? "BUY" : "SELL"}
+              </span>
               <span style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>{fmtAction(o.action)}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.strike.toLocaleString()}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.size.toLocaleString()}</span>

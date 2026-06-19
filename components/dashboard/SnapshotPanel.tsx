@@ -456,7 +456,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
           <MetricCard label="P/C Vol Ratio" value={pcr > 0 ? pcr.toFixed(2) : "0.00"} detail={`Put ${fmtVol(flow.cumulativePutVol)} / Call ${fmtVol(flow.cumulativeCallVol)}`} color={pcr >= 1 ? "#ff4757" : "#00e676"} />
           <MetricCard label="B/B Ratio" value={bbr > 0 ? bbr.toFixed(2) : "0.00"} detail={`Buy ${fmtVol(flow.cumulativeBuyVol)} / Sell ${fmtVol(flow.cumulativeSellVol)}`} color={bbr >= 1 ? "#00e676" : "#ff4757"} />
           <MetricCard label="Bull Vol" value={fmtVol(bullVol)} detail={bullDetail} color="#00e676" />
@@ -491,7 +491,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
         </div>
 
         <div style={{ fontSize: 9, fontWeight: 700, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Option Flow Tops</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
           <TopFlowList label="Buy Call Vol" items={tops.buyCalls} barColor="#00e676" />
           <TopFlowList label="Sell Call Vol" items={tops.sellCalls} barColor="#ff4757" />
           <TopFlowList label="Buy Put Vol" items={tops.buyPuts} barColor="#00e676" />

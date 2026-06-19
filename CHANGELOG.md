@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-06-18 (session 5) — GEX chart fixes, quote accuracy, OI gating, feed pinning (v2026.6.18-v50)
+
+Bug-fix and polish pass on the SPX home dashboard. Version `2026.6.18-v42` → `2026.6.18-v50`.
+
+### GEX chart (`components/dashboard/GexChart.tsx`)
+- Fixed GEX flip line being misaligned with the orange profile curve: introduced a single shared `xForStrike()` strike→X mapping (the index/bar axis) and routed the profile curve, spot line, and flip line through it so they all line up.
+- Fixed the "Profile" curve rendering as a flat-railed step: it was clamped onto the per-strike bar Y-axis and saturated. Now self-scales to its own symmetric magnitude around the zero line, showing the true profile shape crossing zero at the flip.
+- Added bar/border padding: `PAD_L`/`PAD_R` 4→16px.
+- Raised Y headroom 1.10→1.25 so the tallest bar (and MVC label) clears the top/bottom frame.
+
+### Home page (`app/home/page.tsx`)
+- Fixed style shorthand warning: `background`→`backgroundColor` (conflicted with `backgroundImage`).
+- VIX/ESU top-bar: added quotes-batch (Yahoo) fallback for prior closes when `/ws/gex` omits them; added absolute change value alongside % for both.
+- GEX heatmap now fits any window size: container `overflow: auto`→`hidden`, removed vertical cell padding (lineHeight 1.1), tighter header, font 13→12; rows compress to fill panel height.
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- Rewrote `pctFromQuote` to recompute % from last vs prev-close first, removed the over-aggressive ±20% null clamp, added fractional/whole-percent normalization.
+- Quote font bumped to 13 then dialed back to 11 per request.
+
+### Quotes API (`app/api/quotes-batch/route.ts`)
+- Fixed inflated day-% (e.g. AMD +10% vs real +4.86%): `meta.chartPreviousClose` is the close before the chart range window (~a week ago), not yesterday. Now prefers `regularMarketPreviousClose` → `previousClose` → second-to-last candle → chartPreviousClose.
+
+### Server feed (`server-v2/`)
+- OI backfill gating: hold the GEX broadcast until OI coverage ≥85% (`OI_READY_RATIO`) with a 90s grace valve, so the chart no longer renders half-filled on connect. Fast OI polling until ready, then 60s cadence. Re-gates on expiry switch.
+- Fixed wrong-underlying bug (home page showed NVDA): server now loads only `.env.local` with `override:true` (legacy `.env` no longer loaded), and `SYMBOL=SPX` pinned in `.env.local` so a stray shell `SYMBOL` var can't hijack the home feed.
+
+
 ## 2026-06-18 (session 4) — Home dashboard UI/wiring pass (v2026.6.18-v42)
 
 Worked on server-v2 stack. Version bumped to `2026.6.18-v42`.

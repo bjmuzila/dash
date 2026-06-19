@@ -38,7 +38,7 @@ type HeatmapRow = {
   netGexVal: number;   netGex: string;
   volOnlyVal: number;  volOnly: string;
   dexVal: number;      dex: string;
-  gexVexVal: number;   gexVex: string;   // GEX + VEX (net GEX + vanna)
+  gexVexVal: number;   gexVex: string;   // Net VEX (vanna)
   rollingVal: number | null; rolling: string;  // 30-min rolling net GEX (DB)
   type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
   rank?: number;
@@ -220,8 +220,7 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
     const net = row.netGEX ?? 0;
     const volOnly = row.netVolGEX ?? 0;
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
-    const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);
-    const gexVex = net + vex;                         // GEX + VEX
+    const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);  // Net VEX (vanna)
     const rolling = rollingByStrike?.get(row.strike); // 30-min rolling net GEX
     const isAtm = row.strike === atmStrike;
     let type: HeatmapRow["type"] = "neutral";
@@ -238,7 +237,7 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
       netGexVal: net,        netGex: fmtMoney(net),
       volOnlyVal: volOnly,   volOnly: fmtMoney(volOnly),
       dexVal: dex,           dex: fmtMoney(dex),
-      gexVexVal: gexVex,     gexVex: fmtMoney(gexVex),
+      gexVexVal: vex,        gexVex: fmtMoney(vex),
       rollingVal: rolling ?? null,
       rolling: rolling == null ? "—" : fmtMoney(rolling),
       type,
@@ -364,7 +363,7 @@ export default function HomePage() {
   const [flowOrders, setFlowOrders] = useState<FlowOrder[]>([]);
   // Full server flow bucket (vols/premium) for the Snapshot panel.
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
-  // Heatmap intensity slider (0.2–3, default 0.4) — controls cell color opacity.
+  // Heatmap intensity slider (0.1–3, default 0.4) — controls cell color opacity.
   const [intensity, setIntensity] = useState(0.4);
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
@@ -783,19 +782,19 @@ export default function HomePage() {
                   <span style={{ fontSize: 16, fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
                   <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "6px 16px", borderRadius: 6, fontFamily: "monospace", fontSize: 20, fontWeight: 700, color: "#fff", letterSpacing: "0.04em" }}>{etTime}</div>
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
                   <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
                   {vixPct != null && <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
                   <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
                   {esuPct != null && <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
                 </div>
-                <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.02)" }} />
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 13, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
                   <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
@@ -808,14 +807,17 @@ export default function HomePage() {
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
                   </div>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
                   </div>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
                   </div>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
@@ -845,8 +847,6 @@ export default function HomePage() {
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={handleRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
-                    <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
-                      style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>{snapDbState === "busy" ? "…" : snapDbState === "ok" ? "✓" : snapDbState === "err" ? "✕" : "📸"}</button>
                     <BoxSnapBtn targetRef={heatmapContainerRef} label="GEX Heatmap" />
                     <BoxDiscordBtn targetRef={heatmapContainerRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} />
                   </div>
@@ -858,7 +858,7 @@ export default function HomePage() {
                     <span style={{ color: "#94a3b8", fontWeight: 800 }}>Intensity</span>
                     <input
                       type="range"
-                      min={0.2}
+                      min={0.1}
                       max={3}
                       step={0.01}
                       value={intensity}
@@ -882,7 +882,7 @@ export default function HomePage() {
                   </colgroup>
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "GEX + VEX", "30 Min Rolling Net GEX"].map((header, index) => (
+                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX", "30 Min Rolling Net GEX"].map((header, index) => (
                         <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: index === 5 ? C.cyan : "#fff" }}>{header}</th>
                       ))}
                     </tr>
