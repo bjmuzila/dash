@@ -33,7 +33,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
-const { TastytradeProxy } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest } = require('./proxy-tastytrade');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -144,6 +144,27 @@ async function main() {
         }
         const probe = await proxy.probeSymbol(symbol, feed);
         sendJson(res, 200, { ...probe, symbol, elapsedMs: Date.now() - t0 });
+        return;
+      }
+      // REST probe for ANY ticker (the live feed only covers one SYMBOL).
+      // GET /proxy/probe-rest?ticker=AAPL&expiry=2026-06-22&type=P&strike=190
+      if (pathname === '/proxy/probe-rest' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const ticker = (url.searchParams.get('ticker') || '').toUpperCase();
+        const expiry = url.searchParams.get('expiry') || '';
+        const type = (url.searchParams.get('type') || 'P').toUpperCase() === 'C' ? 'C' : 'P';
+        const strike = Number(url.searchParams.get('strike'));
+        const t0 = Date.now();
+        if (!ticker || !expiry) {
+          sendJson(res, 400, { error: 'ticker and expiry required', ticker, expiry, elapsedMs: Date.now() - t0 });
+          return;
+        }
+        try {
+          const probe = await probeRest({ ticker, expiry, type, strike });
+          sendJson(res, 200, { ...probe, ticker, expiry, elapsedMs: Date.now() - t0 });
+        } catch (e) {
+          sendJson(res, 502, { error: String(e?.message || e), ticker, expiry, source: 'rest', elapsedMs: Date.now() - t0 });
+        }
         return;
       }
       if (handleProxyRest(req, res)) return;

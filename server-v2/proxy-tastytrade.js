@@ -53,9 +53,6 @@ const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WIND
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
-// How long to wait for a LIVE event before the probe serves a remembered
-// (stale) value. Keeps fresh data winning during RTH; falls back overnight.
-const PROBE_STALE_GRACE_MS = Number(process.env.PROBE_STALE_GRACE_MS || 4000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
 // Hold the first GEX broadcast until OI backfill covers this fraction of active
 // strikes — avoids rendering a half-filled chart while REST backfill completes.
@@ -142,12 +139,13 @@ async function ttGet(path) {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the SPX nested option chain.
+ * Fetch a nested option chain for any underlying (defaults to the feed SYMBOL).
+ * @param {string} [underlying] e.g. "SPX", "AAPL"
  * @returns {Promise<{expirations:string[], contracts:Array}>}
  *   contracts: { streamerSymbol, expiration, strike, type, dte }
  */
-async function fetchChain() {
-  const json = await ttGet(`/option-chains/${SYMBOL}/nested`);
+async function fetchChain(underlying = SYMBOL) {
+  const json = await ttGet(`/option-chains/${encodeURIComponent(String(underlying).toUpperCase())}/nested`);
   const items = json?.data?.items || [];
   const contracts = [];
   const expSet = new Set();
@@ -303,6 +301,102 @@ async function fetchOpenInterest(occSymbols) {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// REST probe (any ticker) — used by /proxy/probe-rest for non-feed symbols.
+// The live dxLink feed only covers one SYMBOL, so for arbitrary tickers we go
+// straight to Tastytrade REST: fetch the chain, resolve/snap the strike, then
+// pull contract-level market-data (quote / OI / volume).
+// ---------------------------------------------------------------------------
+
+// Cache chains briefly so repeated polls for the same ticker don't re-fetch.
+const _restChainCache = new Map(); // chainTicker -> { at, expirations, contracts }
+const REST_CHAIN_TTL_MS = 60_000;
+
+// The Tastytrade option-chain endpoint is keyed by the ROOT underlying, not the
+// weekly streamer root. Map common weekly/alias roots back to the chain root.
+function chainTicker(ticker) {
+  const t = String(ticker || '').toUpperCase().replace(/^\./, '');
+  if (t === 'SPXW') return 'SPX';
+  if (t === 'NDXP') return 'NDX';
+  if (t === 'RUTW') return 'RUT';
+  return t;
+}
+
+async function getChainCached(ticker) {
+  const key = chainTicker(ticker);
+  const hit = _restChainCache.get(key);
+  if (hit && Date.now() - hit.at < REST_CHAIN_TTL_MS) return hit;
+  const { expirations, contracts } = await fetchChain(key);
+  const entry = { at: Date.now(), expirations, contracts };
+  _restChainCache.set(key, entry);
+  return entry;
+}
+
+/**
+ * Probe any ticker via REST. Resolves the requested strike to the nearest real
+ * chain contract, then fetches its market-data.
+ * @param {object} a
+ * @param {string} a.ticker   e.g. "AAPL"
+ * @param {string} a.expiry   YYYY-MM-DD
+ * @param {'C'|'P'} a.type
+ * @param {number} a.strike
+ */
+async function probeRest({ ticker, expiry, type, strike }) {
+  const reqStrike = Number(strike);
+  const { expirations, contracts } = await getChainCached(ticker);
+
+  // Nearest real strike for this expiry + side.
+  let best = null, bestDist = Infinity;
+  for (const c of contracts) {
+    if (c.expiration !== expiry || c.type !== type) continue;
+    const d = Math.abs(Number(c.strike) - reqStrike);
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  if (!best) {
+    // Help the caller: report whether the expiry even exists for this ticker,
+    // and a few valid expiries to pick from.
+    const expiryExists = expirations.includes(expiry);
+    return {
+      found: false,
+      status: expiryExists ? 'no-strike' : 'no-expiry',
+      source: 'rest',
+      chainTicker: chainTicker(ticker),
+      requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
+      resolvedStrike: null,
+      availableExpirations: expirations.slice(0, 12),
+    };
+  }
+
+  const meta = {
+    resolvedSymbol: best.streamerSymbol,
+    occSymbol: best.occSymbol,
+    snapped: Number.isFinite(reqStrike) && best.strike !== reqStrike,
+    requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
+    resolvedStrike: best.strike,
+  };
+
+  // Contract-level market data (quote, OI, volume) for the OCC symbol.
+  const qs = `equity-option[]=${encodeURIComponent(best.occSymbol)}`;
+  const json = await ttGet(`/market-data/by-type?${qs}`);
+  const it = json?.data?.items?.[0] || null;
+  if (!it) {
+    return { ...meta, found: false, status: 'no-data', source: 'rest' };
+  }
+  const result = {
+    eventType: 'REST',
+    eventSymbol: best.streamerSymbol,
+    occSymbol: best.occSymbol,
+    bid: firstFiniteNumber(it.bid),
+    ask: firstFiniteNumber(it.ask),
+    mark: firstFiniteNumber(it.mark) || firstFiniteNumber(it.mid),
+    last: firstFiniteNumber(it.last),
+    openInterest: firstFiniteNumber(it['open-interest']),
+    volume: firstFiniteNumber(it.volume),
+    prevClose: firstFiniteNumber(it['prev-close']),
+  };
+  return { ...meta, found: true, status: 'ready', source: 'rest', result };
 }
 
 // ---------------------------------------------------------------------------
@@ -1040,13 +1134,70 @@ class TastytradeProxy {
   }
 
   /**
+   * Resolve a probe request to a REAL chain streamer symbol.
+   *
+   * The /dev page builds a symbol by formatting whatever strike was typed
+   * (e.g. 7500 -> .SPXW260622P7500), but the feed only ever emits the exact
+   * streamer symbols from the option chain (e.g. .SPXW260622P7495). If the typed
+   * strike isn't a real chain strike, the built symbol never matches any event
+   * and the probe shows nothing. So:
+   *   1. If the built symbol matches a chain contract exactly, use it.
+   *   2. Otherwise snap to the nearest available strike for that expiry+side and
+   *      return that contract's real streamer symbol, flagging that we snapped.
+   *
+   * @returns {{ sym:string, snapped:boolean, requestedStrike:number|null, resolvedStrike:number|null }}
+   */
+  _resolveChainSymbol(builtSymbol) {
+    const built = String(builtSymbol || '').trim();
+    // Exact hit — the typed strike is a real chain strike.
+    if (this.contracts.has(built)) {
+      const c = this.contracts.get(built);
+      return { sym: built, snapped: false, requestedStrike: c?.strike ?? null, resolvedStrike: c?.strike ?? null };
+    }
+    // Parse the built symbol: .SPXW + YYMMDD + (C|P) + strike
+    const m = /^(\.[A-Z]+)(\d{6})([CP])(\d+(?:\.\d+)?)$/.exec(built);
+    if (!m) return { sym: built, snapped: false, requestedStrike: null, resolvedStrike: null };
+    const [, , yymmdd, cp, strikeStr] = m;
+    const reqStrike = Number(strikeStr);
+    const expiry = `20${yymmdd.slice(0, 2)}-${yymmdd.slice(2, 4)}-${yymmdd.slice(4, 6)}`;
+    const type = cp; // 'C' | 'P'
+
+    // Find the nearest real strike for this expiry + side.
+    let best = null;
+    let bestDist = Infinity;
+    for (const c of this.contracts.values()) {
+      if (c.expiration !== expiry || c.type !== type) continue;
+      const d = Math.abs(Number(c.strike) - reqStrike);
+      if (d < bestDist) { bestDist = d; best = c; }
+    }
+    if (!best) return { sym: built, snapped: false, requestedStrike: reqStrike, resolvedStrike: null };
+    return {
+      sym: best.streamerSymbol,
+      snapped: best.streamerSymbol !== built,
+      requestedStrike: reqStrike,
+      resolvedStrike: best.strike,
+    };
+  }
+
+  /**
    * Dev probe. Returns cached feed data for a built symbol; if not yet
    * subscribed, subscribes on demand and returns a pending status the /dev page
    * can poll. Reports how long data took to arrive (waitedMs).
    */
   async probeSymbol(builtSymbol, feedType = 'Greeks') {
-    const sym = String(builtSymbol || '').trim();
     const ft = String(feedType || 'Greeks');
+    // Resolve the typed/built symbol to a real chain streamer symbol (snapping
+    // to the nearest strike if the exact one isn't in the chain).
+    const resolved = this._resolveChainSymbol(builtSymbol);
+    const sym = resolved.sym;
+    // Echoed back so the page can show which real contract was probed and
+    // whether the typed strike had to be snapped to the nearest chain strike.
+    const meta = {
+      resolvedSymbol: sym,
+      snapped: resolved.snapped,
+      requestedStrike: resolved.requestedStrike,
+      resolvedStrike: resolved.resolvedStrike,
+    };
     const active = this._isActiveSub(sym);
     const result = this._readFeed(sym, ft);
     const sub = this.probeSubs.get(sym);
@@ -1054,7 +1205,7 @@ class TastytradeProxy {
     if (result != null) {
       // Time from on-demand subscribe to first event (0 if it was already live).
       const waitedMs = sub && sub.gotAt != null ? sub.gotAt - sub.since : 0;
-      return { found: true, status: 'ready', feedType: ft, result, waitedMs, source: active ? 'active' : (sub ? 'probe' : 'cache') };
+      return { ...meta, found: true, status: 'ready', feedType: ft, result, waitedMs, source: active ? 'active' : (sub ? 'probe' : 'cache') };
     }
 
     // Subscribe on demand so a live value can fill in if the feed is open.
@@ -1062,27 +1213,30 @@ class TastytradeProxy {
     const since = this.probeSubs.get(sym)?.since ?? Date.now();
     const waited = Date.now() - since;
 
-    // Give the on-demand sub a short grace window to deliver a LIVE event before
-    // we fall back to a remembered value. During RTH this lets fresh data win;
-    // overnight (feed closed) nothing arrives and we serve the stale value.
-    if (waited >= PROBE_STALE_GRACE_MS) {
-      const stale = lastEventStore.getMem(sym, ft) || await lastEventStore.getDb(sym, ft);
-      if (stale && stale.result != null) {
-        return {
-          found: true,
-          status: 'stale',
-          feedType: ft,
-          result: stale.result,
-          waitedMs: 0,
-          source: 'stale',
-          staleAt: stale.seenAt,
-          staleAgeMs: Date.now() - stale.seenAt,
-        };
-      }
+    // No live event in the maps. Return a remembered value IMMEDIATELY rather
+    // than spinning — the live map was already checked above, so RTH fresh data
+    // still wins; this only fires when the feed has nothing right now.
+    //   - in-memory tier is synchronous and free → check every call.
+    //   - DB tier costs a round-trip → only consult it on the FIRST poll
+    //     (waited≈0), so repeat polls stay fast and don't hammer Postgres.
+    const stale = lastEventStore.getMem(sym, ft)
+      || (waited < 750 ? await lastEventStore.getDb(sym, ft) : null);
+    if (stale && stale.result != null) {
+      return {
+        ...meta,
+        found: true,
+        status: 'stale',
+        feedType: ft,
+        result: stale.result,
+        waitedMs: 0,
+        source: 'stale',
+        staleAt: stale.seenAt,
+        staleAgeMs: Date.now() - stale.seenAt,
+      };
     }
 
-    // Still within grace, or nothing cached anywhere — report pending; poll on.
-    return { found: false, status: 'pending', feedType: ft, result: null, waitedMs: waited, ttlMs: PROBE_TTL_MS };
+    // Nothing cached anywhere yet — report pending; the page can keep polling.
+    return { ...meta, found: false, status: 'pending', feedType: ft, result: null, waitedMs: waited, ttlMs: PROBE_TTL_MS };
   }
 
   stop() {
@@ -1098,4 +1252,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, getAccessToken, getQuoteToken, DxLinkClient };
+module.exports = { TastytradeProxy, fetchChain, probeRest, getAccessToken, getQuoteToken, DxLinkClient };

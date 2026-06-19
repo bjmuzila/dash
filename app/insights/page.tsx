@@ -1084,8 +1084,48 @@ export default function InsightsPage() {
     return () => clearInterval(id);
   }, []);
 
+  // Build a GreeksRecord snapshot from the server-computed exposure totals
+  // (/api/insights/gex → /proxy/gex). These greeks are the SAME ones the GEX
+  // heatmap renders, so the cards stay consistent and are never zero just
+  // because the REST chain came back unsubscribed.
+  const snapshotFromServerTotals = useCallback((payload: Record<string, unknown>, fallbackSpot?: number): GreeksRecord | null => {
+    const t = payload?.totals as Record<string, number> | null | undefined;
+    if (!t) return null;
+    const spot = Number(payload?.spot ?? fallbackSpot ?? 0) || 0;
+    const totalGEX = Number(t.totalGEX ?? 0);
+    const netDEX = Number(t.totalDeltaCall ?? 0) - Number(t.totalDeltaPut ?? 0);
+    const totalCHEX = Number(t.totalCHEX ?? 0);
+    const totalVEX = Number(t.totalVEX ?? 0);
+    const ts = Number(payload?.updatedAt ?? Date.now()) || Date.now();
+    return {
+      ts,
+      time: new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      gex: totalGEX / 1e9,
+      dex: netDEX / 1e9,
+      chex: totalCHEX / 1e6,
+      vex: totalVEX / 1e6,
+      buyPct: netDEX >= 0 ? 61 : 39,
+      spot,
+    };
+  }, []);
+
   const fetchExposure = useCallback(async (expiry: string, fallbackSpot?: number) => {
     if (!expiry) return;
+    // Preferred path: server-computed totals (matches the heatmap).
+    try {
+      const r = await fetch("/api/insights/gex", { cache: "no-store" });
+      if (r.ok) {
+        const json = await r.json();
+        const payload = (json?.data ?? json) as Record<string, unknown>;
+        const snap = snapshotFromServerTotals(payload, fallbackSpot);
+        if (snap && (snap.gex !== 0 || snap.dex !== 0 || snap.chex !== 0 || snap.vex !== 0)) {
+          applySnapshot(snap);
+          return;
+        }
+      }
+    } catch { /* fall through to chain compute */ }
+
+    // Fallback: compute from the raw chain (works only when greeks are populated).
     try {
       const r = await fetch(`/api/chains?ticker=SPX&expiration=${encodeURIComponent(expiry)}&range=all&noSubscribe=1`, { cache: "no-store" });
       if (!r.ok) return;
@@ -1096,7 +1136,7 @@ export default function InsightsPage() {
       const snap = computeExposureSnapshot(data as ChainResponse, fallbackSpot);
       applySnapshot(snap);
     } catch { /* silent */ }
-  }, [applySnapshot]);
+  }, [applySnapshot, snapshotFromServerTotals]);
 
   // Gamma logic signals whenever latest changes
   useEffect(() => {
@@ -1182,12 +1222,16 @@ export default function InsightsPage() {
   const putBn   = gex?.put_gex_billions ?? null;
   const posGamma = gexBn != null && gexBn >= 0;
 
-  // Derived exposure data
-  const gexVal  = latest?.gex ?? null;
-  const dexVal  = latest?.dex ?? null;
-  const chexVal = latest?.chex ?? null;
-  const vexVal  = latest?.vex ?? null;
-  const buyPct  = latest?.buyPct != null ? Math.round(latest.buyPct <= 1 ? latest.buyPct * 100 : latest.buyPct) : (gexVal != null && gexVal >= 0 ? 39 : 61);
+  // Derived exposure data.
+  // Fall back to the most recent recorded greek (from queryGreeksToday history)
+  // when no live snapshot is present — e.g. after the session closes or when the
+  // WS feed is idle. Otherwise the cards would sit on "--" despite having data.
+  const displayLatest = latest ?? (history.length ? history[history.length - 1] : null);
+  const gexVal  = displayLatest?.gex ?? null;
+  const dexVal  = displayLatest?.dex ?? null;
+  const chexVal = displayLatest?.chex ?? null;
+  const vexVal  = displayLatest?.vex ?? null;
+  const buyPct  = displayLatest?.buyPct != null ? Math.round(displayLatest.buyPct <= 1 ? displayLatest.buyPct * 100 : displayLatest.buyPct) : (gexVal != null && gexVal >= 0 ? 39 : 61);
   const sellPct = 100 - buyPct;
 
   const gexHistory  = history.map(r => ({ ts: r.ts, value: r.gex  * 1e9 }));
@@ -1440,7 +1484,7 @@ export default function InsightsPage() {
               <MetricCard
                 icon="⊘" label="Gamma Flip" subtitle="Zero Gamma Level"
                 color="#faad14" borderColor="rgba(250,173,20,0.28)"
-                value={latest?.spot ? `${latest.spot.toFixed(0)}` : "—"}
+                value={displayLatest?.spot ? `${displayLatest.spot.toFixed(0)}` : "—"}
                 subvalue={gex?.spx_spot ? `SPX Spot ${gex.spx_spot.toFixed(0)}` : undefined}
                 description="Current spot price where cumulative dealer gamma crosses zero. Above this level dealers stabilize the market; below it they amplify moves."
               />
