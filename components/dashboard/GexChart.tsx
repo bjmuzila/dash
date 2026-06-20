@@ -594,7 +594,9 @@ export default function GexChart({
   }, [expiry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
-  const onWheel = useCallback((e: React.WheelEvent) => {
+  // NOTE: attached as a native non-passive listener (see effect below) so
+  // preventDefault() works. React's onWheel JSX prop is passive in React 18.
+  const onWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const el = containerRef.current;
     if (!el) return;
@@ -611,6 +613,14 @@ export default function GexChart({
     vp.start = clamp(Math.round(anchor - frac * next), 0, Math.max(0, rows.length - next));
     draw();
   }, [chain, spotPrice, draw]);
+
+  // Bind wheel natively with { passive: false } so preventDefault() is honored.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onWheel]);
 
   // ── Pointer down ──
   const onPointerDown = useCallback((e: React.PointerEvent) => {
@@ -702,7 +712,6 @@ export default function GexChart({
     <div
       ref={containerRef}
       style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", cursor: "crosshair", background: "var(--overview-bg, #05080d)", touchAction: "none" }}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

@@ -146,7 +146,7 @@ function BubblesCanvas({ trades, range, sessionMax }: { trades: EsBigTrade[]; ra
     // overlap (slot * 0.85) so VOLUME — not minute spacing — drives the size;
     // this is what real order-flow tools do and keeps big prints prominent.
     const slotW = (BUCKET_MS / span) * chartW;
-    const maxR = Math.max(8 * dpr, Math.min(midY - padY, slotW * 0.85));
+    const maxR = Math.max(8 * dpr, Math.min(midY - padY, slotW * 0.85)) * 0.75;
     const minR = Math.min(5 * dpr, maxR * 0.35);
 
     // Area ∝ volume against the SESSION max (passed in), so a bubble's size means

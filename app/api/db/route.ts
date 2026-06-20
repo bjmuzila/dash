@@ -15,6 +15,8 @@ const ALLOWED_TABLES: Record<string, { dateCol?: string }> = {
   bzila_gex_history: { dateCol: "date" },
   bzila_strike_gex_history: { dateCol: "date" },
   expirations_cache: {},
+  ticker_levels:     {},
+  es_stats:          {},
 };
 
 export async function GET(req: NextRequest) {

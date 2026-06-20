@@ -33,7 +33,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
-const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEsSeed } = require('./es-seed-loader');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -187,6 +187,19 @@ async function main() {
           }
           return;
         }
+        // Market-data history: /proxy/api/tt/market-data/history/:symbol
+        // Backs /api/dxlink/candles (the zones tab). fetchDailyHistory() returns
+        // WEEKLY OHLC bars (from Yahoo) ready for the client's zone math.
+        const histMatch = pathname.match(/^\/proxy\/api\/tt\/market-data\/history\/(.+)$/);
+        if (req.method === 'GET' && histMatch) {
+          const symbol = decodeURIComponent(histMatch[1]).split('?')[0];
+          try {
+            sendJson(res, 200, await fetchDailyHistory(symbol));
+          } catch (e) {
+            sendJson(res, 502, { error: String(e?.message || e), symbol });
+          }
+          return;
+        }
         const chainMatch = pathname.match(/^\/proxy\/api\/tt\/chains\/(.+)$/);
         if (req.method === 'GET' && chainMatch) {
           const url = new URL(req.url || '/', 'http://localhost');
@@ -239,6 +252,9 @@ async function main() {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
     // In-process MVC auto-collector: writes a snapshot every 30m during RTH.
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
+    // In-process weekly publisher for the customer /em page: computes EM + zones
+    // server-side and POSTs each ticker to /api/levels (Mon ~09:35 ET + startup).
+    require('./levels-auto-publish').startLevelsAutoPublish(PORT);
     // Optional: seed the Footprint page from a transcribed ES T&S file when the
     // live ES feed is quiet (after hours). Enabled with ES_SEED=1.
     startEsSeed({ log: console });

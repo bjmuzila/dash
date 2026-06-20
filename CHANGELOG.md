@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-19 (session 18) — Customer `/em` levels page + all-symbol zones + weekend auto-publish
+
+Built a customer-facing Estimated-Move + Buy/Sell-Zone page fed by the existing (now backend) Estimated Moves page via a push→Postgres→pull pipeline, extended No-Short/No-Long zones to all 20 symbols, and added a weekly auto-publisher.
+
+### New
+- **`app/em/page.tsx` + `components/dashboard/EmCustomer.tsx`** — customer page: ticker input → `GET /api/levels?ticker=` → renders Estimated Move (Close/EM/Up/Down) + Buy Zone (noShort) + Sell Zone (noLong). Read-only, deep-linkable via `?ticker=`.
+- **`app/api/levels/route.ts`** — per-ticker `ticker_levels` Postgres table (NULL-aware upsert like es-stats); GET resolves aliases (ES/`/ES`/ESM/ESU26 → ESU, NQ→NQU).
+- **`server-v2/levels-engine.js`** — Node port of `estimateMove` + `fetchNoShortNoLongZones`; calls localhost Next API endpoints so chain/normalization edge cases can't drift. All fetches carry the internal token (`ifetch`).
+- **`server-v2/levels-auto-publish.js`** — weekly publisher: **Sat ~09:00 ET** (Sun catch-up + startup run); `weekKeyET` keys to the upcoming Monday. Wired into `server-with-proxy.js` after `listen()`.
+
+### Changed
+- **`components/dashboard/EstimatedMoves.tsx`** — zones extended from ES/NQ to all 20 SYMBOLS (`zoneSymbol()` maps futures/index/equity dxLink weekly symbols); `ZoneLevels.ticker` widened to `string`; zones tab is now row-per-symbol; pushes EM + zones to `/api/levels` on Refresh; muted gray/blue text → white.
+- **`server-v2/proxy-tastytrade.js`** — added `fetchDailyHistory()` backing the previously-404'ing `/proxy/api/tt/market-data/history/:symbol`; sources **weekly candles from Yahoo Finance** (`interval=1wk`; SPX→^GSPC, NDX→^NDX, ES→ES=F, NQ→NQU). Fixes zones never working on server-v2.
+- **`server-v2/server-with-proxy.js`** — history route handler (passthrough of Yahoo weekly bars).
+- **`middleware.ts`** — bypass Clerk auth when `x-internal-token === INTERNAL_API_TOKEN`, so in-process jobs reach `/api/*` (they were being redirected to `/` → "Unexpected token '<'" HTML).
+- **`.env.local`** — added `INTERNAL_API_TOKEN`.
+- **`app/database/page.tsx` + `app/api/db/route.ts`** — added **Levels (/em)** and **ES Stats** tabs (`ticker_levels`, `es_stats`).
+- **`app/dev/owner/page.tsx`** — added **Levels Publish · /em feed** panel (last-run time, Current/Stale badge, ticker count, schedule).
+- **`components/dashboard/EmCustomer.tsx`** — NEAR/FAR + muted labels → readable white/light-gray; popular chips ES/NQ → ESU/NQU.
+- **`components/shared/Sidebar.tsx`** — Est. Move → `/em` (customer); Est. Move (BE) → `/estimated-move`.
+
+### Fixes
+- NDX/NQM "Invalid price for NDX: NaN" — `fetchAllQuotes` alias step no longer lets a null `$NDX` row clobber the priced `NDX` row.
+- ESU/NQU not showing on `/em` — lookup key mismatch (chip "ES" vs stored "ESU"); fixed via chips + GET alias resolution.
+
+### Verified
+- `[levels-pub] published 20/20 tickers`; `/api/levels?ticker=ESU` and `?ticker=ES` both return the full ESU row (EM + zones).
+
 ## 2026-06-19 (session 17) — Standardize intensity sliders + heatmap coloring to Multi-Greek format
 
 Unified every Greek heatmap's intensity slider and `metricBg()` coloring to match the **Multi-Greek panel** (the reference standard), so increments and color response are identical across the GEX Heatmap, Options Chain, and mobile views.

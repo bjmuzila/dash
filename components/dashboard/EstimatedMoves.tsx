@@ -35,7 +35,7 @@ interface OptionData {
 }
 
 interface ZoneLevels {
-  ticker: "ESU6" | "NQM6";
+  ticker: string;
   open: number;
   high: number;
   low: number;
@@ -83,6 +83,20 @@ const API_SYMBOL: Record<string, string> = {
 };
 const CHAIN_SYMBOL: Record<string, string> = { SPX: "$SPX", NDX: "$NDX" };
 const FUTURE_PROXY: Record<string, string> = { ESM: "SPX", NQM: "NDX" };
+
+// dxLink weekly-candle symbol for the No-Short/No-Long zone math. Futures use
+// their working streamer forms; indices use the $-prefixed form; everything
+// else is a plain equity ticker. `{=w}` requests weekly OHLC aggregation.
+const ZONE_HISTORY_SYMBOL: Record<string, string> = {
+  ESM: "/ESU6{=w}",
+  NQM: "/NQ{=w}",
+};
+function zoneSymbol(ticker: string): string {
+  if (ZONE_HISTORY_SYMBOL[ticker]) return ZONE_HISTORY_SYMBOL[ticker];
+  if (ticker === "SPX") return "$SPX{=w}";
+  if (ticker === "NDX") return "$NDX{=w}";
+  return `${ticker}{=w}`;
+}
 const QUOTE_SYMBOLS = Array.from(new Set([
   ...SYMBOLS,
   ...Object.values(API_SYMBOL),
@@ -633,12 +647,14 @@ async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {
 
 async function fetchNoShortNoLongZones(): Promise<ZoneLevels[]> {
   const targetWeek = getCompletedWeekKey();
-  const configs: Array<{ ticker: ZoneLevels["ticker"]; historySymbol: string }> = [
-    { ticker: "ESU6", historySymbol: "/ESU6{=w}" },
-    { ticker: "NQM6", historySymbol: "/NQ{=w}" },
-  ];
+  // Compute zones for every symbol on the Estimated Moves page (not just the two
+  // futures). Each uses its own dxLink weekly-candle symbol via zoneSymbol().
+  const configs: Array<{ ticker: string; historySymbol: string }> =
+    SYMBOLS.map((ticker) => ({ ticker, historySymbol: zoneSymbol(ticker) }));
 
-  return Promise.all(configs.map(async ({ ticker, historySymbol }) => {
+  // Resilient: one symbol's upstream 404 (server-v2 has no weekly history for it)
+  // must not abort the whole zones refresh. Settle each, skip failures.
+  const settled = await Promise.allSettled(configs.map(async ({ ticker, historySymbol }) => {
     const weeklyBars = await fetchWeeklyHistory(historySymbol);
     const exactMatch = weeklyBars.find((item) => getWeekKey(new Date(item.time)) === targetWeek);
     const candidates = weeklyBars.filter((item) => getWeekKey(new Date(item.time)) <= targetWeek);
@@ -646,13 +662,21 @@ async function fetchNoShortNoLongZones(): Promise<ZoneLevels[]> {
     if (!selected) throw new Error(`No weekly candles for ${ticker}`);
     return buildZoneLevels(ticker, [selected]);
   }));
+
+  const ok = settled
+    .filter((r): r is PromiseFulfilledResult<ZoneLevels> => r.status === "fulfilled")
+    .map((r) => r.value);
+  settled
+    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    .forEach((r) => console.warn("[EM zones] skipped:", r.reason?.message ?? r.reason));
+  return ok;
 }
 
 export default function EstimatedMoves() {
   const [activeView, setActiveView] = useState<DashboardView>("estimated");
   const [rows, setRows] = useState<EMRow[]>([]);
   const [zoneLevels, setZoneLevels] = useState<ZoneLevels[]>([]);
-  const [status, setStatus] = useState<{ text: string; color: string }>({ text: "Ready", color: "#5a7a99" });
+  const [status, setStatus] = useState<{ text: string; color: string }>({ text: "Ready", color: "#eef7ff" });
   const [lastSync, setLastSync] = useState("--");
   const [knownExpirations, setKnownExpirations] = useState<string[]>([]);
   const [fridayExpirations, setFridayExpirations] = useState<string[]>([]);
@@ -756,6 +780,29 @@ export default function EstimatedMoves() {
 
     const exp = settled.find((row) => row.expiration)?.expiration;
     if (exp) setTargetDateLabel(labelForDate(exp));
+    const expLabel = exp ? labelForDate(exp) : nextFridayLabel();
+
+    // Push per-ticker EM levels to /api/levels for the customer-facing /em page.
+    // Buy/Sell zone fields are NOT sent here (left untouched by the NULL-aware
+    // upsert) — they are pushed from refreshZones for ES/NQ.
+    settled
+      .filter((row) => !row.error && row.up !== undefined && row.down !== undefined)
+      .forEach((row) => {
+        const apiTicker = DISPLAY_LABEL[row.ticker] ?? row.ticker;
+        fetch("/api/levels", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ticker: apiTicker,
+            label: apiTicker,
+            close: row.close !== undefined ? fmtPrice(row.ticker, row.close) : null,
+            em: row.em !== undefined ? fmtEm(row.em) : null,
+            up: row.up !== undefined ? fmtPrice(row.ticker, row.up) : null,
+            down: row.down !== undefined ? fmtPrice(row.ticker, row.down) : null,
+            exp_label: expLabel,
+          }),
+        }).catch((e) => console.warn("[Levels] push failed:", row.ticker, e));
+      });
 
     // Persist UP / DOWN to SQLite (NO LONG / NO SHORT come from zones tab)
     const esmRow = settled.find((r) => r.ticker === "ESM" && r.up && r.down);
@@ -779,8 +826,29 @@ export default function EstimatedMoves() {
     const levels = await fetchNoShortNoLongZones();
     setZoneLevels(levels);
 
+    // Push buy/sell zones to /api/levels for EVERY symbol's customer lookup.
+    // noShort = below pivot = Buy Zone; noLong = above pivot = Sell Zone. The
+    // ticker is the raw symbol now; map ESM/NQM to ESU/NQU via DISPLAY_LABEL so
+    // it matches the EM push and the customer page.
+    levels.forEach((lvl) => {
+      const apiTicker = DISPLAY_LABEL[lvl.ticker] ?? lvl.ticker;
+      fetch("/api/levels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: apiTicker,
+          label: apiTicker,
+          pivot: fmtFuture(lvl.pivot),
+          buy_near: fmtFuture(lvl.noShortNear),
+          buy_far: fmtFuture(lvl.noShortFar),
+          sell_near: fmtFuture(lvl.noLongNear),
+          sell_far: fmtFuture(lvl.noLongFar),
+        }),
+      }).catch((e) => console.warn("[Levels] zone push failed:", apiTicker, e));
+    });
+
     // Persist NO LONG, NO SHORT, and MID from ESU zones to SQLite
-    const esm = levels.find((l) => l.ticker === "ESU6");
+    const esm = levels.find((l) => l.ticker === "ESM");
     if (esm) {
       const fmtStat = (v: number) => Math.round(v).toLocaleString("en-US");
       const mid = (esm.high + esm.low) / 2;
@@ -979,7 +1047,7 @@ export default function EstimatedMoves() {
     return map;
   }, [zoneLevels]);
 
-  const currentSymbols = activeView === "estimated" ? SYMBOLS : ["ESU6", "NQM6"];
+  const currentSymbols = SYMBOLS;
   const filteredSnapshots = snapshots.filter((snap) => (snap.view ?? "estimated") === activeView);
   const viewTitle = activeView === "estimated" ? "Estimated Moves" : "No Short No Long Zones";
   const subTitle = activeView === "estimated" ? "Weekly" : "Last Week OHLC";
@@ -1019,18 +1087,18 @@ export default function EstimatedMoves() {
           </div>
 
           <span style={{ fontSize: 15, fontWeight: 700, color: "#00e5ff", letterSpacing: ".15em", textTransform: "uppercase" }}>{viewTitle}</span>
-          <span style={{ fontSize: 12, color: "#3a5570", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
-          <span style={{ fontSize: 12, color: "#7ab8ff", letterSpacing: ".12em", textTransform: "uppercase" }}>
+          <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
+          <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase" }}>
             {activeView === "estimated" ? targetDateLabel : "Last Completed Week"}
           </span>
 
           {activeView === "estimated" && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 12 }}>
-              <span style={{ fontSize: 11, color: "#3a5570", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Expiration</span>
+              <span style={{ fontSize: 11, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Expiration</span>
               <select
                 value={expOverride}
                 onChange={(e) => { setExpOverride(e.target.value); bulkSubscribedRef.current = false; }}
-                style={{ background: "#04070c", border: "1px solid #1e3a5f", color: "#7ab8ff", fontSize: 12, padding: "5px 8px", borderRadius: 2, cursor: "pointer", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".06em", outline: "none", minWidth: 180 }}
+                style={{ background: "#04070c", border: "1px solid #1e3a5f", color: "#eef7ff", fontSize: 12, padding: "5px 8px", borderRadius: 2, cursor: "pointer", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".06em", outline: "none", minWidth: 180 }}
               >
                 <option value="">-- Auto --</option>
                 {fridayExpirations.map((exp) => (
@@ -1061,32 +1129,32 @@ export default function EstimatedMoves() {
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         <div style={{ width: 230, minWidth: 230, flexShrink: 0, background: "#04070c", borderRight: "1px solid #0d1825", boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "12px 14px", borderBottom: "1px solid #0d1825", flexShrink: 0 }}>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>Last Sync</div>
+            <div style={{ fontSize: 9, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>Last Sync</div>
             <div style={{ fontSize: 13, color: "#e8edf5", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{lastSync}</div>
           </div>
 
           <div style={{ flex: 1, overflowY: "auto" }}>
             <button onClick={() => setDrawerOpen((open) => !open)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "transparent", border: "none", borderBottom: "1px solid #0d1825", cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 10, color: "#5a7a99", display: "inline-block", transform: drawerOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s" }}>{">"}</span>
+                <span style={{ fontSize: 10, color: "#eef7ff", display: "inline-block", transform: drawerOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s" }}>{">"}</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#e8edf5", letterSpacing: ".08em", textTransform: "uppercase" }}>
                   {activeView === "estimated" ? "Weekly" : "Zones"}
                 </span>
               </div>
-              <span style={{ fontSize: 10, color: "#7ab8ff", background: "#07111d", border: "1px solid #1a2a3a", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>{filteredSnapshots.length}</span>
+              <span style={{ fontSize: 10, color: "#eef7ff", background: "#07111d", border: "1px solid #1a2a3a", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>{filteredSnapshots.length}</span>
             </button>
 
             {drawerOpen && (
               <div style={{ display: "flex", flexDirection: "column", gap: 1, background: "#020407" }}>
                 {filteredSnapshots.length === 0 ? (
-                  <div style={{ padding: "10px 14px", fontSize: 11, color: "#3a5570" }}>No snapshots</div>
+                  <div style={{ padding: "10px 14px", fontSize: 11, color: "#eef7ff" }}>No snapshots</div>
                 ) : filteredSnapshots.map((snap) => (
                   <div key={snap.id} onClick={() => loadSnapshot(snap)} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: "1px solid #0d1825", background: "#04070c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
                       <div style={{ fontSize: 11, color: "#e8edf5", fontWeight: 700 }}>{snap.date}</div>
-                      <div style={{ fontSize: 10, color: "#7ab8ff", fontVariantNumeric: "tabular-nums" }}>{snap.time}</div>
+                      <div style={{ fontSize: 10, color: "#eef7ff", fontVariantNumeric: "tabular-nums" }}>{snap.time}</div>
                     </div>
-                    <button onClick={(e) => deleteSnapshot(e, snap.id!)} style={{ background: "none", border: "none", color: "#5a7a99", fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>×</button>
+                    <button onClick={(e) => deleteSnapshot(e, snap.id!)} style={{ background: "none", border: "none", color: "#eef7ff", fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>×</button>
                   </div>
                 ))}
               </div>
@@ -1094,10 +1162,10 @@ export default function EstimatedMoves() {
           </div>
 
           <div style={{ padding: "10px 14px", borderTop: "1px solid #0d1825", flexShrink: 0 }}>
-            <div style={{ fontSize: 9, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>Symbols</div>
+            <div style={{ fontSize: 9, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>Symbols</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
               {currentSymbols.map((symbol) => (
-                <span key={symbol} style={{ fontSize: 11, color: "#7ab8ff", background: "#07111d", border: "1px solid #13253a", padding: "3px 6px", borderRadius: 2 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
+                <span key={symbol} style={{ fontSize: 11, color: "#eef7ff", background: "#07111d", border: "1px solid #13253a", padding: "3px 6px", borderRadius: 2 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
               ))}
             </div>
           </div>
@@ -1107,7 +1175,7 @@ export default function EstimatedMoves() {
           {activeView === "estimated" ? (
             <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: "#0b111b", border: "1px solid #1a2a3a", boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
               <div style={{ borderBottom: "1px solid #1a2a3a", background: "#0e1522", padding: "10px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#a8b8cc", letterSpacing: ".16em", textTransform: "uppercase" }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>
                   Weekly Estimated Move For <span style={{ color: "#00e5ff" }}>{targetDateLabel || "--"}</span>
                 </div>
               </div>
@@ -1122,14 +1190,14 @@ export default function EstimatedMoves() {
                   </thead>
                   <tbody style={{ fontFamily: "Consolas, Monaco, monospace" }}>
                     {!started ? (
-                      <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#3a5570" }}>Click Start to load estimated moves</td></tr>
+                      <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#eef7ff" }}>Click Start to load estimated moves</td></tr>
                     ) : rows.length === 0 ? (
-                      <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#3a5570" }}>Loading...</td></tr>
+                      <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</td></tr>
                     ) : rows.map((row) => (
                       <tr key={row.ticker} title={row.error || ""} style={{ textAlign: "center", borderBottom: "1px solid #121b2a", opacity: row.error ? 0.55 : 1 }}>
                         <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</td>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#cbd5e1" }}>{fmtPrice(row.ticker, row.close)}</td>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#7ab8ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
+                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtPrice(row.ticker, row.close)}</td>
+                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
                         <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#e8c060" }}>{fmtEm(row.em)}</td>
                         <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</td>
                         <td style={{ padding: 8, color: "#ff4757" }}>{fmtPrice(row.ticker, row.down)}</td>
@@ -1140,69 +1208,56 @@ export default function EstimatedMoves() {
               </div>
             </div>
           ) : (
-            <div style={{ width: "100%", maxWidth: 760, margin: "0 auto", background: "#0b111b", border: "1px solid #1a2a3a", boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
+            <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: "#0b111b", border: "1px solid #1a2a3a", boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
               <div style={{ borderBottom: "1px solid #1a2a3a", background: "#0e1522", padding: "10px 14px", textAlign: "center" }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>
-                  ES/NQ Last Week Candle
+                  No Short / No Long Zones <span style={{ color: "#eef7ff" }}>· Last Week Candle</span>
                 </div>
               </div>
-              <div style={{ padding: 14 }}>
+              <div style={{ overflowX: "auto" }}>
                 {!started ? (
-                  <div style={{ padding: 30, textAlign: "center", color: "#3a5570" }}>Click Start to load last week OHLC and zones</div>
+                  <div style={{ padding: 30, textAlign: "center", color: "#eef7ff" }}>Click Start to load last week OHLC and zones</div>
                 ) : zoneLevels.length === 0 ? (
-                  <div style={{ padding: 24, textAlign: "center", color: "#3a5570" }}>Loading...</div>
+                  <div style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "Consolas, Monaco, monospace", fontSize: 18 }}>
-                    <thead>
-                      <tr style={{ color: "#00e5ff", textTransform: "uppercase", letterSpacing: ".1em", fontSize: 13 }}>
-                        <th style={{ width: "26%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>Info</th>
-                        <th style={{ width: "37%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>ESU</th>
-                        <th style={{ width: "37%", padding: "10px 8px", border: "1px solid #1a2a3a" }}>NQU</th>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+                    <thead style={{ background: "#0a0f18" }}>
+                      <tr style={{ borderBottom: "1px solid #1a2a3a", color: "#00e5ff", textAlign: "center", fontSize: 12, letterSpacing: ".1em", textTransform: "uppercase" }}>
+                        {["Ticker", "Close", "Pivot", "Range", "No Long", "No Short"].map((header, idx) => (
+                          <th key={header} style={{ padding: 10, borderRight: idx < 5 ? "1px solid #1a2a3a" : undefined }}>{header}</th>
+                        ))}
                       </tr>
                     </thead>
-                    <tbody>
-                      {[
-                        { label: "Open", render: (row: ZoneLevels) => fmtFuture(row.open) },
-                        { label: "High", render: (row: ZoneLevels) => fmtFuture(row.high) },
-                        { label: "Low", render: (row: ZoneLevels) => fmtFuture(row.low) },
-                        { label: "Close", render: (row: ZoneLevels) => fmtFuture(row.close) },
-                        { label: "", spacer: true },
-                        { label: "Pivot", render: (row: ZoneLevels) => fmtFuture(row.pivot) },
-                        { label: "Range", render: (row: ZoneLevels) => fmtFuture(row.range) },
-                        { label: "", spacer: true },
-                        { label: "No Long", renderStack: (row: ZoneLevels) => [fmtFuture(row.noLongNear), fmtFuture(row.noLongFar)] },
-                        { label: "", spacer: true },
-                        { label: "No Short", renderStack: (row: ZoneLevels) => [fmtFuture(row.noShortNear), fmtFuture(row.noShortFar)] },
-                      ].map((def, idx) => {
-                        if (def.spacer) {
+                    <tbody style={{ fontFamily: "Consolas, Monaco, monospace" }}>
+                      {SYMBOLS.map((sym) => {
+                        const row = zoneMap.get(sym);
+                        const label = DISPLAY_LABEL[sym] ?? sym;
+                        if (!row) {
                           return (
-                            <tr key={`spacer-${idx}`}>
-                              <td style={{ height: 20 }} />
-                              <td />
-                              <td />
+                            <tr key={sym} style={{ textAlign: "center", borderBottom: "1px solid #121b2a", opacity: 0.4 }}>
+                              <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{label}</td>
+                              <td colSpan={5} style={{ padding: 8, color: "#eef7ff", fontStyle: "italic" }}>no weekly candle</td>
                             </tr>
                           );
                         }
-                        const es = zoneMap.get("ESU6");
-                        const nq = zoneMap.get("NQM6");
-                        const renderCell = (row: ZoneLevels | undefined) => {
-                          if (!row) return "--";
-                          if (def.renderStack) {
-                            const [first, second] = def.renderStack(row);
-                            return (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                <span>{first}</span>
-                                <span>{second}</span>
-                              </div>
-                            );
-                          }
-                          return def.render?.(row) ?? "--";
-                        };
                         return (
-                          <tr key={def.label}>
-                            <td style={{ padding: "8px 10px", border: "1px solid #1a2a3a", color: "#eef7ff", textTransform: "uppercase", letterSpacing: ".08em", fontSize: 14, fontWeight: 700 }}>{def.label}</td>
-                            <td style={{ padding: "8px 10px", border: "1px solid #1a2a3a", color: "#ffffff", textAlign: "center", fontStyle: "italic" }}>{renderCell(es)}</td>
-                            <td style={{ padding: "8px 10px", border: "1px solid #1a2a3a", color: "#ffffff", textAlign: "center", fontStyle: "italic" }}>{renderCell(nq)}</td>
+                          <tr key={sym} style={{ textAlign: "center", borderBottom: "1px solid #121b2a" }}>
+                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{label}</td>
+                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtFuture(row.close)}</td>
+                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtFuture(row.pivot)}</td>
+                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtFuture(row.range)}</td>
+                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#ff4757" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                <span>{fmtFuture(row.noLongNear)}</span>
+                                <span style={{ opacity: 0.65 }}>{fmtFuture(row.noLongFar)}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: 8, color: "#00e676" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                <span>{fmtFuture(row.noShortNear)}</span>
+                                <span style={{ opacity: 0.65 }}>{fmtFuture(row.noShortFar)}</span>
+                              </div>
+                            </td>
                           </tr>
                         );
                       })}
@@ -1215,11 +1270,11 @@ export default function EstimatedMoves() {
         </div>
       </div>
 
-      <div ref={shotRef} style={{ position: "fixed", top: 0, left: "-9999px", background: "#080c14", padding: "0 0 12px 0", width: activeView === "estimated" ? 420 : 760, fontFamily: "Arial, sans-serif" }}>
+      <div ref={shotRef} style={{ position: "fixed", top: 0, left: "-9999px", background: "#080c14", padding: "0 0 12px 0", width: 420, fontFamily: "Arial, sans-serif" }}>
         {activeView === "estimated" ? (
           <>
             <div style={{ background: "#0b111b", padding: "14px 0", textAlign: "center", borderBottom: "2px solid #1a2a3a" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#a8b8cc", letterSpacing: ".16em", textTransform: "uppercase" }}>Weekly Estimated Move For</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>Weekly Estimated Move For</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
             </div>
 
@@ -1237,7 +1292,7 @@ export default function EstimatedMoves() {
               </div>
             ))}
 
-            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#3a5570", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: "1px solid #1a2a3a", borderTop: "1px solid #1a2a3a", background: "#04070c" }}>
+            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: "1px solid #1a2a3a", borderTop: "1px solid #1a2a3a", background: "#04070c" }}>
               x.com/bzilatrades
             </div>
 
@@ -1252,53 +1307,30 @@ export default function EstimatedMoves() {
         ) : (
           <>
             <div style={{ background: "#0b111b", padding: "14px 0", textAlign: "center", borderBottom: "2px solid #1a2a3a" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>ES/NQ Last Week Candle</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>No Short / No Long Zones</div>
             </div>
 
-            <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "Consolas, Monaco, monospace", fontSize: 17 }}>
-              <thead>
-                <tr style={{ color: "#00e5ff", textTransform: "uppercase", letterSpacing: ".1em", fontSize: 12 }}>
-                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>Info</th>
-                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>ESU</th>
-                  <th style={{ padding: "10px 8px", border: "1px solid #1a2a3a" }}>NQU</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  { label: "Open", value: (row: ZoneLevels) => fmtFuture(row.open) },
-                  { label: "High", value: (row: ZoneLevels) => fmtFuture(row.high) },
-                  { label: "Low", value: (row: ZoneLevels) => fmtFuture(row.low) },
-                  { label: "Close", value: (row: ZoneLevels) => fmtFuture(row.close) },
-                  { label: "Pivot", value: (row: ZoneLevels) => fmtFuture(row.pivot) },
-                  { label: "Range", value: (row: ZoneLevels) => fmtFuture(row.range) },
-                  { label: "No Long", stack: (row: ZoneLevels) => [fmtFuture(row.noLongNear), fmtFuture(row.noLongFar)] },
-                  { label: "No Short", stack: (row: ZoneLevels) => [fmtFuture(row.noShortNear), fmtFuture(row.noShortFar)] },
-                ].map((rowDef) => {
-                  const es = zoneMap.get("ESU6");
-                  const nq = zoneMap.get("NQM6");
-                  const render = (row: ZoneLevels | undefined) => {
-                    if (!row) return "--";
-                    if (rowDef.stack) {
-                      const [first, second] = rowDef.stack(row);
-                      return (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <span>{first}</span>
-                          <span>{second}</span>
-                        </div>
-                      );
-                    }
-                    return rowDef.value?.(row) ?? "--";
-                  };
-                  return (
-                    <tr key={rowDef.label}>
-                      <td style={{ padding: "8px 10px", border: "1px solid #1a2a3a", color: "#eef7ff", textTransform: "uppercase", letterSpacing: ".08em", fontSize: 13, fontWeight: 700 }}>{rowDef.label}</td>
-                      <td style={{ padding: "8px 10px", border: "1px solid #1a2a3a", color: "#ffffff", textAlign: "center", fontStyle: "italic" }}>{render(es)}</td>
-                      <td style={{ padding: "8px 10px", border: "1px solid #1a2a3a", color: "#ffffff", textAlign: "center", fontStyle: "italic" }}>{render(nq)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: "1px solid #1a2a3a" }}>
+              {["Ticker", "No Short", "No Long"].map((header) => (
+                <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em" }}>{header}</div>
+              ))}
+            </div>
+
+            {SYMBOLS.map((sym) => {
+              const row = zoneMap.get(sym);
+              if (!row) return null;
+              return (
+                <div key={sym} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #0d1825" }}>
+                  <div style={{ padding: "8px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 14 }}>{DISPLAY_LABEL[sym] ?? sym}</div>
+                  <div style={{ padding: "8px 0", textAlign: "center", color: "#00e676", fontSize: 14 }}>{fmtFuture(row.noShortNear)}</div>
+                  <div style={{ padding: "8px 0", textAlign: "center", color: "#ff4757", fontSize: 14 }}>{fmtFuture(row.noLongNear)}</div>
+                </div>
+              );
+            })}
+
+            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderTop: "1px solid #1a2a3a", background: "#04070c" }}>
+              x.com/bzilatrades
+            </div>
           </>
         )}
       </div>

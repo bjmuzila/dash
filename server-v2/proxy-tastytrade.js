@@ -699,6 +699,84 @@ async function fetchExpirations(ticker) {
 }
 
 // ---------------------------------------------------------------------------
+// Market-data history (weekly candles) — backs /api/dxlink/candles, which the
+// Estimated-Moves "No Short / No Long Zones" tab uses for weekly OHLC. server-v2
+// originally had no history route (every request 404'd: "unknown proxy route").
+//
+// Source = Yahoo Finance, matching the legacy server/ stack. Tastytrade's
+// /market-data/history REST endpoint 400s for this use, so the old code already
+// relied on Yahoo (query1.finance.yahoo.com/v8/finance/chart). Yahoo serves
+// weekly bars directly (interval=1wk) for equities, indices and futures, no
+// auth required.
+// ---------------------------------------------------------------------------
+
+const _historyCache = new Map(); // yahooSym -> { ts, payload }
+const HISTORY_TTL_MS = 15 * 60 * 1000;
+
+// Index / futures roots Yahoo addresses under special tickers; equities pass
+// through unchanged. Mirrors the legacy yahooSymbolMap.
+const YAHOO_SYMBOL = {
+  SPX: '^GSPC', NDX: '^NDX', RUT: '^RUT', VIX: '^VIX', DJX: '^DJI', XSP: '^GSPC',
+};
+
+/**
+ * Translate a zone/history request symbol into a Yahoo Finance ticker.
+ * The client sends dxLink forms like "AAPL{=w}", "$SPX{=w}", "/ESU6{=w}",
+ * "/NQ{=w}". We strip the aggregation suffix and map indices/futures.
+ */
+function historyYahooSymbol(raw) {
+  let s = String(raw || '').trim();
+  s = s.replace(/\{=[^}]*\}$/, ''); // strip {=w} / {=1w}
+  s = s.replace(/^\$/, '');         // $SPX -> SPX
+  if (/^\/ES/i.test(s)) return 'ES=F';
+  if (/^\/NQ/i.test(s)) return 'NQ=F';
+  if (/^\/RTY/i.test(s)) return 'RTY=F';
+  if (s.startsWith('/')) return s.slice(1).toUpperCase() + '=F'; // other future, best effort
+  s = s.toUpperCase();
+  return YAHOO_SYMBOL[s] || s;
+}
+
+/**
+ * Fetch ~1y of WEEKLY OHLC for any symbol from Yahoo. Returns the normalized
+ * shape { data: { items: [{ time(ms), open, high, low, close, volume }] } }
+ * that the client's parseHistoryItems() already understands.
+ */
+async function fetchDailyHistory(rawSymbol) {
+  const yahoo = historyYahooSymbol(rawSymbol);
+  if (!yahoo) throw new Error('Invalid history symbol');
+
+  const cached = _historyCache.get(yahoo);
+  if (cached && Date.now() - cached.ts < HISTORY_TTL_MS) return cached.payload;
+
+  const period2 = Math.floor(Date.now() / 1000) + 86400;
+  const period1 = period2 - 86400 * 400; // ~13 months
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahoo)}`
+    + `?period1=${period1}&period2=${period2}&interval=1wk`;
+
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } });
+  if (!r.ok) throw new Error(`Yahoo ${yahoo} -> ${r.status}`);
+  const data = await r.json();
+  const result = data?.chart?.result?.[0];
+  if (!result) throw new Error(`Yahoo ${yahoo}: no result`);
+
+  const stamps = result.timestamp || [];
+  const q = result.indicators?.quote?.[0] || {};
+  const items = [];
+  for (let i = 0; i < stamps.length; i += 1) {
+    const open = Number(q.open?.[i]);
+    const high = Number(q.high?.[i]);
+    const low = Number(q.low?.[i]);
+    const close = Number(q.close?.[i]);
+    if (![open, high, low, close].every(Number.isFinite) || close <= 0) continue;
+    items.push({ time: Number(stamps[i]) * 1000, open, high, low, close, volume: Number(q.volume?.[i] || 0) });
+  }
+
+  const payload = { data: { items } };
+  _historyCache.set(yahoo, { ts: Date.now(), payload });
+  return payload;
+}
+
+// ---------------------------------------------------------------------------
 // dxLink client
 // ---------------------------------------------------------------------------
 
@@ -1782,4 +1860,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, probeRest, getAccessToken, getQuoteToken, DxLinkClient };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };

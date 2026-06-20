@@ -52,7 +52,8 @@ const NAV_GROUPS: NavGroup[] = [
     emoji: "📊",
     items: [
       { label: "Overview", href: "/overview" },
-      { label: "Est. Move", href: "/estimated-move" },
+      { label: "Est. Move", href: "/em" },
+      { label: "Est. Move (BE)", href: "/estimated-move" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Insights", href: "/insights" },
@@ -92,6 +93,8 @@ const NAV_GROUPS: NavGroup[] = [
     emoji: "🛠️",
     devOnly: true,
     items: [
+      { label: "Owner", href: "/dev/owner" },
+      { label: "Admin", href: "/dev/admin" },
       { label: "Legacy", href: "/legacy" },
       { label: "Dev", href: "/dev" },
       { label: "Logs", href: "/logs" },

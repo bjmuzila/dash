@@ -26,6 +26,8 @@ const TABLES = [
   { id: "bzila_strike_gex_history", label: "Bzila Strikes" },
   { id: "flow_calls", label: "Flow Calls" },
   { id: "snapshots", label: "EM Snapshots" },
+  { id: "ticker_levels", label: "Levels (/em)" },
+  { id: "es_stats", label: "ES Stats" },
   { id: "trades", label: "Trades" },
   { id: "expirations_cache", label: "Exp Cache" },
 ] as const;
