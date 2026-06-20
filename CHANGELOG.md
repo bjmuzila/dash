@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-20 (session 26) — /em Customer Page: Confidence Score, Win Rate Bar, EM vs Historical Avg
+
+Enhanced the customer-facing `/em` page with three new data points surfaced per-ticker lookup, plus UI polish.
+
+### New features (`components/dashboard/EmCustomer.tsx`)
+- **MVC Confidence %** — fetches `/api/confidence` after each lookup; shown as a color-coded stat cell (green ≥70%, amber ≥45%, red below) inside the Estimated Move card.
+- **EM Hit Rate bar** — fetches `/api/em-tracker` + `/api/em-tracker/history` and merges live DB + historical JSON tally (same logic as the tracker page) so the combined win rate is accurate. Displayed as a pressure-bar: red→green gradient, fills left-to-right by win %, with Miss (N) / Hit (N) labels. Headline reads "X% Hit".
+- **vs Historical EM Average card** — new `/api/em/ticker-em-stats` endpoint queries `em_tracker` for the last 4 and 12 weeks of recorded EM values; shows `▲/▼ X.X%` vs each average. Card moved to the bottom of the page (below Buy/Sell Zones).
+
+### New API (`app/api/em/ticker-em-stats/route.ts`)
+- `GET /api/em/ticker-em-stats?ticker=X` — returns `recentAvg` (last 4 weeks), `midAvg` (last 12 weeks), `sampleSize` from `em_tracker`.
+
+### UI polish (`components/dashboard/EmCustomer.tsx`)
+- Removed pivot row.
+- All gray/muted text (`#9fb4cc`, `#7ab8ff`, `#7a92ad`) replaced with white (`#eef7ff`).
+
+---
+
 ## 2026-06-20 (session 25) — EOD GEX Recorder + Dashboard Save Status
 
 Added a full EOD GEX pipeline: Postgres table, recorder module wired into server-v2, REST endpoint, and save-status UI in both the owner dashboard and the database page.

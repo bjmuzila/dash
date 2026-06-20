@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+interface TickerEmStats {
+  recentAvg: number | null;
+  midAvg: number | null;
+  sampleSize: number;
+}
+
 interface Levels {
   ticker: string;
   label?: string | null;
@@ -56,6 +62,9 @@ export default function EmCustomer() {
   const [data, setData] = useState<Levels | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [emStats, setEmStats] = useState<TickerEmStats | null>(null);
+  const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
+  const [winRate, setWinRate] = useState<{ hits: number; evaluated: number; hit_rate: number } | null>(null);
 
   const lookup = useCallback(async (raw: string) => {
     const sym = raw.trim().toUpperCase();
@@ -64,6 +73,9 @@ export default function EmCustomer() {
     setLoading(true);
     setError("");
     setData(null);
+    setEmStats(null);
+    setConfidenceScore(null);
+    setWinRate(null);
     try {
       const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym)}`, { cache: "no-store" });
       if (!r.ok) throw new Error("Lookup failed");
@@ -83,6 +95,43 @@ export default function EmCustomer() {
         if (!hasZones) {
           const zones = await fetchZones(sym);
           if (zones) setData((prev) => (prev ? { ...prev, ...zones } : zones));
+        }
+      }
+      // Fetch EM history stats, confidence, and win/loss record in parallel
+      const [statsRes, confRes, trackerRes] = await Promise.allSettled([
+        fetch(`/api/em/ticker-em-stats?ticker=${encodeURIComponent(sym)}`).then((r) => r.ok ? r.json() : null),
+        fetch("/api/confidence").then((r) => r.ok ? r.json() : null),
+        Promise.all([
+          fetch("/api/em-tracker").then((r) => r.ok ? r.json() : null),
+          fetch("/api/em-tracker/history").then((r) => r.ok ? r.json() : null),
+        ]).then(([live, hist]) => live ? { summary: live.summary, history: hist } : null),
+      ]);
+      if (statsRes.status === "fulfilled" && statsRes.value) {
+        setEmStats({ recentAvg: statsRes.value.recentAvg ?? null, midAvg: statsRes.value.midAvg ?? null, sampleSize: statsRes.value.sampleSize ?? 0 });
+      }
+      if (confRes.status === "fulfilled" && confRes.value) {
+        const s = confRes.value?.score?.score ?? confRes.value?.score ?? null;
+        if (s != null && Number.isFinite(Number(s))) setConfidenceScore(Math.round(Number(s)));
+      }
+      if (trackerRes.status === "fulfilled" && trackerRes.value) {
+        const { summary: liveSummary, history: histData } = trackerRes.value as {
+          summary: Array<{ ticker: string; hits: number; evaluated: number }>;
+          history: { tallies: Record<string, { hits: number; total: number }> };
+        };
+        // Tracker uses ESM/NQM internally but displays as ESU/NQU; also check both
+        const aliases: Record<string, string[]> = { ESU: ["ESU", "ESM"], NQU: ["NQU", "NQM"] };
+        const candidates = aliases[sym] ?? [sym];
+        const liveRow = (liveSummary || []).find((r) => candidates.includes(r.ticker));
+        const histTicker = candidates.find((c) => histData?.tallies?.[c]);
+        const hist = histTicker ? histData.tallies[histTicker] : null;
+        const liveHits = liveRow?.hits ?? 0;
+        const liveEval = liveRow?.evaluated ?? 0;
+        const histHits = hist?.hits ?? 0;
+        const histTotal = hist?.total ?? 0;
+        const totalHits = histHits + liveHits;
+        const totalEval = histTotal + liveEval;
+        if (totalEval > 0) {
+          setWinRate({ hits: totalHits, evaluated: totalEval, hit_rate: totalHits / totalEval });
         }
       }
     } catch (e) {
@@ -167,6 +216,39 @@ export default function EmCustomer() {
                 <Stat label="Up" value={val(data.up)} color="#00e676" />
                 <Stat label="Down" value={val(data.down)} color="#ff5a6a" />
               </div>
+              {(confidenceScore != null || winRate != null) && (
+                <div style={{ display: "grid", gridTemplateColumns: winRate != null && confidenceScore != null ? "1fr 1fr" : "1fr", gap: 10, marginTop: 10 }}>
+                  {confidenceScore != null && (
+                    <div style={{ ...S.avgStat, border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.3)" : confidenceScore >= 45 ? "rgba(255,193,7,.3)" : "rgba(255,71,87,.3)"}` }}>
+                      <div style={S.statLabel}>MVC Confidence</div>
+                      <div style={{ ...S.statValue, fontSize: 20, color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#ff4757" }}>
+                        {confidenceScore}%
+                      </div>
+                    </div>
+                  )}
+                  {winRate != null && (() => {
+                    const winPct = Math.round(winRate.hit_rate * 100);
+                    const lossPct = 100 - winPct;
+                    const losses = winRate.evaluated - winRate.hits;
+                    return (
+                      <div style={{ ...S.avgStat, border: "1px solid rgba(255,255,255,.1)", padding: "12px 12px 10px" }}>
+                        <div style={S.statLabel}>EM Hit Rate</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: winPct >= 65 ? "#00e676" : winPct >= 50 ? "#ffc107" : "#ff4757", marginBottom: 8 }}>
+                          {winPct}% Hit
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#eef7ff", marginBottom: 4 }}>
+                          <span>Miss ({losses})</span>
+                          <span>{winPct}%</span>
+                          <span>Hit ({winRate.hits})</span>
+                        </div>
+                        <div style={{ height: 4, background: "rgba(255,255,255,.1)", borderRadius: 999, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${winPct}%`, background: "linear-gradient(90deg,#ff4757,#ff4757,#00e676)", transition: "width .4s" }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </section>
 
             {/* Zones */}
@@ -186,11 +268,45 @@ export default function EmCustomer() {
               </section>
             </div>
 
-            {data.pivot && (
-              <div style={S.pivot}>
-                Pivot <span style={S.pivotVal}>{data.pivot}</span>
-              </div>
-            )}
+            {/* EM vs Historical Averages */}
+            {emStats && (emStats.recentAvg != null || emStats.midAvg != null) && (() => {
+              const emVal = data.em ? parseFloat(data.em.replace(/,/g, "")) : null;
+              const renderAvg = (avg: number | null, label: string) => {
+                if (!avg || !emVal || !Number.isFinite(avg) || !Number.isFinite(emVal)) {
+                  return (
+                    <div style={S.avgStat}>
+                      <div style={S.statLabel}>{label}</div>
+                      <div style={{ ...S.statValue, color: "#eef7ff", fontSize: 14 }}>--</div>
+                    </div>
+                  );
+                }
+                const diff = emVal - avg;
+                const pct = (diff / avg) * 100;
+                const isHigher = diff > 0;
+                return (
+                  <div style={S.avgStat}>
+                    <div style={S.statLabel}>{label} ({avg.toLocaleString("en-US", { maximumFractionDigits: 2 })})</div>
+                    <div style={{ ...S.statValue, color: isHigher ? "#00e676" : "#ff5a6a", fontSize: 18 }}>
+                      {isHigher ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
+                    </div>
+                  </div>
+                );
+              };
+              return (
+                <section style={{ ...S.card, marginBottom: 14 }}>
+                  <div style={S.cardTitle}>vs Historical EM Average</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {renderAvg(emStats.recentAvg, "vs 4-Wk Avg")}
+                    {renderAvg(emStats.midAvg, "vs 12-Wk Avg")}
+                  </div>
+                  {emStats.sampleSize > 0 && (
+                    <div style={{ fontSize: 10, color: "#eef7ff", marginTop: 10, letterSpacing: ".08em", textTransform: "uppercase" as const }}>
+                      Based on {emStats.sampleSize} week{emStats.sampleSize !== 1 ? "s" : ""} of recorded data
+                    </div>
+                  )}
+                </section>
+              );
+            })()}
 
             <p style={S.disclaimer}>
               Levels are published weekly and are informational only — not financial advice.
@@ -252,7 +368,7 @@ const S = {
     margin: 0,
     letterSpacing: ".01em",
   },
-  sub: { fontSize: 14, color: "#9fb4cc", marginTop: 8 },
+  sub: { fontSize: 14, color: "#eef7ff", marginTop: 8 },
   form: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" as const },
   input: {
     flex: 1,
@@ -302,7 +418,7 @@ const S = {
   },
   empty: {
     textAlign: "center" as const,
-    color: "#9fb4cc",
+    color: "#eef7ff",
     fontSize: 14,
     padding: "40px 0",
   },
@@ -316,12 +432,12 @@ const S = {
   resultTicker: { fontSize: 30, fontWeight: 800, color: "#eef7ff", letterSpacing: ".02em" },
   resultExp: {
     fontSize: 12,
-    color: "#7ab8ff",
+    color: "#eef7ff",
     textTransform: "uppercase" as const,
     letterSpacing: ".1em",
     fontWeight: 700,
   },
-  resultUpdated: { fontSize: 11, color: "#9fb4cc", marginLeft: "auto" },
+  resultUpdated: { fontSize: 11, color: "#eef7ff", marginLeft: "auto" },
   card: {
     background: "#0b111b",
     border: "1px solid #1a2a3a",
@@ -350,9 +466,16 @@ const S = {
     padding: "12px 8px",
     textAlign: "center" as const,
   },
+  avgStat: {
+    background: "#04070c",
+    border: "1px solid #13253a",
+    borderRadius: 8,
+    padding: "12px 8px",
+    textAlign: "center" as const,
+  },
   statLabel: {
     fontSize: 10,
-    color: "#9fb4cc",
+    color: "#eef7ff",
     letterSpacing: ".12em",
     textTransform: "uppercase" as const,
     fontWeight: 700,
@@ -365,7 +488,7 @@ const S = {
     gap: 14,
   },
   zoneCard: { marginBottom: 14 },
-  zoneHint: { fontSize: 11, color: "#9fb4cc", margin: "0 0 14px", lineHeight: 1.45 },
+  zoneHint: { fontSize: 11, color: "#eef7ff", margin: "0 0 14px", lineHeight: 1.45 },
   zoneLine: {
     display: "flex",
     justifyContent: "space-between",
@@ -394,7 +517,7 @@ const S = {
   disclaimer: {
     textAlign: "center" as const,
     fontSize: 11,
-    color: "#7a92ad",
+    color: "#eef7ff",
     marginTop: 18,
     lineHeight: 1.5,
   },

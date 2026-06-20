@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EmTrackerAdmin from "@/components/dashboard/EmTrackerAdmin";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 async function getHtml2Canvas() {
   const mod = await import("html2canvas" as never);
@@ -20,6 +21,12 @@ interface EMRow {
   expiration?: string;
   strike?: number;
   error?: string;
+}
+
+interface TickerEmStats {
+  recentAvg: number | null;
+  midAvg: number | null;
+  sampleSize: number;
 }
 
 interface OptionData {
@@ -760,6 +767,8 @@ export default function EstimatedMoves() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [started, setStarted] = useState(false);
+  const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
+  const [tickerStats, setTickerStats] = useState<Record<string, TickerEmStats>>({});
 
   const dbRef = useRef<IDBDatabase | null>(null);
   const busyRef = useRef(false);
@@ -892,6 +901,31 @@ export default function EstimatedMoves() {
         }),
       }).catch((e) => console.warn("[ESStats] Failed to persist est moves:", e));
     }
+
+    // Fetch market confidence score (SPX-driven, one value for the session)
+    fetch("/api/confidence")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        const s = data?.score?.score ?? data?.score ?? null;
+        if (s != null && Number.isFinite(Number(s))) setConfidenceScore(Math.round(Number(s)));
+      })
+      .catch(() => {});
+
+    // Fetch per-ticker EM history averages using the settled rows (not state,
+    // which may not have updated yet). Fire-and-forget after rows are displayed.
+    const goodTickers = settled.filter((r) => !r.error && r.em != null).map((r) => r.ticker);
+    const statsMap: Record<string, TickerEmStats> = {};
+    await Promise.allSettled(
+      goodTickers.map((t) =>
+        fetch(`/api/em/ticker-em-stats?ticker=${encodeURIComponent(t)}`)
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (data) statsMap[t] = { recentAvg: data.recentAvg ?? null, midAvg: data.midAvg ?? null, sampleSize: data.sampleSize ?? 0 };
+          })
+          .catch(() => {})
+      )
+    );
+    setTickerStats(statsMap);
   }, [knownExpirations, expOverride]);
 
   const refreshZones = useCallback(async () => {
@@ -1127,8 +1161,8 @@ export default function EstimatedMoves() {
   const subTitle = activeView === "estimated" ? "Weekly" : activeView === "tracker" ? "Win / Loss Record" : "Last Week OHLC";
 
   return (
-    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden", background: "#080c14", height: "100%" }}>
-      <div style={{ padding: "7px 16px", background: "#0b111b", borderBottom: "1px solid #1a2a3a", flexShrink: 0, display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
+    <div style={{ ...homeShellStyle, flex: 1, minHeight: 0, overflow: "hidden", height: "100%" }}>
+      <div style={{ padding: "7px 16px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 10 }}>
             {[
@@ -1142,14 +1176,13 @@ export default function EstimatedMoves() {
                   key={tab.id}
                   onClick={() => setActiveView(tab.id)}
                   style={{
-                    background: active ? "#0d2b46" : "#0a1628",
-                    border: `1px solid ${active ? "#2d6da3" : "#1e3a5f"}`,
+                    background: active ? "rgba(0,229,255,0.15)" : "transparent",
+                    border: `1px solid ${active ? "rgba(0,229,255,.4)" : HT.border}`,
                     color: active ? "#eef7ff" : "#7ab8ff",
                     fontSize: 12,
                     padding: "6px 10px",
                     borderRadius: 2,
                     cursor: "pointer",
-                    fontFamily: "Arial",
                     fontWeight: 700,
                     letterSpacing: ".06em",
                     textTransform: "uppercase",
@@ -1173,7 +1206,7 @@ export default function EstimatedMoves() {
               <select
                 value={expOverride}
                 onChange={(e) => { setExpOverride(e.target.value); bulkSubscribedRef.current = false; }}
-                style={{ background: "#04070c", border: "1px solid #1e3a5f", color: "#eef7ff", fontSize: 12, padding: "5px 8px", borderRadius: 2, cursor: "pointer", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".06em", outline: "none", minWidth: 180 }}
+                style={{ background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, color: HT.text, fontSize: 12, padding: "5px 8px", borderRadius: 4, cursor: "pointer", fontWeight: 700, letterSpacing: ".06em", outline: "none", minWidth: 180 }}
               >
                 <option value="">-- Auto --</option>
                 {fridayExpirations.map((exp) => (
@@ -1186,16 +1219,16 @@ export default function EstimatedMoves() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 12, letterSpacing: ".12em", textTransform: "uppercase", color: status.color }}>{status.text}</span>
-          <button onClick={refresh} disabled={loading} style={{ background: "#0a1628", border: "1px solid #1e3a5f", color: "#00e5ff", fontSize: 13, padding: "7px 12px", borderRadius: 2, cursor: loading ? "not-allowed" : "pointer", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", opacity: loading ? 0.6 : 1 }}>
+          <button onClick={refresh} disabled={loading} style={{ ...homeButtonStyle, opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
             {started ? "Refresh" : "Start"}
           </button>
-          <button onClick={saveSnapshot} disabled={!hasCurrentData} style={{ background: "#0a1628", border: "1px solid #1e3a5f", color: "#00e5ff", fontSize: 13, padding: "7px 12px", borderRadius: 2, cursor: hasCurrentData ? "pointer" : "not-allowed", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", opacity: hasCurrentData ? 1 : 0.4 }}>
+          <button onClick={saveSnapshot} disabled={!hasCurrentData} style={{ ...homeButtonStyle, opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
             Save
           </button>
-          <button onClick={exportCsv} style={{ background: "#0a1628", border: "1px solid #1e3a5f", color: "#00e5ff", fontSize: 13, padding: "7px 12px", borderRadius: 2, cursor: "pointer", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>
+          <button onClick={exportCsv} style={{ ...homeButtonStyle }}>
             Export
           </button>
-          <button onClick={copyShot} disabled={!hasCurrentData} style={{ background: "#0a1628", border: "1px solid #1e3a5f", color: "#00e5ff", fontSize: 13, padding: "7px 12px", borderRadius: 2, cursor: hasCurrentData ? "pointer" : "not-allowed", fontFamily: "Arial", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", opacity: hasCurrentData ? 1 : 0.4 }}>
+          <button onClick={copyShot} disabled={!hasCurrentData} style={{ ...homeButtonStyle, opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
             Copy Shot
           </button>
         </div>
@@ -1207,29 +1240,29 @@ export default function EstimatedMoves() {
         </div>
       ) : (
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
-        <div style={{ width: 230, minWidth: 230, flexShrink: 0, background: "#04070c", borderRight: "1px solid #0d1825", boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid #0d1825", flexShrink: 0 }}>
+        <div style={{ width: 230, minWidth: 230, flexShrink: 0, background: HT.panelBg, backdropFilter: "blur(8px)", borderRight: `1px solid ${HT.border}`, boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "12px 14px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
             <div style={{ fontSize: 9, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>Last Sync</div>
             <div style={{ fontSize: 13, color: "#e8edf5", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{lastSync}</div>
           </div>
 
           <div style={{ flex: 1, overflowY: "auto" }}>
-            <button onClick={() => setDrawerOpen((open) => !open)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "transparent", border: "none", borderBottom: "1px solid #0d1825", cursor: "pointer" }}>
+            <button onClick={() => setDrawerOpen((open) => !open)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "transparent", border: "none", borderBottom: `1px solid ${HT.border}`, cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 10, color: "#eef7ff", display: "inline-block", transform: drawerOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s" }}>{">"}</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#e8edf5", letterSpacing: ".08em", textTransform: "uppercase" }}>
                   {activeView === "estimated" ? "Weekly" : "Zones"}
                 </span>
               </div>
-              <span style={{ fontSize: 10, color: "#eef7ff", background: "#07111d", border: "1px solid #1a2a3a", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>{filteredSnapshots.length}</span>
+              <span style={{ fontSize: 10, color: HT.text, background: HT.panelBg, border: `1px solid ${HT.border}`, padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>{filteredSnapshots.length}</span>
             </button>
 
             {drawerOpen && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 1, background: "#020407" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 1, background: HT.bg }}>
                 {filteredSnapshots.length === 0 ? (
                   <div style={{ padding: "10px 14px", fontSize: 11, color: "#eef7ff" }}>No snapshots</div>
                 ) : filteredSnapshots.map((snap) => (
-                  <div key={snap.id} onClick={() => loadSnapshot(snap)} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: "1px solid #0d1825", background: "#04070c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div key={snap.id} onClick={() => loadSnapshot(snap)} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: `1px solid ${HT.border}`, background: HT.panelBg, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
                       <div style={{ fontSize: 11, color: "#e8edf5", fontWeight: 700 }}>{snap.date}</div>
                       <div style={{ fontSize: 10, color: "#eef7ff", fontVariantNumeric: "tabular-nums" }}>{snap.time}</div>
@@ -1241,11 +1274,11 @@ export default function EstimatedMoves() {
             )}
           </div>
 
-          <div style={{ padding: "10px 14px", borderTop: "1px solid #0d1825", flexShrink: 0 }}>
+          <div style={{ padding: "10px 14px", borderTop: `1px solid ${HT.border}`, flexShrink: 0 }}>
             <div style={{ fontSize: 9, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>Symbols</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
               {currentSymbols.map((symbol) => (
-                <span key={symbol} style={{ fontSize: 11, color: "#eef7ff", background: "#07111d", border: "1px solid #13253a", padding: "3px 6px", borderRadius: 2 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
+                <span key={symbol} style={{ fontSize: 11, color: HT.text, background: HT.panelBg, border: `1px solid ${HT.border}`, padding: "3px 6px", borderRadius: 4 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
               ))}
             </div>
           </div>
@@ -1253,43 +1286,78 @@ export default function EstimatedMoves() {
 
         <div style={{ flex: 1, minWidth: 0, overflow: "auto", padding: 18 }}>
           {activeView === "estimated" ? (
-            <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: "#0b111b", border: "1px solid #1a2a3a", boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
-              <div style={{ borderBottom: "1px solid #1a2a3a", background: "#0e1522", padding: "10px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>
-                  Weekly Estimated Move For <span style={{ color: "#00e5ff" }}>{targetDateLabel || "--"}</span>
+            <div style={{ width: "100%", maxWidth: 1100, margin: "0 auto", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
+              <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(0,240,255,0.04)", padding: "10px 14px", textAlign: "center" }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
+                  <span>Weekly Estimated Move For <span style={{ color: "#00e5ff" }}>{targetDateLabel || "--"}</span></span>
+                  {confidenceScore != null && (
+                    <span style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      letterSpacing: ".1em",
+                      padding: "3px 10px",
+                      borderRadius: 4,
+                      border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.4)" : confidenceScore >= 45 ? "rgba(255,193,7,.4)" : "rgba(255,71,87,.4)"}`,
+                      background: confidenceScore >= 70 ? "rgba(0,230,118,.1)" : confidenceScore >= 45 ? "rgba(255,193,7,.1)" : "rgba(255,71,87,.1)",
+                      color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#ff4757",
+                    }}>
+                      MVC CONF {confidenceScore}%
+                    </span>
+                  )}
                 </div>
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 16 }}>
-                  <thead style={{ background: "#0a0f18" }}>
-                    <tr style={{ borderBottom: "1px solid #1a2a3a", color: "#00e5ff", textAlign: "center", fontSize: 13, letterSpacing: ".12em", textTransform: "uppercase" }}>
-                      {["Ticker","Close","Exp","EM","Up","Down"].map((header, idx) => (
-                        <th key={header} style={{ padding: 10, borderRight: idx < 5 ? "1px solid #1a2a3a" : undefined }}>{header}</th>
+                  <thead style={{ background: HT.panelBgStrong }}>
+                    <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#00e5ff", textAlign: "center", fontSize: 13, letterSpacing: ".12em", textTransform: "uppercase" }}>
+                      {["Ticker","Close","Exp","EM","Up","Down","vs 4-Wk","vs 12-Wk"].map((header, idx) => (
+                        <th key={header} style={{ padding: 10, borderRight: idx < 7 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody style={{ fontFamily: "Consolas, Monaco, monospace" }}>
                     {!started ? (
-                      <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#eef7ff" }}>Click Start to load estimated moves</td></tr>
+                      <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: "#eef7ff" }}>Click Start to load estimated moves</td></tr>
                     ) : rows.length === 0 ? (
-                      <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</td></tr>
-                    ) : rows.map((row) => (
-                      <tr key={row.ticker} title={row.error || ""} style={{ textAlign: "center", borderBottom: "1px solid #121b2a", opacity: row.error ? 0.55 : 1 }}>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</td>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtPrice(row.ticker, row.close)}</td>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#e8c060" }}>{fmtEm(row.em)}</td>
-                        <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</td>
-                        <td style={{ padding: 8, color: "#ff4757" }}>{fmtPrice(row.ticker, row.down)}</td>
-                      </tr>
-                    ))}
+                      <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</td></tr>
+                    ) : rows.map((row) => {
+                      const stats = tickerStats[row.ticker];
+                      const em = row.em;
+                      const renderAvgCell = (avg: number | null, label: string) => {
+                        if (!em || !avg || !Number.isFinite(avg)) {
+                          return <td style={{ padding: 8, borderRight: label === "4wk" ? `1px solid ${HT.border}` : undefined, color: "#eef7ff", fontSize: 12 }}>--</td>;
+                        }
+                        const diff = em - avg;
+                        const pct = (diff / avg) * 100;
+                        const isHigher = diff > 0;
+                        const color = isHigher ? "#00e676" : "#ff4757";
+                        const arrow = isHigher ? "▲" : "▼";
+                        return (
+                          <td style={{ padding: 8, borderRight: label === "4wk" ? `1px solid ${HT.border}` : undefined, fontSize: 12 }}>
+                            <span style={{ color, fontWeight: 700 }}>{arrow} {Math.abs(pct).toFixed(1)}%</span>
+                          </td>
+                        );
+                      };
+                      return (
+                        <tr key={row.ticker} title={row.error || ""} style={{ textAlign: "center", borderBottom: `1px solid ${HT.border}`, opacity: row.error ? 0.55 : 1 }}>
+                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</td>
+                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtPrice(row.ticker, row.close)}</td>
+                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
+                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#e8c060" }}>{fmtEm(row.em)}</td>
+                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</td>
+                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#ff4757" }}>{fmtPrice(row.ticker, row.down)}</td>
+                          {renderAvgCell(stats?.recentAvg ?? null, "4wk")}
+                          {renderAvgCell(stats?.midAvg ?? null, "12wk")}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
           ) : (
-            <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: "#0b111b", border: "1px solid #1a2a3a", boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
-              <div style={{ borderBottom: "1px solid #1a2a3a", background: "#0e1522", padding: "10px 14px", textAlign: "center" }}>
+            <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
+              <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(0,240,255,0.04)", padding: "10px 14px", textAlign: "center" }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>
                   No Short / No Long Zones <span style={{ color: "#eef7ff" }}>· Last Week Candle</span>
                 </div>
@@ -1301,10 +1369,10 @@ export default function EstimatedMoves() {
                   <div style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</div>
                 ) : (
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
-                    <thead style={{ background: "#0a0f18" }}>
-                      <tr style={{ borderBottom: "1px solid #1a2a3a", color: "#00e5ff", textAlign: "center", fontSize: 12, letterSpacing: ".1em", textTransform: "uppercase" }}>
+                    <thead style={{ background: HT.panelBgStrong }}>
+                      <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#00e5ff", textAlign: "center", fontSize: 12, letterSpacing: ".1em", textTransform: "uppercase" }}>
                         {["Ticker", "Close", "Pivot", "Range", "No Long", "No Short"].map((header, idx) => (
-                          <th key={header} style={{ padding: 10, borderRight: idx < 5 ? "1px solid #1a2a3a" : undefined }}>{header}</th>
+                          <th key={header} style={{ padding: 10, borderRight: idx < 5 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1314,19 +1382,19 @@ export default function EstimatedMoves() {
                         const label = DISPLAY_LABEL[sym] ?? sym;
                         if (!row) {
                           return (
-                            <tr key={sym} style={{ textAlign: "center", borderBottom: "1px solid #121b2a", opacity: 0.4 }}>
-                              <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{label}</td>
+                            <tr key={sym} style={{ textAlign: "center", borderBottom: `1px solid ${HT.border}`, opacity: 0.4 }}>
+                              <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, fontWeight: 700, color: "#e8edf5" }}>{label}</td>
                               <td colSpan={5} style={{ padding: 8, color: "#eef7ff", fontStyle: "italic" }}>no weekly candle</td>
                             </tr>
                           );
                         }
                         return (
-                          <tr key={sym} style={{ textAlign: "center", borderBottom: "1px solid #121b2a" }}>
-                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", fontWeight: 700, color: "#e8edf5" }}>{label}</td>
-                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtFuture(row.close)}</td>
-                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtFuture(row.pivot)}</td>
-                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#eef7ff" }}>{fmtFuture(row.range)}</td>
-                            <td style={{ padding: 8, borderRight: "1px solid #1a2a3a", color: "#ff4757" }}>
+                          <tr key={sym} style={{ textAlign: "center", borderBottom: `1px solid ${HT.border}` }}>
+                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, fontWeight: 700, color: "#e8edf5" }}>{label}</td>
+                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtFuture(row.close)}</td>
+                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtFuture(row.pivot)}</td>
+                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtFuture(row.range)}</td>
+                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#ff4757" }}>
                               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                                 <span>{fmtFuture(row.noLongNear)}</span>
                                 <span style={{ opacity: 0.65 }}>{fmtFuture(row.noLongFar)}</span>
@@ -1359,26 +1427,26 @@ export default function EstimatedMoves() {
               <div style={{ fontSize: 15, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: "1px solid #1a2a3a" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
               {["Ticker","Up","Down"].map((header) => (
                 <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#00e5ff", letterSpacing: ".12em" }}>{header}</div>
               ))}
             </div>
 
             {rows.slice(0, 13).filter((row) => !row.error).map((row) => (
-              <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #0d1825" }}>
+              <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
                 <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#ff4757", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
             ))}
 
-            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: "1px solid #1a2a3a", borderTop: "1px solid #1a2a3a", background: "#04070c" }}>
+            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: `1px solid ${HT.border}`, borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
               x.com/bzilatrades
             </div>
 
             {rows.slice(13).filter((row) => !row.error).map((row) => (
-              <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #0d1825" }}>
+              <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
                 <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#ff4757", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
@@ -1391,7 +1459,7 @@ export default function EstimatedMoves() {
               <div style={{ fontSize: 15, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>No Short / No Long Zones</div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: "1px solid #1a2a3a" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
               {["Ticker", "No Short", "No Long"].map((header) => (
                 <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em" }}>{header}</div>
               ))}
@@ -1401,7 +1469,7 @@ export default function EstimatedMoves() {
               const row = zoneMap.get(sym);
               if (!row) return null;
               return (
-                <div key={sym} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #0d1825" }}>
+                <div key={sym} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
                   <div style={{ padding: "8px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 14 }}>{DISPLAY_LABEL[sym] ?? sym}</div>
                   <div style={{ padding: "8px 0", textAlign: "center", color: "#00e676", fontSize: 14 }}>{fmtFuture(row.noShortNear)}</div>
                   <div style={{ padding: "8px 0", textAlign: "center", color: "#ff4757", fontSize: 14 }}>{fmtFuture(row.noLongNear)}</div>
@@ -1409,7 +1477,7 @@ export default function EstimatedMoves() {
               );
             })}
 
-            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderTop: "1px solid #1a2a3a", background: "#04070c" }}>
+            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
               x.com/bzilatrades
             </div>
           </>
