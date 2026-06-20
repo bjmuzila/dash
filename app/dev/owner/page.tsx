@@ -498,7 +498,7 @@ export default function OwnerDashboard() {
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
 
   // Levels section collapsed state
-  const [levelsCollapsed, setLevelsCollapsed] = useState(false);
+  const [levelsCollapsed, setLevelsCollapsed] = useState(true);
 
   // Per-ticker "Copy Pine" feedback: holds the ticker just copied (clears after 1.5s).
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null);
@@ -980,17 +980,17 @@ export default function OwnerDashboard() {
         </div>
 
         {/* ── Levels auto-publish (/em customer feed) ── */}
-        <div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <div style={{ ...homePanelStyle }}>
+          <div
+            onClick={() => setLevelsCollapsed((v) => !v)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", cursor: "pointer", borderBottom: levelsCollapsed ? "none" : `1px solid ${HOME_THEME.border}` }}
+          >
             <SectionLabel>Levels Publish · /em feed</SectionLabel>
-            <button
-              onClick={() => setLevelsCollapsed((v) => !v)}
-              style={{ ...homeSecondaryButtonStyle, fontSize: 9, padding: "2px 10px", marginBottom: 6 }}
-            >
-              {levelsCollapsed ? "▶ Expand" : "▼ Collapse"}
-            </button>
+            <span style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.08em" }}>
+              {levelsCollapsed ? "▶ EXPAND" : "▼ COLLAPSE"}
+            </span>
           </div>
-          {!levelsCollapsed && <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {!levelsCollapsed && <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
               <StatusBadge
                 ok={!levelsAreStale(levels.lastRun)}

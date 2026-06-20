@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -266,11 +267,11 @@ function TickerPanel({
   }, []);
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "#0d1117", border: "1px solid #1e3050", borderRadius: 6, overflow: "hidden" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 16, overflow: "hidden" }}>
 
       {/* Panel header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "#111822", borderBottom: "1px solid #2a4060", flexShrink: 0 }}>
-        <span style={{ fontSize: 12, fontWeight: 800, color: "#00e5ff", letterSpacing: "0.1em", fontFamily: "Arial" }}>{ticker}</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 10, fontFamily: "monospace", color: "#94a3b8" }}>
           {spot > 0 && (
             <>
@@ -282,16 +283,16 @@ function TickerPanel({
       </div>
 
       {/* Column headers */}
-      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "#111822", borderBottom: "2px solid #2a4060", flexShrink: 0 }}>
-        <div style={{ padding: "5px 4px", textAlign: "center", color: "#e4e4e7", fontFamily: "Arial", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
+      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
         {NET_COLS.map(c => (
-          <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: "#a78bfa", fontFamily: "Arial", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>{COL_LABELS[c]}</div>
+          <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: HT.cyan, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>{COL_LABELS[c]}</div>
         ))}
       </div>
 
       {/* Totals row */}
-      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "#0a1220", borderBottom: "2px solid #2a4060", flexShrink: 0 }}>
-        <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: "#475569", fontFamily: "Arial", letterSpacing: "0.06em" }}>TOTAL</div>
+      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(0,240,255,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
           const v = totals?.[c] ?? 0;
           const fmt = totals ? fmtMoney(v) : { sign: "", value: "--" };
@@ -311,11 +312,11 @@ function TickerPanel({
       {/* Body */}
       <div ref={bodyRef} style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
         {!computed ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", fontFamily: "Arial" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", }}>
             Select an expiry and click GO
           </div>
         ) : computed.rows.length === 0 ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", fontFamily: "Arial" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", }}>
             No strikes in range
           </div>
         ) : computed.rows.map(r => {
@@ -548,26 +549,26 @@ export default function MultGreekPage() {
   const pageRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div ref={pageRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "#05080d", overflow: "hidden" }}>
+    <div ref={pageRef} style={{ ...homeShellStyle, height: "100%", overflow: "hidden" }}>
 
       {/* Toolbar */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
-        background: "#0a0e14", borderBottom: "1px solid #1e3050", flexShrink: 0, flexWrap: "wrap",
+        background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, flexWrap: "wrap",
       }}>
 
         {/* Status dot */}
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status.state] ?? "#475569", flexShrink: 0, display: "inline-block" }} />
         <span style={{ fontSize: 9, fontWeight: 800, color: statusColors[status.state] ?? "#e4e4e7", letterSpacing: "0.1em" }}>{status.msg}</span>
 
-        <span style={{ color: "#1e3050" }}>|</span>
+        <span style={{ color: HT.border }}>|</span>
 
         {/* Expiry select */}
         <select
           value={selectedExpiry}
           onChange={e => setSelectedExpiry(e.target.value)}
           style={{
-            background: "#0a1220", color: "#e4e4e7", border: "1px solid #1e3050",
+            background: "rgba(0,0,0,0.4)", color: HT.text, border: `1px solid ${HT.border}`,
             borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer",
             fontFamily: "monospace",
           }}
@@ -583,27 +584,26 @@ export default function MultGreekPage() {
           onClick={doGo}
           disabled={!selectedExpiry}
           style={{
-            padding: "3px 14px", fontSize: 10, fontWeight: 800, fontFamily: "Arial",
-            background: "rgba(0,229,255,.12)", border: "1px solid rgba(0,229,255,.45)",
-            color: "#00e5ff", borderRadius: 4, cursor: "pointer", letterSpacing: "0.1em",
+            ...homeButtonStyle,
+            padding: "3px 14px", fontSize: 10,
           }}
         >
           GO
         </button>
 
-        <span style={{ color: "#1e3050" }}>|</span>
+        <span style={{ color: HT.border }}>|</span>
 
         {/* Contract mode toggle */}
-        <div style={{ display: "flex", gap: 2, background: "#070c14", borderRadius: 4, padding: 2 }}>
+        <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
           {(["oivol", "vol"] as const).map(m => (
             <button
               key={m}
               onClick={() => setContractMode(m)}
               style={{
                 padding: "2px 10px", fontSize: 9, fontWeight: 800, borderRadius: 3,
-                border: "none", cursor: "pointer", fontFamily: "Arial",
+                border: "none", cursor: "pointer",
                 background: contractMode === m ? "rgba(0,229,255,.15)" : "transparent",
-                color: contractMode === m ? "#00e5ff" : "#64748b",
+                color: contractMode === m ? HT.cyan : "#64748b",
               }}
             >
               {m === "oivol" ? "OI+VOL" : "VOL"}
@@ -611,7 +611,7 @@ export default function MultGreekPage() {
           ))}
         </div>
 
-        <span style={{ color: "#1e3050" }}>|</span>
+        <span style={{ color: HT.border }}>|</span>
 
         {/* Intensity slider */}
         <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
@@ -626,7 +626,7 @@ export default function MultGreekPage() {
         </span>
 
         {/* Refresh / Snap / Discord */}
-        <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>{btnLabel}</button>
+        <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>{btnLabel}</button>
         <BoxSnapBtn targetRef={pageRef} label="📷" />
         <BoxDiscordBtn targetRef={pageRef} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
 

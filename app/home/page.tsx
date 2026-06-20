@@ -803,17 +803,17 @@ export default function HomePage() {
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
                 {activeTab === "calendar" && (
-                  <div style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel />
                   </div>
                 )}
                 {activeTab === "snapshot" && (
-                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: -24, height: "calc(100% + 48px)" }}>
                     <SnapshotPanel orders={flowOrders} bucket={flowBucket} />
                   </div>
                 )}
                 {activeTab === "spxflow" && (
-                  <div style={{ margin: -24, height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: -24, height: "calc(100% + 48px)" }}>
                     <FlowTape orders={flowOrders} connected={status === "LIVE"} />
                   </div>
                 )}
@@ -823,32 +823,36 @@ export default function HomePage() {
 
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px, 1.4vw, 20px)", marginBottom: 6, flexWrap: "nowrap", whiteSpace: "nowrap", minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "clamp(5px, 0.7vw, 10px)", flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(10px, 1.1vw, 16px)", fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "clamp(3px,0.4vw,6px) clamp(8px,1.1vw,16px)", borderRadius: 6, fontFamily: "monospace", fontSize: "clamp(12px, 1.4vw, 20px)", fontWeight: 700, color: "#fff", letterSpacing: "0.04em" }}>{etTime}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "clamp(4px, 0.8vw, 14px)", marginBottom: 6, flexWrap: "nowrap", minWidth: 0, overflow: "hidden" }}>
+                {/* SPX/GEX + clock — always visible, never shrinks */}
+                <div style={{ display: "flex", alignItems: "center", gap: "clamp(4px, 0.6vw, 8px)", flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(9px, 1vw, 14px)", fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "clamp(2px,0.3vw,5px) clamp(6px,0.9vw,12px)", borderRadius: 6, fontFamily: "monospace", fontSize: "clamp(11px, 1.3vw, 18px)", fontWeight: 700, color: "#fff", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{etTime}</div>
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.4vw,6px)", flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(9px, 0.9vw, 13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(11px, 1.25vw, 18px)", fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
-                  {vixPct != null && <span style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.85vw, 12px)", fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                {/* VIX — label+price never shrink; change% hidden via className */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                  {vixPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.4vw,6px)", flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(9px, 0.9vw, 13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(11px, 1.25vw, 18px)", fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
-                  {esuPct != null && <span style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.85vw, 12px)", fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                {/* ESU */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
+                  {esuPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.4vw,6px)", flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(9px, 0.9vw, 13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(11px, 1.25vw, 18px)", fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(9px, 1vw, 14px)", fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                {/* SPX */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+                  <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+                  <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "clamp(8px,1.2vw,18px)", flexWrap: "nowrap", whiteSpace: "nowrap", justifyContent: "space-between", minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "clamp(8px,1.2vw,18px)", flexShrink: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexWrap: "nowrap", justifyContent: "space-between", minWidth: 0, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexShrink: 1, flexWrap: "nowrap", minWidth: 0, overflow: "hidden" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
                     <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
                     <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
@@ -888,6 +892,16 @@ export default function HomePage() {
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     Live GEX Heatmap
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+                      <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
+                      <input
+                        type="range" min={0.5} max={3} step={0.01}
+                        value={intensity}
+                        onChange={(e) => setIntensity(Number(e.target.value))}
+                        style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
+                      />
+                      <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
+                    </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
@@ -895,20 +909,6 @@ export default function HomePage() {
                       style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
                     <BoxSnapBtn targetRef={heatmapContainerRef} label="GEX Heatmap" />
                     <BoxDiscordBtn targetRef={heatmapContainerRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} />
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                  <span style={{ color: "#fff" }}>Stream</span>
-                  <span style={{ color: C.cyan }}>{subscribedSymbolsRef.current.length} option symbols</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-                    <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
-                    <input
-                      type="range" min={0.5} max={3} step={0.01}
-                      value={intensity}
-                      onChange={(e) => setIntensity(Number(e.target.value))}
-                      style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
-                    />
-                    <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
                   </div>
                 </div>
               </div>
@@ -982,10 +982,16 @@ export default function HomePage() {
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {row.strike}
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
-                                {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700 }}>#{row.rank}</span>}
                               </div>
                             </td>
-                            {dataCell(row.netGex, row.netGexVal, "netGexVal", 1)}
+                            <td key={1} style={{ padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: (() => { const v = row.netGexVal; return v == null ? "transparent" : metricBg(v, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []); })(), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                                <span style={{ flexShrink: 0, minWidth: 28 }}>
+                                  {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
+                                </span>
+                                <span>{row.netGex}</span>
+                              </div>
+                            </td>
                             {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
                             {dataCell(row.dex, row.dexVal, "dexVal", 3)}
                             {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
@@ -1014,6 +1020,10 @@ export default function HomePage() {
       )}
 
       <style>{`
+        /* Strip the opaque shell bg from tab panels when embedded in the home card */
+        .tab-panel-embed > div:first-child {
+          background: transparent !important;
+        }
         .grad-divider-b {
           position: relative;
         }

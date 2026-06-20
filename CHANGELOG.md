@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-06-20 (session 27) — Glassmorphic UI Theme: Tab Panels, Custom Dropdowns, Card Accents
+
+Continued the glassmorphic dark fintech theme rollout across all remaining pages and embedded tab panels.
+
+### Tab panels themed (`components/dashboard/`)
+- **`EconCalendarPanel.tsx`** — Shell bg transparent (embeds cleanly in home card), header `panelBgStrong` + blur, filter dropdown glassmorphic, event rows get horizontal gradient wash from impact color (red/amber/etc.) + inset glow on time column left bar.
+- **`SnapshotPanel.tsx`** — Shell bg transparent, `MetricCard` upgraded: `borderTop: 2px solid accent`, radial glow from top, larger value text with `textShadow`. `TopFlowList` same accent treatment with `barColor`. Net Premium sparkline box now `flex: 1` to fill all remaining vertical space; canvas `height: 100%` scales with container.
+- **`FlowTape.tsx`** — Root bg transparent, container gets `borderTop: 2px solid cyan` + radial cyan glow from top. Toggle bg `rgba(0,0,0,0.4)`. Live/waiting badge uses rgba colors.
+
+### Home page tab embed fix (`app/home/page.tsx`)
+- Added `.tab-panel-embed > div:first-child { background: transparent !important }` CSS — but inline styles beat it. Fix: set `background: "transparent"` directly after `...homeShellStyle` spread in each panel root, overriding the `#05060A` solid bg.
+
+### Custom dropdown (`app/options-chain/page.tsx`)
+- Replaced both native `<select>` elements with `CustomDropdown<T>` generic component. Glassmorphic panel: `rgba(13,17,25,0.97)` bg, `blur(20px)`, cyan active item, outside-click close. Accepts `T[] | readonly T[]` to handle both mutable and const arrays.
+
+### Owner dashboard (`app/dev/owner/page.tsx`)
+- **Levels Publish · /em feed** section: now auto-collapsed by default (`useState(true)`), wrapped in `homePanelStyle` panel box, clickable header row toggles expand/collapse with border-bottom separator when open.
+
+---
+
+
 ## 2026-06-20 (session 26) — /em Customer Page: Confidence Score, Win Rate Bar, EM vs Historical Avg
 
 Enhanced the customer-facing `/em` page with three new data points surfaced per-ticker lookup, plus UI polish.

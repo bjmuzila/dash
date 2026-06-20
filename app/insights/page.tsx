@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryPlaybookFeedToday, savePlaybookSignal } from "@/lib/snapdb";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
@@ -823,12 +824,12 @@ function GexGauge({ value, label }: { value: number; label: string }) {
   const pct = Math.max(0, Math.min(100, ((value + 5) / 10) * 100));
   const color = value >= 0 ? "#00e676" : "#ef4444";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 14px", background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 6 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 14px", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#6b7280", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
         <span style={{ fontSize: 14, fontWeight: 900, color, fontFamily: "monospace" }}>{fmtB(value)}</span>
       </div>
-      <div style={{ height: 8, background: "#1a2a3a", borderRadius: 4, overflow: "hidden", position: "relative" }}>
+      <div style={{ height: 8, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden", position: "relative" }}>
         <div style={{ position: "absolute", left: "50%", top: 0, width: 1, height: "100%", background: "#334155", zIndex: 1 }} />
         <div style={{
           position: "absolute",
@@ -876,13 +877,13 @@ function VixMeter({ label, value, color, max = 80 }: { label: string; value?: nu
   const level = value == null ? "—" : value < 15 ? "LOW" : value < 20 ? "NORM" : value < 30 ? "ELEV" : value < 40 ? "HIGH" : "EXTR";
   const levelColor = value == null ? "#ffffff" : value < 15 ? "#22c55e" : value < 20 ? "#86efac" : value < 30 ? "#faad14" : value < 40 ? "#f97316" : "#ef4444";
   return (
-    <div className="card-hover" style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className="card-hover" style={{ background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 14, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
         <span style={{ fontSize: 11, fontWeight: 800, color: levelColor, background: `${levelColor}22`, padding: "2px 6px", borderRadius: 3 }}>{level}</span>
       </div>
       <div style={{ fontSize: 44, fontWeight: 900, color, fontFamily: "monospace", lineHeight: 1.1, paddingBottom: 2 }}>{value != null ? value.toFixed(2) : "—"}</div>
-      <div style={{ height: 6, background: "#1a2a3a", borderRadius: 3, overflow: "hidden", flexShrink: 0, marginTop: "auto" }}>
+      <div style={{ height: 6, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden", flexShrink: 0, marginTop: "auto" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 3, transition: "width 0.4s" }} />
       </div>
     </div>
@@ -1326,24 +1327,24 @@ export default function InsightsPage() {
   const regime = gexVal != null && dexVal != null ? getRegime(gexVal, dexVal) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#02070f", overflow: "hidden" }}>
+    <div style={{ ...homeShellStyle, height: "100%", overflow: "hidden" }}>
 
       {/* Header */}
-      <div style={{ padding: "6px 8px", background: "#070c14", borderBottom: "1px solid #1a2a3a", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 10, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em", flexShrink: 0 }}>Insights</span>
+      <div style={{ padding: "6px 8px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: HT.cyan, textTransform: "uppercase", letterSpacing: "0.14em", flexShrink: 0 }}>Insights</span>
         <div style={{ display: "flex", gap: 0, flexWrap: "wrap" }}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               padding: "5px 10px", fontSize: 10, fontWeight: 800,
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: "transparent", border: "none",
-              borderBottom: tab === t.id ? "2px solid #00e5ff" : "2px solid transparent",
-              color: tab === t.id ? "#00e5ff" : "#4a6a8a",
+              borderBottom: tab === t.id ? `2px solid ${HT.cyan}` : "2px solid transparent",
+              color: tab === t.id ? HT.cyan : "#4a6a8a",
               cursor: "pointer",
             }}>{t.label}</button>
           ))}
         </div>
-        <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>{btnLabel}</button>
+        <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>{btnLabel}</button>
       </div>
 
       {/* Content */}
@@ -1604,7 +1605,7 @@ export default function InsightsPage() {
               <VixMeter label="10D Realized Vol"  value={vix?.realized_10d} color="#a78bfa" max={60} />
             </div>
 
-            <div className="card-hover" style={{ background: "#070c14", border: `1px solid ${vixRegime ? vixRegime.color + "55" : "#1a2a3a"}`, borderRadius: 8, padding: 14 }}>
+            <div className="card-hover" style={{ background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${vixRegime ? vixRegime.color + "55" : HT.border}`, borderRadius: 8, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
                 <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Interpretation</div>
                 {vixRegime && (
@@ -1622,7 +1623,7 @@ export default function InsightsPage() {
                   {/* Signal readouts */}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {vixRatio != null && (
-                      <div style={{ fontSize: 13, color: "#ffffff", background: "rgba(255,255,255,.04)", border: "1px solid #1a2a3a", borderRadius: 6, padding: "6px 10px" }}>
+                      <div style={{ fontSize: 13, color: "#ffffff", background: "rgba(255,255,255,.04)", border: `1px solid ${HT.border}`, borderRadius: 6, padding: "6px 10px" }}>
                         <span style={{ color: "#faad14", fontWeight: 700 }}>VIX1D / VIX:</span>{" "}
                         <span style={{ fontFamily: "monospace" }}>{vixRatio.toFixed(3)}</span>{" "}
                         <span style={{ color: "#9fb3c8" }}>
@@ -1631,7 +1632,7 @@ export default function InsightsPage() {
                       </div>
                     )}
                     {vrp != null && (
-                      <div style={{ fontSize: 13, color: "#ffffff", background: "rgba(255,255,255,.04)", border: "1px solid #1a2a3a", borderRadius: 6, padding: "6px 10px" }}>
+                      <div style={{ fontSize: 13, color: "#ffffff", background: "rgba(255,255,255,.04)", border: `1px solid ${HT.border}`, borderRadius: 6, padding: "6px 10px" }}>
                         <span style={{ color: "#a78bfa", fontWeight: 700 }}>VRP (IV−RV):</span>{" "}
                         <span style={{ fontFamily: "monospace", color: vrp >= 2 ? "#22c55e" : vrp <= -3 ? "#ef4444" : "#ffffff" }}>{vrp >= 0 ? "+" : ""}{vrp.toFixed(2)}</span>{" "}
                         <span style={{ color: "#9fb3c8" }}>
@@ -1651,7 +1652,7 @@ export default function InsightsPage() {
                     </ul>
                   </div>
 
-                  <div style={{ fontSize: 11, color: "#6b8298", fontStyle: "italic", borderTop: "1px solid #1a2a3a", paddingTop: 8 }}>
+                  <div style={{ fontSize: 11, color: "#6b8298", fontStyle: "italic", borderTop: `1px solid ${HT.border}`, paddingTop: 8 }}>
                     Always cross-check with GEX/DEX walls, flips, MVC levels, and premium flow.
                   </div>
                 </div>
@@ -1663,13 +1664,13 @@ export default function InsightsPage() {
             {(vix?.iv_rank != null || vix?.iv_percentile != null) && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10 }}>
                 {vix.iv_rank != null && (
-                  <div className="card-hover" style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16 }}>
+                  <div className="card-hover" style={{ background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>IV Rank (1Y)</div>
                     <div style={{ fontSize: 40, fontWeight: 900, color: "#00e5ff", fontFamily: "monospace" }}>{vix.iv_rank.toFixed(1)}<span style={{ fontSize: 18 }}>%</span></div>
                   </div>
                 )}
                 {vix.iv_percentile != null && (
-                  <div className="card-hover" style={{ background: "#070c14", border: "1px solid #1a2a3a", borderRadius: 8, padding: 16 }}>
+                  <div className="card-hover" style={{ background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>IV Percentile</div>
                     <div style={{ fontSize: 40, fontWeight: 900, color: "#00b4ff", fontFamily: "monospace" }}>{vix.iv_percentile.toFixed(1)}<span style={{ fontSize: 18 }}>%</span></div>
                   </div>

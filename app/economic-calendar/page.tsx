@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 interface CalEvent {
   date: string;
@@ -127,20 +128,20 @@ export default function EconomicCalendarPage() {
     : Array.from(activeFilters).map(k => FILTER_OPTS.find(o => o.value === k)?.label ?? k).join(" + ");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0a0e17", fontFamily: "Arial, Helvetica, sans-serif", color: "#fff" }}>
+    <div style={{ ...homeShellStyle, height: "100%" }}>
 
       {/* ── Top bar ──────────────────────────────────────────── */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "8px 16px", background: "#0d1220",
-        borderBottom: "1px solid #1a2540", flexShrink: 0,
+        padding: "8px 16px", background: HT.panelBgStrong, backdropFilter: "blur(16px)",
+        borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.15em", color: "#fff" }}>
             📅 Economic Calendar
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 11, color: "#fff", fontFamily: "monospace", background: "#141c2e", padding: "2px 8px", borderRadius: 3 }}>
+            <span style={{ fontSize: 11, color: HT.text, fontFamily: "monospace", background: HT.panelBg, padding: "2px 8px", borderRadius: 3 }}>
               {today}
             </span>
           )}
@@ -153,9 +154,8 @@ export default function EconomicCalendarPage() {
             <button
               onClick={() => setDropOpen(o => !o)}
               style={{
-                fontSize: 11, padding: "4px 12px", border: "1px solid #1e3050",
-                borderRadius: 3, background: "#141c2e", color: "#fff",
-                cursor: "pointer", fontWeight: 700, display: "flex", alignItems: "center", gap: 6,
+                ...homeButtonStyle,
+                display: "flex", alignItems: "center", gap: 6,
               }}
             >
               {filterLabel} <span style={{ fontSize: 8 }}>▾</span>
@@ -163,7 +163,7 @@ export default function EconomicCalendarPage() {
             {dropOpen && (
               <div style={{
                 position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 200,
-                background: "#0d1220", border: "1px solid #1e3050", borderRadius: 4,
+                background: HT.panelBgStrong, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 4,
                 padding: "4px 0", minWidth: 170, boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
               }}>
                 {FILTER_OPTS.map(o => {
@@ -175,7 +175,7 @@ export default function EconomicCalendarPage() {
                       style={{
                         display: "flex", alignItems: "center", gap: 10,
                         padding: "8px 16px", cursor: "pointer",
-                        background: on ? "#111a2e" : "transparent",
+                        background: on ? "rgba(0,240,255,0.08)" : "transparent",
                       }}
                     >
                       <span style={{
@@ -198,11 +198,11 @@ export default function EconomicCalendarPage() {
           <input
             type="text" placeholder="Search…" value={search}
             onChange={e => setSearch(e.target.value)}
-            style={{ fontSize: 12, padding: "4px 10px", background: "#141c2e", border: "1px solid #1e3050", color: "#fff", outline: "none", borderRadius: 3, width: 140 }}
+            style={{ fontSize: 12, padding: "4px 10px", background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, color: HT.text, outline: "none", borderRadius: 3, width: 140 }}
           />
           <button
             onClick={load} disabled={loading}
-            style={{ fontSize: 13, padding: "4px 14px", border: "none", borderRadius: 3, background: "#00b4d8", color: "#05080d", cursor: "pointer", fontWeight: 800 }}
+            style={{ ...homeButtonStyle }}
           >
             {loading ? "…" : "↻ Now"}
           </button>
@@ -211,7 +211,7 @@ export default function EconomicCalendarPage() {
 
       {/* ── Quote of the day ─────────────────────────────────── */}
       {quote && (
-        <div style={{ padding: "10px 20px", borderBottom: "1px solid #1a2540", background: "#0d1220", flexShrink: 0, textAlign: "center" }}>
+        <div style={{ padding: "10px 20px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0, textAlign: "center" }}>
           <span style={{ fontSize: 13, fontStyle: "italic", color: "#fff", lineHeight: 1.7 }}>
             &ldquo;{quote}&rdquo;
           </span>
@@ -249,7 +249,7 @@ export default function EconomicCalendarPage() {
                   display: "flex", alignItems: "center", gap: 10,
                   padding: "10px 16px 6px",
                   background: isToday ? "rgba(0,229,255,0.04)" : "transparent",
-                  borderTop: "1px solid #1a2540",
+                  borderTop: `1px solid ${HT.border}`,
                 }}>
                   <span style={{ fontSize: 14, fontWeight: 800, color: isToday ? "#00e5ff" : "#fff", letterSpacing: "0.08em" }}>
                     {fullLabel}
@@ -271,9 +271,9 @@ export default function EconomicCalendarPage() {
                       style={{
                         display: "grid",
                         gridTemplateColumns: "80px 1fr",
-                        borderTop: i === 0 ? "none" : "1px solid #111827",
+                        borderTop: i === 0 ? "none" : `1px solid ${HT.border}`,
                         borderLeft: `3px solid ${col}`,
-                        background: "#0a0e17",
+                        background: HT.bg,
                         minHeight: 56,
                       }}
                     >
@@ -281,7 +281,7 @@ export default function EconomicCalendarPage() {
                       <div style={{
                         display: "flex", flexDirection: "column", justifyContent: "center",
                         padding: "10px 12px",
-                        borderRight: "1px solid #111827",
+                        borderRight: `1px solid ${HT.border}`,
                         gap: 3,
                       }}>
                         <span style={{ fontSize: 11, fontWeight: 700, color: isToday && dl === "TODAY" ? "#00e5ff" : "#fff", letterSpacing: "0.06em" }}>

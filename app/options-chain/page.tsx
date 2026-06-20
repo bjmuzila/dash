@@ -3,6 +3,88 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+
+// ── Custom dropdown (bypasses native OS rendering) ─────────────────────────
+function CustomDropdown<T extends string | number>({
+  value,
+  options,
+  onChange,
+  formatLabel,
+  accentCyan,
+}: {
+  value: T;
+  options: T[] | readonly T[];
+  onChange: (v: T) => void;
+  formatLabel?: (v: T) => string;
+  accentCyan?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const label = formatLabel ? formatLabel(value) : String(value);
+
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const color = accentCyan !== false ? HT.cyan : HT.text;
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          fontSize: 10, fontWeight: 800, padding: "4px 8px",
+          border: `1px solid ${accentCyan !== false ? "rgba(0,229,255,.3)" : HT.border}`,
+          borderRadius: 4,
+          background: "rgba(0,0,0,0.4)",
+          color,
+          cursor: "pointer", outline: "none",
+          display: "flex", alignItems: "center", gap: 5,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+        <span style={{ fontSize: 7, opacity: 0.7 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 3px)", left: 0, zIndex: 999,
+          background: "rgba(13,17,25,0.97)", backdropFilter: "blur(20px)",
+          border: `1px solid ${HT.border}`, borderRadius: 6,
+          padding: "3px 0", minWidth: "100%",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
+        }}>
+          {options.map(opt => {
+            const optLabel = formatLabel ? formatLabel(opt) : String(opt);
+            const active = opt === value;
+            return (
+              <div
+                key={String(opt)}
+                onClick={() => { onChange(opt); setOpen(false); }}
+                style={{
+                  padding: "6px 12px", fontSize: 10, fontWeight: active ? 800 : 600,
+                  cursor: "pointer", whiteSpace: "nowrap",
+                  color: active ? HT.cyan : HT.text,
+                  background: active ? "rgba(0,229,255,0.10)" : "transparent",
+                  letterSpacing: "0.04em",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = active ? "rgba(0,229,255,0.15)" : "rgba(255,255,255,0.05)")}
+                onMouseLeave={e => (e.currentTarget.style.background = active ? "rgba(0,229,255,0.10)" : "transparent")}
+              >
+                {optLabel}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const QUOTE_PANEL_TICKERS = [
   "VIX",
@@ -520,12 +602,9 @@ export default function OptionsChainPage() {
     <div
       ref={pageRef}
       style={{
-        display: "flex",
-        flexDirection: "column",
+        ...homeShellStyle,
         height: "100%",
-        background: "#05080d",
         overflow: "hidden",
-        fontFamily: "Arial, sans-serif",
       }}
     >
       {loadProgress > 0 && (
@@ -539,8 +618,9 @@ export default function OptionsChainPage() {
           alignItems: "center",
           gap: 8,
           padding: "6px 12px",
-          background: "#0a0e14",
-          borderBottom: "1px solid #1e3050",
+          background: HT.panelBgStrong,
+          backdropFilter: "blur(16px)",
+          borderBottom: `1px solid ${HT.border}`,
           flexShrink: 0,
           flexWrap: "wrap",
         }}
@@ -563,11 +643,10 @@ export default function OptionsChainPage() {
             fontSize: 10,
             fontWeight: 800,
             padding: "4px 8px",
-            border: "1px solid rgba(0,229,255,.4)",
+            border: `1px solid rgba(0,229,255,.4)`,
             borderRadius: 4,
-            background: "#0a0e14",
-            color: "#00e5ff",
-            fontFamily: "Arial",
+            background: "rgba(0,0,0,0.4)",
+            color: HT.cyan,
             outline: "none",
             width: 88,
             textTransform: "uppercase",
@@ -577,47 +656,20 @@ export default function OptionsChainPage() {
           {QUOTE_PANEL_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
         </datalist>
 
-        <select
+        <CustomDropdown
           value={selectedExpiry}
-          onChange={(event) => setSelectedExpiry(event.target.value)}
-          style={{
-            fontSize: 10,
-            fontWeight: 800,
-            padding: "4px 8px",
-            border: "1px solid rgba(255,255,255,.18)",
-            borderRadius: 4,
-            background: "#0a0e14",
-            color: "#e4e4e7",
-            cursor: "pointer",
-            fontFamily: "Arial",
-            outline: "none",
-          }}
-        >
-          {expiries.map((expiry) => (
-            <option key={expiry.value} value={expiry.value}>{expiry.label}</option>
-          ))}
-        </select>
+          options={expiries.map(e => e.value) as string[]}
+          onChange={setSelectedExpiry}
+          formatLabel={v => expiries.find(e => e.value === v)?.label ?? v}
+          accentCyan={false}
+        />
 
-        <select
-          value={String(displayPercent)}
-          onChange={(event) => setDisplayPercent(Number(event.target.value))}
-          style={{
-            fontSize: 10,
-            fontWeight: 800,
-            padding: "4px 8px",
-            border: "1px solid rgba(0,229,255,.3)",
-            borderRadius: 4,
-            background: "#0a0e14",
-            color: "#00e5ff",
-            cursor: "pointer",
-            fontFamily: "Arial",
-            outline: "none",
-          }}
-        >
-          {DISPLAY_PERCENTS.map((percent) => (
-            <option key={percent} value={percent}>{percent}% of strikes</option>
-          ))}
-        </select>
+        <CustomDropdown
+          value={displayPercent}
+          options={DISPLAY_PERCENTS}
+          onChange={setDisplayPercent}
+          formatLabel={v => `${v}% of strikes`}
+        />
 
         <button
           onClick={doGo}
@@ -631,7 +683,6 @@ export default function OptionsChainPage() {
             background: tickerInput && selectedExpiry ? "rgba(0,229,255,.12)" : "rgba(0,229,255,.04)",
             color: tickerInput && selectedExpiry ? "#00e5ff" : "#4a6a88",
             cursor: tickerInput && selectedExpiry ? "pointer" : "not-allowed",
-            fontFamily: "Arial",
             outline: "none",
             letterSpacing: "0.08em",
             textTransform: "uppercase",
@@ -661,7 +712,7 @@ export default function OptionsChainPage() {
 
         <span style={{ color: "#1e3050" }}>|</span>
 
-        <div style={{ display: "flex", gap: 2, background: "#070c14", borderRadius: 4, padding: 2 }}>
+        <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
           {GREEK_MODES.map(m => (
             <button
               key={m}
@@ -673,10 +724,9 @@ export default function OptionsChainPage() {
                 borderRadius: 3,
                 border: "none",
                 cursor: "pointer",
-                fontFamily: "Arial",
                 textTransform: "uppercase",
                 background: greekMode === m ? "rgba(0,229,255,.15)" : "transparent",
-                color: greekMode === m ? "#00e5ff" : "#64748b",
+                color: greekMode === m ? HT.cyan : "#64748b",
               }}
             >
               {m}
@@ -693,7 +743,7 @@ export default function OptionsChainPage() {
           <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate}</span>
         </div>
 
-        <button onClick={trigger} style={refreshStyle}>{refreshLabel}</button>
+        <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
         <BoxSnapBtn targetRef={pageRef} />
         <BoxDiscordBtn
           targetRef={pageRef}
@@ -705,8 +755,8 @@ export default function OptionsChainPage() {
         style={{
           display: "grid",
           gridTemplateColumns: "80px repeat(3, minmax(80px, 1fr))",
-          background: "#0a0f18",
-          borderBottom: "2px solid #1e3050",
+          background: HT.panelBgStrong,
+          borderBottom: `1px solid ${HT.border}`,
           flexShrink: 0,
           fontSize: 9,
           fontWeight: 800,
@@ -720,7 +770,7 @@ export default function OptionsChainPage() {
             style={{
               padding: "5px 8px",
               textAlign: index === 0 ? "left" : "right",
-              color: index === 0 ? "#e4e4e7" : "#a78bfa",
+              color: index === 0 ? HT.muted : HT.cyan,
             }}
           >
             {column}

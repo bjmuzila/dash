@@ -143,3 +143,8 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
     flex: 0 0 auto !important;
   }
 }
+
+/* Hide change% spans in ticker row when viewport is narrow */
+@media (max-width: 900px) {
+  .ticker-chg { display: none !important; }
+}

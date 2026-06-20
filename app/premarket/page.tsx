@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { usePageLoadStatus } from "@/lib/pageStatus";
+import { HOME_THEME as HT, homeShellStyle, homePanelStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 // ── Symbol definitions ───────────────────────────────────────────────────────
 
@@ -121,14 +122,14 @@ function SectionHeader({ title }: { title: string }) {
       <td
         colSpan={4}
         style={{
-          background: "#0c1825",
-          color: "#00e5ff",
+          background: "rgba(0,240,255,0.04)",
+          color: HT.cyan,
           fontWeight: 700,
           fontSize: 10,
           letterSpacing: ".12em",
           textTransform: "uppercase",
           padding: "6px 10px",
-          borderBottom: "1px solid #0d1e2e",
+          borderBottom: `1px solid ${HT.border}`,
         }}
       >
         {title}
@@ -152,9 +153,9 @@ function QuoteRowEl({
   const color  = chgColor(pct ?? change);
 
   return (
-    <tr style={{ borderBottom: "1px solid #08111a" }}>
-      <td style={{ padding: "6px 10px", color: "#c8d8e8", fontSize: 12, fontWeight: 500 }}>{label}</td>
-      <td style={{ padding: "6px 10px", color: "#e8edf5", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
+    <tr style={{ borderBottom: `1px solid ${HT.border}` }}>
+      <td style={{ padding: "6px 10px", color: HT.muted, fontSize: 12, fontWeight: 500 }}>{label}</td>
+      <td style={{ padding: "6px 10px", color: HT.text, fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
         {fmt(price, decimals)}
       </td>
       <td style={{ padding: "6px 10px", color, fontSize: 12, fontWeight: 600, fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
@@ -171,11 +172,11 @@ function TableShell({ children }: { children: React.ReactNode }) {
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
       <thead>
-        <tr style={{ borderBottom: "1px solid #0d1e2e" }}>
-          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "left", letterSpacing: ".08em", width: "40%" }}>INSTRUMENT</th>
-          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>PRICE</th>
-          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>CHANGE</th>
-          <th style={{ padding: "5px 10px", color: "#ffffff", fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>%</th>
+        <tr style={{ borderBottom: `1px solid ${HT.border}` }}>
+          <th style={{ padding: "5px 10px", color: HT.cyan, fontSize: 10, textAlign: "left", letterSpacing: ".08em", width: "40%" }}>INSTRUMENT</th>
+          <th style={{ padding: "5px 10px", color: HT.cyan, fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>PRICE</th>
+          <th style={{ padding: "5px 10px", color: HT.cyan, fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>CHANGE</th>
+          <th style={{ padding: "5px 10px", color: HT.cyan, fontSize: 10, textAlign: "right", letterSpacing: ".08em", width: "20%" }}>%</th>
         </tr>
       </thead>
       <tbody>{children}</tbody>
@@ -210,10 +211,10 @@ function RVSigmaPanel({ spxPrice, spxPrev }: { spxPrice: number | null; spxPrev:
   }
 
   return (
-    <div style={{ background: "#060d15" }}>
-      <div style={{ padding: "3px 10px", display: "flex", justifyContent: "flex-end", gap: 16, borderBottom: "1px solid #0d1e2e" }}>
-        <span style={{ color: "#ffffff", fontSize: 10, letterSpacing: ".06em" }}>SPX</span>
-        <span style={{ color: "#ffffff", fontSize: 10, letterSpacing: ".06em" }}>ES EQUIV.</span>
+    <div style={{ background: "rgba(0,0,0,0.2)" }}>
+      <div style={{ padding: "3px 10px", display: "flex", justifyContent: "flex-end", gap: 16, borderBottom: `1px solid ${HT.border}` }}>
+        <span style={{ color: HT.cyan, fontSize: 10, letterSpacing: ".06em" }}>SPX</span>
+        <span style={{ color: HT.cyan, fontSize: 10, letterSpacing: ".06em" }}>ES EQUIV.</span>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <tbody>
@@ -221,15 +222,14 @@ function RVSigmaPanel({ spxPrice, spxPrev }: { spxPrice: number | null; spxPrev:
             const isClose = label === "Previous Close";
             const isUpLevel   = label.includes("Up");
             const isDnLevel   = label.includes("Dn");
-            const labelColor  = isUpLevel ? "#00e676" : isDnLevel ? "#ff4757" : isClose ? "#ffb300" : "#c8d8e8";
+            const labelColor  = isUpLevel ? HT.green : isDnLevel ? HT.red : isClose ? "#ffb300" : HT.muted;
             const valueStr    = value != null ? value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
-            // ES equiv: SPX + ~50 spread (rough)
             const esEquiv     = value != null ? (value + 50).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "—";
             return (
-              <tr key={label} style={{ borderBottom: "1px solid #08111a" }}>
+              <tr key={label} style={{ borderBottom: `1px solid ${HT.border}` }}>
                 <td style={{ padding: "5px 10px", fontSize: 11, color: labelColor, fontWeight: isClose ? 700 : 500 }}>{label}</td>
-                <td style={{ padding: "5px 10px", fontSize: 11, color: "#e8edf5", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{valueStr}</td>
-                <td style={{ padding: "5px 10px", fontSize: 11, color: "#e8edf5", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{esEquiv}</td>
+                <td style={{ padding: "5px 10px", fontSize: 11, color: HT.text, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{valueStr}</td>
+                <td style={{ padding: "5px 10px", fontSize: 11, color: HT.text, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{esEquiv}</td>
               </tr>
             );
           })}
@@ -257,7 +257,7 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
   const overnightRange = esChg != null ? Math.abs(esChg).toFixed(2) + " pts" : "—";
 
   return (
-    <div style={{ background: "#060d15" }}>
+    <div style={{ background: "rgba(0,0,0,0.2)" }}>
       <div style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
         {/* Left col */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -377,13 +377,11 @@ export default function PremarketPage() {
     <div
       ref={pageRef}
       style={{
+        ...homeShellStyle,
         flex: 1,
         minHeight: 0,
         overflow: "auto",
-        background: "#05080d",
         padding: "12px 16px",
-        display: "flex",
-        flexDirection: "column",
         gap: 14,
       }}
     >
@@ -410,7 +408,7 @@ export default function PremarketPage() {
             {wsLive ? "● LIVE" : "● CONNECTING"}
           </span>
           {ts && <span style={{ fontSize: 10, color: "#ffffff", fontVariantNumeric: "tabular-nums" }}>{ts}</span>}
-          <button onClick={trigger} style={{ ...btnStyle }}>{btnLabel}</button>
+          <button onClick={trigger} style={{ ...homeButtonStyle }}>{btnLabel}</button>
           <BoxSnapBtn targetRef={pageRef} label="📷" />
           <BoxDiscordBtn targetRef={pageRef} message={`📊 Premarket Positioning — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
         </div>
@@ -422,16 +420,16 @@ export default function PremarketPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
           {/* Premarket Positioning summary */}
-          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+          <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Premarket Positioning</span>
             </div>
             <PositioningPanel esRow={esRow} spxRow={spxRow} />
           </div>
 
           {/* Global Markets – US Futures */}
-          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+          <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Global Markets</span>
             </div>
             <TableShell>
@@ -455,16 +453,16 @@ export default function PremarketPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
           {/* RV Sigma */}
-          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+          <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Daily RV Sigma Levels</span>
             </div>
             <RVSigmaPanel spxPrice={spxPrice} spxPrev={spxPrev || null} />
           </div>
 
           {/* Commodities, Risk Assets, Fixed Income / FX / Crypto */}
-          <div style={{ border: "1px solid #0d1e2e", borderRadius: 4, overflow: "hidden", background: "#060d15" }}>
-            <div style={{ padding: "6px 10px", background: "#0c1825", borderBottom: "1px solid #0d1e2e", display: "flex", alignItems: "center" }}>
+          <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
               <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Other Markets</span>
             </div>
             <TableShell>
