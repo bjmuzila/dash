@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 interface CalEvent {
   date: string;
@@ -174,9 +175,9 @@ export default function EconCalendarPanel() {
         style={{
           display: "grid",
           gridTemplateColumns: "62px 1fr",
-          borderTop: "1px solid #0d1520",
+          borderTop: `1px solid ${HT.border}`,
           borderLeft: `3px solid ${col}`,
-          background: "var(--overview-card-bg, #05080d)",
+          background: faded ? HT.bg : `linear-gradient(90deg, ${col}0f 0%, transparent 35%), ${HT.bg}`,
           opacity: faded ? 0.32 : 1,
           transition: "opacity 0.4s",
           minHeight: 48,
@@ -186,7 +187,8 @@ export default function EconCalendarPanel() {
         <div style={{
           display: "flex", flexDirection: "column", justifyContent: "center",
           padding: "6px 8px",
-          borderRight: "1px solid #0d1520",
+          borderRight: `1px solid ${HT.border}`,
+          boxShadow: faded ? "none" : `inset -1px 0 8px ${col}18`,
           gap: 2,
         }}>
           <span style={{ fontSize: 13, color: faded ? "#1e2a38" : "#fff", fontFamily: "monospace" }}>
@@ -250,8 +252,8 @@ export default function EconCalendarPanel() {
             key={`sep-${faded ? "s" : "a"}-${ev.date}`}
             style={{
               padding: "4px 10px",
-              background: isToday ? "rgba(0,229,255,0.06)" : "#070c14",
-              borderTop: "1px solid #0d1f30",
+              background: isToday ? "rgba(0,229,255,0.06)" : HT.panelBg,
+              borderTop: `1px solid ${HT.border}`,
               display: "flex", alignItems: "center", gap: 8,
             }}
           >
@@ -272,12 +274,12 @@ export default function EconCalendarPanel() {
   }
 
   return (
-    <div ref={containerRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden", fontFamily: "Arial, Helvetica, sans-serif" }}>
+    <div ref={containerRef} style={{ ...homeShellStyle, background: "transparent", height: "100%", overflow: "hidden" }}>
 
       {/* Header */}
       <div style={{
-        padding: "5px 10px", background: "var(--overview-header-bg, #070c14)",
-        borderBottom: "1px solid var(--overview-border-soft, #0d1f30)",
+        padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)",
+        borderBottom: `1px solid ${HT.border}`,
         display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
       }}>
         <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
@@ -290,9 +292,8 @@ export default function EconCalendarPanel() {
           <button
             onClick={() => setDropOpen(o => !o)}
             style={{
-              fontSize: 9, padding: "2px 7px", border: "1px solid #1e3050",
-              borderRadius: 3, background: "#070c14", color: "#fff",
-              cursor: "pointer", fontWeight: 700, display: "flex", alignItems: "center", gap: 4,
+              ...homeButtonStyle,
+              display: "flex", alignItems: "center", gap: 4,
             }}
           >
             {filterLabel} <span style={{ fontSize: 7 }}>▾</span>
@@ -300,7 +301,7 @@ export default function EconCalendarPanel() {
           {dropOpen && (
             <div style={{
               position: "absolute", right: 0, top: "calc(100% + 3px)", zIndex: 200,
-              background: "#0d1220", border: "1px solid #1e3050", borderRadius: 4,
+              background: HT.panelBgStrong, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 4,
               padding: "3px 0", minWidth: 140, boxShadow: "0 8px 24px rgba(0,0,0,0.7)",
             }}>
               {FILTER_OPTS.map(o => {
@@ -312,7 +313,7 @@ export default function EconCalendarPanel() {
                     style={{
                       display: "flex", alignItems: "center", gap: 8,
                       padding: "6px 12px", cursor: "pointer",
-                      background: on ? "#111a2e" : "transparent",
+                      background: on ? "rgba(0,240,255,0.08)" : "transparent",
                     }}
                   >
                     <span style={{
@@ -332,7 +333,7 @@ export default function EconCalendarPanel() {
           )}
         </div>
 
-        <button onClick={trigger} style={{ ...btnStyle }}>
+        <button onClick={trigger} style={{ ...homeButtonStyle }}>
           {btnLabel}
         </button>
         <EconCalendarTemplateCopyBtn />
@@ -341,8 +342,8 @@ export default function EconCalendarPanel() {
 
       {/* Quote */}
       {quote && (
-        <div style={{ padding: "5px 10px", borderBottom: "1px solid #0d1f30", background: "var(--overview-header-bg, #070c14)", flexShrink: 0 }}>
-          <p style={{ margin: 0, fontSize: 13, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "center" }}>
+        <div style={{ padding: "5px 10px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0 }}>
+          <p style={{ margin: 0, fontSize: 15, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "left" }}>
             &ldquo;{quote}&rdquo;
           </p>
         </div>
@@ -362,7 +363,7 @@ export default function EconCalendarPanel() {
             {staleEvents.length > 0 && (
               <>
                 {activeEvents.length > 0 && (
-                  <div style={{ height: 1, background: "#0d1f30", margin: "2px 0" }} />
+                  <div style={{ height: 1, background: HT.border, margin: "2px 0" }} />
                 )}
                 {renderWithDaySeparators(staleEvents, true)}
               </>

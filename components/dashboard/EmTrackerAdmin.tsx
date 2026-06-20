@@ -201,6 +201,8 @@ export default function EmTrackerAdmin() {
   // Discord OCR review
   const [review, setReview] = useState<DiscordPreview | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  // Raw string drafts for numeric cells — prevents "." being eaten on every keystroke
+  const [draftCells, setDraftCells] = useState<Record<string, string>>({});
 
   // add-week form
   const [fTicker, setFTicker] = useState("SPX");
@@ -327,11 +329,20 @@ export default function EmTrackerAdmin() {
   }
 
   function editReviewCell(wi: number, ri: number, field: "up" | "down", value: string) {
+    // Store raw string so "188." doesn't get eaten mid-type
+    setDraftCells((d) => ({ ...d, [`${wi}-${ri}-${field}`]: value }));
+  }
+
+  function flushReviewCell(wi: number, ri: number, field: "up" | "down") {
+    const key = `${wi}-${ri}-${field}`;
+    setDraftCells((d) => { const n = { ...d }; delete n[key]; return n; });
+    const raw = draftCells[key];
+    if (raw === undefined) return;
     setReview((prev) => {
       if (!prev) return prev;
       const weeks = prev.weeks.map((w, i) => {
         if (i !== wi) return w;
-        const num = value.trim() === "" ? (NaN as unknown as number) : Number(value);
+        const num = raw.trim() === "" ? (NaN as unknown as number) : Number(raw);
         const rows = w.rows.map((r, j) => (j === ri ? { ...r, [field]: num, repaired: false } : r));
         return { ...w, rows };
       });
@@ -583,9 +594,17 @@ export default function EmTrackerAdmin() {
                         <span style={{ width: 14, fontSize: 12, color: r.repaired ? HOME_THEME.cyan : "transparent" }} title={r.repaired ? "auto-fixed" : undefined}>{r.repaired ? "↩" : ""}</span>
                         <input value={r.ticker} onChange={(e) => editReviewTicker(wi, ri, e.target.value)} placeholder="—"
                           style={{ ...homeInputStyle, width: 62, padding: "6px 6px", fontSize: 14, fontWeight: 800, textTransform: "uppercase", borderColor: tone ? bd : "transparent", background: "transparent", color: fl.bad ? HOME_THEME.red : "#fff" }} title="Ticker" />
-                        <input value={numStr(r.up)} onChange={(e) => editReviewCell(wi, ri, "up", e.target.value)} placeholder="up" style={{ ...homeInputStyle, width: 82, padding: "6px 8px", fontSize: 14, borderColor: bd, color: numColor }} title="Up" />
+                        <input
+                          value={draftCells[`${wi}-${ri}-up`] ?? numStr(r.up)}
+                          onChange={(e) => editReviewCell(wi, ri, "up", e.target.value)}
+                          onBlur={() => flushReviewCell(wi, ri, "up")}
+                          placeholder="up" style={{ ...homeInputStyle, width: 82, padding: "6px 8px", fontSize: 14, borderColor: bd, color: numColor }} title="Up" />
                         <span style={{ color: "#5a657a", fontSize: 14 }}>/</span>
-                        <input value={numStr(r.down)} onChange={(e) => editReviewCell(wi, ri, "down", e.target.value)} placeholder="down" style={{ ...homeInputStyle, width: 82, padding: "6px 8px", fontSize: 14, borderColor: bd, color: numColor }} title="Down" />
+                        <input
+                          value={draftCells[`${wi}-${ri}-down`] ?? numStr(r.down)}
+                          onChange={(e) => editReviewCell(wi, ri, "down", e.target.value)}
+                          onBlur={() => flushReviewCell(wi, ri, "down")}
+                          placeholder="down" style={{ ...homeInputStyle, width: 82, padding: "6px 8px", fontSize: 14, borderColor: bd, color: numColor }} title="Down" />
                         <button onClick={() => deleteReviewRow(wi, ri)} title="Remove row" style={{ background: "none", border: "none", color: HOME_THEME.muted, fontSize: 16, cursor: "pointer", lineHeight: 1, padding: "0 2px" }}>×</button>
                       </div>
                     );

@@ -61,8 +61,12 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
 
   return (
     <div
-      className="flex flex-col rounded border overflow-hidden"
-      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+      className="flex flex-col rounded overflow-hidden"
+      style={{
+        border: "1px solid var(--border)",
+        borderTop: "2px solid rgba(0,240,255,0.55)",
+        background: "radial-gradient(circle at 50% 0%, rgba(0,240,255,0.06) 0%, transparent 55%), transparent",
+      }}
     >
       <div
         className="flex items-center justify-between px-3 py-2 border-b flex-shrink-0"
@@ -74,7 +78,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
           </span>
           <div
             className="flex items-center rounded border p-0.5"
-            style={{ borderColor: "var(--border)", background: "#0b1320" }}
+            style={{ borderColor: "var(--border)", background: "rgba(0,0,0,0.4)" }}
             title="Show all flow or only contracts that were out of the money when the order printed"
           >
             {MONEYNESS_OPTIONS.map((option) => {
@@ -107,7 +111,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
                 setMinPremium(value === "all" ? "all" : Number(value) as Exclude<(typeof FILTER_OPTIONS)[number], "all">);
               }}
               style={{
-                background: "#0b1320",
+                background: "rgba(0,0,0,0.4)",
                 color: "var(--text)",
                 border: "1px solid var(--border)",
                 borderRadius: 4,
@@ -129,7 +133,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
         <span
           className="text-xs px-2 py-0.5 rounded font-mono"
           style={{
-            background: connected ? "#0c2a1e" : "#1a0a0a",
+            background: connected ? "rgba(0,230,118,0.12)" : "rgba(239,68,68,0.12)",
             color: connected ? "var(--accent)" : "var(--red)",
           }}
         >

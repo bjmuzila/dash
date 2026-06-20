@@ -5,6 +5,7 @@ import { useSpxFlow, type FlowOrder } from "@/hooks/useSpxFlow";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, currentSession, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 function fmtVol(v = 0) {
   if (!Number.isFinite(v) || v <= 0) return "0";
@@ -127,7 +128,7 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
     ctx.stroke();
   }, [color, data]);
 
-  return <canvas ref={ref} style={{ width: "100%", height: 48, display: "block", background: "var(--overview-card-bg, #05080d)", border: "1px solid var(--overview-border-soft, #0d1f30)", borderRadius: 2 }} />;
+  return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />;
 }
 
 function MetricCard({
@@ -142,10 +143,18 @@ function MetricCard({
   color: string;
 }) {
   return (
-    <div style={{ background: "var(--overview-card-bg, #05080d)", border: "1px solid var(--overview-border, #1a2a3a)", borderRadius: 3, padding: "5px 6px", textAlign: "center" }}>
-      <div style={{ fontSize: 9, color: "#fff", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      <div style={{ fontSize: 9, color: "#fff", marginTop: 1 }}>{detail}</div>
+    <div style={{
+      background: `radial-gradient(circle at 50% 0%, ${color}14 0%, transparent 65%), ${HT.panelBg}`,
+      backdropFilter: "blur(8px)",
+      border: `1px solid ${HT.border}`,
+      borderTop: `2px solid ${color}99`,
+      borderRadius: 6,
+      padding: "8px 6px",
+      textAlign: "center",
+    }}>
+      <div style={{ fontSize: 9, color: HT.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color, fontVariantNumeric: "tabular-nums", textShadow: `0 0 16px ${color}55` }}>{value}</div>
+      <div style={{ fontSize: 9, color: HT.muted, marginTop: 3 }}>{detail}</div>
     </div>
   );
 }
@@ -162,8 +171,16 @@ function TopFlowList({
   const maxGex = Math.max(1, ...items.map((item) => item.gex));
 
   return (
-    <div style={{ background: "var(--overview-card-bg, #05080d)", border: "1px solid var(--overview-border, #1a2a3a)", borderRadius: 3, padding: "5px 7px", display: "flex", flexDirection: "column", gap: 3 }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase" }}>{label}</div>
+    <div style={{
+      background: `radial-gradient(circle at 50% 0%, ${barColor}10 0%, transparent 60%), ${HT.panelBg}`,
+      backdropFilter: "blur(8px)",
+      border: `1px solid ${HT.border}`,
+      borderTop: `2px solid ${barColor}88`,
+      borderRadius: 6,
+      padding: "6px 8px",
+      display: "flex", flexDirection: "column", gap: 3,
+    }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: barColor, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</div>
       {!items.length ? (
         <div style={{ color: "#fff", fontSize: 9 }}>Waiting...</div>
       ) : (
@@ -443,44 +460,46 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
   }, [persistedPayload]);
 
   return (
-    <div ref={panelRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
-      <div style={{ padding: "5px 10px", background: "var(--overview-header-bg, #070c14)", borderBottom: "1px solid var(--overview-border, #1a2a3a)", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+    <div ref={panelRef} style={{ ...homeShellStyle, background: "transparent", height: "100%", overflow: "hidden" }}>
+      <div style={{ padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block", background: flow.connected ? "#00e676" : "#ef4444" }} />
         <span style={{ fontSize: 8, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
         {flow.spxPrice > 0 && <span style={{ fontSize: 9, fontFamily: "inherit", color: "#3a5570", marginLeft: 4 }}>SPX {flow.spxPrice.toFixed(2)}</span>}
-        <button onClick={trigger} style={{ marginLeft: "auto", ...btnStyle }}>
+        <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>
           {btnLabel}
         </button>
         <BoxSnapBtn targetRef={panelRef} label="📷" />
         <BoxDiscordBtn targetRef={panelRef} message={`📊 Flow Snapshot — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5, flexShrink: 0 }}>
           <MetricCard label="P/C Vol Ratio" value={pcr > 0 ? pcr.toFixed(2) : "0.00"} detail={`Put ${fmtVol(flow.cumulativePutVol)} / Call ${fmtVol(flow.cumulativeCallVol)}`} color={pcr >= 1 ? "#ff4757" : "#00e676"} />
           <MetricCard label="B/B Ratio" value={bbr > 0 ? bbr.toFixed(2) : "0.00"} detail={`Buy ${fmtVol(flow.cumulativeBuyVol)} / Sell ${fmtVol(flow.cumulativeSellVol)}`} color={bbr >= 1 ? "#00e676" : "#ff4757"} />
           <MetricCard label="Bull Vol" value={fmtVol(bullVol)} detail={bullDetail} color="#00e676" />
           <MetricCard label="Bear Vol" value={fmtVol(bearVol)} detail={bearDetail} color="#ff4757" />
         </div>
 
-        <div style={{ background: "var(--overview-card-bg, #05080d)", border: "1px solid var(--overview-border, #1a2a3a)", borderRadius: 3, padding: "5px 7px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div style={{ flex: 1, minHeight: 0, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "5px 7px", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
             <div style={{ fontSize: 9, color: "#fff", fontWeight: 700, textTransform: "uppercase" }}>Net Premium</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: netPrem >= 0 ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{fmtPrem(netPrem)}</div>
           </div>
-          <Sparkline data={premHistory} color="#ff9f40" />
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3, fontSize: 9, color: "#5a7a99", fontVariantNumeric: "tabular-nums" }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <Sparkline data={premHistory} color="#ff9f40" />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3, fontSize: 9, color: "#5a7a99", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
             <span>{premHistory.length ? fmtPrem(histMin) : "-"}</span>
             <span>{premHistory.length ? fmtPrem(histMax) : "-"}</span>
           </div>
         </div>
 
-        <div style={{ background: "var(--overview-card-bg, #05080d)", border: "1px solid var(--overview-border, #1a2a3a)", borderRadius: 3, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5 }}>
+        <div style={{ flexShrink: 0, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#00e676" }}>{fmtVol(tops.bullTotal)} Net Bullish</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#ff4757", textAlign: "right" }}>{fmtVol(tops.bearTotal)} Net Bearish</div>
           </div>
-          <div style={{ position: "relative", height: 10, background: "#1a2a3a", borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
             <div style={{ position: "absolute", left: 0, top: 0, height: "100%", background: "linear-gradient(90deg,#00e67655 0%,#00e676cc 60%,#00e676 100%)", width: `${tops.bullPct}%`, transition: "width .4s ease", borderRadius: "3px 0 0 3px" }} />
             <div style={{ position: "absolute", right: 0, top: 0, height: "100%", background: "linear-gradient(270deg,#ff475755 0%,#ff4757cc 60%,#ff4757 100%)", width: `${tops.bearPct}%`, transition: "width .4s ease", borderRadius: "0 3px 3px 0" }} />
           </div>
@@ -490,8 +509,8 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
           </div>
         </div>
 
-        <div style={{ fontSize: 9, fontWeight: 700, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Option Flow Tops</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
+        <div style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Option Flow Tops</div>
+        <div style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
           <TopFlowList label="Buy Call Vol" items={tops.buyCalls} barColor="#00e676" />
           <TopFlowList label="Sell Call Vol" items={tops.sellCalls} barColor="#ff4757" />
           <TopFlowList label="Buy Put Vol" items={tops.buyPuts} barColor="#00e676" />
