@@ -125,13 +125,17 @@ export default function GexHeatmap({
   ) as Record<(typeof COLS)[number]["key"], Map<number, number>>;
 
   function cellBg(key: keyof typeof maxMap, val: number | null, topRank: number): string {
-    if (val == null || !Number.isFinite(val) || Math.abs(val) < 1e-12) return "transparent";
-    const m = maxMap[key] || 1;
-    const raw = (Math.abs(val) / m) * intensity;
-    const boost = topRank === 1 ? 0.34 : topRank === 2 ? 0.22 : topRank === 3 ? 0.12 : 0;
-    const alpha = 0.06 + Math.min(1, Math.pow(raw, 1.85) + boost) * 0.94;
-    if (val >= 0) return `rgba(41,182,246,${alpha.toFixed(2)})`;
-    return `rgba(255,71,87,${alpha.toFixed(2)})`;
+    const n = val == null || !Number.isFinite(val) ? 0 : val;
+    const m = maxMap[key] || 0;
+    if (m === 0 || !n) return "transparent";
+    const pos = n >= 0;
+    if (topRank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+    if (topRank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
+    if (topRank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+    const ratio = Math.min(Math.abs(n) / m, 1);
+    const eased = Math.pow(ratio * (intensity || 0.1), 1.4);
+    const alpha = Math.min(0.18, 0.02 + eased * 0.16);
+    return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
   }
 
   const aboveATM = rows.filter(r => r.strike > (atm?.strike ?? 0));

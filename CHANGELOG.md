@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-19 (session 17) — Standardize intensity sliders + heatmap coloring to Multi-Greek format
+
+Unified every Greek heatmap's intensity slider and `metricBg()` coloring to match the **Multi-Greek panel** (the reference standard), so increments and color response are identical across the GEX Heatmap, Options Chain, and mobile views.
+
+### Canonical spec (from `app/mult-greek/page.tsx`)
+- **Slider:** `min 0.5 / max 3 / step 0.01`, `width 80 / height 3`, accent `#00e5ff`, 9px label, 10px monospace readout, default `1.75`.
+- **Coloring:** rank 1/2/3 → fixed alpha `0.90 / 0.45 / 0.25`; rest → `min(0.18, 0.02 + (ratio × intensity)^1.4 × 0.16)`; blue `rgba(41,182,246,…)` positive / red `rgba(255,71,87,…)` negative.
+
+### Changes
+- **`app/home/page.tsx`** (LIVE GEX HEATMAP panel) — replaced divergent `metricBg` (0.82/0.6/0.4 floors, uncapped) with canonical formula; slider 0.1–3 → 0.5–3; default 0.4 → 1.75.
+- **`app/options-chain/page.tsx`** — slider 0.2–3 → 0.5–3, restyled to canonical; default 0.4 → 1.75.
+- **`components/dashboard/GexHeatmap.tsx`** — replaced `cellBg()` additive-boost math (alpha up to ~1.0) with canonical alpha math (rank fixed alphas + 0.18 cap); fixes mobile heatmap looking uniformly over-saturated.
+- **`md files/INTENSITY_SLIDER_GRADIENT_LOGIC.md`** — rewritten to document the new canonical slider + formula and list all four consuming files.
+
 ## 2026-06-19 (session 16) — Footprint page: live ES big-order bubbles + delta profile
 
 New **Footprint → Big Orders** page (`/footprint`) showing real-time large prints on the front ES future (ESU6) as a Big Trade Bubbles lane + a Delta Profile lane, fed by a new server-v2 trade-classification pipeline. Includes an offline seed-replay path for reviewing a past session's transcribed time & sales.

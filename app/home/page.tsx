@@ -50,19 +50,18 @@ type HeatmapRow = {
 // Intensity-scaled cell background. Ported from options-chain metricBg logic:
 // rank-based floors for the top 3 magnitudes, power curve for the rest.
 function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]): string {
-  if (!value) return "transparent";
-  const abs = Math.abs(value);
-  const ratio = Math.min(abs / Math.max(maxValue, 1), 1);
-  const rank = topValues.indexOf(abs) + 1;
-  let opacity: number;
-  if (rank === 1) opacity = Math.max(0.82, intensity * 0.92);
-  else if (rank === 2) opacity = Math.max(0.6, intensity * 0.78);
-  else if (rank === 3) opacity = Math.max(0.4, intensity * 0.62);
-  else opacity = Math.pow(ratio, 0.65) * intensity * 0.55;
-  const finalOpacity = Math.min(opacity, 0.95).toFixed(3);
-  return value > 0
-    ? `rgba(32,178,220,${finalOpacity})`
-    : `rgba(220,50,60,${finalOpacity})`;
+  const n = value || 0;
+  const m = maxValue || 0;
+  if (m === 0 || !n) return "transparent";
+  const pos = n >= 0;
+  const rank = topValues.indexOf(Math.abs(n)) + 1;
+  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+  if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
+  if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+  const ratio = Math.min(Math.abs(n) / m, 1);
+  const eased = Math.pow(ratio * (intensity || 0.1), 1.4);
+  const alpha = Math.min(0.18, 0.02 + eased * 0.16);
+  return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
 type ExpiryOption = { value: string; label: string };
@@ -372,8 +371,8 @@ export default function HomePage() {
   const [flowOrders, setFlowOrders] = useState<FlowOrder[]>([]);
   // Full server flow bucket (vols/premium) for the Snapshot panel.
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
-  // Heatmap intensity slider (0.1–3, default 0.4) — controls cell color opacity.
-  const [intensity, setIntensity] = useState(0.4);
+  // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
+  const [intensity, setIntensity] = useState(1.75);
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
 
@@ -905,17 +904,14 @@ export default function HomePage() {
                   <span style={{ color: "#fff" }}>Stream</span>
                   <span style={{ color: C.cyan }}>{subscribedSymbolsRef.current.length} option symbols</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-                    <span style={{ color: "#94a3b8", fontWeight: 800 }}>Intensity</span>
+                    <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
                     <input
-                      type="range"
-                      min={0.1}
-                      max={3}
-                      step={0.01}
+                      type="range" min={0.5} max={3} step={0.01}
                       value={intensity}
                       onChange={(e) => setIntensity(Number(e.target.value))}
-                      style={{ width: 100, accentColor: "#00e5ff", cursor: "pointer" }}
+                      style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
                     />
-                    <span style={{ color: "#00e5ff", fontWeight: 700, minWidth: 36, textAlign: "right", fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
+                    <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
                   </div>
                 </div>
               </div>
