@@ -5,8 +5,12 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 async function loadChangelog() {
-  const filePath = path.join(process.cwd(), "CHANGELOG.md");
-  return readFile(filePath, "utf8");
+  try {
+    const filePath = path.join(process.cwd(), "CHANGELOG.md");
+    return await readFile(filePath, "utf8");
+  } catch {
+    return "No CHANGELOG.md found at the project root.";
+  }
 }
 
 export default async function ChangelogPage() {

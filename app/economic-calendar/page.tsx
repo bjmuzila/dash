@@ -68,6 +68,7 @@ export default function EconomicCalendarPage() {
   const [events,       setEvents]       = useState<CalEvent[]>([]);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
+  const [warning,      setWarning]      = useState<string | null>(null);
   const [lastRefresh,  setLastRefresh]  = useState<string | null>(null);
   const [quote,        setQuote]        = useState<string | null>(null);
   const [search,       setSearch]       = useState("");
@@ -87,10 +88,14 @@ export default function EconomicCalendarPage() {
     setLoading(true);
     setError(null);
     try {
-      setEvents([]);
-      setQuote(null);
+      const res = await fetch("/api/calendar", { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      const list: CalEvent[] = Array.isArray(json?.events) ? json.events : Array.isArray(json) ? json : [];
+      setEvents(list);
+      setWarning(json?.warning ? String(json.warning) : null);
       setLastRefresh(new Date().toLocaleTimeString());
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(String(e)); setEvents([]); }
     finally    { setLoading(false); }
   }, []);
 
@@ -210,6 +215,13 @@ export default function EconomicCalendarPage() {
           <span style={{ fontSize: 13, fontStyle: "italic", color: "#fff", lineHeight: 1.7 }}>
             &ldquo;{quote}&rdquo;
           </span>
+        </div>
+      )}
+
+      {/* ── Stale-data warning (non-blocking) ────────────────── */}
+      {warning && !error && (
+        <div style={{ padding: "6px 16px", fontSize: 11, color: "#f59e0b", background: "rgba(245,158,11,0.06)", borderBottom: "1px solid rgba(245,158,11,0.25)", flexShrink: 0 }}>
+          ⚠ Live feed unavailable — showing saved events. ({warning})
         </div>
       )}
 

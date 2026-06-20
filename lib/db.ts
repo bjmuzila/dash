@@ -200,7 +200,225 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);
+
+    -- Per-ticker weekly Estimated Move tracking. One row per (ticker, week).
+    -- week_label is the human label that matches the EstimatedMoves columns
+    -- (e.g. "10/3"); week_start is the Monday ISO date for ordering. em is the
+    -- expected move (dollars for equities/$ index points, index points for SPX
+    -- etc). ref_close is the reference close the band is centered on. The OHLC
+    -- columns are the realized weekly candle; result is auto-computed:
+    --   'hit'  = OHLC stayed inside the band  (win)
+    --   'miss' = high or low broke the band   (loss)
+    --   NULL   = not yet evaluated (week not closed / no OHLC)
+    CREATE TABLE IF NOT EXISTS em_tracker (
+      id SERIAL PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      week_label TEXT NOT NULL,
+      week_start DATE,
+      em REAL NOT NULL,
+      ref_close REAL,
+      up REAL,
+      down REAL,
+      o REAL, h REAL, l REAL, c REAL,
+      result TEXT,          -- 'hit' | 'miss' | NULL  (close inside band = hit)
+      breach INTEGER,       -- 1 = high/low poked outside band intraweek, 0 = no, NULL = unknown
+      result_source TEXT,   -- 'auto' | 'manual' | 'import'
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_tracker_ticker ON em_tracker(ticker);
+    CREATE INDEX IF NOT EXISTS idx_em_tracker_week ON em_tracker(week_start);
+
+    -- Migration: add breach column to pre-existing em_tracker tables.
+    ALTER TABLE em_tracker ADD COLUMN IF NOT EXISTS breach INTEGER;
+
+    -- Uniqueness is per (ticker, week_start): week_label like "5/1" repeats every
+    -- year, so 2 years of history would collide on (ticker, week_label). Keying on
+    -- the Monday ISO date keeps each calendar week distinct. Drop the old label
+    -- constraint if present, add the date-based one.
+    ALTER TABLE em_tracker DROP CONSTRAINT IF EXISTS em_tracker_ticker_week_label_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_tracker_ticker_week_start
+      ON em_tracker(ticker, week_start);
   `);
+}
+
+// ── EM Tracker (per-ticker weekly Estimated Move hit/miss record) ───────────
+
+export interface EmTrackerRow {
+  id?: number;
+  ticker: string;
+  week_label: string;
+  week_start?: string | null;
+  em: number;
+  ref_close?: number | null;
+  up?: number | null;
+  down?: number | null;
+  o?: number | null;
+  h?: number | null;
+  l?: number | null;
+  c?: number | null;
+  result?: "hit" | "miss" | null;
+  breach?: number | null;
+  result_source?: "auto" | "manual" | "import" | "seed" | null;
+  note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** Insert or update one weekly EM row, keyed on (ticker, week_start).
+ *  Requires week_start (the Monday ISO date) so 2+ years of weeks stay distinct.
+ *  NULL incoming values never overwrite an existing non-null value. */
+export async function upsertEmTrackerRow(r: EmTrackerRow): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO em_tracker
+       (ticker, week_label, week_start, em, ref_close, up, down, o, h, l, c, result, breach, result_source, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     ON CONFLICT(ticker, week_start) DO UPDATE SET
+       week_label    = COALESCE(EXCLUDED.week_label,    em_tracker.week_label),
+       em            = COALESCE(EXCLUDED.em,            em_tracker.em),
+       ref_close     = COALESCE(EXCLUDED.ref_close,     em_tracker.ref_close),
+       up            = COALESCE(EXCLUDED.up,            em_tracker.up),
+       down          = COALESCE(EXCLUDED.down,          em_tracker.down),
+       o             = COALESCE(EXCLUDED.o,             em_tracker.o),
+       h             = COALESCE(EXCLUDED.h,             em_tracker.h),
+       l             = COALESCE(EXCLUDED.l,             em_tracker.l),
+       c             = COALESCE(EXCLUDED.c,             em_tracker.c),
+       result        = COALESCE(EXCLUDED.result,        em_tracker.result),
+       breach        = COALESCE(EXCLUDED.breach,        em_tracker.breach),
+       result_source = COALESCE(EXCLUDED.result_source, em_tracker.result_source),
+       note          = COALESCE(EXCLUDED.note,          em_tracker.note),
+       updated_at    = CURRENT_TIMESTAMP`,
+    [
+      r.ticker.toUpperCase(), r.week_label, r.week_start ?? null, r.em, r.ref_close ?? null,
+      r.up ?? null, r.down ?? null, r.o ?? null, r.h ?? null, r.l ?? null, r.c ?? null,
+      r.result ?? null, r.breach ?? null, r.result_source ?? null, r.note ?? null,
+    ]
+  );
+}
+
+/** Fill realized weekly OHLC onto an EXISTING (ticker, week_label) row without
+ *  touching the EM band. No-op if the row doesn't exist (never inserts an
+ *  em-less row, which would violate the NOT NULL constraint). */
+export async function updateEmTrackerOhlc(
+  ticker: string, week_label: string,
+  ohlc: { o?: number | null; h?: number | null; l?: number | null; c?: number | null }
+): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE em_tracker SET
+       o = COALESCE($3, o), h = COALESCE($4, h), l = COALESCE($5, l), c = COALESCE($6, c),
+       updated_at = CURRENT_TIMESTAMP
+     WHERE ticker = $1 AND week_label = $2`,
+    [ticker.toUpperCase(), week_label, ohlc.o ?? null, ohlc.h ?? null, ohlc.l ?? null, ohlc.c ?? null]
+  );
+}
+
+/** All weekly rows, newest week first (then ticker). */
+export async function getEmTrackerRows(ticker?: string): Promise<EmTrackerRow[]> {
+  if (ticker) {
+    return queryAll<EmTrackerRow>(
+      `SELECT * FROM em_tracker WHERE ticker = ? ORDER BY week_start DESC NULLS LAST, week_label DESC`,
+      [ticker.toUpperCase()]
+    );
+  }
+  return queryAll<EmTrackerRow>(
+    `SELECT * FROM em_tracker ORDER BY week_start DESC NULLS LAST, ticker ASC`
+  );
+}
+
+/** Rows seeded for a given week that still need a result (band present, no
+ *  result yet). Used by the Saturday evaluator. */
+export async function getEmTrackerPendingForWeek(week_start: string): Promise<EmTrackerRow[]> {
+  return queryAll<EmTrackerRow>(
+    `SELECT * FROM em_tracker
+      WHERE week_start = ? AND result IS NULL AND em IS NOT NULL
+      ORDER BY ticker ASC`,
+    [week_start]
+  );
+}
+
+/** Per-ticker hit-rate summary: hits, evaluated weeks, total weeks, latest EM. */
+export interface EmTrackerSummary {
+  ticker: string;
+  hits: number;
+  misses: number;
+  evaluated: number;   // hits + misses
+  total: number;       // all weeks with an EM on record
+  hit_rate: number | null; // hits / evaluated, 0..1
+  latest_em: number | null;
+  latest_week: string | null;
+}
+
+export async function getEmTrackerSummary(): Promise<EmTrackerSummary[]> {
+  const pool = await getDb();
+  const result = await pool.query(`
+    SELECT
+      ticker,
+      COUNT(*) FILTER (WHERE result = 'hit')::int  AS hits,
+      COUNT(*) FILTER (WHERE result = 'miss')::int AS misses,
+      COUNT(*) FILTER (WHERE result IN ('hit','miss'))::int AS evaluated,
+      COUNT(*)::int AS total,
+      (SELECT em FROM em_tracker e2
+         WHERE e2.ticker = e.ticker
+         ORDER BY week_start DESC NULLS LAST, week_label DESC LIMIT 1) AS latest_em,
+      (SELECT week_label FROM em_tracker e3
+         WHERE e3.ticker = e.ticker
+         ORDER BY week_start DESC NULLS LAST, week_label DESC LIMIT 1) AS latest_week
+    FROM em_tracker e
+    GROUP BY ticker
+    ORDER BY ticker ASC
+  `);
+  return result.rows.map((r) => ({
+    ticker: r.ticker,
+    hits: Number(r.hits ?? 0),
+    misses: Number(r.misses ?? 0),
+    evaluated: Number(r.evaluated ?? 0),
+    total: Number(r.total ?? 0),
+    hit_rate: Number(r.evaluated) > 0 ? Number(r.hits) / Number(r.evaluated) : null,
+    latest_em: r.latest_em != null ? Number(r.latest_em) : null,
+    latest_week: r.latest_week ?? null,
+  }));
+}
+
+/** Rows that have an EM + reference close + realized OHLC but no result yet —
+ *  the candidates for auto-evaluation. */
+export async function getEmTrackerUnevaluated(): Promise<EmTrackerRow[]> {
+  return queryAll<EmTrackerRow>(
+    `SELECT * FROM em_tracker
+      WHERE result IS NULL AND em IS NOT NULL AND ref_close IS NOT NULL
+        AND h IS NOT NULL AND l IS NOT NULL
+      ORDER BY week_start ASC NULLS LAST, ticker ASC`
+  );
+}
+
+/** Set the computed result for one row. */
+export async function setEmTrackerResult(
+  id: number, result: "hit" | "miss", source: "auto" | "manual" = "auto"
+): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE em_tracker SET result = $2, result_source = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+    [id, result, source]
+  );
+}
+
+export async function deleteEmTrackerRow(id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM em_tracker WHERE id = $1`, [id]);
+}
+
+/** Wipe going-forward em_tracker rows. Optionally only those from a given
+ *  result_source (e.g. 'import' to undo a bad import without losing manual/auto
+ *  weeks). Returns number of rows removed. The verified 31-week history lives in
+ *  data/em-tracker-history.json and is NOT affected. */
+export async function clearEmTracker(source?: string): Promise<number> {
+  const pool = await getDb();
+  const res = source
+    ? await pool.query(`DELETE FROM em_tracker WHERE result_source = $1`, [source])
+    : await pool.query(`DELETE FROM em_tracker`);
+  return res.rowCount ?? 0;
 }
 
 // ── Waitlist (launch email capture) ────────────────────────────────────────

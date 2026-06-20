@@ -29,6 +29,7 @@
         "react": "^19",
         "react-dom": "^19",
         "tailwind-merge": "^2.3.0",
+        "tesseract.js": "^5.1.1",
         "ws": "^8.18.0",
         "xlsx": "^0.18.5"
     },

@@ -15,7 +15,6 @@ const NAV_ITEMS = [
   { label: "Trading",       href: "/trading" },
   { label: "Logs",          href: "/logs" },
   { label: "Personal",      href: "/personal" },
-  { label: "Legacy",        href: "/legacy" },
   { label: "Econ Calendar", href: "/economic-calendar" },
 ];
 

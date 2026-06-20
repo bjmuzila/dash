@@ -15,7 +15,7 @@
  *   require('./levels-auto-publish').startLevelsAutoPublish(PORT);
  */
 
-const { computeAllLevels } = require('./levels-engine');
+const { computeAllLevels, seedUpcomingWeek } = require('./levels-engine');
 
 const PUBLISH_HOUR = 9;   // ET
 const PUBLISH_MIN = 0;    // ET
@@ -77,6 +77,11 @@ async function publishOnce(base, reason) {
     }
   }
   console.log(`[levels-pub] published ${ok}/${payloads.length} tickers in ${Math.round((Date.now() - t0) / 1000)}s`);
+
+  // Seed em_tracker rows for the upcoming week so next Saturday's evaluator has
+  // the EM band on record (best-effort; never blocks the publish result).
+  try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); }
+
   return ok > 0;
 }
 

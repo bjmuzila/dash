@@ -1,0 +1,19 @@
+{
+  "source": "google-sheet:1NzeEb9KZgQQLIFkQ0ipxDPM2zQDBO1Yy-0As7O5q9Vg",
+  "note": "Verified historical 31-week 'closed inside EM' record. hits = weeks the OHLC stayed inside the estimated move. pct = hits/total. latest_em = most recent weekly EM.",
+  "total_weeks": 31,
+  "tallies": {
+    "NQU":   { "hits": 21, "total": 31, "pct": 67.74, "latest_em": 531.51 },
+    "SPY":   { "hits": 22, "total": 31, "pct": 70.97, "latest_em": 10.977 },
+    "QQQ":   { "hits": 21, "total": 31, "pct": 67.74, "latest_em": 13.397 },
+    "SPX":   { "hits": 22, "total": 31, "pct": 70.97, "latest_em": 111.576 },
+    "AAPL":  { "hits": 23, "total": 31, "pct": 74.19, "latest_em": 7.568 },
+    "AMD":   { "hits": 19, "total": 31, "pct": 61.29, "latest_em": 16.73 },
+    "AMZN":  { "hits": 18, "total": 31, "pct": 58.06, "latest_em": 8.565 },
+    "GOOGL": { "hits": 20, "total": 31, "pct": 64.52, "latest_em": 11.934 },
+    "META":  { "hits": 18, "total": 31, "pct": 58.06, "latest_em": 24.992 },
+    "MSFT":  { "hits": 18, "total": 31, "pct": 58.06, "latest_em": 14.448 },
+    "NVDA":  { "hits": 24, "total": 31, "pct": 77.42, "latest_em": 7.493 },
+    "TSLA":  { "hits": 28, "total": 31, "pct": 90.32, "latest_em": 27.573 }
+  }
+}

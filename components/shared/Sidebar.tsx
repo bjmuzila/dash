@@ -95,7 +95,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Owner", href: "/dev/owner" },
       { label: "Admin", href: "/dev/admin" },
-      { label: "Legacy", href: "/legacy" },
       { label: "Dev", href: "/dev" },
       { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },

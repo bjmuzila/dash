@@ -483,4 +483,206 @@ async function computeAllLevels(base) {
   return Object.values(byTicker);
 }
 
-module.exports = { computeAllLevels, SYMBOLS };
+/**
+ * Fetch the realized weekly CLOSE for one ticker for a given completed week key.
+ * Uses the same dxLink weekly candles as the zone math. Returns the close of the
+ * candle whose week == targetWeek (falls back to the latest <= targetWeek).
+ */
+async function fetchWeeklyClose(engine, ticker, targetWeek) {
+  const bars = await fetchWeeklyHistory(engine, zoneSymbol(ticker));
+  const exact = bars.find((i) => getWeekKey(new Date(i.time)) === targetWeek);
+  const candidates = bars.filter((i) => getWeekKey(new Date(i.time)) <= targetWeek);
+  const selected = exact || candidates[candidates.length - 1] || bars[bars.length - 1];
+  if (!selected) throw new Error(`No weekly candle for ${ticker}`);
+  return { close: selected.close, high: selected.high, low: selected.low, open: selected.open, week: getWeekKey(new Date(selected.time)) };
+}
+
+/**
+ * Evaluate the just-completed week for every ticker that has a seeded em_tracker
+ * row (week_start == completed week) still awaiting a result. For each, pull the
+ * realized weekly close and decide:
+ *
+ *     win  = down <= close <= up        (closed INSIDE the EM band)
+ *     loss = close < down or close > up (closed OUTSIDE)
+ *
+ * The band (up/down) was seeded the prior Saturday from that week's EM and
+ * reference close, so there is no dependency on the current week's levels.
+ *
+ * POSTs realized OHLC + the close-based result to /api/em-tracker.
+ */
+async function evaluateCompletedWeek(base) {
+  const engine = makeEngine(base);
+  const completedWeek = getCompletedWeekKey();
+  console.log(`[em-eval] evaluating completed week ${completedWeek}`);
+
+  // Pull the rows seeded for that week that still need a result.
+  let pending = [];
+  try {
+    const r = await ifetch(`${base}/api/em-tracker?week_start=${completedWeek}&status=pending`);
+    if (r.ok) pending = (await r.json()).rows || [];
+  } catch (e) {
+    console.log('[em-eval] fetch pending failed:', e.message);
+  }
+  if (!pending.length) { console.log('[em-eval] nothing seeded/pending for this week — skip'); return { evaluated: 0, hits: 0, misses: 0 }; }
+
+  let hits = 0, misses = 0;
+  for (let i = 0; i < pending.length; i += 4) {
+    const batch = pending.slice(i, i + 4);
+    await Promise.allSettled(batch.map(async (row) => {
+      // Map the stored API ticker back to a weekly-candle symbol.
+      const candleTicker = row.ticker === 'ESU' ? 'ESM' : row.ticker === 'NQU' ? 'NQM' : row.ticker;
+      const { close, high, low, open } = await fetchWeeklyClose(engine, candleTicker, completedWeek);
+
+      const up = Number(row.up);
+      const down = Number(row.down);
+      const em = Number(row.em);
+      const ref = Number(row.ref_close);
+      // Prefer explicit up/down band; fall back to ref +/- em.
+      const hi = Number.isFinite(up) ? up : (Number.isFinite(ref) ? ref + em : null);
+      const lo = Number.isFinite(down) ? down : (Number.isFinite(ref) ? ref - em : null);
+      if (hi == null || lo == null) { console.log(`[em-eval] ${row.ticker}: no band, skip`); return; }
+
+      const result = (close >= lo && close <= hi) ? 'hit' : 'miss';
+      if (result === 'hit') hits += 1; else misses += 1;
+
+      await ifetch(`${base}/api/em-tracker`, {
+        method: 'POST',
+        headers: Object.assign(
+          { 'Content-Type': 'application/json' },
+          process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+        ),
+        body: JSON.stringify({
+          ticker: row.ticker, week_label: row.week_label, week_start: completedWeek,
+          em, ref_close: Number.isFinite(ref) ? ref : null,
+          up: Number.isFinite(up) ? up : null, down: Number.isFinite(down) ? down : null,
+          o: open, h: high, l: low, c: close,
+          result, result_source: 'auto',
+        }),
+      });
+      console.log(`[em-eval] ${row.ticker} ${row.week_label}: close ${close} band [${lo}, ${hi}] -> ${result}`);
+    }));
+    if (i + 4 < pending.length) await new Promise((r) => setTimeout(r, 250));
+  }
+
+  console.log(`[em-eval] done: ${hits} hit / ${misses} miss`);
+  return { evaluated: hits + misses, hits, misses };
+}
+
+/**
+ * Seed em_tracker rows for the UPCOMING week from freshly computed levels, so
+ * next Saturday's evaluator has the band on record. Call right after the levels
+ * publish. `payloads` is the array computeAllLevels() returns.
+ */
+async function seedUpcomingWeek(base, payloads) {
+  const upcomingWeek = getWeekKey(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)); // the coming Mon's week
+  const weekLabel = labelForDate(upcomingWeek);
+  const rows = payloads
+    .filter((p) => p.em != null)
+    .map((p) => ({
+      ticker: p.ticker,
+      week_label: weekLabel,
+      week_start: upcomingWeek,
+      em: Number(String(p.em).replace(/,/g, '')),
+      ref_close: p.close != null ? Number(String(p.close).replace(/,/g, '')) : null,
+      up: p.up != null ? Number(String(p.up).replace(/,/g, '')) : null,
+      down: p.down != null ? Number(String(p.down).replace(/,/g, '')) : null,
+      result_source: 'seed',
+    }))
+    .filter((r) => Number.isFinite(r.em) && r.em > 0);
+  if (!rows.length) return 0;
+  try {
+    const r = await ifetch(`${base}/api/em-tracker`, {
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+      ),
+      body: JSON.stringify({ rows }),
+    });
+    if (r.ok) { console.log(`[em-eval] seeded ${rows.length} rows for upcoming week ${upcomingWeek}`); return rows.length; }
+  } catch (e) {
+    console.log('[em-eval] seed failed:', e.message);
+  }
+  return 0;
+}
+
+/**
+ * Fetch a deep weekly-candle history for one ticker (default ~3 years) and
+ * return a map of weekKey -> { open, high, low, close } so historical weeks can
+ * be looked up by their Monday ISO date.
+ */
+async function fetchWeeklyOhlcMap(engine, ticker, daysBack = 1100, count = 170) {
+  const start = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
+  const url = `${engine.base}/api/dxlink/candles?symbol=${encodeURIComponent(zoneSymbol(ticker))}&start=${start}&count=${count}`;
+  const r = await ifetch(url);
+  if (!r.ok) throw new Error(`History failed for ${ticker}`);
+  const bars = parseHistoryItems(JSON.parse(await r.text()));
+  const map = {};
+  for (const b of bars) map[getWeekKey(new Date(b.time))] = { open: b.open, high: b.high, low: b.low, close: b.close };
+  return map;
+}
+
+/**
+ * Historical backfill: for a set of { ticker, week_start, up, down } bands,
+ * fetch each ticker's realized weekly OHLC for that week and compute:
+ *   breach = high > up OR low < down   (intraweek poke outside the band)
+ *   result = down <= close <= up ? 'hit' : 'miss'   (close-based win/loss)
+ * POSTs the filled rows to /api/em-tracker. `bands` groups by ticker internally
+ * so each ticker's deep history is fetched once.
+ */
+async function evaluateHistoricalWeeks(base, bands) {
+  const engine = makeEngine(base);
+  const byTicker = {};
+  for (const b of bands) {
+    const candleTicker = b.ticker === 'ESU' ? 'ESM' : b.ticker === 'NQU' ? 'NQM' : b.ticker;
+    (byTicker[candleTicker] = byTicker[candleTicker] || []).push(b);
+  }
+
+  let hits = 0, misses = 0, breaches = 0, missingOhlc = 0, saved = 0;
+  for (const [candleTicker, list] of Object.entries(byTicker)) {
+    let ohlcMap = {};
+    try { ohlcMap = await fetchWeeklyOhlcMap(engine, candleTicker); }
+    catch (e) { console.log(`[em-hist] ${candleTicker} history failed: ${e.message}`); }
+
+    for (const b of list) {
+      const up = Number(b.up), down = Number(b.down);
+      const em = Number.isFinite(b.em) ? Number(b.em) : (Number.isFinite(up) && Number.isFinite(down) ? (up - down) / 2 : null);
+      const ref = Number.isFinite(b.ref_close) ? Number(b.ref_close) : (Number.isFinite(up) && Number.isFinite(down) ? (up + down) / 2 : null);
+      const ohlc = ohlcMap[b.week_start];
+
+      const row = {
+        ticker: b.ticker, week_label: b.week_label, week_start: b.week_start,
+        em: em != null ? em : 0,
+        ref_close: ref, up, down,
+        result_source: 'import',
+      };
+
+      if (ohlc) {
+        const breach = (ohlc.high > up || ohlc.low < down) ? 1 : 0;
+        const result = (ohlc.close >= down && ohlc.close <= up) ? 'hit' : 'miss';
+        Object.assign(row, { o: ohlc.open, h: ohlc.high, l: ohlc.low, c: ohlc.close, breach, result });
+        if (result === 'hit') hits++; else misses++;
+        if (breach) breaches++;
+      } else {
+        missingOhlc++;
+      }
+
+      try {
+        const resp = await ifetch(`${base}/api/em-tracker`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(row),
+        });
+        if (resp.ok) saved++;
+      } catch (e) { console.log(`[em-hist] save ${b.ticker} ${b.week_start} failed: ${e.message}`); }
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  console.log(`[em-hist] saved ${saved} rows — ${hits} win / ${misses} loss, ${breaches} breaches, ${missingOhlc} no-OHLC`);
+  return { saved, hits, misses, breaches, missingOhlc };
+}
+
+module.exports = {
+  computeAllLevels, evaluateCompletedWeek, evaluateHistoricalWeeks, seedUpcomingWeek, SYMBOLS,
+};

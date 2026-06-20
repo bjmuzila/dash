@@ -255,6 +255,9 @@ async function main() {
     // In-process weekly publisher for the customer /em page: computes EM + zones
     // server-side and POSTs each ticker to /api/levels (Mon ~09:35 ET + startup).
     require('./levels-auto-publish').startLevelsAutoPublish(PORT);
+    // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
+    // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
+    require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
     // Optional: seed the Footprint page from a transcribed ES T&S file when the
     // live ES feed is quiet (after hours). Enabled with ES_SEED=1.
     startEsSeed({ log: console });

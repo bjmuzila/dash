@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import EmTrackerAdmin from "@/components/dashboard/EmTrackerAdmin";
 
 async function getHtml2Canvas() {
   const mod = await import("html2canvas" as never);
@@ -8,7 +9,7 @@ async function getHtml2Canvas() {
   return (mod as any).default ?? mod;
 }
 
-type DashboardView = "estimated" | "zones";
+type DashboardView = "estimated" | "zones" | "tracker";
 
 interface EMRow {
   ticker: string;
@@ -1049,8 +1050,8 @@ export default function EstimatedMoves() {
 
   const currentSymbols = SYMBOLS;
   const filteredSnapshots = snapshots.filter((snap) => (snap.view ?? "estimated") === activeView);
-  const viewTitle = activeView === "estimated" ? "Estimated Moves" : "No Short No Long Zones";
-  const subTitle = activeView === "estimated" ? "Weekly" : "Last Week OHLC";
+  const viewTitle = activeView === "estimated" ? "Estimated Moves" : activeView === "tracker" ? "EM Tracker" : "No Short No Long Zones";
+  const subTitle = activeView === "estimated" ? "Weekly" : activeView === "tracker" ? "Win / Loss Record" : "Last Week OHLC";
 
   return (
     <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden", background: "#080c14", height: "100%" }}>
@@ -1060,6 +1061,7 @@ export default function EstimatedMoves() {
             {[
               { id: "estimated" as const, label: "Estimated Moves" },
               { id: "zones" as const, label: "No Short No Long Zones" },
+              { id: "tracker" as const, label: "EM Tracker" },
             ].map((tab) => {
               const active = activeView === tab.id;
               return (
@@ -1089,7 +1091,7 @@ export default function EstimatedMoves() {
           <span style={{ fontSize: 15, fontWeight: 700, color: "#00e5ff", letterSpacing: ".15em", textTransform: "uppercase" }}>{viewTitle}</span>
           <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
           <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase" }}>
-            {activeView === "estimated" ? targetDateLabel : "Last Completed Week"}
+            {activeView === "estimated" ? targetDateLabel : activeView === "tracker" ? "" : "Last Completed Week"}
           </span>
 
           {activeView === "estimated" && (
@@ -1126,6 +1128,11 @@ export default function EstimatedMoves() {
         </div>
       </div>
 
+      {activeView === "tracker" ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 18 }}>
+          <EmTrackerAdmin />
+        </div>
+      ) : (
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         <div style={{ width: 230, minWidth: 230, flexShrink: 0, background: "#04070c", borderRight: "1px solid #0d1825", boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "12px 14px", borderBottom: "1px solid #0d1825", flexShrink: 0 }}>
@@ -1269,6 +1276,7 @@ export default function EstimatedMoves() {
           )}
         </div>
       </div>
+      )}
 
       <div ref={shotRef} style={{ position: "fixed", top: 0, left: "-9999px", background: "#080c14", padding: "0 0 12px 0", width: 420, fontFamily: "Arial, sans-serif" }}>
         {activeView === "estimated" ? (

@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-06-20 (session 22) — v2 dashboard audit, two bug fixes, build verified, legacy removed
+
+Box-by-box static audit of every page linked in the v2 sidebar. Found and fixed two real bugs, verified a clean production build (`✓ Compiled successfully`, 78/78 pages, no TS/ESLint errors), and removed the deprecated Legacy section.
+
+### Fixed
+- **`app/economic-calendar/page.tsx`** — `load()` never fetched; the event list was permanently empty ("No events match"). Wired it to `GET /api/calendar`, added a separate non-blocking warning banner (so a stale-feed fallback no longer hides loaded events).
+- **`app/changelog/page.tsx`** — `readFile(CHANGELOG.md)` had no error handling and would 500 if the file were ever missing/gitignored. Wrapped in try/catch with fallback text.
+
+### Removed
+- **`app/legacy/`** (index page + `view/[page]/route.ts`) — deprecated vanilla-site archive, slated for removal. Deleted, plus its nav entries in `components/shared/Sidebar.tsx`, `components/shared/TopBar.tsx`, and `app/dev/owner/page.tsx` (NAV_GROUPS copy).
+
+### Notes
+- Build verified clean locally this session (`next build`, Next 15.5.19). Render deploy path (`npm ci && npm run build`) should pass; confirm `CHANGELOG.md`, `app/api/econ-calendar/events.json`, and `package-lock.json` are committed.
+- Audit report written to `AUDIT-v2-2026-06-20.md` (root). Minor non-blocking items logged there: `/dev/admin` is mock data, hardcoded version string on `/dev/owner`, `{cat.spent}` label on `/trading`, `/premarket` WS not wired (runs on Yahoo).
+
+## 2026-06-20 (session 21) — EM Tracker: win/loss record, Saturday auto-eval, Discord OCR backfill
+
+Built an Estimated-Move win/loss tracker keyed to the rule **close inside the EM band = win, outside = loss** (close-only). Seeded the verified 31-week history, added a Saturday 9am auto-evaluator that scores each completed week from weekly OHLC, and a Discord OCR pipeline to backfill ~2 years of weekly EM boards (91 weeks captured) with a review/confirm UI.
+
+### New
+- **`app/api/em-tracker/route.ts`** — list/summary GET (+ `week_start&status=pending`), upsert/seed POST, set-result, and DELETE with `?all=1` / `?source=` bulk reset. `computeResult` lives in `lib/em-tracker/computeResult.ts`.
+- **`app/api/em-tracker/evaluate/route.ts`** — "Evaluate Now" + manual OHLC backfill; runs the server-v2 engine via a webpack-safe runtime require (`eval("require")`, `runtime="nodejs"`).
+- **`app/api/em-tracker/commit-history/route.ts`** — commits reviewed historical bands and scores them against weekly OHLC (breach + close-inside win).
+- **`app/api/em-tracker/discord-preview/route.ts` + `history/route.ts`** — serve the OCR preview and the verified 31-week tally (`data/em-tracker-history.json`).
+- **`components/dashboard/EmTrackerAdmin.tsx`** — EM Tracker UI: per-ticker hit-rate table, per-week detail (band/close/Δedge/breach/result), add-week form, Discord review panel (roster-driven rows, red OCR flags, orange blanks, cyan auto-repaired dropped-decimals, editable ticker for futures rolls, per-week + bulk commit, reset).
+- **`scripts/import-em-from-discord.mjs`** — reads the EM channel history (no privileged intent needed), OCRs boards (tesseract.js), parses title date + ticker/up/down (last-two-numbers, EU decimal handling, ticker fuzzy-resolve), `--limit`/`--debug`, writes `data/em-discord-preview.json`.
+- **`server-v2/em-tracker-auto-eval.js`** — Saturday ~9am ET in-process evaluator (mirrors levels-auto-publish); wired in `server-with-proxy.js`.
+
+### Added
+- **`server-v2/levels-engine.js`** — `evaluateCompletedWeek`, `evaluateHistoricalWeeks`, `seedUpcomingWeek`, `fetchWeeklyOhlcMap`.
+- **`lib/db.ts`** — `em_tracker` table (keyed `UNIQUE(ticker, week_start)` so multi-year weeks don't collide), `breach` column + migration, and helpers (upsert/summary/pending/clear/ohlc).
+- **`server-v2/levels-auto-publish.js`** — seeds the upcoming week's EM band after each publish.
+- **`package.json`** — added `tesseract.js`.
+
+### Notes
+- Build not run this session (sandbox unavailable) — run `npm run build` before deploy.
+- 91 Discord weeks captured and pending review/commit in the EM Tracker tab.
+
 ## 2026-06-19 (session 20) — Unify MVC across chart, top-bar, and snapshot
 
 Fixed the long-standing mismatch where the purple top-bar MVC (e.g. 7,550) disagreed with the on-chart MVC label (e.g. 7,500). Root cause: three independent computations using different metrics/data sources. Settled on a single source of truth — **largest |netGEX| only** — so the chart label, purple top-bar value, and Save/Now snapshot all agree.

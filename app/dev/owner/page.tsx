@@ -88,7 +88,6 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
     id: "dev", label: "Dev", emoji: "🛠️",
     items: [
       { label: "Owner", href: "/dev/owner" },
-      { label: "Legacy", href: "/legacy" },
       { label: "Dev", href: "/dev" },
       { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
