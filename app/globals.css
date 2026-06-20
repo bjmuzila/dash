@@ -70,6 +70,13 @@ main [style*="border-radius:16px"]:hover {
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
   border-color: rgba(0, 240, 255, .35);
 }
+/* Home page: disable the auto lift — feels off on its dense data boxes. */
+main.home-no-hover [style*="border-radius: 16px"]:hover,
+main.home-no-hover [style*="border-radius:16px"]:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: inherit;
+}
 
 /* Insights page cards (.greek-card) use 8/12px radius — give them the same lift. */
 .greek-card {

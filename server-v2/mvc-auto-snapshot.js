@@ -27,12 +27,15 @@ function nowParts() {
   return { hour: Number(get('hour')), minute: Number(get('minute')), weekday: get('weekday') };
 }
 
-/** RTH = Mon–Fri, 09:30–16:00 ET. */
+/** RTH = Mon–Fri, 09:30–16:00 ET, excluding market holidays. Half-days close 13:00 ET. */
 function isRTH() {
   const { hour, minute, weekday } = nowParts();
   if (weekday === 'Sat' || weekday === 'Sun') return false;
+  const today = etDateStr();
+  if (MARKET_HOLIDAYS.has(today)) return false;
   const mins = hour * 60 + minute;
-  return mins >= 570 && mins <= 960;
+  const close = MARKET_HALF_DAYS.has(today) ? 780 : 960; // 13:00 vs 16:00 ET
+  return mins >= 570 && mins < close;
 }
 
 function etDateStr(d = new Date()) {
@@ -42,6 +45,22 @@ function etDateStr(d = new Date()) {
     .reduce((a, p) => ({ ...a, [p.type]: p.value }), {});
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
+
+// US equity-market full-day closures (NYSE/Cboe), ET date strings.
+const MARKET_HOLIDAYS = new Set([
+  // 2026
+  '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+  '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+  // 2027
+  '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31',
+  '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
+]);
+
+// Early-close days (1:00 PM ET close): day after Thanksgiving, July 3 / Christmas Eve when a trading day.
+const MARKET_HALF_DAYS = new Set([
+  '2026-11-27', '2026-12-24',
+  '2027-11-26',
+]);
 
 function highestRow(chain, field) {
   if (!chain.length) return null;
