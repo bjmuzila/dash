@@ -447,6 +447,8 @@ async function probeRest({ ticker, expiry, type, strike }) {
   // Contract-level market data for the OCC symbol. The by-type item carries
   // quote, trade, summary AND greek fields — group them into the four feed
   // types the dev page renders, and pass the raw item through so nothing hides.
+  // NOTE: TastyTrade REST by-type prices SPX/NDX index options under
+  // equity-option[] (confirmed working); index-option[] returned nothing.
   const qs = `equity-option[]=${encodeURIComponent(best.occSymbol)}`;
   const json = await ttGet(`/market-data/by-type?${qs}`);
   const it = json?.data?.items?.[0] || null;
@@ -572,22 +574,37 @@ async function fetchUnderlyingSpot(ticker) {
  * Fetch market-data (greeks + OI + volume + mark) for a list of OCC option
  * symbols, batched. Keyed by normalized OCC symbol.
  * @param {string[]} occSymbols
+ * @param {'equity-option'|'index-option'} [optionParam] by-type param name.
+ *   Index options (SPX/NDX/RUT/...) MUST be requested under `index-option[]`;
+ *   `equity-option[]` returns NO items for them, which silently zeroed out every
+ *   NDX/NDXP strike (and NQU, which proxies to the NDX chain) → blank EM rows.
  * @returns {Promise<Map<string, object>>}
  */
-async function fetchOptionMarketData(occSymbols) {
+async function fetchOptionMarketData(occSymbols, optionParam = 'equity-option') {
   const out = new Map();
   const n = firstFiniteNumber;
   const symbols = occSymbols.filter(Boolean);
   const BATCH = 100;
   for (let i = 0; i < symbols.length; i += BATCH) {
     const chunk = symbols.slice(i, i + BATCH);
-    const qs = chunk.map((s) => `equity-option[]=${encodeURIComponent(s)}`).join('&');
+    const qs = chunk.map((s) => `${optionParam}[]=${encodeURIComponent(s)}`).join('&');
     let json;
     try {
       json = await ttGet(`/market-data/by-type?${qs}`);
     } catch (err) {
       console.warn('[CHAIN-MD] batch failed:', String(err.message).slice(0, 160));
       continue;
+    }
+    // DEBUG: dump the raw first item ONCE PER PARAM (so we see both equity-option
+    // and index-option responses). Also report how many items came back vs asked.
+    // Remove once the mark/IV field mapping is confirmed.
+    fetchOptionMarketData._dumped = fetchOptionMarketData._dumped || new Set();
+    if (!fetchOptionMarketData._dumped.has(optionParam)) {
+      fetchOptionMarketData._dumped.add(optionParam);
+      const items = json?.data?.items || [];
+      console.log('[CHAIN-MD DEBUG] param=%s asked=%d got=%d rawItem0=%s',
+        optionParam, chunk.length, items.length,
+        items.length ? JSON.stringify(items[0]) : '(none)');
     }
     for (const it of json?.data?.items || []) {
       if (!it.symbol) continue;
@@ -637,7 +654,9 @@ async function fetchChainFull(ticker, expiration = '') {
   const expSet = new Set(targetExps);
 
   const scoped = contracts.filter((c) => expSet.has(c.expiration));
-  const mdMap = await fetchOptionMarketData(scoped.map((c) => c.occSymbol));
+  // TastyTrade REST by-type prices SPX/NDX index options under equity-option[]
+  // (confirmed working); index-option[] returned nothing and broke SPX.
+  const mdMap = await fetchOptionMarketData(scoped.map((c) => c.occSymbol), 'equity-option');
   const underlyingPrice = await fetchUnderlyingSpot(ticker);
 
   // Group into nested expGroups -> strikes -> { call, put }.
@@ -678,6 +697,38 @@ async function fetchChainFull(ticker, expiration = '') {
     .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
 
   return { items, underlyingPrice, rootSymbol: root, symbol: root };
+}
+
+/**
+ * Per-contract marks for a list of OCC option symbols — backs
+ * /api/em/option-marks (the EstimatedMoves IV=0 straddle fallback). Returns the
+ * legacy shape { items: [{ symbol, iv, bid, ask, mark, last, ... }] } the client
+ * Object.assigns onto its option rows. TastyTrade REST by-type prices both equity
+ * AND index (SPX/NDX) options under equity-option[].
+ *
+ * @param {string[]} symbols OCC option symbols (e.g. "SPXW  260624C07380000")
+ * @returns {Promise<{items:Array}>}
+ */
+async function fetchOptionMarks(symbols) {
+  const n = firstFiniteNumber;
+  const clean = (symbols || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!clean.length) return { items: [] };
+
+  const map = await fetchOptionMarketData(clean, 'equity-option'); // keyed by normalizeOcc
+  const items = [];
+  for (const occ of clean) {
+    const md = map.get(normalizeOcc(occ));
+    if (!md) continue;
+    items.push({
+      symbol: occ,
+      iv: n(md.iv),
+      bid: n(md.bid),
+      ask: n(md.ask),
+      mark: n(md.mark),
+      last: n(md.mark) || (md.bid > 0 && md.ask > 0 ? (md.bid + md.ask) / 2 : 0),
+    });
+  }
+  return { items };
 }
 
 /**
@@ -1860,4 +1911,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };

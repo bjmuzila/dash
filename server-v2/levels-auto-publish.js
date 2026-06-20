@@ -15,7 +15,16 @@
  *   require('./levels-auto-publish').startLevelsAutoPublish(PORT);
  */
 
-const { computeAllLevels, seedUpcomingWeek } = require('./levels-engine');
+const { computeAllLevels, seedUpcomingWeek, SYMBOLS } = require('./levels-engine');
+const { DISPLAY_LABEL } = (() => {
+  // SYMBOLS are raw (ESM/NQM); the published rows use display labels (ESU/NQU).
+  // Mirror the engine's mapping so the "missing EM" diff compares like-for-like.
+  return { DISPLAY_LABEL: { ESM: 'ESU', NQM: 'NQU' } };
+})();
+
+// Last publish run summary, surfaced to the owner page via /proxy/levels-status.
+let lastRun = null; // { at, reason, ms, emOk, emTotal, posted, failedEm:[], error }
+let publishing = false; // true while a run is in flight (so the UI shows progress)
 
 const PUBLISH_HOUR = 9;   // ET
 const PUBLISH_MIN = 0;    // ET
@@ -49,41 +58,69 @@ function weekKeyET(d = new Date()) {
 
 async function publishOnce(base, reason) {
   const t0 = Date.now();
+  publishing = true;
   console.log(`[levels-pub] publishing (${reason})…`);
-  let payloads;
+  // Expected display tickers (so the "missing EM" diff matches the published rows).
+  const expected = SYMBOLS.map((s) => DISPLAY_LABEL[s] || s);
+  const emTotal = expected.length;
   try {
-    payloads = await computeAllLevels(base);
-  } catch (e) {
-    console.log(`[levels-pub] compute failed — ${e.message}`);
-    return false;
-  }
-  if (!payloads.length) { console.log('[levels-pub] nothing computed — skip'); return false; }
-
-  let ok = 0;
-  for (const body of payloads) {
+    let payloads;
     try {
-      const r = await fetch(`${base}/api/levels`, {
-        method: 'POST',
-        headers: Object.assign(
-          { 'Content-Type': 'application/json' },
-          process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
-        ),
-        body: JSON.stringify(body),
-      });
-      if (r.ok) ok += 1;
-      else console.log(`[levels-pub] POST ${body.ticker} ${r.status}`);
+      payloads = await computeAllLevels(base);
     } catch (e) {
-      console.log(`[levels-pub] POST ${body.ticker} failed — ${e.message}`);
+      console.log(`[levels-pub] compute failed — ${e.message}`);
+      lastRun = { at: new Date().toISOString(), reason, ms: Date.now() - t0, emOk: 0, emTotal, posted: 0, failedEm: expected, error: e.message };
+      return { ok: false, ...lastRun };
     }
+    if (!payloads.length) {
+      console.log('[levels-pub] nothing computed — skip');
+      lastRun = { at: new Date().toISOString(), reason, ms: Date.now() - t0, emOk: 0, emTotal, posted: 0, failedEm: expected, error: 'nothing computed' };
+      return { ok: false, ...lastRun };
+    }
+
+    let posted = 0;
+    for (const body of payloads) {
+      try {
+        const r = await fetch(`${base}/api/levels`, {
+          method: 'POST',
+          headers: Object.assign(
+            { 'Content-Type': 'application/json' },
+            process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+          ),
+          body: JSON.stringify(body),
+        });
+        if (r.ok) posted += 1;
+        else console.log(`[levels-pub] POST ${body.ticker} ${r.status}`);
+      } catch (e) {
+        console.log(`[levels-pub] POST ${body.ticker} failed — ${e.message}`);
+      }
+    }
+
+    // EM coverage: a payload "has EM" only if its em field is non-null. Zones-only
+    // rows (straddle didn't price) don't count. failedEm = expected with no EM.
+    const withEm = new Set(payloads.filter((p) => p.em != null && p.em !== '').map((p) => p.ticker));
+    const failedEm = expected.filter((t) => !withEm.has(t));
+    const emOk = emTotal - failedEm.length;
+
+    console.log(`[levels-pub] published ${posted}/${payloads.length} rows — EM ${emOk}/${emTotal}` +
+      (failedEm.length ? ` — no EM: ${failedEm.join(', ')}` : '') +
+      ` in ${Math.round((Date.now() - t0) / 1000)}s`);
+
+    // Seed em_tracker rows for the upcoming week (best-effort).
+    try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); }
+
+    lastRun = {
+      at: new Date().toISOString(), reason, ms: Date.now() - t0,
+      emOk, emTotal, posted, failedEm, error: null,
+    };
+    return { ok: posted > 0, ...lastRun };
+  } finally {
+    publishing = false;
   }
-  console.log(`[levels-pub] published ${ok}/${payloads.length} tickers in ${Math.round((Date.now() - t0) / 1000)}s`);
-
-  // Seed em_tracker rows for the upcoming week so next Saturday's evaluator has
-  // the EM band on record (best-effort; never blocks the publish result).
-  try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); }
-
-  return ok > 0;
 }
+
+function getLastRun() { return lastRun; }
+function isPublishing() { return publishing; }
 
 function startLevelsAutoPublish(port) {
   const base = `http://localhost:${port}`;
@@ -91,11 +128,10 @@ function startLevelsAutoPublish(port) {
 
   console.log(`[levels-pub] enabled — weekly, Sat ~${PUBLISH_HOUR}:${String(PUBLISH_MIN).padStart(2, '0')} ET`);
 
-  // One-time startup publish so a fresh deploy isn't empty until next Saturday.
-  // ~30s after boot to let the feed warm up.
-  setTimeout(() => {
-    publishOnce(base, 'startup').then((ok) => { if (ok) lastPublishedWeek = weekKeyET(); });
-  }, 30_000).unref();
+  // NO startup publish: levels are computed once a week (Saturday) and must hold
+  // unchanged through Friday's close. Republishing on every boot would overwrite
+  // the weekend snapshot with mid-week numbers on any restart. To (re)publish
+  // manually, call publishOnce() / hit the manual trigger.
 
   // Poll: fire once we're at/after Saturday's publish time and haven't yet
   // published for the upcoming trading week. Saturday is the target; Sunday is
@@ -110,7 +146,7 @@ function startLevelsAutoPublish(port) {
     const isSatAfterTarget = dow === 6 && mins >= target;
     const isSundayCatchup = dow === 0;
     if (isSatAfterTarget || isSundayCatchup) {
-      publishOnce(base, 'weekly').then((ok) => { if (ok) lastPublishedWeek = wk; });
+      publishOnce(base, 'weekly').then((res) => { if (res && res.ok) lastPublishedWeek = wk; });
     }
   };
   const timer = setInterval(tick, CHECK_MS);
@@ -118,4 +154,4 @@ function startLevelsAutoPublish(port) {
   return () => clearInterval(timer);
 }
 
-module.exports = { startLevelsAutoPublish, publishOnce };
+module.exports = { startLevelsAutoPublish, publishOnce, getLastRun, isPublishing };

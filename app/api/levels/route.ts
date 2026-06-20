@@ -24,9 +24,14 @@ async function ensureTable(pool: Awaited<ReturnType<typeof getDb>>) {
       sell_far TEXT,
       pivot TEXT,
       exp_label TEXT,
-      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      em_updated_at TIMESTAMPTZ
     )
   `);
+  // Back-fill the column for tables created before em_updated_at existed.
+  await pool.query(
+    `ALTER TABLE ticker_levels ADD COLUMN IF NOT EXISTS em_updated_at TIMESTAMPTZ`
+  );
   _tableEnsured = true;
 }
 
@@ -75,8 +80,9 @@ export async function POST(req: NextRequest) {
 
     await pool.query(
       `INSERT INTO ticker_levels
-        (ticker, label, close, em, up, down, buy_near, buy_far, sell_near, sell_far, pivot, exp_label)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        (ticker, label, close, em, up, down, buy_near, buy_far, sell_near, sell_far, pivot, exp_label, em_updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+               CASE WHEN $4::text IS NOT NULL THEN CURRENT_TIMESTAMP ELSE NULL END)
        ON CONFLICT(ticker) DO UPDATE SET
          label     = CASE WHEN EXCLUDED.label     IS NOT NULL THEN EXCLUDED.label     ELSE ticker_levels.label     END,
          close     = CASE WHEN EXCLUDED.close     IS NOT NULL THEN EXCLUDED.close     ELSE ticker_levels.close     END,
@@ -89,7 +95,11 @@ export async function POST(req: NextRequest) {
          sell_far  = CASE WHEN EXCLUDED.sell_far  IS NOT NULL THEN EXCLUDED.sell_far  ELSE ticker_levels.sell_far  END,
          pivot     = CASE WHEN EXCLUDED.pivot     IS NOT NULL THEN EXCLUDED.pivot     ELSE ticker_levels.pivot     END,
          exp_label = CASE WHEN EXCLUDED.exp_label IS NOT NULL THEN EXCLUDED.exp_label ELSE ticker_levels.exp_label END,
-         updated_at = CURRENT_TIMESTAMP`,
+         updated_at = CURRENT_TIMESTAMP,
+         -- Only advance em_updated_at when a FRESH em is supplied. A zones-only
+         -- push (em NULL because the straddle failed to price) leaves it alone,
+         -- so the owner page can detect an em served from a stale prior run.
+         em_updated_at = CASE WHEN EXCLUDED.em IS NOT NULL THEN CURRENT_TIMESTAMP ELSE ticker_levels.em_updated_at END`,
       [
         ticker,
         body.label ?? null,

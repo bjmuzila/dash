@@ -150,6 +150,24 @@ function levelsAreStale(iso: string | null): boolean {
   return Date.now() - d.getTime() > 8 * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * A ticker's EM is STALE if the last publish touched its row (updated_at) but did
+ * NOT refresh the em value (em_updated_at lags it, or is null). That's exactly the
+ * case where the straddle failed to price this week and a zones-only push left the
+ * old em in place — the /em page then shows a value that's actually carried over.
+ * Tolerance: em_updated_at within 10 min of updated_at counts as fresh.
+ */
+function emIsStale(updatedAt: string | null, emUpdatedAt: string | null): boolean {
+  if (!emUpdatedAt) return true;
+  const em = new Date(emUpdatedAt).getTime();
+  if (isNaN(em)) return true;
+  // Older than 8 days = definitely stale regardless of the row stamp.
+  if (Date.now() - em > 8 * 24 * 60 * 60 * 1000) return true;
+  const up = updatedAt ? new Date(updatedAt).getTime() : NaN;
+  if (!isNaN(up) && up - em > 10 * 60 * 1000) return true;
+  return false;
+}
+
 /** Classify a raw WS message string as tasty or dxlink */
 function classifyWsMsg(raw: string): "tasty" | "dxlink" | null {
   try {
@@ -427,10 +445,28 @@ export default function OwnerDashboard() {
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [uptimeTick, setUptimeTick] = useState(0);
-  // Levels auto-publish status (the /em customer feed).
-  const [levels, setLevels] = useState<{ count: number; lastRun: string | null; tickers: string[] }>({
-    count: 0, lastRun: null, tickers: [],
-  });
+  // Levels auto-publish status (the /em customer feed). `tickers` now carries the
+  // per-row em freshness so the chips can flag a STALE em (served from a prior
+  // run because this week's straddle failed to price).
+  const [levels, setLevels] = useState<{
+    count: number;
+    lastRun: string | null;
+    tickers: Array<{ ticker: string; stale: boolean }>;
+  }>({ count: 0, lastRun: null, tickers: [] });
+
+  // Manual publish run state + last-run summary from /proxy/levels-status.
+  const [pubRun, setPubRun] = useState<{
+    running: boolean;
+    at: string | null;
+    reason: string | null;
+    ms: number | null;
+    emOk: number | null;
+    emTotal: number | null;
+    posted: number | null;
+    failedEm: string[];
+    error: string | null;
+  }>({ running: false, at: null, reason: null, ms: null, emOk: null, emTotal: null, posted: null, failedEm: [], error: null });
+  const [publishing, setPublishing] = useState(false);
 
   // Log state — two buckets
   const [tastyLogs, setTastyLogs] = useState<LogLine[]>([]);
@@ -498,7 +534,7 @@ export default function OwnerDashboard() {
       try {
         const lr = await fetch("/api/levels", { cache: "no-store" });
         if (lr.ok) {
-          const all = (await lr.json()) as Array<{ ticker?: string; updated_at?: string }>;
+          const all = (await lr.json()) as Array<{ ticker?: string; updated_at?: string; em_updated_at?: string }>;
           if (Array.isArray(all) && all.length) {
             const lastRun = all
               .map((r) => r.updated_at)
@@ -508,11 +544,36 @@ export default function OwnerDashboard() {
             setLevels({
               count: all.length,
               lastRun: lastRun as string | null,
-              tickers: all.map((r) => String(r.ticker ?? "")).filter(Boolean),
+              tickers: all
+                .filter((r) => r.ticker)
+                .map((r) => ({
+                  ticker: String(r.ticker),
+                  stale: emIsStale(r.updated_at ?? null, r.em_updated_at ?? null),
+                })),
             });
           } else {
             setLevels({ count: 0, lastRun: null, tickers: [] });
           }
+        }
+      } catch { /* non-fatal */ }
+
+      // Manual-publish run summary (last run + whether one is in progress).
+      try {
+        const ps = await fetch("/proxy/levels-status", { cache: "no-store" });
+        if (ps.ok) {
+          const j = await ps.json();
+          const lr = j?.lastRun ?? null;
+          setPubRun({
+            running: !!j?.running,
+            at: lr?.at ?? null,
+            reason: lr?.reason ?? null,
+            ms: typeof lr?.ms === "number" ? lr.ms : null,
+            emOk: typeof lr?.emOk === "number" ? lr.emOk : null,
+            emTotal: typeof lr?.emTotal === "number" ? lr.emTotal : null,
+            posted: typeof lr?.posted === "number" ? lr.posted : null,
+            failedEm: Array.isArray(lr?.failedEm) ? lr.failedEm : [],
+            error: lr?.error ?? null,
+          });
         }
       } catch { /* non-fatal */ }
 
@@ -521,6 +582,45 @@ export default function OwnerDashboard() {
       setLoading(false);
     }
   }, []);
+
+  // Kick off a manual publish, then poll status until it finishes.
+  const triggerPublish = useCallback(async () => {
+    if (publishing) return;
+    // Double-confirm: publishing overwrites the current weekly snapshot for the
+    // whole roster, so require two explicit OKs before firing.
+    if (!window.confirm("Publish weekly EM levels for the ENTIRE roster now?\n\nThis overwrites this week's snapshot and takes a few minutes.")) return;
+    if (!window.confirm("Are you sure? This will replace the current published levels on the customer /em page.")) return;
+    setPublishing(true);
+    try {
+      await fetch("/proxy/levels-publish", { method: "POST" });
+    } catch { /* the poll below still reflects state */ }
+    // Poll /proxy/levels-status until running clears (or ~10 min safety cap).
+    const startedAt = Date.now();
+    const poll = async (): Promise<void> => {
+      try {
+        const ps = await fetch("/proxy/levels-status", { cache: "no-store" });
+        if (ps.ok) {
+          const j = await ps.json();
+          const lr = j?.lastRun ?? null;
+          setPubRun({
+            running: !!j?.running,
+            at: lr?.at ?? null,
+            reason: lr?.reason ?? null,
+            ms: typeof lr?.ms === "number" ? lr.ms : null,
+            emOk: typeof lr?.emOk === "number" ? lr.emOk : null,
+            emTotal: typeof lr?.emTotal === "number" ? lr.emTotal : null,
+            posted: typeof lr?.posted === "number" ? lr.posted : null,
+            failedEm: Array.isArray(lr?.failedEm) ? lr.failedEm : [],
+            error: lr?.error ?? null,
+          });
+          if (!j?.running) { setPublishing(false); void refresh(); return; }
+        }
+      } catch { /* keep polling */ }
+      if (Date.now() - startedAt > 10 * 60 * 1000) { setPublishing(false); return; }
+      setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 2000);
+  }, [publishing, refresh]);
 
   useEffect(() => {
     void refresh();
@@ -731,16 +831,86 @@ export default function OwnerDashboard() {
                 <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "monospace" }}>Sat ~09:00 ET</span>
               </div>
-              <a href="/database" style={{ ...homeSecondaryButtonStyle, padding: "6px 14px", borderRadius: 8, textDecoration: "none", fontSize: 11, marginLeft: "auto" }}>
+              <button
+                onClick={triggerPublish}
+                disabled={publishing || pubRun.running}
+                title="Compute & publish weekly EM levels for the whole roster now (takes a few minutes for ~370 tickers). Overwrites the current weekly snapshot."
+                style={{
+                  ...homeButtonStyle,
+                  padding: "6px 16px",
+                  borderRadius: 8,
+                  fontSize: 11,
+                  marginLeft: "auto",
+                  opacity: (publishing || pubRun.running) ? 0.6 : 1,
+                  cursor: (publishing || pubRun.running) ? "not-allowed" : "pointer",
+                }}
+              >
+                {(publishing || pubRun.running) ? "Publishing…" : "Publish Now"}
+              </button>
+              <a href="/database" style={{ ...homeSecondaryButtonStyle, padding: "6px 14px", borderRadius: 8, textDecoration: "none", fontSize: 11 }}>
                 View table →
               </a>
             </div>
-            {levels.tickers.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {levels.tickers.map((t) => (
-                  <span key={t} style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.cyan, background: "rgba(0,229,255,0.08)", border: `1px solid ${HOME_THEME.border}`, padding: "3px 8px", borderRadius: 6, fontFamily: "monospace" }}>{t}</span>
-                ))}
+
+            {/* Last manual/weekly run result */}
+            {(pubRun.running || pubRun.at) && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 11, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+                {pubRun.running ? (
+                  <span style={{ fontWeight: 800, color: HOME_THEME.cyan }}>● Running… computing levels (this can take a few minutes)</span>
+                ) : (
+                  <>
+                    <span style={{ fontWeight: 800, color: pubRun.error ? HOME_THEME.red : HOME_THEME.green }}>
+                      {pubRun.error ? "✗ Failed" : "✓ Last run OK"}
+                    </span>
+                    {pubRun.emTotal != null && (
+                      <span style={{ color: "#fff", fontFamily: "monospace" }}>
+                        EM <b style={{ color: (pubRun.failedEm.length ? HOME_THEME.orange : HOME_THEME.green) }}>{pubRun.emOk}/{pubRun.emTotal}</b>
+                        {pubRun.posted != null ? <> · {pubRun.posted} rows</> : null}
+                      </span>
+                    )}
+                    {pubRun.ms != null && <span style={{ color: HOME_THEME.muted }}>in {Math.round(pubRun.ms / 1000)}s</span>}
+                    {pubRun.at && <span style={{ color: HOME_THEME.muted }}>{fmtLastRun(pubRun.at)}</span>}
+                    {pubRun.reason && <span style={{ color: HOME_THEME.muted }}>({pubRun.reason})</span>}
+                    {pubRun.error && <span style={{ color: HOME_THEME.red }}>{pubRun.error}</span>}
+                  </>
+                )}
               </div>
+            )}
+            {!pubRun.running && pubRun.failedEm.length > 0 && (
+              <div style={{ fontSize: 10, color: HOME_THEME.orange, lineHeight: 1.5 }}>
+                <b>No EM priced ({pubRun.failedEm.length}):</b> {pubRun.failedEm.join(", ")}
+                <span style={{ color: HOME_THEME.muted }}> — illiquid / no quoted weekly straddle, or after-hours.</span>
+              </div>
+            )}
+            {levels.tickers.length > 0 && (
+              <>
+                {levels.tickers.some((t) => t.stale) && (
+                  <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.orange, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.orange, display: "inline-block" }} />
+                    {levels.tickers.filter((t) => t.stale).length} ticker(s) showing a STALE EM — straddle didn’t price this run; /em is serving the prior week’s value.
+                  </div>
+                )}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  {levels.tickers.map((t) => (
+                    <span
+                      key={t.ticker}
+                      title={t.stale ? "EM is stale — carried over from a previous run (this week’s straddle failed to price)" : "EM freshly computed this run"}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
+                        background: t.stale ? "rgba(249,115,22,0.12)" : "rgba(0,229,255,0.08)",
+                        border: `1px solid ${t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
+                        padding: "3px 8px",
+                        borderRadius: 6,
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {t.ticker}{t.stale ? " ⚠" : ""}
+                    </span>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>

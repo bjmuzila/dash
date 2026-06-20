@@ -12,10 +12,8 @@
  * Used by levels-auto-publish.js to compute weekly levels with no browser.
  */
 
-const SYMBOLS = [
-  'ESM', 'NQM', 'SPY', 'QQQ', 'SPX', 'AAPL', 'AMD', 'AMZN', 'GOOGL',
-  'META', 'MSFT', 'NVDA', 'TSLA', 'COIN', 'HOOD', 'IWM', 'NDX', 'NFLX', 'SMH', 'PLTR',
-];
+// Publish roster lives in em-tickers.js (edit the list there, not here).
+const { SYMBOLS, ZONE_SYMBOLS } = require('./em-tickers');
 
 const DISPLAY_LABEL = { ESM: 'ESU', NQM: 'NQU', ESU6: 'ESU', NQM6: 'NQU' };
 const API_SYMBOL = { ESM: '/ESU26', NQM: '/NQ:XCME', SPX: '$SPX', NDX: '$NDX' };
@@ -87,6 +85,22 @@ function getCompletedWeekKey() {
 }
 
 // ── chain normalization (verbatim port) ─────────────────────────────────────
+// Broker underlying spot from the chain payload. Indices (SPX ~7500) differ from
+// Yahoo's ^GSPC (~6000); strikes are in the broker scale, so the ATM walk must
+// center on this, not the Yahoo quote, or the straddle never matches.
+function chainUnderlyingPrice(chain) {
+  const c = chain || {};
+  const d = c.data || {};
+  const v = Number(
+    d.underlyingPrice != null ? d.underlyingPrice
+    : c.underlyingPrice != null ? c.underlyingPrice
+    : d.underlying_price != null ? d.underlying_price
+    : c.underlying_price != null ? c.underlying_price
+    : 0
+  );
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 function normalizeOptions(chain) {
   const flat = [];
   const direct = Array.isArray(chain && chain.options) ? chain.options : [];
@@ -190,10 +204,16 @@ async function getJson(url) {
 
 async function fetchAllQuotes(engine) {
   if (Date.now() - engine.quoteCacheTime < 5000) return engine.quoteCache;
-  const json = await getJson(`${engine.base}/api/quotes-batch?symbols=${encodeURIComponent(QUOTE_SYMBOLS.join(','))}`);
-  const items = (json && json.data && json.data.items) || [];
+  // Chunk the quotes-batch call so a large roster (200+ tickers) doesn't blow the
+  // query-string length limit. 40 symbols/request keeps the URL well under ~2KB.
+  const CHUNK = 40;
   const map = {};
-  items.forEach((q) => { map[q.symbol] = q; });
+  for (let i = 0; i < QUOTE_SYMBOLS.length; i += CHUNK) {
+    const part = QUOTE_SYMBOLS.slice(i, i + CHUNK);
+    const json = await getJson(`${engine.base}/api/quotes-batch?symbols=${encodeURIComponent(part.join(','))}`);
+    const items = (json && json.data && json.data.items) || [];
+    items.forEach((q) => { map[q.symbol] = q; });
+  }
   // A quote row is only usable if it carries a real price. Yahoo intermittently
   // returns an all-null row for index symbols ($NDX), which must NOT clobber a
   // sibling key (NDX) that does have the price — that was the cause of NDX/NQM
@@ -304,8 +324,22 @@ function getTargetExpiration(knownExpirations, expOverride) {
 }
 
 async function estimateMove(ticker, targetExp, engine) {
-  const { close, prevClose } = await fetchQuoteDetail(ticker, engine);
-  if (!Number.isFinite(close) || close <= 0) throw new Error('No quote');
+  const isIndex = ticker === 'SPX' || ticker === 'NDX';
+  const isFutureProxy = !!FUTURE_PROXY[ticker];
+  // The Yahoo quote-batch row can be null/all-zero (for $NDX and the NQ future).
+  // Tolerate it for indices AND futures — both recover their level from the broker
+  // chain underlyingPrice below (a future falls back to a zero basis).
+  const tolerateMissingQuote = isIndex || isFutureProxy;
+  let close = 0;
+  let prevClose = 0;
+  try {
+    const detail = await fetchQuoteDetail(ticker, engine);
+    close = detail.close;
+    prevClose = detail.prevClose;
+  } catch (e) {
+    if (!tolerateMissingQuote) throw e;
+  }
+  if (!tolerateMissingQuote && (!Number.isFinite(close) || close <= 0)) throw new Error('No quote');
   if (!targetExp) throw new Error('No expiration selected');
 
   const isFuture = FUTURE_PROXY[ticker];
@@ -319,6 +353,7 @@ async function estimateMove(ticker, targetExp, engine) {
   ]);
 
   let options = normalizeOptions(chain);
+  let chainSpot = chainUnderlyingPrice(chain);
   const isPriced = (o) => (o.bid > 0 && o.ask > 0) || o.mark > 0 || Number(o.iv || 0) > 0;
   let effectiveExp = targetExp;
   let expOptions = options.filter((o) => o.expiration === effectiveExp);
@@ -327,6 +362,8 @@ async function estimateMove(ticker, targetExp, engine) {
       .then((r) => (r.ok ? r.json() : { options: [] })).catch(() => ({ options: [] }));
     const merged = normalizeOptions(unpinned);
     if (merged.length) options = merged;
+    const unpinnedSpot = chainUnderlyingPrice(unpinned);
+    if (unpinnedSpot > 0) chainSpot = unpinnedSpot;
     const pricedExps = [...new Set(options.filter(isPriced).map((o) => o.expiration))].filter(Boolean).sort();
     const allExps = [...new Set(options.map((o) => o.expiration))].filter(Boolean).sort();
     const pool = pricedExps.length ? pricedExps : allExps;
@@ -340,11 +377,30 @@ async function estimateMove(ticker, targetExp, engine) {
     if (direct) expOptions = direct;
   }
 
-  const indexQuote = isFuture ? await fetchQuoteDetail(lookupSym, engine) : null;
-  const indexClose = isFuture ? (indexQuote.prevClose > 0 ? indexQuote.prevClose : indexQuote.close) : close;
+  // Proxy index quote only as a fallback when the chain gave no broker spot; the
+  // $NDX Yahoo quote is often null and throws, so guard it.
+  let indexQuote = null;
+  if (isFuture && !(chainSpot > 0)) {
+    try { indexQuote = await fetchQuoteDetail(lookupSym, engine); } catch { indexQuote = null; }
+  }
+  // Center the ATM strike walk on the broker spot (chainSpot) when available —
+  // strikes are in that scale (SPX ~7500), not the Yahoo close (~6000).
+  const quoteClose = isFuture
+    ? (indexQuote && indexQuote.prevClose > 0 ? indexQuote.prevClose : (indexQuote ? indexQuote.close : 0))
+    : close;
+  const indexClose = chainSpot > 0 ? chainSpot : quoteClose;
+  // Recover an index's display close from the broker spot when the Yahoo quote
+  // was null, instead of throwing "Invalid price".
+  if (isIndex && (!Number.isFinite(close) || close <= 0) && chainSpot > 0) close = chainSpot;
+  if (!Number.isFinite(indexClose) || indexClose <= 0) throw new Error('No usable underlying price');
 
+  // Bound the ATM-first strike walk (see EstimatedMoves.tsx): after-hours the
+  // chain may have no IV/quote on most strikes; probing all of them serially via
+  // option-marks caused a request storm + multi-second publish. Nearest few only.
+  const MAX_STRIKE_TRIES = 8;
   const strikes = [...new Set(expOptions.map((o) => o.strike))]
-    .sort((a, b) => Math.abs(a - indexClose) - Math.abs(b - indexClose));
+    .sort((a, b) => Math.abs(a - indexClose) - Math.abs(b - indexClose))
+    .slice(0, MAX_STRIKE_TRIES);
   if (!strikes.length) throw new Error('No strikes found');
 
   let strike = null;
@@ -359,13 +415,15 @@ async function estimateMove(ticker, targetExp, engine) {
     if (avgIV > 0 && candidateDte > 0) {
       candidateEm = 0.84 * avgIV * indexClose * Math.sqrt(candidateDte / 365);
     } else {
-      if (!(c.bid > 0 && c.ask > 0) || !(p.bid > 0 && p.ask > 0)) {
-        if (c.symbol || p.symbol) {
-          const marks = await fetchOptionMarks(engine, [c.symbol, p.symbol].filter(Boolean));
-          if (marks[c.symbol]) c = Object.assign({}, c, marks[c.symbol]);
-          if (marks[p.symbol]) p = Object.assign({}, p, marks[p.symbol]);
-          avgIV = (Number((c && c.iv) || 0) + Number((p && p.iv) || 0)) / 2;
-        }
+      // Only refetch marks when the chain leg has NO usable price (no bid/ask AND
+      // no mark/last). The chain payload already carries a REST mark, so refetching
+      // on every strike fired hundreds of /api/em/option-marks calls per ticker.
+      const haveUsable = (o) => (o.bid > 0 && o.ask > 0) || Number(o.mark) > 0 || Number(o.last) > 0;
+      if ((!haveUsable(c) || !haveUsable(p)) && (c.symbol || p.symbol)) {
+        const marks = await fetchOptionMarks(engine, [c.symbol, p.symbol].filter(Boolean));
+        if (marks[c.symbol]) c = Object.assign({}, c, marks[c.symbol]);
+        if (marks[p.symbol]) p = Object.assign({}, p, marks[p.symbol]);
+        avgIV = (Number((c && c.iv) || 0) + Number((p && p.iv) || 0)) / 2;
       }
       const cMid = c ? mid(c) : 0;
       const pMid = p ? mid(p) : 0;
@@ -381,9 +439,14 @@ async function estimateMove(ticker, targetExp, engine) {
   if (!strike) throw new Error('No usable strike');
   if (!Number.isFinite(em) || em <= 0) throw new Error('EM zero');
 
-  const basis = isFuture ? close - indexClose : 0;
+  // Basis only when the future's own quote is valid; else 0 (center on proxy spot).
+  const haveFutureClose = isFuture && Number.isFinite(close) && close > 0;
+  const basis = haveFutureClose ? close - indexClose : 0;
   void prevClose;
-  return { ticker, close, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: effectiveExp, strike };
+  const displayClose = isFuture
+    ? (haveFutureClose ? close : indexClose)
+    : (chainSpot > 0 ? chainSpot : close);
+  return { ticker, close: displayClose, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: effectiveExp, strike };
 }
 
 async function fetchWeeklyHistory(engine, symbol) {
@@ -395,19 +458,45 @@ async function fetchWeeklyHistory(engine, symbol) {
   return parseHistoryItems(JSON.parse(text));
 }
 
-async function fetchNoShortNoLongZones(engine) {
+// Zones for ONE ticker from last week's weekly candle. Shared by the weekly
+// publisher and the on-demand /em-zones lookup so the math never drifts.
+async function computeZonesForTicker(engine, ticker) {
   const targetWeek = getCompletedWeekKey();
-  // Every symbol on the Estimated Moves page, each via its dxLink weekly symbol.
-  const configs = SYMBOLS.map((ticker) => ({ ticker, historySymbol: zoneSymbol(ticker) }));
+  const bars = await fetchWeeklyHistory(engine, zoneSymbol(ticker));
+  const exact = bars.find((i) => getWeekKey(new Date(i.time)) === targetWeek);
+  const candidates = bars.filter((i) => getWeekKey(new Date(i.time)) <= targetWeek);
+  const selected = exact || candidates[candidates.length - 1] || bars[bars.length - 1];
+  if (!selected) throw new Error(`No weekly candles for ${ticker}`);
+  return buildZoneLevels(ticker, [selected]);
+}
+
+// On-demand: zones for one ticker, formatted as the ticker_levels payload (same
+// fields the weekly publisher writes). Used by /api/em-zones. `ticker` is the
+// user/display symbol (e.g. AAPL, or ESU/NQU for futures rolls).
+async function computeZonesPayload(base, ticker) {
+  const engine = makeEngine(base);
+  // Map display futures back to the candle symbol the zone math expects.
+  const sym = ticker === 'ESU' ? 'ESM' : ticker === 'NQU' ? 'NQM' : ticker;
+  const z = await computeZonesForTicker(engine, sym);
+  const apiTicker = DISPLAY_LABEL[sym] ?? sym;
+  return {
+    ticker: apiTicker,
+    label: apiTicker,
+    pivot: fmtFuture(z.pivot),
+    buy_near: fmtFuture(z.noShortNear),
+    buy_far: fmtFuture(z.noShortFar),
+    sell_near: fmtFuture(z.noLongNear),
+    sell_far: fmtFuture(z.noLongFar),
+  };
+}
+
+async function fetchNoShortNoLongZones(engine) {
+  // Only the core ZONE_SYMBOLS are pre-published — zones are static for the week
+  // (last week's OHLC), so the long-tail 200 compute zones on demand at lookup.
   // Resilient: a symbol with no weekly history must not abort the batch.
-  const settled = await Promise.allSettled(configs.map(async ({ ticker, historySymbol }) => {
-    const bars = await fetchWeeklyHistory(engine, historySymbol);
-    const exact = bars.find((i) => getWeekKey(new Date(i.time)) === targetWeek);
-    const candidates = bars.filter((i) => getWeekKey(new Date(i.time)) <= targetWeek);
-    const selected = exact || candidates[candidates.length - 1] || bars[bars.length - 1];
-    if (!selected) throw new Error(`No weekly candles for ${ticker}`);
-    return buildZoneLevels(ticker, [selected]);
-  }));
+  const settled = await Promise.allSettled(
+    ZONE_SYMBOLS.map((ticker) => computeZonesForTicker(engine, ticker))
+  );
   return settled
     .filter((r) => r.status === 'fulfilled')
     .map((r) => r.value);
@@ -685,4 +774,5 @@ async function evaluateHistoricalWeeks(base, bands) {
 
 module.exports = {
   computeAllLevels, evaluateCompletedWeek, evaluateHistoricalWeeks, seedUpcomingWeek, SYMBOLS,
+  computeZonesPayload, computeZonesForTicker,
 };

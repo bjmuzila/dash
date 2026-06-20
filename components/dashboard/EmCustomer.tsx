@@ -37,6 +37,19 @@ function fmtUpdated(ts: string | null | undefined): string {
   });
 }
 
+/** On-demand Buy/Sell zones for any ticker (static for the week, server-cached). */
+async function fetchZones(sym: string): Promise<Partial<Levels> | null> {
+  try {
+    const r = await fetch(`/api/em-zones?ticker=${encodeURIComponent(sym)}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const z = (await r.json()) as Partial<Levels> | { error?: string } | null;
+    if (!z || (z as { error?: string }).error) return null;
+    return z as Partial<Levels>;
+  } catch {
+    return null;
+  }
+}
+
 export default function EmCustomer() {
   const [input, setInput] = useState("");
   const [ticker, setTicker] = useState("");
@@ -56,9 +69,21 @@ export default function EmCustomer() {
       if (!r.ok) throw new Error("Lookup failed");
       const json = (await r.json()) as Levels | null;
       if (!json) {
-        setError(`No levels published for ${sym} yet.`);
+        // No published row at all — still try on-demand zones (static for the
+        // week). EM only exists if the weekly publisher computed it, so a brand
+        // new ticker shows zones now and EM after the next weekend run.
+        const zones = await fetchZones(sym);
+        if (zones) setData(zones);
+        else setError(`No levels published for ${sym} yet.`);
       } else {
         setData(json);
+        // Fill in zones on demand when the published row has EM but no zones
+        // (the long-tail names aren't pre-published with zones).
+        const hasZones = json.buy_near || json.sell_near || json.pivot;
+        if (!hasZones) {
+          const zones = await fetchZones(sym);
+          if (zones) setData((prev) => (prev ? { ...prev, ...zones } : zones));
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lookup failed");

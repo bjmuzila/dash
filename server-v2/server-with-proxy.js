@@ -33,7 +33,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
-const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchDailyHistory } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEsSeed } = require('./es-seed-loader');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -132,6 +132,30 @@ async function main() {
         sendJson(res, 200, { idle: marketState.getState().status.idle });
         return;
       }
+      // Manual weekly-levels publish. The auto-publisher only fires Saturday, so
+      // this lets you (re)publish on demand — e.g. after editing the ticker list
+      // or for the first load — without overwriting on every restart.
+      //   POST /proxy/levels-publish
+      if (pathname === '/proxy/levels-publish' && req.method === 'POST') {
+        const { publishOnce, isPublishing } = require('./levels-auto-publish');
+        if (isPublishing()) { sendJson(res, 200, { started: false, running: true }); return; }
+        // Fire-and-forget: a full-roster publish takes minutes. Kick it off and
+        // return immediately; the owner page polls /proxy/levels-status for the
+        // result. Errors are captured into lastRun by publishOnce itself.
+        publishOnce(`http://localhost:${PORT}`, 'manual').catch((e) => {
+          console.log('[levels-pub] manual run error:', e && e.message);
+        });
+        sendJson(res, 200, { started: true, running: true });
+        return;
+      }
+      // Last publish-run summary + whether a run is in progress (for the owner
+      // page; survives a page refresh, resets on server restart).
+      //   GET /proxy/levels-status
+      if (pathname === '/proxy/levels-status' && req.method === 'GET') {
+        const { getLastRun, isPublishing } = require('./levels-auto-publish');
+        sendJson(res, 200, { lastRun: getLastRun() || null, running: isPublishing() });
+        return;
+      }
       // Dev probe: raw feed data for a single built symbol from the live maps
       // (same source as the GEX chart). GET /proxy/probe?symbol=...&feed=Greeks
       if (pathname === '/proxy/probe' && req.method === 'GET') {
@@ -197,6 +221,39 @@ async function main() {
             sendJson(res, 200, await fetchDailyHistory(symbol));
           } catch (e) {
             sendJson(res, 502, { error: String(e?.message || e), symbol });
+          }
+          return;
+        }
+        // On-demand zones: /proxy/api/tt/em-zones?ticker=AAPL
+        // Buy/Sell zones from last week's weekly candle for ANY ticker (the
+        // long-tail names the weekly publisher doesn't pre-compute). Static for
+        // the week; the Next /api/em-zones route caches the result.
+        if (req.method === 'GET' && pathname === '/proxy/api/tt/em-zones') {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const ticker = (url.searchParams.get('ticker') || '').trim().toUpperCase();
+          if (!ticker) { sendJson(res, 400, { error: 'ticker required' }); return; }
+          try {
+            const { computeZonesPayload } = require('./levels-engine');
+            const data = await computeZonesPayload(`http://localhost:${PORT}`, ticker);
+            sendJson(res, 200, { data });
+          } catch (e) {
+            sendJson(res, 502, { error: String(e?.message || e), ticker });
+          }
+          return;
+        }
+        // Option marks: /proxy/api/tt/option-marks?symbols=OCC1,OCC2
+        // Backs /api/em/option-marks — the EstimatedMoves IV=0 straddle fallback.
+        // Without this adapter every per-strike call 404'd (log spam) and the
+        // fallback got no marks. Index OCC symbols are routed to index-option[].
+        if (req.method === 'GET' && pathname === '/proxy/api/tt/option-marks') {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const symbols = (url.searchParams.get('symbols') || '')
+            .split(',').map((s) => s.trim()).filter(Boolean);
+          try {
+            const data = await fetchOptionMarks(symbols);
+            sendJson(res, 200, { data });
+          } catch (e) {
+            sendJson(res, 502, { error: String(e?.message || e) });
           }
           return;
         }

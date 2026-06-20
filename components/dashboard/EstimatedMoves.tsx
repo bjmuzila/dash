@@ -299,6 +299,22 @@ function normalizeOptions(chain: unknown): OptionData[] {
   return flat.filter((o) => o.expiration && Number.isFinite(o.strike));
 }
 
+/**
+ * The broker's underlying spot from the chain payload. For indices (SPX/NDX) the
+ * dashboard's SPX (~7500) differs from Yahoo's ^GSPC (~6000), and the option
+ * strikes are denominated in the BROKER's level — so we must center the ATM strike
+ * walk on this, not on the Yahoo quotes-batch close, or the straddle never matches.
+ */
+function chainUnderlyingPrice(chain: unknown): number {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const c = chain as any;
+  const v = Number(
+    c?.data?.underlyingPrice ?? c?.underlyingPrice ??
+    c?.data?.underlying_price ?? c?.underlying_price ?? 0
+  );
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open("EM_Dashboard_Next", 1);
@@ -495,8 +511,23 @@ function getTargetExpiration(knownExpirations: string[], expOverride: string): s
 }
 
 async function estimateMove(ticker: string, targetExp: string, engine: EMEngine): Promise<EMRow> {
-  const { close, prevClose } = await fetchQuoteDetail(ticker, engine);
-  if (!Number.isFinite(close) || close <= 0) throw new Error("No quote");
+  const isIndex = ticker === "SPX" || ticker === "NDX";
+  const isFutureProxy = !!FUTURE_PROXY[ticker];
+  // The Yahoo quote-batch row can be null/all-zero — for $NDX, and for the NQ
+  // continuous future (NQU). Don't let a missing quote kill the row: indices and
+  // futures both recover their level from the broker chain underlyingPrice below
+  // (a future just falls back to a zero basis, centering on the proxy-index spot).
+  const tolerateMissingQuote = isIndex || isFutureProxy;
+  let close = 0;
+  let prevClose = 0;
+  try {
+    const detail = await fetchQuoteDetail(ticker, engine);
+    close = detail.close;
+    prevClose = detail.prevClose;
+  } catch (e) {
+    if (!tolerateMissingQuote) throw e; // equities still need a real quote
+  }
+  if (!tolerateMissingQuote && (!Number.isFinite(close) || close <= 0)) throw new Error("No quote");
   if (!targetExp) throw new Error("No expiration selected");
 
   const isFuture = FUTURE_PROXY[ticker];
@@ -513,6 +544,9 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
   ]);
 
   let options = normalizeOptions(chain);
+  // Broker spot for the chain's underlying — the strikes are denominated in THIS
+  // level (SPX ~7500), not the Yahoo close (~6000). Used to center the ATM walk.
+  let chainSpot = chainUnderlyingPrice(chain);
   // A priced option carries a usable bid/ask, mark, or IV. NDX/NDXP weeklies
   // that are still far out (e.g. next Friday) are LISTED but the broker isn't
   // quoting them yet, so the chain comes back all-zero — which would zero out
@@ -530,6 +564,8 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
       .catch(() => ({ options: [] }));
     const merged = normalizeOptions(unpinned);
     if (merged.length) options = merged;
+    const unpinnedSpot = chainUnderlyingPrice(unpinned);
+    if (unpinnedSpot > 0) chainSpot = unpinnedSpot;
     const pricedExps = [...new Set(options.filter(isPriced).map((o) => o.expiration))]
       .filter(Boolean).sort();
     const allExps = [...new Set(options.map((o) => o.expiration))].filter(Boolean).sort();
@@ -547,14 +583,38 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
     if (direct) expOptions = direct;
   }
 
-  const indexQuote = isFuture ? await fetchQuoteDetail(lookupSym, engine) : null;
-  const indexClose = isFuture ? (indexQuote!.prevClose > 0 ? indexQuote!.prevClose : indexQuote!.close) : close;
+  // For a future we may need the proxy index's quote, but only as a FALLBACK when
+  // the chain didn't carry a broker spot. The proxy index ($NDX) Yahoo quote is
+  // often null and throws — so guard it; chainSpot (the NDX chain we just fetched)
+  // is the authoritative center for NQU anyway.
+  let indexQuote: { close: number; prevClose: number } | null = null;
+  if (isFuture && !(chainSpot > 0)) {
+    try { indexQuote = await fetchQuoteDetail(lookupSym, engine); } catch { indexQuote = null; }
+  }
+  // Center the ATM strike walk on the BROKER's underlying level (chainSpot) when
+  // available — the strikes are in that scale (SPX ~7500), and the Yahoo close
+  // (~6000 for ^GSPC) would point the walk at strikes that don't exist, so the
+  // straddle never matches and the row dies. Falls back to the quote close.
+  const quoteClose = isFuture
+    ? (indexQuote && indexQuote.prevClose > 0 ? indexQuote.prevClose : (indexQuote ? indexQuote.close : 0))
+    : close;
+  const indexClose = chainSpot > 0 ? chainSpot : quoteClose;
+  // For an index whose Yahoo quote was null, recover the display close from the
+  // broker spot so the row shows a price instead of throwing "Invalid price".
+  if (isIndex && (!Number.isFinite(close) || close <= 0) && chainSpot > 0) close = chainSpot;
+  if (!Number.isFinite(indexClose) || indexClose <= 0) throw new Error("No usable underlying price");
 
   const allIvZero = expOptions.every((o) => Number(o.iv || 0) === 0);
   const metricsIv = allIvZero ? await fetchMetricsIv(chainSym, effectiveExp) : 0;
 
+  // Walk strikes ATM-first, but BOUND the walk. After-hours the chain can come
+  // back with no IV and no bid/ask on most strikes; without a cap the loop probed
+  // /api/em/option-marks for all ~200 strikes serially (the log storm + multi-second
+  // refresh). The ATM straddle is all we need, so only consider the nearest few.
+  const MAX_STRIKE_TRIES = 8;
   const strikes = [...new Set(expOptions.map((o) => o.strike))]
-    .sort((a, b) => Math.abs(a - indexClose) - Math.abs(b - indexClose));
+    .sort((a, b) => Math.abs(a - indexClose) - Math.abs(b - indexClose))
+    .slice(0, MAX_STRIKE_TRIES);
 
   if (!strikes.length || (allIvZero && metricsIv > 0 && expOptions.length === 0)) {
     if (metricsIv > 0) {
@@ -585,15 +645,19 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
     if (avgIV > 0 && candidateDte > 0) {
       candidateEm = 0.84 * avgIV * indexClose * Math.sqrt(candidateDte / 365);
     } else {
-      if (!(c.bid > 0 && c.ask > 0) || !(p.bid > 0 && p.ask > 0)) {
-        if (c.symbol || p.symbol) {
-          const marks = await fetchOptionMarks([c.symbol, p.symbol].filter(Boolean));
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (marks[c.symbol]) c = Object.assign({}, c, marks[c.symbol] as any);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (marks[p.symbol]) p = Object.assign({}, p, marks[p.symbol] as any);
-          avgIV = (Number(c?.iv || 0) + Number(p?.iv || 0)) / 2;
-        }
+      // Only refetch per-strike marks when the chain row carries NO usable price
+      // at all (no bid/ask AND no mark). The /api/chains payload already includes
+      // a REST mark for every leg, so after-hours (bid/ask=0 but mark>0) we must
+      // NOT refetch — doing so fired /api/em/option-marks for hundreds of strikes
+      // per ticker (the 404/200 log storm). mid() already falls back to mark.
+      const haveUsable = (o: OptionData) => (o.bid > 0 && o.ask > 0) || o.mark > 0 || o.last > 0;
+      if ((!haveUsable(c) || !haveUsable(p)) && (c.symbol || p.symbol)) {
+        const marks = await fetchOptionMarks([c.symbol, p.symbol].filter(Boolean));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (marks[c.symbol]) c = Object.assign({}, c, marks[c.symbol] as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (marks[p.symbol]) p = Object.assign({}, p, marks[p.symbol] as any);
+        avgIV = (Number(c?.iv || 0) + Number(p?.iv || 0)) / 2;
       }
 
       const cMid = c ? mid(c) : 0;
@@ -617,9 +681,18 @@ async function estimateMove(ticker: string, targetExp: string, engine: EMEngine)
   if (!strike) throw new Error("No usable strike (IV=0 and no straddle bid/ask)");
   if (!Number.isFinite(em) || em <= 0) throw new Error("EM calculation returned zero");
 
-  const basis = isFuture ? close - indexClose : 0;
+  // Basis = future price − proxy-index spot, applied ONLY when the future's own
+  // quote is valid. If NQU's quote was missing, basis stays 0 so Up/Down center
+  // on the proxy-index spot rather than blowing up by −indexClose.
+  const haveFutureClose = isFuture && Number.isFinite(close) && close > 0;
+  const basis = haveFutureClose ? close - indexClose : 0;
   void prevClose;
-  return { ticker, close, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: effectiveExp, strike };
+  // Index displays the broker spot as Close. A future shows its own price when we
+  // have it, else the proxy-index spot (so the row still renders a sensible level).
+  const displayClose = isFuture
+    ? (haveFutureClose ? close : indexClose)
+    : (chainSpot > 0 ? chainSpot : close);
+  return { ticker, close: displayClose, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: effectiveExp, strike };
 }
 
 async function fetchWeeklyHistory(symbol: string): Promise<HistoryItem[]> {

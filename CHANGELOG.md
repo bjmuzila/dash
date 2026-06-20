@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-06-20 (session 23) — Estimated Moves: SPX/NDX/NQU fixes, 200+ ticker roster, on-demand zones, manual publish
+
+Fixed the Estimated Moves table where SPX/NDX/ESU/NQU showed blank/`--`/"Invalid price". Root causes were strike-centering on the wrong spot (Yahoo ^GSPC ~6000 vs the dashboard's broker SPX ~7500) and intolerant quote lookups. Then expanded the customer `/em` feed from ~20 to a 200+ ticker roster (EM pre-published weekly, zones computed on demand), added a manual publish trigger with results UI, and stale-EM flagging.
+
+### Fixed (Estimated Moves / levels)
+- **`server-v2/proxy-tastytrade.js`** — strike walk now centers on the broker chain `underlyingPrice` (added `chainUnderlyingPrice`), not the Yahoo quote. SPX/NDX strikes are denominated in the broker scale (~7500); Yahoo gave ~6000 so the ATM straddle never matched. Reverted an incorrect `index-option[]` by-type param guess — TastyTrade REST has NO `index-option[]`; SPX/NDX options price under `equity-option[]` (params: index[], equity[], equity-option[], future[], future-option[], cryptocurrency[]).
+- **`components/dashboard/EstimatedMoves.tsx` + `server-v2/levels-engine.js`** — tolerate null Yahoo quotes for indices AND the NQ future (recover spot from chain underlyingPrice; futures fall back to a zero basis); guarded the proxy-index second quote call (was throwing "Invalid price for NDX, NaN" on NQU); capped the ATM strike walk at 8 nearest strikes (killed a per-strike `option-marks` request storm + multi-second refresh); only refetch option-marks when a leg has no usable price.
+- **`server-v2/proxy-tastytrade.js`** — added `fetchOptionMarks` + `/proxy/api/tt/option-marks` adapter (was 404ing every per-strike fallback call).
+- **`app/api/levels/route.ts`** — added `em_updated_at` column (advances only on a fresh EM) so stale EMs are detectable; fixed `$4::text` cast (Postgres "could not determine data type" on null em).
+
+### New (200+ roster + on-demand zones + manual publish)
+- **`server-v2/em-tickers.js`** — roster lives here now (`EQUITY_TICKERS`, ~370 names, deduped). `SYMBOLS` imported by the engine; `ZONE_SYMBOLS` = core set pre-published with zones.
+- **`app/api/em-zones/route.ts` + `/proxy/api/tt/em-zones`** — on-demand Buy/Sell zones for any ticker (static for the week from last week's OHLC), cached to `ticker_levels` (NULL-aware, never clobbers EM). `EmCustomer.tsx` fetches zones when a looked-up ticker has EM but no zones (or no row at all).
+- **`server-v2/levels-auto-publish.js`** — removed startup publish (was overwriting the weekend snapshot on every restart); levels now publish Sat ~9am ET only and hold Mon–Fri. Added manual `/proxy/levels-publish` (fire-and-forget) + `/proxy/levels-status`; `publishOnce` returns a run summary (emOk/emTotal, posted, failedEm).
+- **`app/dev/owner/page.tsx`** — "Publish Now" button (double-confirm) with live "Publishing…" state, last-run result row (EM coverage, rows, duration, time), "No EM priced" failed-ticker list, and orange STALE-EM chips for tickers serving a carried-over value.
+- **`server-v2/em-tickers.js`** chunked the quotes-batch call (40/req) so a 200+ roster doesn't blow the URL length.
+
+### Notes
+- Workspace Linux sandbox was DOWN all session (HYPERVISOR_VIRT_DISABLED) — no `node --check`/git run from the assistant side; user restarted + tested. SPX/NDX/NQU confirmed working by the user.
+- First load / re-publish: hit **Publish Now** on `/dev/owner` (or `POST /proxy/levels-publish`); ~370 tickers take a few minutes.
+- Leftover: one-time `[CHAIN-MD DEBUG]` log line still in `proxy-tastytrade.js` (logs once per by-type param) — safe to remove.
+- `BRK.B` may need `BRK-B`/`BRK/B`; `SPCX` unverified (possibly meant `SPCE`) — illiquid/invalid names just won't get a row.
+
 ## 2026-06-20 (session 22) — v2 dashboard audit, two bug fixes, build verified, legacy removed
 
 Box-by-box static audit of every page linked in the v2 sidebar. Found and fixed two real bugs, verified a clean production build (`✓ Compiled successfully`, 78/78 pages, no TS/ESLint errors), and removed the deprecated Legacy section.
