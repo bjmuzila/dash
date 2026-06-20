@@ -35,6 +35,7 @@ const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEsSeed } = require('./es-seed-loader');
+const { startEodGexRecorder } = require('./eod-gex-recorder');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -309,6 +310,8 @@ async function main() {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
     // In-process MVC auto-collector: writes a snapshot every 30m during RTH.
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
+    // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
+    startEodGexRecorder(PORT);
     // In-process weekly publisher for the customer /em page: computes EM + zones
     // server-side and POSTs each ticker to /api/levels (Mon ~09:35 ET + startup).
     require('./levels-auto-publish').startLevelsAutoPublish(PORT);

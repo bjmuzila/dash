@@ -17,6 +17,7 @@ const ALLOWED_TABLES: Record<string, { dateCol?: string }> = {
   expirations_cache: {},
   ticker_levels:     {},
   es_stats:          {},
+  eod_gex:           { dateCol: "date" },
 };
 
 export async function GET(req: NextRequest) {

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-06-20 (session 25) — EOD GEX Recorder + Dashboard Save Status
+
+Added a full EOD GEX pipeline: Postgres table, recorder module wired into server-v2, REST endpoint, and save-status UI in both the owner dashboard and the database page.
+
+### New files
+- **`server-v2/eod-gex-recorder.js`** — Polls every 60s; fires during 3:55–4:05 PM ET window (Mon–Fri, market days). $SPX reads totalNetGex + spot from live market-state via `/proxy/gex` (no re-computation). SPY/QQQ fetch chain on-demand via `/api/expirations` + `/api/chains`, then run `computeGexRows()` from `gex-calculator.js`. Data quality guard: skips write if fewer than 20 strikes have non-zero gamma + OI. Upserts (never duplicates) one row per (date, symbol). Lazy PG pool with auto-rebuild on error.
+- **`app/api/eod-gex/route.ts`** — `GET /api/eod-gex?date=&symbol=&limit=` returns rows from the `eod_gex` table.
+
+### Modified files
+- **`lib/db.ts`** — Added `eod_gex` table DDL to `ensureAllTables()`, `EodGexRecord` interface, `upsertEodGex()`, and `getEodGex()`.
+- **`server-v2/server-with-proxy.js`** — Wired `startEodGexRecorder(PORT)` alongside `startMvcAutoSnapshot()`.
+- **`app/api/db/route.ts`** — Added `eod_gex: { dateCol: "date" }` to the allowlist.
+- **`app/database/page.tsx`** — Added `EOD GEX` as first tab (default); shows date-filtered rows with full table viewer.
+- **`app/dev/owner/page.tsx`** — Added `EodGexRow` interface, `eodGex` state, fetch in `refresh()`, `fmtGex()` helper, and "EOD GEX · Today" section showing green/red dot + GEX value + spot + computed-at time for each of $SPX, SPY, QQQ. Updated `TABLES` array to reflect all 9 daily-recording tables (removed `trades`; added `bzila_snapshots`, `bzila_gex_history`, `flow_calls`).
+
+---
+
 ## 2026-06-20 (session 24) — Owner Dashboard: collapseable levels section, font & card style polish
 
 ### Changed (`app/dev/owner/page.tsx`)

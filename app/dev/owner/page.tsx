@@ -41,6 +41,13 @@ interface PageStatus {
   status?: string;
 }
 
+interface EodGexRow {
+  symbol: string;
+  total_gex: number;
+  spot: number;
+  computed_at: string;
+}
+
 interface LogLine {
   ts: number;
   msg: string;
@@ -96,12 +103,15 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
 ];
 
 const TABLES: { id: string; label: string }[] = [
-  { id: "mvc_snapshots", label: "MVC Snaps" },
-  { id: "premium_flow", label: "Flow" },
-  { id: "es_candles", label: "ES Candles" },
-  { id: "trades", label: "Trades" },
-  { id: "greeks_ts", label: "Greeks TS" },
-  { id: "playbook_feed", label: "Playbook" },
+  { id: "eod_gex",            label: "EOD GEX" },
+  { id: "mvc_snapshots",      label: "MVC Snaps" },
+  { id: "premium_flow",       label: "Prem Flow" },
+  { id: "greeks_ts",          label: "Greeks TS" },
+  { id: "playbook_feed",      label: "Playbook" },
+  { id: "es_candles",         label: "ES Candles" },
+  { id: "bzila_snapshots",    label: "Bzila Snaps" },
+  { id: "bzila_gex_history",  label: "Bzila GEX" },
+  { id: "flow_calls",         label: "Flow Calls" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -124,6 +134,14 @@ function fmtNum(v: number | undefined): string {
 function fmtTs(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", { hour12: false }) +
     "." + String(ts % 1000).padStart(3, "0");
+}
+
+function fmtGex(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v >= 0 ? "+" : "-";
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  return `${sign}$${(abs / 1e3).toFixed(2)}K`;
 }
 
 /** "Jun 21, 09:00 (2h ago)" style for the levels last-run stamp. */
@@ -476,6 +494,9 @@ export default function OwnerDashboard() {
   }>({ running: false, at: null, reason: null, ms: null, emOk: null, emTotal: null, posted: null, failedEm: [], error: null });
   const [publishing, setPublishing] = useState(false);
 
+  // EOD GEX save status (today's rows from eod_gex table)
+  const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
+
   // Levels section collapsed state
   const [levelsCollapsed, setLevelsCollapsed] = useState(false);
 
@@ -619,6 +640,15 @@ export default function OwnerDashboard() {
           } else {
             setLevels({ count: 0, lastRun: null, tickers: [] });
           }
+        }
+      } catch { /* non-fatal */ }
+
+      // EOD GEX save status — today's rows
+      try {
+        const eg = await fetch(`/api/eod-gex?date=${today}`, { cache: "no-store" });
+        if (eg.ok) {
+          const j = await eg.json();
+          setEodGex((j.rows ?? []) as EodGexRow[]);
         }
       } catch { /* non-fatal */ }
 
@@ -879,6 +909,73 @@ export default function OwnerDashboard() {
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* ── EOD GEX save status ── */}
+        <div>
+          <SectionLabel>EOD GEX · Today</SectionLabel>
+          <div style={{ ...homePanelStyle, padding: "14px 18px" }}>
+            {eodGex.length === 0 ? (
+              <div style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "monospace" }}>
+                Not yet recorded today — fires 3:55–4:05 PM ET
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {(["$SPX", "SPY", "QQQ"] as const).map((sym) => {
+                  const row = eodGex.find((r) => r.symbol === sym);
+                  const ok = !!row;
+                  const tStr = row?.computed_at
+                    ? new Date(row.computed_at).toLocaleTimeString("en-US", {
+                        hour12: false, hour: "2-digit", minute: "2-digit",
+                        timeZone: "America/New_York",
+                      }) + " ET"
+                    : null;
+                  return (
+                    <div
+                      key={sym}
+                      style={{
+                        ...homePanelStyle,
+                        padding: "12px 16px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 4,
+                        borderLeft: `3px solid ${ok ? HOME_THEME.green : HOME_THEME.red}55`,
+                        background: `linear-gradient(135deg, ${ok ? HOME_THEME.green : HOME_THEME.red}14 0%, transparent 100%)`,
+                        minWidth: 160,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{
+                          width: 7, height: 7, borderRadius: "50%",
+                          background: ok ? HOME_THEME.green : HOME_THEME.red,
+                          boxShadow: ok ? `0 0 6px ${HOME_THEME.green}` : `0 0 6px ${HOME_THEME.red}`,
+                          flexShrink: 0,
+                        }} />
+                        <span style={{ fontSize: 12, fontWeight: 800, color: ok ? HOME_THEME.green : HOME_THEME.red, letterSpacing: "0.1em" }}>
+                          {sym}
+                        </span>
+                      </div>
+                      {row ? (
+                        <>
+                          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", color: row.total_gex >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                            {fmtGex(row.total_gex)}
+                          </div>
+                          <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
+                            spot {row.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                          {tStr && (
+                            <div style={{ fontSize: 9, color: `${HOME_THEME.green}88` }}>{tStr}</div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 12, color: HOME_THEME.red, fontFamily: "monospace" }}>not saved</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 

@@ -240,6 +240,22 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ALTER TABLE em_tracker DROP CONSTRAINT IF EXISTS em_tracker_ticker_week_label_key;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_em_tracker_ticker_week_start
       ON em_tracker(ticker, week_start);
+
+    -- EOD GEX snapshot: one row per (date, symbol), upserted at 3:55–4:05 ET.
+    -- total_gex  signed net GEX (same value as the dashboard header)
+    -- spot       underlying price at compute time
+    -- computed_at ISO timestamp of the actual computation
+    CREATE TABLE IF NOT EXISTS eod_gex (
+      id          SERIAL PRIMARY KEY,
+      date        TEXT NOT NULL,
+      symbol      TEXT NOT NULL,
+      total_gex   DOUBLE PRECISION NOT NULL,
+      spot        DOUBLE PRECISION NOT NULL,
+      computed_at TEXT NOT NULL,
+      UNIQUE (date, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS idx_eod_gex_date ON eod_gex(date);
+    CREATE INDEX IF NOT EXISTS idx_eod_gex_symbol ON eod_gex(symbol);
   `);
 }
 
@@ -1323,5 +1339,56 @@ export async function listBudgetEntries(profileId: number, limit = 200): Promise
   return queryAll<BudgetEntryRecord>(
     "SELECT * FROM budget_entries WHERE profile_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?",
     [profileId, limit]
+  );
+}
+
+// ── EOD GEX Snapshots ─────────────────────────────────────────────────────────
+
+export interface EodGexRecord {
+  id?: number;
+  date: string;
+  symbol: string;
+  total_gex: number;
+  spot: number;
+  computed_at: string;
+}
+
+/** Upsert one EOD GEX row. Overwrites an existing (date, symbol) row. */
+export async function upsertEodGex(r: Omit<EodGexRecord, "id">): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO eod_gex (date, symbol, total_gex, spot, computed_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (date, symbol) DO UPDATE SET
+       total_gex   = EXCLUDED.total_gex,
+       spot        = EXCLUDED.spot,
+       computed_at = EXCLUDED.computed_at`,
+    [r.date, r.symbol, r.total_gex, r.spot, r.computed_at]
+  );
+}
+
+export async function getEodGex(opts: { date?: string; symbol?: string; limit?: number } = {}): Promise<EodGexRecord[]> {
+  const { date, symbol, limit = 200 } = opts;
+  if (date && symbol) {
+    return queryAll<EodGexRecord>(
+      "SELECT * FROM eod_gex WHERE date = ? AND symbol = ? ORDER BY id DESC LIMIT ?",
+      [date, symbol, limit]
+    );
+  }
+  if (date) {
+    return queryAll<EodGexRecord>(
+      "SELECT * FROM eod_gex WHERE date = ? ORDER BY symbol ASC LIMIT ?",
+      [date, limit]
+    );
+  }
+  if (symbol) {
+    return queryAll<EodGexRecord>(
+      "SELECT * FROM eod_gex WHERE symbol = ? ORDER BY date DESC LIMIT ?",
+      [symbol, limit]
+    );
+  }
+  return queryAll<EodGexRecord>(
+    "SELECT * FROM eod_gex ORDER BY date DESC, symbol ASC LIMIT ?",
+    [limit]
   );
 }

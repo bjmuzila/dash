@@ -15,6 +15,7 @@ import {
 } from "@/components/shared/homeTheme";
 
 const TABLES = [
+  { id: "eod_gex", label: "EOD GEX" },
   { id: "mvc_snapshots", label: "MVC Snapshots" },
   { id: "premium_flow", label: "Premium Flow" },
   { id: "greeks_ts", label: "Greeks TS" },
@@ -103,7 +104,7 @@ function todayET() {
 
 export default function DatabasePage() {
   usePageLoadStatus({ pageKey: "database", pageLabel: "Database", path: "/database" });
-  const [tab, setTab] = useState<TableId>("mvc_snapshots");
+  const [tab, setTab] = useState<TableId>("eod_gex");
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [cols, setCols] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
