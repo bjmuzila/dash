@@ -1,6 +1,6 @@
 {
     "name": "bzila-dashboard",
-    "version": "2026.6.20-v15",
+    "version": "2026.6.20-v17",
     "private": true,
     "workspaces": [],
     "scripts": {
@@ -31,16 +31,16 @@
         "tailwind-merge": "^2.3.0",
         "tesseract.js": "^5.1.1",
         "ws": "^8.18.0",
-        "xlsx": "^0.18.5"
+        "xlsx": "^0.18.5",
+        "autoprefixer": "^10.4.19",
+        "postcss": "^8.4.38",
+        "tailwindcss": "^3.4.3"
     },
     "devDependencies": {
         "@types/node": "^20",
         "@types/pg": "^8.20.0",
         "@types/react": "^19",
         "@types/react-dom": "^19",
-        "autoprefixer": "^10.4.19",
-        "postcss": "^8.4.38",
-        "tailwindcss": "^3.4.3",
         "tsx": "^4.22.4",
         "typescript": "^5"
     }
