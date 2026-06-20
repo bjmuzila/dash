@@ -15,6 +15,8 @@
  *   require('./levels-auto-publish').startLevelsAutoPublish(PORT);
  */
 
+const path = require('path');
+const { execFile } = require('child_process');
 const { computeAllLevels, seedUpcomingWeek, SYMBOLS } = require('./levels-engine');
 const { DISPLAY_LABEL } = (() => {
   // SYMBOLS are raw (ESM/NQM); the published rows use display labels (ESU/NQU).
@@ -109,6 +111,9 @@ async function publishOnce(base, reason) {
     // Seed em_tracker rows for the upcoming week (best-effort).
     try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); }
 
+    // Push the new levels to the Pine Seeds repo (best-effort; no-op if unset).
+    if (posted > 0) exportToPineSeeds();
+
     lastRun = {
       at: new Date().toISOString(), reason, ms: Date.now() - t0,
       emOk, emTotal, posted, failedEm, error: null,
@@ -117,6 +122,43 @@ async function publishOnce(base, reason) {
   } finally {
     publishing = false;
   }
+}
+
+/**
+ * Best-effort: export levels to the Pine Seeds repo and git push, so a published
+ * TradingView indicator (request.seed) shows the new weekly levels. No-op unless
+ * PINE_SEEDS_OUT is set. End-of-day cadence on TV's side; runs once per weekly
+ * publish. Never throws — a seeds failure must not affect the levels publish.
+ *
+ *   PINE_SEEDS_OUT   absolute path to the local clone of your seeds repo (required)
+ *   PINE_SEEDS_REPO  repo name = exporter --repo (default seed_em_levels)
+ */
+function exportToPineSeeds() {
+  const out = process.env.PINE_SEEDS_OUT;
+  if (!out) return; // not configured — skip silently
+  const repo = process.env.PINE_SEEDS_REPO || 'seed_em_levels';
+  const script = path.join(__dirname, '..', 'pine-seeds', 'pine-seeds-export.js');
+
+  const run = (cmd, args, cwd) => new Promise((resolve) => {
+    execFile(cmd, args, { cwd, timeout: 120000 }, (err, stdout, stderr) => {
+      if (err) console.log(`[levels-pub] seeds ${cmd} failed — ${stderr || err.message}`);
+      resolve(!err);
+    });
+  });
+
+  (async () => {
+    try {
+      const ok = await run('node', [script, '--repo', repo, '--out', out], process.cwd());
+      if (!ok) return;
+      await run('git', ['add', '.'], out);
+      // commit may "fail" with nothing to commit — that's fine, still try push.
+      await run('git', ['commit', '-m', `Update levels ${new Date().toISOString().slice(0, 10)}`], out);
+      await run('git', ['push'], out);
+      console.log('[levels-pub] pine seeds exported + pushed');
+    } catch (e) {
+      console.log('[levels-pub] seeds export error:', e.message);
+    }
+  })();
 }
 
 function getLastRun() { return lastRun; }

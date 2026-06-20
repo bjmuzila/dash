@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-20 (session 24) — Owner Dashboard: collapseable levels section, font & card style polish
+
+### Changed (`app/dev/owner/page.tsx`)
+- **Collapseable Levels panel** — added `levelsCollapsed` state + Expand/Collapse toggle button in the "Levels Publish · /em feed" section header; panel body hidden when collapsed.
+- **Font size bump** — `SectionLabel` headings `9px → 12px`; stat card labels and DB table card labels `9px → 11px`.
+- **Card color accents** — `StatCard` and DB table cards now have a left border + diagonal gradient tint derived from each card's accent color; border/label at ~33% opacity, gradient fades `18→06→transparent` for a light, blended look; value text softened to `dd` alpha.
+
+---
+
 ## 2026-06-20 (session 23) — Estimated Moves: SPX/NDX/NQU fixes, 200+ ticker roster, on-demand zones, manual publish
 
 Fixed the Estimated Moves table where SPX/NDX/ESU/NQU showed blank/`--`/"Invalid price". Root causes were strike-centering on the wrong spot (Yahoo ^GSPC ~6000 vs the dashboard's broker SPX ~7500) and intolerant quote lookups. Then expanded the customer `/em` feed from ~20 to a 200+ ticker roster (EM pre-published weekly, zones computed on demand), added a manual publish trigger with results UI, and stale-EM flagging.

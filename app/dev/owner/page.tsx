@@ -417,8 +417,16 @@ function StatCard({
   mono?: boolean;
 }) {
   return (
-    <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 5 }}>
-      <div style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.14em" }}>
+    <div style={{
+      ...homePanelStyle,
+      padding: "14px 18px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 5,
+      borderLeft: `3px solid ${accent}55`,
+      background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em" }}>
         {label}
       </div>
       <div style={{ fontSize: 22, fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1 }}>
@@ -430,7 +438,7 @@ function StatCard({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 6 }}>
+    <div style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 6 }}>
       {children}
     </div>
   );
@@ -467,6 +475,63 @@ export default function OwnerDashboard() {
     error: string | null;
   }>({ running: false, at: null, reason: null, ms: null, emOk: null, emTotal: null, posted: null, failedEm: [], error: null });
   const [publishing, setPublishing] = useState(false);
+
+  // Levels section collapsed state
+  const [levelsCollapsed, setLevelsCollapsed] = useState(false);
+
+  // Per-ticker "Copy Pine" feedback: holds the ticker just copied (clears after 1.5s).
+  const [copiedTicker, setCopiedTicker] = useState<string | null>(null);
+
+  // Fetch the baked-in Pine v5 script for a ticker and drop it on the clipboard.
+  const copyPine = useCallback(async (ticker: string) => {
+    try {
+      const r = await fetch(`/api/pinescript?ticker=${encodeURIComponent(ticker)}&format=json`, { cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok || !j?.pine) throw new Error(j?.error || "no script");
+      await navigator.clipboard.writeText(j.pine);
+      setCopiedTicker(ticker);
+      setTimeout(() => setCopiedTicker((c) => (c === ticker ? null : c)), 1500);
+    } catch (err) {
+      window.alert(`Copy Pine failed for ${ticker}: ${String((err as Error)?.message || err)}`);
+    }
+  }, []);
+
+  // Core "Estimated Moves" watchlist — the zone roster from em-tickers.js
+  // (ZONE_SYMBOLS), using the display labels the table publishes (ESU/NQU).
+  const CORE_EM_TICKERS = ["SPX", "NDX", "ESU", "NQU", "SPY", "QQQ", "IWM"];
+
+  // TradingView watchlist export — the combined indicator is filtered to these
+  // (intersected with tickers that actually have levels). Paste a fresh export
+  // here to change the roster. ###sections and EXCHANGE: prefixes are handled.
+  const WATCHLIST =
+    "CME_MINI:ESU2026,CME_MINI:NQU2026,AMEX:SPY,NASDAQ:QQQ,SPCFD:SPX,NASDAQ:NDX,CBOE:UVXY," +
+    "NASDAQ:AAPL,NASDAQ:AMD,NASDAQ:AMZN,NASDAQ:GOOGL,NASDAQ:META,NASDAQ:MSFT,NASDAQ:NVDA,NASDAQ:SPCX,NASDAQ:TSLA," +
+    "NASDAQ:ASTS,NASDAQ:AVGO,NASDAQ:BYND,NYSE:CMG,NASDAQ:COIN,NASDAQ:NFLX,NYSE:NOK,NYSE:OSCR,NASDAQ:PLTR,NYSE:QBTS," +
+    "NASDAQ:QUBT,NASDAQ:RGTI,NASDAQ:RIVN,AMEX:SLV,NASDAQ:SMCI,NASDAQ:SOFI,NASDAQ:SOUN,AMEX:SOXL,NASDAQ:TQQQ," +
+    "NASDAQ:ABNB,NASDAQ:AFRM,NASDAQ:ARM,NYSE:BA,NYSE:BABA,NYSE:CCJ,NYSE:CHWY,NASDAQ:COST,NYSE:CRM,NASDAQ:CRWD," +
+    "NYSE:FDX,NYSE:GS,NYSE:HIMS,NASDAQ:INTC,NASDAQ:IREN,AMEX:IWM,NYSE:LLY,NYSE:MA,NASDAQ:MARA,NYSE:MCD,NYSE:MRK," +
+    "NASDAQ:MRNA,NASDAQ:MU,NYSE:NIO,NYSE:NKE,NYSE:OKLO,NASDAQ:OPEN,NYSE:OXY,NASDAQ:PDD,NYSE:PFE,NASDAQ:PTON," +
+    "NYSE:RBLX,NASDAQ:RIOT,NASDAQ:RKLB,NASDAQ:ROKU,NYSE:SE,NASDAQ:SMH,NASDAQ:SNDK,NYSE:SNOW,NYSE:TGT,NYSE:TSM," +
+    "NASDAQ:TTD,NYSE:U,NYSE:UNH,NYSE:UPS,NASDAQ:UPST,NYSE:V,NYSE:XPEV";
+
+  // Copy ONE combined indicator filtered to the watchlist (single pasteable script).
+  const [copyingAll, setCopyingAll] = useState(false);
+  const copyAllPine = useCallback(async () => {
+    if (copyingAll) return;
+    setCopyingAll(true);
+    try {
+      const r = await fetch(`/api/pinescript?all=1&format=json&symbols=${encodeURIComponent(WATCHLIST)}`, { cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok || !j?.pine) throw new Error(j?.error || "no script");
+      await navigator.clipboard.writeText(j.pine);
+      setCopiedTicker("__ALL__");
+      setTimeout(() => setCopiedTicker((c) => (c === "__ALL__" ? null : c)), 1500);
+    } catch (err) {
+      window.alert(`Copy combined Pine failed: ${String((err as Error)?.message || err)}`);
+    } finally {
+      setCopyingAll(false);
+    }
+  }, [copyingAll]);
 
   // Log state — two buckets
   const [tastyLogs, setTastyLogs] = useState<LogLine[]>([]);
@@ -793,17 +858,24 @@ export default function OwnerDashboard() {
         <div>
           <SectionLabel>Database · Today</SectionLabel>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
-            {TABLES.map(({ id, label }) => {
+            {TABLES.map(({ id, label }, idx) => {
               const count = (dbStats as Record<string, number>)[id];
+              const palette = [HOME_THEME.cyan, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.orange, HOME_THEME.red, "#a78bfa"];
+              const accent = palette[idx % palette.length];
               return (
-                <div key={id} style={{ ...homePanelStyle, padding: "12px 16px" }}>
-                  <div style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4 }}>
+                <div key={id} style={{
+                  ...homePanelStyle,
+                  padding: "12px 16px",
+                  borderLeft: `3px solid ${accent}55`,
+                  background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4 }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? HOME_THEME.cyan : "#fff" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
-                  <div style={{ fontSize: 9, color: "#fff" }}>rows today</div>
+                  <div style={{ fontSize: 9, color: `${accent}66` }}>rows today</div>
                 </div>
               );
             })}
@@ -812,8 +884,16 @@ export default function OwnerDashboard() {
 
         {/* ── Levels auto-publish (/em customer feed) ── */}
         <div>
-          <SectionLabel>Levels Publish · /em feed</SectionLabel>
-          <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <SectionLabel>Levels Publish · /em feed</SectionLabel>
+            <button
+              onClick={() => setLevelsCollapsed((v) => !v)}
+              style={{ ...homeSecondaryButtonStyle, fontSize: 9, padding: "2px 10px", marginBottom: 6 }}
+            >
+              {levelsCollapsed ? "▶ Expand" : "▼ Collapse"}
+            </button>
+          </div>
+          {!levelsCollapsed && <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
               <StatusBadge
                 ok={!levelsAreStale(levels.lastRun)}
@@ -890,29 +970,54 @@ export default function OwnerDashboard() {
                     {levels.tickers.filter((t) => t.stale).length} ticker(s) showing a STALE EM — straddle didn’t price this run; /em is serving the prior week’s value.
                   </div>
                 )}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                  {levels.tickers.map((t) => (
-                    <span
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => void copyAllPine()}
+                    disabled={copyingAll}
+                    title={`Copy ONE combined indicator for the core EM watchlist (${CORE_EM_TICKERS.join(", ")})`}
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      cursor: copyingAll ? "wait" : "pointer",
+                      color: copiedTicker === "__ALL__" ? HOME_THEME.green : HOME_THEME.cyan,
+                      background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(0,229,255,0.15)",
+                      border: `1px solid ${copiedTicker === "__ALL__" ? HOME_THEME.green + "66" : HOME_THEME.cyan + "66"}`,
+                      padding: "3px 10px",
+                      borderRadius: 6,
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    {copiedTicker === "__ALL__" ? "✓ copied core" : copyingAll ? "copying…" : "⧉ Copy Core EM"}
+                  </button>
+                  {levels.tickers.map((t) => {
+                    const copied = copiedTicker === t.ticker;
+                    return (
+                    <button
                       key={t.ticker}
-                      title={t.stale ? "EM is stale — carried over from a previous run (this week’s straddle failed to price)" : "EM freshly computed this run"}
+                      type="button"
+                      onClick={() => void copyPine(t.ticker)}
+                      title={`Click to copy Pine script.\n${t.stale ? "EM is stale — carried over from a previous run (this week’s straddle failed to price)" : "EM freshly computed this run"}`}
                       style={{
                         fontSize: 10,
                         fontWeight: 700,
-                        color: t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
-                        background: t.stale ? "rgba(249,115,22,0.12)" : "rgba(0,229,255,0.08)",
-                        border: `1px solid ${t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
+                        cursor: "pointer",
+                        color: copied ? HOME_THEME.green : t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
+                        background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(0,229,255,0.08)",
+                        border: `1px solid ${copied ? HOME_THEME.green + "66" : t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
                         padding: "3px 8px",
                         borderRadius: 6,
                         fontFamily: "monospace",
                       }}
                     >
-                      {t.ticker}{t.stale ? " ⚠" : ""}
-                    </span>
-                  ))}
+                      {copied ? "✓ copied" : `${t.ticker}${t.stale ? " ⚠" : ""}`}
+                    </button>
+                    );
+                  })}
                 </div>
               </>
             )}
-          </div>
+          </div>}
         </div>
 
         {/* ── Live log boxes ── */}

@@ -1,0 +1,100 @@
+//@version=6
+// EM & Levels (Pine Seeds) — SHAREABLE
+//
+// This is the indicator you PUBLISH ONCE on TradingView. It pulls levels from
+// YOUR Pine Seeds repo via request.seed(), so everyone who adds it sees YOUR
+// current (end-of-day) levels — no copy-paste, no per-user updates.
+//
+// Before publishing, set GH_USER / GH_REPO below to your registered seeds repo,
+// and confirm the symbol naming matches pine-seeds-export.js (<TICKER>_<LEVEL>).
+// Pick the ticker via the "Levels ticker" input (must match an exported ticker).
+//
+// IMPORTANT — request.seed() requires ALL THREE of its first args (user, repo,
+// symbol) to be STRING LITERALS, not variables or computed strings. So the
+// symbols below are hardcoded for ONE ticker (SPX). To support another ticker,
+// duplicate this script and replace the SPX_ prefixes (e.g. NDX_EM_UP). You can
+// then publish each as its own indicator, or merge several into one script.
+
+indicator("SPX EM & Levels (Seeds)", overlay=true, max_lines_count=50, max_labels_count=50)
+
+showBand  = input.bool(true,  "Shade EM band",       group="Display")
+showClose = input.bool(true,  "Show reference close",group="Display")
+showZones = input.bool(true,  "Show buy/sell zones", group="Display")
+showLabel = input.bool(true,  "Show price labels",   group="Display")
+extOpt    = input.string("Right", "Line extension", options=["Right","Both","None"], group="Display")
+ext = extOpt == "Both" ? extend.both : extOpt == "None" ? extend.none : extend.right
+
+// ── Pull each level as a daily seed series ───────────────────────
+// request.seed(user, repo, symbol, expression) — ALL must be literals.
+// Replace "YOUR_GITHUB_USER" and "seed_em_levels" below with your registered
+// repo (find/replace both, all 8 lines). Symbol = <TICKER>_<LEVEL> from the
+// exporter; these are hardcoded to SPX.
+emUp     = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_EM_UP",     close)
+emDown   = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_EM_DOWN",   close)
+emClose  = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_CLOSE",     close)
+pivot    = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_PIVOT",     close)
+buyNear  = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_BUY_NEAR",  close)
+buyFar   = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_BUY_FAR",   close)
+sellNear = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_SELL_NEAR", close)
+sellFar  = request.seed("YOUR_GITHUB_USER", "seed_em_levels", "SPX_SELL_FAR",  close)
+
+// Latest non-na value of each series (seed data may lag a bar).
+f_last(s) => ta.valuewhen(not na(s), s, 0)
+vUp=f_last(emUp), vDown=f_last(emDown), vClose=f_last(emClose), vPivot=f_last(pivot)
+vBN=f_last(buyNear), vBF=f_last(buyFar), vSN=f_last(sellNear), vSF=f_last(sellFar)
+
+// ── Colors ───────────────────────────────────────────────────────
+cUp=color.new(#26a69a,0), cDown=color.new(#ef5350,0), cClose=color.new(#b2b5be,0)
+cPivot=color.new(#787b86,0), cBuy=color.new(#26a69a,30), cSell=color.new(#ef5350,30)
+cFill=color.new(#5d9cf5,90)
+
+// ── Draw flat lines once, on the last bar ────────────────────────
+// Helpers take a show flag and always return a typed line/label (na when
+// hidden) — so call-site assignments are never bare untyped na (v6 CE10097).
+f_line(bool show, float p, color col, string style) =>
+    line out = na
+    if show and not na(p)
+        out := line.new(bar_index-1, p, bar_index, p, xloc=xloc.bar_index, extend=ext, color=col, style=style, width=2)
+    out
+f_tag(bool show, float p, string txt, color col) =>
+    label out = na
+    if show and showLabel and not na(p)
+        out := label.new(bar_index, p, txt+"  "+str.tostring(p,format.mintick), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col,85), textcolor=col, size=size.small)
+    out
+
+var line lUp = na
+var line lDown = na
+var line lClose = na
+var line lPivot = na
+var line lBN = na
+var line lBF = na
+var line lSN = na
+var line lSF = na
+var label tUp = na
+var label tDown = na
+var label tClose = na
+var label tPivot = na
+
+if barstate.islast
+    line.delete(lUp),line.delete(lDown),line.delete(lClose),line.delete(lPivot)
+    line.delete(lBN),line.delete(lBF),line.delete(lSN),line.delete(lSF)
+    label.delete(tUp),label.delete(tDown),label.delete(tClose),label.delete(tPivot)
+
+    lUp    := f_line(true,      vUp,    cUp,    line.style_solid)
+    lDown  := f_line(true,      vDown,  cDown,  line.style_solid)
+    lClose := f_line(showClose, vClose, cClose, line.style_dotted)
+    lPivot := f_line(showZones, vPivot, cPivot, line.style_dashed)
+    lBN    := f_line(showZones, vBN,    cBuy,   line.style_dashed)
+    lBF    := f_line(showZones, vBF,    cBuy,   line.style_dashed)
+    lSN    := f_line(showZones, vSN,    cSell,  line.style_dashed)
+    lSF    := f_line(showZones, vSF,    cSell,  line.style_dashed)
+
+    tUp    := f_tag(true,      vUp,    "EM Up",   cUp)
+    tDown  := f_tag(true,      vDown,  "EM Down", cDown)
+    tClose := f_tag(showClose, vClose, "Close",   cClose)
+    tPivot := f_tag(showZones, vPivot, "Pivot",   cPivot)
+
+// ── EM band fill ─────────────────────────────────────────────────
+pU = plot(showBand ? vUp   : na, "EM Up plot",   color=color(na), display=display.none)
+pD = plot(showBand ? vDown : na, "EM Down plot", color=color(na), display=display.none)
+fill(pU, pD, color=cFill, title="EM band")
