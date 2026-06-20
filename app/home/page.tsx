@@ -696,21 +696,18 @@ export default function HomePage() {
   );
 
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
-  // MVC = strike carrying the peak |net GEX| (most valuable concentration).
-  // Must follow the active dataMode: Vol-Only uses volume-based net GEX, otherwise
-  // the OI + Vol composite — same metric as netGexLive above.
+  // MVC = strike carrying the peak |netGEX| (most valuable concentration).
+  // Single source of truth: largest |netGEX| only — matches the GexChart MVC label
+  // and SnapButton.getHighestRow so chart, top-bar, and snapshot always agree.
   const mvcStrike = useMemo(() => {
     let best: number | null = null;
     let bestAbs = 0;
     for (const r of chartRows) {
-      const metric = dataMode === "vol-only"
-        ? (r.netVolGEX ?? 0)
-        : (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
-      const v = Math.abs(metric);
+      const v = Math.abs(r.netGEX ?? 0);
       if (v > bestAbs) { bestAbs = v; best = r.strike; }
     }
     return best;
-  }, [chartRows, dataMode]);
+  }, [chartRows]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
 
   const etTime = now?.toLocaleTimeString("en-US", {
@@ -977,7 +974,7 @@ export default function HomePage() {
                             className={isAtm ? "heatmap-row-atm" : "heatmap-row"}
                             style={{ ...rowStyle, cursor: "pointer" }}
                             onClick={(e) => {
-                              const full = chartRowByStrike.get(row.strike);
+                              const full = chartRowByStrike.get(Number(row.strike));
                               if (full) setSelectedStrike({ row: full, pos: { x: e.clientX, y: e.clientY } });
                             }}
                           >

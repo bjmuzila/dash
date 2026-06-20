@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-06-19 (session 20) — Unify MVC across chart, top-bar, and snapshot
+
+Fixed the long-standing mismatch where the purple top-bar MVC (e.g. 7,550) disagreed with the on-chart MVC label (e.g. 7,500). Root cause: three independent computations using different metrics/data sources. Settled on a single source of truth — **largest |netGEX| only** — so the chart label, purple top-bar value, and Save/Now snapshot all agree.
+
+### Changed
+- **`components/dashboard/GexChart.tsx`** — MVC peak now selected from the full raw `chain` by `|netGEX|` (was densified+windowed `data` respecting `dataMode`/call-put). Label is hidden when the peak strike is outside the visible window (`peakIdx < 0`).
+- **`app/home/page.tsx`** — `mvcStrike` now uses `|netGEX|` only (dropped the `netGEX + netVolGEX` composite and the Vol-Only branch); removed `dataMode` from its deps. Also coerced `chartRowByStrike.get(Number(row.strike))` to fix a string/number key TS error.
+
+### Added
+- **`lib/em-tracker/computeResult.ts`** — extracted `computeResult` out of `app/api/em-tracker/route.ts` (Next.js route files may not export non-handlers; this resolved the generated `.next/types` TS2344 error). Both `app/api/em-tracker/route.ts` and `app/api/em-tracker/evaluate/route.ts` now import from here.
+
+## 2026-06-19 (session 19) — Disable hover lift on home page data boxes
+
+Removed the dashboard-wide card hover lift/shadow on the home page only; it felt off on that page's dense data boxes. Every other page keeps the effect. Version bumped to `2026.6.19-v3`.
+
+### Changed
+- **`app/home/page.tsx`** — added `className="home-no-hover"` to the page's root `<main>`.
+- **`app/globals.css`** — added `main.home-no-hover [style*="border-radius:16px"]:hover` override that cancels `transform` / `box-shadow` / `border-color` (resets to `none`/`inherit`), scoping out the auto-applied lift for the home page.
+- **`package.json`** — version `2026.6.19-v2` → `2026.6.19-v3`.
+
 ## 2026-06-19 (session 18) — Customer `/em` levels page + all-symbol zones + weekend auto-publish
 
 Built a customer-facing Estimated-Move + Buy/Sell-Zone page fed by the existing (now backend) Estimated Moves page via a push→Postgres→pull pipeline, extended No-Short/No-Long zones to all 20 symbols, and added a weekly auto-publisher.

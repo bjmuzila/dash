@@ -471,20 +471,18 @@ export default function GexChart({
     ctx.restore(); // end clip
 
     // ── Peak strike label box ──
-    const peak = data.reduce<ChainRow | null>((b, r) => {
-      const rv = Math.abs(isCallPut
-        ? Math.max(Math.abs(getCall(r)), Math.abs(getPut(r)))
-        : getNet(r));
-      const bv = b ? Math.abs(isCallPut
-        ? Math.max(Math.abs(getCall(b)), Math.abs(getPut(b)))
-        : getNet(b)) : -1;
+    // MVC = source of truth: largest |netGEX| over the FULL raw chain, matching
+    // SnapButton.getHighestRow / TopBar so the chart label always agrees with the
+    // top-bar / snapshot value. Hidden when the peak strike is outside the window.
+    const peak = chain.reduce<ChainRow | null>((b, r) => {
+      const rv = Math.abs(r.netGEX ?? 0);
+      const bv = b ? Math.abs(b.netGEX ?? 0) : -1;
       return rv > bv ? r : b;
     }, null);
-    if (peak) {
-      const pi  = data.indexOf(peak);
-      const pv  = isCallPut
-        ? (Math.abs(getCall(peak)) >= Math.abs(getPut(peak)) ? Math.abs(getCall(peak)) : -Math.abs(getPut(peak)))
-        : getNet(peak);
+    const peakIdx = peak ? data.findIndex(r => r.strike === peak.strike) : -1;
+    if (peak && peakIdx >= 0) {
+      const pi  = peakIdx;
+      const pv  = peak.netGEX ?? 0;
       const py  = clamp(yFor(pv), PAD_T + 2, PAD_T + cH - 2);
       const col = pv >= 0 ? "#29b6f6" : "#ffb300";
       ctx.save();
