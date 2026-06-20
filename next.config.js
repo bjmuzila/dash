@@ -1,8 +1,11 @@
-import type { NextConfig } from "next";
+/** @type {import('next').NextConfig} */
+const path = require('path');
 
-const nextConfig: NextConfig = {
+const nextConfig = {
   compress: true,
   productionBrowserSourceMaps: false,
+  reactStrictMode: true,
+  outputFileTracingRoot: path.join(__dirname),
   async rewrites() {
     const internalProxyBase = process.env.PROXY_URL || `http://127.0.0.1:${process.env.PORT || '3002'}`;
     return {
@@ -16,4 +19,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+module.exports = nextConfig;
