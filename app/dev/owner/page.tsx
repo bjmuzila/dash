@@ -474,6 +474,9 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export default function OwnerDashboard() {
   const [server, setServer] = useState<ServerStatus>({});
   const [waitlistCount, setWaitlistCount] = useState<number | null>(null);
+  // Wall-clock time (ms) when server.uptime was last received, so we can tick the
+  // displayed uptime forward without drift across snapshots.
+  const uptimeBaseRef = useRef<{ uptime: number; at: number } | null>(null);
   const [dbStats, setDbStats] = useState<DbStats>({});
   const [pageStatuses, setPageStatuses] = useState<PageStatus[]>([]);
   const [loading, setLoading] = useState(false);
@@ -799,8 +802,12 @@ export default function OwnerDashboard() {
             const snap = j?.data ?? j;
             const s = snap?.status ?? snap?.data?.status;
             if (s) {
+              if (typeof s.uptime === "number") {
+                uptimeBaseRef.current = { uptime: s.uptime, at: Date.now() };
+              }
               setServer((prev) => ({
                 ...prev,
+                uptime: typeof s.uptime === "number" ? s.uptime : prev.uptime,
                 ttAuthenticated: typeof s.ttAuthenticated === "boolean" ? s.ttAuthenticated : prev.ttAuthenticated,
                 dxLinkState: typeof s.dxlinkConnected === "boolean"
                   ? (s.dxlinkConnected ? "CONNECTED" : "DISCONNECTED")
@@ -863,7 +870,11 @@ export default function OwnerDashboard() {
   const isServerUp = !server.idleMode;
   const dxOk = server.dxLinkState === "CONNECTED";
   const ttOk = server.ttAuthenticated === true;
-  const displayUptime = server.uptime != null ? server.uptime + uptimeTick : undefined;
+  // Re-read uptimeTick so this recomputes every second.
+  void uptimeTick;
+  const displayUptime = uptimeBaseRef.current
+    ? uptimeBaseRef.current.uptime + Math.floor((Date.now() - uptimeBaseRef.current.at) / 1000)
+    : undefined;
   const lastFeedAgo = server.lastFeedAt
     ? Math.round((Date.now() - server.lastFeedAt) / 1000)
     : null;

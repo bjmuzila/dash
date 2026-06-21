@@ -12,7 +12,7 @@ export default function SignInPage() {
         background: "#05060A",
       }}
     >
-      <SignIn />
+      <SignIn routing="path" path="/sign-in" signUpUrl="/" fallbackRedirectUrl="/home" />
     </div>
   );
 }

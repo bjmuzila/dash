@@ -19,6 +19,10 @@ const marketState = require('./state/market-state');
 
 const WS_PATH = process.env.GEX_WS_PATH || '/ws/gex';
 
+// Captured once at module load = process start. Used to report server uptime
+// (seconds) in the snapshot status so the owner dashboard can render it.
+const PROCESS_START_MS = Date.now();
+
 function buildSnapshot(state) {
   return {
     symbol: state.symbol,
@@ -40,7 +44,15 @@ function buildSnapshot(state) {
     flow: state.flow,
     esCandles: state.esCandles,
     esBigTrades: state.esBigTrades,
-    status: state.status,
+    status: {
+      ...state.status,
+      // Server uptime in seconds (process lifetime).
+      uptime: Math.round((Date.now() - PROCESS_START_MS) / 1000),
+      // If the feed has produced data at all, treat the last state update as the
+      // freshest feed time so the dashboard's "Last Feed" doesn't go stale while
+      // snapshots are still flowing.
+      lastFeedAt: state.status.lastFeedAt ?? (state.updatedAt || null),
+    },
   };
 }
 

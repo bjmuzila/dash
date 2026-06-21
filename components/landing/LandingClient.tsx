@@ -74,7 +74,7 @@ export default function LandingClient() {
 
       {/* Top-right sign-in for returning subscribers */}
       <div style={{ position: "absolute", top: 20, right: 24, zIndex: 3 }}>
-        <SignInButton mode="modal">
+        <SignInButton forceRedirectUrl="/home">
           <button style={topSignInBtn}>Sign in</button>
         </SignInButton>
       </div>
@@ -154,7 +154,7 @@ export default function LandingClient() {
           </div>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <SignInButton mode="modal">
+            <SignInButton forceRedirectUrl="/home">
               <button style={primaryBtn}>Sign in to dashboard</button>
             </SignInButton>
             <button style={comingSoonBtn} disabled aria-disabled>
