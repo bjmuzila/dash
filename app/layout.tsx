@@ -7,6 +7,17 @@ import LayoutShell from "@/components/shared/LayoutShell";
 export const metadata: Metadata = {
   title: "CB Edge Dashboard",
   description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
+  openGraph: {
+    title: "CB Edge Dashboard",
+    description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
+    images: ["/og.png"], // ADD: place a 1200x630 image at /public/og.png
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "CB Edge Dashboard",
+    description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
+    images: ["/og.png"],
+  },
 };
 
 export const viewport: Viewport = {
