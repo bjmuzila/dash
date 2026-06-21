@@ -149,6 +149,23 @@ async function main() {
         sendJson(res, 200, { started: true, running: true });
         return;
       }
+      // Retry ONLY the not-found tickers from the last run (no full re-publish).
+      // Recomputes just lastRun.failedEm; merges the result so names that now
+      // price drop off the list. POST /proxy/levels-retry-failed
+      if (pathname === '/proxy/levels-retry-failed' && req.method === 'POST') {
+        const { publishOnce, isPublishing, getLastRun } = require('./levels-auto-publish');
+        if (isPublishing()) { sendJson(res, 200, { started: false, running: true }); return; }
+        const lr = getLastRun();
+        const only = Array.isArray(lr?.failedEm)
+          ? lr.failedEm.map((f) => (typeof f === 'string' ? f : f && f.ticker)).filter(Boolean)
+          : [];
+        if (!only.length) { sendJson(res, 200, { started: false, running: false, reason: 'nothing to retry' }); return; }
+        publishOnce(`http://localhost:${PORT}`, 'retry', { only }).catch((e) => {
+          console.log('[levels-pub] retry run error:', e && e.message);
+        });
+        sendJson(res, 200, { started: true, running: true, count: only.length });
+        return;
+      }
       // Last publish-run summary + whether a run is in progress (for the owner
       // page; survives a page refresh, resets on server restart).
       //   GET /proxy/levels-status

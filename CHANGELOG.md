@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-06-21 (session 29) — EM Weekly Publisher: Stop Re-runs + Retry Not-Found Only
+
+Fixed the Estimated-Move weekly publisher re-running on restarts (overwriting the good Saturday-9am snapshot with worse mid-week/weekend numbers, which made the "not found" list appear to grow). Added per-ticker failure reasons and a manual "retry not-found only" path.
+
+### Stop unwanted re-runs (`server-v2/levels-auto-publish.js`)
+- Root cause: the once-per-week guard (`lastPublishedWeek`) was in-memory only, so any server-v2 restart reset it and the Sat/Sun poll re-published.
+- Persist the published-week key to disk (`server-v2/.levels-last-week`), seeded on startup, so restarts remember the week was already published.
+- Sunday branch documented as catch-up only (shares the week key with Saturday, so once Saturday publishes the guard blocks Sunday).
+
+### Per-ticker failure reasons (`server-v2/levels-engine.js`)
+- `computeAllLevels(base, opts)` now accepts `opts.only` (subset roster for retries) and returns `{ payloads, failReasons }`.
+- `failReasons` maps each failed ticker to why it failed (no quote / no options / straddle unpriced, etc.). Zones + em_tracker seeding skipped on subset retries.
+
+### Retry not-found only (`server-v2/levels-auto-publish.js`, `server-v2/server-with-proxy.js`)
+- `publishOnce(base, reason, opts)` consumes reasons; `failedEm` is now `[{ ticker, reason }]`. Subset retries MERGE into the prior run — fixed tickers drop off, still-failing ones refresh their reason, `emOk/emTotal` stays against the full roster.
+- New `POST /proxy/levels-retry-failed` route recomputes ONLY the last run's not-found tickers.
+
+### Owner page (`app/dev/owner/page.tsx`)
+- Not-found list shows each ticker with its reason; added "↻ Retry not-found only" button. Backward-compatible with the legacy `string[]` shape via `normFailedEm`.
+
+### Misc
+- **`.gitignore`** — ignore `server-v2/.levels-last-week`.
+
 ## 2026-06-20 (session 28) — CB Edge Rebrand + Landing Card Polish
 
 Rebranded the app from **BzilaTrades** to **CB Edge** ("Real Edge — Real Orderflow") and refined the landing card to the dark glassmorphic + cyan-accent theme.

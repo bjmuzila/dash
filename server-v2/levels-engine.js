@@ -503,11 +503,28 @@ async function fetchNoShortNoLongZones(engine) {
 }
 
 /**
- * Compute everything and return an array of per-ticker payloads ready to POST
- * to /api/levels. EM rows for all SYMBOLS; buy/sell zones merged onto ESU/NQU.
+ * Compute everything and return per-ticker payloads ready to POST to /api/levels.
+ * EM rows for all SYMBOLS; buy/sell zones merged onto ESU/NQU.
+ *
+ * opts.only — optional array of RAW symbols (e.g. ['NVDA','BABA']) to restrict
+ *   the roster. Used by the "retry not-found" path so a manual re-run recomputes
+ *   only the tickers that failed, not all ~200.
+ *
+ * Returns { payloads, failReasons } where failReasons is a map of
+ *   displayTicker -> short reason string for every requested symbol that did NOT
+ *   produce an EM (either estimateMove threw, or it returned a null/empty em).
  */
-async function computeAllLevels(base) {
+async function computeAllLevels(base, opts = {}) {
   const engine = makeEngine(base);
+  // Subset roster for retries. opts.only may contain raw symbols OR display
+  // labels (ESU/NQU). Keep a SYMBOLS row if its raw name OR its display label is
+  // in the wanted set — so a retry of "ESU" still maps to the raw ESM/ESU6 row.
+  let roster = SYMBOLS;
+  if (Array.isArray(opts.only) && opts.only.length) {
+    const wanted = new Set(opts.only.map((s) => String(s || '').trim().toUpperCase()).filter(Boolean));
+    roster = SYMBOLS.filter((s) => wanted.has(s) || wanted.has(DISPLAY_LABEL[s] || s));
+  }
+  const failReasons = {}; // displayTicker -> reason
 
   // Known SPX expirations → pick the weekly target the EM calc uses.
   let knownExpirations = [];
@@ -528,31 +545,40 @@ async function computeAllLevels(base) {
 
   // Per-ticker EM, in small batches (mirrors client pacing).
   const byTicker = {};
-  for (let i = 0; i < SYMBOLS.length; i += 4) {
-    const batch = SYMBOLS.slice(i, i + 4);
+  for (let i = 0; i < roster.length; i += 4) {
+    const batch = roster.slice(i, i + 4);
     const results = await Promise.allSettled(batch.map((s) => estimateMove(s, targetExp, engine)));
     results.forEach((res, idx) => {
       const sym = batch[idx];
       const apiTicker = DISPLAY_LABEL[sym] ?? sym;
       if (res.status === 'fulfilled') {
         const row = res.value;
+        const emStr = fmtEm(row.em);
         byTicker[apiTicker] = {
           ticker: apiTicker, label: apiTicker,
           close: fmtPrice(sym, row.close),
-          em: fmtEm(row.em),
+          em: emStr,
           up: fmtPrice(sym, row.up),
           down: fmtPrice(sym, row.down),
           exp_label: row.expiration ? labelForDate(row.expiration) : expLabel,
         };
+        // Computed but the straddle didn't price → EM is null/empty.
+        if (emStr == null || emStr === '') failReasons[apiTicker] = 'no EM (straddle unpriced)';
       } else {
-        console.log(`[levels] EM ${sym} failed: ${(res.reason && res.reason.message) || res.reason}`);
+        const reason = (res.reason && res.reason.message) || String(res.reason || 'failed');
+        failReasons[apiTicker] = reason;
+        console.log(`[levels] EM ${sym} failed: ${reason}`);
       }
     });
-    if (i + 4 < SYMBOLS.length) await new Promise((r) => setTimeout(r, 300));
+    if (i + 4 < roster.length) await new Promise((r) => setTimeout(r, 300));
   }
 
   // Zones for every symbol: noShort = Buy Zone, noLong = Sell Zone.
+  // Skip on subset retries — zones are static for the week and already published;
+  // a not-found retry only needs to recompute the missing EM rows.
+  const isSubset = Array.isArray(opts.only) && opts.only.length;
   try {
+    if (isSubset) throw { skip: true };
     const zones = await fetchNoShortNoLongZones(engine);
     zones.forEach((z) => {
       const apiTicker = DISPLAY_LABEL[z.ticker] ?? z.ticker;
@@ -566,10 +592,10 @@ async function computeAllLevels(base) {
       });
     });
   } catch (e) {
-    console.log('[levels] zones failed:', e.message);
+    if (!(e && e.skip)) console.log('[levels] zones failed:', e.message);
   }
 
-  return Object.values(byTicker);
+  return { payloads: Object.values(byTicker), failReasons };
 }
 
 /**

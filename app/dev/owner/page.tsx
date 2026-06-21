@@ -500,10 +500,17 @@ export default function OwnerDashboard() {
     emOk: number | null;
     emTotal: number | null;
     posted: number | null;
-    failedEm: string[];
+    failedEm: { ticker: string; reason?: string }[];
     error: string | null;
   }>({ running: false, at: null, reason: null, ms: null, emOk: null, emTotal: null, posted: null, failedEm: [], error: null });
   const [publishing, setPublishing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  // failedEm may arrive as string[] (legacy) or {ticker,reason}[]; normalize.
+  const normFailedEm = (raw: unknown): { ticker: string; reason?: string }[] =>
+    Array.isArray(raw)
+      ? raw.map((f) => (typeof f === "string" ? { ticker: f } : (f as { ticker: string; reason?: string }))).filter((f) => f && f.ticker)
+      : [];
 
   // EOD GEX save status (today's rows from eod_gex table)
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
@@ -694,7 +701,7 @@ export default function OwnerDashboard() {
             emOk: typeof lr?.emOk === "number" ? lr.emOk : null,
             emTotal: typeof lr?.emTotal === "number" ? lr.emTotal : null,
             posted: typeof lr?.posted === "number" ? lr.posted : null,
-            failedEm: Array.isArray(lr?.failedEm) ? lr.failedEm : [],
+            failedEm: normFailedEm(lr?.failedEm),
             error: lr?.error ?? null,
           });
         }
@@ -717,18 +724,8 @@ export default function OwnerDashboard() {
     }
   }, []);
 
-  // Kick off a manual publish, then poll status until it finishes.
-  const triggerPublish = useCallback(async () => {
-    if (publishing) return;
-    // Double-confirm: publishing overwrites the current weekly snapshot for the
-    // whole roster, so require two explicit OKs before firing.
-    if (!window.confirm("Publish weekly EM levels for the ENTIRE roster now?\n\nThis overwrites this week's snapshot and takes a few minutes.")) return;
-    if (!window.confirm("Are you sure? This will replace the current published levels on the customer /em page.")) return;
-    setPublishing(true);
-    try {
-      await fetch("/proxy/levels-publish", { method: "POST" });
-    } catch { /* the poll below still reflects state */ }
-    // Poll /proxy/levels-status until running clears (or ~10 min safety cap).
+  // Poll /proxy/levels-status until running clears (or ~10 min cap), then run done().
+  const pollPublishStatus = useCallback((done: () => void) => {
     const startedAt = Date.now();
     const poll = async (): Promise<void> => {
       try {
@@ -744,17 +741,44 @@ export default function OwnerDashboard() {
             emOk: typeof lr?.emOk === "number" ? lr.emOk : null,
             emTotal: typeof lr?.emTotal === "number" ? lr.emTotal : null,
             posted: typeof lr?.posted === "number" ? lr.posted : null,
-            failedEm: Array.isArray(lr?.failedEm) ? lr.failedEm : [],
+            failedEm: normFailedEm(lr?.failedEm),
             error: lr?.error ?? null,
           });
-          if (!j?.running) { setPublishing(false); void refresh(); return; }
+          if (!j?.running) { done(); void refresh(); return; }
         }
       } catch { /* keep polling */ }
-      if (Date.now() - startedAt > 10 * 60 * 1000) { setPublishing(false); return; }
+      if (Date.now() - startedAt > 10 * 60 * 1000) { done(); return; }
       setTimeout(poll, 3000);
     };
     setTimeout(poll, 2000);
-  }, [publishing, refresh]);
+  }, [refresh]);
+
+  // Kick off a manual full-roster publish, then poll status until it finishes.
+  const triggerPublish = useCallback(async () => {
+    if (publishing || retrying) return;
+    // Double-confirm: publishing overwrites the current weekly snapshot for the
+    // whole roster, so require two explicit OKs before firing.
+    if (!window.confirm("Publish weekly EM levels for the ENTIRE roster now?\n\nThis overwrites this week's snapshot and takes a few minutes.")) return;
+    if (!window.confirm("Are you sure? This will replace the current published levels on the customer /em page.")) return;
+    setPublishing(true);
+    try {
+      await fetch("/proxy/levels-publish", { method: "POST" });
+    } catch { /* the poll below still reflects state */ }
+    pollPublishStatus(() => setPublishing(false));
+  }, [publishing, retrying, pollPublishStatus]);
+
+  // Retry ONLY the not-found tickers from the last run (no full re-publish).
+  const triggerRetry = useCallback(async () => {
+    if (publishing || retrying) return;
+    const n = pubRun.failedEm.length;
+    if (!n) return;
+    if (!window.confirm(`Retry the ${n} not-found ticker${n === 1 ? "" : "s"} only?\n\nRecomputes just those rows; the rest of the published roster is untouched.`)) return;
+    setRetrying(true);
+    try {
+      await fetch("/proxy/levels-retry-failed", { method: "POST" });
+    } catch { /* the poll below still reflects state */ }
+    pollPublishStatus(() => setRetrying(false));
+  }, [publishing, retrying, pubRun.failedEm.length, pollPublishStatus]);
 
   useEffect(() => {
     void refresh();
@@ -1184,9 +1208,32 @@ export default function OwnerDashboard() {
               </div>
             )}
             {!pubRun.running && pubRun.failedEm.length > 0 && (
-              <div style={{ fontSize: 10, color: HOME_THEME.orange, lineHeight: 1.5 }}>
-                <b>No EM priced ({pubRun.failedEm.length}):</b> {pubRun.failedEm.join(", ")}
-                <span style={{ color: HOME_THEME.muted }}> — illiquid / no quoted weekly straddle, or after-hours.</span>
+              <div style={{ fontSize: 10, color: HOME_THEME.orange, lineHeight: 1.6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                  <b>No EM priced ({pubRun.failedEm.length}):</b>
+                  <button
+                    onClick={triggerRetry}
+                    disabled={retrying || publishing}
+                    style={{
+                      fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 6, cursor: (retrying || publishing) ? "default" : "pointer",
+                      color: (retrying || publishing) ? HOME_THEME.muted : "#000",
+                      background: (retrying || publishing) ? "rgba(255,255,255,0.06)" : HOME_THEME.orange,
+                      border: `1px solid ${HOME_THEME.orange}`, opacity: (retrying || publishing) ? 0.6 : 1,
+                    }}
+                    title="Recompute and publish ONLY these tickers — the rest of the roster is untouched."
+                  >
+                    {retrying ? "Retrying…" : "↻ Retry not-found only"}
+                  </button>
+                </div>
+                {pubRun.failedEm.map((f) => (
+                  <span key={f.ticker} style={{ marginRight: 10, whiteSpace: "nowrap" }}>
+                    <b style={{ color: "#fff" }}>{f.ticker}</b>
+                    {f.reason ? <span style={{ color: HOME_THEME.muted }}> ({f.reason})</span> : null}
+                  </span>
+                ))}
+                <div style={{ color: HOME_THEME.muted, marginTop: 3 }}>
+                  Usually illiquid / no quoted weekly straddle, or after-hours. Retry once liquidity returns.
+                </div>
               </div>
             )}
             {levels.tickers.length > 0 && (

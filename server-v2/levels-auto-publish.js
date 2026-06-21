@@ -16,7 +16,19 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const { execFile } = require('child_process');
+
+// Persist the last-published week key across restarts so a server-v2 restart
+// doesn't wipe the in-memory guard and re-publish (overwriting the good
+// Saturday-9am snapshot with worse mid-week/weekend numbers).
+const PUB_STATE_FILE = path.join(__dirname, '.levels-last-week');
+function readPublishedWeek() {
+  try { return fs.readFileSync(PUB_STATE_FILE, 'utf8').trim() || null; } catch { return null; }
+}
+function writePublishedWeek(wk) {
+  try { fs.writeFileSync(PUB_STATE_FILE, String(wk), 'utf8'); } catch (e) { console.log('[levels-pub] could not persist week key:', e.message); }
+}
 const { computeAllLevels, seedUpcomingWeek, SYMBOLS } = require('./levels-engine');
 const { DISPLAY_LABEL } = (() => {
   // SYMBOLS are raw (ESM/NQM); the published rows use display labels (ESU/NQU).
@@ -58,25 +70,43 @@ function weekKeyET(d = new Date()) {
   return et.toISOString().slice(0, 10);
 }
 
-async function publishOnce(base, reason) {
+/**
+ * Run the weekly publish.
+ *
+ * opts.only — optional array of display tickers (the not-found list) to retry.
+ *   When set, only those rows are recomputed/POSTed and the result is MERGED into
+ *   the existing lastRun: tickers that now price drop off failedEm, ones that
+ *   still fail keep an updated reason. emTotal always reflects the full roster.
+ *
+ * failedEm is reported as [{ ticker, reason }] so the owner page can show WHY a
+ *   name didn't price (no quote vs. straddle unpriced, etc.).
+ */
+async function publishOnce(base, reason, opts = {}) {
   const t0 = Date.now();
   publishing = true;
-  console.log(`[levels-pub] publishing (${reason})…`);
+  const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null;
+  console.log(`[levels-pub] publishing (${reason})${only ? ` — retry ${only.length} not-found` : ''}…`);
   // Expected display tickers (so the "missing EM" diff matches the published rows).
-  const expected = SYMBOLS.map((s) => DISPLAY_LABEL[s] || s);
-  const emTotal = expected.length;
+  const expectedAll = SYMBOLS.map((s) => DISPLAY_LABEL[s] || s);
+  const emTotal = expectedAll.length;
+  // The scope we're actually computing this run (full roster, or the retry subset).
+  const expectedRun = only ? only.slice() : expectedAll;
+  const asFails = (list) => list.map((t) => ({ ticker: t, reason: 'not computed' }));
   try {
-    let payloads;
+    let payloads, failReasons;
     try {
-      payloads = await computeAllLevels(base);
+      ({ payloads, failReasons } = await computeAllLevels(base, only ? { only } : {}));
     } catch (e) {
       console.log(`[levels-pub] compute failed — ${e.message}`);
-      lastRun = { at: new Date().toISOString(), reason, ms: Date.now() - t0, emOk: 0, emTotal, posted: 0, failedEm: expected, error: e.message };
+      // On a subset retry, keep the prior failedEm; on a full run, everything failed.
+      const failedEm = only ? (lastRun?.failedEm || asFails(expectedAll)) : asFails(expectedAll);
+      lastRun = { at: new Date().toISOString(), reason, ms: Date.now() - t0, emOk: emTotal - failedEm.length, emTotal, posted: 0, failedEm, error: e.message };
       return { ok: false, ...lastRun };
     }
     if (!payloads.length) {
       console.log('[levels-pub] nothing computed — skip');
-      lastRun = { at: new Date().toISOString(), reason, ms: Date.now() - t0, emOk: 0, emTotal, posted: 0, failedEm: expected, error: 'nothing computed' };
+      const failedEm = only ? (lastRun?.failedEm || asFails(expectedAll)) : asFails(expectedAll);
+      lastRun = { at: new Date().toISOString(), reason, ms: Date.now() - t0, emOk: emTotal - failedEm.length, emTotal, posted: 0, failedEm, error: 'nothing computed' };
       return { ok: false, ...lastRun };
     }
 
@@ -98,18 +128,36 @@ async function publishOnce(base, reason) {
       }
     }
 
-    // EM coverage: a payload "has EM" only if its em field is non-null. Zones-only
-    // rows (straddle didn't price) don't count. failedEm = expected with no EM.
+    // EM coverage for THIS run's scope: a name failed if it has no priced EM.
+    // failReasons (from the engine) already explains why; fall back generically.
     const withEm = new Set(payloads.filter((p) => p.em != null && p.em !== '').map((p) => p.ticker));
-    const failedEm = expected.filter((t) => !withEm.has(t));
+    const runFailed = expectedRun
+      .filter((t) => !withEm.has(t))
+      .map((t) => ({ ticker: t, reason: failReasons[t] || 'no EM priced' }));
+
+    // Build the merged failedEm list.
+    let failedEm;
+    if (only) {
+      // Retry: start from the prior list, drop any that now priced, refresh reasons
+      // for any still failing. (Only the retried subset is touched.)
+      const retried = new Set(expectedRun);
+      const stillFailed = new Map(runFailed.map((f) => [f.ticker, f.reason]));
+      const prior = (lastRun?.failedEm || []).map((f) => (typeof f === 'string' ? { ticker: f, reason: 'no EM priced' } : f));
+      failedEm = prior
+        .filter((f) => !retried.has(f.ticker) || stillFailed.has(f.ticker))
+        .map((f) => (stillFailed.has(f.ticker) ? { ticker: f.ticker, reason: stillFailed.get(f.ticker) } : f));
+    } else {
+      failedEm = runFailed;
+    }
     const emOk = emTotal - failedEm.length;
 
     console.log(`[levels-pub] published ${posted}/${payloads.length} rows — EM ${emOk}/${emTotal}` +
-      (failedEm.length ? ` — no EM: ${failedEm.join(', ')}` : '') +
+      (failedEm.length ? ` — no EM: ${failedEm.map((f) => f.ticker).join(', ')}` : '') +
       ` in ${Math.round((Date.now() - t0) / 1000)}s`);
 
-    // Seed em_tracker rows for the upcoming week (best-effort).
-    try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); }
+    // Seed em_tracker rows for the upcoming week (best-effort). Skip on retries —
+    // seeding already happened on the Saturday full run.
+    if (!only) { try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); } }
 
     // Push the new levels to the Pine Seeds repo (best-effort; no-op if unset).
     if (posted > 0) exportToPineSeeds();
@@ -166,7 +214,8 @@ function isPublishing() { return publishing; }
 
 function startLevelsAutoPublish(port) {
   const base = `http://localhost:${port}`;
-  let lastPublishedWeek = null;
+  // Seed from disk so a restart remembers we already published this week.
+  let lastPublishedWeek = readPublishedWeek();
 
   console.log(`[levels-pub] enabled — weekly, Sat ~${PUBLISH_HOUR}:${String(PUBLISH_MIN).padStart(2, '0')} ET`);
 
@@ -186,9 +235,17 @@ function startLevelsAutoPublish(port) {
     const wk = weekKeyET();
     if (lastPublishedWeek === wk) return;
     const isSatAfterTarget = dow === 6 && mins >= target;
+    // Sunday is a catch-up ONLY: fire if Saturday's run was missed (e.g. server
+    // was down). It shares wk with Saturday, so once Saturday published, the
+    // lastPublishedWeek === wk guard above already blocks Sunday.
     const isSundayCatchup = dow === 0;
     if (isSatAfterTarget || isSundayCatchup) {
-      publishOnce(base, 'weekly').then((res) => { if (res && res.ok) lastPublishedWeek = wk; });
+      publishOnce(base, 'weekly').then((res) => {
+        if (res && res.ok) {
+          lastPublishedWeek = wk;
+          writePublishedWeek(wk); // persist so restarts don't re-publish
+        }
+      });
     }
   };
   const timer = setInterval(tick, CHECK_MS);
