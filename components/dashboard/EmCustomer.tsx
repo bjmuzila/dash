@@ -59,7 +59,9 @@ async function fetchZones(sym: string): Promise<Partial<Levels> | null> {
 export default function EmCustomer() {
   const [input, setInput] = useState("");
   const [ticker, setTicker] = useState("");
-  const [data, setData] = useState<Levels | null>(null);
+  // Holds either a full published Levels row or a zones-only Partial<Levels>
+  // (the on-demand /api/em-zones fallback for not-yet-published tickers).
+  const [data, setData] = useState<Partial<Levels> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [emStats, setEmStats] = useState<TickerEmStats | null>(null);
