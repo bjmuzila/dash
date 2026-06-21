@@ -473,6 +473,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export default function OwnerDashboard() {
   const [server, setServer] = useState<ServerStatus>({});
+  const [waitlistCount, setWaitlistCount] = useState<number | null>(null);
   const [dbStats, setDbStats] = useState<DbStats>({});
   const [pageStatuses, setPageStatuses] = useState<PageStatus[]>([]);
   const [loading, setLoading] = useState(false);
@@ -662,6 +663,12 @@ export default function OwnerDashboard() {
           const j = await eg.json();
           setEodGex((j.rows ?? []) as EodGexRow[]);
         }
+      } catch { /* non-fatal */ }
+
+      // Waitlist signup count
+      try {
+        const wl = await fetch("/api/waitlist/count", { cache: "no-store" });
+        if (wl.ok) { const j = await wl.json(); setWaitlistCount(j?.count ?? 0); }
       } catch { /* non-fatal */ }
 
       // Render hosting metrics (live window on general refresh)
@@ -909,6 +916,7 @@ export default function OwnerDashboard() {
             <StatCard label="Contracts Sub'd" value={server.contractsSubscribed ?? "—"} accent={HOME_THEME.cyan} />
             <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
+            <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Version" value="2026.6.19-v2" accent={HOME_THEME.purple} mono />
           </div>
         </div>

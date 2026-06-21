@@ -473,6 +473,11 @@ export async function listWaitlist(limit = 1000): Promise<WaitlistRecord[]> {
   );
 }
 
+export async function countWaitlist(): Promise<number> {
+  const row = await queryOne<{ n: number }>("SELECT COUNT(*)::int AS n FROM waitlist", []);
+  return Number(row?.n ?? 0);
+}
+
 /** No-op: pg writes are immediate, no file persistence needed */
 export function persistDb(): void {}
 

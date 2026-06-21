@@ -54,11 +54,21 @@ function sum(series: Array<{ values: Array<{ timestamp: string; value: number }>
 }
 
 export async function GET(req: NextRequest) {
+  const windowParam = (req.nextUrl.searchParams.get("window") ?? "live") as Window;
+
+  // No Render creds (e.g. local dev): return a null payload (200) so the UI shows
+  // "—" instead of spamming the console with 500s.
   if (!API_KEY || !SERVICE_ID) {
-    return NextResponse.json({ error: "RENDER_API_KEY or RENDER_SERVICE_ID not set" }, { status: 500 });
+    return NextResponse.json({
+      window: windowParam,
+      bandwidth: { value: null, unit: "MB",    window: windowParam },
+      memory:    { value: null, unit: "bytes", window: windowParam },
+      cpu:       { value: null, unit: "cpu",   window: windowParam },
+      fetchedAt: new Date().toISOString(),
+      unconfigured: true,
+    });
   }
 
-  const windowParam = (req.nextUrl.searchParams.get("window") ?? "live") as Window;
   const ms = WINDOWS[windowParam] ?? WINDOWS.live;
 
   const now   = new Date();
