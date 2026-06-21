@@ -395,7 +395,7 @@ export default function Sidebar() {
                 <span role="img" aria-label={group.label}>{group.emoji}</span>
               </button>
 
-              {isOpen && (
+              {isOpen && mounted && createPortal((
                 <div
                   ref={(el) => { groupMenuRefs.current[group.id] = el; }}
                   style={{
@@ -464,7 +464,7 @@ export default function Sidebar() {
                     })}
                   </div>
                 </div>
-              )}
+              ), document.body)}
             </div>
           );
         })}
@@ -544,7 +544,7 @@ export default function Sidebar() {
             <SettingsIcon />
           </button>
 
-          {settingsOpen && (
+          {settingsOpen && mounted && createPortal((
             <div
               ref={settingsMenuRef}
               style={{
@@ -594,7 +594,7 @@ export default function Sidebar() {
                 </span>
               </button>
             </div>
-          )}
+          ), document.body)}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>

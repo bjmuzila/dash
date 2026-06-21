@@ -322,7 +322,7 @@ export default function HomePage() {
   // Strike-detail popup: selected strike, click anchor, and which popup style to
   // preview (card | drawer | modal — toggled in the toolbar so all 3 can be tested).
   const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
-  const [popupStyle, setPopupStyle] = useState<PopupStyle>("card");
+  const popupStyle: PopupStyle = "card";
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const heatmapContainerRef = useRef<HTMLDivElement>(null);
   // Snapshot-to-DB button state for the heatmap header.
@@ -755,8 +755,6 @@ export default function HomePage() {
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
                 onRefresh={handleRefresh}
-                popupStyle={popupStyle}
-                onPopupStyle={(v) => setPopupStyle(v as PopupStyle)}
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />

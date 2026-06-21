@@ -21,9 +21,6 @@ interface GexToolbarProps {
   onToggleDex:   () => void;
   onToggleFlip:  () => void;
   onRefresh:     () => Promise<void>;
-  /** Strike-detail popup style preview (card | drawer | modal) */
-  popupStyle?:   string;
-  onPopupStyle?: (v: string) => void;
   /** Ref to the GEX chart container — used for snap/discord screenshot */
   containerRef?: RefObject<HTMLElement | null>;
   /** Message text sent to Discord (title + expiry) */
@@ -97,7 +94,6 @@ export default function GexToolbar({
   onGexMode, onDataMode,
   onToggleOI, onToggleDex, onToggleFlip,
   onRefresh,
-  popupStyle, onPopupStyle,
   containerRef, discordMessage,
 }: GexToolbarProps) {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
@@ -154,18 +150,6 @@ export default function GexToolbar({
       <ToggleBtn label="OI Overlay" active={showOI}        onClick={onToggleOI} />
       <ToggleBtn label="Net DEX"    active={showDex}       onClick={onToggleDex} />
       <ToggleBtn label="GEX Flip"   active={showFlipCurve} onClick={onToggleFlip} />
-
-      {onPopupStyle && (
-        <>
-          <SEP />
-          <span style={{ fontSize: 8, color: "#4a6a88", fontWeight: 700, letterSpacing: "0.08em", flexShrink: 0 }}>POPUP</span>
-          <PillGroup
-            options={[{ label: "Card", value: "card" }, { label: "Drawer", value: "drawer" }, { label: "Modal", value: "modal" }]}
-            active={popupStyle ?? "card"}
-            onChange={onPopupStyle}
-          />
-        </>
-      )}
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
         <button onClick={trigger} style={{ ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}>{btnLabel}</button>
