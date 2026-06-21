@@ -211,7 +211,7 @@ function buildExpiries() {
       const dayName = dayNames[date.getDay()];
       const mm = String(date.getMonth() + 1).padStart(2, "0");
       const dd = String(date.getDate()).padStart(2, "0");
-      list.push({ value, label: `${dayName}, ${mm}-${dd}` });
+      list.push({ value, label: `${dayName}, ${mm}-${dd}-${date.getFullYear()}` });
       daysAdded++;
     }
 
@@ -475,7 +475,7 @@ export default function OptionsChainPage() {
             const dt = new Date(value + "T12:00:00");
             const mm = String(dt.getMonth() + 1).padStart(2, "0");
             const dd = String(dt.getDate()).padStart(2, "0");
-            return { value, label: `${dayNames[dt.getDay()]}, ${mm}-${dd}` };
+            return { value, label: `${dayNames[dt.getDay()]}, ${mm}-${dd}-${dt.getFullYear()}` };
           });
         if (!list.length) return;
 

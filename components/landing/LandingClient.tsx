@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { SignInButton } from "@clerk/nextjs";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
-import DashboardMock from "./DashboardMock";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "BzilaTrades";
 
@@ -57,7 +56,11 @@ export default function LandingClient() {
     >
       {/* Blurred dashboard behind glass */}
       <div style={{ position: "absolute", inset: 0, filter: "blur(7px)", transform: "scale(1.04)" }}>
-        <DashboardMock />
+        <img
+          src="/landing-bg.png"
+          alt=""
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        />
       </div>
       {/* Dark scrim so the mock is unreadable + focuses the modal */}
       <div
