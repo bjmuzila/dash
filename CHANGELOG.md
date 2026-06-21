@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-06-20 (session 28) — CB Edge Rebrand + Landing Card Polish
+
+Rebranded the app from **BzilaTrades** to **CB Edge** ("Real Edge — Real Orderflow") and refined the landing card to the dark glassmorphic + cyan-accent theme.
+
+### Rebrand (sitewide)
+- **`app/layout.tsx`** — metadata title → "CB Edge Dashboard", description updated with tagline.
+- **`.env.local`** — `NEXT_PUBLIC_APP_NAME=CB Edge`.
+- **`components/shared/Navbar.tsx`** — logo `src` → `/cb-edge-logo.png`, alt + wordmark → "CB Edge".
+- **`components/shared/TopBar.tsx`** — logo `src` → `/cb-edge-logo.png`, alt → "CB Edge".
+- **`components/dashboard/EmCustomer.tsx`** — kicker → "CB Edge".
+- **`components/landing/LandingClient.tsx`** — fallback `APP_NAME` → "CB Edge".
+
+### Landing card polish (`components/landing/LandingClient.tsx`)
+- Stronger glass: gradient fill, 22px blur, cyan-tinted border + inset highlight, layered shadow.
+- Radial cyan→purple accent glow bleeding through the top of the card.
+- Accent-tinted feature cells (cyan gradient + cyan border).
+- Added CB Edge logo (transparent PNG) as the sole brand element at 88px; **removed** the redundant "CB Edge" `<h1>` title and "Real Edge — Real Orderflow" tagline (logo carries both).
+
+### Notes
+- Logo file: `public/cb-edge-logo.png` (transparent). `.env.local` change requires a dev-server restart to take effect.
+- Version bumped `2026.6.20-v19` → `2026.6.20-v20`.
+
 ## 2026-06-20 (session 27) — Glassmorphic UI Theme: Tab Panels, Custom Dropdowns, Card Accents
 
 Continued the glassmorphic dark fintech theme rollout across all remaining pages and embedded tab panels.

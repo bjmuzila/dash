@@ -267,6 +267,8 @@ export default function Sidebar() {
   const [isIdle, setIsIdle] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [groupAnchor, setGroupAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [settingsAnchor, setSettingsAnchor] = useState<{ bottom: number; left: number } | null>(null);
   const [dragHref, setDragHref] = useState<string | null>(null);
   const groupBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const groupMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -318,6 +320,7 @@ export default function Sidebar() {
 
   return (
     <nav
+      onScroll={() => { setOpenGroup(null); setSettingsOpen(false); }}
       style={{
         width: 76,
         flexShrink: 0,
@@ -329,11 +332,13 @@ export default function Sidebar() {
         background: "rgba(13,17,25,0.62)",
         backdropFilter: "blur(16px)",
         borderRight: `1px solid ${HOME_THEME.border}`,
-        overflow: "visible",
+        overflowX: "visible",
+        overflowY: "auto",
+        scrollbarWidth: "none",
         fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "12px 0 8px" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "12px 0 8px", flexShrink: 0 }}>
         <Link
           href="/home"
           title="Home"
@@ -363,7 +368,11 @@ export default function Sidebar() {
               <button
                 ref={(el) => { groupBtnRefs.current[group.id] = el; }}
                 title={group.label}
-                onClick={() => setOpenGroup((v) => (v === group.id ? null : group.id))}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setGroupAnchor({ top: r.top, left: r.right + 8 });
+                  setOpenGroup((v) => (v === group.id ? null : group.id));
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -387,9 +396,9 @@ export default function Sidebar() {
                 <div
                   ref={(el) => { groupMenuRefs.current[group.id] = el; }}
                   style={{
-                    position: "absolute",
-                    left: 52,
-                    top: 0,
+                    position: "fixed",
+                    left: groupAnchor?.left ?? 52,
+                    top: groupAnchor?.top ?? 0,
                     zIndex: 10001,
                     width: 240,
                     background: "rgba(13,17,25,0.96)",
@@ -464,7 +473,7 @@ export default function Sidebar() {
         Quotes
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, scrollbarWidth: "none" }}>
+      <div style={{ flex: "1 1 0", overflowY: "auto", minHeight: 40, scrollbarWidth: "none" }}>
         {[...QUOTE_SYMBOLS]
           .sort((a, b) => {
             const pa = pcts[a.sym] ?? null;
@@ -501,12 +510,16 @@ export default function Sidebar() {
 
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px 0" }} />
 
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 0 14px" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 0 14px", paddingBottom: "calc(14px + env(safe-area-inset-bottom, 0px))", flexShrink: 0 }}>
         <div style={{ position: "relative" }}>
           <button
             ref={settingsBtnRef}
             title="Settings"
-            onClick={() => setSettingsOpen((v) => !v)}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setSettingsAnchor({ bottom: window.innerHeight - r.bottom, left: r.right + 8 });
+              setSettingsOpen((v) => !v);
+            }}
             disabled={idleActionState === "busy"}
             style={{
               background: "none",
@@ -532,9 +545,9 @@ export default function Sidebar() {
             <div
               ref={settingsMenuRef}
               style={{
-                position: "absolute",
-                left: 52,
-                bottom: 0,
+                position: "fixed",
+                left: settingsAnchor?.left ?? 52,
+                bottom: settingsAnchor?.bottom ?? 0,
                 zIndex: 10001,
                 minWidth: 160,
                 background: "rgba(13,17,25,0.96)",

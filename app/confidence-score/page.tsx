@@ -43,6 +43,58 @@ interface Thresholds {
   analogGexTol: number;
   analogMax: number;
 }
+interface DayOutcome {
+  kind: "reversal" | "pinned" | "false-break" | "breakout" | "squeeze" | "cascade" | "chop" | "approaching" | "untouched";
+  wall: "call" | "put" | "neutral";
+  title: string;
+  status: string;
+  detail: string;
+  forward: string;
+  provisional: boolean;
+  final: boolean;
+  touched: boolean;
+  outcome: "hit" | "pivot" | "chop" | "miss";
+  maxAway: number;
+  maxBand: number;
+  overshoot: number;
+  seriesSource?: "es5m" | "snapshots";
+  basis?: number | null;
+  bars?: number;
+}
+interface MvcSegment {
+  strike: number;
+  from: string;
+  to: string;
+  snaps: number;
+  current: boolean;
+  kind: DayOutcome["kind"];
+  title: string;
+  status: string;
+  detail: string;
+  forward: string;
+  touched: boolean;
+  outcome: "hit" | "pivot" | "chop" | "miss";
+  maxAway: number;
+  maxBand: number;
+  overshoot: number;
+  closestApproach: number | null;
+  minToTouch: number | null;
+  distAtStart: number | null;
+  score: { hit: number; pivot: number; chop: number };
+  gammaRegime: "positive" | "negative" | "flat";
+  stats: {
+    spxAtActivation: number | null;
+    netGex: number;
+    netDex: number;
+    gexFlip: number | null;
+    gexDominance: number;
+  };
+}
+interface MvcSummary {
+  distinctStrikes: number;
+  changes: number;
+  engaged: number;
+}
 interface ApiResp {
   date: string;
   level: number;
@@ -55,6 +107,9 @@ interface ApiResp {
   gexMagnitude: number;
   sessionProgress: number;
   score: ScoreResult;
+  dayOutcome?: DayOutcome;
+  mvcTimeline?: MvcSegment[];
+  mvcSummary?: MvcSummary;
   history: { sampleSize: number; hitRate: number; pivotRate: number; chopRate: number } | null;
   analogs: Analog[];
   thresholds?: Thresholds;
@@ -97,6 +152,20 @@ const OUTCOME_ICON: Record<Analog["outcome"], string> = {
   pivot: "⟲", // reversed
   chop: "≈",  // sticky
   miss: "·",
+};
+
+// Day-outcome archetype → color + glyph. Reversals/squeezes = pivot purple,
+// breakouts/cascades = directional (green/red), pins/chop = chop orange.
+const SCENARIO: Record<DayOutcome["kind"], { color: string; icon: string }> = {
+  reversal:    { color: METRIC.pivot,     icon: "⟲" },
+  squeeze:     { color: HOME_THEME.green, icon: "⤴" },
+  "false-break": { color: METRIC.pivot,   icon: "⤬" },
+  breakout:    { color: HOME_THEME.green, icon: "⤒" },
+  cascade:     { color: HOME_THEME.red,   icon: "⤓" },
+  pinned:      { color: METRIC.chop,      icon: "⊙" },
+  chop:        { color: METRIC.chop,      icon: "≈" },
+  approaching: { color: METRIC.hit,       icon: "→" },
+  untouched:   { color: HOME_THEME.muted, icon: "·" },
 };
 
 function Tip({ text, children }: { text: string; children: ReactNode }) {
@@ -191,6 +260,64 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
       <span style={{ width: 48, textAlign: "right", fontSize: 11, fontFamily: "monospace", fontWeight: 700, color }}>
         {signed ? (value >= 0 ? "+" : "") : ""}{(value * 100).toFixed(0)}
       </span>
+    </div>
+  );
+}
+
+/** One MVC strike in the timeline — compact row that expands to full stats. */
+function TimelineRow({ seg }: { seg: MvcSegment }) {
+  const [open, setOpen] = useState(false);
+  const sc = SCENARIO[seg.kind];
+  const win = `${seg.from}${seg.to !== seg.from ? `–${seg.to}` : ""}`;
+  const Stat = ({ label, value }: { label: string; value: string }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      <span style={{ fontSize: 8.5, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
+      <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
+    </div>
+  );
+  return (
+    <div style={{ borderRadius: 6, overflow: "hidden",
+      background: seg.current ? rgba(sc.color, 0.08) : "rgba(255,255,255,0.02)",
+      border: `1px solid ${seg.current ? rgba(sc.color, 0.3) : HOME_THEME.border}` }}>
+      <button onClick={() => setOpen((v) => !v)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, fontSize: 11.5,
+          padding: "7px 10px", background: "transparent", border: "none", cursor: "pointer", color: HOME_THEME.text, textAlign: "left" }}>
+        <span style={{ color: HOME_THEME.muted, fontSize: 9, width: 10 }}>{open ? "▾" : "▸"}</span>
+        <span style={{ color: sc.color, fontSize: 14, width: 16, textAlign: "center" }}>{sc.icon}</span>
+        <span style={{ fontFamily: "monospace", fontWeight: 700, width: 56 }}>{fmt(seg.strike)}</span>
+        <span style={{ fontFamily: "monospace", fontSize: 10, opacity: 0.6, width: 96 }}>{win}</span>
+        <span style={{ color: sc.color, fontWeight: 700 }}>{seg.title}</span>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 8, fontFamily: "monospace", fontSize: 10, fontWeight: 700 }}>
+          <span style={{ color: METRIC.hit }}>{seg.score.hit}</span>
+          <span style={{ color: METRIC.pivot }}>{seg.score.pivot}</span>
+          <span style={{ color: METRIC.chop }}>{seg.score.chop}</span>
+          <span style={{ color: HOME_THEME.muted, opacity: 0.7, fontWeight: 400 }}>×{seg.snaps}{seg.current ? "·now" : ""}</span>
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: "4px 12px 12px 36px", display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.5 }}>{seg.detail}</div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.5,
+            padding: "8px 10px", borderRadius: 6, background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.2)}` }}>
+            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 2 }}>Next</span>
+            <span>{seg.forward}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(86px,1fr))", gap: 10 }}>
+            <Stat label="Score H/P/C" value={`${seg.score.hit}/${seg.score.pivot}/${seg.score.chop}`} />
+            <Stat label="Closest" value={seg.closestApproach != null ? `${seg.closestApproach} pts` : "—"} />
+            <Stat label="Time to touch" value={seg.minToTouch != null ? `${seg.minToTouch} min` : "—"} />
+            <Stat label="Dist @ start" value={seg.distAtStart != null ? `${seg.distAtStart} pts` : "—"} />
+            {seg.touched && <Stat label="Reversal" value={`${seg.maxAway} pts`} />}
+            {seg.touched && <Stat label="Band" value={`±${seg.maxBand} pts`} />}
+            <Stat label="SPX @ activ." value={seg.stats.spxAtActivation != null ? fmt(seg.stats.spxAtActivation) : "—"} />
+            <Stat label="GEX dom." value={`${seg.stats.gexDominance}%`} />
+            <Stat label="Net GEX" value={fmt(seg.stats.netGex, 0)} />
+            <Stat label="Net DEX" value={fmt(seg.stats.netDex, 0)} />
+            <Stat label="Flip" value={seg.stats.gexFlip != null ? fmt(seg.stats.gexFlip) : "—"} />
+            <Stat label="Regime" value={seg.gammaRegime} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -425,6 +552,100 @@ export default function ConfidenceScorePage() {
                 <span>Session {Math.round(data.sessionProgress * 100)}%</span>
               </div>
             </div>
+
+            {/* Day outcome — MV strike result + GEX archetype (provisional → final) */}
+            {data.dayOutcome && (() => {
+              const o = data.dayOutcome;
+              const sc = SCENARIO[o.kind];
+              const wallLabel = o.wall === "call" ? "Call Wall" : o.wall === "put" ? "Put Wall" : "Level";
+              return (
+                <div className="conf-hover" style={{ ...homePanelStyle, padding: 20, display: "flex", flexDirection: "column", gap: 14,
+                  borderLeft: `2px solid ${rgba(sc.color, 0.55)}`,
+                  background: `radial-gradient(circle at 0% 0%, ${rgba(sc.color, 0.08)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <SectionTitle text="Outcome" accent={sc.color} />
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 9, fontWeight: 800,
+                      letterSpacing: ".1em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 4,
+                      color: o.final ? HOME_THEME.green : HOME_THEME.orange,
+                      background: rgba(o.final ? HOME_THEME.green : HOME_THEME.orange, 0.1),
+                      border: `1px solid ${rgba(o.final ? HOME_THEME.green : HOME_THEME.orange, 0.35)}` }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%",
+                        background: o.final ? HOME_THEME.green : HOME_THEME.orange,
+                        animation: o.final ? undefined : "confPulse 1.6s ease-in-out infinite" }} />
+                      {o.final ? "Final" : "Live · Provisional"}
+                    </span>
+                  </div>
+
+                  {/* Strike + archetype headline */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 26, lineHeight: 1, color: sc.color, textShadow: `0 0 16px ${rgba(sc.color, 0.4)}` }}>{sc.icon}</span>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontSize: 16, fontWeight: 800, color: sc.color }}>{o.title}</span>
+                      <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.8 }}>
+                        MV strike <span style={{ fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{fmt(data.level)}</span>
+                        <span style={{ opacity: 0.5 }}> · </span>{wallLabel}
+                        <span style={{ opacity: 0.5 }}> · </span>
+                        <span style={{ color: o.touched ? sc.color : HOME_THEME.muted, fontWeight: 700 }}>{o.status}</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* What happened */}
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: HOME_THEME.text, lineHeight: 1.5 }}>
+                    <span style={{ color: sc.color, marginTop: 1, flexShrink: 0 }}>▸</span>
+                    <span>{o.detail}</span>
+                  </div>
+
+                  {/* If/then forward read */}
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, lineHeight: 1.5,
+                    padding: "10px 12px", borderRadius: 8,
+                    background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.22)}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 2 }}>Next</span>
+                    <span style={{ color: HOME_THEME.text }}>{o.forward}</span>
+                  </div>
+
+                  {/* MVC strike timeline — each distinct strike = a fresh MVC with
+                      its own confidence score + outcome (expand a row for stats) */}
+                  {data.mvcTimeline && data.mvcTimeline.length > 1 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+                          MVC Timeline
+                        </span>
+                        {data.mvcSummary && (
+                          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.7 }}>
+                            {data.mvcSummary.distinctStrikes} strikes · {data.mvcSummary.changes} change{data.mvcSummary.changes === 1 ? "" : "s"} · {data.mvcSummary.engaged} engaged
+                          </span>
+                        )}
+                        <span style={{ marginLeft: "auto", fontSize: 9, fontFamily: "monospace", opacity: 0.6, display: "flex", gap: 6 }}>
+                          <span style={{ color: METRIC.hit }}>Hit</span>
+                          <span style={{ color: METRIC.pivot }}>Pivot</span>
+                          <span style={{ color: METRIC.chop }}>Chop</span>
+                        </span>
+                      </div>
+                      {data.mvcTimeline.map((seg, i) => <TimelineRow key={i} seg={seg} />)}
+                    </div>
+                  )}
+
+                  {/* Mechanics readout + data-source provenance */}
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: HOME_THEME.text, fontFamily: "monospace", opacity: 0.85 }}>
+                    {o.touched && <span>Reversal {o.maxAway} pts</span>}
+                    {o.touched && <span>Band ±{o.maxBand} pts</span>}
+                    {o.touched && <span>Overshoot {o.overshoot} pts</span>}
+                    <span title={o.seriesSource === "es5m"
+                      ? `True 5-min SPX reconstructed from ES candles · basis ${o.basis ?? "—"} · ${o.bars ?? "?"} bars`
+                      : `30-min MVC snapshots (no ES candles for this date) · ${o.bars ?? "?"} pts`}
+                      style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 9, fontWeight: 800,
+                        letterSpacing: ".06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
+                        color: o.seriesSource === "es5m" ? METRIC.hit : HOME_THEME.muted,
+                        background: rgba(o.seriesSource === "es5m" ? METRIC.hit : HOME_THEME.muted, 0.1),
+                        border: `1px solid ${rgba(o.seriesSource === "es5m" ? METRIC.hit : HOME_THEME.muted, 0.3)}` }}>
+                      {o.seriesSource === "es5m" ? "5m SPX (ES-implied)" : "30m snapshots"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Collapsible tuning reference (display-only) */}
             {data.thresholds && (
