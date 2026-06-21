@@ -268,8 +268,11 @@ async function main() {
           const symbols = (url.searchParams.get('symbols') || '')
             .split(',').map((s) => s.trim()).filter(Boolean);
           try {
-            const data = await fetchOptionMarks(symbols);
-            sendJson(res, 200, { data });
+            // Serve from the live subscriber when it fully covers the request
+            // (no upstream pull); fall back to REST otherwise.
+            const live = proxy?.serveOptionMarksFromLive?.(symbols) || null;
+            const data = live || await fetchOptionMarks(symbols);
+            sendJson(res, 200, { data, source: live ? 'live' : 'rest' });
           } catch (e) {
             sendJson(res, 502, { error: String(e?.message || e) });
           }
@@ -281,8 +284,12 @@ async function main() {
           const ticker = decodeURIComponent(chainMatch[1]).split('?')[0];
           const expiration = url.searchParams.get('expiration') || '';
           try {
-            const data = await fetchChainFull(ticker, expiration);
-            sendJson(res, 200, { data, context: 'rest' });
+            // Serve from the live subscriber when it fully covers the request
+            // (active SPX expiry, in-window strikes) — no upstream REST pull.
+            // Returns null when not fully covered → fall back to REST unchanged.
+            const live = proxy?.serveChainFromLive?.(ticker, expiration) || null;
+            const data = live || await fetchChainFull(ticker, expiration);
+            sendJson(res, 200, { data, context: live ? 'live' : 'rest' });
           } catch (e) {
             sendJson(res, 502, { error: String(e?.message || e), ticker });
           }

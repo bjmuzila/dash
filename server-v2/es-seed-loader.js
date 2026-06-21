@@ -21,8 +21,8 @@ const fs = require('fs');
 const path = require('path');
 const marketState = require('./state/market-state');
 
-const BIG_MIN = Number(process.env.ES_BIG_TRADE_MIN || 25);
-const BIG_MAX = Number(process.env.ES_BIG_TRADES_MAX || 80);
+const BIG_MIN = Number(process.env.ES_BIG_TRADE_MIN || 1);
+const BIG_MAX = Number(process.env.ES_BIG_TRADES_MAX || 400);
 const BUCKET_MS = Number(process.env.ES_DELTA_BUCKET_MS || 60_000);
 const BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 60);
 

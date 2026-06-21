@@ -353,7 +353,41 @@ function DeltaCanvas({ delta, range, sessionMax }: { delta: EsDeltaBucket[]; ran
 
 export default function FootprintPage() {
   usePageLoadStatus({ pageKey: "footprint", pageLabel: "Footprint", path: "/footprint" });
-  const { symbol, updatedAt, trades, delta, connected, seeded } = useEsBigTrades();
+  const { symbol, updatedAt, trades: rawTrades, delta: rawDelta, connected, seeded } = useEsBigTrades();
+
+  // ── Min-size view filter ────────────────────────────────────────────────────
+  // Purely visual: drops prints below `minSize` before anything is drawn. The raw
+  // feed (rawTrades/rawDelta) is untouched — clearing the filter restores it all.
+  // Default 50 so the page opens on the bigger players, not 1-lot noise.
+  const SIZE_MIN = 1;
+  const SIZE_MAX = 100;
+  const [minSize, setMinSize] = useState(50);
+
+  // Rolling order feed (below the lanes): collapsible, scrollable.
+  const [feedOpen, setFeedOpen] = useState(true);
+
+  // Filtered prints used by every downstream view.
+  const trades = useMemo(
+    () => (minSize > SIZE_MIN ? rawTrades.filter((t) => t.size >= minSize) : rawTrades),
+    [rawTrades, minSize],
+  );
+
+  // Delta lane must reflect the same filter, so rebuild per-minute buckets from
+  // the filtered prints rather than using the server's (unfiltered) delta. When
+  // the filter is off, fall back to the server delta verbatim.
+  const delta = useMemo<EsDeltaBucket[]>(() => {
+    if (minSize <= SIZE_MIN) return rawDelta;
+    const cells = new Map<number, { buy: number; sell: number }>();
+    for (const t of trades) {
+      const k = Math.floor(t.ts / 60_000) * 60_000;
+      const c = cells.get(k) || { buy: 0, sell: 0 };
+      if (t.side === "buy") c.buy += t.size; else c.sell += t.size;
+      cells.set(k, c);
+    }
+    return [...cells.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, c]) => ({ ts, buy: c.buy, sell: c.sell, net: c.buy - c.sell }));
+  }, [trades, rawDelta, minSize]);
 
   const stats = useMemo(() => {
     const buy = trades.filter((t) => t.side === "buy");
@@ -469,6 +503,38 @@ export default function FootprintPage() {
         <StatCard label="Biggest Print" value={stats.biggest ? fmtInt(stats.biggest.size) : "—"} color={stats.biggest ? (stats.biggest.side === "buy" ? BUY : SELL) : "#94a3b8"} sub={stats.biggest ? `${stats.biggest.side.toUpperCase()} @ ${stats.biggest.price.toFixed(2)}` : "waiting for prints"} />
       </div>
 
+      {/* Min-size filter */}
+      <div className="flex flex-wrap items-center gap-3 px-4 pb-1">
+        <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+          Min order size
+        </div>
+        <input
+          type="range"
+          min={SIZE_MIN}
+          max={SIZE_MAX}
+          step={1}
+          value={minSize}
+          onChange={(e) => setMinSize(Number(e.target.value))}
+          className="h-1 w-44 cursor-pointer accent-sky-400"
+          style={{ accentColor: "#38bdf8" }}
+        />
+        <span className="font-mono text-[11px] text-white/70">
+          ≥ {fmtInt(minSize)} <span className="text-white/35">contracts</span>
+        </span>
+        {minSize > SIZE_MIN && (
+          <button
+            onClick={() => setMinSize(SIZE_MIN)}
+            className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors"
+            style={{ border: "1px solid rgba(255,255,255,.15)", color: "#cbd5e1", background: "rgba(255,255,255,.04)" }}
+          >
+            Clear
+          </button>
+        )}
+        <span className="font-mono text-[10px] text-white/35">
+          showing {fmtInt(trades.length)} / {fmtInt(rawTrades.length)} prints
+        </span>
+      </div>
+
       {/* Window controls */}
       <div className="flex items-center justify-between px-4 pb-1">
         <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
@@ -526,6 +592,96 @@ export default function FootprintPage() {
         >
           <DeltaCanvas delta={delta} range={view} sessionMax={sessionMaxDelta} />
         </Lane>
+      </div>
+
+      {/* Rolling order feed — same min-size filter as the lanes, newest first. */}
+      <OrderFeed trades={trades} open={feedOpen} onToggle={() => setFeedOpen((v) => !v)} minSize={minSize} />
+    </div>
+  );
+}
+
+// ── Rolling order feed ────────────────────────────────────────────────────────
+
+function OrderFeed({ trades, open, onToggle, minSize }: {
+  trades: EsBigTrade[]; open: boolean; onToggle: () => void; minSize: number;
+}) {
+  // Newest first. Cap the rendered rows so a full session day stays smooth to scroll.
+  const rows = useMemo(() => [...trades].reverse().slice(0, 500), [trades]);
+
+  return (
+    <div className="px-4 pb-4">
+      <div
+        className="overflow-hidden rounded-2xl"
+        style={{
+          background: "linear-gradient(180deg, rgba(20,24,33,.65) 0%, rgba(8,11,17,.92) 100%)",
+          border: "1px solid rgba(255,255,255,.07)",
+          boxShadow: "inset 0 1px 0 rgba(255,255,255,.05), 0 8px 28px rgba(0,0,0,.45)",
+        }}
+      >
+        {/* Header / collapse toggle */}
+        <button
+          onClick={onToggle}
+          className="flex w-full items-center justify-between px-4 py-3 transition-colors hover:bg-white/[0.03]"
+          style={{ cursor: "pointer" }}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-block transition-transform"
+              style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", color: "rgba(255,255,255,.5)", fontSize: 10 }}
+            >
+              ▶
+            </span>
+            <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/90">Order Feed</span>
+            <span className="text-[9px] uppercase tracking-[0.14em] text-white/35">
+              ≥ {fmtInt(minSize)} contracts · {fmtInt(trades.length)} prints
+            </span>
+          </div>
+          <span className="text-[10px] uppercase tracking-wider text-white/45">{open ? "Hide" : "Show"}</span>
+        </button>
+
+        {open && (
+          <div>
+            {/* Column header */}
+            <div
+              className="grid px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-white/35"
+              style={{ gridTemplateColumns: "84px 1fr 88px 76px", borderTop: "1px solid rgba(255,255,255,.06)" }}
+            >
+              <span>Time</span>
+              <span>Side</span>
+              <span className="text-right">Price</span>
+              <span className="text-right">Size</span>
+            </div>
+            {/* Scrollable body */}
+            <div className="overflow-y-auto" style={{ maxHeight: 320 }}>
+              {rows.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-white/35">
+                  No prints at ≥ {fmtInt(minSize)} contracts — lower the filter to see more.
+                </div>
+              ) : (
+                rows.map((t, i) => {
+                  const isBuy = t.side === "buy";
+                  const c = isBuy ? BUY : SELL;
+                  return (
+                    <div
+                      key={`${t.ts}-${i}`}
+                      className="grid items-center px-4 py-1 font-mono text-[11px]"
+                      style={{
+                        gridTemplateColumns: "84px 1fr 88px 76px",
+                        borderTop: "1px solid rgba(255,255,255,.03)",
+                        background: `linear-gradient(90deg, ${c}10, transparent 60%)`,
+                      }}
+                    >
+                      <span className="text-white/55">{etClock(t.ts)}</span>
+                      <span style={{ color: c, fontWeight: 700 }}>{isBuy ? "BUY" : "SELL"}</span>
+                      <span className="text-right text-white/70">{t.price.toFixed(2)}</span>
+                      <span className="text-right" style={{ color: c, fontWeight: 700 }}>{fmtInt(t.size)}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -20,6 +20,8 @@
  */
 
 const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
 
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
@@ -54,10 +56,16 @@ const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WIND
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 // ES footprint: a print must be at least this many contracts to count as a "big
 // order" bubble. Delta buckets aggregate signed contracts over BUCKET_MS windows.
-const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 25);
-const ES_BIG_TRADES_MAX = Number(process.env.ES_BIG_TRADES_MAX || 80);
+const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 1);
+// Footprint retention is now TIME-based: keep the whole current session day, not a
+// fixed count. These ceilings are just safety caps so a runaway feed can't grow the
+// buffers without bound — set high enough that a full RTH+ETH day fits comfortably.
+const ES_BIG_TRADES_MAX = Number(process.env.ES_BIG_TRADES_MAX || 50_000);
 const ES_DELTA_BUCKET_MS = Number(process.env.ES_DELTA_BUCKET_MS || 60_000);
-const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 60);
+const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 1_440);
+// Disk persistence: today's footprint is mirrored here so a server-v2 restart
+// reloads the session instead of starting empty. File is keyed by ET session day.
+const ES_FOOTPRINT_FILE = path.join(__dirname, '.es-footprint.json');
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
@@ -377,9 +385,16 @@ async function fetchOpenInterest(occSymbols) {
 // pull contract-level market-data (quote / OI / volume).
 // ---------------------------------------------------------------------------
 
-// Cache chains briefly so repeated polls for the same ticker don't re-fetch.
+// Cache chains so repeated polls for the same ticker don't re-fetch the full
+// nested chain (SPX is ~30k contracts / multi-MB). The chain STRUCTURE (strikes
+// + expirations) only changes intraday when new strikes list, so a multi-minute
+// TTL is safe — per-strike marks/greeks/OI are pulled separately and fresher.
+// Env-tunable so it can be dialed without a redeploy.
 const _restChainCache = new Map(); // chainTicker -> { at, expirations, contracts }
-const REST_CHAIN_TTL_MS = 60_000;
+const REST_CHAIN_TTL_MS = Number(process.env.REST_CHAIN_TTL_MS || 600_000); // 10 min
+// Coalesce concurrent cache misses: when N tabs ask for the same cold chain in
+// the same instant, they share ONE upstream fetch instead of N.
+const _restChainInFlight = new Map(); // chainTicker -> Promise<entry>
 
 // The Tastytrade option-chain endpoint is keyed by the ROOT underlying, not the
 // weekly streamer root. Map common weekly/alias roots back to the chain root.
@@ -395,10 +410,18 @@ async function getChainCached(ticker) {
   const key = chainTicker(ticker);
   const hit = _restChainCache.get(key);
   if (hit && Date.now() - hit.at < REST_CHAIN_TTL_MS) return hit;
-  const { expirations, contracts } = await fetchChain(key);
-  const entry = { at: Date.now(), expirations, contracts };
-  _restChainCache.set(key, entry);
-  return entry;
+  // A fetch for this key is already running — await it rather than starting a
+  // second identical upstream pull.
+  const inflight = _restChainInFlight.get(key);
+  if (inflight) return inflight;
+  const p = (async () => {
+    const { expirations, contracts } = await fetchChain(key);
+    const entry = { at: Date.now(), expirations, contracts };
+    _restChainCache.set(key, entry);
+    return entry;
+  })().finally(() => _restChainInFlight.delete(key));
+  _restChainInFlight.set(key, p);
+  return p;
 }
 
 /**
@@ -1069,10 +1092,13 @@ class TastytradeProxy {
     // as buy (lifted ask) / sell (hit bid) using the live ES bid/ask, keep a ring
     // buffer of the largest recent prints, and bucket signed delta over time.
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
-    this.esBigTrades = [];        // ring buffer of recent big ES prints (newest last)
+    this.esBigTrades = [];        // session buffer of ES prints (newest last)
     this.esDeltaBuckets = new Map(); // bucketStartMs -> { ts, buy, sell }
     this.esFootprintDirty = false;
     this.footprintFlushTimer = null;
+    this.esSessionDay = null;     // ET ymd the current footprint belongs to
+    this.esFootprintSaveDirty = false; // unsaved changes pending disk write
+    this.footprintSaveTimer = null;
     this.expiry = '';
     this.recomputeTimer = null;
     // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
@@ -1186,6 +1212,12 @@ class TastytradeProxy {
     // the Footprint page tape stays live without spamming a broadcast per tick.
     if (!this.footprintFlushTimer) {
       this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
+    }
+    // Restore today's footprint from disk (no-op if missing/stale), then mirror it
+    // back to disk every 5s so a restart reloads the session.
+    this._loadFootprintFromDisk();
+    if (!this.footprintSaveTimer) {
+      this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
     }
 
     // Backfill OI/volume from REST now, then refresh periodically (OI only
@@ -1316,12 +1348,15 @@ class TastytradeProxy {
       if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
       if (this.candleFlushTimer) { clearInterval(this.candleFlushTimer); this.candleFlushTimer = null; }
       if (this.footprintFlushTimer) { clearInterval(this.footprintFlushTimer); this.footprintFlushTimer = null; }
+      if (this.footprintSaveTimer) { clearInterval(this.footprintSaveTimer); this.footprintSaveTimer = null; }
+      this._saveFootprintToDisk(); // final flush before going idle
     } else {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
       if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
       if (!this.oiTimer) this._scheduleOiRefresh();
       if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
       if (!this.footprintFlushTimer) this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
+      if (!this.footprintSaveTimer) this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
     }
     marketState.setStatus({ idle: next });
   }
@@ -1365,22 +1400,35 @@ class TastytradeProxy {
     const ts = Date.now();
     const signed = side === 'buy' ? size : -size;
 
+    // New ET session day → clear the prior day's footprint so the page shows
+    // today only. (Retention is "current session / day".)
+    const day = todayYmd().ymd;
+    if (this.esSessionDay && this.esSessionDay !== day) {
+      this.esBigTrades = [];
+      this.esDeltaBuckets.clear();
+    }
+    this.esSessionDay = day;
+
     // Per-minute signed-delta bucket.
     const bucketStart = Math.floor(ts / ES_DELTA_BUCKET_MS) * ES_DELTA_BUCKET_MS;
     const b = this.esDeltaBuckets.get(bucketStart) || { ts: bucketStart, buy: 0, sell: 0 };
     if (side === 'buy') b.buy += size; else b.sell += size;
     this.esDeltaBuckets.set(bucketStart, b);
+    // Safety cap only (time-pruned by day rollover above). Drop oldest if a runaway
+    // feed somehow exceeds a full day of minute buckets.
     if (this.esDeltaBuckets.size > ES_DELTA_BUCKETS_MAX) {
       const oldest = [...this.esDeltaBuckets.keys()].sort((a, c) => a - c)[0];
       this.esDeltaBuckets.delete(oldest);
     }
 
-    // Big-print ring buffer for the bubbles.
+    // Per-print buffer for the bubbles — kept for the whole session day.
     if (size >= ES_BIG_TRADE_MIN) {
       this.esBigTrades.push({ ts, price, size, side, signed });
+      // Safety cap only; normal retention is the day-rollover reset above.
       if (this.esBigTrades.length > ES_BIG_TRADES_MAX) this.esBigTrades.shift();
     }
     this.esFootprintDirty = true;
+    this.esFootprintSaveDirty = true;
   }
 
   /** Push the current footprint (bubbles + delta buckets) to market-state. */
@@ -1397,6 +1445,52 @@ class TastytradeProxy {
         delta: buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell, net: x.buy - x.sell })),
       },
     });
+  }
+
+  /**
+   * Load today's footprint from disk on boot so a server-v2 restart restores the
+   * session instead of starting empty. Ignores the file if it belongs to a prior
+   * ET session day (stale → discard, fresh day starts clean).
+   */
+  _loadFootprintFromDisk() {
+    let saved;
+    try {
+      saved = JSON.parse(fs.readFileSync(ES_FOOTPRINT_FILE, 'utf8'));
+    } catch { return; } // no file yet, or unreadable — start fresh
+    const today = todayYmd().ymd;
+    if (!saved || saved.day !== today) {
+      console.log(`[ES-FP] saved footprint is for ${saved && saved.day} (today ${today}) — discarding`);
+      return;
+    }
+    this.esSessionDay = today;
+    this.esBigTrades = Array.isArray(saved.trades) ? saved.trades : [];
+    this.esDeltaBuckets = new Map();
+    for (const d of (Array.isArray(saved.delta) ? saved.delta : [])) {
+      this.esDeltaBuckets.set(d.ts, { ts: d.ts, buy: d.buy, sell: d.sell });
+    }
+    console.log(`[ES-FP] restored ${this.esBigTrades.length} prints, ${this.esDeltaBuckets.size} delta buckets from disk`);
+    // Republish so a freshly-connected page gets the restored buffer immediately.
+    this.esFootprintDirty = true;
+    this._flushEsFootprint();
+  }
+
+  /** Mirror the current footprint to disk (throttled by the save timer). */
+  _saveFootprintToDisk() {
+    if (!this.esFootprintSaveDirty) return;
+    this.esFootprintSaveDirty = false;
+    const buckets = [...this.esDeltaBuckets.values()].sort((a, b) => a.ts - b.ts);
+    const payload = {
+      day: this.esSessionDay,
+      symbol: this.esSymbol,
+      savedAt: Date.now(),
+      trades: this.esBigTrades,
+      delta: buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell })),
+    };
+    try {
+      fs.writeFileSync(ES_FOOTPRINT_FILE, JSON.stringify(payload), 'utf8');
+    } catch (e) {
+      console.log('[ES-FP] could not persist footprint:', e.message);
+    }
   }
 
   _onEvent(ev) {
@@ -1896,6 +1990,142 @@ class TastytradeProxy {
 
     // Nothing cached anywhere yet — report pending; the page can keep polling.
     return { ...meta, found: false, status: 'pending', feedType: ft, result: null, waitedMs: waited, ttlMs: PROBE_TTL_MS };
+  }
+
+  /**
+   * Serve a nested chain payload from the LIVE subscriber maps instead of a
+   * fresh Tastytrade REST pull — but ONLY when this subscriber fully covers the
+   * request. Returns the SAME shape as fetchChainFull(); returns null to signal
+   * "not covered — fall back to REST".
+   *
+   * Coverage requires ALL of:
+   *   - ticker root === the subscribed SYMBOL (the feed only streams one underlying)
+   *   - the requested expiration === this.expiry (the active gated expiry), OR no
+   *     expiration was requested and this.expiry is the nearest (matches the REST
+   *     default closely enough that the chart pages request it explicitly anyway)
+   *   - this.spot > 0 (needed to define the in-window strike set)
+   *   - every in-window strike on the active expiry has at least one streamed leg
+   *
+   * The strike set served is exactly _activeContracts() — the ±window the feed
+   * subscribes. If the page asks for a wider chain, this can't fully serve it, so
+   * we return null and let REST handle the whole request (all-or-nothing — no
+   * partial/blank strikes, no mixed staleness).
+   *
+   * @param {string} ticker
+   * @param {string} [expiration] YYYY-MM-DD
+   * @returns {{items:Array, underlyingPrice:number, rootSymbol:string, symbol:string}|null}
+   */
+  serveChainFromLive(ticker, expiration = '') {
+    // Set CHAIN_LIVE_DEBUG=1 to log which gate sends a request to REST instead
+    // of serving it live. Remove once the live path is confirmed in production.
+    const dbg = process.env.CHAIN_LIVE_DEBUG === '1';
+    const miss = (reason) => {
+      if (dbg) console.log(`[CHAIN-LIVE] ${ticker}/${expiration || '(nearest)'} -> REST: ${reason}`);
+      return null;
+    };
+    const root = chainTicker(ticker);
+    // Only the subscribed underlying is live.
+    if (root !== SYMBOL) return miss(`root ${root} !== feed ${SYMBOL}`);
+    // Must have a spot to define the window, and the feed must be warmed up.
+    if (!(this.spot > 0)) return miss('no spot yet');
+    if (!this.chartReady) return miss('chart not ready (feed warming/closed)');
+    // Only the active expiry is streamed. An explicit request for a different
+    // expiry can't be served live.
+    if (expiration && expiration !== this.expiry) return miss(`expiry ${expiration} !== active ${this.expiry}`);
+    const exp = this.expiry;
+    if (!exp) return miss('no active expiry');
+
+    const active = this._activeContracts();
+    if (!active.length) return miss('no active contracts in window');
+
+    // Build the nested {call, put} strike map from live state. Bail to REST the
+    // moment a strike has no streamed data at all — a partial live chain would
+    // silently blank real strikes.
+    const strikes = new Map(); // strikeKey -> { 'strike-price', call?, put? }
+    for (const c of active) {
+      const q = this.quotes.get(c.streamerSymbol);
+      const gk = this.greeks.get(c.streamerSymbol);
+      const s = this.summaries.get(c.streamerSymbol);
+      const rest = this.restOI.get(c.streamerSymbol);
+      const liveVol = this.volumes.get(c.streamerSymbol);
+
+      // Require *some* live signal for this leg; otherwise we can't claim full
+      // live coverage — fall back to REST for the whole request.
+      if (!q && !gk && !s && !rest) return miss(`leg ${c.streamerSymbol} has no live data (of ${active.length} in-window)`);
+
+      const oi = (rest?.oi ?? 0) || (s?.oi ?? 0);
+      const volume = liveVol != null ? liveVol : (rest?.volume || 0);
+      const bid = q?.bid || 0;
+      const ask = q?.ask || 0;
+      const mark = q?.mid > 0 ? q.mid : (rest?.mark || 0);
+
+      const key = String(c.strike);
+      if (!strikes.has(key)) strikes.set(key, { 'strike-price': key });
+      const side = c.type === 'C' ? 'call' : 'put';
+      strikes.get(key)[side] = {
+        symbol: c.occSymbol || '',
+        'streamer-symbol': c.streamerSymbol || '',
+        'open-interest': oi || 0,
+        openInterest: oi || 0,
+        volume: volume || 0,
+        delta: gk?.delta || 0,
+        gamma: gk?.gamma || 0,
+        theta: gk?.theta || 0,
+        vega: gk?.vega || 0,
+        'implied-volatility': gk?.iv || 0,
+        bid,
+        ask,
+        mark,
+      };
+    }
+
+    const items = [{
+      'expiration-date': exp,
+      strikes: [...strikes.values()].sort(
+        (a, b) => parseFloat(a['strike-price']) - parseFloat(b['strike-price'])
+      ),
+    }];
+    return { items, underlyingPrice: this.spot, rootSymbol: root, symbol: root };
+  }
+
+  /**
+   * Serve option marks for a list of OCC symbols from the LIVE maps. Returns the
+   * same { items:[{symbol, iv, bid, ask, mark, last}] } shape as fetchOptionMarks
+   * — but ONLY if EVERY requested symbol is present live; otherwise null (→ REST).
+   * @param {string[]} occSymbols
+   * @returns {{items:Array}|null}
+   */
+  serveOptionMarksFromLive(occSymbols) {
+    const clean = (occSymbols || []).map((s) => String(s || '').trim()).filter(Boolean);
+    if (!clean.length) return null;
+    // Index live contracts by normalized OCC so we can match the requested OCC
+    // symbols against the streamer symbols we hold.
+    const byOcc = new Map();
+    for (const c of this.contracts.values()) {
+      if (c.occSymbol) byOcc.set(normalizeOcc(c.occSymbol), c);
+    }
+    const items = [];
+    for (const occ of clean) {
+      const c = byOcc.get(normalizeOcc(occ));
+      if (!c) return null; // unknown symbol — REST handles the whole batch
+      const q = this.quotes.get(c.streamerSymbol);
+      const gk = this.greeks.get(c.streamerSymbol);
+      const rest = this.restOI.get(c.streamerSymbol);
+      const bid = q?.bid || 0;
+      const ask = q?.ask || 0;
+      const mark = q?.mid > 0 ? q.mid : (rest?.mark || 0);
+      // No live price for this contract — can't fully serve. Fall back.
+      if (!(mark > 0) && !(bid > 0) && !(ask > 0)) return null;
+      items.push({
+        symbol: occ,
+        iv: gk?.iv || 0,
+        bid,
+        ask,
+        mark,
+        last: mark || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0),
+      });
+    }
+    return { items };
   }
 
   stop() {

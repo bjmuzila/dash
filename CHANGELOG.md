@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-06-21 (session 31) — EM Freeze Guard, Snapshots → Postgres, Backend Table = Frozen Source
+
+Version bump: `2026.6.21-v18` → `2026.6.21-v20`.
+
+### Weekly EM freeze guard (`app/api/levels/route.ts`)
+- The customer-facing weekly `em` is now write-once per week. `em`/`close`/`up`/`down` only change when the supplied `em` is non-null AND the caller is either the trusted publisher (`x-internal-token` === `INTERNAL_API_TOKEN`) OR the row has no `em` frozen since this week's Saturday-09:00-ET boundary.
+- Added `lastSaturday9amET()` helper to compute the freeze boundary; passed as `$13` (trusted) / `$14` (weekStart) into the upsert.
+- Fixes the 128 → 105 → 95 drift: the backend dashboard's live recompute can no longer overwrite the Saturday-9am value. Zones/pivot/labels still refresh freely.
+
+### Snapshots moved from IndexedDB → Postgres (`app/api/snapshots/route.ts`, `[id]/route.ts`, `components/dashboard/EstimatedMoves.tsx`)
+- New `em_snapshots` table (JSONB `payload` + promoted `view`/`ts`/`date`/`time`/`period` columns). Route rewritten: GET (list, `?view=` / legacy `?period=`), POST (save), DELETE (`?id=`).
+- Component `dbSaveSnapshot`/`dbGetAll`/`dbDeleteSnapshot` helpers now fetch the API instead of IndexedDB; `dbRef` is a vestigial ready flag.
+- One-time `migrateLegacyIndexedDb()` lifts any remaining IndexedDB snapshots into Postgres (localStorage `em_snapshots_migrated=1` guard).
+- `[id]` DELETE now tries `em_snapshots` then legacy `snapshots`; legacy `estimated-moves.js` still works via the rewritten route.
+
+### Backend Estimated Moves table = frozen source
+- Estimated view now loads the frozen `/api/levels` rows (`loadFrozenLevels()`) on mount and on Refresh — no live recompute, and the backend no longer pushes `em` to `/api/levels` at all (publisher owns it exclusively).
+- Added an owner-only **Compute Live** button (inspection only; never writes), and a toolbar **Source** chip: "Weekly publish — &lt;timestamp&gt; ET" (from `em_updated_at`) or amber "Live (not saved)".
+
+### Backend table column cleanup
+- Removed the **vs 4-Wk** and **vs 12-Wk** columns from the backend Estimated Moves table (headers + cells); dropped the now-dead `tickerStats` state, `TickerEmStats` type, and per-ticker stats fetch. Customer `/em` page's historical-average display is unchanged.
+
 ## 2026-06-21 (session 30) — Landing Page: X Follow Button + Feature Copy
 
 Updated the public landing page (`components/landing/LandingClient.tsx`).

@@ -1,6 +1,7 @@
 .next/
 node_modules/
 server-v2/.levels-last-week
+server-v2/.es-footprint.json
 .env*.local
 .env
 *.env
