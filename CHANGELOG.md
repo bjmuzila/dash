@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-21 (session 32) — Owner page: "EM Grabbed" timestamp on Levels Publish panel
+
+Added an **EM Grabbed** field beside **Last Published** in the Levels Publish · /em feed panel (`app/dev/owner/page.tsx`), so the owner can see when the EM/straddle data was actually captured — distinct from when the publish job ran.
+
+- `levels` state extended with `emGrabbed: string | null`.
+- `/api/levels` fetch now derives the newest `em_updated_at` across all rows (alongside the existing `updated_at` → `lastRun`).
+- New "EM Grabbed" column renders `fmtLastRun(levels.emGrabbed)` next to "Last Published".
+- Verified `/api/levels` GET (`SELECT *`) returns `em_updated_at`; column exists, is back-filled, and only advances when `em` actually changes — so "EM Grabbed" reflects the true capture time, not the publish time.
+
+---
+
 ## 2026-06-21 (session 31) — EM Freeze Guard, Snapshots → Postgres, Backend Table = Frozen Source
 
 Version bump: `2026.6.21-v18` → `2026.6.21-v20`.

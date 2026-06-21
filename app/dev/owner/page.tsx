@@ -488,8 +488,9 @@ export default function OwnerDashboard() {
   const [levels, setLevels] = useState<{
     count: number;
     lastRun: string | null;
+    emGrabbed: string | null;
     tickers: Array<{ ticker: string; stale: boolean }>;
-  }>({ count: 0, lastRun: null, tickers: [] });
+  }>({ count: 0, lastRun: null, emGrabbed: null, tickers: [] });
 
   // Manual publish run state + last-run summary from /proxy/levels-status.
   const [pubRun, setPubRun] = useState<{
@@ -650,9 +651,15 @@ export default function OwnerDashboard() {
               .filter(Boolean)
               .sort()
               .pop() ?? null;
+            const emGrabbed = all
+              .map((r) => r.em_updated_at)
+              .filter(Boolean)
+              .sort()
+              .pop() ?? null;
             setLevels({
               count: all.length,
               lastRun: lastRun as string | null,
+              emGrabbed: emGrabbed as string | null,
               tickers: all
                 .filter((r) => r.ticker)
                 .map((r) => ({
@@ -661,7 +668,7 @@ export default function OwnerDashboard() {
                 })),
             });
           } else {
-            setLevels({ count: 0, lastRun: null, tickers: [] });
+            setLevels({ count: 0, lastRun: null, emGrabbed: null, tickers: [] });
           }
         }
       } catch { /* non-fatal */ }
@@ -1153,6 +1160,10 @@ export default function OwnerDashboard() {
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Last Published</span>
                 <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.lastRun)}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>EM Grabbed</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.emGrabbed)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Tickers</span>
