@@ -484,7 +484,7 @@ export default function FootprintPage() {
   const endDrag = useCallback(() => { dragRef.current = null; }, []);
 
   return (
-    <div className="flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
+    <div className="flex h-full flex-col overflow-y-auto" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)" }}>
         <div>

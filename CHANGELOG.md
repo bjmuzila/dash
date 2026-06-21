@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-06-21 (session 34) — Header readability, ESU baseline fix, candle flush cadence
+
+Three targeted fixes to the home dashboard header and ES feed.
+
+### Header strip readability (`app/home/page.tsx`)
+- NET GEX / CALL WALL / PUT WALL / FLIP / MVC strip was hard to read (small font, esp. the green NET GEX value).
+- Labels bumped `clamp(8px,0.78vw,11px)` → `clamp(10px,0.95vw,13px)`; values `clamp(10px,1.05vw,15px)` weight-700 → `clamp(13px,1.3vw,18px)` weight-800.
+
+### ESU day-change baseline (`server-v2/proxy-tastytrade.js`)
+- ESU change % was inaccurate on the Sunday-evening reopen: `esFutPrevClose` was set only once from TT's REST `prev-close` at connect, which lags a session.
+- The live dxLink `Summary.prevDayClosePrice` for the ES symbol now updates `esFutPrevClose` — the exchange's official prior-session settle (= Friday's settle on a Sunday reopen). `setAux` already allows the live value to overwrite the stale REST one.
+
+### ES candle flush cadence (`server-v2/proxy-tastytrade.js`)
+- The 5s `_flushEsCandles` timer (hardcoded ×2) is now a `CANDLE_FLUSH_MS` constant, default 10000ms, env-tunable. Halves the live-candle delta broadcast rate while keeping the forming bar accurate (still aggregates every tick).
+
 ## 2026-06-21 (session 33) — Bandwidth leak hunt: subscriber-first REST, candle delta, reconnect leak
 
 Version bump: `2026.6.21-v20` → `2026.6.21-v22`.
