@@ -30,6 +30,34 @@ function fmtInt(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
+// ── Trading sessions (ET) ─────────────────────────────────────────────────────
+// Day (RTH):       09:30 – 17:30
+// Overnight (ETH): 18:00 – 09:30 (wraps midnight)
+// 17:30 – 18:00 is a dead zone, excluded from both.
+type Session = "day" | "overnight";
+
+/** Minutes-since-ET-midnight for a timestamp. */
+function etMinutes(ts: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date(ts));
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return h * 60 + m;
+}
+
+const DAY_OPEN = 9 * 60 + 30;   // 09:30
+const DAY_CLOSE = 17 * 60 + 30; // 17:30
+const ETH_OPEN = 18 * 60;       // 18:00
+
+/** Which session a timestamp belongs to, or null if in the 17:30–18:00 dead zone. */
+function sessionOf(ts: number): Session | null {
+  const mins = etMinutes(ts);
+  if (mins >= DAY_OPEN && mins < DAY_CLOSE) return "day";
+  if (mins >= ETH_OPEN || mins < DAY_OPEN) return "overnight";
+  return null; // 17:30–18:00
+}
+
 /** "HH:MM" ET for a timestamp — used for the shared time axis on both lanes. */
 function etHM(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", {
@@ -399,15 +427,25 @@ export default function FootprintPage() {
       .map(([ts, c]) => ({ ts, buy: c.buy, sell: c.sell, net: c.buy - c.sell }));
   }, [trades, rawDelta, minSize]);
 
+  // Current session (by `updatedAt`, the live clock). In the 17:30–18:00 dead zone
+  // we report the Day session that just closed.
+  const currentSession: Session = useMemo(() => {
+    const now = updatedAt || Date.now();
+    return sessionOf(now) ?? "day";
+  }, [updatedAt]);
+
+  // Stats reflect ONLY the current session's prints (Day 9:30–17:30 ET, or
+  // Overnight 18:00–9:30 ET). Prints outside the active session are excluded.
   const stats = useMemo(() => {
-    const buy = trades.filter((t) => t.side === "buy");
-    const sell = trades.filter((t) => t.side === "sell");
+    const inSession = trades.filter((t) => sessionOf(t.ts) === currentSession);
+    const buy = inSession.filter((t) => t.side === "buy");
+    const sell = inSession.filter((t) => t.side === "sell");
     const buyVol = buy.reduce((a, t) => a + t.size, 0);
     const sellVol = sell.reduce((a, t) => a + t.size, 0);
     const net = buyVol - sellVol;
-    const biggest = trades.reduce<EsBigTrade | null>((m, t) => (!m || t.size > m.size ? t : m), null);
+    const biggest = inSession.reduce<EsBigTrade | null>((m, t) => (!m || t.size > m.size ? t : m), null);
     return { buyCount: buy.length, sellCount: sell.length, buyVol, sellVol, net, biggest };
-  }, [trades]);
+  }, [trades, currentSession]);
 
   const label = symbol ? symbol.replace(/:.*/, "") : "ESU6";
 
@@ -513,8 +551,23 @@ export default function FootprintPage() {
         </div>
       </div>
 
-      {/* Stat strip */}
-      <div className="grid gap-3 p-4 md:grid-cols-4">
+      {/* Session label */}
+      <div className="flex items-center gap-2 px-4 pt-3">
+        <span className="text-[10px] uppercase tracking-[0.18em] text-white/40">Session</span>
+        <span
+          className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+          style={{
+            color: currentSession === "day" ? "#38bdf8" : "#a78bfa",
+            background: currentSession === "day" ? "rgba(56,189,248,.12)" : "rgba(167,139,250,.12)",
+            border: `1px solid ${currentSession === "day" ? "rgba(56,189,248,.4)" : "rgba(167,139,250,.4)"}`,
+          }}
+        >
+          {currentSession === "day" ? "Day · 9:30–5:30 ET" : "Overnight · 6:00pm–9:30am ET"}
+        </span>
+      </div>
+
+      {/* Stat strip — current session only */}
+      <div className="grid gap-3 px-4 pb-4 pt-2 md:grid-cols-4">
         <StatCard label="Net Delta (prints)" value={`${stats.net >= 0 ? "+" : ""}${fmtInt(stats.net)}`} color={stats.net >= 0 ? BUY : SELL} sub={`${fmtInt(stats.buyVol)} buy / ${fmtInt(stats.sellVol)} sell`} />
         <StatCard label="Buy Orders" value={fmtInt(stats.buyCount)} color={BUY} sub={`${fmtInt(stats.buyVol)} contracts`} />
         <StatCard label="Sell Orders" value={fmtInt(stats.sellCount)} color={SELL} sub={`${fmtInt(stats.sellVol)} contracts`} />
