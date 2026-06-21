@@ -409,7 +409,7 @@ export default function TopBar() {
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <SnapButton mode="save" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/bzilatrades-logo.png" alt="BzilaTrades" style={{ height: 42, width: "auto", objectFit: "contain" }} />
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 42, width: "auto", objectFit: "contain" }} />
           <div id="topbar-dd-root" style={{ position: "relative" }}>
             <button
               onClick={(e) => { e.stopPropagation(); setDdOpen((v) => !v); }}

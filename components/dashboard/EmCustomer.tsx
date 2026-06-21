@@ -160,7 +160,7 @@ export default function EmCustomer() {
     <div style={S.page}>
       <div style={S.wrap}>
         <div style={S.header}>
-          <div style={S.kicker}>BzilaTrades</div>
+          <div style={S.kicker}>CB Edge</div>
           <h1 style={S.title}>Weekly Estimated Move & Zones</h1>
           <p style={S.sub}>
             Enter a ticker to see this week&apos;s estimated move and the buy / sell zones.

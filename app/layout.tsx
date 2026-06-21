@@ -5,8 +5,8 @@ import "./globals.css";
 import LayoutShell from "@/components/shared/LayoutShell";
 
 export const metadata: Metadata = {
-  title: "BzilaTrades Dashboard",
-  description: "Real-time SPX GEX & options flow dashboard",
+  title: "CB Edge Dashboard",
+  description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
 };
 
 export const viewport: Viewport = {

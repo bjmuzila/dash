@@ -4,7 +4,7 @@ import { useState } from "react";
 import { SignInButton } from "@clerk/nextjs";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
-const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "BzilaTrades";
+const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
 const FEATURES = [
   { t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
@@ -93,11 +93,18 @@ export default function LandingClient() {
         }}
       >
         <div style={card}>
+          {/* Accent glow bleeding through the glass */}
+          <div style={cardGlow} aria-hidden />
+
           <div style={badge}>Launching soon</div>
 
-          <h1 style={{ fontSize: "clamp(28px,4vw,42px)", fontWeight: 800, margin: "14px 0 6px", lineHeight: 1.1 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} />
+
+          <h1 style={{ fontSize: "clamp(26px,3.6vw,38px)", fontWeight: 800, margin: "10px 0 4px", lineHeight: 1.1 }}>
             {APP_NAME}
           </h1>
+          <div style={tagline}>Real Edge — Real Orderflow</div>
           <p style={{ color: T.muted, fontSize: 16, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
             A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
             traders. See dealer positioning, flow, and key levels the moment they move.
@@ -167,13 +174,48 @@ export default function LandingClient() {
 /* ── styles ───────────────────────────────────────────────────────────── */
 
 const card: React.CSSProperties = {
+  position: "relative",
+  overflow: "hidden",
   width: "min(620px, 100%)",
-  background: "rgba(13,17,25,0.82)",
-  backdropFilter: "blur(18px)",
-  border: `1px solid ${T.border}`,
+  background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
+  backdropFilter: "blur(22px)",
+  WebkitBackdropFilter: "blur(22px)",
+  border: "1px solid rgba(0,240,255,0.14)",
   borderRadius: 20,
   padding: "clamp(24px, 4vw, 40px)",
-  boxShadow: "0 30px 80px rgba(0,0,0,0.55)",
+  boxShadow:
+    "0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(0,240,255,0.04)",
+};
+
+const cardGlow: React.CSSProperties = {
+  position: "absolute",
+  top: -120,
+  left: "50%",
+  transform: "translateX(-50%)",
+  width: 420,
+  height: 220,
+  background:
+    "radial-gradient(circle, rgba(0,240,255,0.16) 0%, rgba(139,92,246,0.08) 45%, transparent 70%)",
+  pointerEvents: "none",
+  filter: "blur(10px)",
+};
+
+const logo: React.CSSProperties = {
+  display: "block",
+  height: 56,
+  width: "auto",
+  objectFit: "contain",
+  margin: "16px 0 4px",
+  filter: "drop-shadow(0 4px 14px rgba(0,240,255,0.25))",
+};
+
+const tagline: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  letterSpacing: "0.06em",
+  color: T.cyan,
+  margin: "0 0 16px",
+  opacity: 0.85,
 };
 
 const badge: React.CSSProperties = {
@@ -196,8 +238,8 @@ const featureGrid: React.CSSProperties = {
 };
 
 const featureCell: React.CSSProperties = {
-  background: "rgba(255,255,255,0.03)",
-  border: `1px solid ${T.border}`,
+  background: "linear-gradient(180deg, rgba(0,240,255,0.04), rgba(255,255,255,0.02))",
+  border: "1px solid rgba(0,240,255,0.10)",
   borderRadius: 12,
   padding: 14,
 };

@@ -11,14 +11,14 @@ export default function Navbar() {
     >
       <Link href="/home" className="flex items-center gap-2">
         <Image
-          src="/bzilatrades-logo.png"
-          alt="BzilaTrades"
+          src="/cb-edge-logo.png"
+          alt="CB Edge"
           width={32}
           height={32}
           priority
         />
         <span className="text-sm font-semibold tracking-widest uppercase" style={{ color: "var(--accent)" }}>
-          BzilaTrades
+          CB Edge
         </span>
       </Link>
 
