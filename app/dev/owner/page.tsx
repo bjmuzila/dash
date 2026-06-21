@@ -41,6 +41,13 @@ interface PageStatus {
   status?: string;
 }
 
+interface RenderMetrics {
+  bandwidth: { value: number | null; unit: string; window: string };
+  memory:    { value: number | null; unit: string; window: string };
+  cpu:       { value: number | null; unit: string; window: string };
+  fetchedAt: string;
+}
+
 interface EodGexRow {
   symbol: string;
   total_gex: number;
@@ -497,6 +504,11 @@ export default function OwnerDashboard() {
   // EOD GEX save status (today's rows from eod_gex table)
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
 
+  // Render hosting metrics
+  const [renderMetrics, setRenderMetrics] = useState<RenderMetrics | null>(null);
+  const [renderWindow, setRenderWindow] = useState<"live" | "weekly" | "monthly">("live");
+  const [renderLoading, setRenderLoading] = useState(false);
+
   // Levels section collapsed state
   const [levelsCollapsed, setLevelsCollapsed] = useState(true);
 
@@ -652,6 +664,12 @@ export default function OwnerDashboard() {
         }
       } catch { /* non-fatal */ }
 
+      // Render hosting metrics (live window on general refresh)
+      try {
+        const rm = await fetch("/api/render-metrics?window=live", { cache: "no-store" });
+        if (rm.ok) { setRenderMetrics(await rm.json()); setRenderWindow("live"); }
+      } catch { /* non-fatal */ }
+
       // Manual-publish run summary (last run + whether one is in progress).
       try {
         const ps = await fetch("/proxy/levels-status", { cache: "no-store" });
@@ -675,6 +693,17 @@ export default function OwnerDashboard() {
       setLastRefresh(new Date());
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const fetchRenderWindow = useCallback(async (w: "live" | "weekly" | "monthly") => {
+    setRenderWindow(w);
+    setRenderLoading(true);
+    try {
+      const rm = await fetch(`/api/render-metrics?window=${w}`, { cache: "no-store" });
+      if (rm.ok) setRenderMetrics(await rm.json());
+    } catch { /* non-fatal */ } finally {
+      setRenderLoading(false);
     }
   }, []);
 
@@ -881,6 +910,88 @@ export default function OwnerDashboard() {
             <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
             <StatCard label="Version" value="2026.6.19-v2" accent={HOME_THEME.purple} mono />
+          </div>
+        </div>
+
+        {/* ── Render hosting metrics ── */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <SectionLabel>Render · Hosting</SectionLabel>
+            <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
+              {(["live", "weekly", "monthly"] as const).map(w => (
+                <button
+                  key={w}
+                  onClick={() => void fetchRenderWindow(w)}
+                  disabled={renderLoading}
+                  style={{
+                    padding: "3px 10px",
+                    fontSize: 9,
+                    fontWeight: 800,
+                    borderRadius: 4,
+                    border: "none",
+                    cursor: renderLoading ? "wait" : "pointer",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    background: renderWindow === w ? "rgba(0,229,255,.15)" : "transparent",
+                    color: renderWindow === w ? HOME_THEME.cyan : HOME_THEME.muted,
+                  }}
+                >
+                  {w === "live" ? "Live" : w === "weekly" ? "7 Day" : "30 Day"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
+            <StatCard
+              label={`Bandwidth · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
+              value={renderMetrics?.bandwidth.value != null
+                ? renderMetrics.bandwidth.value < 1024
+                  ? `${renderMetrics.bandwidth.value.toFixed(1)} MB`
+                  : `${(renderMetrics.bandwidth.value / 1024).toFixed(2)} GB`
+                : "—"}
+              accent={HOME_THEME.cyan}
+              mono
+            />
+            <StatCard
+              label={`Memory · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
+              value={renderMetrics?.memory.value != null
+                ? renderMetrics.memory.value < 1024 * 1024
+                  ? `${(renderMetrics.memory.value / 1024).toFixed(0)} KB`
+                  : `${(renderMetrics.memory.value / 1024 / 1024).toFixed(0)} MB`
+                : "—"}
+              accent={(() => {
+                const mb = (renderMetrics?.memory.value ?? 0) / 1024 / 1024;
+                return mb > 400 ? HOME_THEME.red : mb > 200 ? HOME_THEME.orange : HOME_THEME.green;
+              })()}
+              mono
+            />
+            <StatCard
+              label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
+              value={renderMetrics?.cpu.value != null
+                ? `${(renderMetrics.cpu.value * 100).toFixed(1)}%`
+                : "—"}
+              accent={(() => {
+                const pct = (renderMetrics?.cpu.value ?? 0) * 100;
+                return pct > 80 ? HOME_THEME.red : pct > 40 ? HOME_THEME.orange : HOME_THEME.green;
+              })()}
+              mono
+            />
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px" }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>Updated</div>
+              <div style={{ fontSize: 11, fontFamily: "monospace", color: HOME_THEME.muted, marginTop: 4 }}>
+                {renderMetrics?.fetchedAt
+                  ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
+                  : "—"}
+              </div>
+              <a
+                href="https://dashboard.render.com/web/srv-d8mk8se7r5hc739t138g"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 10, color: HOME_THEME.cyan, marginTop: 6, textDecoration: "none", fontWeight: 700 }}
+              >
+                Render Dashboard ↗
+              </a>
+            </div>
           </div>
         </div>
 

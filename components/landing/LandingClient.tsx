@@ -101,10 +101,6 @@ export default function LandingClient() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} />
 
-          <h1 style={{ fontSize: "clamp(26px,3.6vw,38px)", fontWeight: 800, margin: "10px 0 4px", lineHeight: 1.1 }}>
-            {APP_NAME}
-          </h1>
-          <div style={tagline}>Real Edge — Real Orderflow</div>
           <p style={{ color: T.muted, fontSize: 16, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
             A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
             traders. See dealer positioning, flow, and key levels the moment they move.
@@ -202,20 +198,13 @@ const cardGlow: React.CSSProperties = {
 
 const logo: React.CSSProperties = {
   display: "block",
-  height: 56,
-  width: "auto",
+  width: "100%",
+  maxWidth: "100%",
+  height: "auto",
+  maxHeight: 200,
   objectFit: "contain",
-  margin: "16px 0 4px",
-  filter: "drop-shadow(0 4px 14px rgba(0,240,255,0.25))",
-};
-
-const tagline: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  letterSpacing: "0.06em",
-  color: T.cyan,
-  margin: "0 0 16px",
-  opacity: 0.85,
+  margin: "18px 0 18px",
+  filter: "drop-shadow(0 6px 20px rgba(0,240,255,0.25))",
 };
 
 const badge: React.CSSProperties = {
