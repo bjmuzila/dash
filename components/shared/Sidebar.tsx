@@ -15,13 +15,6 @@ const HomeIcon = () => (
   </svg>
 );
 
-const SettingsIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </svg>
-);
-
 const QUOTE_SYMBOLS = [
   { sym: "/ESU26", label: "ESU" },
   { sym: "/NQU26", label: "NQU" },
@@ -264,17 +257,11 @@ export default function Sidebar() {
   const pcts = useSidebarQuotes();
   const { isSignedIn } = useUser();
   const { orderedItems, reorder } = useNavOrder();
-  const [idleActionState, setIdleActionState] = useState<"idle" | "busy" | "ok" | "err">("idle");
-  const [isIdle, setIsIdle] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [groupAnchor, setGroupAnchor] = useState<{ top: number; left: number } | null>(null);
-  const [settingsAnchor, setSettingsAnchor] = useState<{ bottom: number; left: number } | null>(null);
   const [dragHref, setDragHref] = useState<string | null>(null);
   const groupBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const groupMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
-  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
@@ -287,43 +274,14 @@ export default function Sidebar() {
       const inBtn = Object.values(groupBtnRefs.current).some((el) => el?.contains(target));
       const inMenu = Object.values(groupMenuRefs.current).some((el) => el?.contains(target));
       if (!inBtn && !inMenu) setOpenGroup(null);
-      if (!settingsBtnRef.current?.contains(target) && !settingsMenuRef.current?.contains(target)) setSettingsOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  // Reflect current idle state on mount.
-  useEffect(() => {
-    fetch("/proxy/idle").then(r => r.ok ? r.json() : null).then(j => {
-      if (j && typeof j.idle === "boolean") setIsIdle(j.idle);
-    }).catch(() => {});
-  }, []);
-
-  const toggleIdle = async () => {
-    const next = !isIdle;
-    setIdleActionState("busy");
-    try {
-      const r = await fetch("/proxy/idle", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idle: next }),
-      });
-      if (!r.ok) throw new Error(String(r.status));
-      const j = await r.json();
-      setIsIdle(typeof j.idle === "boolean" ? j.idle : next);
-      setIdleActionState("ok");
-    } catch {
-      setIdleActionState("err");
-    } finally {
-      setTimeout(() => setIdleActionState("idle"), 1500);
-      setSettingsOpen(false);
-    }
-  };
-
   return (
     <nav
-      onScroll={() => { setOpenGroup(null); setSettingsOpen(false); }}
+      onScroll={() => { setOpenGroup(null); }}
       style={{
         width: 76,
         flexShrink: 0,
@@ -514,104 +472,11 @@ export default function Sidebar() {
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "4px 12px 0" }} />
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 0 14px", paddingBottom: "calc(14px + env(safe-area-inset-bottom, 0px))", flexShrink: 0 }}>
-        <div style={{ position: "relative" }}>
-          <button
-            ref={settingsBtnRef}
-            title="Settings"
-            onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setSettingsAnchor({ bottom: window.innerHeight - r.bottom, left: r.right + 8 });
-              setSettingsOpen((v) => !v);
-            }}
-            disabled={idleActionState === "busy"}
-            style={{
-              background: "none",
-              border: "none",
-              // Red when idle is active; otherwise muted (or status color while busy).
-              color: isIdle ? "#ff4757"
-                : idleActionState === "err" ? "#ff4757"
-                : idleActionState === "ok" ? "#00e676"
-                : HOME_THEME.muted,
-              cursor: idleActionState === "busy" ? "wait" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 6,
-              borderRadius: 8,
-              transition: "color 0.15s",
-            }}
-          >
-            <SettingsIcon />
-          </button>
-
-          {settingsOpen && mounted && createPortal((
-            <div
-              ref={settingsMenuRef}
-              style={{
-                position: "fixed",
-                left: settingsAnchor?.left ?? 52,
-                bottom: settingsAnchor?.bottom ?? 0,
-                zIndex: 10001,
-                minWidth: 160,
-                background: "rgba(13,17,25,0.96)",
-                border: "1px solid rgba(0,229,255,0.20)",
-                borderRadius: 10,
-                boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-                backdropFilter: "blur(16px)",
-                overflow: "hidden",
-              }}
-            >
-              <div style={{ padding: "8px 12px", fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                Settings
-              </div>
-              <button
-                onClick={toggleIdle}
-                disabled={idleActionState === "busy"}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  width: "100%",
-                  padding: "10px 12px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: isIdle ? "#ff4757" : "#fff",
-                  background: isIdle ? "rgba(255,71,87,0.08)" : "transparent",
-                  border: "none",
-                  borderLeft: isIdle ? "2px solid #ff4757" : "2px solid transparent",
-                  cursor: "pointer",
-                  textAlign: "left",
-                }}
-              >
-                <span>Idle Proxy</span>
-                <span style={{
-                  fontSize: 9, fontWeight: 800, letterSpacing: "0.08em",
-                  padding: "2px 6px", borderRadius: 3,
-                  background: isIdle ? "#ff4757" : "rgba(255,255,255,0.08)",
-                  color: isIdle ? "#05080d" : HOME_THEME.muted,
-                }}>
-                  {idleActionState === "busy" ? "…" : isIdle ? "ON" : "OFF"}
-                </span>
-              </button>
-            </div>
-          ), document.body)}
-        </div>
-
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
           <UserButton
             afterSignOutUrl="/"
             appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }}
           />
-        </div>
-
-        <div style={{
-          fontSize: 8,
-          color: isIdle || idleActionState === "err" ? HOME_THEME.red : HOME_THEME.muted,
-          textTransform: "uppercase",
-          letterSpacing: "0.12em",
-          textAlign: "center",
-        }}>
-          {idleActionState === "busy" ? "Working" : isIdle ? "Idle" : "Ready"}
         </div>
       </div>
     </nav>

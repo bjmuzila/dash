@@ -60,10 +60,15 @@ async function fetchOne(yahooSym: string): Promise<YahooQuote> {
     // window (≈a week ago for range=5d) — NOT yesterday. Using it inflates the
     // day %. Prefer Yahoo's actual prior-session close, then the second-to-last
     // candle, and only fall back to chartPreviousClose as a last resort.
+    // For the day %, the live price (regularMarketPrice) must be compared to the
+    // SAME session's prior close. With includePrePost the second-to-last daily
+    // candle is the true prior-session close and is consistent with the live
+    // price; meta.regularMarketPreviousClose can lag a session for futures and
+    // inflates the % — only fall back to it when the candle series is missing.
     const prevClose =
+      seriesPrevClose ??
       meta.regularMarketPreviousClose ??
       meta.previousClose ??
-      seriesPrevClose ??
       meta.chartPreviousClose ??
       null;
     const change = price != null && prevClose != null ? price - prevClose : null;

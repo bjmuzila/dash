@@ -19,6 +19,13 @@
 const INTERVAL_MIN = 5;                       // snapshot cadence (minutes)
 const INTERVAL_MS = INTERVAL_MIN * 60 * 1000; // 5 minutes
 
+// Runtime on/off switch for the auto-collector. The interval keeps firing but
+// collectOnce() short-circuits when disabled, so the owner dashboard can pause
+// auto-snapshotting without restarting the server. Manual snapshots ignore this.
+let autoEnabled = true;
+function setMvcAutoEnabled(on) { autoEnabled = !!on; }
+function isMvcAutoEnabled() { return autoEnabled; }
+
 function nowParts() {
   const p = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
@@ -70,21 +77,23 @@ function highestRow(chain, field) {
     chain[0]);
 }
 
-async function collectOnce(base) {
-  if (!isRTH()) return; // silent skip off-hours
+async function collectOnce(base, opts = {}) {
+  const manual = !!opts.manual;
+  if (!manual && !autoEnabled) return;          // auto paused via dashboard
+  if (!isRTH()) { return manual ? { ok: false, error: 'outside RTH' } : undefined; }
 
   let data;
   try {
     const res = await fetch(`${base}/api/gex`, { cache: 'no-store' });
-    if (!res.ok) { console.log(`[auto-mvc] /api/gex ${res.status} — skip`); return; }
+    if (!res.ok) { console.log(`[auto-mvc] /api/gex ${res.status} — skip`); return manual ? { ok: false, error: `/api/gex ${res.status}` } : undefined; }
     data = await res.json();
   } catch (e) {
     console.log(`[auto-mvc] /api/gex unreachable — skip (${e.message})`);
-    return;
+    return manual ? { ok: false, error: e.message } : undefined;
   }
 
   const chain = data.chain ?? [];
-  if (!chain.length) { console.log('[auto-mvc] empty chain — skip'); return; }
+  if (!chain.length) { console.log('[auto-mvc] empty chain — skip'); return manual ? { ok: false, error: 'empty chain' } : undefined; }
 
   const spot = Number(data.spotPrice) || 0;
   const expiry = data.expiration ?? '—';
@@ -132,7 +141,7 @@ async function collectOnce(base) {
     totalNetDEX_Vol,
     totalAbsNetGEX: Math.abs(totalNetGEX),
     gexFlip,
-    triggerType: `auto-${INTERVAL_MIN}m`,
+    triggerType: manual ? 'manual' : `auto-${INTERVAL_MIN}m`,
     expiration: expiry,
   };
 
@@ -143,10 +152,12 @@ async function collectOnce(base) {
       body: JSON.stringify(body),
     });
     const json = await res.json();
-    if (!res.ok) { console.log(`[auto-mvc] POST ${res.status} — ${JSON.stringify(json)}`); return; }
+    if (!res.ok) { console.log(`[auto-mvc] POST ${res.status} — ${JSON.stringify(json)}`); return { ok: false, error: `POST ${res.status}` }; }
     console.log(`[auto-mvc] ${body.date} ${body.time} ET — saved id ${json.id} · MVC ${body.strikeOIVol} · SPX ${spot}`);
+    return { ok: true, id: json.id, strike: body.strikeOIVol, spot };
   } catch (e) {
     console.log(`[auto-mvc] POST failed — ${e.message}`);
+    return { ok: false, error: e.message };
   }
 }
 
@@ -180,4 +191,4 @@ function startMvcAutoSnapshot(port) {
   return () => { if (timer) clearInterval(timer); };
 }
 
-module.exports = { startMvcAutoSnapshot, collectOnce };
+module.exports = { startMvcAutoSnapshot, collectOnce, setMvcAutoEnabled, isMvcAutoEnabled };

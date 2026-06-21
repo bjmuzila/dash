@@ -174,6 +174,67 @@ async function main() {
         sendJson(res, 200, { lastRun: getLastRun() || null, running: isPublishing() });
         return;
       }
+      // Reconnect the live TT/dxLink feed in place (stop + start). Recovers from a
+      // dropped dxLink socket or expired TT auth without a Render restart.
+      //   POST /proxy/reconnect
+      if (pathname === '/proxy/reconnect' && req.method === 'POST') {
+        if (!proxy || typeof proxy.reconnect !== 'function') {
+          sendJson(res, 503, { ok: false, error: 'proxy not ready' });
+          return;
+        }
+        proxy.reconnect()
+          .then(() => sendJson(res, 200, { ok: true }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      // Manually fire the EOD GEX recorder (the 3:55–4:05 ET window may have been
+      // missed, e.g. server was idle/asleep). POST /proxy/eod-gex-run
+      if (pathname === '/proxy/eod-gex-run' && req.method === 'POST') {
+        const { collectEodGex } = require('./eod-gex-recorder');
+        collectEodGex(`http://localhost:${PORT}`, { force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      // Fire a single MVC snapshot now (ignores the auto on/off switch, still
+      // requires RTH + a live chain). POST /proxy/mvc-snapshot
+      if (pathname === '/proxy/mvc-snapshot' && req.method === 'POST') {
+        const { collectOnce } = require('./mvc-auto-snapshot');
+        collectOnce(`http://localhost:${PORT}`, { manual: true })
+          .then((r) => sendJson(res, 200, r ?? { ok: false, error: 'no result' }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      // Toggle the MVC auto-collector on/off at runtime, or read its state.
+      //   GET  /proxy/mvc-auto            → { enabled }
+      //   POST /proxy/mvc-auto { on: bool } → { enabled }
+      if (pathname === '/proxy/mvc-auto' && req.method === 'GET') {
+        const { isMvcAutoEnabled } = require('./mvc-auto-snapshot');
+        sendJson(res, 200, { enabled: isMvcAutoEnabled() });
+        return;
+      }
+      if (pathname === '/proxy/mvc-auto' && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          const { setMvcAutoEnabled, isMvcAutoEnabled } = require('./mvc-auto-snapshot');
+          let on = true;
+          try { on = !!JSON.parse(body || '{}').on; } catch {}
+          setMvcAutoEnabled(on);
+          sendJson(res, 200, { enabled: isMvcAutoEnabled() });
+        });
+        return;
+      }
+      // Trigger a Render redeploy via the service's deploy hook (set
+      // RENDER_DEPLOY_HOOK_URL in env). POST /proxy/redeploy
+      if (pathname === '/proxy/redeploy' && req.method === 'POST') {
+        const hook = process.env.RENDER_DEPLOY_HOOK_URL || '';
+        if (!hook) { sendJson(res, 400, { ok: false, error: 'RENDER_DEPLOY_HOOK_URL not set' }); return; }
+        fetch(hook, { method: 'POST' })
+          .then((r) => sendJson(res, r.ok ? 200 : 502, { ok: r.ok, status: r.status }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Dev probe: raw feed data for a single built symbol from the live maps
       // (same source as the GEX chart). GET /proxy/probe?symbol=...&feed=Greeks
       if (pathname === '/proxy/probe' && req.method === 'GET') {
@@ -332,7 +393,7 @@ async function main() {
 
   server.listen(PORT, () => {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
-    // In-process MVC auto-collector: writes a snapshot every 30m during RTH.
+    // In-process MVC auto-collector: writes a snapshot every 5m during RTH.
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);

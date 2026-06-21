@@ -239,13 +239,15 @@ async function upsertEodGex(date, symbol, total_gex, spot, computed_at) {
 
 // ── Main collection ───────────────────────────────────────────────────────────
 
-async function collectEodGex(base) {
-  if (!isEodWindow()) return; // silent skip outside window
+async function collectEodGex(base, opts = {}) {
+  const force = !!opts.force;
+  if (!force && !isEodWindow()) return; // silent skip outside window (unless forced)
 
   const date = etDateStr();
   const computedAt = new Date().toISOString();
-  console.log(`[eod-gex] EOD window — recording for ${date}`);
+  console.log(`[eod-gex] ${force ? 'manual run' : 'EOD window'} — recording for ${date}`);
 
+  const saved = [];
   for (const { symbol, fetchMode, chainTicker } of EOD_SYMBOLS) {
     try {
       let result;
@@ -263,6 +265,7 @@ async function collectEodGex(base) {
       }
 
       await upsertEodGex(date, symbol, tng, spot, computedAt);
+      saved.push(symbol);
       console.log(
         `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`
       );
@@ -270,6 +273,7 @@ async function collectEodGex(base) {
       console.warn(`[eod-gex] ${symbol} — ${e.message}`);
     }
   }
+  return { date, saved };
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────

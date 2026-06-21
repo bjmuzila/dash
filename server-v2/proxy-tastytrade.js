@@ -2215,6 +2215,21 @@ class TastytradeProxy {
     this.flowTimer = null;
     this.client?.close();
   }
+
+  /**
+   * Tear down the live dxLink/TT connection and re-establish it from scratch.
+   * Used by the owner dashboard "Reconnect Feed" button to recover from a dropped
+   * dxLink socket or expired TT auth without a full Render restart.
+   */
+  async reconnect() {
+    marketState.setStatus({ reconnecting: true });
+    try { this.stop(); } catch {}
+    // Reset idle so start() wires its timers back up.
+    this.idle = false;
+    await this.start();
+    marketState.setStatus({ reconnecting: false });
+    return true;
+  }
 }
 
 module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };

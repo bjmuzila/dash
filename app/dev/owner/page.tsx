@@ -578,6 +578,19 @@ export default function OwnerDashboard() {
     }
   }, [copyingAll]);
 
+  // ── Owner control surface ───────────────────────────────────────────────────
+  // Idle mode (moved here from the sidebar cogwheel) + MVC auto on/off, plus
+  // transient per-button busy/result state. Handlers are defined after refresh().
+  const [isIdle, setIsIdle] = useState<boolean | null>(null);
+  const [mvcAuto, setMvcAuto] = useState<boolean | null>(null);
+  const [ctlBusy, setCtlBusy] = useState<string | null>(null);
+  const [ctlMsg, setCtlMsg] = useState<{ key: string; text: string; ok: boolean } | null>(null);
+
+  const flashMsg = useCallback((key: string, text: string, ok: boolean) => {
+    setCtlMsg({ key, text, ok });
+    setTimeout(() => setCtlMsg((m) => (m?.key === key ? null : m)), 4000);
+  }, []);
+
   // Log state — two buckets
   const [tastyLogs, setTastyLogs] = useState<LogLine[]>([]);
   const [dxLogs, setDxLogs] = useState<LogLine[]>([]);
@@ -719,6 +732,97 @@ export default function OwnerDashboard() {
       setLoading(false);
     }
   }, []);
+
+  // Reflect idle + mvc-auto state on mount.
+  useEffect(() => {
+    fetch("/proxy/idle").then(r => r.ok ? r.json() : null).then(j => {
+      if (j && typeof j.idle === "boolean") setIsIdle(j.idle);
+    }).catch(() => {});
+    fetch("/proxy/mvc-auto").then(r => r.ok ? r.json() : null).then(j => {
+      if (j && typeof j.enabled === "boolean") setMvcAuto(j.enabled);
+    }).catch(() => {});
+  }, []);
+
+  const toggleIdle = useCallback(async () => {
+    const next = !isIdle;
+    setCtlBusy("idle");
+    try {
+      const r = await fetch("/proxy/idle", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idle: next }),
+      });
+      const j = await r.json();
+      setIsIdle(typeof j.idle === "boolean" ? j.idle : next);
+      setServer((prev) => ({ ...prev, idleMode: typeof j.idle === "boolean" ? j.idle : next }));
+      flashMsg("idle", next ? "Feed paused (idle ON)" : "Feed resumed (idle OFF)", true);
+    } catch (e) {
+      flashMsg("idle", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); }
+  }, [isIdle, flashMsg]);
+
+  const toggleMvcAuto = useCallback(async () => {
+    const next = !mvcAuto;
+    setCtlBusy("mvcAuto");
+    try {
+      const r = await fetch("/proxy/mvc-auto", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: next }),
+      });
+      const j = await r.json();
+      setMvcAuto(typeof j.enabled === "boolean" ? j.enabled : next);
+      flashMsg("mvcAuto", next ? "MVC auto-snapshot ON" : "MVC auto-snapshot OFF", true);
+    } catch (e) {
+      flashMsg("mvcAuto", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); }
+  }, [mvcAuto, flashMsg]);
+
+  const doReconnect = useCallback(async () => {
+    if (!window.confirm("Reconnect the TT/dxLink feed now? Live data drops for a few seconds while it re-establishes.")) return;
+    setCtlBusy("reconnect");
+    try {
+      const r = await fetch("/proxy/reconnect", { method: "POST" });
+      const j = await r.json();
+      flashMsg("reconnect", j?.ok ? "Feed reconnected" : `Failed: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("reconnect", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); void refresh(); }
+  }, [flashMsg, refresh]);
+
+  const doEodRun = useCallback(async () => {
+    setCtlBusy("eod");
+    try {
+      const r = await fetch("/proxy/eod-gex-run", { method: "POST" });
+      const j = await r.json();
+      const saved = j?.result?.saved?.length ? j.result.saved.join(", ") : "none";
+      flashMsg("eod", j?.ok ? `EOD GEX saved: ${saved}` : `Failed: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("eod", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); void refresh(); }
+  }, [flashMsg, refresh]);
+
+  const doMvcSnapshot = useCallback(async () => {
+    setCtlBusy("mvcSnap");
+    try {
+      const r = await fetch("/proxy/mvc-snapshot", { method: "POST" });
+      const j = await r.json();
+      flashMsg("mvcSnap", j?.ok ? `Snapshot saved · MVC ${j.strike} · SPX ${j.spot}` : `Skipped: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("mvcSnap", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); void refresh(); }
+  }, [flashMsg, refresh]);
+
+  const doRedeploy = useCallback(async () => {
+    if (!window.confirm("Trigger a Render redeploy?\n\nThis rebuilds and restarts the whole service — a few minutes of downtime.")) return;
+    if (!window.confirm("Are you sure? The dashboard will go offline during the rebuild.")) return;
+    setCtlBusy("redeploy");
+    try {
+      const r = await fetch("/proxy/redeploy", { method: "POST" });
+      const j = await r.json();
+      flashMsg("redeploy", j?.ok ? "Redeploy triggered — check Render" : `Failed: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("redeploy", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); }
+  }, [flashMsg]);
 
   const fetchRenderWindow = useCallback(async (w: "live" | "weekly" | "monthly") => {
     setRenderWindow(w);
@@ -960,6 +1064,107 @@ export default function OwnerDashboard() {
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
             <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Version" value="2026.6.19-v2" accent={HOME_THEME.purple} mono />
+          </div>
+        </div>
+
+        {/* ── Controls ── */}
+        <div>
+          <SectionLabel>Controls</SectionLabel>
+          <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+            {/* Toggles */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
+              {/* Idle */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Idle Mode (feed)</span>
+                <button
+                  onClick={toggleIdle}
+                  disabled={ctlBusy === "idle"}
+                  title="Pause/resume the live TT/dxLink feed. Idle ON stops recompute, flow, OI, and candle timers."
+                  style={{
+                    ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
+                    opacity: ctlBusy === "idle" ? 0.6 : 1,
+                    cursor: ctlBusy === "idle" ? "wait" : "pointer",
+                    background: isIdle ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.14)",
+                    color: isIdle ? HOME_THEME.red : HOME_THEME.green,
+                    border: `1px solid ${isIdle ? HOME_THEME.red : HOME_THEME.green}55`,
+                  }}
+                >
+                  {ctlBusy === "idle" ? "…" : isIdle == null ? "—" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause"}
+                </button>
+              </div>
+              {/* MVC auto */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>MVC Auto (5m)</span>
+                <button
+                  onClick={toggleMvcAuto}
+                  disabled={ctlBusy === "mvcAuto"}
+                  title="Enable/disable the in-process MVC auto-collector (writes mvc_snapshots every 5m during RTH)."
+                  style={{
+                    ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
+                    opacity: ctlBusy === "mvcAuto" ? 0.6 : 1,
+                    cursor: ctlBusy === "mvcAuto" ? "wait" : "pointer",
+                    background: mvcAuto ? "rgba(16,185,129,0.14)" : "rgba(239,68,68,0.16)",
+                    color: mvcAuto ? HOME_THEME.green : HOME_THEME.red,
+                    border: `1px solid ${mvcAuto ? HOME_THEME.green : HOME_THEME.red}55`,
+                  }}
+                >
+                  {ctlBusy === "mvcAuto" ? "…" : mvcAuto == null ? "—" : mvcAuto ? "● Auto ON — disable" : "○ Auto OFF — enable"}
+                </button>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button
+                onClick={doReconnect}
+                disabled={ctlBusy === "reconnect"}
+                title="Tear down and re-establish the TT/dxLink feed (recovers from a dropped socket or expired auth without a Render restart)."
+                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "reconnect" ? 0.6 : 1, cursor: ctlBusy === "reconnect" ? "wait" : "pointer" }}
+              >
+                {ctlBusy === "reconnect" ? "Reconnecting…" : "↻ Reconnect Feed"}
+              </button>
+              <button
+                onClick={doEodRun}
+                disabled={ctlBusy === "eod"}
+                title="Manually fire the EOD GEX recorder for $SPX/SPY/QQQ (in case the 3:55–4:05 ET window was missed)."
+                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "eod" ? 0.6 : 1, cursor: ctlBusy === "eod" ? "wait" : "pointer" }}
+              >
+                {ctlBusy === "eod" ? "Recording…" : "▶ Run EOD GEX now"}
+              </button>
+              <button
+                onClick={doMvcSnapshot}
+                disabled={ctlBusy === "mvcSnap"}
+                title="Write a single MVC snapshot right now (requires RTH + a live chain)."
+                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
+              >
+                {ctlBusy === "mvcSnap" ? "Saving…" : "📸 MVC Snapshot now"}
+              </button>
+              <button
+                onClick={doRedeploy}
+                disabled={ctlBusy === "redeploy"}
+                title="Trigger a full Render redeploy via the service deploy hook (rebuilds + restarts; a few minutes of downtime)."
+                style={{
+                  ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11,
+                  marginLeft: "auto",
+                  color: HOME_THEME.orange, borderColor: `${HOME_THEME.orange}55`,
+                  opacity: ctlBusy === "redeploy" ? 0.6 : 1, cursor: ctlBusy === "redeploy" ? "wait" : "pointer",
+                }}
+              >
+                {ctlBusy === "redeploy" ? "Triggering…" : "⟳ Redeploy (Render)"}
+              </button>
+            </div>
+
+            {/* Result message */}
+            {ctlMsg && (
+              <div style={{
+                fontSize: 11, fontFamily: "monospace", padding: "8px 10px", borderRadius: 8,
+                background: ctlMsg.ok ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)",
+                border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
+                color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
+              }}>
+                {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
+              </div>
+            )}
           </div>
         </div>
 
