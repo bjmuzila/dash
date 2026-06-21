@@ -124,7 +124,12 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       }, state.symbol));
     }
     if (changed.has('flow')) out.push(msg('flow', state.flow, state.symbol));
+    // Full esCandles array goes out only in the connect-time snapshot (written via
+    // setStateSilent, so it never lands in changedKeys here). Live updates arrive
+    // as a small esCandlesDelta — re-typed as 'esCandles' so the client's existing
+    // slotKey merge ingests it unchanged, carrying only the bars that moved.
     if (changed.has('esCandles')) out.push(msg('esCandles', state.esCandles, state.symbol));
+    if (changed.has('esCandlesDelta')) out.push(msg('esCandles', state.esCandlesDelta, state.symbol));
     if (changed.has('esBigTrades')) out.push(msg('esBigTrades', state.esBigTrades, state.symbol));
     if (changed.has('spot') || changed.has('prevClose')) {
       out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose }, state.symbol));

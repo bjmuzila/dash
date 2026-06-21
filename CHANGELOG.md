@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-06-21 (session 33) — Bandwidth leak hunt: subscriber-first REST, candle delta, reconnect leak
+
+Version bump: `2026.6.21-v20` → `2026.6.21-v22`.
+
+Investigated high bandwidth usage. Root cause was **duplicate upstream traffic**, not a security leak: REST-path pages each re-fetched from Tastytrade instead of reading the already-running subscriber, and the ES candle WS push re-sent the full 600-bar array every 5s to every tab.
+
+### Subscriber-first chain/marks serve (`server-v2/proxy-tastytrade.js`, `server-with-proxy.js`)
+- New `serveChainFromLive(ticker, expiration)` and `serveOptionMarksFromLive(occSymbols)` on `TastytradeProxy` — rebuild the nested chain / marks payloads from the live subscriber maps (`quotes`/`greeks`/`summaries`/`restOI`/`volumes`/`spot`), byte-compatible with `fetchChainFull` / `fetchOptionMarks`.
+- All-or-nothing coverage guard: serves live ONLY for the subscribed SYMBOL, active expiry, in-window strikes, warm feed, every leg present — else returns null → REST fallback unchanged. No blank strikes, no mixed staleness.
+- Wired into `/proxy/api/tt/chains/:ticker` and `/proxy/api/tt/option-marks` (try live, fall back to REST). Response carries `context`/`source: "live"|"rest"`.
+- Confirmed working on dev: `/api/chains?ticker=SPX` → `live`.
+- Added `CHAIN_LIVE_DEBUG=1` gated logging to report which guard sends a request to REST.
+
+### Chain cache (`server-v2/proxy-tastytrade.js`)
+- `REST_CHAIN_TTL_MS` 60s → 10 min (env-tunable). The ~30k-contract SPX chain structure rarely changes intraday; per-strike data is pulled separately and fresher.
+- Added in-flight coalescing (`_restChainInFlight`) so concurrent cold-cache misses for the same ticker share one upstream fetch.
+
+### ES candle delta broadcast (`server-v2/proxy-tastytrade.js`, `state/market-state.js`, `websocket-server.js`)
+- Was re-sending all 600 bars every 5s to every tab; only the forming bar (±a just-closed one) actually changes.
+- Track changed slot keys (`esCandlesDirtySlots`); flush writes the full array via new `setStateSilent` (no `change` emit, backs the connect-time snapshot) and broadcasts only moved bars as `esCandlesDelta`, re-typed as an `esCandles` message so the client's existing slotKey merge ingests it with zero client change.
+- ~99% cut on this stream. New tabs still get full history via connect snapshot.
+
+### `useTastytradeStream.ts` reconnect leak (dormant hook)
+- Cleanup only closed the socket but never cancelled the pending `setTimeout(connect)`, so unmount spawned a self-perpetuating reconnect loop (each iteration a new WS + TT OAuth round-trip).
+- Added `unmountedRef` guard, reconnect timer ref cleared on cleanup, handlers nulled before close, exponential backoff (3s→30s), post-await unmount check. Matches the safe `/ws/gex` hook pattern.
+
+### Pre-existing tsc errors cleared (unrelated to this work)
+- `app/trading/page.tsx`: removed duplicate `flex`/`minHeight` keys in a style literal.
+- `components/dashboard/EmCustomer.tsx`: widened `data` state to `Partial<Levels> | null` to match the zones-only fallback payload. `npx tsc --noEmit` now clean.
+
+### GEX rows delta — deferred
+- Considered applying the same delta to the 2s GEX broadcast; deferred. GEX changes many strikes per recompute (smaller, riskier win) and the client read-path needs verification first. Measure bandwidth post-deploy before revisiting.
+
+---
+
 ## 2026-06-21 (session 32) — Owner page: "EM Grabbed" timestamp on Levels Publish panel
 
 Added an **EM Grabbed** field beside **Last Published** in the Levels Publish · /em feed panel (`app/dev/owner/page.tsx`), so the owner can see when the EM/straddle data was actually captured — distinct from when the publish job ran.

@@ -1087,6 +1087,7 @@ class TastytradeProxy {
     this.esCandleSymbol = null; // candle stream symbol, e.g. "/ESU26:XCME{=5m}"
     this.esCandles = new Map(); // slotKey -> { timestamp, date, slotKey, time, open, high, low, close, volume }
     this.esCandlesDirty = false; // set when a candle slot changed since last flush
+    this.esCandlesDirtySlots = new Set(); // slotKeys changed since last flush (delta broadcast)
     this.candleFlushTimer = null;
     // Big-order footprint on the front ES future. We classify each ES Trade tick
     // as buy (lifted ask) / sell (hit bid) using the live ES bid/ask, keep a ring
@@ -1181,6 +1182,10 @@ class TastytradeProxy {
     this.spotSymbol = this.underlying.streamerSymbol;
     for (const c of contracts) this.contracts.set(c.streamerSymbol, c);
 
+    // Restore today's footprint from disk BEFORE the live feed connects, so an
+    // early live tick can't start a fresh buffer ahead of the restore.
+    this._loadFootprintFromDisk();
+
     const { token, url } = await getQuoteToken();
     this.client = new DxLinkClient({
       url,
@@ -1213,9 +1218,8 @@ class TastytradeProxy {
     if (!this.footprintFlushTimer) {
       this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
     }
-    // Restore today's footprint from disk (no-op if missing/stale), then mirror it
-    // back to disk every 5s so a restart reloads the session.
-    this._loadFootprintFromDisk();
+    // Mirror the footprint to disk every 5s so a restart reloads the session.
+    // (Restore itself happens earlier, before the live feed connects.)
     if (!this.footprintSaveTimer) {
       this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
     }
@@ -1371,11 +1375,25 @@ class TastytradeProxy {
   _flushEsCandles() {
     if (!this.esCandlesDirty) return;
     this.esCandlesDirty = false;
+    const dirtySlots = this.esCandlesDirtySlots;
+    this.esCandlesDirtySlots = new Set();
+
     const rows = [...this.esCandles.values()]
       .sort((a, b) => a.timestamp - b.timestamp)
       .slice(-600); // cap payload: ~15 sessions of RTH 5m bars
-    // Broadcast a fresh array reference so market-state emits a change.
-    marketState.setState({ esCandles: rows });
+
+    // Keep the FULL array in state so a newly-connecting client still gets the
+    // complete history in its connect-time snapshot. setStateSilent does NOT emit
+    // 'change', so this no longer triggers a full-array broadcast every 5s — the
+    // recurring update goes out as a small esCandlesDelta below.
+    marketState.setStateSilent({ esCandles: rows });
+
+    // Broadcast ONLY the bars that changed this cycle (typically the forming bar,
+    // plus a just-closed one). The client merges by slotKey, so a partial array
+    // updates the chart correctly without re-sending all 600 bars every 5s.
+    const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
+    if (delta.length) marketState.setState({ esCandlesDelta: delta });
+
     // Persist only bars with real volume (skip empty forming snapshots).
     writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
@@ -1456,7 +1474,10 @@ class TastytradeProxy {
     let saved;
     try {
       saved = JSON.parse(fs.readFileSync(ES_FOOTPRINT_FILE, 'utf8'));
-    } catch { return; } // no file yet, or unreadable — start fresh
+    } catch (e) {
+      console.log(`[ES-FP] no footprint to restore from ${ES_FOOTPRINT_FILE}: ${e.code || e.message}`);
+      return; // no file yet, or unreadable — start fresh
+    }
     const today = todayYmd().ymd;
     if (!saved || saved.day !== today) {
       console.log(`[ES-FP] saved footprint is for ${saved && saved.day} (today ${today}) — discarding`);
@@ -1617,6 +1638,9 @@ class TastytradeProxy {
         : { timestamp: slotMs, date, slotKey, time, symbol: '/ES', intervalMinutes: 5, source: 'dxlink', open, high, low, close, volume };
       this.esCandles.set(slotKey, merged);
       this.esCandlesDirty = true;
+      // Track WHICH slots changed so the flush can broadcast just those bars
+      // instead of the whole 600-bar array every cycle.
+      this.esCandlesDirtySlots.add(slotKey);
       return;
     }
 

@@ -78,7 +78,9 @@ interface BubbleHit {
   ts: number; buyVol: number; sellVol: number; total: number; net: number; count: number;
 }
 
-function BubblesCanvas({ trades, range, sessionMax }: { trades: EsBigTrade[]; range: { min: number; max: number } | null; sessionMax: number }) {
+type BubbleMetric = "total" | "net";
+
+function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTrade[]; range: { min: number; max: number } | null; sessionMax: number; metric: BubbleMetric }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const hitsRef = useRef<BubbleHit[]>([]);
   const [hover, setHover] = useState<{ hit: BubbleHit; x: number; y: number } | null>(null);
@@ -147,16 +149,20 @@ function BubblesCanvas({ trades, range, sessionMax }: { trades: EsBigTrade[]; ra
     // this is what real order-flow tools do and keeps big prints prominent.
     const slotW = (BUCKET_MS / span) * chartW;
     const maxR = Math.max(8 * dpr, Math.min(midY - padY, slotW * 0.85)) * 0.75;
-    const minR = Math.min(5 * dpr, maxR * 0.35);
+    // Keep a tiny visible floor so a 1-contract minute is still clickable, but make
+    // it genuinely small (was 0.35*maxR, which flattened the whole size range).
+    const minR = Math.min(3 * dpr, maxR * 0.08);
 
-    // Area ∝ volume against the SESSION max (passed in), so a bubble's size means
-    // the same thing in every window — pan to a quiet stretch and bubbles are
-    // genuinely small; pan to the heavy open and they're big. Absolute, not relative.
+    // Area ∝ the chosen metric against the SESSION max, so a bubble's size means the
+    // same thing in every window. metric="total" → buy+sell volume; "net" → |buy−sell|,
+    // which matches the Delta Profile bar so a small bar reads as a small bubble.
     const refVol = Math.max(1, sessionMax);
-    const radiusFor = (total: number) => {
-      const f = Math.min(1, total / refVol);
+    const radiusFor = (value: number) => {
+      const f = Math.min(1, value / refVol);
       return Math.max(minR, Math.sqrt(f) * maxR);
     };
+    const sizeOf = (b: { total: number; net: number }) =>
+      metric === "net" ? Math.abs(b.net) : b.total;
 
     // Right-edge size scale labels reference the session max.
     ctx.save();
@@ -165,7 +171,7 @@ function BubblesCanvas({ trades, range, sessionMax }: { trades: EsBigTrade[]; ra
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillText(`${fmtInt(refVol)}`, padL + chartW + 8 * dpr, padY + 4 * dpr);
-    ctx.fillText(fmtInt(refVol / 2), padL + chartW + 8 * dpr, midY);
+    ctx.fillText(metric === "net" ? "|net|" : "vol", padL + chartW + 8 * dpr, midY);
     ctx.fillText("0", padL + chartW + 8 * dpr, plotH - padY - 4 * dpr);
     ctx.restore();
 
@@ -187,7 +193,7 @@ function BubblesCanvas({ trades, range, sessionMax }: { trades: EsBigTrade[]; ra
     const hits: BubbleHit[] = [];
     for (const b of bubbles) {
       const x = padL + ((b.ts + BUCKET_MS / 2 - minTs) / span) * chartW;
-      const r = radiusFor(b.total);
+      const r = radiusFor(sizeOf(b));
       const isBuy = b.side === "buy";
       // Solid gradient orb (diagonal light→deep of the same hue) with a soft
       // colored glow — matching the reference dashboard look.
@@ -361,10 +367,14 @@ export default function FootprintPage() {
   // Default 50 so the page opens on the bigger players, not 1-lot noise.
   const SIZE_MIN = 1;
   const SIZE_MAX = 100;
-  const [minSize, setMinSize] = useState(50);
+  const [minSize, setMinSize] = useState(SIZE_MIN);
 
   // Rolling order feed (below the lanes): collapsible, scrollable.
   const [feedOpen, setFeedOpen] = useState(true);
+
+  // What drives bubble size: "total" (buy+sell) or "net" (|buy−sell|, matches the
+  // Delta Profile bar so a small bar reads as a small bubble).
+  const [bubbleMetric, setBubbleMetric] = useState<BubbleMetric>("net");
 
   // Filtered prints used by every downstream view.
   const trades = useMemo(
@@ -412,15 +422,23 @@ export default function FootprintPage() {
     return { min: Math.min(...tsList), max: Math.max(...tsList) };
   }, [trades, delta]);
 
-  // Session-wide max per-minute volume — the bubble size reference, so a bubble's
-  // size means the same thing no matter which window you've panned to.
-  const sessionMaxMinuteVol = useMemo(() => {
-    const cells = new Map<number, number>();
+  // Session-wide per-minute maxima, computed from the SAME filtered prints the
+  // bubbles use, so the size scale matches whichever metric is selected:
+  //   total = max(buy+sell) per minute   ·   net = max|buy−sell| per minute
+  const { sessionMaxMinuteVol, sessionMaxMinuteNet } = useMemo(() => {
+    const cells = new Map<number, { buy: number; sell: number }>();
     for (const t of trades) {
       const k = Math.floor(t.ts / 60_000);
-      cells.set(k, (cells.get(k) ?? 0) + t.size);
+      const c = cells.get(k) || { buy: 0, sell: 0 };
+      if (t.side === "buy") c.buy += t.size; else c.sell += t.size;
+      cells.set(k, c);
     }
-    return Math.max(1, ...cells.values());
+    let maxTot = 1, maxNet = 1;
+    for (const c of cells.values()) {
+      maxTot = Math.max(maxTot, c.buy + c.sell);
+      maxNet = Math.max(maxNet, Math.abs(c.buy - c.sell));
+    }
+    return { sessionMaxMinuteVol: maxTot, sessionMaxMinuteNet: maxNet };
   }, [trades]);
 
   // Session-wide max |net delta| — same idea for the delta bars: bar height is
@@ -521,15 +539,6 @@ export default function FootprintPage() {
         <span className="font-mono text-[11px] text-white/70">
           ≥ {fmtInt(minSize)} <span className="text-white/35">contracts</span>
         </span>
-        {minSize > SIZE_MIN && (
-          <button
-            onClick={() => setMinSize(SIZE_MIN)}
-            className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors"
-            style={{ border: "1px solid rgba(255,255,255,.15)", color: "#cbd5e1", background: "rgba(255,255,255,.04)" }}
-          >
-            Clear
-          </button>
-        )}
         <span className="font-mono text-[10px] text-white/35">
           showing {fmtInt(trades.length)} / {fmtInt(rawTrades.length)} prints
         </span>
@@ -578,8 +587,31 @@ export default function FootprintPage() {
           legend={[{ c: BUY, t: "Buys" }, { c: SELL, t: "Sells" }]}
           empty={!trades.length}
           emptyText={connected ? "No big prints yet — waiting for large ES orders" : "Connecting to live feed…"}
+          headerRight={
+            <div className="flex items-center gap-1 rounded-md p-0.5" style={{ background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.08)" }}>
+              {(["net", "total"] as BubbleMetric[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setBubbleMetric(m)}
+                  className="rounded px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors"
+                  style={{
+                    color: bubbleMetric === m ? "#0b1018" : "rgba(255,255,255,.6)",
+                    background: bubbleMetric === m ? "#38bdf8" : "transparent",
+                  }}
+                  title={m === "net" ? "Size by net (buy−sell) — matches the Delta Profile bar" : "Size by total volume (buy+sell)"}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          }
         >
-          <BubblesCanvas trades={trades} range={view} sessionMax={sessionMaxMinuteVol} />
+          <BubblesCanvas
+            trades={trades}
+            range={view}
+            metric={bubbleMetric}
+            sessionMax={bubbleMetric === "net" ? sessionMaxMinuteNet : sessionMaxMinuteVol}
+          />
         </Lane>
 
         {/* Delta Profile lane */}
@@ -707,10 +739,11 @@ function StatCard({ label, value, color, sub }: { label: string; value: string; 
   );
 }
 
-function Lane({ title, subtitle, legend, empty, emptyText, children }: {
+function Lane({ title, subtitle, legend, empty, emptyText, headerRight, children }: {
   title: string; subtitle: string;
   legend: { c: string; t: string }[];
   empty: boolean; emptyText: string;
+  headerRight?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -726,6 +759,9 @@ function Lane({ title, subtitle, legend, empty, emptyText, children }: {
       >
         {/* Soft top sheen */}
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent)" }} />
+
+        {/* Optional top-right control (e.g. bubble metric toggle) */}
+        {headerRight && <div className="absolute right-14 top-3 z-20">{headerRight}</div>}
 
         {/* Lane label block */}
         <div className="absolute left-4 top-3 z-10">

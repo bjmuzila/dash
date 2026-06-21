@@ -47,6 +47,9 @@ const state = {
   // 5-minute ES futures candles (raw OHLCV bars, ~15 sessions). Client computes
   // relative-volume baselines + IB levels from these.
   esCandles: [],
+  // Delta of just-changed 5m bars (forming bar + any newly-closed one). Emitted
+  // on each flush so the WS broadcast carries only the moved bars, not all 600.
+  esCandlesDelta: [],
   // Front ES future big-order footprint: { symbol, updatedAt, trades[], delta[] }.
   // trades = recent large prints (size + buy/sell aggressor); delta = per-minute
   // signed-volume buckets. Powers the Footprint page bubbles + delta profile.
@@ -92,6 +95,18 @@ function setState(patch) {
     emitter.emit('change', { state: getState(), changedKeys });
   }
   return changedKeys;
+}
+
+/**
+ * Apply a patch WITHOUT emitting 'change'. Used for fields that back the
+ * connect-time snapshot but should not trigger a per-change broadcast — e.g. the
+ * full esCandles array, which is sent once on connect while live updates go out
+ * as a small esCandlesDelta instead.
+ */
+function setStateSilent(patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (state[key] !== value) state[key] = value;
+  }
 }
 
 /** Snapshot of current state (shallow copy; nested objects shared by ref). */
@@ -180,6 +195,7 @@ function clearError() {
 module.exports = {
   getState,
   setState,
+  setStateSilent,
   onChange,
   setGexUpdate,
   setFlow,
