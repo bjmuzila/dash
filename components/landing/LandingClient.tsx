@@ -8,13 +8,14 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
 const FEATURES = [
   { t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
-  { t: "Options flow tape", d: "Streaming sweeps and block orders so you see where size is hitting." },
+  { t: "Confidence Score", d: "Each key level scored 0–100 for Hit, Pivot or Chop — live positioning blended with historical analogs." },
   { t: "Greeks & exposure", d: "DEX, VEX and charm intraday — the dealer-positioning picture in one view." },
-  { t: "Estimated moves", d: "Expected-move bands and key strikes for every expiration." },
+  { t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 
 export default function LandingClient() {
   const [email, setEmail] = useState("");
+  const [xHover, setXHover] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
   const [msg, setMsg] = useState("");
 
@@ -146,6 +147,30 @@ export default function LandingClient() {
               </div>
             )}
           </form>
+
+          <a
+            href="https://x.com/bzilatrades"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Follow @bzilatrades on X"
+            title="Follow @bzilatrades on X"
+            onMouseEnter={() => setXHover(true)}
+            onMouseLeave={() => setXHover(false)}
+            style={{
+              ...xFollow,
+              ...(xHover
+                ? {
+                    color: T.cyan,
+                    borderColor: "rgba(0,240,255,0.5)",
+                    boxShadow: "0 0 14px rgba(0,240,255,0.45)",
+                  }
+                : {}),
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+          </a>
 
           <div style={divider}>
             <span style={{ background: T.panel, padding: "0 12px", color: T.muted, fontSize: 12 }}>
@@ -291,6 +316,25 @@ const comingSoonBtn: React.CSSProperties = {
   fontWeight: 700,
   cursor: "not-allowed",
   opacity: 0.7,
+};
+
+const xFollow: React.CSSProperties = {
+  position: "absolute",
+  top: "clamp(24px, 4vw, 40px)",
+  right: "clamp(24px, 4vw, 40px)",
+  zIndex: 3,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 30,
+  height: 30,
+  borderRadius: 10,
+  border: `1px solid ${T.border}`,
+  background: "rgba(13,17,25,0.7)",
+  backdropFilter: "blur(10px)",
+  color: T.text,
+  textDecoration: "none",
+  transition: "color 0.2s, border-color 0.2s, box-shadow 0.2s",
 };
 
 const topSignInBtn: React.CSSProperties = {
