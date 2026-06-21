@@ -74,9 +74,10 @@ function startEmTrackerAutoEval(port) {
     const target = EVAL_HOUR * 60 + EVAL_MIN;
     const wk = completedWeekKeyET();
     if (lastEvaluatedWeek === wk) return;
+    // Saturday only — no Sunday catch-up (mirrors levels-auto-publish). The
+    // startup catch-up above still scores a missed week on the next boot.
     const isSatAfterTarget = dow === 6 && mins >= target;
-    const isSundayCatchup = dow === 0; // Sat/Sun map to the same completed week
-    if (isSatAfterTarget || isSundayCatchup) {
+    if (isSatAfterTarget) {
       evalOnce(base, 'weekly').then((ok) => { if (ok) lastEvaluatedWeek = wk; });
     }
   };

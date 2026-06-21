@@ -26,6 +26,7 @@ const path = require('path');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
 const { writeEsCandles } = require('./state/es-candle-writer');
+const { saveFootprint, loadFootprint, footprintDbEnabled } = require('./state/footprint-writer');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
@@ -115,6 +116,11 @@ const OI_READY_GRACE_MS = Number(process.env.OI_READY_GRACE_MS || 90000);
 // SPX flow tape is aggregated and broadcast on this cadence (default 500ms),
 // independent of the heavier GEX recompute loop.
 const FLOW_AGGREGATE_MS = Number(process.env.FLOW_AGGREGATE_MS || 500);
+
+// ES 5-minute candle broadcast cadence. The forming bar updates on nearly every
+// flush while ES is live, so this is effectively how often the live candle
+// repaints. 10s keeps it visibly live without one delta every ~5s.
+const CANDLE_FLUSH_MS = Number(process.env.CANDLE_FLUSH_MS || 10000);
 
 // ---------------------------------------------------------------------------
 // OAuth
@@ -1182,9 +1188,9 @@ class TastytradeProxy {
     this.spotSymbol = this.underlying.streamerSymbol;
     for (const c of contracts) this.contracts.set(c.streamerSymbol, c);
 
-    // Restore today's footprint from disk BEFORE the live feed connects, so an
-    // early live tick can't start a fresh buffer ahead of the restore.
-    this._loadFootprintFromDisk();
+    // Restore today's footprint (Postgres, else local file) BEFORE the live feed
+    // connects, so an early live tick can't start a fresh buffer ahead of the restore.
+    await this._loadFootprint();
 
     const { token, url } = await getQuoteToken();
     this.client = new DxLinkClient({
@@ -1211,7 +1217,7 @@ class TastytradeProxy {
       this.client.subscribeCandle(this.esCandleSymbol, fromTime);
       console.log(`[FEED] subscribed ES candles ${this.esCandleSymbol} from ${new Date(fromTime).toISOString()}`);
       // Flush aggregated candles to state + DB on a steady cadence.
-      this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
+      this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
     }
     // Flush the ES big-order footprint (bubbles + delta buckets) every second so
     // the Footprint page tape stays live without spamming a broadcast per tick.
@@ -1358,7 +1364,7 @@ class TastytradeProxy {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
       if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
       if (!this.oiTimer) this._scheduleOiRefresh();
-      if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), 5000);
+      if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
       if (!this.footprintFlushTimer) this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
       if (!this.footprintSaveTimer) this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
     }
@@ -1466,51 +1472,91 @@ class TastytradeProxy {
   }
 
   /**
-   * Load today's footprint from disk on boot so a server-v2 restart restores the
-   * session instead of starting empty. Ignores the file if it belongs to a prior
-   * ET session day (stale → discard, fresh day starts clean).
+   * Restore today's footprint on boot so a restart — on ANY machine sharing the
+   * DATABASE_URL — resumes the session instead of starting empty. Prefers Postgres
+   * (durable + cross-machine); falls back to the local disk file when no DB is set
+   * or the DB has no row yet. Anything tagged to a prior ET day is ignored.
    */
-  _loadFootprintFromDisk() {
+  async _loadFootprint() {
+    const today = todayYmd().ymd;
+
+    // 1) Postgres first (shared across machines).
+    if (footprintDbEnabled()) {
+      try {
+        const row = await loadFootprint(today);
+        if (row && row.payload) {
+          const applied = this._applyRestoredFootprint(today, row.payload, row.symbol);
+          if (applied > 0) {
+            console.log(`[ES-FP] restored ${applied} prints from Postgres`);
+            return;
+          }
+        }
+        console.log('[ES-FP] no Postgres footprint for today — trying local file');
+      } catch (e) {
+        console.log('[ES-FP] Postgres restore failed, trying local file:', e.message);
+      }
+    }
+
+    // 2) Local disk file fallback.
     let saved;
     try {
       saved = JSON.parse(fs.readFileSync(ES_FOOTPRINT_FILE, 'utf8'));
     } catch (e) {
       console.log(`[ES-FP] no footprint to restore from ${ES_FOOTPRINT_FILE}: ${e.code || e.message}`);
-      return; // no file yet, or unreadable — start fresh
-    }
-    const today = todayYmd().ymd;
-    if (!saved || saved.day !== today) {
-      console.log(`[ES-FP] saved footprint is for ${saved && saved.day} (today ${today}) — discarding`);
       return;
     }
-    this.esSessionDay = today;
-    this.esBigTrades = Array.isArray(saved.trades) ? saved.trades : [];
+    if (!saved || saved.day !== today) {
+      console.log(`[ES-FP] saved file is for ${saved && saved.day} (today ${today}) — discarding`);
+      return;
+    }
+    const applied = this._applyRestoredFootprint(today, saved, saved.symbol);
+    console.log(`[ES-FP] restored ${applied} prints from disk file`);
+  }
+
+  /**
+   * Load restored {trades, delta} into the in-memory buffers + republish to state.
+   * Returns the number of prints restored.
+   */
+  _applyRestoredFootprint(day, data, symbol) {
+    this.esSessionDay = day;
+    if (symbol && !this.esSymbol) this.esSymbol = symbol;
+    this.esBigTrades = Array.isArray(data.trades) ? data.trades : [];
     this.esDeltaBuckets = new Map();
-    for (const d of (Array.isArray(saved.delta) ? saved.delta : [])) {
+    for (const d of (Array.isArray(data.delta) ? data.delta : [])) {
       this.esDeltaBuckets.set(d.ts, { ts: d.ts, buy: d.buy, sell: d.sell });
     }
-    console.log(`[ES-FP] restored ${this.esBigTrades.length} prints, ${this.esDeltaBuckets.size} delta buckets from disk`);
     // Republish so a freshly-connected page gets the restored buffer immediately.
     this.esFootprintDirty = true;
     this._flushEsFootprint();
+    return this.esBigTrades.length;
   }
 
-  /** Mirror the current footprint to disk (throttled by the save timer). */
+  /**
+   * Mirror the current footprint (throttled by the save timer) to:
+   *   • Postgres (es_footprint, one row/day) — durable + shared across machines, and
+   *   • a local disk file — fast fallback when no DATABASE_URL is configured.
+   */
   _saveFootprintToDisk() {
     if (!this.esFootprintSaveDirty) return;
     this.esFootprintSaveDirty = false;
     const buckets = [...this.esDeltaBuckets.values()].sort((a, b) => a.ts - b.ts);
+    const delta = buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell }));
     const payload = {
       day: this.esSessionDay,
       symbol: this.esSymbol,
       savedAt: Date.now(),
       trades: this.esBigTrades,
-      delta: buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell })),
+      delta,
     };
+    // Postgres (fire-and-forget; never throws into the timer).
+    if (this.esSessionDay) {
+      saveFootprint(this.esSessionDay, this.esSymbol, { trades: this.esBigTrades, delta }).catch(() => {});
+    }
+    // Local file fallback.
     try {
       fs.writeFileSync(ES_FOOTPRINT_FILE, JSON.stringify(payload), 'utf8');
     } catch (e) {
-      console.log('[ES-FP] could not persist footprint:', e.message);
+      console.log('[ES-FP] could not persist footprint to disk:', e.message);
     }
   }
 
@@ -1567,10 +1613,16 @@ class TastytradeProxy {
       // an empty later Summary.
       const prev = this.summaries.get(sym) || {};
       const oi = firstFiniteNumber(ev.openInterest);
+      const pc = firstFiniteNumber(ev.prevDayClosePrice);
       this.summaries.set(sym, {
         oi: oi > 0 ? oi : prev.oi || 0,
-        prevClose: firstFiniteNumber(ev.prevDayClosePrice) || prev.prevClose || 0,
+        prevClose: pc || prev.prevClose || 0,
       });
+      // dxLink prevDayClosePrice is the exchange's official prior-session
+      // settle for the CURRENT session. On a Sunday/holiday reopen this is
+      // Friday's settle — more accurate than the connect-time REST prev-close,
+      // which can lag a session. Prefer it for the ES day-change baseline.
+      if (sym === this.esSymbol && pc > 0) marketState.setAux({ esFutPrevClose: pc });
       return;
     }
 

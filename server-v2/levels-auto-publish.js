@@ -224,22 +224,19 @@ function startLevelsAutoPublish(port) {
   // the weekend snapshot with mid-week numbers on any restart. To (re)publish
   // manually, call publishOnce() / hit the manual trigger.
 
-  // Poll: fire once we're at/after Saturday's publish time and haven't yet
-  // published for the upcoming trading week. Saturday is the target; Sunday is
-  // also accepted as a catch-up so a server that was down Saturday still
-  // publishes before Monday. (weekKeyET ties Sat/Sun to the coming Monday.)
+  // Poll: fire ONLY at/after Saturday's publish time, once per upcoming trading
+  // week. No Sunday catch-up — a weekend restart must not recompute levels
+  // (markets are closed, quotes come back NaN, and the moves are stale anyway).
+  // If Saturday's run is ever missed, use the manual "Publish Now" button on the
+  // owner dash (/proxy/levels-publish).
   const tick = () => {
     const { dow, hour, minute } = etParts();
     const mins = hour * 60 + minute;
     const target = PUBLISH_HOUR * 60 + PUBLISH_MIN;
     const wk = weekKeyET();
     if (lastPublishedWeek === wk) return;
-    const isSatAfterTarget = dow === 6 && mins >= target;
-    // Sunday is a catch-up ONLY: fire if Saturday's run was missed (e.g. server
-    // was down). It shares wk with Saturday, so once Saturday published, the
-    // lastPublishedWeek === wk guard above already blocks Sunday.
-    const isSundayCatchup = dow === 0;
-    if (isSatAfterTarget || isSundayCatchup) {
+    const isSatAfterTarget = dow === PUBLISH_DOW && mins >= target;
+    if (isSatAfterTarget) {
       publishOnce(base, 'weekly').then((res) => {
         if (res && res.ok) {
           lastPublishedWeek = wk;

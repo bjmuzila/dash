@@ -80,6 +80,10 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles("slotKey");
 
+    CREATE TABLE IF NOT EXISTS es_footprint (
+      day TEXT PRIMARY KEY, symbol TEXT, updated_at BIGINT NOT NULL, payload JSONB NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS ib_levels (
       id SERIAL PRIMARY KEY, date TEXT NOT NULL UNIQUE, symbol TEXT DEFAULT '/ES',
       timestamp BIGINT NOT NULL, locked INTEGER DEFAULT 0,

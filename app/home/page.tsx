@@ -852,29 +852,29 @@ export default function HomePage() {
               <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexWrap: "nowrap", justifyContent: "space-between", minWidth: 0, overflow: "hidden" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexShrink: 1, flexWrap: "nowrap", minWidth: 0, overflow: "hidden" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
+                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
+                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 700, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,0.7vw,10px)", marginLeft: "auto", flexShrink: 0 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)" }}>
-                    <span style={{ fontSize: "clamp(8px,0.78vw,11px)", color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.05vw,15px)", fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
+                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>
                   <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
                     style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: "clamp(8px,0.78vw,11px)", fontWeight: 700, padding: "4px clamp(6px,0.9vw,12px)", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
