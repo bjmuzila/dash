@@ -37,6 +37,28 @@ function todayET(): string {
     .slice(0, 10);
 }
 
+/** Current ET minute-of-day (0..1439). */
+function nowMinutesET(): number {
+  const hhmm = new Date().toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
+  });
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : 0;
+}
+
+/**
+ * Fraction of the RTH session elapsed (0..1), from the wall clock — independent
+ * of snapshot cadence. Past dates = 1 (complete); before the open = 0.
+ */
+function sessionProgressET(date: string): number {
+  if (date < todayET()) return 1;
+  if (date > todayET()) return 0;
+  const mins = nowMinutesET();
+  if (mins <= RTH_OPEN_MIN) return 0;
+  if (mins >= RTH_CLOSE_MIN) return 1;
+  return (mins - RTH_OPEN_MIN) / (RTH_CLOSE_MIN - RTH_OPEN_MIN);
+}
+
 function num(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -349,7 +371,9 @@ export async function GET(req: NextRequest) {
     const refPrice = cur.spx || todaySpx[todaySpx.length - 1] || cur.level || 0;
     const emSize =
       emOverride ?? (intradayRange > 0 ? intradayRange : refPrice * EM_FALLBACK_FRACT);
-    const sessionProgress = Math.min(1, todayRows.length / 24); // ~24 snaps ≈ full day
+    // Session progress from the RTH clock (cadence-independent: works for 5m,
+    // 30m, or any snapshot interval). Past dates are complete.
+    const sessionProgress = sessionProgressET(date);
 
     // 2) Find historical analog days (same gamma regime + similar GEX dominance)
     //    and classify each from its own SPX series — no ES candles needed.

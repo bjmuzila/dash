@@ -117,7 +117,7 @@ interface ApiResp {
   detail?: string;
 }
 
-const AUTO_REFRESH_MS = 10 * 60 * 1000; // 10 min when Auto is on
+const AUTO_REFRESH_MS = 5 * 60 * 1000; // 5 min — matches MVC snapshot cadence
 
 function todayET() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }))
@@ -271,8 +271,8 @@ function TimelineRow({ seg }: { seg: MvcSegment }) {
   const win = `${seg.from}${seg.to !== seg.from ? `–${seg.to}` : ""}`;
   const Stat = ({ label, value }: { label: string; value: string }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-      <span style={{ fontSize: 8.5, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
-      <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
+      <span style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
+      <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
     </div>
   );
   return (
@@ -280,14 +280,14 @@ function TimelineRow({ seg }: { seg: MvcSegment }) {
       background: seg.current ? rgba(sc.color, 0.08) : "rgba(255,255,255,0.02)",
       border: `1px solid ${seg.current ? rgba(sc.color, 0.3) : HOME_THEME.border}` }}>
       <button onClick={() => setOpen((v) => !v)}
-        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, fontSize: 11.5,
-          padding: "7px 10px", background: "transparent", border: "none", cursor: "pointer", color: HOME_THEME.text, textAlign: "left" }}>
-        <span style={{ color: HOME_THEME.muted, fontSize: 9, width: 10 }}>{open ? "▾" : "▸"}</span>
-        <span style={{ color: sc.color, fontSize: 14, width: 16, textAlign: "center" }}>{sc.icon}</span>
-        <span style={{ fontFamily: "monospace", fontWeight: 700, width: 56 }}>{fmt(seg.strike)}</span>
-        <span style={{ fontFamily: "monospace", fontSize: 10, opacity: 0.6, width: 96 }}>{win}</span>
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, fontSize: 14,
+          padding: "9px 12px", background: "transparent", border: "none", cursor: "pointer", color: HOME_THEME.text, textAlign: "left" }}>
+        <span style={{ color: HOME_THEME.muted, fontSize: 11, width: 12 }}>{open ? "▾" : "▸"}</span>
+        <span style={{ color: sc.color, fontSize: 17, width: 18, textAlign: "center" }}>{sc.icon}</span>
+        <span style={{ fontFamily: "monospace", fontWeight: 700, width: 64 }}>{fmt(seg.strike)}</span>
+        <span style={{ fontFamily: "monospace", fontSize: 12, opacity: 0.6, width: 108 }}>{win}</span>
         <span style={{ color: sc.color, fontWeight: 700 }}>{seg.title}</span>
-        <span style={{ marginLeft: "auto", display: "flex", gap: 8, fontFamily: "monospace", fontSize: 10, fontWeight: 700 }}>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 9, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>
           <span style={{ color: METRIC.hit }}>{seg.score.hit}</span>
           <span style={{ color: METRIC.pivot }}>{seg.score.pivot}</span>
           <span style={{ color: METRIC.chop }}>{seg.score.chop}</span>
@@ -295,11 +295,11 @@ function TimelineRow({ seg }: { seg: MvcSegment }) {
         </span>
       </button>
       {open && (
-        <div style={{ padding: "4px 12px 12px 36px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.5 }}>{seg.detail}</div>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.5,
-            padding: "8px 10px", borderRadius: 6, background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.2)}` }}>
-            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 2 }}>Next</span>
+        <div style={{ padding: "4px 14px 14px 40px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.55 }}>{seg.detail}</div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 14, lineHeight: 1.55,
+            padding: "10px 12px", borderRadius: 6, background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.2)}` }}>
+            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 3 }}>Next</span>
             <span>{seg.forward}</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(86px,1fr))", gap: 10 }}>
@@ -363,7 +363,6 @@ export default function ConfidenceScorePage() {
   usePageLoadStatus({ pageKey: "confidence-score", pageLabel: "Confidence", path: "/confidence-score" });
   const [date, setDate] = useState(todayET());
   const [opex, setOpex] = useState(false);
-  const [auto, setAuto] = useState(false);
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -401,11 +400,14 @@ export default function ConfidenceScorePage() {
     void load(date, opex);
   }, [date, opex, load]);
 
+  // Always-live: poll the current day on a fixed interval. Historical dates are
+  // static, so only today is polled. The MVC timeline carries intraday history.
+  const isToday = date === todayET();
   useEffect(() => {
-    if (!auto) return;
+    if (!isToday) return;
     const id = setInterval(() => void load(date, opex), AUTO_REFRESH_MS);
     return () => clearInterval(id);
-  }, [auto, date, opex, load]);
+  }, [isToday, date, opex, load]);
 
   const s = data?.score;
   const bias = s ? biasLine(s) : null;
@@ -420,13 +422,13 @@ export default function ConfidenceScorePage() {
       <div style={homeHeaderStyle}>
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>Confidence Score</span>
-          {/* Live indicator */}
+          {/* Live indicator — live polling on today, static for past dates */}
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: HOME_THEME.text, opacity: 0.85 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%",
-              background: auto ? HOME_THEME.green : HOME_THEME.muted,
-              boxShadow: auto ? `0 0 8px ${rgba(HOME_THEME.green, 0.8)}` : "none",
-              animation: auto ? "confPulse 1.6s ease-in-out infinite" : undefined }} />
-            {auto ? "LIVE" : "PAUSED"}
+              background: isToday ? HOME_THEME.green : HOME_THEME.muted,
+              boxShadow: isToday ? `0 0 8px ${rgba(HOME_THEME.green, 0.8)}` : "none",
+              animation: isToday ? "confPulse 1.6s ease-in-out infinite" : undefined }} />
+            {isToday ? "LIVE" : "HISTORY"}
             {updatedAt && <span style={{ opacity: 0.6, fontFamily: "monospace" }}>· {updatedAt.toLocaleTimeString("en-US", { hour12: false })}</span>}
           </span>
           <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
@@ -442,11 +444,6 @@ export default function ConfidenceScorePage() {
             style={{ ...homeSecondaryButtonStyle, fontSize: 10, padding: "3px 8px",
               borderColor: opex ? HOME_THEME.cyan : HOME_THEME.border, color: opex ? HOME_THEME.cyan : HOME_THEME.text }}>
             0DTE / OPEX {opex ? "ON" : "OFF"}
-          </button>
-          <button onClick={() => setAuto((v) => !v)}
-            style={{ ...homeSecondaryButtonStyle, fontSize: 10, padding: "3px 8px",
-              borderColor: auto ? HOME_THEME.green : HOME_THEME.border, color: auto ? HOME_THEME.green : HOME_THEME.text }}>
-            Auto {auto ? "ON" : "OFF"}
           </button>
         </div>
         <button onClick={() => void load(date, opex)} style={homeButtonStyle}>Refresh</button>
@@ -577,11 +574,11 @@ export default function ConfidenceScorePage() {
                   </div>
 
                   {/* Strike + archetype headline */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 26, lineHeight: 1, color: sc.color, textShadow: `0 0 16px ${rgba(sc.color, 0.4)}` }}>{sc.icon}</span>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span style={{ fontSize: 16, fontWeight: 800, color: sc.color }}>{o.title}</span>
-                      <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 34, lineHeight: 1, color: sc.color, textShadow: `0 0 16px ${rgba(sc.color, 0.4)}` }}>{sc.icon}</span>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: sc.color }}>{o.title}</span>
+                      <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.85 }}>
                         MV strike <span style={{ fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{fmt(data.level)}</span>
                         <span style={{ opacity: 0.5 }}> · </span>{wallLabel}
                         <span style={{ opacity: 0.5 }}> · </span>
@@ -591,16 +588,16 @@ export default function ConfidenceScorePage() {
                   </div>
 
                   {/* What happened */}
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: HOME_THEME.text, lineHeight: 1.5 }}>
-                    <span style={{ color: sc.color, marginTop: 1, flexShrink: 0 }}>▸</span>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 15, color: HOME_THEME.text, lineHeight: 1.55 }}>
+                    <span style={{ color: sc.color, marginTop: 2, flexShrink: 0 }}>▸</span>
                     <span>{o.detail}</span>
                   </div>
 
                   {/* If/then forward read */}
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, lineHeight: 1.5,
-                    padding: "10px 12px", borderRadius: 8,
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 15, lineHeight: 1.55,
+                    padding: "12px 14px", borderRadius: 8,
                     background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.22)}` }}>
-                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 2 }}>Next</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 3 }}>Next</span>
                     <span style={{ color: HOME_THEME.text }}>{o.forward}</span>
                   </div>
 
@@ -609,15 +606,15 @@ export default function ConfidenceScorePage() {
                   {data.mvcTimeline && data.mvcTimeline.length > 1 && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
                           MVC Timeline
                         </span>
                         {data.mvcSummary && (
-                          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.7 }}>
+                          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>
                             {data.mvcSummary.distinctStrikes} strikes · {data.mvcSummary.changes} change{data.mvcSummary.changes === 1 ? "" : "s"} · {data.mvcSummary.engaged} engaged
                           </span>
                         )}
-                        <span style={{ marginLeft: "auto", fontSize: 9, fontFamily: "monospace", opacity: 0.6, display: "flex", gap: 6 }}>
+                        <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "monospace", opacity: 0.6, display: "flex", gap: 6 }}>
                           <span style={{ color: METRIC.hit }}>Hit</span>
                           <span style={{ color: METRIC.pivot }}>Pivot</span>
                           <span style={{ color: METRIC.chop }}>Chop</span>

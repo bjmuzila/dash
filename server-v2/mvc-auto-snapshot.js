@@ -16,7 +16,8 @@
  *   require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
  */
 
-const INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const INTERVAL_MIN = 5;                       // snapshot cadence (minutes)
+const INTERVAL_MS = INTERVAL_MIN * 60 * 1000; // 5 minutes
 
 function nowParts() {
   const p = new Intl.DateTimeFormat('en-US', {
@@ -131,7 +132,7 @@ async function collectOnce(base) {
     totalNetDEX_Vol,
     totalAbsNetGEX: Math.abs(totalNetGEX),
     gexFlip,
-    triggerType: 'auto-30m',
+    triggerType: `auto-${INTERVAL_MIN}m`,
     expiration: expiry,
   };
 
@@ -150,17 +151,18 @@ async function collectOnce(base) {
 }
 
 /**
- * Begin the 30-min collection loop. Aligns the first fire to the next :00/:30
- * wall-clock boundary, then runs every 30 min. Returns the interval handle.
+ * Begin the collection loop. Aligns the first fire to the next INTERVAL_MIN
+ * wall-clock boundary (:00/:05/:10…), then runs every INTERVAL_MIN. Returns the
+ * interval handle.
  */
 function startMvcAutoSnapshot(port) {
   const base = `http://localhost:${port}`;
   const min = new Date().getMinutes();
   const sec = new Date().getSeconds();
-  const minsToNext = (min < 30 ? 30 : 60) - min;
+  const minsToNext = INTERVAL_MIN - (min % INTERVAL_MIN) || INTERVAL_MIN;
   const delayMs = (minsToNext * 60 - sec) * 1000;
 
-  console.log(`[auto-mvc] enabled — every 30m during RTH, first scheduled run in ${Math.round(delayMs / 60000)}m`);
+  console.log(`[auto-mvc] enabled — every ${INTERVAL_MIN}m during RTH, first scheduled run in ${Math.round(delayMs / 60000)}m`);
 
   // One-time startup test: fire once ~20s after boot (lets the feed warm up) so
   // you can verify collection without waiting for the next :00/:30 boundary.

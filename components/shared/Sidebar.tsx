@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { UserButton, useUser } from "@clerk/nextjs";
 
 import { HOME_THEME } from "./homeTheme";
@@ -274,6 +275,8 @@ export default function Sidebar() {
   const groupMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
 
   const visibleGroups = NAV_GROUPS.filter((g) => !g.devOnly || isSignedIn);

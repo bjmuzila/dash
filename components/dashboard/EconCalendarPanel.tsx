@@ -281,6 +281,7 @@ export default function EconCalendarPanel() {
         padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)",
         borderBottom: `1px solid ${HT.border}`,
         display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+        position: "relative", zIndex: 30,
       }}>
         <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
           📅 Econ Calendar
@@ -342,7 +343,7 @@ export default function EconCalendarPanel() {
 
       {/* Quote */}
       {quote && (
-        <div style={{ padding: "5px 10px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0 }}>
+        <div style={{ padding: "5px 10px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0, position: "relative", zIndex: 10 }}>
           <p style={{ margin: 0, fontSize: 15, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "left" }}>
             &ldquo;{quote}&rdquo;
           </p>
