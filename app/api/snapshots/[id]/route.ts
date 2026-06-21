@@ -37,12 +37,20 @@ export async function DELETE(
     const { id } = await params;
     const pool = await getDb();
 
-    const check = await pool.query("SELECT id FROM snapshots WHERE id = $1", [parseInt(id, 10)]);
-    if (!check.rows.length) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    await pool.query("DELETE FROM snapshots WHERE id = $1", [parseInt(id, 10)]);
+    const nid = parseInt(id, 10);
+    // Delete from whichever table holds the row. New snapshots live in
+    // em_snapshots (JSONB); the legacy HTML dashboard used `snapshots`. Either
+    // table may not exist yet on a cold DB, so tolerate a missing-relation error.
+    const tryDelete = async (table: string): Promise<number> => {
+      try {
+        const r = await pool.query(`DELETE FROM ${table} WHERE id = $1`, [nid]);
+        return r.rowCount ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+    const deleted = (await tryDelete("em_snapshots")) || (await tryDelete("snapshots"));
+    if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ id, message: "Deleted" }, { status: 200 });
   } catch (err) {
     console.error("[/api/snapshots/[id] DELETE]", err);

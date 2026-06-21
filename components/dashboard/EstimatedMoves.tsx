@@ -23,11 +23,6 @@ interface EMRow {
   error?: string;
 }
 
-interface TickerEmStats {
-  recentAvg: number | null;
-  midAvg: number | null;
-  sampleSize: number;
-}
 
 interface OptionData {
   symbol: string;
@@ -145,6 +140,19 @@ function nextFridayLabel(): string {
 
 function daysTo(exp: string): number {
   return Math.ceil((new Date(exp + "T16:00:00").getTime() - Date.now()) / 86400000);
+}
+
+// Format a published-at ISO timestamp for the toolbar source label, in ET.
+// e.g. "Sat Jun 20, 9:00 AM ET".
+function fmtPublishedAt(ts: string | null): string {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  }) + " ET";
 }
 
 function roundQuarter(num: number): number {
@@ -322,21 +330,16 @@ function chainUnderlyingPrice(chain: unknown): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open("EM_Dashboard_Next", 1);
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve(req.result);
-    req.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains("snapshots")) {
-        db.createObjectStore("snapshots", { keyPath: "id", autoIncrement: true });
-      }
-    };
-  });
-}
+// Snapshots are persisted in Postgres via /api/snapshots so they survive across
+// browsers, profiles, and origin/domain changes (the old IndexedDB store was
+// per-browser and got lost on the Clerk/domain migration). The helper
+// signatures below are kept identical to the former IndexedDB versions so the
+// component call sites are unchanged; the `db` arg is now a vestigial flag.
 
-async function dbSaveSnapshot(db: IDBDatabase, snapshot: Omit<Snapshot, "id" | "timestamp" | "date" | "time">): Promise<Snapshot> {
+async function dbSaveSnapshot(
+  _db: unknown,
+  snapshot: Omit<Snapshot, "id" | "timestamp" | "date" | "time">
+): Promise<Snapshot> {
   const now = new Date();
   const snap: Omit<Snapshot, "id"> = {
     ...snapshot,
@@ -344,33 +347,59 @@ async function dbSaveSnapshot(db: IDBDatabase, snapshot: Omit<Snapshot, "id" | "
     date: now.toLocaleDateString("en-US"),
     time: now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
   };
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(["snapshots"], "readwrite");
-    const store = tx.objectStore("snapshots");
-    const req = store.add(snap);
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve({ ...snap, id: req.result as number });
+  const r = await fetch("/api/snapshots", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(snap),
   });
+  if (!r.ok) throw new Error(`Save failed (${r.status})`);
+  return (await r.json()) as Snapshot;
 }
 
-async function dbGetAll(db: IDBDatabase): Promise<Snapshot[]> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(["snapshots"], "readonly");
-    const store = tx.objectStore("snapshots");
-    const req = store.getAll();
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve(((req.result as Snapshot[]) || []).reverse());
-  });
+async function dbGetAll(_db?: unknown): Promise<Snapshot[]> {
+  const r = await fetch("/api/snapshots", { cache: "no-store" });
+  if (!r.ok) throw new Error(`Load failed (${r.status})`);
+  // API already returns newest-first (ORDER BY ts DESC).
+  return (await r.json()) as Snapshot[];
 }
 
-async function dbDeleteSnapshot(db: IDBDatabase, id: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(["snapshots"], "readwrite");
-    const store = tx.objectStore("snapshots");
-    const req = store.delete(id);
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve();
-  });
+async function dbDeleteSnapshot(_db: unknown, id: number): Promise<void> {
+  const r = await fetch(`/api/snapshots?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`Delete failed (${r.status})`);
+}
+
+// One-time migration: lift any snapshots still sitting in the old IndexedDB
+// store into Postgres, then mark the store migrated so it only runs once.
+async function migrateLegacyIndexedDb(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  if (localStorage.getItem("em_snapshots_migrated") === "1") return;
+  try {
+    const legacy: Snapshot[] = await new Promise((resolve) => {
+      const req = indexedDB.open("EM_Dashboard_Next", 1);
+      req.onerror = () => resolve([]);
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("snapshots")) { resolve([]); return; }
+        const tx = db.transaction(["snapshots"], "readonly");
+        const all = tx.objectStore("snapshots").getAll();
+        all.onerror = () => resolve([]);
+        all.onsuccess = () => resolve((all.result as Snapshot[]) || []);
+      };
+      // No upgrade handler: if the DB/store doesn't exist, treat as empty.
+    });
+    for (const snap of legacy) {
+      const rest: Partial<Snapshot> = { ...snap };
+      delete rest.id; // let Postgres assign a fresh id
+      await fetch("/api/snapshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rest),
+      }).catch(() => {});
+    }
+    localStorage.setItem("em_snapshots_migrated", "1");
+  } catch {
+    /* best-effort; don't block the UI */
+  }
 }
 
 interface EMEngine {
@@ -768,9 +797,14 @@ export default function EstimatedMoves() {
   const [loading, setLoading] = useState(false);
   const [started, setStarted] = useState(false);
   const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
-  const [tickerStats, setTickerStats] = useState<Record<string, TickerEmStats>>({});
+  // When the table is populated from the frozen weekly publish (not a live
+  // recompute), this holds the publish timestamp so the toolbar can show the
+  // source. null = no published data shown yet.
+  const [levelsSource, setLevelsSource] = useState<string | null>(null);
 
-  const dbRef = useRef<IDBDatabase | null>(null);
+  // Ready flag (true once legacy migration has run). Snapshots now live in
+  // Postgres via /api/snapshots, so this no longer holds an IndexedDB handle.
+  const dbRef = useRef<boolean>(false);
   const busyRef = useRef(false);
   const bulkSubscribedRef = useRef(false);
   const shotRef = useRef<HTMLDivElement | null>(null);
@@ -778,7 +812,9 @@ export default function EstimatedMoves() {
   const hasCurrentData = activeView === "estimated" ? rows.length > 0 : zoneLevels.length > 0;
 
   useEffect(() => {
-    openDB().then((db) => { dbRef.current = db; });
+    // Migrate any legacy IndexedDB snapshots into Postgres (once), then mark
+    // the API as ready so the drawer loads from the server.
+    migrateLegacyIndexedDb().finally(() => { dbRef.current = true; });
     setTargetDateLabel(nextFridayLabel());
 
     (async () => {
@@ -834,12 +870,58 @@ export default function EstimatedMoves() {
   }, []);
 
   useEffect(() => {
-    if (drawerOpen && dbRef.current) {
-      dbGetAll(dbRef.current).then((all) => {
+    if (drawerOpen) {
+      dbGetAll().then((all) => {
         setSnapshots(all.filter((snap) => (snap.view ?? "estimated") === activeView));
-      });
+      }).catch(() => {});
     }
   }, [drawerOpen, activeView]);
+
+  // Populate the table from the FROZEN weekly publish (Postgres ticker_levels
+  // via /api/levels) — the exact numbers customers see. This is the default
+  // source for the estimated view: the table reflects the Saturday-9am run and
+  // does NOT recompute live. (Live recompute lives in refreshEstimatedMoves and
+  // is only used by the owner publish path / manual seeding.)
+  const loadFrozenLevels = useCallback(async () => {
+    const r = await fetch("/api/levels", { cache: "no-store" });
+    if (!r.ok) throw new Error(`Levels load failed (${r.status})`);
+    const all = (await r.json()) as Array<{
+      ticker: string; label?: string | null; close?: string | null; em?: string | null;
+      up?: string | null; down?: string | null; exp_label?: string | null;
+      em_updated_at?: string | null; updated_at?: string | null;
+    }>;
+    const byTicker = new Map(all.map((row) => [row.ticker, row]));
+    const num = (s: string | null | undefined): number | undefined => {
+      if (s == null || s === "") return undefined;
+      const v = parseFloat(String(s).replace(/,/g, ""));
+      return Number.isFinite(v) ? v : undefined;
+    };
+
+    const mapped: EMRow[] = SYMBOLS.map((sym) => {
+      const key = DISPLAY_LABEL[sym] ?? sym;
+      const row = byTicker.get(key);
+      if (!row) return { ticker: sym, error: "No published levels" };
+      return {
+        ticker: sym,
+        close: num(row.close),
+        em: num(row.em),
+        up: num(row.up),
+        down: num(row.down),
+      };
+    });
+    setRows(mapped);
+
+    // Toolbar source = the freshest em publish time across published rows.
+    const newest = all
+      .map((row) => row.em_updated_at || row.updated_at)
+      .filter(Boolean)
+      .sort()
+      .pop();
+    setLevelsSource(newest ?? null);
+
+    const firstExp = all.find((row) => row.exp_label)?.exp_label;
+    if (firstExp) setTargetDateLabel(firstExp);
+  }, []);
 
   const refreshEstimatedMoves = useCallback(async () => {
     setRows([]);
@@ -863,29 +945,11 @@ export default function EstimatedMoves() {
 
     const exp = settled.find((row) => row.expiration)?.expiration;
     if (exp) setTargetDateLabel(labelForDate(exp));
-    const expLabel = exp ? labelForDate(exp) : nextFridayLabel();
 
-    // Push per-ticker EM levels to /api/levels for the customer-facing /em page.
-    // Buy/Sell zone fields are NOT sent here (left untouched by the NULL-aware
-    // upsert) — they are pushed from refreshZones for ES/NQ.
-    settled
-      .filter((row) => !row.error && row.up !== undefined && row.down !== undefined)
-      .forEach((row) => {
-        const apiTicker = DISPLAY_LABEL[row.ticker] ?? row.ticker;
-        fetch("/api/levels", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ticker: apiTicker,
-            label: apiTicker,
-            close: row.close !== undefined ? fmtPrice(row.ticker, row.close) : null,
-            em: row.em !== undefined ? fmtEm(row.em) : null,
-            up: row.up !== undefined ? fmtPrice(row.ticker, row.up) : null,
-            down: row.down !== undefined ? fmtPrice(row.ticker, row.down) : null,
-            exp_label: expLabel,
-          }),
-        }).catch((e) => console.warn("[Levels] push failed:", row.ticker, e));
-      });
+    // NOTE: the backend dashboard no longer pushes em to /api/levels. The
+    // customer-facing weekly em is owned EXCLUSIVELY by the Saturday-9am
+    // publisher (server-v2/levels-auto-publish.js). A live recompute here is for
+    // owner inspection only and must never overwrite the frozen weekly value.
 
     // Persist UP / DOWN to SQLite (NO LONG / NO SHORT come from zones tab)
     const esmRow = settled.find((r) => r.ticker === "ESM" && r.up && r.down);
@@ -910,22 +974,7 @@ export default function EstimatedMoves() {
         if (s != null && Number.isFinite(Number(s))) setConfidenceScore(Math.round(Number(s)));
       })
       .catch(() => {});
-
-    // Fetch per-ticker EM history averages using the settled rows (not state,
-    // which may not have updated yet). Fire-and-forget after rows are displayed.
-    const goodTickers = settled.filter((r) => !r.error && r.em != null).map((r) => r.ticker);
-    const statsMap: Record<string, TickerEmStats> = {};
-    await Promise.allSettled(
-      goodTickers.map((t) =>
-        fetch(`/api/em/ticker-em-stats?ticker=${encodeURIComponent(t)}`)
-          .then((r) => r.ok ? r.json() : null)
-          .then((data) => {
-            if (data) statsMap[t] = { recentAvg: data.recentAvg ?? null, midAvg: data.midAvg ?? null, sampleSize: data.sampleSize ?? 0 };
-          })
-          .catch(() => {})
-      )
-    );
-    setTickerStats(statsMap);
+    // (Per-ticker 4-/12-week EM averages were removed from the backend table.)
   }, [knownExpirations, expOverride]);
 
   const refreshZones = useCallback(async () => {
@@ -983,12 +1032,15 @@ export default function EstimatedMoves() {
 
     try {
       if (activeView === "estimated") {
-        await refreshEstimatedMoves();
+        // Estimated view shows the FROZEN weekly publish (what customers see),
+        // not a live recompute. Refresh re-pulls the published rows.
+        await loadFrozenLevels();
+        setStatus({ text: "Published", color: "#00e676" });
       } else {
         await refreshZones();
+        setStatus({ text: "Live", color: "#00e676" });
       }
       setLastSync(new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-      setStatus({ text: "Live", color: "#00e676" });
     } catch (e) {
       console.error("Refresh failed:", e);
       setStatus({ text: "Error", color: "#ff4757" });
@@ -996,17 +1048,49 @@ export default function EstimatedMoves() {
       busyRef.current = false;
       setLoading(false);
     }
-  }, [activeView, refreshEstimatedMoves, refreshZones]);
+  }, [activeView, loadFrozenLevels, refreshZones]);
+
+  // Owner-only spot check: recompute the estimated moves LIVE (right now) into
+  // the table for inspection. This does NOT write to /api/levels, so the
+  // customer-facing weekly em is untouched. The toolbar flips to a LIVE source.
+  const computeLive = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setLoading(true);
+    setStarted(true);
+    setStatus({ text: "Computing live", color: "#00e5ff" });
+    try {
+      await refreshEstimatedMoves();
+      setLevelsSource("__live__");
+      setLastSync(new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setStatus({ text: "Live (not saved)", color: "#e8c060" });
+    } catch (e) {
+      console.error("Compute live failed:", e);
+      setStatus({ text: "Error", color: "#ff4757" });
+    } finally {
+      busyRef.current = false;
+      setLoading(false);
+    }
+  }, [refreshEstimatedMoves]);
+
+  // On mount, populate the estimated table from the frozen weekly publish so the
+  // owner immediately sees the same numbers customers see (no click needed).
+  useEffect(() => {
+    setStarted(true);
+    loadFrozenLevels().catch((e) => console.warn("[Levels] initial load failed:", e));
+    // run once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveSnapshot = useCallback(async () => {
-    if (!dbRef.current || !hasCurrentData) {
+    if (!hasCurrentData) {
       setStatus({ text: "No data to save", color: "#ff4757" });
       return;
     }
 
     setStatus({ text: "Saving...", color: "#00e5ff" });
     try {
-      await dbSaveSnapshot(dbRef.current, activeView === "estimated"
+      await dbSaveSnapshot(null, activeView === "estimated"
         ? {
             period: "weekly",
             view: "estimated",
@@ -1021,8 +1105,8 @@ export default function EstimatedMoves() {
             targetDateLabel: "Last Week",
           });
       setStatus({ text: "Snapshot saved", color: "#00e676" });
-      if (drawerOpen && dbRef.current) {
-        const all = await dbGetAll(dbRef.current);
+      if (drawerOpen) {
+        const all = await dbGetAll();
         setSnapshots(all.filter((snap) => (snap.view ?? "estimated") === activeView));
       }
     } catch (e) {
@@ -1032,9 +1116,8 @@ export default function EstimatedMoves() {
   }, [activeView, drawerOpen, hasCurrentData, knownExpirations, rows, targetDateLabel, zoneLevels]);
 
   const exportCsv = useCallback(async () => {
-    if (!dbRef.current) return;
     setStatus({ text: "Exporting...", color: "#00e5ff" });
-    const all = await dbGetAll(dbRef.current).catch(() => [] as Snapshot[]);
+    const all = await dbGetAll().catch(() => [] as Snapshot[]);
     const filtered = all.filter((snap) => (snap.view ?? "estimated") === activeView);
     if (!filtered.length) {
       setStatus({ text: "No snapshots", color: "#ff4757" });
@@ -1097,8 +1180,7 @@ export default function EstimatedMoves() {
 
   const deleteSnapshot = useCallback(async (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
-    if (!dbRef.current) return;
-    await dbDeleteSnapshot(dbRef.current, id);
+    await dbDeleteSnapshot(null, id);
     setSnapshots((prev) => prev.filter((s) => s.id !== id));
   }, []);
 
@@ -1200,6 +1282,28 @@ export default function EstimatedMoves() {
             {activeView === "estimated" ? targetDateLabel : activeView === "tracker" ? "" : "Last Completed Week"}
           </span>
 
+          {activeView === "estimated" && levelsSource && (
+            <span
+              title="Where the EM table values came from"
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: ".08em",
+                textTransform: "uppercase",
+                color: levelsSource === "__live__" ? "#e8c060" : "#7ab8ff",
+                border: `1px solid ${levelsSource === "__live__" ? "rgba(232,192,96,.4)" : "rgba(122,184,255,.35)"}`,
+                background: levelsSource === "__live__" ? "rgba(232,192,96,.08)" : "rgba(122,184,255,.08)",
+                padding: "3px 9px",
+                borderRadius: 4,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {levelsSource === "__live__"
+                ? "Source: Live (not saved)"
+                : `Source: Weekly publish — ${fmtPublishedAt(levelsSource)}`}
+            </span>
+          )}
+
           {activeView === "estimated" && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 12 }}>
               <span style={{ fontSize: 11, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Expiration</span>
@@ -1222,6 +1326,11 @@ export default function EstimatedMoves() {
           <button onClick={refresh} disabled={loading} style={{ ...homeButtonStyle, opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
             {started ? "Refresh" : "Start"}
           </button>
+          {activeView === "estimated" && (
+            <button onClick={computeLive} disabled={loading} title="Recompute live for inspection only — does not change the published customer values" style={{ ...homeButtonStyle, opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
+              Compute Live
+            </button>
+          )}
           <button onClick={saveSnapshot} disabled={!hasCurrentData} style={{ ...homeButtonStyle, opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
             Save
           </button>
@@ -1310,34 +1419,17 @@ export default function EstimatedMoves() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 16 }}>
                   <thead style={{ background: HT.panelBgStrong }}>
                     <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#00e5ff", textAlign: "center", fontSize: 13, letterSpacing: ".12em", textTransform: "uppercase" }}>
-                      {["Ticker","Close","Exp","EM","Up","Down","vs 4-Wk","vs 12-Wk"].map((header, idx) => (
-                        <th key={header} style={{ padding: 10, borderRight: idx < 7 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
+                      {["Ticker","Close","Exp","EM","Up","Down"].map((header, idx, arr) => (
+                        <th key={header} style={{ padding: 10, borderRight: idx < arr.length - 1 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody style={{ fontFamily: "Consolas, Monaco, monospace" }}>
                     {!started ? (
-                      <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: "#eef7ff" }}>Click Start to load estimated moves</td></tr>
+                      <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#eef7ff" }}>Click Start to load estimated moves</td></tr>
                     ) : rows.length === 0 ? (
-                      <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</td></tr>
+                      <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</td></tr>
                     ) : rows.map((row) => {
-                      const stats = tickerStats[row.ticker];
-                      const em = row.em;
-                      const renderAvgCell = (avg: number | null, label: string) => {
-                        if (!em || !avg || !Number.isFinite(avg)) {
-                          return <td style={{ padding: 8, borderRight: label === "4wk" ? `1px solid ${HT.border}` : undefined, color: "#eef7ff", fontSize: 12 }}>--</td>;
-                        }
-                        const diff = em - avg;
-                        const pct = (diff / avg) * 100;
-                        const isHigher = diff > 0;
-                        const color = isHigher ? "#00e676" : "#ff4757";
-                        const arrow = isHigher ? "▲" : "▼";
-                        return (
-                          <td style={{ padding: 8, borderRight: label === "4wk" ? `1px solid ${HT.border}` : undefined, fontSize: 12 }}>
-                            <span style={{ color, fontWeight: 700 }}>{arrow} {Math.abs(pct).toFixed(1)}%</span>
-                          </td>
-                        );
-                      };
                       return (
                         <tr key={row.ticker} title={row.error || ""} style={{ textAlign: "center", borderBottom: `1px solid ${HT.border}`, opacity: row.error ? 0.55 : 1 }}>
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</td>
@@ -1345,9 +1437,7 @@ export default function EstimatedMoves() {
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#e8c060" }}>{fmtEm(row.em)}</td>
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</td>
-                          <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#ff4757" }}>{fmtPrice(row.ticker, row.down)}</td>
-                          {renderAvgCell(stats?.recentAvg ?? null, "4wk")}
-                          {renderAvgCell(stats?.midAvg ?? null, "12wk")}
+                          <td style={{ padding: 8, color: "#ff4757" }}>{fmtPrice(row.ticker, row.down)}</td>
                         </tr>
                       );
                     })}

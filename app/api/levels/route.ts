@@ -7,6 +7,26 @@ import { getDb } from "@/lib/db";
 
 let _tableEnsured = false;
 
+// Most-recent Saturday 09:00 ET boundary. The weekly em is "frozen" once it has
+// been written on/after this instant; an untrusted (browser) push must not move
+// an em that is already frozen for the current week.
+function lastSaturday9amET(now = new Date()): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value;
+  const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = dowMap[get("weekday") || "Sun"];
+  const hour = Number(get("hour"));
+  const minute = Number(get("minute"));
+  // minutes since this week's Saturday 09:00 (negative until Sat reaches 9am)
+  const minsSinceSat9 = ((dow - 6) * 24 * 60) + hour * 60 + minute - 9 * 60;
+  // if we haven't reached Saturday 9am yet this week, roll back to last week's
+  const offsetMin = minsSinceSat9 >= 0 ? minsSinceSat9 : minsSinceSat9 + 7 * 24 * 60;
+  return new Date(now.getTime() - offsetMin * 60 * 1000);
+}
+
 async function ensureTable(pool: Awaited<ReturnType<typeof getDb>>) {
   if (_tableEnsured) return;
   await pool.query(`
@@ -78,6 +98,16 @@ export async function POST(req: NextRequest) {
     const pool = await getDb();
     await ensureTable(pool);
 
+    // The weekly em is FROZEN at the Saturday-9am-ET publish and must hold until
+    // the next Saturday run. Only the trusted publisher (internal token) may
+    // (re)write em. An untrusted caller — the backend Estimated Moves dashboard
+    // recomputing live — may still seed em for a ticker that has NO frozen value
+    // this week, but can never overwrite an em already frozen for the week.
+    // Zones / pivot / labels are unaffected and can refresh anytime.
+    const token = req.headers.get("x-internal-token") || "";
+    const trusted = !!process.env.INTERNAL_API_TOKEN && token === process.env.INTERNAL_API_TOKEN;
+    const weekStart = lastSaturday9amET();
+
     await pool.query(
       `INSERT INTO ticker_levels
         (ticker, label, close, em, up, down, buy_near, buy_far, sell_near, sell_far, pivot, exp_label, em_updated_at)
@@ -85,10 +115,6 @@ export async function POST(req: NextRequest) {
                CASE WHEN $4::text IS NOT NULL THEN CURRENT_TIMESTAMP ELSE NULL END)
        ON CONFLICT(ticker) DO UPDATE SET
          label     = CASE WHEN EXCLUDED.label     IS NOT NULL THEN EXCLUDED.label     ELSE ticker_levels.label     END,
-         close     = CASE WHEN EXCLUDED.close     IS NOT NULL THEN EXCLUDED.close     ELSE ticker_levels.close     END,
-         em        = CASE WHEN EXCLUDED.em        IS NOT NULL THEN EXCLUDED.em        ELSE ticker_levels.em        END,
-         up        = CASE WHEN EXCLUDED.up        IS NOT NULL THEN EXCLUDED.up        ELSE ticker_levels.up        END,
-         down      = CASE WHEN EXCLUDED.down      IS NOT NULL THEN EXCLUDED.down      ELSE ticker_levels.down      END,
          buy_near  = CASE WHEN EXCLUDED.buy_near  IS NOT NULL THEN EXCLUDED.buy_near  ELSE ticker_levels.buy_near  END,
          buy_far   = CASE WHEN EXCLUDED.buy_far   IS NOT NULL THEN EXCLUDED.buy_far   ELSE ticker_levels.buy_far   END,
          sell_near = CASE WHEN EXCLUDED.sell_near IS NOT NULL THEN EXCLUDED.sell_near ELSE ticker_levels.sell_near END,
@@ -96,10 +122,26 @@ export async function POST(req: NextRequest) {
          pivot     = CASE WHEN EXCLUDED.pivot     IS NOT NULL THEN EXCLUDED.pivot     ELSE ticker_levels.pivot     END,
          exp_label = CASE WHEN EXCLUDED.exp_label IS NOT NULL THEN EXCLUDED.exp_label ELSE ticker_levels.exp_label END,
          updated_at = CURRENT_TIMESTAMP,
-         -- Only advance em_updated_at when a FRESH em is supplied. A zones-only
-         -- push (em NULL because the straddle failed to price) leaves it alone,
-         -- so the owner page can detect an em served from a stale prior run.
-         em_updated_at = CASE WHEN EXCLUDED.em IS NOT NULL THEN CURRENT_TIMESTAMP ELSE ticker_levels.em_updated_at END`,
+         -- em (and the close/up/down it implies) is write-once per week. It only
+         -- changes when the supplied em is non-null AND the caller is either the
+         -- trusted publisher ($13) OR the row has no em frozen since this week's
+         -- Saturday-9am boundary ($14). Otherwise the frozen value is kept.
+         em = CASE WHEN EXCLUDED.em IS NOT NULL
+                     AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                   THEN EXCLUDED.em ELSE ticker_levels.em END,
+         close = CASE WHEN EXCLUDED.close IS NOT NULL
+                     AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                   THEN EXCLUDED.close ELSE ticker_levels.close END,
+         up = CASE WHEN EXCLUDED.up IS NOT NULL
+                     AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                   THEN EXCLUDED.up ELSE ticker_levels.up END,
+         down = CASE WHEN EXCLUDED.down IS NOT NULL
+                     AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                   THEN EXCLUDED.down ELSE ticker_levels.down END,
+         -- Advance em_updated_at only when em actually changed (same guard).
+         em_updated_at = CASE WHEN EXCLUDED.em IS NOT NULL
+                     AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                   THEN CURRENT_TIMESTAMP ELSE ticker_levels.em_updated_at END`,
       [
         ticker,
         body.label ?? null,
@@ -113,6 +155,8 @@ export async function POST(req: NextRequest) {
         body.sell_far ?? null,
         body.pivot ?? null,
         body.exp_label ?? null,
+        trusted,        // $13 — trusted publisher may always (re)write em
+        weekStart,      // $14 — this week's Saturday-9am ET freeze boundary
       ]
     );
     return NextResponse.json({ ok: true, ticker });

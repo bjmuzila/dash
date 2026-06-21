@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-06-21 (session 30) — Landing Page: X Follow Button + Feature Copy
+
+Updated the public landing page (`components/landing/LandingClient.tsx`).
+
+### X follow button
+- Added a clickable X (Twitter) logo button linking to `https://x.com/bzilatrades` (opens new tab).
+- Positioned absolute in the card's top-right, aligned to the "Launching soon" badge line and card padding (`clamp(24px, 4vw, 40px)`); 30×30, same glass style as the sign-in button.
+- Glows cyan on hover (React `xHover` state — inline styles can't use `:hover`), with a smooth color/border/box-shadow transition.
+
+### Feature grid copy
+- Box 2: replaced "Options flow tape" with "Confidence Score" — each key level scored 0–100 for Hit/Pivot/Chop, live positioning blended with historical analogs.
+- Box 4: "Estimated moves" reworded to weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results.
+
+Version bumped to `2026.6.21-v17`.
+
 ## 2026-06-21 (session 29) — EM Weekly Publisher: Stop Re-runs + Retry Not-Found Only
 
 Fixed the Estimated-Move weekly publisher re-running on restarts (overwriting the good Saturday-9am snapshot with worse mid-week/weekend numbers, which made the "not found" list appear to grow). Added per-ticker failure reasons and a manual "retry not-found only" path.
