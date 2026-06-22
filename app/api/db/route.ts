@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queryAll, getRecentTrades } from "@/lib/db";
+import { queryAll, queryOne, getRecentTrades } from "@/lib/db";
 
 const ALLOWED_TABLES: Record<string, { dateCol?: string }> = {
   trades:            { dateCol: "date(timestamp)" },
@@ -12,8 +12,6 @@ const ALLOWED_TABLES: Record<string, { dateCol?: string }> = {
   page_load_status:  {},
   es_candles:        { dateCol: "date" },
   bzila_snapshots:   { dateCol: "date" },
-  bzila_gex_history: { dateCol: "date" },
-  bzila_strike_gex_history: { dateCol: "date" },
   expirations_cache: {},
   ticker_levels:     {},
   es_stats:          {},
@@ -26,13 +24,30 @@ export async function GET(req: NextRequest) {
     const table = searchParams.get("table") ?? "mvc_snapshots";
     const limit = Math.min(Number(searchParams.get("limit") ?? 200), 1000);
     const date  = searchParams.get("date") ?? "";
+    const countOnly = searchParams.get("countOnly") === "true";
 
     if (!ALLOWED_TABLES[table]) {
       return NextResponse.json({ error: "Table not allowed" }, { status: 400 });
     }
 
-    let rows: unknown[];
     const meta = ALLOWED_TABLES[table];
+
+    // Fast path: real row count (no row payload). Used by the owner dashboard cards.
+    if (countOnly) {
+      const dateCol = table === "trades" ? "date(timestamp)" : meta.dateCol;
+      let row: { c?: number } | null;
+      if (date && dateCol) {
+        row = await queryOne<{ c: number }>(
+          `SELECT COUNT(*) AS c FROM "${table}" WHERE ${dateCol} = ?`,
+          [date]
+        );
+      } else {
+        row = await queryOne<{ c: number }>(`SELECT COUNT(*) AS c FROM "${table}"`);
+      }
+      return NextResponse.json({ table, count: Number(row?.c ?? 0) });
+    }
+
+    let rows: unknown[];
 
     if (table === "trades") {
       if (date) {

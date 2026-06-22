@@ -566,7 +566,7 @@ export default function OptionsChainPage() {
       start = Math.max(0, end - targetCount);
     }
 
-    return rows.slice(start, end).sort((a, b) => a.strike - b.strike); // High to low
+    return rows.slice(start, end).sort((a, b) => b.strike - a.strike); // High to low
   }, [autoDisplayPercent, nearestStrike, rows]);
 
   const maxByColumn = useMemo(() => {

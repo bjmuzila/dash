@@ -31,7 +31,6 @@ for each majore change - place a quick summary of the change log in "C:\Users\Br
 | Estimated Moves | `app/insights/page.tsx` (contains Est. Move component) |
 | Options Chain | `app/options-chain/page.tsx` |
 | Multi Greek | `app/mult-greek/page.tsx` |
-| Bzila Flow | `app/bzila/page.tsx` |
 | GEX page | `app/gex/page.tsx` |
 
 ## Key Components

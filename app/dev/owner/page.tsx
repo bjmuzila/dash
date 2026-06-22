@@ -117,7 +117,6 @@ const TABLES: { id: string; label: string }[] = [
   { id: "playbook_feed",      label: "Playbook" },
   { id: "es_candles",         label: "ES Candles" },
   { id: "bzila_snapshots",    label: "Bzila Snaps" },
-  { id: "bzila_gex_history",  label: "Bzila GEX" },
   { id: "flow_calls",         label: "Flow Calls" },
 ];
 
@@ -272,11 +271,15 @@ function LogBox({
   connected: boolean;
   onClear: () => void;
 }) {
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const streamRef = useRef<HTMLDivElement | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
+  // Scroll the log container itself — NOT scrollIntoView, which scrolls the whole
+  // page so each new line yanks the viewport down to the log box.
   useEffect(() => {
-    if (autoScroll) bottomRef.current?.scrollIntoView({ block: "end" });
+    if (autoScroll && streamRef.current) {
+      streamRef.current.scrollTop = streamRef.current.scrollHeight;
+    }
   }, [lines, autoScroll]);
 
   return (
@@ -361,6 +364,7 @@ function LogBox({
 
       {/* Log stream */}
       <div
+        ref={streamRef}
         style={{
           flex: 1,
           overflowY: "auto",
@@ -391,7 +395,6 @@ function LogBox({
             </div>
           );
         })}
-        <div ref={bottomRef} />
       </div>
     </div>
   );

@@ -56,23 +56,21 @@ type NavGroup = { id: string; label: string; Icon: IconCmp; devOnly?: boolean; i
 const NAV_GROUPS: NavGroup[] = [
   {
     id: "gex",
-    label: "Gex",
+    label: "GEX",
     Icon: GridIcon,
     items: [
-      { label: "Overview", href: "/overview" },
-      { label: "Est. Move", href: "/em" },
-      { label: "Est. Move (BE)", href: "/estimated-move" },
-      { label: "Options Chain", href: "/options-chain" },
       { label: "Multi Greek", href: "/mult-greek" },
+      { label: "Options Chain", href: "/options-chain" },
       { label: "Insights", href: "/insights" },
       { label: "Confidence", href: "/confidence-score" },
+      { label: "Estimated Moves Front End", href: "/em" },
     ],
   },
   {
-    id: "footprint",
-    label: "Footprint",
+    id: "futures",
+    label: "Futures",
     Icon: FootIcon,
-    items: [{ label: "Big Orders", href: "/footprint" }],
+    items: [{ label: "Footprint", href: "/footprint" }],
   },
   {
     id: "stock-market",
@@ -80,8 +78,7 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: ChartIcon,
     items: [
       { label: "Premarket", href: "/premarket" },
-      { label: "Database", href: "/database" },
-      { label: "Econ Calendar", href: "/economic-calendar" },
+      { label: "Economic Calendar", href: "/economic-calendar" },
     ],
   },
   {
@@ -89,19 +86,21 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Personal",
     Icon: UserIcon,
     items: [
-      { label: "Trading", href: "/trading" },
+      { label: "Journal", href: "/trading" },
       { label: "Budget", href: "/budget" },
     ],
   },
   {
-    id: "dev",
-    label: "Dev",
+    id: "admin",
+    label: "Admin",
     Icon: WrenchIcon,
     devOnly: true,
     items: [
       { label: "Owner", href: "/dev/owner" },
       { label: "Admin", href: "/dev/admin" },
+      { label: "Database", href: "/database" },
       { label: "Dev", href: "/dev" },
+      { label: "Estimated Moves BE", href: "/estimated-move" },
       { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
     ],

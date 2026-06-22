@@ -5,6 +5,7 @@ import "./globals.css";
 import LayoutShell from "@/components/shared/LayoutShell";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://cbedge.net"),
   title: "CB Edge Dashboard",
   description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
   openGraph: {
