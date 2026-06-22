@@ -5,6 +5,30 @@ import { useEffect, useRef, useState } from "react";
 
 const C = { cyan: "#00F0FF", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#8da8c2" };
 
+type ProbeResult = {
+  feeds?: Record<string, Record<string, unknown>>;
+  exposures?: Record<string, unknown>;
+  oiCompare?: Record<string, unknown>;
+  [k: string]: unknown;
+};
+
+// Combine call + put exposures into one NET row. The server already signs puts
+// negative (gex/dex/vex/thetaExp), so call + put = net. spot is shared.
+const NET_KEYS = ["gex", "gexVol", "dex", "vex", "thetaExp", "vannaExp", "charmExp", "oi", "volume"] as const;
+function combineExposures(call?: Record<string, unknown>, put?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!call && !put) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const k of NET_KEYS) {
+    const a = call?.[k];
+    const b = put?.[k];
+    const an = typeof a === "number" ? a : null;
+    const bn = typeof b === "number" ? b : null;
+    out[k] = an == null && bn == null ? null : (an ?? 0) + (bn ?? 0);
+  }
+  out.spot = (typeof call?.spot === "number" ? call.spot : null) ?? (typeof put?.spot === "number" ? put.spot : null);
+  return out;
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -71,6 +95,102 @@ function ExposurePanel({ data }: { data: Record<string, unknown> | undefined }) 
   );
 }
 
+// Section divider label between the call / put / net rows.
+function RowLabel({ text, color }: { text: string; color: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}>
+      <span style={{ fontSize: 13, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.14em" }}>{text}</span>
+      <div style={{ flex: 1, height: 1, background: C.border }} />
+    </div>
+  );
+}
+
+// Row 3: net (call + put) exposures. Same rows as ExposurePanel, plus net OI/vol.
+const NET_ROWS: { key: string; label: string }[] = [
+  { key: "gex", label: "Net GEX (γ·OI·S²)" },
+  { key: "dex", label: "Net DEX (δ·OI·100·S)" },
+  { key: "vex", label: "Net VEX (vega·OI·100·S)" },
+  { key: "thetaExp", label: "Net Theta exp" },
+  { key: "gexVol", label: "Net GEX (vol)" },
+  { key: "vannaExp", label: "Net Vanna exp" },
+  { key: "charmExp", label: "Net Charm exp" },
+  { key: "oi", label: "Σ OI (call + put)" },
+  { key: "volume", label: "Σ Volume (call + put)" },
+];
+function NetExposurePanel({ data }: { data: Record<string, unknown> | undefined }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid #a78bfa55`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Net Greeks · Call + Put</div>
+      {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
+      {data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {NET_ROWS.map(({ key, label }) => {
+            const v = data[key];
+            const na = v == null;
+            const isCount = key === "oi" || key === "volume";
+            return (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
+                <span style={{ color: C.label }}>{label}</span>
+                <span style={{ color: na ? "#5d7388" : isCount ? "#cfe" : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>
+                  {na ? "n/a" : isCount ? fmt(v) : fmtExp(v)}
+                </span>
+              </div>
+            );
+          })}
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 12, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+            <span>spot</span><span>{fmt(data.spot)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// OI cross-check panel: our (TastyTrade) open interest vs Yahoo's for the same
+// contract — the A/B test for our persistent OI discrepancies.
+function OiComparePanel({ data }: { data: Record<string, unknown> | undefined }) {
+  const ok = data?.ok === true;
+  const matched = ok && data?.match === true;
+  const ours = data?.ours as number | null | undefined;
+  const yahoo = data?.yahoo as number | null | undefined;
+  const diff = data?.diff as number | null | undefined;
+  const pct = data?.pctDiff as number | null | undefined;
+  // Highlight: green if within 2%, amber if 2–10%, red if >10% off.
+  const aPct = typeof pct === "number" ? Math.abs(pct) : null;
+  const diffColor = aPct == null ? "#5d7388" : aPct <= 2 ? "#22e08a" : aPct <= 10 ? "#ffb300" : "#ff6b6b";
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
+      {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
+      {data && !ok && (
+        <div style={{ color: "#ff6b6b", fontFamily: "monospace", fontSize: 13 }}>CBOE error: {fmt(data.status)}</div>
+      )}
+      {ok && !matched && (
+        <div style={{ color: "#ffb300", fontFamily: "monospace", fontSize: 13 }}>No CBOE match ({fmt(data.yahooContracts)} contracts scanned)</div>
+      )}
+      {matched && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "monospace", fontSize: 13.5 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <span style={{ color: C.label }}>Ours (TT)</span><span style={{ color: "#cfe", fontWeight: 700 }}>{fmt(ours)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <span style={{ color: C.label }}>CBOE</span><span style={{ color: "#cfe", fontWeight: 700 }}>{fmt(yahoo)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 2 }}>
+            <span style={{ color: C.label }}>Diff</span>
+            <span style={{ color: diffColor, fontWeight: 800 }}>
+              {fmt(diff)}{typeof pct === "number" ? ` (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: C.label, marginTop: 2 }}>
+            <span>CBOE vol</span><span>{fmt(data.yahooVolume)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // One feed-type panel: a titled card listing its key/value rows.
 function FeedPanel({ name, data }: { name: string; data: Record<string, unknown> | undefined }) {
   const entries = data ? Object.entries(data) : [];
@@ -92,15 +212,18 @@ function FeedPanel({ name, data }: { name: string; data: Record<string, unknown>
 
 export default function DevPage() {
   const [ticker, setTicker] = useState("SPXW");
-  const [side, setSide] = useState<"CALL" | "PUT">("PUT");
-  const [strike, setStrike] = useState("7265");
+  const [strike, setStrike] = useState("");
+  // True until the user edits the strike, so the spot-snap auto-fill doesn't
+  // clobber a manually-typed strike.
+  const strikeTouched = useRef(false);
   const [expiry, setExpiry] = useState("");
   const [expirations, setExpirations] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [sentSymbol, setSentSymbol] = useState("");
-  const [result, setResult] = useState<unknown>(null);
+  const [callResult, setCallResult] = useState<ProbeResult | null>(null);
+  const [putResult, setPutResult] = useState<ProbeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveMs, setLiveMs] = useState(0);
   const [logs, setLogs] = useState<{ t: number; level: "info" | "ok" | "warn" | "err"; msg: string }[]>([]);
@@ -143,52 +266,102 @@ export default function DevPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Default the strike to the chain strike closest to live spot (unless the user
+  // has already typed one). Uses the same /proxy/gex spot + strikes as the chart.
+  useEffect(() => {
+    fetch("/proxy/gex")
+      .then((r) => r.json())
+      .then((d) => {
+        if (strikeTouched.current) return;
+        const spot = Number(d?.spot);
+        if (!(spot > 0)) return;
+        const strikes: number[] = Array.isArray(d?.gexRows)
+          ? d.gexRows.map((r: { strike: number }) => Number(r.strike)).filter((n: number) => n > 0)
+          : [];
+        // Nearest real chain strike to spot; fall back to rounding spot itself.
+        const nearest = strikes.length
+          ? strikes.reduce((best, s) => (Math.abs(s - spot) < Math.abs(best - spot) ? s : best))
+          : Math.round(spot);
+        setStrike(String(nearest));
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const tkr = ticker.trim().toUpperCase();
 
   // All tickers (SPX included) probe via REST — one request, no polling, no
   // dependency on the live feed having the symbol subscribed. This is the path
   // that reliably loads. /proxy/probe-rest does: chain → resolve strike →
   // market-data (quote / OI / volume / prev-close).
+  // Probe one side; returns the parsed response (or throws on abort).
+  async function probeSide(type: "C" | "P", signal: AbortSignal) {
+    const url = `/proxy/probe-rest?ticker=${encodeURIComponent(tkr)}&expiry=${encodeURIComponent(expiry)}&type=${type}&strike=${encodeURIComponent(strike)}`;
+    const r = await fetch(url, { signal });
+    const d = await r.json();
+    return { status: r.status, d };
+  }
+
   async function render() {
     if (!tkr || !expiry || !strike) { setError("Pick a ticker, expiry and strike first."); return; }
     stopRef.current = false;
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
-    setLoading(true); setError(null); setResult(null); setElapsed(null); setStatusMsg(null);
+    setLoading(true); setError(null); setCallResult(null); setPutResult(null); setElapsed(null); setStatusMsg(null);
     setSentSymbol("");
     const t0 = performance.now();
-    const type = side === "CALL" ? "C" : "P";
-    log("info", `▶ REST probe ${tkr} ${side} ${strike} ${expiry}`);
+    log("info", `▶ REST probe ${tkr} ${strike} ${expiry} (call + put)`);
     try {
-      const url = `/proxy/probe-rest?ticker=${encodeURIComponent(tkr)}&expiry=${encodeURIComponent(expiry)}&type=${type}&strike=${encodeURIComponent(strike)}`;
-      const r = await fetch(url, { signal });
-      const d = await r.json();
+      // Fetch both sides at once — one strike in, calls + puts out.
+      const [callRes, putRes] = await Promise.all([
+        probeSide("C", signal),
+        probeSide("P", signal),
+      ]);
       setElapsed(Math.round(performance.now() - t0));
-      if (d?.resolvedSymbol) setSentSymbol(d.resolvedSymbol);
-      const snapNote = d?.snapped ? ` · snapped ${d?.requestedStrike} → ${d?.resolvedStrike}` : "";
-      log(d?.found ? "ok" : "warn", `${r.status} ${d?.status || "?"} · sym=${d?.resolvedSymbol || "—"} · ${Math.round(performance.now() - t0)}ms`);
 
-      if (d?.found) {
-        setResult(d.result);
-        setStatusMsg(`REST — all feeds${snapNote}`);
-        if (d?.snapped) log("warn", `↪ snapped ${d?.requestedStrike} → ${d?.resolvedStrike} (${d?.resolvedSymbol})`);
-        const f = d?.result?.feeds || {};
-        const ex = d?.result?.exposures || {};
-        log("ok", `✔ OI=${f?.Summary?.openInterest ?? "—"} vol=${f?.Trade?.volume ?? "—"} mark=${f?.Quote?.mark ?? "—"} iv=${f?.Greeks?.iv ?? "—"}`);
-        log("ok", `Σ GEX=${fmtExp(ex?.gex)} DEX=${fmtExp(ex?.dex)} VEX=${fmtExp(ex?.vex)} spot=${ex?.spot ?? "—"}`);
-      } else if (d?.error) {
-        setError(d.error);
-        log("err", `✖ ${d.error}`);
-      } else if (d?.status === "no-expiry") {
-        const av = Array.isArray(d?.availableExpirations) ? d.availableExpirations.join(", ") : "—";
-        setError(`No expiry ${expiry} for ${d?.chainTicker || tkr}. Available: ${av}`);
-        log("warn", `⚠ no-expiry · available: ${av}`);
-      } else if (d?.status === "no-strike") {
-        setError(`Expiry ${expiry} exists but no ${type} strikes matched ${strike} for ${d?.chainTicker || tkr}.`);
-        log("warn", `⚠ no-strike for ${strike}${type}`);
+      const sym = callRes.d?.resolvedSymbol || putRes.d?.resolvedSymbol || "";
+      if (sym) setSentSymbol(sym);
+
+      const cOk = callRes.d?.found, pOk = putRes.d?.found;
+      if (cOk) setCallResult(callRes.d.result);
+      if (pOk) setPutResult(putRes.d.result);
+
+      // Log each side.
+      for (const [name, res] of [["CALL", callRes], ["PUT", putRes]] as const) {
+        const d = res.d;
+        if (d?.found) {
+          const f = d.result?.feeds || {};
+          const ex = d.result?.exposures || {};
+          log("ok", `${name} OI=${f?.Summary?.openInterest ?? "—"} vol=${f?.Trade?.volume ?? "—"} GEX=${fmtExp(ex?.gex)} DEX=${fmtExp(ex?.dex)}`);
+          const oc = d.result?.oiCompare;
+          if (oc?.match) {
+            const aPct = typeof oc.pctDiff === "number" ? Math.abs(oc.pctDiff) : null;
+            const lvl = aPct == null ? "info" : aPct <= 2 ? "ok" : aPct <= 10 ? "warn" : "err";
+            log(lvl, `${name} OI ours=${oc.ours ?? "—"} cboe=${oc.yahoo ?? "—"} diff=${oc.diff ?? "—"}${typeof oc.pctDiff === "number" ? ` (${oc.pctDiff >= 0 ? "+" : ""}${oc.pctDiff.toFixed(1)}%)` : ""}`);
+          }
+        } else {
+          log("warn", `${name} ${res.status} ${d?.status || "?"}`);
+        }
+      }
+
+      if (cOk || pOk) {
+        const cex = cOk ? callRes.d.result?.exposures : undefined;
+        const pex = pOk ? putRes.d.result?.exposures : undefined;
+        const net = combineExposures(cex, pex);
+        log("ok", `Σ NET GEX=${fmtExp(net?.gex)} DEX=${fmtExp(net?.dex)} VEX=${fmtExp(net?.vex)} spot=${net?.spot ?? "—"}`);
+        setStatusMsg("REST — calls + puts + net");
       } else {
-        setStatusMsg(`No data (${d?.status || r.status}).`);
-        log("warn", `⚠ ${d?.status || r.status}`);
+        // Neither side resolved — surface the most useful error.
+        const d = callRes.d?.error || callRes.d?.status ? callRes.d : putRes.d;
+        if (d?.error) { setError(d.error); log("err", `✖ ${d.error}`); }
+        else if (d?.status === "no-expiry") {
+          const av = Array.isArray(d?.availableExpirations) ? d.availableExpirations.join(", ") : "—";
+          setError(`No expiry ${expiry} for ${d?.chainTicker || tkr}. Available: ${av}`);
+        } else if (d?.status === "no-strike") {
+          setError(`Expiry ${expiry} exists but no strikes matched ${strike} for ${d?.chainTicker || tkr}.`);
+        } else {
+          setStatusMsg(`No data (${d?.status || callRes.status}).`);
+        }
       }
     } catch (e) {
       if ((e as Error)?.name !== "AbortError" && !stopRef.current) {
@@ -221,16 +394,8 @@ export default function DevPage() {
           />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
-          Side
-          <div style={{ display: "flex", gap: 4 }}>
-            {(["CALL", "PUT"] as const).map((s) => (
-              <button key={s} onClick={() => setSide(s)} style={{ ...inputStyle, padding: "8px 16px", cursor: "pointer", background: side === s ? "#0c2535" : "#0b1320", color: side === s ? C.cyan : "#fff", fontWeight: 700 }}>{s}</button>
-            ))}
-          </div>
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
           Strike
-          <input value={strike} onChange={(e) => setStrike(e.target.value.replace(/[^\d.]/g, ""))} style={{ ...inputStyle, width: 120 }} />
+          <input value={strike} onChange={(e) => { strikeTouched.current = true; setStrike(e.target.value.replace(/[^\d.]/g, "")); }} style={{ ...inputStyle, width: 120 }} />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
           Expiry
@@ -253,7 +418,6 @@ export default function DevPage() {
       {/* Readout */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
         <Field label="Ticker">{tkr || "—"}</Field>
-        <Field label="Side">{side}</Field>
         <Field label="Strike">{strike || "—"}</Field>
         <Field label="Resolved Symbol">{sentSymbol || "—"}</Field>
         <Field label="Elapsed">
@@ -263,20 +427,33 @@ export default function DevPage() {
         </Field>
       </div>
 
-      {/* All feed types at once */}
-      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => {
-          const feeds = (result as { feeds?: Record<string, Record<string, unknown>> } | null)?.feeds;
-          return <FeedPanel key={name} name={name} data={feeds?.[name]} />;
-        })}
-        <ExposurePanel data={(result as { exposures?: Record<string, unknown> } | null)?.exposures} />
+      {/* Row 1 — CALL cards */}
+      <RowLabel text="Calls" color="#22e08a" />
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} />)}
+        <ExposurePanel data={callResult?.exposures} />
+        <OiComparePanel data={callResult?.oiCompare} />
       </div>
 
-      {/* Raw market-data item — every field, nothing dropped */}
+      {/* Row 2 — PUT cards */}
+      <RowLabel text="Puts" color="#ff6b6b" />
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} />)}
+        <ExposurePanel data={putResult?.exposures} />
+        <OiComparePanel data={putResult?.oiCompare} />
+      </div>
+
+      {/* Row 3 — NET (call + put) Greeks */}
+      <RowLabel text="Net · Calls + Puts" color="#a78bfa" />
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        <NetExposurePanel data={combineExposures(callResult?.exposures, putResult?.exposures)} />
+      </div>
+
+      {/* Raw market-data items — every field, nothing dropped */}
       <details style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
-        <summary style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em", cursor: "pointer" }}>Raw response</summary>
+        <summary style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em", cursor: "pointer" }}>Raw response (call + put)</summary>
         <pre style={{ margin: "10px 0 0", fontSize: 13, fontFamily: "monospace", color: "#cfe", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {result != null ? JSON.stringify(result, null, 2) : "—"}
+          {(callResult || putResult) ? JSON.stringify({ call: callResult, put: putResult }, null, 2) : "—"}
         </pre>
       </details>
 

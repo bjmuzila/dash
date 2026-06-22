@@ -55,6 +55,11 @@ const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
 const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
+// SPX/SPXW reopen for the next ~23h session at 6PM ET. At that boundary the prior
+// session's per-strike dayVolume + OI are stale; we force a re-pull rather than
+// depend on dxFeed reliably pushing the reset (it does so only sometimes).
+const SESSION_ROLL_HOUR_ET = Number(process.env.SESSION_ROLL_HOUR_ET || 18);
+const SESSION_ROLL_CHECK_MS = Number(process.env.SESSION_ROLL_CHECK_MS || 60000);
 // ES footprint: a print must be at least this many contracts to count as a "big
 // order" bubble. Delta buckets aggregate signed contracts over BUCKET_MS windows.
 const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 1);
@@ -451,6 +456,91 @@ async function getChainCached(ticker) {
   return p;
 }
 
+// CBOE delayed-quote symbol: index roots are underscore-prefixed (_SPX, _NDX…).
+const CBOE_INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
+function cboeSymbol(root) {
+  return CBOE_INDEX_ROOTS.has(root) ? `_${root}` : root;
+}
+const _cboeCache = new Map(); // cboeSymbol -> { at, byOcc: Map<occNorm,{oi,volume,symbol}> }
+const CBOE_TTL_MS = 60_000;
+
+/** Fetch + cache CBOE's full delayed option chain, indexed by normalized OCC. */
+async function fetchCboeChain(root) {
+  const sym = cboeSymbol(root);
+  const cached = _cboeCache.get(sym);
+  if (cached && Date.now() - cached.at < CBOE_TTL_MS) return cached;
+  const url = `https://cdn.cboe.com/api/global/delayed_quotes/options/${encodeURIComponent(sym)}.json`;
+  // CBOE's CDN WAF 401s bare server requests; mimic a browser-originated fetch.
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      Origin: 'https://www.cboe.com',
+      Referer: 'https://www.cboe.com/',
+    },
+  });
+  if (!r.ok) { const e = new Error(`CBOE ${sym} -> ${r.status}`); e.status = r.status; throw e; }
+  const data = await r.json();
+  const rows = data?.data?.options || [];
+  const byOcc = new Map();
+  for (const o of rows) {
+    // CBOE `option` looks like "SPXW250620P05000000" — same OCC body we use.
+    if (!o?.option) continue;
+    byOcc.set(normalizeOcc(o.option), {
+      oi: Number.isFinite(o.open_interest) ? o.open_interest : null,
+      volume: Number.isFinite(o.volume) ? o.volume : null,
+      symbol: o.option,
+    });
+  }
+  const entry = { at: Date.now(), byOcc };
+  _cboeCache.set(sym, entry);
+  return entry;
+}
+
+/**
+ * Independent open-interest cross-check for a SINGLE option contract via CBOE's
+ * public delayed-quotes feed (no auth — Yahoo's v7 options endpoint now 401s).
+ * Dev-page only: matches by OCC contract symbol so the page can show our OI
+ * (TastyTrade) beside CBOE's for the exact same strike — to debug OI mismatches.
+ *
+ * Return shape keeps the `yahoo`/`yahooVolume` keys so the dev UI is unchanged;
+ * `source` reports the real provider.
+ * @param {object} a
+ * @param {string} a.root      chain root, e.g. "SPX" / "AAPL"
+ * @param {string} a.occSymbol our OCC symbol (spaces removed = CBOE `option`)
+ * @param {string} a.expiry    YYYY-MM-DD (unused by CBOE; full chain returned)
+ * @param {number} a.oursOI    our (TastyTrade) open interest for the contract
+ */
+async function fetchYahooContractOI({ root, occSymbol, oursOI }) {
+  try {
+    const { byOcc } = await fetchCboeChain(root);
+    const want = normalizeOcc(occSymbol);
+    // SPX weeklies trade under the SPXW body on CBOE too; try the swap as a fallback.
+    let hit = byOcc.get(want);
+    if (!hit && root === 'SPX') hit = byOcc.get(want.replace(/^SPX(?=\d)/, 'SPXW'));
+    if (!hit) {
+      return { source: 'cboe', ok: true, match: false, underlying: cboeSymbol(root), contractSymbol: want, yahooContracts: byOcc.size };
+    }
+    const refOI = Number.isFinite(hit.oi) ? hit.oi : null;
+    const ours = Number.isFinite(oursOI) ? oursOI : null;
+    return {
+      source: 'cboe',
+      ok: true,
+      match: true,
+      underlying: cboeSymbol(root),
+      contractSymbol: hit.symbol,
+      ours,
+      yahoo: refOI, // key kept for UI compatibility; value is CBOE OI
+      diff: ours != null && refOI != null ? ours - refOI : null,
+      pctDiff: ours != null && refOI > 0 ? ((ours - refOI) / refOI) * 100 : null,
+      yahooVolume: Number.isFinite(hit.volume) ? hit.volume : null,
+    };
+  } catch (err) {
+    return { source: 'cboe', ok: false, status: err?.status ? `HTTP ${err.status}` : String(err?.message || err).slice(0, 120) };
+  }
+}
+
 /**
  * Probe any ticker via REST. Resolves the requested strike to the nearest real
  * chain contract, then fetches its market-data.
@@ -583,12 +673,22 @@ async function probeRest({ ticker, expiry, type, strike }) {
       }
     : { spot: null, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
 
+  // Independent OI cross-check (Yahoo) for THIS one contract — dev-page A/B test
+  // for our persistent open-interest discrepancies. Best-effort; never throws.
+  const oiCompare = await fetchYahooContractOI({
+    root: chainTicker(ticker),
+    occSymbol: best.occSymbol,
+    expiry: best.expiration,
+    oursOI: oi,
+  });
+
   const result = {
     eventType: 'REST',
     eventSymbol: best.streamerSymbol,
     occSymbol: best.occSymbol,
     feeds,
     exposures,
+    oiCompare, // { ours, yahoo, diff, pctDiff, match, ... } — OI sanity check
     raw: it, // full unmodified market-data item — every field, nothing dropped
   };
   return { ...meta, found: true, status: 'ready', source: 'rest', result };
@@ -1227,6 +1327,8 @@ class TastytradeProxy {
     this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
     this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
     this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
+    this.optSessionKey = null; // SPX session key (~6PM ET rollover) the OI/volume maps belong to
+    this.sessionRollTimer = null; // self-rescheduling watcher that re-arms OI + clears volume at rollover
     this.oiCoverage = 0;      // 0..1 fraction of active strikes that have OI (last backfill)
     this.oiReady = false;     // true once OI coverage crosses threshold, plateaus, or grace elapses
     this.oiPlateauHits = 0;   // consecutive backfills with negligible OI-coverage gain
@@ -1397,6 +1499,11 @@ class TastytradeProxy {
     await this._refreshOI();
     this._scheduleOiRefresh();
 
+    // Seed the SPX session key now, then watch for the ~6PM ET rollover so OI +
+    // volume self-refresh across the session boundary without a restart.
+    this.optSessionKey = this._sessionKey();
+    this._scheduleSessionRoll();
+
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
     // Aggregate + broadcast the SPX flow tape every 500ms (independent of GEX).
     this.flowTimer = setInterval(() => {
@@ -1408,6 +1515,53 @@ class TastytradeProxy {
     if (this.idle) { this.idle = false; this.setIdle(true); }
     else { marketState.setStatus({ idle: false }); }
     return this;
+  }
+
+  /**
+   * SPX session key. SPX/SPXW trade a ~23h session that reopens ~6PM ET, so the
+   * "session day" is the ET calendar date AFTER 6PM (a trade at 8PM Mon belongs
+   * to Tue's session). Used to detect the session rollover independently of
+   * dxFeed — which only *sometimes* pushes a fresh Summary/dayVolume reset at the
+   * boundary, leaving OI + volume (and thus the GEX chart) frozen at yesterday.
+   */
+  _sessionKey(now = new Date()) {
+    const hourStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: '2-digit', hour12: false,
+    }).format(now);
+    const etHour = Number(hourStr) % 24;
+    const base = todayYmd().ymd;
+    if (etHour >= SESSION_ROLL_HOUR_ET) {
+      // After the reopen → belongs to the NEXT ET calendar day's session.
+      const d = new Date(`${base}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d.toISOString().slice(0, 10);
+    }
+    return base;
+  }
+
+  /**
+   * Watch for the SPX session rollover (~6PM ET). When the session key advances,
+   * the prior session's per-strike dayVolume is stale and OI must be re-pulled:
+   * clear this.volumes (so an expired dayVolume can't linger as a REST fallback)
+   * and re-arm the OI backfill (oiReady=false → fast re-poll until coverage warms).
+   * Self-reschedules each minute; cheap and dxFeed-independent.
+   */
+  _scheduleSessionRoll() {
+    if (this.sessionRollTimer) { clearTimeout(this.sessionRollTimer); this.sessionRollTimer = null; }
+    this.sessionRollTimer = setTimeout(() => {
+      if (!this.idle) {
+        const key = this._sessionKey();
+        if (this.optSessionKey && key !== this.optSessionKey) {
+          console.log(`[SESSION] SPX rollover ${this.optSessionKey} → ${key}: clearing stale volume + re-arming OI`);
+          this.volumes.clear();
+          this.oiReady = false;
+          this.oiPlateauHits = 0;
+          this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
+        }
+        this.optSessionKey = key;
+      }
+      this._scheduleSessionRoll();
+    }, SESSION_ROLL_CHECK_MS);
   }
 
   /** Pull OI + volume for the active chain from REST into this.restOI. */
@@ -1529,6 +1683,7 @@ class TastytradeProxy {
       if (this.candleFlushTimer) { clearInterval(this.candleFlushTimer); this.candleFlushTimer = null; }
       if (this.footprintFlushTimer) { clearInterval(this.footprintFlushTimer); this.footprintFlushTimer = null; }
       if (this.footprintSaveTimer) { clearInterval(this.footprintSaveTimer); this.footprintSaveTimer = null; }
+      if (this.sessionRollTimer) { clearTimeout(this.sessionRollTimer); this.sessionRollTimer = null; }
       this._saveFootprintToDisk(); // final flush before going idle
     } else {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
@@ -1537,6 +1692,9 @@ class TastytradeProxy {
       if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
       if (!this.footprintFlushTimer) this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
       if (!this.footprintSaveTimer) this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
+      // Resync the session key on resume (may have rolled while idle), then re-arm the watcher.
+      this.optSessionKey = this._sessionKey();
+      if (!this.sessionRollTimer) this._scheduleSessionRoll();
     }
     try { fs.writeFileSync(IDLE_STATE_FILE, JSON.stringify({ idle: next }), 'utf8'); } catch {}
     marketState.setStatus({ idle: next });

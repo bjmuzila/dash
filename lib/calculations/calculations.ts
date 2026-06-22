@@ -84,8 +84,11 @@ export function calculateNetGEX(row: ChainRow, mode: CalcMode = "net"): number {
       ? (row.putVolume ?? 0)
       : (row.putOI ?? 0) + (row.putVolume ?? 0);
 
-  const callGEX = (row.callGamma ?? 0) * callPos * spot * spot;
-  const putGEX = (row.putGamma ?? 0) * putPos * spot * spot * -1;
+  // Force sign by side (calls +, puts −) regardless of the incoming gamma sign,
+  // matching the server calculator (gex-calculator.js): a stray negative gamma
+  // must not flip a put's contribution positive.
+  const callGEX = Math.abs(row.callGamma ?? 0) * callPos * spot * spot;
+  const putGEX = -(Math.abs(row.putGamma ?? 0) * putPos * spot * spot);
   return callGEX + putGEX;
 }
 

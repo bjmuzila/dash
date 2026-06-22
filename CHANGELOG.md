@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-06-22 (session 41) — SPX session-rollover OI/vol refresh, dev-page calls+puts+net, GEX sign/clarity fixes
+
+Diagnosed the "GEX chart looks identical to yesterday" issue, hardened the OI/volume refresh across SPX's ~23h session boundary, rebuilt the dev probe to show calls + puts + net in one shot, added an independent OI cross-check, and clarified the strike popup's OI-vs-Vol GEX so a negative bar with a positive composite is self-explaining. Version bumped to `2026.6.22-v3`.
+
+### SPX session rollover (`server-v2/proxy-tastytrade.js`)
+- Root cause: once OI coverage warms at startup the REST OI/volume poll stops, leaving the feed dependent on dxFeed pushing a fresh Summary/`dayVolume` reset at the ~6PM ET reopen — which it does only sometimes, freezing OI + volume (and the GEX chart) at the prior session.
+- Added a dxFeed-independent watcher: computes an SPX "session key" (ET date after the 6PM reopen), checks each minute, and on rollover clears `this.volumes` (so a stale `dayVolume` can't linger as a REST fallback) and re-arms the OI backfill (`oiReady=false` → fast re-poll). Pauses/resumes with idle. Env-tunable via `SESSION_ROLL_HOUR_ET` (18) and `SESSION_ROLL_CHECK_MS` (60000).
+
+### Independent OI cross-check (`server-v2/proxy-tastytrade.js`, `app/dev/page.tsx`)
+- Probe now also fetches the same contract's OI from an external source and returns an `oiCompare` block (ours vs reference, diff, %); dev page renders an "OI Check" panel + per-probe log line, color-coded by % gap.
+- Yahoo v7 options endpoint now 401s (needs crumb/cookie); switched to CBOE delayed-quotes with browser-style WAF headers. **Still 401 — open item to revisit** (likely needs a session cookie or a keyed provider).
+
+### Dev page — calls + puts + net (`app/dev/page.tsx`)
+- Removed the Call/Put toggle: one strike in → fetches both sides in parallel, renders three rows (Call cards, Put cards, combined Net Greeks summing GEX/DEX/VEX/theta/vanna/charm + total OI/volume).
+- Strike now auto-fills to the chain strike nearest live spot (from `/proxy/gex`), instead of a hardcoded value; manual edits suppress the auto-fill.
+
+### Strike popup (`components/dashboard/StrikeDetailPopup.tsx`)
+- Added a collapsible raw "GEX INPUTS (LIVE)" breakdown (spot, per-side gamma/OI, call/put/net GEX) for cross-checking against /dev.
+- Split the headline into OI-GEX (= the bar) vs Vol-GEX component chips, so a negative bar next to a positive OI+Vol composite is no longer confusing. (Confirmed not a bug: 7500 has put-heavy OI but call-heavy volume today.)
+
+### GEX sign fix (`lib/calculations/calculations.ts`)
+- `calculateNetGEX` now takes `Math.abs` of both gammas and forces puts negative, matching the server calculator — a stray negative gamma can no longer flip a put's contribution positive.
+
+### Landing + flow (`components/landing/LandingClient.tsx`, `components/dashboard/FlowTape.tsx`)
+- Mobile landing card shrinks to fit an iPhone viewport without scrolling (responsive logo/intro/feature/gap sizing; feature grid hides on short screens).
+- SPX flow tape now defaults to the 100K premium filter on load.
+
 ## 2026-06-21 (session 40) — Overview NQU watchlist quote (broker AH-aware) + sidebar collapsed by default
 
 Added a new NQU quote to the Overview top-right toolbar with a click-to-open gainers dropdown, switched its prices to the real-time broker feed (extended-hours aware), and set the left sidebar to start collapsed.

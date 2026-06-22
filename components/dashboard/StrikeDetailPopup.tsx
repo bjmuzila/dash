@@ -32,6 +32,13 @@ function fmtPrice(v: number | null | undefined): string {
   return `$${v.toFixed(2)}`;
 }
 
+// Raw number, full precision (for greeks/OI/spot inputs — match the dev probe).
+function fmtRaw(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (Number.isInteger(v)) return v.toLocaleString();
+  return String(+v.toFixed(6));
+}
+
 const C = {
   bg: "rgba(13,17,25,0.96)",
   border: "rgba(0,240,255,0.30)",
@@ -70,7 +77,7 @@ function PopupBody({ row, spotPrice, baselines }: Pick<Props, "row" | "spotPrice
   return (
     <div style={{ fontFamily: "monospace", color: "#fff" }}>
       {/* Header: strike + live composite */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
         <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.02em" }}>
           SPX {row.strike.toLocaleString()}
         </span>
@@ -80,6 +87,19 @@ function PopupBody({ row, spotPrice, baselines }: Pick<Props, "row" | "spotPrice
             {fmtGex(compositeNetGex)}
           </span>
         </span>
+      </div>
+
+      {/* Component breakdown: the bar plots the OI term, so a negative bar with a
+          positive composite means volume-GEX outweighs OI-GEX. Show both. */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "6px 9px" }}>
+          <div style={{ fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>OI GEX (= BAR)</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: (row.netGEX ?? 0) >= 0 ? C.pos : C.neg }}>{fmtGex(row.netGEX)}</div>
+        </div>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "6px 9px" }}>
+          <div style={{ fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>VOL GEX</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: (row.netVolGEX ?? 0) >= 0 ? C.pos : C.neg }}>{fmtGex(row.netVolGEX)}</div>
+        </div>
       </div>
 
       {/* 2x2 rolling-difference boxes */}
@@ -123,6 +143,48 @@ function PopupBody({ row, spotPrice, baselines }: Pick<Props, "row" | "spotPrice
         </span>
         <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan }}>{fmtPrice(otmPrice)}</span>
       </div>
+
+      {/* Raw GEX inputs actually used to draw this bar — for cross-checking
+          against the /dev probe (same formula: |γ| × OI × spot²). */}
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ fontSize: 9, color: C.dim, letterSpacing: "0.1em", cursor: "pointer" }}>
+          GEX INPUTS (LIVE — VERIFY VS /DEV)
+        </summary>
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* spot */}
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+            <span style={{ color: C.dim }}>spot (S)</span>
+            <span style={{ color: "#fff", fontWeight: 700 }}>{fmtRaw(row.spotPrice ?? spotPrice)}</span>
+          </div>
+          {/* call side */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
+            <div style={{ fontSize: 9, color: C.pos, letterSpacing: "0.08em", marginBottom: 3 }}>CALL</div>
+            <InputRow label="gamma" value={fmtRaw(row.callGamma)} />
+            <InputRow label="OI" value={fmtRaw(row.callOI)} />
+            <InputRow label="callGEX = |γ|·OI·S²" value={fmtGex(row.callGEX)} strong />
+          </div>
+          {/* put side */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
+            <div style={{ fontSize: 9, color: C.neg, letterSpacing: "0.08em", marginBottom: 3 }}>PUT</div>
+            <InputRow label="gamma" value={fmtRaw(row.putGamma)} />
+            <InputRow label="OI" value={fmtRaw(row.putOI)} />
+            <InputRow label="putGEX = −|γ|·OI·S²" value={fmtGex(row.putGEX)} strong />
+          </div>
+          {/* net */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
+            <InputRow label="netGEX = call + put" value={fmtGex(row.netGEX)} strong />
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function InputRow({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, lineHeight: 1.7 }}>
+      <span style={{ color: C.dim }}>{label}</span>
+      <span style={{ color: strong ? "#fff" : "#cfe", fontWeight: strong ? 800 : 600 }}>{value}</span>
     </div>
   );
 }

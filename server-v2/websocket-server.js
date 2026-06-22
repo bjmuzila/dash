@@ -127,7 +127,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       // => near-zero traffic). Other signals below (flow/spot/aux/status) are NOT
       // gated — they keep their own cadence.
       const now = Date.now();
-      const payload = JSON.stringify({
+      // Build the frame data once. updatedAt is excluded from the dedupe key so a
+      // changing timestamp on an otherwise-identical chain doesn't defeat dedupe.
+      const gexData = {
         gexRows: state.gexRows,
         totals: state.totals,
         callWall: state.callWall,
@@ -135,20 +137,12 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
         gexFlip: state.gexFlip,
         totalNetGex: state.totalNetGex,
         expiry: state.expiry,
-      });
-      if (now - lastGexSentAt >= GEX_BROADCAST_MS && payload !== lastGexPayload) {
+      };
+      const dedupeKey = JSON.stringify(gexData);
+      if (now - lastGexSentAt >= GEX_BROADCAST_MS && dedupeKey !== lastGexPayload) {
         lastGexSentAt = now;
-        lastGexPayload = payload;
-        out.push(msg('gex', {
-          gexRows: state.gexRows,
-          totals: state.totals,
-          callWall: state.callWall,
-          putWall: state.putWall,
-          gexFlip: state.gexFlip,
-          totalNetGex: state.totalNetGex,
-          expiry: state.expiry,
-          updatedAt: state.updatedAt,
-        }, state.symbol));
+        lastGexPayload = dedupeKey;
+        out.push(msg('gex', { ...gexData, updatedAt: state.updatedAt }, state.symbol));
       }
     }
     if (changed.has('flow')) out.push(msg('flow', state.flow, state.symbol));

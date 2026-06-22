@@ -55,6 +55,23 @@ export default function LandingClient() {
         color: T.text,
       }}
     >
+      {/* Mobile: shrink the card so it fits an iPhone viewport without scrolling */}
+      <style>{`
+        @media (max-width: 640px) {
+          .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
+          .landing-card .landing-intro { font-size: 13.5px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
+          .landing-card .landing-features { gap: 8px !important; }
+          .landing-card .landing-feature { padding: 9px !important; }
+          .landing-card .landing-feature-t { font-size: 12.5px !important; margin-bottom: 2px !important; }
+          .landing-card .landing-feature-d { font-size: 11px !important; line-height: 1.35 !important; }
+          .landing-card .landing-form { margin-top: 14px !important; }
+          .landing-card .landing-divider { margin: 14px 0 10px !important; }
+        }
+        @media (max-width: 640px) and (max-height: 750px) {
+          .landing-card .landing-features { display: none !important; }
+          .landing-card .landing-logo { max-height: 80px !important; }
+        }
+      `}</style>
       {/* Blurred dashboard behind glass */}
       <div style={{ position: "absolute", inset: 0, filter: "blur(7px)", transform: "scale(1.04)" }}>
         <img
@@ -93,31 +110,31 @@ export default function LandingClient() {
           overflowY: "auto",
         }}
       >
-        <div style={card}>
+        <div style={card} className="landing-card">
           {/* Accent glow bleeding through the glass */}
           <div style={cardGlow} aria-hidden />
 
           <div style={badge}>Launching soon</div>
 
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} />
+          <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
 
-          <p style={{ color: T.muted, fontSize: 16, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
+          <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
             A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
             traders. See dealer positioning, flow, and key levels the moment they move.
           </p>
 
-          <div style={featureGrid}>
+          <div style={featureGrid} className="landing-features">
             {FEATURES.map((f) => (
-              <div key={f.t} style={featureCell}>
-                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{f.t}</div>
-                <div style={{ color: T.muted, fontSize: 12.5, lineHeight: 1.45 }}>{f.d}</div>
+              <div key={f.t} style={featureCell} className="landing-feature">
+                <div className="landing-feature-t" style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{f.t}</div>
+                <div className="landing-feature-d" style={{ color: T.muted, fontSize: 12.5, lineHeight: 1.45 }}>{f.d}</div>
               </div>
             ))}
           </div>
 
           {/* Waitlist form */}
-          <form onSubmit={submit} style={{ marginTop: 26 }}>
+          <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
             <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
               Get notified when we launch
             </label>
@@ -172,7 +189,7 @@ export default function LandingClient() {
             </svg>
           </a>
 
-          <div style={divider}>
+          <div style={divider} className="landing-divider">
             <span style={{ background: T.panel, padding: "0 12px", color: T.muted, fontSize: 12 }}>
               already a member?
             </span>
@@ -203,7 +220,7 @@ const card: React.CSSProperties = {
   WebkitBackdropFilter: "blur(22px)",
   border: "1px solid rgba(0,240,255,0.14)",
   borderRadius: 20,
-  padding: "clamp(24px, 4vw, 40px)",
+  padding: "clamp(16px, 4vw, 40px)",
   boxShadow:
     "0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(0,240,255,0.04)",
 };

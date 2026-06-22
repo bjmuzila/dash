@@ -47,7 +47,7 @@ function fmtTime(ts: number): string {
 }
 
 export default function FlowTape({ orders, connected }: FlowTapeProps) {
-  const [minPremium, setMinPremium] = useState<(typeof FILTER_OPTIONS)[number]>("all");
+  const [minPremium, setMinPremium] = useState<(typeof FILTER_OPTIONS)[number]>(100000);
   const [moneyness, setMoneyness] = useState<(typeof MONEYNESS_OPTIONS)[number]>("otm");
 
   const recent = useMemo(() => {
