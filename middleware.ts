@@ -1,27 +1,82 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
-// Public routes: landing, auth pages, the waitlist API, and static/proxy assets.
-// Everything else (the paid dashboard) requires a signed-in user.
+// Public routes: landing, auth pages, the waitlist API, the maintenance page,
+// and static/proxy assets. Everything else (the paid dashboard) requires a
+// signed-in user.
 const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/waitlist(.*)",
+  "/maintenance",
 ]);
 
-export default clerkMiddleware(async (auth, req) => {
-  if (isPublicRoute(req)) return;
+// Owner Clerk user ID that bypasses maintenance mode. Set OWNER_USER_ID in env.
+// Trimmed so a stray space in the env value can't cause a mismatch (lockout).
+const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
+// Origin for the in-process proxy that holds the maintenance flag. Defaults to
+// the same host the request came in on (works on Render and locally).
+function proxyOrigin(req: Request): string {
+  try { return new URL(req.url).origin; } catch { return ""; }
+}
+
+// Lightly cached read of the proxy maintenance flag so we don't fetch on every
+// request. Cache TTL keeps the toggle near-instant without hammering the proxy.
+let maintCache: { value: boolean; at: number } = { value: false, at: 0 };
+const MAINT_TTL_MS = 5000;
+
+async function isMaintenanceOn(req: Request): Promise<boolean> {
+  if (Date.now() - maintCache.at < MAINT_TTL_MS) return maintCache.value;
+  try {
+    const r = await fetch(`${proxyOrigin(req)}/proxy/maintenance`, { cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json();
+      maintCache = { value: !!j?.maintenance, at: Date.now() };
+      return maintCache.value;
+    }
+  } catch { /* proxy unreachable → fail open (no maintenance) */ }
+  maintCache = { value: false, at: Date.now() };
+  return false;
+}
+
+export default clerkMiddleware(async (auth, req) => {
   // Internal server-to-server calls (the in-process levels auto-publisher and
   // other localhost jobs) carry a shared-secret header instead of a Clerk
   // session. Without this they were redirected to "/" and got the landing-page
   // HTML back, breaking the publisher ("Unexpected token '<'"). The secret is
   // never exposed to the browser, so these endpoints stay non-public.
   const internalToken = process.env.INTERNAL_API_TOKEN;
-  if (internalToken && req.headers.get("x-internal-token") === internalToken) {
-    return NextResponse.next();
+  const hasInternalToken =
+    !!internalToken && req.headers.get("x-internal-token") === internalToken;
+  if (hasInternalToken) return NextResponse.next();
+
+  // ── Maintenance gate ──────────────────────────────────────────────────────
+  // When ON, everyone except the owner is sent to /maintenance. Runs before the
+  // public-route check so customers on the landing page see it too. The
+  // /maintenance page itself and auth pages are exempt to avoid redirect loops.
+  const path = req.nextUrl.pathname;
+  const exemptFromMaint =
+    path === "/maintenance" ||
+    path.startsWith("/sign-in") ||
+    path.startsWith("/sign-up") ||
+    path.startsWith("/api/waitlist");
+  if (!exemptFromMaint && (await isMaintenanceOn(req))) {
+    const { userId } = await auth();
+    // Owner bypasses. If OWNER_USER_ID isn't configured yet, fall back to letting
+    // ANY signed-in user through (so you can't accidentally lock yourself out
+    // before setting the env var) — only signed-out visitors get the page.
+    const isOwner = OWNER_USER_ID ? (userId || "").trim() === OWNER_USER_ID : !!userId;
+    if (!isOwner) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/maintenance";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
   }
+
+  if (isPublicRoute(req)) return;
 
   const { userId } = await auth();
 

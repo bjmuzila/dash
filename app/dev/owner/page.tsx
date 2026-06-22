@@ -620,6 +620,7 @@ export default function OwnerDashboard() {
   // transient per-button busy/result state. Handlers are defined after refresh().
   const [isIdle, setIsIdle] = useState<boolean | null>(null);
   const [mvcAuto, setMvcAuto] = useState<boolean | null>(null);
+  const [maint, setMaint] = useState<boolean | null>(null);
   const [ctlBusy, setCtlBusy] = useState<string | null>(null);
   const [ctlMsg, setCtlMsg] = useState<{ key: string; text: string; ok: boolean } | null>(null);
 
@@ -778,6 +779,9 @@ export default function OwnerDashboard() {
     fetch("/proxy/mvc-auto").then(r => r.ok ? r.json() : null).then(j => {
       if (j && typeof j.enabled === "boolean") setMvcAuto(j.enabled);
     }).catch(() => {});
+    fetch("/proxy/maintenance").then(r => r.ok ? r.json() : null).then(j => {
+      if (j && typeof j.maintenance === "boolean") setMaint(j.maintenance);
+    }).catch(() => {});
   }, []);
 
   const toggleIdle = useCallback(async () => {
@@ -812,6 +816,24 @@ export default function OwnerDashboard() {
       flashMsg("mvcAuto", `Failed: ${String((e as Error)?.message || e)}`, false);
     } finally { setCtlBusy(null); }
   }, [mvcAuto, flashMsg]);
+
+  const toggleMaint = useCallback(async () => {
+    const next = !maint;
+    // Turning ON locks out customers — confirm. Turning OFF is safe.
+    if (next && !window.confirm("Enable maintenance mode?\n\nAll non-owner users will be redirected to the maintenance page until you turn it off.")) return;
+    setCtlBusy("maint");
+    try {
+      const r = await fetch("/proxy/maintenance", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: next }),
+      });
+      const j = await r.json();
+      setMaint(typeof j.maintenance === "boolean" ? j.maintenance : next);
+      flashMsg("maint", next ? "Maintenance mode ON — customers locked out" : "Maintenance mode OFF — site live", true);
+    } catch (e) {
+      flashMsg("maint", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); }
+  }, [maint, flashMsg]);
 
   const doReconnect = useCallback(async () => {
     if (!window.confirm("Reconnect the TT/dxLink feed now? Live data drops for a few seconds while it re-establishes.")) return;
@@ -1107,7 +1129,7 @@ export default function OwnerDashboard() {
             <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
             <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.green} mono />
-            <StatCard label="Version" value="2026.6.19-v2" accent={HOME_THEME.purple} mono />
+            <StatCard label="Version" value={process.env.NEXT_PUBLIC_APP_VERSION || "—"} accent={HOME_THEME.purple} mono />
           </div>
         </div>
 
@@ -1262,6 +1284,25 @@ export default function OwnerDashboard() {
                   }}
                 >
                   {ctlBusy === "mvcAuto" ? "…" : mvcAuto == null ? "—" : mvcAuto ? "● Auto ON — disable" : "○ Auto OFF — enable"}
+                </button>
+              </div>
+              {/* Maintenance mode */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Maintenance</span>
+                <button
+                  onClick={toggleMaint}
+                  disabled={ctlBusy === "maint"}
+                  title="When ON, all non-owner users are redirected to the maintenance page. You (owner) keep full access."
+                  style={{
+                    ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
+                    opacity: ctlBusy === "maint" ? 0.6 : 1,
+                    cursor: ctlBusy === "maint" ? "wait" : "pointer",
+                    background: maint ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.14)",
+                    color: maint ? HOME_THEME.red : HOME_THEME.green,
+                    border: `1px solid ${maint ? HOME_THEME.red : HOME_THEME.green}55`,
+                  }}
+                >
+                  {ctlBusy === "maint" ? "…" : maint == null ? "—" : maint ? "● Maint ON — go live" : "○ Maint OFF — enable"}
                 </button>
               </div>
             </div>

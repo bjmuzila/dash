@@ -138,6 +138,24 @@ async function main() {
         sendJson(res, 200, { idle: marketState.getState().status.idle });
         return;
       }
+      // Maintenance mode read/toggle. The Next middleware polls the GET to decide
+      // whether to serve /maintenance to non-owner requests.
+      //   GET  /proxy/maintenance            → { maintenance }
+      //   POST /proxy/maintenance { on: bool } → { maintenance }
+      if (pathname === '/proxy/maintenance' && req.method === 'GET') {
+        sendJson(res, 200, { maintenance: maintenanceMode });
+        return;
+      }
+      if (pathname === '/proxy/maintenance' && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          try { maintenanceMode = !!JSON.parse(body || '{}').on; } catch {}
+          console.log(`[SERVER-V2] maintenance mode → ${maintenanceMode ? 'ON' : 'OFF'}`);
+          sendJson(res, 200, { maintenance: maintenanceMode });
+        });
+        return;
+      }
       // Manual weekly-levels publish. The auto-publisher only fires Saturday, so
       // this lets you (re)publish on demand — e.g. after editing the ticker list
       // or for the first load — without overwriting on every restart.

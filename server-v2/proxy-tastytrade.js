@@ -288,6 +288,17 @@ async function resolveUnderlying(symbol) {
   }
 }
 
+// US equity-market full-day closures (ET date strings). ES futures trade an
+// abbreviated session on these days but there is NO official daily settle, so
+// TradingView's day-change skips them. Mirrors mvc-auto-snapshot.js — keep in
+// sync. Extend before 2028.
+const ES_NON_SETTLE_DATES = new Set([
+  '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+  '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+  '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31',
+  '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
+]);
+
 /**
  * Compute an ET 5-minute slot descriptor for an epoch-ms timestamp.
  * Returns { slotKey:'YYYY-MM-DDTHH:MM', date:'YYYY-MM-DD', time:'HH:MM', slotMs }
@@ -1420,35 +1431,37 @@ class TastytradeProxy {
     if (rows.length) {
       const last = rows[rows.length - 1];
       const lastClose = Number(last.close);
-      if (lastClose > 0) marketState.setAux({ esFut: lastClose });
+      // NOTE: do NOT set esFut here. The live ES Quote/Trade handler (_onEvent)
+      // already publishes esFut from the real-time bid/ask mid. Writing it again
+      // from the 5s candle close created two competing writers at different
+      // values → the visible flicker. Candles are used ONLY for the baseline.
 
       const todayDate = last.date;
-      // The day-change baseline must be the prior session's 4:00pm ET RTH SETTLE
-      // — matching TradingView — NOT just the last bar of the prior date (ES
-      // trades to 17:00 ET, so the final bar is ~16pts off settle). Find the most
-      // recent prior trading date, then that date's 15:55 bar (covers 15:55–16:00,
-      // its close = the 4:00pm settle). Fall back to the prior date's last bar.
-      let prevDate = "";
-      for (let i = rows.length - 1; i >= 0; i--) {
-        if (rows[i].date !== todayDate) { prevDate = rows[i].date; break; }
+      // The day-change baseline must be the prior SETTLE session's 4:00pm ET close
+      // (matching TradingView). Two corrections vs a naive "last bar of yesterday":
+      //   1. Use the 15:55 bar close (the 4:00pm settle), not the ~17:00 Globex
+      //      close — ES trades past 16:00 so the final bar is ~16pts off settle.
+      //   2. Skip non-settle dates (weekends + market holidays, e.g. Juneteenth
+      //      2026-06-19) — those have no official daily close, so TradingView's
+      //      prior close is the last real settle before them (e.g. Thu 06-18).
+      // Build the list of distinct prior dates that have a real 15:55 settle bar
+      // and aren't holidays, then take the most recent.
+      const settleByDate = new Map();
+      for (const r of rows) {
+        if (r.date === todayDate) continue;
+        if (ES_NON_SETTLE_DATES.has(r.date)) continue;
+        if (r.time === "15:55" && Number(r.close) > 0) settleByDate.set(r.date, Number(r.close));
       }
-      let prevClose = 0;
-      if (prevDate) {
-        const settleBar = rows.find((r) => r.date === prevDate && r.time === "15:55");
-        if (settleBar && Number(settleBar.close) > 0) {
-          prevClose = Number(settleBar.close);
-        } else {
-          // No 15:55 bar (gap/holiday) — use the last RTH bar at/under 16:00.
-          const rthBars = rows.filter((r) => r.date === prevDate && r.time <= "16:00");
-          const lastRth = rthBars[rthBars.length - 1];
-          if (lastRth && Number(lastRth.close) > 0) prevClose = Number(lastRth.close);
-        }
-      }
-      if (prevClose > 0) {
+      const settleDates = [...settleByDate.keys()].sort(); // ascending
+      const prevDate = settleDates.length ? settleDates[settleDates.length - 1] : "";
+      const prevClose = prevDate ? settleByDate.get(prevDate) : 0;
+
+      // The exchange Summary settle (if delivered) is authoritative; only use the
+      // candle-derived close when no Summary settle has arrived for this symbol.
+      if (prevClose > 0 && !(this._esSummarySettle > 0)) {
         if (prevClose !== this._lastLoggedEsBaseline) {
           this._lastLoggedEsBaseline = prevClose;
-          const settleBar = rows.find((r) => r.date === prevDate && r.time === "15:55");
-          console.log(`[FEED] ES baseline=${prevClose} prevDate=${prevDate} via=${settleBar ? "15:55-settle" : "lastRTH"} live=${lastClose} -> chg=${(lastClose - prevClose).toFixed(2)}`);
+          console.log(`[FEED] ES baseline=${prevClose} prevSettleDate=${prevDate} live=${lastClose} -> chg=${(lastClose - prevClose).toFixed(2)} (candle-derived; no Summary settle yet; skipped non-settle: ${[...ES_NON_SETTLE_DATES].filter(d => d > prevDate && d < todayDate).join(",") || "none"})`);
         }
         marketState.setAux({ esFutPrevClose: prevClose });
       }
@@ -1660,7 +1673,10 @@ class TastytradeProxy {
         // Keep the live bid/ask so ES Trade ticks can be classified as
         // aggressive-buy (>= ask) vs aggressive-sell (<= bid) for the footprint.
         if (bid > 0 || ask > 0) this.esQuote = { bid, ask, mid };
-        if (mid > 0) marketState.setAux({ esFut: mid });
+        // Do NOT publish esFut from the Quote mid: (bid+ask)/2 is off the 0.25
+        // tick grid (e.g. 7541.63) and alternates with the Trade price, causing
+        // the toolbar flicker. esFut is set ONLY from the Trade (last-traded)
+        // price below, which is already on the tick grid.
         return;
       }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize) });
@@ -1684,6 +1700,7 @@ class TastytradeProxy {
       // which can lag a session. Prefer it for the ES day-change baseline.
       if (sym === this.esSymbol && pc > 0) {
         console.log(`[FEED] ES Summary prevDayClosePrice=${pc} (authoritative baseline) sym=${sym}`);
+        this._esSummarySettle = pc; // exchange settle wins over candle-derived
         marketState.setAux({ esFutPrevClose: pc });
       }
       return;
@@ -1707,7 +1724,19 @@ class TastytradeProxy {
         const px = Number(ev.price);
         if (px > 0) {
           marketState.setAux({ esFut: px });
-          this._recordEsPrint(px, Number(ev.size));
+          const sz = Number(ev.size);
+          // DIAGNOSTIC: what sizes does dxFeed's (conflated) Trade event actually
+          // deliver for ES? Log the running max + every print ≥ 50 with all raw
+          // fields, so we can compare against MotiveWave's tick stream (e.g. the 300
+          // print). Remove once the TimeAndSale-vs-Trade question is settled.
+          if (!(this._esMaxSeen >= sz)) {
+            this._esMaxSeen = sz;
+            console.log(`[ES-DIAG] new max trade size=${sz} px=${px} dayVol=${ev.dayVolume} raw=${JSON.stringify(ev)}`);
+          }
+          if (sz >= 50) {
+            console.log(`[ES-DIAG] big trade size=${sz} px=${px} dayVol=${ev.dayVolume}`);
+          }
+          this._recordEsPrint(px, sz);
         }
         return;
       }
