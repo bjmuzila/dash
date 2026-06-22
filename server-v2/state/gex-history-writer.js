@@ -105,7 +105,7 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
     // Only rebuild the pool on connection-level failures — a data/range error
     // is not a broken connection and shouldn't tear it down every tick.
     const msg = String(e?.message || '');
-    const connDropped = /terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed/i.test(msg);
+    const connDropped = /terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed|after calling end|recovery mode|not yet accepting|cannot use a pool/i.test(msg);
     if (connDropped) {
       try { pool?.end().catch(() => {}); } catch {}
       pool = null;

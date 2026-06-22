@@ -1,5 +1,88 @@
 # Changelog
 
+## 2026-06-21 (session 37) — Toolbar ESU price/day-change fix + DB pool reconnect hardening
+
+Fixed the Overview top-bar **ESU** quote (wrong day-change %, flicker, off-grid price) and hardened the Postgres writers against a connection-drop log-spam loop.
+
+### ESU live price — single source, on-grid (`server-v2/proxy-tastytrade.js`, `components/shared/TopBar.tsx`)
+- TopBar now sources ESU **only** from the `/ws/gex` broker feed (`esFut` / `esFutPrevClose`); removed the Yahoo `quotes-batch` seed and the vanilla-app `prevCloses_v3` cache seed for ES (both caused a wrong-scale flash + flicker).
+- `esFut` reduced to a **single server-side writer**: the live ES Quote/Trade is published as the **last trade clamped into the current bid/ask**, snapped to the **0.25 tick** (`_publishEsFut`). Removed the competing candle-close writer and the raw Quote-mid writer that fought it. Client also snaps defensively in `pushPrices`.
+
+### ESU day-change baseline = CME official settle (`server-v2/proxy-tastytrade.js`)
+- Root cause of the wrong %: the baseline used Yahoo / a stale REST value / the 15:55 candle close (~6pt off settle), and the holiday (Juneteenth 06-19) made the auto-walkback pick the wrong prior date.
+- `resolveFrontEsSymbol` now also returns the **TT instrument symbol** (`/ESU6`); the `/market-data/by-type?future=` lookup previously used the dxLink streamer symbol (`/ESU26:XCME`) and returned `items:[]`. With the correct symbol it returns `prev-close=7570.75` (type **Final**, dated 06-18) — matching TradingView.
+- Baseline priority: **REST Final settle** (`_esRestSettle`) → dxLink Summary settle → candle 15:55 close (fallback only). Added an hourly `_refreshEsSettle` so the baseline self-updates across the ~5–6pm ET settlement rollover without a restart.
+- Candle-derived baseline retains the holiday/weekend skip (`ES_NON_SETTLE_DATES`) and 15:55-settle logic as the last-resort fallback. Empty `ES_MANUAL_BASELINE` map left in place for future holiday overrides.
+
+### DB pool reconnect hardening (`state/es-candle-writer.js`, `state/last-event-store.js`, `state/footprint-writer.js`, `state/gex-history-writer.js`)
+- Postgres restarting (recovery mode) triggered `Cannot use a pool after calling end on the pool` spam: the error-recovery regex didn't match the ended-pool / recovery messages, so the cached pool was never rebuilt and every write hammered the dead pool.
+- Widened the recovery regex in all four writers to also catch `after calling end`, `recovery mode`, `not yet accepting`, `cannot use a pool` → pool is nulled and rebuilt on the next call. Added a **5s throttle** on the "DB unavailable, will reconnect" warning so a draining backlog can't flood the console.
+
+### Tooling
+- Added `scripts/esu-price.ps1` — reads `/proxy/snapshot` to print live ESU price + prior settle + day-change (matches the toolbar).
+- Diagnostic logs left in `[FEED] ES REST prev-close=…` (concise) for monitoring the baseline source each session.
+
+## 2026-06-21 (session 36) — Footprint page: filter, order feed, sessions, persistence, pan/zoom
+
+Major buildout of the Footprint (Big Orders) page plus durable ES footprint persistence. Version bumped to `2026.6.21-v30`.
+
+### Min-size filter (`app/footprint/page.tsx`)
+- Added a **Min order size** slider (1–100, default 1) that visually filters which prints render in the bubbles, delta lane, and order feed. Raw feed data is untouched (`rawTrades`/`rawDelta` preserved); the delta lane rebuilds from filtered prints when the filter is active.
+- Lowered server floor `ES_BIG_TRADE_MIN` 25 → 1 so all prints reach the page (slider does the filtering).
+
+### Rolling order feed (`app/footprint/page.tsx`)
+- New **Order Feed** below the lanes: collapsible, scrollable (max 320px, capped 500 rows), newest-first, color-coded buy/sell with time/side/price/size.
+- **Raw / 1s** toggle: 1s mode combines same-side prints within each 1000ms window into one row (`×N` count badge), aggregating from raw prints then filtering combined size.
+- Page root made `overflow-y-auto` so the feed is reachable.
+
+### Two trading sessions for stat cards (`app/footprint/page.tsx`)
+- Net Delta / Buy / Sell / Biggest Print now reflect **only the current session**: Day 9:30–17:30 ET or Overnight 18:00–9:30 ET (wraps midnight); 17:30–18:00 dead zone excluded. Colored session badge added.
+- **Biggest Print** card follows the feed's Raw/1s toggle (shows "Biggest Order (1s)" with combined size in agg mode) via a shared `aggregatePrints` helper.
+
+### Bubble sizing (`app/footprint/page.tsx`)
+- Fixed compressed bubble scaling (minR 0.35→0.08 of max) so small minutes render small.
+- Added **net / total** metric toggle on the Bubbles lane (default net, which matches the Delta Profile bar). Per-minute session maxima computed for both metrics from filtered prints.
+
+### Delta Profile hover (`app/footprint/page.tsx`)
+- Added the same hover tooltip as the Bubbles lane (buy/sell/net/total per minute), full-column hit area.
+
+### Pan + zoom + 60-min window (`app/footprint/page.tsx`)
+- Window widened 30 → 60 min default; `windowMs` is now state.
+- **Mouse-wheel zoom** of the time axis (5 min–8 hr), cursor-anchored, via a **non-passive native wheel listener** (React's passive `onWheel` ignored `preventDefault`). Drag-to-pan unchanged. Live window-size label.
+- All page fonts set to solid white.
+
+### Footprint persistence (`server-v2/proxy-tastytrade.js`, `server-v2/state/footprint-writer.js`, `lib/db.ts`)
+- Retention changed from fixed-count caps to **time-based (current session day)** with day-rollover reset; high safety ceilings only.
+- Footprint mirrored to **Postgres** (`es_footprint` table, one JSON blob/day) AND a local disk file. On boot, restore prefers Postgres (today's row) then falls back to the file — so any machine on the same `DATABASE_URL` resumes the session. Restore runs before the live feed connects to avoid an empty-buffer race.
+- New `footprint-writer.js` (lazy pool, no-op without `DATABASE_URL`, reconnect-on-error with throttled warning).
+
+### Diagnostics (`server-v2/proxy-tastytrade.js`)
+- Added `[ES-DIAG]` logging of raw ES Trade sizes (running max + every print ≥50 with raw fields) to investigate why large MotiveWave prints (e.g. 300-lot) aren't reaching the dashboard — suspected dxFeed `Trade`-event conflation (`acceptAggregationPeriod: 1`); candidate fix is subscribing to `TimeAndSale`. **Open / unresolved.**
+
+## 2026-06-21 (session 35) — Owner dashboard control surface, maintenance mode, Render sparklines
+
+Turned the owner dashboard from monitor-only into a control surface, added maintenance mode, and made the metrics cards responsive. Version bumped to `2026.6.21-v29`.
+
+### Owner control surface (`app/dev/owner/page.tsx`, `server-v2/server-with-proxy.js`)
+- New **Controls** section (placed under the Database · Today cards) with toggles and action buttons, each showing transient busy/result state.
+- Toggles: **Idle Mode** (feed pause/resume), **MVC Auto (5m)**, **Maintenance**.
+- Actions: **Reconnect Feed**, **Run EOD GEX now**, **MVC Snapshot now**, **Redeploy (Render)** — reconnect & redeploy double-confirm.
+- New `/proxy/*` routes: `reconnect`, `eod-gex-run`, `mvc-snapshot`, `mvc-auto` (GET/POST), `redeploy` (needs `RENDER_DEPLOY_HOOK_URL`), `maintenance` (GET/POST).
+- `proxy.reconnect()` added (stop + reset idle + start). `collectEodGex(base,{force})` bypasses the 3:55–4:05 ET window and returns `{date,saved[]}`. `collectOnce(base,{manual})` returns a result; MVC auto gains runtime on/off (`setMvcAutoEnabled`/`isMvcAutoEnabled`).
+
+### Idle toggle moved off the sidebar (`components/shared/Sidebar.tsx`)
+- Removed the cogwheel Settings menu, `SettingsIcon`, and all idle state from the sidebar (UserButton remains). Idle now lives in the dashboard Controls.
+
+### Maintenance mode (`middleware.ts`, `app/maintenance/page.tsx`, `server-v2/server-with-proxy.js`)
+- Owner-toggled gate: when ON, middleware redirects non-owner users to a branded `/maintenance` page; owner (`OWNER_USER_ID` env, trimmed) bypasses. Flag held in the proxy (`/proxy/maintenance`, default from `MAINTENANCE_MODE` env), read by middleware with a 5s cache. Falls back to "any signed-in user" if `OWNER_USER_ID` is unset, to avoid self-lockout.
+
+### Responsive metric cards + sparklines (`app/dev/owner/page.tsx`, `app/api/render-metrics/route.ts`)
+- System / Render / Database card rows forced to a single row (`repeat(N, minmax(0,1fr))`) that shrinks with the window; fonts/padding now use container-query units (`cqw` + `clamp`) so text scales down instead of wrapping.
+- Render route emits a downsampled `spark[]` for bandwidth, memory, and CPU; new inline `Sparkline` SVG renders a trend area in each card (flat line for a single point; live bandwidth pulls a wider 6h series since 1h is too coarse).
+
+### Version card now live (`next.config.js`, `app/dev/owner/page.tsx`)
+- `NEXT_PUBLIC_APP_VERSION` injected from `package.json` at build time; the Version card reads it instead of a hardcoded string, so `/push` bumps now show on redeploy.
+
 ## 2026-06-21 (session 34) — Header readability, ESU baseline fix, candle flush cadence
 
 Three targeted fixes to the home dashboard header and ES feed.

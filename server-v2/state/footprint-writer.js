@@ -16,6 +16,7 @@
 
 let pool = null;
 let pgUnavailable = false;
+let _lastPoolWarn = 0;
 
 function getPool() {
   if (pgUnavailable) return null;
@@ -72,11 +73,17 @@ async function saveFootprint(day, symbol, payload) {
       [String(day), symbol == null ? null : String(symbol), Date.now(), JSON.stringify(payload || {})]
     );
   } catch (e) {
-    console.warn('[footprint] write failed:', e.message);
     const msg = String(e?.message || '');
-    if (/terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed/i.test(msg)) {
+    if (/terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed|after calling end|recovery mode|not yet accepting|cannot use a pool/i.test(msg)) {
       try { pool?.end().catch(() => {}); } catch {}
       pool = null;
+      const now = Date.now();
+      if (!_lastPoolWarn || now - _lastPoolWarn > 5000) {
+        _lastPoolWarn = now;
+        console.warn('[footprint] DB unavailable, will reconnect:', msg.slice(0, 80));
+      }
+    } else {
+      console.warn('[footprint] write failed:', msg.slice(0, 120));
     }
   }
 }

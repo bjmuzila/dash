@@ -299,6 +299,12 @@ const ES_NON_SETTLE_DATES = new Set([
   '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
 ]);
 
+// Manual ES day-change baseline override, keyed by the ET *trading date* it
+// applies to. Empty in normal operation — the TT REST prev-close (CME Final
+// settle) drives the baseline. Add an entry only if a future holiday session
+// confuses the auto logic; entries auto-expire once the ET date passes the key.
+const ES_MANUAL_BASELINE = new Map();
+
 /**
  * Compute an ET 5-minute slot descriptor for an epoch-ms timestamp.
  * Returns { slotKey:'YYYY-MM-DDTHH:MM', date:'YYYY-MM-DD', time:'HH:MM', slotMs }
@@ -336,7 +342,9 @@ async function resolveFrontEsSymbol() {
     .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
   const front = active[0] || items.find((it) => it['streamer-symbol']);
   if (!front?.['streamer-symbol']) throw new Error('No active ES future found');
-  return front['streamer-symbol'];
+  // streamer-symbol (e.g. /ESU26:XCME) is for dxLink; ttSymbol (the instrument's
+  // own `symbol`, e.g. /ESU6) is what /market-data/by-type?future= expects.
+  return { streamerSymbol: front['streamer-symbol'], ttSymbol: front['symbol'] || front['streamer-symbol'] };
 }
 
 /** Get a dxLink API quote token + url from Tastytrade. */
@@ -1151,28 +1159,22 @@ class TastytradeProxy {
       console.warn('[FEED] VIX resolve failed:', err.message.slice(0, 120));
     }
     try {
-      this.esSymbol = await resolveFrontEsSymbol();
+      const esRes = await resolveFrontEsSymbol();
+      this.esSymbol = esRes.streamerSymbol;     // dxLink streamer symbol (/ESU26:XCME)
+      this.esTtSymbol = esRes.ttSymbol;         // TT instrument symbol for REST (/ESU6)
       this.esCandleSymbol = `${this.esSymbol}{=5m}`;
-      console.log(`[FEED] ES front streamer=${this.esSymbol} candle=${this.esCandleSymbol}`);
+      console.log(`[FEED] ES front streamer=${this.esSymbol} ttSymbol=${this.esTtSymbol} candle=${this.esCandleSymbol}`);
       // Prior close for ES future day-change.
       // The authoritative baseline is dxLink Summary.prevDayClosePrice (official
       // exchange settle for the current session, set in _onEvent). The REST
       // /market-data/by-type prev-close lags a session and was producing a wrong
       // day-% (e.g. 7508 vs the real 7564.25 settle), so use it ONLY as a seed
       // before Summary arrives — never let it overwrite a Summary-sourced value.
-      try {
-        if (!(this.summaries.get(this.esSymbol)?.prevClose > 0)) {
-          const enc = encodeURIComponent(this.esSymbol.replace(/:.*/, '')); // /ESU25:XCME -> /ESU25
-          const md = await ttGet(`/market-data/by-type?future=${enc}`);
-          const it = md?.data?.items?.[0];
-          const pc = firstFiniteNumber(it?.['prev-close']);
-          if (pc > 0 && !(this.summaries.get(this.esSymbol)?.prevClose > 0)) {
-            console.log(`[FEED] ES REST seed prev-close=${pc} (temporary until Summary arrives)`);
-            marketState.setAux({ esFutPrevClose: pc });
-          }
-        }
-      } catch (err) {
-        console.warn('[FEED] ES prev-close failed:', err.message.slice(0, 120));
+      await this._refreshEsSettle();
+      // Refresh hourly so the baseline self-updates across the daily settlement
+      // rollover (~5-6pm ET) without a server restart.
+      if (!this._esSettleTimer) {
+        this._esSettleTimer = setInterval(() => this._refreshEsSettle().catch(() => {}), 60 * 60 * 1000);
       }
     } catch (err) {
       console.warn('[FEED] ES resolve failed:', err.message.slice(0, 120));
@@ -1404,6 +1406,33 @@ class TastytradeProxy {
    * (5/14-day baselines) is computed client-side from SQLite history, so the
    * server stores raw bars only.
    */
+  /**
+   * Publish the ES live price (esFut), snapped to the 0.25 tick. Source priority:
+   * the last traded price CLAMPED into the current bid/ask — this matches
+   * TradingView's last-price display while following the market when the spread
+   * moves past a stale print. Falls back to the mid, then bid/ask, then last
+   * trade. Single esFut writer; setAux dedupes so identical snaps don't rebroadcast.
+   */
+  _publishEsFut() {
+    const q = this.esQuote || {};
+    const bid = Number(q.bid) || 0;
+    const ask = Number(q.ask) || 0;
+    const last = Number(this.esLastTrade) || 0;
+    let px = 0;
+    if (last > 0 && bid > 0 && ask > 0 && ask >= bid) {
+      px = Math.min(Math.max(last, bid), ask); // clamp last into [bid, ask]
+    } else if (bid > 0 && ask > 0 && ask >= bid) {
+      px = (bid + ask) / 2;
+    } else if (last > 0) {
+      px = last;
+    } else if (bid > 0) {
+      px = bid;
+    } else if (ask > 0) {
+      px = ask;
+    }
+    if (px > 0) marketState.setAux({ esFut: Math.round(px * 4) / 4 });
+  }
+
   _flushEsCandles() {
     if (!this.esCandlesDirty) return;
     this.esCandlesDirty = false;
@@ -1437,6 +1466,12 @@ class TastytradeProxy {
       // values → the visible flicker. Candles are used ONLY for the baseline.
 
       const todayDate = last.date;
+
+      // Manual override for holiday-confused sessions: if today's ET date has an
+      // entry, use CME's official prior settle. Tomorrow the key won't match, so
+      // normal baseline logic resumes automatically.
+      const manual = ES_MANUAL_BASELINE.get(todayDate);
+
       // The day-change baseline must be the prior SETTLE session's 4:00pm ET close
       // (matching TradingView). Two corrections vs a naive "last bar of yesterday":
       //   1. Use the 15:55 bar close (the 4:00pm settle), not the ~17:00 Globex
@@ -1456,12 +1491,21 @@ class TastytradeProxy {
       const prevDate = settleDates.length ? settleDates[settleDates.length - 1] : "";
       const prevClose = prevDate ? settleByDate.get(prevDate) : 0;
 
-      // The exchange Summary settle (if delivered) is authoritative; only use the
-      // candle-derived close when no Summary settle has arrived for this symbol.
-      if (prevClose > 0 && !(this._esSummarySettle > 0)) {
+      // Baseline source priority for the day-change:
+      //   0. Manual override for today (holiday-confused sessions) — CME settle.
+      //   1. CME official settlement via TT REST prev-close (_esRestSettle).
+      //   2. dxLink Summary settle (_esSummarySettle), if ever delivered.
+      //   3. Candle 15:55 close — last-resort fallback only; ~6pt off official.
+      if (manual > 0) {
+        if (manual !== this._lastLoggedEsBaseline) {
+          this._lastLoggedEsBaseline = manual;
+          console.log(`[FEED] ES baseline=${manual} (MANUAL override for ${todayDate}; CME settle) live=${lastClose} -> chg=${(lastClose - manual).toFixed(2)}`);
+        }
+        marketState.setAux({ esFutPrevClose: manual });
+      } else if (prevClose > 0 && !(this._esRestSettle > 0) && !(this._esSummarySettle > 0)) {
         if (prevClose !== this._lastLoggedEsBaseline) {
           this._lastLoggedEsBaseline = prevClose;
-          console.log(`[FEED] ES baseline=${prevClose} prevSettleDate=${prevDate} live=${lastClose} -> chg=${(lastClose - prevClose).toFixed(2)} (candle-derived; no Summary settle yet; skipped non-settle: ${[...ES_NON_SETTLE_DATES].filter(d => d > prevDate && d < todayDate).join(",") || "none"})`);
+          console.log(`[FEED] ES baseline=${prevClose} prevSettleDate=${prevDate} live=${lastClose} -> chg=${(lastClose - prevClose).toFixed(2)} (candle FALLBACK; no REST/Summary settle; skipped non-settle: ${[...ES_NON_SETTLE_DATES].filter(d => d > prevDate && d < todayDate).join(",") || "none"})`);
         }
         marketState.setAux({ esFutPrevClose: prevClose });
       }
@@ -1673,10 +1717,9 @@ class TastytradeProxy {
         // Keep the live bid/ask so ES Trade ticks can be classified as
         // aggressive-buy (>= ask) vs aggressive-sell (<= bid) for the footprint.
         if (bid > 0 || ask > 0) this.esQuote = { bid, ask, mid };
-        // Do NOT publish esFut from the Quote mid: (bid+ask)/2 is off the 0.25
-        // tick grid (e.g. 7541.63) and alternates with the Trade price, causing
-        // the toolbar flicker. esFut is set ONLY from the Trade (last-traded)
-        // price below, which is already on the tick grid.
+        // Re-publish on each Quote so a moving spread drags the price with the
+        // live market (clamps a stale last-trade into the new bid/ask).
+        this._publishEsFut();
         return;
       }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize) });
@@ -1723,7 +1766,12 @@ class TastytradeProxy {
       if (sym === this.esSymbol) {
         const px = Number(ev.price);
         if (px > 0) {
-          marketState.setAux({ esFut: px });
+          // Record the last traded price and re-publish esFut. esFut = last trade
+          // CLAMPED into the live bid/ask: matches TradingView's last-price display
+          // (not the mid, which floats high on a wide spread) while still tracking
+          // the market when the spread moves away from a stale print.
+          this.esLastTrade = px;
+          this._publishEsFut();
           const sz = Number(ev.size);
           // DIAGNOSTIC: what sizes does dxFeed's (conflated) Trade event actually
           // deliver for ES? Log the running max + every print ≥ 50 with all raw
@@ -1748,10 +1796,11 @@ class TastytradeProxy {
       const dv = firstFiniteNumber(ev.dayVolume);
       if (Number.isFinite(dv)) this.volumes.set(sym, dv);
       const quote = this.quotes.get(sym) || null;
+      const sz = Number(ev.size);
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
-        size: Number(ev.size),
+        size: Number.isFinite(sz) ? sz : 0, // snapshot Trade events can omit size → NaN; guard it
         quote,
         spot: this.spot,
       });

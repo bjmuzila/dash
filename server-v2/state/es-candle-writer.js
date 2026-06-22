@@ -12,6 +12,7 @@
 
 let pool = null;
 let pgUnavailable = false;
+let _lastPoolWarn = 0;
 
 function getPool() {
   if (pgUnavailable) return null;
@@ -79,11 +80,22 @@ async function writeEsCandles(rows) {
         ]
       );
     } catch (e) {
-      console.warn('[es-candle] write failed:', e.message);
       const msg = String(e?.message || '');
-      if (/terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed/i.test(msg)) {
+      // Reset the cached pool so the next call rebuilds a fresh one. Includes
+      // "Cannot use a pool after calling end" (the ended-pool case) and DB
+      // restart/recovery errors — otherwise every later write hammers the dead
+      // pool and spams the log until restart.
+      if (/terminat|ECONNRESET|ETIMEDOUT|Connection|socket|server closed|after calling end|recovery mode|not yet accepting|cannot use a pool/i.test(msg)) {
         try { pool?.end().catch(() => {}); } catch {}
         pool = null;
+        // Throttle the warning so a draining backlog doesn't flood the console.
+        const now = Date.now();
+        if (!_lastPoolWarn || now - _lastPoolWarn > 5000) {
+          _lastPoolWarn = now;
+          console.warn('[es-candle] DB unavailable, will reconnect:', msg.slice(0, 80));
+        }
+      } else {
+        console.warn('[es-candle] write failed:', msg.slice(0, 120));
       }
     }
   }

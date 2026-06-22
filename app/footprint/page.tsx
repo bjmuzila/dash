@@ -580,8 +580,12 @@ export default function FootprintPage() {
     return Math.max(1, ...delta.map((d) => Math.abs(d.net)));
   }, [delta]);
 
-  // ── Viewport: always a 30-minute window; drag right pans into history ───────
-  const WINDOW_MS = 60 * 60 * 1000;
+  // ── Viewport: a time window you can pan (drag) and zoom (mouse wheel) ────────
+  // windowMs is the visible span; wheel compresses/expands it between 5m and 8h.
+  const WINDOW_MIN_MS = 5 * 60 * 1000;
+  const WINDOW_MAX_MS = 8 * 60 * 60 * 1000;
+  const [windowMs, setWindowMs] = useState(60 * 60 * 1000);
+  const WINDOW_MS = windowMs;
   // viewEnd = right edge of the window. null = "follow latest" (live mode).
   const [viewEnd, setViewEnd] = useState<number | null>(null);
   const dragRef = useRef<{ x: number; end: number } | null>(null);
@@ -615,6 +619,38 @@ export default function FootprintPage() {
   }, [extent, WINDOW_MS]);
 
   const endDrag = useCallback(() => { dragRef.current = null; }, []);
+
+  // Mouse wheel zooms the time window (compress/expand the x-axis). Must be a
+  // NON-PASSIVE native listener — React's onWheel is passive, so preventDefault()
+  // there is ignored and the page scrolls instead of zooming. We keep the latest
+  // zoom inputs in a ref so the native listener (attached once) reads fresh values.
+  const wheelState = useRef({ extent, view, windowMs });
+  wheelState.current = { extent, view, windowMs };
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const handler = (e: WheelEvent) => {
+      const { extent: ext, view: v, windowMs: wms } = wheelState.current;
+      if (!ext || !v) return;
+      e.preventDefault();
+      const rect = panel.getBoundingClientRect();
+      const w = rect.width || 1;
+      const fx = Math.min(1, Math.max(0, (e.clientX - rect.left) / w)); // 0..1 across panel
+      const cursorTs = v.min + fx * (v.max - v.min);                    // ts under cursor
+
+      const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2; // down = wider, up = narrower
+      const nextSpan = Math.min(WINDOW_MAX_MS, Math.max(WINDOW_MIN_MS, wms * factor));
+      if (nextSpan === wms) return;
+
+      const rawEnd = cursorTs + (1 - fx) * nextSpan;
+      const clampedEnd = Math.min(ext.max, Math.max(ext.min + nextSpan, rawEnd));
+      setWindowMs(nextSpan);
+      setViewEnd(clampedEnd >= ext.max ? null : clampedEnd);
+    };
+    panel.addEventListener("wheel", handler, { passive: false });
+    return () => panel.removeEventListener("wheel", handler);
+  }, [WINDOW_MIN_MS, WINDOW_MAX_MS]);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
@@ -695,7 +731,9 @@ export default function FootprintPage() {
       {/* Window controls */}
       <div className="flex items-center justify-between px-4 pb-1">
         <div className="text-[10px] uppercase tracking-[0.16em] text-white">
-          60-min window · drag to pan history
+          {windowMs >= 60 * 60 * 1000
+            ? `${(windowMs / 3_600_000).toFixed(windowMs % 3_600_000 ? 1 : 0)}-hr window`
+            : `${Math.round(windowMs / 60_000)}-min window`} · drag to pan · scroll to zoom
         </div>
         <div className="flex items-center gap-2">
           {view && (
@@ -719,7 +757,7 @@ export default function FootprintPage() {
         </div>
       </div>
 
-      {/* Draggable viewport: both lanes share one pan gesture so they stay locked. */}
+      {/* Draggable + zoomable viewport: both lanes share one pan/zoom gesture. */}
       <div
         ref={panelRef}
         onPointerDown={onPointerDown}
