@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-06-22 (session 47, ~10:10 ET) — Net-premium sparkline square-wave fix, DB connection retry, MVC writer hardening (v10)
+
+Fixed the "NET PREMIUM" sparkline that rendered as a square wave whipsawing between fixed rails (-$7.8M / +$21.2M), plus the DB-write 500s and MVC auto-collector reliability.
+
+### Net-premium sparkline — square-wave root cause
+- `hooks/useSpxFlow.ts`: `seed()` guarded `netPremium`/`callPremium`/`putPremium` with `Math.abs(new) > Math.abs(stored)` — but premium is a SIGNED live value that swings +/-, so it latched at the largest magnitude ever seen, freezing the readout and squaring off the sparkline. Now tracks the latest signed value. (Volume counters keep their monotonic `>` guard — that's correct for them.)
+- `components/dashboard/SnapshotPanel.tsx`: live in-memory net-premium series (`liveSeriesRef`/`liveSeries`) sampled from the corrected `netPremiumFlow` (~3s cadence, 600-pt cap) is now the source of truth. `premHistory` renders live; persisted `premium_flow` rows are stitched on only as a prefix for points OLDER than the first live sample, so corrupt/latched DB rows can't override live values.
+- Sparkline autoscale clamped to 2nd–98th percentile + `y()` clamps out-of-range points, so a couple of outlier rows can't crush the real signal into a flat rail.
+- Corrupt persisted rows purged: `DELETE FROM premium_flow WHERE date = '2026-06-22'` (1245 rows) via `scripts/purge-premium-flow.js` (one-off; remove it — has DB URL hardcoded).
+
+### DB connection — transient-drop retry
+- `lib/db.ts`: snapshot POSTs were 500ing on `Connection terminated unexpectedly` (Postgres restart/recovery / churn). The pool's `error` handler only covers IDLE clients; an in-flight drop rejected the query. Added `pgQuery()` + `isTransientConnError()` (matches `Connection terminated`/`ECONNRESET`/`57P01`/`08006`/`08003`), retries once on a fresh client after 150ms.
+- Routed `queryAll`, `insertPremiumFlow`, `insertBzilaSnapshot`, and `insertMvcSnapshot` through `pgQuery`.
+
+### MVC auto-collector
+- `server-v2/mvc-auto-snapshot.js` already fires every 5 min during RTH (`INTERVAL_MIN = 5`; stale "auto-30m" comments aside). The blocker was the shared DB-write failure above — now covered by the `insertMvcSnapshot` retry.
+
+## 2026-06-22 (session 46) — Bzila page removal, sidebar nav rebuild, To-Do reskin, top-bar/clock + socials
+
+Removed the `/bzila` page and its exclusive data layer, rebuilt the sidebar nav structure + styling, reskinned the To-Do page to match the dashboard UI, moved the GEX-chart clock, and refreshed the social buttons.
+
+### Bzila page + data layer removed (surgical)
+- Deleted `app/bzila/page.tsx` and the two routes it exclusively used: `app/api/snapshots/bzila-gex-history/` and `app/api/snapshots/bzila-strikes/`.
+- `lib/db.ts`: removed `bzila_gex_history` + `bzila_strike_gex_history` table/index DDL, interfaces (`BzilaGexPoint`, `BzilaStrikeGexRecord`), and functions (`insertBzilaGexPoint`, `getBzilaGexHistory`, `insertBzilaStrikeGexRows`, `getBzilaStrikeGexHistory`, the two `ensure*` stubs). **Kept** `bzila_snapshots` (+ all its functions) because the main dashboard's `SnapshotPanel.tsx` depends on it. Kept `OptionStrikeGexRecord` / `insertOptionStrikeGexRows`.
+- Removed both tables from `app/api/db/route.ts` allowlist, `app/database/page.tsx`, `app/dev/owner/page.tsx`, and the Bzila Flow row in `md files/agents.md`.
+- Dropped the two tables in Postgres via a one-time owner-gated route (`/api/debug/drop-bzila-gex`, since deleted). `migrations/drop_bzila_gex_history.sql` left for reference. `bzila_snapshots` confirmed retained.
+
+### Sidebar nav rebuild (`components/shared/Sidebar.tsx`)
+- New groups: **GEX** (Home, Multi Greek, Options Chain, Insights, Confidence, Estimated Moves Front End), **Futures** (Footprint), **Stock Market** (Premarket, Economic Calendar), **Personal** (Journal→/trading, Budget, To-Do→/personal/todo), **Admin** (Owner, Admin, Database, Dev, Estimated Moves BE, Logs, Changelog; owner-gated `devOnly`).
+- Replaced the five group SVG icons with detailed approximations (funnel, hourglass+contract, bull/bear+pit, house+safe+person, gear+key+badge).
+- Futures forced to accordion layout (`forceAccordion`) so its single "Footprint" item shows under the title.
+- Faint cyan hover tint on expanded nav items.
+- Collapsed mode: clicking a group icon now navigates to its top item.
+- All muted-grey nav text (group labels, items, flyout headers, chevrons, collapse toggle) → white.
+- Social row replaced with X / YouTube / TikTok (real URLs); always-on colored glow (brighter on hover), shared white border like X.
+- Clerk `UserButton` avatar enlarged 32→56px.
+
+### To-Do page reskin (`app/personal/todo/page.tsx`)
+- Full restyle to match Confidence Score: `homeShellStyle` shell, glassmorphic `homePanelStyle` panels, cyan/purple/orange/green `HOME_THEME` accents, `SectionTitle` bars, `conf-hover` lift, Inter font, cyan gradient buttons, cyan-glow trend chart. All functionality preserved (checklists, kanban, all-tasks table, analytics, modals). Removed dead Budget/Trading/Personal header tabs. Added `usePageLoadStatus`.
+
+### GEX chart clock + top bar
+- `app/home/page.tsx`: replaced the "Drag to pan · Scroll to zoom" hint in the NET GEX header with the live ET clock (`etTime`).
+- `components/shared/TopBar.tsx`: removed the clock + session from the VIX pill (freeing room for VIX/ESU/SPX) and deleted the now-unused `clock`/`session` state, clock tick effect, and `etClock`/`etSession` helpers.
+
+### Investigated (no code change)
+- Strike-detail popup Δ boxes (From Open / 5 / 15 / 30 min): confirmed the `option_strike_gex_history` writer is healthy (~120 points/30min) and the rolling query works. Open question left for next session: whether point-mode baselines come back populated, and the `selectedStrike`-gating on `app/home/page.tsx:729`.
+
+> Note: build verified green earlier this session (`next build`, 76 pages). Postgres tables dropped. No server-v2 changes. Sandbox hypervisor disabled — git commit must be run manually (commands below).
+
 ## 2026-06-22 (session 45) — Multi-greek dropdown theming, SPY/QQQ volume refresh + greek basis, pre-open volume reset, version bump v7
 
 Fixed the mult-greek expiry dropdown styling, addressed SPY/QQQ option volume showing 0 (no auto-refresh + REST staleness), restored the VOL-only tab, and added a 9:30 ET pre-open volume reset so the new session starts clean.

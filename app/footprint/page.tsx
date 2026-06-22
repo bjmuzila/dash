@@ -219,7 +219,7 @@ function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTra
       // Was sqrt(f) (area-proportional): visually compresses the range so most
       // bubbles cluster near maxR. f^0.85 makes the size gap between small and
       // large prints far more pronounced.
-      return Math.max(minR, Math.pow(f, 0.85) * maxR);
+      return Math.max(minR, Math.pow(f, 2.0) * maxR);
     };
     const sizeOf = (b: { total: number; net: number }) =>
       metric === "net" ? Math.abs(b.net) : b.total;

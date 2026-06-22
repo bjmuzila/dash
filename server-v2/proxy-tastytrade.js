@@ -1396,6 +1396,33 @@ class TastytradeProxy {
     this.probeSubs = new Map();
   }
 
+  /**
+   * Fetch the front ES future's prior-session settle from Tastytrade REST and
+   * store it as this._esRestSettle — baseline priority tier #1 for ES day-change
+   * (see the baseline-priority comment in _flushEsCandles). The plain ES
+   * subscription often never delivers a dxLink Summary, so without this the
+   * day-change permanently falls back to the candle 15:55 close (~6pt off the
+   * official CME settle). Never overwrites a Summary-sourced settle; sets only on
+   * a valid positive number so a bad fetch can't zero out a good baseline.
+   */
+  async _refreshEsSettle() {
+    if (!this.esTtSymbol) return;
+    try {
+      const md = await ttGet(`/market-data/by-type?future[]=${encodeURIComponent(this.esTtSymbol)}`);
+      const it = md?.data?.items?.[0];
+      const pc = firstFiniteNumber(it?.['prev-close']);
+      if (pc > 0) {
+        this._esRestSettle = pc;
+        if (pc !== this._lastLoggedEsRestSettle) {
+          this._lastLoggedEsRestSettle = pc;
+          console.log(`[FEED] ES REST settle=${pc} (TT prev-close, baseline tier 1) sym=${this.esTtSymbol}`);
+        }
+      }
+    } catch (err) {
+      console.warn('[FEED] ES settle refresh failed:', err.message.slice(0, 120));
+    }
+  }
+
   async start() {
     await getAccessToken();
 
@@ -1827,6 +1854,15 @@ class TastytradeProxy {
           console.log(`[FEED] ES baseline=${manual} (MANUAL override for ${todayDate}; CME settle) live=${lastClose} -> chg=${(lastClose - manual).toFixed(2)}`);
         }
         marketState.setAux({ esFutPrevClose: manual });
+      } else if (this._esRestSettle > 0 && !(this._esSummarySettle > 0)) {
+        // Tier 1: CME official settle via TT REST (_refreshEsSettle). Preferred
+        // over the candle close; Summary (tier 2, published from _onEvent) still
+        // wins if it ever arrives.
+        if (this._esRestSettle !== this._lastLoggedEsBaseline) {
+          this._lastLoggedEsBaseline = this._esRestSettle;
+          console.log(`[FEED] ES baseline=${this._esRestSettle} (REST settle) live=${lastClose} -> chg=${(lastClose - this._esRestSettle).toFixed(2)}`);
+        }
+        marketState.setAux({ esFutPrevClose: this._esRestSettle });
       } else if (prevClose > 0 && !(this._esRestSettle > 0) && !(this._esSummarySettle > 0)) {
         if (prevClose !== this._lastLoggedEsBaseline) {
           this._lastLoggedEsBaseline = prevClose;

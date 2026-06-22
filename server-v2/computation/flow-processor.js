@@ -135,17 +135,17 @@ class FlowProcessor {
       bucket = bullish ? 'bull' : 'bear';
     }
     const tapeSide = side === 'buy' || side === 'sell' ? side : 'buy';
-    // Coalesce prints on the same contract + side into 1-second aggregate orders.
+    // Coalesce prints on the same contract + side into 500ms aggregate orders.
     // The tape is oldest-first, so the candidate to merge into is the last entry;
-    // merge when it shares symbol+side+action and falls in the same 1s slot.
-    const slot = Math.floor(time / 1000);
+    // merge when it shares symbol+side+action and falls in the same 500ms slot.
+    const slot = Math.floor(time / 500);
     const last = this.tape[this.tape.length - 1];
     if (
       last &&
       last.symbol === streamerSymbol &&
       last.side === tapeSide &&
       last.action === action &&
-      Math.floor(last.ts / 1000) === slot
+      Math.floor(last.ts / 500) === slot
     ) {
       const newSize = last.size + size;
       // Size-weighted average fill price across the aggregated prints.
@@ -154,7 +154,7 @@ class FlowProcessor {
       last.premium += premium;
     } else {
       this.tape.push({
-        ts: slot * 1000, // pin to the 1s slot start so later prints coalesce
+        ts: slot * 500, // pin to the 500ms slot start so later prints coalesce
         symbol: streamerSymbol,
         underlying: parsed.root,
         expiration: parsed.expiration,
