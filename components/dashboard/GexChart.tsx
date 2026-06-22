@@ -440,7 +440,7 @@ export default function GexChart({
       const is0DTE = !expiry || expiry === todayIso;
       const usingProfile = !!(gexProfile && gexProfile.levels.length > 1);
       const flip = (usingProfile ? gexProfile!.flipPoint : null) ?? flipPoint ?? null;
-      if (is0DTE && flip != null && Number.isFinite(flip) && flip > 0) {
+      if (showFlipCurve && is0DTE && flip != null && Number.isFinite(flip) && flip > 0) {
         // Same strike→X mapping as the curve, spot line, and bars.
         const flipX: number | null = xForStrike(flip);
 

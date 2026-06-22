@@ -13,6 +13,16 @@ export function getPool(): Pool {
       ssl: process.env.DATABASE_URL?.includes("localhost") || process.env.DATABASE_URL?.includes("127.0.0.1")
         ? undefined
         : { rejectUnauthorized: false },
+      max: 5,                   // cap per-instance conns (Render Postgres is connection-limited)
+      idleTimeoutMillis: 30000, // hold idle conns 30s, not pg's 10s default → less connect churn
+      keepAlive: true,          // TCP keepalive so dead idle sockets surface fast and reconnect
+    });
+    // An idle client losing its connection (e.g. Postgres restart / recovery)
+    // emits 'error' on the pool. Without a listener, pg escalates it to an
+    // uncaughtException that can kill the process. Log + swallow; the pool
+    // discards the dead client and the next query opens a fresh one.
+    _pool.on("error", (err) => {
+      console.warn("[db] idle pool client error (will reconnect):", err.message);
     });
   }
   return _pool;

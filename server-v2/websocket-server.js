@@ -68,8 +68,18 @@ function msg(type, data, symbol) {
  * @param {object} [opts.log]
  * @returns {{ wss: WebSocket.Server, close: () => void }}
  */
+// Min interval between full-chain GEX broadcasts. The recompute still runs every
+// RECOMPUTE_MS (~2s) for accurate walls/flip, but re-serializing + sending the
+// whole gexRows array (~100KB) to every client every 2s, 24/7, was ~4GB/hr of
+// outbound — most of it identical overnight. Coalesce sends to this cadence and
+// skip when the payload is byte-identical to the last one we sent.
+const GEX_BROADCAST_MS = Number(process.env.GEX_BROADCAST_MS || 6000);
+
 function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   const wss = new WebSocket.Server({ noServer: true });
+  // GEX broadcast throttle state.
+  let lastGexSentAt = 0;
+  let lastGexPayload = null;
 
   server.on('upgrade', (request, socket, head) => {
     let pathname;
@@ -112,7 +122,12 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
 
     if (changed.has('gexRows') || changed.has('totals') || changed.has('callWall') ||
         changed.has('putWall') || changed.has('gexFlip') || changed.has('totalNetGex')) {
-      out.push(msg('gex', {
+      // Throttle the heavy full-chain GEX frame: at most once per GEX_BROADCAST_MS,
+      // and skip entirely if identical to the last one sent (static overnight chain
+      // => near-zero traffic). Other signals below (flow/spot/aux/status) are NOT
+      // gated — they keep their own cadence.
+      const now = Date.now();
+      const payload = JSON.stringify({
         gexRows: state.gexRows,
         totals: state.totals,
         callWall: state.callWall,
@@ -120,8 +135,21 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
         gexFlip: state.gexFlip,
         totalNetGex: state.totalNetGex,
         expiry: state.expiry,
-        updatedAt: state.updatedAt,
-      }, state.symbol));
+      });
+      if (now - lastGexSentAt >= GEX_BROADCAST_MS && payload !== lastGexPayload) {
+        lastGexSentAt = now;
+        lastGexPayload = payload;
+        out.push(msg('gex', {
+          gexRows: state.gexRows,
+          totals: state.totals,
+          callWall: state.callWall,
+          putWall: state.putWall,
+          gexFlip: state.gexFlip,
+          totalNetGex: state.totalNetGex,
+          expiry: state.expiry,
+          updatedAt: state.updatedAt,
+        }, state.symbol));
+      }
     }
     if (changed.has('flow')) out.push(msg('flow', state.flow, state.symbol));
     // Full esCandles array goes out only in the connect-time snapshot (written via

@@ -265,6 +265,10 @@ interface SnapshotPanelProps {
 export default function SnapshotPanel({ orders: serverOrders, bucket: serverBucket }: SnapshotPanelProps = {}) {
   const { flow, seed } = useSpxFlow(true);
   const [, setNow] = useState(0);
+  // Bumped whenever the accum effect ingests new trades, so the `tops` memo
+  // recomputes even after the server tape hits its length cap (length stops
+  // changing but the underlying accumRef keeps moving).
+  const [accumTick, setAccumTick] = useState(0);
 
   // Drive the panel from the server-pushed flow (new proxy) when provided.
   // useSpxFlow has no socket of its own, so without this the panel stays empty.
@@ -351,6 +355,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
       seenRef.current = new Set();
     }
 
+    let ingested = 0;
     for (const trade of flow.orders) {
       const key = `${trade.symbol}|${trade.ts}|${trade.price}|${trade.size}|${trade.side}`;
       if (seenRef.current.has(key) || !trade.strike) continue;
@@ -362,7 +367,9 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
       const spotPrice = flow.spxPrice || flow.esPrice || 5500;
       const gexDelta = trade.size * spotPrice * (side === "buy" ? 1 : -1) * (type === "c" ? 1 : -1);
       accumRef.current[accumKey] = (accumRef.current[accumKey] ?? 0) + gexDelta;
+      ingested++;
     }
+    if (ingested) setAccumTick((t) => t + 1);
   }, [flow.esPrice, flow.orders, flow.spxPrice]);
 
   const pcr = flow.pcr;
@@ -407,7 +414,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
       bullBreakdown: `$${fmtVol(bullTotal)} = ${fmtVol(totalGex(buyCalls))} (BC) + ${fmtVol(totalGex(sellPuts))} (SP)`,
       bearBreakdown: `$${fmtVol(bearTotal)} = ${fmtVol(totalGex(sellCalls))} (SC) + ${fmtVol(totalGex(buyPuts))} (BP)`,
     };
-  }, [flow.orders.length, flow.spxPrice, flow.esPrice]);
+  }, [accumTick, flow.orders.length, flow.spxPrice, flow.esPrice]);
 
   const histMin = premHistory.length ? Math.min(...premHistory) : 0;
   const histMax = premHistory.length ? Math.max(...premHistory) : 0;
@@ -480,7 +487,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
           <MetricCard label="Bear Vol" value={fmtVol(bearVol)} detail={bearDetail} color="#ff4757" />
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "5px 7px", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: "1 1 90px", minHeight: 90, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "5px 7px", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
             <div style={{ fontSize: 9, color: "#fff", fontWeight: 700, textTransform: "uppercase" }}>Net Premium</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: netPrem >= 0 ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{fmtPrem(netPrem)}</div>
@@ -503,13 +510,8 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
             <div style={{ position: "absolute", left: 0, top: 0, height: "100%", background: "linear-gradient(90deg,#00e67655 0%,#00e676cc 60%,#00e676 100%)", width: `${tops.bullPct}%`, transition: "width .4s ease", borderRadius: "3px 0 0 3px" }} />
             <div style={{ position: "absolute", right: 0, top: 0, height: "100%", background: "linear-gradient(270deg,#ff475755 0%,#ff4757cc 60%,#ff4757 100%)", width: `${tops.bearPct}%`, transition: "width .4s ease", borderRadius: "0 3px 3px 0" }} />
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <div style={{ fontSize: 9, color: "#fff" }}>{tops.bullBreakdown}</div>
-            <div style={{ fontSize: 9, color: "#fff", textAlign: "right" }}>{tops.bearBreakdown}</div>
-          </div>
         </div>
 
-        <div style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Option Flow Tops</div>
         <div style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
           <TopFlowList label="Buy Call Vol" items={tops.buyCalls} barColor="#00e676" />
           <TopFlowList label="Sell Call Vol" items={tops.sellCalls} barColor="#ff4757" />

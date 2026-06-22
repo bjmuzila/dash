@@ -35,7 +35,8 @@ function getPool() {
       ssl: process.env.DATABASE_URL.includes('localhost') || process.env.DATABASE_URL.includes('127.0.0.1')
         ? undefined
         : { rejectUnauthorized: false },
-      max: 3,
+      max: 2,
+      keepAlive: true,
     });
     // Idle-client errors (Render closing idle conns) must not crash the process
     // and must not spam logs — drop the pool so the next write rebuilds it.

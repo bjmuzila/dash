@@ -28,7 +28,8 @@ function getPool() {
       ssl: process.env.DATABASE_URL.includes('localhost') || process.env.DATABASE_URL.includes('127.0.0.1')
         ? undefined
         : { rejectUnauthorized: false },
-      max: 3,
+      max: 2,
+      keepAlive: true,
     });
     pool.on('error', (e) => {
       console.warn('[es-candle] pool error (will reconnect):', e.message);

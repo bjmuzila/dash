@@ -619,6 +619,91 @@ async function fetchUnderlyingSpot(ticker) {
 }
 
 /**
+ * Batch underlying quotes via Tastytrade REST /market-data/by-type for a mix of
+ * equities, indices and futures. The `mark`/`last` fields update during extended
+ * hours, so this backs the watchlist's real-time AFTER-HOURS prices (vs Yahoo's
+ * delayed series). Returns a map keyed by the caller's original symbol.
+ *
+ *   item.mark / item.last  → live price (updates in pre/post market)
+ *   item.close             → today's regular-session (4pm) close
+ *   item['prev-close']     → prior trading day's close
+ *
+ * @param {string[]} symbols user symbols, e.g. ["AAPL","SPX","/NQU26"]
+ * @returns {Promise<Map<string,{last:number,mark:number,close:number,prevClose:number}>>}
+ */
+async function fetchUnderlyingQuotes(symbols) {
+  const n = firstFiniteNumber;
+  const out = new Map();
+  const list = (symbols || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!list.length) return out;
+
+  const equities = [];
+  const indices = [];
+  const futures = []; // { sym }
+  for (const sym of list) {
+    const up = sym.toUpperCase();
+    if (up.startsWith('/')) futures.push(up);
+    else if (INDEX_ROOTS.has(chainTicker(up))) indices.push(chainTicker(up));
+    else equities.push(up);
+  }
+
+  const assign = (origSym, it) => {
+    out.set(origSym, {
+      last: n(it?.last),
+      mark: n(it?.mark),
+      close: n(it?.close),
+      prevClose: n(it?.['prev-close']),
+    });
+  };
+
+  // Equities + indices: one batched by-type call per class.
+  const batchParam = async (param, vals, mapBack) => {
+    if (!vals.length) return;
+    const qs = vals.map((v) => `${param}[]=${encodeURIComponent(v)}`).join('&');
+    try {
+      const json = await ttGet(`/market-data/by-type?${qs}`);
+      const items = json?.data?.items || [];
+      const byName = new Map(items.map((it) => [String(it.symbol || '').toUpperCase(), it]));
+      for (const v of vals) {
+        const it = byName.get(String(v).toUpperCase());
+        if (it) assign(mapBack(v), it);
+      }
+    } catch (err) {
+      console.warn('[WATCH-QUOTES] batch failed:', String(err.message).slice(0, 160));
+    }
+  };
+
+  // Equities pass through; indices map root→original (SPXW→SPX already collapsed).
+  const eqBack = new Map(equities.map((e) => [e, e]));
+  await batchParam('equity', [...eqBack.keys()], (v) => v);
+  // Build index original-symbol map (root → first original that produced it).
+  const idxOriginals = new Map();
+  for (const sym of list) {
+    const up = sym.toUpperCase();
+    if (!up.startsWith('/') && INDEX_ROOTS.has(chainTicker(up))) {
+      const root = chainTicker(up);
+      if (!idxOriginals.has(root)) idxOriginals.set(root, sym);
+    }
+  }
+  await batchParam('index', [...new Set(indices)], (root) => idxOriginals.get(root) || root);
+
+  // Futures: resolve each to its TT market-data symbol, then a by-type call.
+  for (const fut of futures) {
+    const orig = list.find((s) => s.toUpperCase() === fut) || fut;
+    try {
+      const { marketDataParam } = await resolveUnderlying(fut);
+      const json = await ttGet(`/market-data/by-type?${marketDataParam}`);
+      const it = json?.data?.items?.[0];
+      if (it) assign(orig, it);
+    } catch (err) {
+      console.warn(`[WATCH-QUOTES] future ${fut} failed:`, String(err.message).slice(0, 120));
+    }
+  }
+
+  return out;
+}
+
+/**
  * Fetch market-data (greeks + OI + volume + mark) for a list of OCC option
  * symbols, batched. Keyed by normalized OCC symbol.
  * @param {string[]} occSymbols
@@ -2373,4 +2458,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };

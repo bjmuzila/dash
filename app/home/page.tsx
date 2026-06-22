@@ -5,6 +5,7 @@ import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
+import NquQuotePill from "@/components/dashboard/NquQuotePill";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import FlowTape from "@/components/dashboard/FlowTape";
@@ -794,7 +795,7 @@ export default function HomePage() {
                   { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
                   { id: "spxflow", label: "SPX Flow", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg> },
                 ] as const).map((tab) => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 15, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
                   </button>
                 ))}
@@ -822,9 +823,8 @@ export default function HomePage() {
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "clamp(4px, 0.8vw, 14px)", marginBottom: 6, flexWrap: "nowrap", minWidth: 0, overflow: "hidden" }}>
-                {/* SPX/GEX + clock — always visible, never shrinks */}
+                {/* Clock — moved to the start of the toolbar; SPX/GEX label removed */}
                 <div style={{ display: "flex", alignItems: "center", gap: "clamp(4px, 0.6vw, 8px)", flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(9px, 1vw, 14px)", fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>SPX <span style={{ color: "#fff", fontWeight: 400 }}>/ GEX</span></span>
                   <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "clamp(2px,0.3vw,5px) clamp(6px,0.9vw,12px)", borderRadius: 6, fontFamily: "monospace", fontSize: "clamp(11px, 1.3vw, 18px)", fontWeight: 700, color: "#fff", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{etTime}</div>
                 </div>
                 <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
@@ -847,6 +847,11 @@ export default function HomePage() {
                   <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
                   <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
                   <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
+                </div>
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                {/* NQU quote — inline next to SPX; click price to open all quotes (top gainers first) */}
+                <div style={{ flexShrink: 0 }}>
+                  <NquQuotePill />
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexWrap: "nowrap", justifyContent: "space-between", minWidth: 0, overflow: "hidden" }}>

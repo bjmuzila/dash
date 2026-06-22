@@ -33,7 +33,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer } = require('./websocket-server');
-const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchDailyHistory } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEsSeed } = require('./es-seed-loader');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 
@@ -291,6 +291,26 @@ async function main() {
           sendJson(res, 200, { ...probe, ticker, expiry, elapsedMs: Date.now() - t0 });
         } catch (e) {
           sendJson(res, 502, { error: String(e?.message || e), ticker, expiry, source: 'rest', elapsedMs: Date.now() - t0 });
+        }
+        return;
+      }
+      // Underlying watchlist quotes (broker, after-hours aware) for the toolbar
+      // dropdown. GET /proxy/quotes?symbols=AAPL,SPX,/NQU26
+      // Returns { items: [{ symbol, last, mark, close, prevClose }] } — mark/last
+      // update in pre/post market; close = today's 4pm regular close.
+      if (pathname === '/proxy/quotes' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const symbols = (url.searchParams.get('symbols') || '')
+          .split(',').map((s) => s.trim()).filter(Boolean);
+        try {
+          const map = await fetchUnderlyingQuotes(symbols);
+          const items = symbols.map((sym) => {
+            const q = map.get(sym) || {};
+            return { symbol: sym, last: q.last || 0, mark: q.mark || 0, close: q.close || 0, prevClose: q.prevClose || 0 };
+          });
+          sendJson(res, 200, { data: { items } });
+        } catch (e) {
+          sendJson(res, 502, { error: String(e?.message || e) });
         }
         return;
       }

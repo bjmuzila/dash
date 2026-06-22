@@ -340,8 +340,21 @@ export function useSpxFlow(enabled = true) {
     if (stats.netPremium  != null && Math.abs(stats.netPremium)  > Math.abs(s.netPremiumFlow))  s.netPremiumFlow  = stats.netPremium;
     if (stats.callPremium != null && Math.abs(stats.callPremium) > Math.abs(s.callPremiumFlow)) s.callPremiumFlow = stats.callPremium;
     if (stats.putPremium  != null && Math.abs(stats.putPremium)  > Math.abs(s.putPremiumFlow))  s.putPremiumFlow  = stats.putPremium;
-    if (Array.isArray(stats.orders) && stats.orders.length > s.orders.length) {
-      s.orders = [...stats.orders];
+    // Server resends the full capped tape each message: once it hits the cap the
+    // length stops growing, so a length-only guard freezes the panel. Replace
+    // whenever the newest order differs (covers capped + post-restart shrink).
+    if (Array.isArray(stats.orders)) {
+      const incomingLast = stats.orders[stats.orders.length - 1];
+      const currentLast = s.orders[s.orders.length - 1];
+      const lastChanged =
+        stats.orders.length !== s.orders.length ||
+        (incomingLast && currentLast
+          ? incomingLast.ts !== currentLast.ts ||
+            incomingLast.symbol !== currentLast.symbol ||
+            incomingLast.price !== currentLast.price ||
+            incomingLast.size !== currentLast.size
+          : incomingLast !== currentLast);
+      if (lastChanged) s.orders = [...stats.orders];
     }
     if (Array.isArray(stats.tapeOrders) && stats.tapeOrders.length > s.tapeOrders.length) {
       s.tapeOrders = [...stats.tapeOrders];
