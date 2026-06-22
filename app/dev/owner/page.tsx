@@ -42,7 +42,7 @@ interface PageStatus {
 }
 
 interface RenderMetrics {
-  bandwidth: { value: number | null; unit: string; window: string };
+  bandwidth: { value: number | null; unit: string; window: string; spark?: number[] };
   memory:    { value: number | null; unit: string; window: string };
   cpu:       { value: number | null; unit: string; window: string };
   fetchedAt: string;
@@ -430,33 +430,70 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
+/** Tiny inline area sparkline. Scales to its container width; fixed small height. */
+function Sparkline({ data, accent, height = 22 }: { data: number[]; accent: string; height?: number }) {
+  if (!data || data.length < 1) return null;
+  const W = 100; // viewBox width; SVG stretches to container via width:100%
+  // A single point can't show a trend — draw a flat baseline so the card isn't empty.
+  const series = data.length === 1 ? [data[0], data[0]] : data;
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = max - min || 1;
+  const stepX = W / (series.length - 1);
+  const pts = series.map((v, i) => {
+    const x = i * stepX;
+    const y = height - 2 - ((v - min) / range) * (height - 4);
+    return [x, y] as const;
+  });
+  const line = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `${line} L${W},${height} L0,${height} Z`;
+  const gradId = `spark-${accent.replace(/[^a-z0-9]/gi, "")}`;
+  return (
+    <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" style={{ width: "100%", height, display: "block" }}>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={accent} stopOpacity="0.35" />
+          <stop offset="100%" stopColor={accent} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gradId})`} />
+      <path d={line} fill="none" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
 function StatCard({
   label,
   value,
   accent = HOME_THEME.cyan,
   mono = false,
+  footer,
 }: {
   label: string;
   value: React.ReactNode;
   accent?: string;
   mono?: boolean;
+  footer?: React.ReactNode;
 }) {
   return (
     <div style={{
       ...homePanelStyle,
-      padding: "14px 18px",
+      containerType: "inline-size",
+      padding: "clamp(8px, 9cqw, 14px) clamp(10px, 11cqw, 18px)",
       display: "flex",
       flexDirection: "column",
       gap: 5,
+      overflow: "hidden",
       borderLeft: `3px solid ${accent}55`,
       background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
     }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em" }}>
+      <div style={{ fontSize: "clamp(7px, 7cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1 }}>
+      <div style={{ fontSize: "clamp(12px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
+      {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
     </div>
   );
 }
@@ -1054,7 +1091,7 @@ export default function OwnerDashboard() {
         {/* ── KPI cards ── */}
         <div>
           <SectionLabel>System</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(9, minmax(0, 1fr))", gap: 10 }}>
             <StatCard label="Server Uptime" value={displayUptime != null ? fmtUptime(displayUptime) : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Idle Mode" value={server.idleMode == null ? "—" : server.idleMode ? "ON" : "OFF"} accent={server.idleMode ? HOME_THEME.red : HOME_THEME.green} />
             <StatCard label="dxLink Feed (TT→Proxy)" value={server.dxLinkState || "—"} accent={dxOk ? HOME_THEME.green : HOME_THEME.red} mono />
@@ -1064,6 +1101,119 @@ export default function OwnerDashboard() {
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
             <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Version" value="2026.6.19-v2" accent={HOME_THEME.purple} mono />
+          </div>
+        </div>
+
+        {/* ── Render hosting metrics ── */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <SectionLabel>Render · Hosting</SectionLabel>
+            <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
+              {(["live", "weekly", "monthly"] as const).map(w => (
+                <button
+                  key={w}
+                  onClick={() => void fetchRenderWindow(w)}
+                  disabled={renderLoading}
+                  style={{
+                    padding: "3px 10px",
+                    fontSize: 9,
+                    fontWeight: 800,
+                    borderRadius: 4,
+                    border: "none",
+                    cursor: renderLoading ? "wait" : "pointer",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    background: renderWindow === w ? "rgba(0,229,255,.15)" : "transparent",
+                    color: renderWindow === w ? HOME_THEME.cyan : HOME_THEME.muted,
+                  }}
+                >
+                  {w === "live" ? "Live" : w === "weekly" ? "7 Day" : "30 Day"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
+            <StatCard
+              label={`Bandwidth · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
+              value={renderMetrics?.bandwidth.value != null
+                ? renderMetrics.bandwidth.value < 1024
+                  ? `${renderMetrics.bandwidth.value.toFixed(1)} MB`
+                  : `${(renderMetrics.bandwidth.value / 1024).toFixed(2)} GB`
+                : "—"}
+              accent={HOME_THEME.cyan}
+              mono
+              footer={<Sparkline data={renderMetrics?.bandwidth.spark ?? []} accent={HOME_THEME.cyan} />}
+            />
+            <StatCard
+              label={`Memory · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
+              value={renderMetrics?.memory.value != null
+                ? renderMetrics.memory.value < 1024 * 1024
+                  ? `${(renderMetrics.memory.value / 1024).toFixed(0)} KB`
+                  : `${(renderMetrics.memory.value / 1024 / 1024).toFixed(0)} MB`
+                : "—"}
+              accent={(() => {
+                const mb = (renderMetrics?.memory.value ?? 0) / 1024 / 1024;
+                return mb > 400 ? HOME_THEME.red : mb > 200 ? HOME_THEME.orange : HOME_THEME.green;
+              })()}
+              mono
+            />
+            <StatCard
+              label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
+              value={renderMetrics?.cpu.value != null
+                ? `${(renderMetrics.cpu.value * 100).toFixed(1)}%`
+                : "—"}
+              accent={(() => {
+                const pct = (renderMetrics?.cpu.value ?? 0) * 100;
+                return pct > 80 ? HOME_THEME.red : pct > 40 ? HOME_THEME.orange : HOME_THEME.green;
+              })()}
+              mono
+            />
+            <div style={{ containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px", overflow: "hidden" }}>
+              <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>Updated</div>
+              <div style={{ fontSize: "clamp(8px, 7.5cqw, 11px)", fontFamily: "monospace", color: HOME_THEME.muted, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {renderMetrics?.fetchedAt
+                  ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
+                  : "—"}
+              </div>
+              <a
+                href="https://dashboard.render.com/web/srv-d8mk8se7r5hc739t138g"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: "clamp(7px, 6.5cqw, 10px)", color: HOME_THEME.cyan, marginTop: 6, textDecoration: "none", fontWeight: 700, whiteSpace: "nowrap" }}
+              >
+                Render Dashboard ↗
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* ── DB row counts ── */}
+        <div>
+          <SectionLabel>Database · Today</SectionLabel>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
+            {TABLES.map(({ id, label }, idx) => {
+              const count = (dbStats as Record<string, number>)[id];
+              const palette = [HOME_THEME.cyan, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.orange, HOME_THEME.red, "#a78bfa"];
+              const accent = palette[idx % palette.length];
+              return (
+                <div key={id} style={{
+                  ...homePanelStyle,
+                  containerType: "inline-size",
+                  padding: "clamp(7px, 8cqw, 12px) clamp(9px, 10cqw, 16px)",
+                  overflow: "hidden",
+                  borderLeft: `3px solid ${accent}55`,
+                  background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
+                }}>
+                  <div style={{ fontSize: "clamp(7px, 7.5cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {label}
+                  </div>
+                  <div style={{ fontSize: "clamp(11px, 13cqw, 20px)", fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {count != null ? fmtNum(count) : "—"}
+                  </div>
+                  <div style={{ fontSize: "clamp(7px, 6.5cqw, 9px)", color: `${accent}66`, whiteSpace: "nowrap" }}>rows today</div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -1165,116 +1315,6 @@ export default function OwnerDashboard() {
                 {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
               </div>
             )}
-          </div>
-        </div>
-
-        {/* ── Render hosting metrics ── */}
-        <div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <SectionLabel>Render · Hosting</SectionLabel>
-            <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
-              {(["live", "weekly", "monthly"] as const).map(w => (
-                <button
-                  key={w}
-                  onClick={() => void fetchRenderWindow(w)}
-                  disabled={renderLoading}
-                  style={{
-                    padding: "3px 10px",
-                    fontSize: 9,
-                    fontWeight: 800,
-                    borderRadius: 4,
-                    border: "none",
-                    cursor: renderLoading ? "wait" : "pointer",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                    background: renderWindow === w ? "rgba(0,229,255,.15)" : "transparent",
-                    color: renderWindow === w ? HOME_THEME.cyan : HOME_THEME.muted,
-                  }}
-                >
-                  {w === "live" ? "Live" : w === "weekly" ? "7 Day" : "30 Day"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
-            <StatCard
-              label={`Bandwidth · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
-              value={renderMetrics?.bandwidth.value != null
-                ? renderMetrics.bandwidth.value < 1024
-                  ? `${renderMetrics.bandwidth.value.toFixed(1)} MB`
-                  : `${(renderMetrics.bandwidth.value / 1024).toFixed(2)} GB`
-                : "—"}
-              accent={HOME_THEME.cyan}
-              mono
-            />
-            <StatCard
-              label={`Memory · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
-              value={renderMetrics?.memory.value != null
-                ? renderMetrics.memory.value < 1024 * 1024
-                  ? `${(renderMetrics.memory.value / 1024).toFixed(0)} KB`
-                  : `${(renderMetrics.memory.value / 1024 / 1024).toFixed(0)} MB`
-                : "—"}
-              accent={(() => {
-                const mb = (renderMetrics?.memory.value ?? 0) / 1024 / 1024;
-                return mb > 400 ? HOME_THEME.red : mb > 200 ? HOME_THEME.orange : HOME_THEME.green;
-              })()}
-              mono
-            />
-            <StatCard
-              label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
-              value={renderMetrics?.cpu.value != null
-                ? `${(renderMetrics.cpu.value * 100).toFixed(1)}%`
-                : "—"}
-              accent={(() => {
-                const pct = (renderMetrics?.cpu.value ?? 0) * 100;
-                return pct > 80 ? HOME_THEME.red : pct > 40 ? HOME_THEME.orange : HOME_THEME.green;
-              })()}
-              mono
-            />
-            <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px" }}>
-              <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>Updated</div>
-              <div style={{ fontSize: 11, fontFamily: "monospace", color: HOME_THEME.muted, marginTop: 4 }}>
-                {renderMetrics?.fetchedAt
-                  ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
-                  : "—"}
-              </div>
-              <a
-                href="https://dashboard.render.com/web/srv-d8mk8se7r5hc739t138g"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ fontSize: 10, color: HOME_THEME.cyan, marginTop: 6, textDecoration: "none", fontWeight: 700 }}
-              >
-                Render Dashboard ↗
-              </a>
-            </div>
-          </div>
-        </div>
-
-        {/* ── DB row counts ── */}
-        <div>
-          <SectionLabel>Database · Today</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
-            {TABLES.map(({ id, label }, idx) => {
-              const count = (dbStats as Record<string, number>)[id];
-              const palette = [HOME_THEME.cyan, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.orange, HOME_THEME.red, "#a78bfa"];
-              const accent = palette[idx % palette.length];
-              return (
-                <div key={id} style={{
-                  ...homePanelStyle,
-                  padding: "12px 16px",
-                  borderLeft: `3px solid ${accent}55`,
-                  background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
-                }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4 }}>
-                    {label}
-                  </div>
-                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff" }}>
-                    {count != null ? fmtNum(count) : "—"}
-                  </div>
-                  <div style={{ fontSize: 9, color: `${accent}66` }}>rows today</div>
-                </div>
-              );
-            })}
           </div>
         </div>
 

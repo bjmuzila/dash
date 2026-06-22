@@ -185,7 +185,9 @@ export default function TopBar() {
         // Try sessionStorage first (set by vanilla app)
         const cached = JSON.parse(sessionStorage.getItem("prevCloses_v3") || "null");
         if (cached?.es > 0 && cached?.spx > 0) {
-          live.current.esPrev  = cached.es;
+          // NOT esPrev — ES baseline comes only from the broker candle feed
+          // (esFutPrevClose). The vanilla cache held a Yahoo close that flashed
+          // a wrong day-change for ~5s before the WS corrected it.
           live.current.spxPrev = cached.spx;
           live.current.vixPrev = cached.vix || 0;
         }
@@ -209,10 +211,11 @@ export default function TopBar() {
             if (price > 0 && live.current.spxPrice === 0) live.current.spxPrice = price;
             if (prev  > 0 && live.current.spxPrev  === 0) live.current.spxPrev  = prev;
           }
-          if (isEsuSymbol(sym)) {
-            if (price > 0 && live.current.esPrice === 0) live.current.esPrice = price;
-            if (prev  > 0 && live.current.esPrev  === 0) live.current.esPrev  = prev;
-          }
+          // ESU is sourced exclusively from the /ws/gex broker candle feed
+          // (esFut / esFutPrevClose). Do NOT seed it from Yahoo — mixing a Yahoo
+          // ES=F price/close with the broker feed caused the flicker and a wrong
+          // day-change. Left intentionally unhandled here.
+          void isEsuSymbol;
           if (sym === "VIX" || sym === "$VIX.X" || sym === "$VIX") {
             if (price > 0 && live.current.vixPrice === 0) live.current.vixPrice = price;
             if (prev  > 0 && live.current.vixPrev  === 0) live.current.vixPrev  = prev;
@@ -248,8 +251,11 @@ export default function TopBar() {
     const C = closesRef.current;
 
     // -- ES --
-    const esPrice = L.esPrice;
-    const esPrev  = L.esPrev || 0;
+    // Snap to the ES tick (0.25) at the source so the displayed price AND the
+    // day-change are computed from the SAME value — otherwise sub-tick source
+    // jitter makes the price flicker and the +/- disagree with the shown price.
+    const esPrice = L.esPrice > 0 ? Math.round(L.esPrice * 4) / 4 : 0;
+    const esPrev  = L.esPrev > 0 ? Math.round(L.esPrev * 4) / 4 : 0;
     setEs({ price: esPrice, changeBaseline: esPrev });
 
     // Keep esPrice available for SnapButton
@@ -306,6 +312,68 @@ export default function TopBar() {
 
     es.onerror = () => { es.close(); };
     return () => es.close();
+  }, []);
+
+  // ── Live ESU / VIX / SPX from /ws/gex (broker dxLink feed) ──
+  // The toolbar price + day-% baseline must come from the SAME broker feed.
+  // The server publishes esFut/esFutPrevClose (live ES future mid + prev close),
+  // vix/vixPrevClose, and spot/prevClose. Consuming these here replaces the old
+  // Yahoo quotes-batch seed so the ESU % is computed against the matching close.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let ws: WebSocket | null = null;
+    let reconnect: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+
+    const applyAux = (a: Record<string, unknown>) => {
+      const esFut = Number(a.esFut ?? 0);
+      const esPrev = Number(a.esFutPrevClose ?? 0);
+      const vix = Number(a.vix ?? 0);
+      const vixPrev = Number(a.vixPrevClose ?? 0);
+      if (esFut > 0) live.current.esPrice = esFut;
+      if (esPrev > 0) live.current.esPrev = esPrev;
+      if (vix > 0) live.current.vixPrice = vix;
+      if (vixPrev > 0) live.current.vixPrev = vixPrev;
+    };
+    const applySpot = (s: Record<string, unknown>) => {
+      const spot = Number(s.spot ?? 0);
+      const prev = Number(s.prevClose ?? 0);
+      if (spot > 0) live.current.spxPrice = spot;
+      if (prev > 0) live.current.spxPrev = prev;
+    };
+
+    const connect = () => {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
+      catch { schedule(); return; }
+
+      ws.onmessage = (evt) => {
+        try {
+          const m = JSON.parse(String(evt.data));
+          const d = m?.data ?? {};
+          if (m?.type === "snapshot") { applyAux(d); applySpot(d); }
+          else if (m?.type === "aux") applyAux(d);
+          else if (m?.type === "spot") applySpot(d);
+          else return;
+          pushPrices();
+        } catch (_) {}
+      };
+      ws.onerror = () => { try { ws?.close(); } catch (_) {} };
+      ws.onclose = () => { if (!closed) schedule(); };
+    };
+    const schedule = () => {
+      if (closed) return;
+      if (reconnect) clearTimeout(reconnect);
+      reconnect = setTimeout(connect, 2000);
+    };
+
+    connect();
+    return () => {
+      closed = true;
+      if (reconnect) clearTimeout(reconnect);
+      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch (_) {} }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── close dropdown on outside click ──

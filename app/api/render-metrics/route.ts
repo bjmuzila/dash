@@ -53,6 +53,29 @@ function sum(series: Array<{ values: Array<{ timestamp: string; value: number }>
   return vals.reduce((acc, v) => acc + v.value, 0);
 }
 
+/**
+ * Chronological values for a sparkline, downsampled to at most `max` points
+ * (averaging each bucket) so the payload stays small. Returns [] when no data.
+ */
+function sparkline(
+  series: Array<{ values: Array<{ timestamp: string; value: number }> }> | null,
+  max = 40,
+): number[] {
+  if (!series?.length) return [];
+  const points = series
+    .flatMap(s => s.values)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .map(v => v.value);
+  if (points.length <= max) return points;
+  const bucket = points.length / max;
+  const out: number[] = [];
+  for (let i = 0; i < max; i++) {
+    const slice = points.slice(Math.floor(i * bucket), Math.floor((i + 1) * bucket));
+    if (slice.length) out.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+  }
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   const windowParam = (req.nextUrl.searchParams.get("window") ?? "live") as Window;
 
@@ -61,7 +84,7 @@ export async function GET(req: NextRequest) {
   if (!API_KEY || !SERVICE_ID) {
     return NextResponse.json({
       window: windowParam,
-      bandwidth: { value: null, unit: "MB",    window: windowParam },
+      bandwidth: { value: null, unit: "MB",    window: windowParam, spark: [] },
       memory:    { value: null, unit: "bytes", window: windowParam },
       cpu:       { value: null, unit: "cpu",   window: windowParam },
       fetchedAt: new Date().toISOString(),
@@ -75,8 +98,16 @@ export async function GET(req: NextRequest) {
   const end   = now.toISOString();
   const start = new Date(now.getTime() - ms).toISOString();
 
-  const [bwSeries, memSeries, cpuSeries] = await Promise.all([
+  // Render's bandwidth metric is coarse: a 1h window often returns 0–1 buckets,
+  // which can't draw a sparkline. For the live window, pull a wider 6h series for
+  // the trend line only — the displayed total still sums the true 1h window.
+  const sparkStart = windowParam === "live"
+    ? new Date(now.getTime() - 6 * 3_600_000).toISOString()
+    : start;
+
+  const [bwSeries, bwSparkSeries, memSeries, cpuSeries] = await Promise.all([
     fetchMetric("bandwidth", start, end),
+    windowParam === "live" ? fetchMetric("bandwidth", sparkStart, end) : Promise.resolve(null),
     fetchMetric("memory",    start, end),
     fetchMetric("cpu",       start, end),
   ]);
@@ -87,7 +118,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     window:    windowParam,
-    bandwidth: { value: sum(bwSeries),      unit: "MB",    window: windowParam },
+    bandwidth: { value: sum(bwSeries),      unit: "MB",    window: windowParam, spark: sparkline(bwSparkSeries ?? bwSeries) },
     memory:    { value: memFn(memSeries),   unit: "bytes", window: windowParam },
     cpu:       { value: cpuFn(cpuSeries),   unit: "cpu",   window: windowParam },
     fetchedAt: end,

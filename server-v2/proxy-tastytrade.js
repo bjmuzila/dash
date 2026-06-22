@@ -1144,12 +1144,22 @@ class TastytradeProxy {
       this.esCandleSymbol = `${this.esSymbol}{=5m}`;
       console.log(`[FEED] ES front streamer=${this.esSymbol} candle=${this.esCandleSymbol}`);
       // Prior close for ES future day-change.
+      // The authoritative baseline is dxLink Summary.prevDayClosePrice (official
+      // exchange settle for the current session, set in _onEvent). The REST
+      // /market-data/by-type prev-close lags a session and was producing a wrong
+      // day-% (e.g. 7508 vs the real 7564.25 settle), so use it ONLY as a seed
+      // before Summary arrives — never let it overwrite a Summary-sourced value.
       try {
-        const enc = encodeURIComponent(this.esSymbol.replace(/:.*/, '')); // /ESU25:XCME -> /ESU25
-        const md = await ttGet(`/market-data/by-type?future=${enc}`);
-        const it = md?.data?.items?.[0];
-        const pc = firstFiniteNumber(it?.['prev-close']);
-        if (pc > 0) marketState.setAux({ esFutPrevClose: pc });
+        if (!(this.summaries.get(this.esSymbol)?.prevClose > 0)) {
+          const enc = encodeURIComponent(this.esSymbol.replace(/:.*/, '')); // /ESU25:XCME -> /ESU25
+          const md = await ttGet(`/market-data/by-type?future=${enc}`);
+          const it = md?.data?.items?.[0];
+          const pc = firstFiniteNumber(it?.['prev-close']);
+          if (pc > 0 && !(this.summaries.get(this.esSymbol)?.prevClose > 0)) {
+            console.log(`[FEED] ES REST seed prev-close=${pc} (temporary until Summary arrives)`);
+            marketState.setAux({ esFutPrevClose: pc });
+          }
+        }
       } catch (err) {
         console.warn('[FEED] ES prev-close failed:', err.message.slice(0, 120));
       }
@@ -1291,13 +1301,18 @@ class TastytradeProxy {
    * once ready. Keeps a single timer handle in this.oiTimer.
    */
   _scheduleOiRefresh() {
-    if (this.oiTimer) clearTimeout(this.oiTimer);
-    const delay = this.oiReady ? OI_REFRESH_MS : RECOMPUTE_MS;
+    if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
+    // OI is static for the session and live volume comes from the dxLink Trade
+    // stream (this.volumes), not REST — rest.volume is only a startup fallback.
+    // So once coverage is ready we stop polling entirely; the 60s loop was a
+    // 24/7 upstream bleed (full chain ×5 batches/min) for data that no longer
+    // changes. setExpiry() re-arms it by clearing oiReady before calling here.
+    if (this.oiReady) return;
     this.oiTimer = setTimeout(async () => {
       if (this.idle) { this._scheduleOiRefresh(); return; }
       try { await this._refreshOI(); } catch {}
       this._scheduleOiRefresh();
-    }, delay);
+    }, RECOMPUTE_MS);
   }
 
   /** Pick contracts for the active expiry within the strike window of spot. */
@@ -1393,6 +1408,51 @@ class TastytradeProxy {
     // 'change', so this no longer triggers a full-array broadcast every 5s — the
     // recurring update goes out as a small esCandlesDelta below.
     marketState.setStateSilent({ esCandles: rows });
+
+    // ── Derive ESU live price + day-change baseline from the candle stream ──
+    // The plain /ESU26:XCME Quote/Trade/Summary subscription delivers no events
+    // (only the {=5m} candle stream does), so esFut/esFutPrevClose never got set
+    // and the toolbar fell back to Yahoo — mismatching price vs baseline. The
+    // candle bars ARE the broker feed, so use them for BOTH values to keep them
+    // on the same source. Latest bar close = live price; the final bar of the
+    // most recent PRIOR trading date = the day-change baseline (4pm settle ≈ the
+    // last RTH bar). rows are sorted ascending by timestamp.
+    if (rows.length) {
+      const last = rows[rows.length - 1];
+      const lastClose = Number(last.close);
+      if (lastClose > 0) marketState.setAux({ esFut: lastClose });
+
+      const todayDate = last.date;
+      // The day-change baseline must be the prior session's 4:00pm ET RTH SETTLE
+      // — matching TradingView — NOT just the last bar of the prior date (ES
+      // trades to 17:00 ET, so the final bar is ~16pts off settle). Find the most
+      // recent prior trading date, then that date's 15:55 bar (covers 15:55–16:00,
+      // its close = the 4:00pm settle). Fall back to the prior date's last bar.
+      let prevDate = "";
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].date !== todayDate) { prevDate = rows[i].date; break; }
+      }
+      let prevClose = 0;
+      if (prevDate) {
+        const settleBar = rows.find((r) => r.date === prevDate && r.time === "15:55");
+        if (settleBar && Number(settleBar.close) > 0) {
+          prevClose = Number(settleBar.close);
+        } else {
+          // No 15:55 bar (gap/holiday) — use the last RTH bar at/under 16:00.
+          const rthBars = rows.filter((r) => r.date === prevDate && r.time <= "16:00");
+          const lastRth = rthBars[rthBars.length - 1];
+          if (lastRth && Number(lastRth.close) > 0) prevClose = Number(lastRth.close);
+        }
+      }
+      if (prevClose > 0) {
+        if (prevClose !== this._lastLoggedEsBaseline) {
+          this._lastLoggedEsBaseline = prevClose;
+          const settleBar = rows.find((r) => r.date === prevDate && r.time === "15:55");
+          console.log(`[FEED] ES baseline=${prevClose} prevDate=${prevDate} via=${settleBar ? "15:55-settle" : "lastRTH"} live=${lastClose} -> chg=${(lastClose - prevClose).toFixed(2)}`);
+        }
+        marketState.setAux({ esFutPrevClose: prevClose });
+      }
+    }
 
     // Broadcast ONLY the bars that changed this cycle (typically the forming bar,
     // plus a just-closed one). The client merges by slotKey, so a partial array
@@ -1622,7 +1682,10 @@ class TastytradeProxy {
       // settle for the CURRENT session. On a Sunday/holiday reopen this is
       // Friday's settle — more accurate than the connect-time REST prev-close,
       // which can lag a session. Prefer it for the ES day-change baseline.
-      if (sym === this.esSymbol && pc > 0) marketState.setAux({ esFutPrevClose: pc });
+      if (sym === this.esSymbol && pc > 0) {
+        console.log(`[FEED] ES Summary prevDayClosePrice=${pc} (authoritative baseline) sym=${sym}`);
+        marketState.setAux({ esFutPrevClose: pc });
+      }
       return;
     }
 

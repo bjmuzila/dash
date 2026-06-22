@@ -79,7 +79,7 @@ function drawTimeAxis(
 ) {
   if (!(maxTs > minTs)) return;
   ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,.42)";
+  ctx.fillStyle = "#ffffff";
   ctx.font = `${9 * dpr}px monospace`;
   ctx.textBaseline = "top";
   for (let i = 0; i <= ticks; i++) {
@@ -194,7 +194,7 @@ function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTra
 
     // Right-edge size scale labels reference the session max.
     ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,.4)";
+    ctx.fillStyle = "#ffffff";
     ctx.font = `${10 * dpr}px monospace`;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
@@ -284,12 +284,12 @@ function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTra
             whiteSpace: "nowrap",
           }}
         >
-          <div className="mb-1 text-[10px] uppercase tracking-wider text-white/45">{etHM(hover.hit.ts)} ET · {hover.hit.count} prints</div>
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-white">{etHM(hover.hit.ts)} ET · {hover.hit.count} prints</div>
           <div style={{ color: BUY }}>Buy &nbsp;{fmtInt(hover.hit.buyVol)}</div>
           <div style={{ color: SELL }}>Sell {fmtInt(hover.hit.sellVol)}</div>
           <div className="mt-1 border-t pt-1" style={{ borderColor: "rgba(255,255,255,.1)" }}>
             Net <span style={{ color: hover.hit.net >= 0 ? BUY : SELL, fontWeight: 700 }}>{hover.hit.net >= 0 ? "+" : ""}{fmtInt(hover.hit.net)}</span>
-            <span className="text-white/40"> · {fmtInt(hover.hit.total)} total</span>
+            <span className="text-white"> · {fmtInt(hover.hit.total)} total</span>
           </div>
         </div>
       )}
@@ -299,8 +299,16 @@ function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTra
 
 // ── Delta Profile canvas ───────────────────────────────────────────────────────
 
+interface DeltaHit {
+  cx: number; // bar center, CSS px
+  hw: number; // half-width hit slack, CSS px
+  ts: number; buy: number; sell: number; net: number;
+}
+
 function DeltaCanvas({ delta, range, sessionMax }: { delta: EsDeltaBucket[]; range: { min: number; max: number } | null; sessionMax: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const hitsRef = useRef<DeltaHit[]>([]);
+  const [hover, setHover] = useState<{ hit: DeltaHit; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -344,7 +352,7 @@ function DeltaCanvas({ delta, range, sessionMax }: { delta: EsDeltaBucket[]; ran
 
     // Right-edge scale (+max / 0 / -max).
     ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,.45)";
+    ctx.fillStyle = "#ffffff";
     ctx.font = `${10 * dpr}px monospace`;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
@@ -364,6 +372,7 @@ function DeltaCanvas({ delta, range, sessionMax }: { delta: EsDeltaBucket[]; ran
     // still filling). Highlight it so the live build is visible; it resets to 0
     // when the next minute starts.
     const activeTs = delta[delta.length - 1]?.ts ?? -1;
+    const hits: DeltaHit[] = [];
     for (const d of vis) {
       // Center the bar in the middle of its minute.
       const cx = padL + ((d.ts + bucketMs / 2 - minTs) / span) * chartW;
@@ -377,10 +386,61 @@ function DeltaCanvas({ delta, range, sessionMax }: { delta: EsDeltaBucket[]; ran
       if (d.net >= 0) ctx.fillRect(x, midY - h, barW, h);
       else ctx.fillRect(x, midY, barW, h);
       ctx.restore();
+      // Hit slot spans the full minute width so the whole column is hoverable,
+      // not just the (possibly thin) bar.
+      const slotHalf = Math.max(barW, (bucketMs / span) * chartW) / 2;
+      hits.push({ cx: cx / dpr, hw: slotHalf / dpr, ts: d.ts, buy: d.buy, sell: d.sell, net: d.net });
     }
+    hitsRef.current = hits;
   });
 
-  return <canvas ref={ref} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }} />;
+  const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let best: DeltaHit | null = null;
+    let bestD = Infinity;
+    for (const h of hitsRef.current) {
+      const d = Math.abs(mx - h.cx);
+      if (d <= h.hw && d < bestD) { best = h; bestD = d; }
+    }
+    setHover(best ? { hit: best, x: mx, y: my } : null);
+  };
+
+  return (
+    <>
+      <canvas
+        ref={ref}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHover(null)}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }}
+      />
+      {hover && (
+        <div
+          className="pointer-events-none absolute z-20 rounded-lg px-3 py-2 font-mono text-[11px] leading-relaxed"
+          style={{
+            left: hover.x + 130 > (ref.current?.clientWidth ?? 9999) ? hover.x - 130 : hover.x + 14,
+            top: Math.max(8, hover.y - 78),
+            background: "rgba(10,13,20,.96)",
+            border: "1px solid rgba(255,255,255,.12)",
+            boxShadow: "0 10px 30px rgba(0,0,0,.6)",
+            color: "#e6eef5",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-white">{etHM(hover.hit.ts)} ET</div>
+          <div style={{ color: BUY }}>Buy &nbsp;{fmtInt(hover.hit.buy)}</div>
+          <div style={{ color: SELL }}>Sell {fmtInt(hover.hit.sell)}</div>
+          <div className="mt-1 border-t pt-1" style={{ borderColor: "rgba(255,255,255,.1)" }}>
+            Net <span style={{ color: hover.hit.net >= 0 ? BUY : SELL, fontWeight: 700 }}>{hover.hit.net >= 0 ? "+" : ""}{fmtInt(hover.hit.net)}</span>
+            <span className="text-white"> · {fmtInt(hover.hit.buy + hover.hit.sell)} total</span>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
 
 // ── Page ────────────────────────────────────────────────────────────────────────
@@ -486,7 +546,7 @@ export default function FootprintPage() {
   }, [delta]);
 
   // ── Viewport: always a 30-minute window; drag right pans into history ───────
-  const WINDOW_MS = 30 * 60 * 1000;
+  const WINDOW_MS = 60 * 60 * 1000;
   // viewEnd = right edge of the window. null = "follow latest" (live mode).
   const [viewEnd, setViewEnd] = useState<number | null>(null);
   const dragRef = useRef<{ x: number; end: number } | null>(null);
@@ -528,11 +588,11 @@ export default function FootprintPage() {
         <div>
           <div className="flex items-center gap-2">
             <span style={{ width: 8, height: 8, borderRadius: 999, background: "#38bdf8", boxShadow: "0 0 10px #38bdf8" }} />
-            <div className="text-xs font-bold uppercase tracking-[0.24em] text-white/90">
-              Footprint <span className="text-white/35">·</span> Big Orders
+            <div className="text-xs font-bold uppercase tracking-[0.24em] text-white">
+              Footprint <span className="text-white">·</span> Big Orders
             </div>
           </div>
-          <div className="mt-1 text-xs text-white/55">
+          <div className="mt-1 text-xs text-white">
             Real-time large prints on the front ES future ({label}) · buy = lifted ask, sell = hit bid.
           </div>
         </div>
@@ -545,7 +605,7 @@ export default function FootprintPage() {
           <span className="rounded border px-2 py-1 font-mono" style={{ borderColor: "rgba(255,255,255,.12)", color: seeded ? "#38bdf8" : connected ? "#22c55e" : "#ef4444", background: seeded ? "rgba(56,189,248,.1)" : connected ? "#0c2a1e" : "#1a0a0a" }}>
             {seeded ? "REPLAY" : connected ? "LIVE" : "WAITING"}
           </span>
-          <span className="rounded border px-2 py-1 text-white/70" style={{ borderColor: "rgba(255,255,255,.12)" }}>
+          <span className="rounded border px-2 py-1 text-white" style={{ borderColor: "rgba(255,255,255,.12)" }}>
             {updatedAt ? etClock(updatedAt) : "—"}
           </span>
         </div>
@@ -553,7 +613,7 @@ export default function FootprintPage() {
 
       {/* Session label */}
       <div className="flex items-center gap-2 px-4 pt-3">
-        <span className="text-[10px] uppercase tracking-[0.18em] text-white/40">Session</span>
+        <span className="text-[10px] uppercase tracking-[0.18em] text-white">Session</span>
         <span
           className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
           style={{
@@ -576,7 +636,7 @@ export default function FootprintPage() {
 
       {/* Min-size filter */}
       <div className="flex flex-wrap items-center gap-3 px-4 pb-1">
-        <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+        <div className="text-[10px] uppercase tracking-[0.16em] text-white">
           Min order size
         </div>
         <input
@@ -589,22 +649,22 @@ export default function FootprintPage() {
           className="h-1 w-44 cursor-pointer accent-sky-400"
           style={{ accentColor: "#38bdf8" }}
         />
-        <span className="font-mono text-[11px] text-white/70">
-          ≥ {fmtInt(minSize)} <span className="text-white/35">contracts</span>
+        <span className="font-mono text-[11px] text-white">
+          ≥ {fmtInt(minSize)} <span className="text-white">contracts</span>
         </span>
-        <span className="font-mono text-[10px] text-white/35">
+        <span className="font-mono text-[10px] text-white">
           showing {fmtInt(trades.length)} / {fmtInt(rawTrades.length)} prints
         </span>
       </div>
 
       {/* Window controls */}
       <div className="flex items-center justify-between px-4 pb-1">
-        <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
-          30-min window · drag to pan history
+        <div className="text-[10px] uppercase tracking-[0.16em] text-white">
+          60-min window · drag to pan history
         </div>
         <div className="flex items-center gap-2">
           {view && (
-            <span className="font-mono text-[10px] text-white/45">
+            <span className="font-mono text-[10px] text-white">
               {etHM(view.min)} – {etHM(view.max)} ET
             </span>
           )}
@@ -648,7 +708,7 @@ export default function FootprintPage() {
                   onClick={() => setBubbleMetric(m)}
                   className="rounded px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors"
                   style={{
-                    color: bubbleMetric === m ? "#0b1018" : "rgba(255,255,255,.6)",
+                    color: bubbleMetric === m ? "#0b1018" : "#ffffff",
                     background: bubbleMetric === m ? "#38bdf8" : "transparent",
                   }}
                   title={m === "net" ? "Size by net (buy−sell) — matches the Delta Profile bar" : "Size by total volume (buy+sell)"}
@@ -679,19 +739,58 @@ export default function FootprintPage() {
         </Lane>
       </div>
 
-      {/* Rolling order feed — same min-size filter as the lanes, newest first. */}
-      <OrderFeed trades={trades} open={feedOpen} onToggle={() => setFeedOpen((v) => !v)} minSize={minSize} />
+      {/* Rolling order feed. Aggregates from RAW prints so a big order that filled
+          as many small ticks isn't lost to the size filter before being combined;
+          the min-size filter is applied AFTER aggregation. */}
+      <OrderFeed rawTrades={rawTrades} open={feedOpen} onToggle={() => setFeedOpen((v) => !v)} minSize={minSize} />
     </div>
   );
 }
 
 // ── Rolling order feed ────────────────────────────────────────────────────────
 
-function OrderFeed({ trades, open, onToggle, minSize }: {
-  trades: EsBigTrade[]; open: boolean; onToggle: () => void; minSize: number;
+type FeedMode = "raw" | "agg";
+interface FeedRow { ts: number; side: "buy" | "sell"; price: number; size: number; count: number; }
+
+function OrderFeed({ rawTrades, open, onToggle, minSize }: {
+  rawTrades: EsBigTrade[]; open: boolean; onToggle: () => void; minSize: number;
 }) {
+  // raw = every print; agg = combine same-side prints in each 1000ms window into one
+  // row (so a big order that filled as many ticks shows as one large row).
+  const [mode, setMode] = useState<FeedMode>("raw");
+  const AGG_MS = 1000;
+
   // Newest first. Cap the rendered rows so a full session day stays smooth to scroll.
-  const rows = useMemo(() => [...trades].reverse().slice(0, 500), [trades]);
+  const rows = useMemo<FeedRow[]>(() => {
+    if (mode === "raw") {
+      // Raw mode: filter individual prints by min size, as before.
+      return rawTrades
+        .filter((t) => t.size >= minSize)
+        .slice()
+        .reverse()
+        .slice(0, 500)
+        .map((t) => ({ ts: t.ts, side: t.side, price: t.price, size: t.size, count: 1 }));
+    }
+    // Agg mode: combine ALL raw same-side prints per 1s window FIRST, then filter the
+    // COMBINED size by minSize — so an order built from sub-threshold ticks still shows.
+    const cells = new Map<string, FeedRow>();
+    for (const t of rawTrades) {
+      const win = Math.floor(t.ts / AGG_MS) * AGG_MS;
+      const key = `${win}:${t.side}`;
+      const c = cells.get(key);
+      if (c) {
+        c.size += t.size;
+        c.count += 1;
+        if (t.ts >= c.ts) { c.ts = t.ts; c.price = t.price; } // last print's price
+      } else {
+        cells.set(key, { ts: t.ts, side: t.side, price: t.price, size: t.size, count: 1 });
+      }
+    }
+    return [...cells.values()]
+      .filter((r) => r.size >= minSize)
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 500);
+  }, [rawTrades, mode, minSize]);
 
   return (
     <div className="px-4 pb-4">
@@ -704,31 +803,53 @@ function OrderFeed({ trades, open, onToggle, minSize }: {
         }}
       >
         {/* Header / collapse toggle */}
-        <button
-          onClick={onToggle}
-          className="flex w-full items-center justify-between px-4 py-3 transition-colors hover:bg-white/[0.03]"
-          style={{ cursor: "pointer" }}
-        >
-          <div className="flex items-center gap-2">
+        <div className="flex w-full items-center justify-between px-4 py-3">
+          <button
+            onClick={onToggle}
+            className="flex items-center gap-2 transition-colors hover:opacity-80"
+            style={{ cursor: "pointer" }}
+          >
             <span
               className="inline-block transition-transform"
-              style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", color: "rgba(255,255,255,.5)", fontSize: 10 }}
+              style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", color: "#ffffff", fontSize: 10 }}
             >
               ▶
             </span>
-            <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/90">Order Feed</span>
-            <span className="text-[9px] uppercase tracking-[0.14em] text-white/35">
-              ≥ {fmtInt(minSize)} contracts · {fmtInt(trades.length)} prints
+            <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-white">Order Feed</span>
+            <span className="text-[9px] uppercase tracking-[0.14em] text-white">
+              ≥ {fmtInt(minSize)} contracts · {fmtInt(rows.length)} {mode === "agg" ? "orders" : "prints"}
             </span>
+          </button>
+          <div className="flex items-center gap-3">
+            {open && (
+              <div className="flex items-center gap-1 rounded-md p-0.5" style={{ background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.08)" }}>
+                {([["raw", "Raw"], ["agg", "1s"]] as [FeedMode, string][]).map(([m, lbl]) => (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    className="rounded px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors"
+                    style={{
+                      color: mode === m ? "#0b1018" : "#ffffff",
+                      background: mode === m ? "#38bdf8" : "transparent",
+                    }}
+                    title={m === "raw" ? "Every print" : "Combine prints within each 1000ms window"}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button onClick={onToggle} className="text-[10px] uppercase tracking-wider text-white" style={{ cursor: "pointer" }}>
+              {open ? "Hide" : "Show"}
+            </button>
           </div>
-          <span className="text-[10px] uppercase tracking-wider text-white/45">{open ? "Hide" : "Show"}</span>
-        </button>
+        </div>
 
         {open && (
           <div>
             {/* Column header */}
             <div
-              className="grid px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-white/35"
+              className="grid px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-white"
               style={{ gridTemplateColumns: "84px 1fr 88px 76px", borderTop: "1px solid rgba(255,255,255,.06)" }}
             >
               <span>Time</span>
@@ -739,7 +860,7 @@ function OrderFeed({ trades, open, onToggle, minSize }: {
             {/* Scrollable body */}
             <div className="overflow-y-auto" style={{ maxHeight: 320 }}>
               {rows.length === 0 ? (
-                <div className="px-4 py-6 text-center text-xs text-white/35">
+                <div className="px-4 py-6 text-center text-xs text-white">
                   No prints at ≥ {fmtInt(minSize)} contracts — lower the filter to see more.
                 </div>
               ) : (
@@ -748,7 +869,7 @@ function OrderFeed({ trades, open, onToggle, minSize }: {
                   const c = isBuy ? BUY : SELL;
                   return (
                     <div
-                      key={`${t.ts}-${i}`}
+                      key={`${t.ts}-${t.side}-${i}`}
                       className="grid items-center px-4 py-1 font-mono text-[11px]"
                       style={{
                         gridTemplateColumns: "84px 1fr 88px 76px",
@@ -756,9 +877,14 @@ function OrderFeed({ trades, open, onToggle, minSize }: {
                         background: `linear-gradient(90deg, ${c}10, transparent 60%)`,
                       }}
                     >
-                      <span className="text-white/55">{etClock(t.ts)}</span>
-                      <span style={{ color: c, fontWeight: 700 }}>{isBuy ? "BUY" : "SELL"}</span>
-                      <span className="text-right text-white/70">{t.price.toFixed(2)}</span>
+                      <span className="text-white">{etClock(t.ts)}</span>
+                      <span style={{ color: c, fontWeight: 700 }}>
+                        {isBuy ? "BUY" : "SELL"}
+                        {mode === "agg" && t.count > 1 && (
+                          <span className="ml-1 text-white" style={{ fontWeight: 400, opacity: 0.6 }}>×{t.count}</span>
+                        )}
+                      </span>
+                      <span className="text-right text-white">{t.price.toFixed(2)}</span>
                       <span className="text-right" style={{ color: c, fontWeight: 700 }}>{fmtInt(t.size)}</span>
                     </div>
                   );
@@ -787,7 +913,7 @@ function StatCard({ label, value, color, sub }: { label: string; value: string; 
     >
       <div className="text-[10px] uppercase tracking-[0.2em]" style={{ color: `${color}cc` }}>{label}</div>
       <div className="mt-2 text-3xl font-black" style={{ color, fontFamily: "monospace", textShadow: `0 0 18px ${color}55` }}>{value}</div>
-      <div className="mt-1 text-[11px] text-white/55 font-mono">{sub}</div>
+      <div className="mt-1 text-[11px] text-white font-mono">{sub}</div>
     </div>
   );
 }
@@ -818,11 +944,11 @@ function Lane({ title, subtitle, legend, empty, emptyText, headerRight, children
 
         {/* Lane label block */}
         <div className="absolute left-4 top-3 z-10">
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/90">{title}</div>
-          <div className="text-[9px] uppercase tracking-[0.14em] text-white/35">{subtitle}</div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white">{title}</div>
+          <div className="text-[9px] uppercase tracking-[0.14em] text-white">{subtitle}</div>
           <div className="mt-1.5 flex items-center gap-3">
             {legend.map((l) => (
-              <span key={l.t} className="flex items-center gap-1.5 text-[10px] font-medium text-white/55">
+              <span key={l.t} className="flex items-center gap-1.5 text-[10px] font-medium text-white">
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: l.c, boxShadow: `0 0 6px ${l.c}` }} />
                 {l.t}
               </span>
@@ -831,7 +957,7 @@ function Lane({ title, subtitle, legend, empty, emptyText, headerRight, children
         </div>
         {children}
         {empty && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-white/35">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-white">
             {emptyText}
           </div>
         )}
