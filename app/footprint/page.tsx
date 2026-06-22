@@ -205,7 +205,10 @@ function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTra
     // overlap (slot * 0.85) so VOLUME — not minute spacing — drives the size;
     // this is what real order-flow tools do and keeps big prints prominent.
     const slotW = (BUCKET_MS / span) * chartW;
-    const maxR = Math.max(8 * dpr, Math.min(midY - padY, slotW * 0.85)) * 0.75;
+    // Big bubbles should fill the lane height regardless of how narrow each
+    // minute-slot is — overlap is fine, volume drives size. Was capped by
+    // slotW*0.85 which collapsed bubbles on wide windows.
+    const maxR = (midY - padY) * 0.32;
     // Keep a tiny visible floor so a 1-contract minute is still clickable, but make
     // it genuinely small (was 0.35*maxR, which flattened the whole size range).
     const minR = Math.min(3 * dpr, maxR * 0.08);
@@ -219,7 +222,7 @@ function BubblesCanvas({ trades, range, sessionMax, metric }: { trades: EsBigTra
       // Was sqrt(f) (area-proportional): visually compresses the range so most
       // bubbles cluster near maxR. f^0.85 makes the size gap between small and
       // large prints far more pronounced.
-      return Math.max(minR, Math.pow(f, 2.0) * maxR);
+      return Math.max(minR, Math.pow(f, 1.3) * maxR);
     };
     const sizeOf = (b: { total: number; net: number }) =>
       metric === "net" ? Math.abs(b.net) : b.total;

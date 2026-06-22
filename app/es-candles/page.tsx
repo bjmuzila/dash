@@ -1,45 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { CandlestickSeries, HistogramSeries, ColorType, CrosshairMode, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, CandlestickData, HistogramData } from "lightweight-charts";
 import { usePageLoadStatus } from "@/lib/pageStatus";
-
-type Candle = {
-  timestamp: number;
-  date: string;
-  slotKey: string;
-  time?: string;
-  symbol?: string;
-  intervalMinutes?: number;
-  source?: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  avgVolume?: number;
-};
-
-function todayET(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const map: Record<string, string> = {};
-  parts.forEach((p) => { map[p.type] = p.value; });
-  return `${map.year}-${map.month}-${map.day}`;
-}
-
-function sortCandles(rows: Candle[]) {
-  return [...rows].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
-}
-
-function slotLabel(c: Candle) {
-  return c.slotKey.slice(11, 16) || c.time?.slice(0, 5) || "--:--";
-}
+import { useEsCandles } from "@/hooks/useEsCandles";
 
 function etClock(ts = Date.now()) {
   return new Date(ts).toLocaleTimeString("en-US", {
@@ -50,107 +15,23 @@ function etClock(ts = Date.now()) {
   });
 }
 
-function etSlotKey(ts: number) {
-  const d = new Date(ts);
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(d);
-  const map: Record<string, string> = {};
-  parts.forEach((p) => { map[p.type] = p.value; });
-  const minute = String(Math.floor(Number(map.minute || "0") / 5) * 5).padStart(2, "0");
-  return `${map.year}-${map.month}-${map.day}T${map.hour}:${minute}`;
-}
-
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
 }
 
 export default function EsCandlesPage() {
   usePageLoadStatus({ pageKey: "es-candles", pageLabel: "ES Candles", path: "/es-candles" });
-  const [rows, setRows] = useState<Candle[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("idle");
-  const [error, setError] = useState<string | null>(null);
+
+  // Single source of truth: SQL load (today + ~20d history) + live /ws/gex merge.
+  const { candles: rows, connected, refresh } = useEsCandles();
+
   const chartRef = useRef<HTMLDivElement>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const rowMapRef = useRef<Map<string, Candle>>(new Map());
-  const lastSaveRef = useRef(0);
 
-  const loadCandles = useCallback(async () => {
-    setLoading(false);
-    setError("ES Candles data feed disabled");
-    setRows([]);
-  }, []);
-
-  const fetchLiveCandles = useCallback(async () => {
-    try {
-      const symbols = ["/ES{=5m}", "/ES:XCME{=5m}", "/ES"];
-      for (const symbol of symbols) {
-        const res = await fetch(`/api/dxlink/candles?symbol=${encodeURIComponent(symbol)}&count=300`, { cache: "no-store" });
-        if (!res.ok) continue;
-        const json = await res.json();
-        const candles = Array.isArray(json.candles) ? json.candles : [];
-        if (!candles.length) continue;
-
-        const nextMap = new Map(rowMapRef.current);
-        for (const raw of candles) {
-          const item = raw as Record<string, unknown>;
-          const ts = Number(item.datetime ?? item.time ?? 0);
-          const open = Number(item.open ?? 0);
-          const high = Number(item.high ?? 0);
-          const low = Number(item.low ?? 0);
-          const close = Number(item.close ?? 0);
-          const volume = Number(item.volume ?? 0);
-          if (!(ts > 0) || !(open > 0) || !(high > 0) || !(low > 0) || !(close > 0)) continue;
-          const slotKey = etSlotKey(ts);
-          nextMap.set(slotKey, {
-            timestamp: ts,
-            date: slotKey.slice(0, 10),
-            slotKey,
-            time: slotKey.slice(11),
-            symbol,
-            intervalMinutes: 5,
-            source: "dxlink",
-            open,
-            high,
-            low,
-            close,
-            volume,
-            avgVolume: Number(item.avgVolume ?? 0),
-          });
-        }
-
-        const sorted = sortCandles([...nextMap.values()]);
-        rowMapRef.current = nextMap;
-        setRows(sorted);
-        setStatus("live");
-        return;
-      }
-    } catch {
-      // keep trying silently
-    }
-  }, []);
-
-  // Data feed disabled — no API calls
-  useEffect(() => {
-    void loadCandles();
-  }, [loadCandles]);
-
-  useEffect(() => {
-    const id = setInterval(() => void loadCandles(), 60_000);
-    return () => clearInterval(id);
-  }, [loadCandles]);
-
+  const status = connected ? "live" : "offline";
   const lastCandle = rows[rows.length - 1];
-  const maxVol = useMemo(() => Math.max(1, ...rows.map((r) => Number(r.volume || 0))), [rows]);
 
   useEffect(() => {
     let canceled = false;
@@ -251,11 +132,17 @@ export default function EsCandlesPage() {
       low: row.low,
       close: row.close,
     }));
-    const volumeData: HistogramData[] = rows.map((row) => ({
-      time: toChartTime(row.timestamp),
-      value: row.volume,
-      color: row.close >= row.open ? "rgba(48, 209, 88, .45)" : "rgba(255, 91, 91, .45)",
-    }));
+    const volumeData: HistogramData[] = rows.map((row) => {
+      const up = row.close >= row.open;
+      // Brighter bar when volume runs hot vs the 14-day slot average.
+      const hot = row.avg14 && row.avg14 > 0 ? row.volume / row.avg14 >= 1.5 : false;
+      const a = hot ? 0.7 : 0.42;
+      return {
+        time: toChartTime(row.timestamp),
+        value: row.volume,
+        color: up ? `rgba(48, 209, 88, ${a})` : `rgba(255, 91, 91, ${a})`,
+      };
+    });
 
     candleSeries.setData(candleData);
     volumeSeries.setData(volumeData);
@@ -267,16 +154,16 @@ export default function EsCandlesPage() {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)" }}>
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.24em]" style={{ color: "#ff5b5b" }}>ES 5m Candles</div>
-          <div className="mt-1 text-xs text-white/70">Live dxLink candle feed saved to SQLite and shown in the ES Candles table.</div>
+          <div className="mt-1 text-xs text-white/70">5m ES candles from Postgres, merged live over /ws/gex.</div>
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span className="rounded border px-2 py-1" style={{ borderColor: "rgba(255,255,255,.12)", color: status === "live" ? "#30d158" : status === "err" ? "#ff5b5b" : "#94a3b8" }}>
+          <span className="rounded border px-2 py-1" style={{ borderColor: "rgba(255,255,255,.12)", color: status === "live" ? "#30d158" : "#94a3b8" }}>
             {status.toUpperCase()}
           </span>
           <span className="rounded border px-2 py-1 text-white/70" style={{ borderColor: "rgba(255,255,255,.12)" }}>
-            {loading ? "Loading" : `${rows.length} candles`}
+            {`${rows.length} candles`}
           </span>
-          <button onClick={() => void loadCandles()} className="rounded border px-3 py-1 text-xs" style={{ borderColor: "rgba(255,255,255,.12)", color: "#ffb4b4" }}>
+          <button onClick={() => void refresh()} className="rounded border px-3 py-1 text-xs" style={{ borderColor: "rgba(255,255,255,.12)", color: "#ffb4b4" }}>
             Refresh
           </button>
         </div>
@@ -300,10 +187,10 @@ export default function EsCandlesPage() {
       <div className="flex-1 px-4 pb-4">
         <div className="relative h-full min-h-[520px] overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "radial-gradient(circle at top, rgba(255,91,91,.12), rgba(6,8,13,.96) 50%)" }}>
           <div ref={chartRef} className="absolute inset-0" />
-          {error ? (
-            <div className="absolute inset-0 flex items-center justify-center text-sm text-red-300">{error}</div>
-          ) : rows.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center text-sm text-white/50">Waiting for live 5m ES candles</div>
+          {rows.length === 0 ? (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-white/50">
+              {connected ? "Waiting for live 5m ES candles" : "Loading candles…"}
+            </div>
           ) : null}
         </div>
       </div>

@@ -20,11 +20,15 @@ interface ScoreFactors {
   flipProximity: number;
   dexBias: number;
   timeWeight: number;
+  gexRank: number;
+  rejectionRate: number;
 }
 interface ScoreResult {
   hit: number;
   pivot: number;
   chop: number;
+  break: number;
+  netWallBias: number;
   factors: ScoreFactors;
   historyWeight: number;
   sampleSize: number;
@@ -80,7 +84,9 @@ interface MvcSegment {
   closestApproach: number | null;
   minToTouch: number | null;
   distAtStart: number | null;
-  score: { hit: number; pivot: number; chop: number };
+  score: { hit: number; pivot: number; chop: number; break: number; netWallBias: number };
+  gexRank: number;
+  rejectionRate: number;
   gammaRegime: "positive" | "negative" | "flat";
   stats: {
     spxAtActivation: number | null;
@@ -105,6 +111,7 @@ interface ApiResp {
   netDex: number;
   gexFlip: number | null;
   gexMagnitude: number;
+  gexRank: number;
   sessionProgress: number;
   score: ScoreResult;
   dayOutcome?: DayOutcome;
@@ -133,6 +140,7 @@ const METRIC = {
   hit: HOME_THEME.cyan,
   pivot: HOME_THEME.purple,
   chop: HOME_THEME.orange,
+  break: HOME_THEME.red,
 } as const;
 
 function rgba(hex: string, a: number) {
@@ -166,6 +174,20 @@ const SCENARIO: Record<DayOutcome["kind"], { color: string; icon: string }> = {
   chop:        { color: METRIC.chop,      icon: "≈" },
   approaching: { color: METRIC.hit,       icon: "→" },
   untouched:   { color: HOME_THEME.muted, icon: "·" },
+};
+
+// Interaction verb per archetype — the plain-language "what price did to the
+// level" tag shown on each timeline row (touched / rejected / broke / etc.).
+const VERB: Record<DayOutcome["kind"], string> = {
+  reversal:    "Rejected",
+  squeeze:     "Rejected",
+  "false-break": "Rejected",
+  breakout:    "Broke",
+  cascade:     "Broke",
+  pinned:      "Consolidated",
+  chop:        "Consolidated",
+  approaching: "Approaching",
+  untouched:   "Untouched",
 };
 
 function Tip({ text, children }: { text: string; children: ReactNode }) {
@@ -232,6 +254,46 @@ function Gauge({ label, value, hint, tip, accent }: { label: string; value: numb
   );
 }
 
+/** Net Wall Bias = pivot − break, shown as a centered signed meter
+ *  (−100 break ⟵ 0 ⟶ +100 defend). Green right = wall defends, red left = break. */
+function BiasMeter({ value }: { value: number }) {
+  const v = Math.max(-100, Math.min(100, value));
+  const defend = v >= 0;
+  const col = Math.abs(v) < 12 ? METRIC.chop : defend ? HOME_THEME.green : HOME_THEME.red;
+  const pct = Math.abs(v) / 2; // half-bar fill (0..50% of full width)
+  const read =
+    v >= 25 ? "Lean defense — favor holds / continuation if it holds"
+    : v <= -25 ? "Respect the break — don't fight momentum through"
+    : "Neutral — smaller size until a clear reaction at the level";
+  return (
+    <div className="conf-hover" style={{ ...homePanelStyle, padding: "14px 18px", display: "flex",
+      flexDirection: "column", gap: 10, borderTop: `2px solid ${rgba(col, 0.6)}`,
+      background: `radial-gradient(circle at ${defend ? "100%" : "0%"} 0%, ${rgba(col, 0.1)} 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: col }}>
+          <Tip text="Net Wall Bias = Pivot − Break. Positive = expect defense; negative = respect the break.">Net Wall Bias</Tip>
+        </span>
+        <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "monospace", color: col, textShadow: `0 0 16px ${rgba(col, 0.4)}` }}>
+          {v >= 0 ? "+" : ""}{v}
+        </span>
+      </div>
+      <div style={{ position: "relative", height: 12, background: "rgba(255,255,255,0.05)", borderRadius: 6 }}>
+        <div style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 2, background: rgba(HOME_THEME.text, 0.3) }} />
+        <div style={{ position: "absolute", top: 0, bottom: 0, borderRadius: 6,
+          left: defend ? "50%" : `${50 - pct}%`, width: `${pct}%`,
+          background: `linear-gradient(90deg, ${rgba(col, 0.45)}, ${col})`,
+          boxShadow: `0 0 10px ${rgba(col, 0.5)}`, transition: "all .45s cubic-bezier(.4,0,.2,1)" }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace",
+        textTransform: "uppercase", letterSpacing: ".06em", color: HOME_THEME.muted }}>
+        <span style={{ color: rgba(HOME_THEME.red, 0.8) }}>← Break</span>
+        <span style={{ color: rgba(HOME_THEME.green, 0.8) }}>Defend →</span>
+      </div>
+      <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{read}</span>
+    </div>
+  );
+}
+
 function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan, emphasize = false }: {
   label: string; value: number; tip: string; signed?: boolean; accent?: string; emphasize?: boolean;
 }) {
@@ -264,10 +326,140 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
   );
 }
 
-/** One MVC strike in the timeline — compact row that expands to full stats. */
-function TimelineRow({ seg }: { seg: MvcSegment }) {
+/** Hero MVC card — the one-glance trade read at the top of the Outcome box.
+ *  REACH = probability price gets to the level (the Hit score). On a touch, the
+ *  three outcomes (reject / chop / break) are renormalized to sum to 100% so they
+ *  read as a true probability split — display-only, the engine scores stay raw. */
+function MvcHero({
+  level, spx, reach, pivot, chop, brk, wall, provisional,
+}: {
+  level: number; spx: number | null; reach: number;
+  pivot: number; chop: number; brk: number;
+  wall: "call" | "put" | "neutral"; provisional: boolean;
+}) {
+  const dist = spx != null ? Math.round(Math.abs(spx - level)) : null;
+  // Normalize the on-touch outcomes to a 100% split (guard all-zero).
+  const sum = pivot + chop + brk || 1;
+  const reject = Math.round((pivot / sum) * 100);
+  const breakP = Math.round((brk / sum) * 100);
+  const chopP = Math.max(0, 100 - reject - breakP); // remainder absorbs rounding
+  const lean = reject >= breakP;
+  const leanColor = Math.abs(reject - breakP) < 12 ? METRIC.chop : lean ? HOME_THEME.green : HOME_THEME.red;
+  const wallLabel = wall === "call" ? "Call Wall" : wall === "put" ? "Put Wall" : "Level";
+  const reachColor = reach >= 70 ? METRIC.hit : reach >= 45 ? METRIC.chop : HOME_THEME.muted;
+
+  // A horizontal reject|chop|break split bar.
+  const Seg = ({ pct, color, label }: { pct: number; color: string; label: string }) =>
+    pct <= 0 ? null : (
+      <div title={`${label} ${pct}%`} style={{ width: `${pct}%`, background: `linear-gradient(180deg, ${rgba(color, 0.85)}, ${color})`,
+        display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
+        {pct >= 12 && <span style={{ fontSize: 11, fontWeight: 800, color: "#0b0e14", fontFamily: "monospace" }}>{pct}%</span>}
+      </div>
+    );
+
+  return (
+    <div className="conf-hover" style={{ ...homePanelStyle, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16,
+      borderTop: `3px solid ${rgba(leanColor, 0.7)}`,
+      background: `radial-gradient(circle at 50% -10%, ${rgba(leanColor, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 24, flexWrap: "wrap" }}>
+        {/* MVC level */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: HOME_THEME.muted }}>MVC · {wallLabel}</span>
+          <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, fontFamily: "monospace", color: HOME_THEME.text, textShadow: `0 0 24px ${rgba(leanColor, 0.3)}` }}>{fmt(level)}</span>
+          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7, fontFamily: "monospace" }}>
+            SPX {fmt(spx)}{dist != null && <> · <strong style={{ color: leanColor }}>{dist} pts</strong> away</>}
+          </span>
+        </div>
+
+        {/* REACH */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: "auto", alignItems: "flex-end" }}>
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: reachColor }}>
+            <Tip text="Reach = probability price gets to / interacts with the MVC level today (the Hit score).">Reach</Tip>
+          </span>
+          <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, color: reachColor, textShadow: `0 0 22px ${rgba(reachColor, 0.4)}` }}>{reach}<span style={{ fontSize: 18, opacity: 0.7 }}>%</span></span>
+          <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>{reach >= 70 ? "likely to get there" : reach >= 45 ? "could get there" : "out of range for now"}</span>
+        </div>
+      </div>
+
+      {/* On-touch outcome split */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+            If touched{provisional ? " · live" : ""}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: leanColor }}>
+            {lean ? `Rejects ${reject}%` : `Breaks ${breakP}%`}
+            <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}> {lean ? "— wall likely defends" : "— wall likely fails"}</span>
+          </span>
+        </div>
+        <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", border: `1px solid ${HOME_THEME.border}` }}>
+          <Seg pct={reject} color={METRIC.pivot} label="Reject" />
+          <Seg pct={chopP} color={METRIC.chop} label="Chop" />
+          <Seg pct={breakP} color={METRIC.break} label="Break" />
+        </div>
+        <div style={{ display: "flex", gap: 16, fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
+          <span><span style={{ color: METRIC.pivot }}>■</span> Reject {reject}%</span>
+          <span><span style={{ color: METRIC.chop }}>■</span> Chop {chopP}%</span>
+          <span><span style={{ color: METRIC.break }}>■</span> Break {breakP}%</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** "So far" roll-up: which strike is the live MVC + how every prior anchor
+ *  resolved (rejected / broke / consolidated / untouched). Shown at the top of
+ *  the Outcome box. */
+function SoFarRollup({ timeline }: { timeline: MvcSegment[] }) {
+  const cur = timeline.find((g) => g.current) ?? timeline[timeline.length - 1];
+  const c = { rejected: 0, broke: 0, consolidated: 0, abandoned: 0 };
+  for (const g of timeline) {
+    if (g.current) continue;
+    if (g.kind === "reversal" || g.kind === "squeeze" || g.kind === "false-break") c.rejected++;
+    else if (g.kind === "breakout" || g.kind === "cascade") c.broke++;
+    else if (g.kind === "pinned" || g.kind === "chop") c.consolidated++;
+    else if (!g.touched) c.abandoned++;
+  }
+  const curVerb = cur.touched && (cur.kind === "approaching" || cur.kind === "untouched")
+    ? "touched" : VERB[cur.kind].toLowerCase();
+  const chips: { label: string; n: number; color: string }[] = [
+    { label: "rejected", n: c.rejected, color: METRIC.pivot },
+    { label: "broke", n: c.broke, color: HOME_THEME.red },
+    { label: "consolidated", n: c.consolidated, color: METRIC.chop },
+    { label: "untouched", n: c.abandoned, color: HOME_THEME.muted },
+  ].filter((x) => x.n > 0);
+  return (
+    <div style={{ ...homePanelStyle, padding: "10px 14px", display: "flex", alignItems: "center",
+      gap: 12, flexWrap: "wrap", background: "rgba(255,255,255,0.02)", borderLeft: `2px solid ${rgba(SCENARIO[cur.kind].color, 0.5)}` }}>
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>So far</span>
+      <span style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
+        <strong style={{ color: SCENARIO[cur.kind].color }}>{fmt(cur.strike)}</strong> is the live MVC
+        {cur.distAtStart != null && <> — SPX <strong>{cur.distAtStart} pts</strong> away</>}, {curVerb}.
+        {" "}{timeline.length} strike{timeline.length === 1 ? "" : "s"} have anchored today:
+      </span>
+      <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {chips.length === 0 ? (
+          <span style={{ fontSize: 12, color: HOME_THEME.muted }}>none resolved yet</span>
+        ) : chips.map((x) => (
+          <span key={x.label} style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+            padding: "2px 8px", borderRadius: 4, color: x.color,
+            background: rgba(x.color, 0.1), border: `1px solid ${rgba(x.color, 0.3)}` }}>
+            {x.n} {x.label}
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** One MVC strike in the timeline — compact row that expands to full stats.
+ *  `nextSpx` is the SPX captured when the *next* strike became the MVC, which is
+ *  exactly where price sat when this strike's reign ended (the handoff point). */
+function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null }) {
   const [open, setOpen] = useState(false);
   const sc = SCENARIO[seg.kind];
+  // Distance SPX was from this strike at the moment the magnet migrated away.
+  const distAtEnd = nextSpx != null ? Math.round(Math.abs(nextSpx - seg.strike)) : null;
   const win = `${seg.from}${seg.to !== seg.from ? `–${seg.to}` : ""}`;
   const Stat = ({ label, value }: { label: string; value: string }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
@@ -287,10 +479,76 @@ function TimelineRow({ seg }: { seg: MvcSegment }) {
         <span style={{ fontFamily: "monospace", fontWeight: 700, width: 64 }}>{fmt(seg.strike)}</span>
         <span style={{ fontFamily: "monospace", fontSize: 12, opacity: 0.6, width: 108 }}>{win}</span>
         <span style={{ color: sc.color, fontWeight: 700 }}>{seg.title}</span>
-        <span style={{ marginLeft: "auto", display: "flex", gap: 9, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>
+        {(() => {
+          // Plain-language interaction verb. Touched-but-classified-approaching
+          // (rare data edge) reads "Touched"; else the archetype verb.
+          const verb = seg.touched && (seg.kind === "approaching" || seg.kind === "untouched") ? "Touched" : VERB[seg.kind];
+          // Distance range while this strike was the active MVC: how far SPX was
+          // when it became the magnet (start) → how far when the magnet migrated
+          // away (end = next strike's activation SPX). The live strike hasn't
+          // handed off yet, so it shows its closest approach so far instead.
+          const start = seg.distAtStart;
+          const end = seg.current ? seg.closestApproach : distAtEnd;
+          const endWord = seg.current ? "closest so far" : "ended";
+          const showRange = start != null && end != null && Math.abs(start - end) >= 1;
+          const distLabel = start == null ? ""
+            : showRange ? ` ${start}→${end}p`
+            : ` ${start}p`;
+          const distTip = start == null ? ""
+            : showRange
+              ? ` · SPX was ${start} pts away when this became the MVC and ${endWord} ${end} pts away`
+              : ` · SPX held ${start} pts away the whole time this was the MVC`;
+          return (
+            <span title={`Level ${verb.toLowerCase()}${distTip}`}
+              style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
+                textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
+                color: sc.color, background: rgba(sc.color, 0.1), border: `1px solid ${rgba(sc.color, 0.3)}` }}>
+              {verb}{distLabel}
+            </span>
+          );
+        })()}
+        {(() => {
+          // SPX price + distance at each end of this strike's active reign:
+          //   start = SPX when it became the MVC, end = SPX at the handoff.
+          const startPx = seg.stats.spxAtActivation;
+          const endPx = seg.current ? null : nextSpx;
+          if (startPx == null) return null;
+          const part = (px: number, dist: number | null) =>
+            `${fmt(px)}${dist != null ? ` (${dist}p)` : ""}`;
+          const text = endPx != null
+            ? `${part(startPx, seg.distAtStart)} → ${part(endPx, distAtEnd)}`
+            : part(startPx, seg.distAtStart);
+          return (
+            <span title="SPX price (distance from strike): start of reign → handoff to next MVC"
+              style={{ fontFamily: "monospace", fontSize: 11, color: HOME_THEME.text, whiteSpace: "nowrap" }}>
+              {text}
+            </span>
+          );
+        })()}
+        {!seg.current && !seg.touched && (
+          <span title="This MVC strike was never touched before the magnet migrated to a new strike"
+            style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
+              textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
+              color: HOME_THEME.muted, background: rgba(HOME_THEME.muted, 0.12), border: `1px dashed ${rgba(HOME_THEME.muted, 0.4)}` }}>
+            → new MVC
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>
           <span style={{ color: METRIC.hit }}>{seg.score.hit}</span>
           <span style={{ color: METRIC.pivot }}>{seg.score.pivot}</span>
           <span style={{ color: METRIC.chop }}>{seg.score.chop}</span>
+          <span style={{ color: METRIC.break }}>{seg.score.break}</span>
+          {(() => {
+            const b = seg.score.netWallBias;
+            const c = Math.abs(b) < 12 ? METRIC.chop : b >= 0 ? HOME_THEME.green : HOME_THEME.red;
+            return (
+              <span title={`Net Wall Bias ${b >= 0 ? "+" : ""}${b} (pivot − break)`}
+                style={{ color: c, fontSize: 11, padding: "1px 6px", borderRadius: 4,
+                  background: rgba(c, 0.1), border: `1px solid ${rgba(c, 0.3)}` }}>
+                {b >= 0 ? "+" : ""}{b}
+              </span>
+            );
+          })()}
           <span style={{ color: HOME_THEME.muted, opacity: 0.7, fontWeight: 400 }}>×{seg.snaps}{seg.current ? "·now" : ""}</span>
         </span>
       </button>
@@ -303,7 +561,10 @@ function TimelineRow({ seg }: { seg: MvcSegment }) {
             <span>{seg.forward}</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(86px,1fr))", gap: 10 }}>
-            <Stat label="Score H/P/C" value={`${seg.score.hit}/${seg.score.pivot}/${seg.score.chop}`} />
+            <Stat label="Score H/P/C/B" value={`${seg.score.hit}/${seg.score.pivot}/${seg.score.chop}/${seg.score.break}`} />
+            <Stat label="Wall bias" value={`${seg.score.netWallBias >= 0 ? "+" : ""}${seg.score.netWallBias}`} />
+            <Stat label="GEX rank" value={`${seg.gexRank}%`} />
+            <Stat label="Rejection" value={`${seg.rejectionRate}%`} />
             <Stat label="Closest" value={seg.closestApproach != null ? `${seg.closestApproach} pts` : "—"} />
             <Stat label="Time to touch" value={seg.minToTouch != null ? `${seg.minToTouch} min` : "—"} />
             <Stat label="Dist @ start" value={seg.distAtStart != null ? `${seg.distAtStart} pts` : "—"} />
@@ -326,10 +587,13 @@ const GAUGE_TIP = {
   Hit: "Hit = probability price reaches / interacts with the MVC level.",
   Pivot: "Pivot = probability the level acts as a reversal once approached.",
   Chop: "Chop = probability of range-bound / sticky action around the level.",
+  Break: "Break = probability price slices THROUGH the level instead of holding — highest in negative-gamma regimes at a dominant level.",
 };
 const FACTOR_TIP = {
   proximity: "Proximity: how close price is to the MVC level, scaled by the Estimated Move. On the level = 100.",
   gexMagnitude: "GEX dominance: how concentrated the day's gamma is at this MVC level. 100 = the dominant peak (strong magnet).",
+  gexRank: "GEX rank: where this level ranks among today's MVC strikes. 100 = the day's #1 magnet, 80 = 2nd, 60 = 3rd… Discounts strong-but-secondary walls.",
+  rejectionRate: "Rejection rate: share of prior same-cluster touches that REVERSED price (defended) vs broke through. History of real rejections, time-decayed. Boosts Pivot, lowers Break.",
   flipProximity: "Flip proximity: how close price sits to the gamma flip — the volatility pivot zone.",
   dexBias: "DEX bias: signed directional pull from net delta exposure. Green = upward pull, red = downward.",
   timeWeight: "Time weight: a strong level acts more like a magnet earlier in the session; decays toward the close.",
@@ -468,7 +732,11 @@ export default function ConfidenceScorePage() {
               <Gauge label="Hit" value={s.hit} hint="Reaches / interacts with the level" tip={GAUGE_TIP.Hit} accent={METRIC.hit} />
               <Gauge label="Pivot" value={s.pivot} hint="Reverses once approached" tip={GAUGE_TIP.Pivot} accent={METRIC.pivot} />
               <Gauge label="Chop" value={s.chop} hint="Range-bound / sticky around it" tip={GAUGE_TIP.Chop} accent={METRIC.chop} />
+              <Gauge label="Break" value={s.break} hint="Slices through / fails to hold" tip={GAUGE_TIP.Break} accent={METRIC.break} />
             </div>
+
+            {/* Net Wall Bias meter — the single defend-vs-break decision read */}
+            <BiasMeter value={s.netWallBias} />
 
             {/* Actionable bias line */}
             {bias && (
@@ -484,6 +752,8 @@ export default function ConfidenceScorePage() {
                 <SectionTitle text="Live Structure" accent={HOME_THEME.cyan} />
                 <FactorBar label="Proximity" value={s.factors.proximity} tip={FACTOR_TIP.proximity} accent={METRIC.hit} />
                 <FactorBar label="GEX dominance" value={s.factors.gexMagnitude} tip={FACTOR_TIP.gexMagnitude} accent={METRIC.hit} emphasize={s.factors.gexMagnitude >= 0.9} />
+                <FactorBar label="GEX rank" value={s.factors.gexRank} tip={FACTOR_TIP.gexRank} accent={METRIC.hit} emphasize={s.factors.gexRank >= 1} />
+                <FactorBar label="Rejection rate" value={s.factors.rejectionRate} tip={FACTOR_TIP.rejectionRate} accent={METRIC.pivot} emphasize={s.factors.rejectionRate >= 0.6} />
                 <FactorBar label="Flip proximity" value={s.factors.flipProximity} tip={FACTOR_TIP.flipProximity} accent={METRIC.pivot} />
                 <FactorBar label="DEX bias" value={s.factors.dexBias} tip={FACTOR_TIP.dexBias} signed />
                 <FactorBar label="Time weight" value={s.factors.timeWeight} tip={FACTOR_TIP.timeWeight} accent={METRIC.chop} />
@@ -546,6 +816,7 @@ export default function ConfidenceScorePage() {
                 <span>Net DEX {fmt(data.netDex, 0)}</span>
                 <span>Flip {fmt(data.gexFlip)}</span>
                 <span>EM ±{fmt(data.emSize)}</span>
+                <span>GEX rank {Math.round((data.gexRank ?? 1) * 100)}%</span>
                 <span>Session {Math.round(data.sessionProgress * 100)}%</span>
               </div>
             </div>
@@ -572,6 +843,23 @@ export default function ConfidenceScorePage() {
                       {o.final ? "Final" : "Live · Provisional"}
                     </span>
                   </div>
+
+                  {/* Hero read: MVC level + REACH % + on-touch reject/break split */}
+                  <MvcHero
+                    level={data.level}
+                    spx={data.spx}
+                    reach={s.hit}
+                    pivot={s.pivot}
+                    chop={s.chop}
+                    brk={s.break}
+                    wall={o.wall}
+                    provisional={!o.final}
+                  />
+
+                  {/* So-far roll-up: live MVC + how prior anchors resolved */}
+                  {data.mvcTimeline && data.mvcTimeline.length > 0 && (
+                    <SoFarRollup timeline={data.mvcTimeline} />
+                  )}
 
                   {/* Strike + archetype headline */}
                   <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -618,9 +906,17 @@ export default function ConfidenceScorePage() {
                           <span style={{ color: METRIC.hit }}>Hit</span>
                           <span style={{ color: METRIC.pivot }}>Pivot</span>
                           <span style={{ color: METRIC.chop }}>Chop</span>
+                          <span style={{ color: METRIC.break }}>Break</span>
+                          <span style={{ color: HOME_THEME.green }}>Bias</span>
                         </span>
                       </div>
-                      {data.mvcTimeline.map((seg, i) => <TimelineRow key={i} seg={seg} />)}
+
+                      {/* Newest (live) at top → oldest at bottom. nextSpx still
+                          references the chronologically-next strike (the handoff). */}
+                      {data.mvcTimeline.map((seg, i) => ({ seg, i })).reverse().map(({ seg, i }) => (
+                        <TimelineRow key={i} seg={seg}
+                          nextSpx={data.mvcTimeline![i + 1]?.stats.spxAtActivation ?? null} />
+                      ))}
                     </div>
                   )}
 

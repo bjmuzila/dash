@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-22 (session 48) — MVC auto-snapshot fix (internal-token auth), flow-tape big-order retention (v13)
+
+Fixed the MVC auto-collector that was never writing auto rows (all snapshots in the DB were manual), and the SPX Flow Tape showing nothing above the $100k filter.
+
+### MVC auto-snapshot — root cause: protected route returned HTML
+- `server-v2/mvc-auto-snapshot.js`: the collector's localhost `fetch('/api/gex')` carried no Clerk session, so middleware redirected it to `/` and returned landing-page HTML → `res.json()` threw `Unexpected token '<'` and every auto tick silently skipped. Added an `internalHeaders()` helper that sends `x-internal-token: INTERNAL_API_TOKEN` on both `/api/gex` (GET) and `/api/snapshots/mvc` (POST), matching the existing `levels-auto-publish.js` pattern.
+- Diagnostics + hardening: auto-pause and outside-RTH skips now log a reason; `setMvcAutoEnabled` logs ENABLED/PAUSED; default is env-controlled (`MVC_AUTO=0` to disable). Replaced the drift-prone `setInterval` with a self-rescheduling boundary timer locked to :00/:05/:10 (no `.unref()`), each tick logged. Confirmed working — 5-min cadence is writing.
+
+### SPX Flow Tape — big orders evicted before the client filter
+- `server-v2/computation/flow-processor.js`: the tape kept the most recent 200 prints of ALL underlyings with no premium floor, then filtered to SPX ≥$100k only on the client. SPX 0DTE prints hundreds/sec, so the window was always full of sub-$100k noise and real $100k+ blocks were evicted within seconds. Tape is now SPX/SPXW-only and rejects new entries below a $10k premium floor before they consume a cap slot (sweeps still coalesce into existing slots); cap raised 200→500. `prints` aggregation (net premium / buyPct) unchanged — still counts every underlying.
+
 ## 2026-06-22 (session 47, ~10:10 ET) — Net-premium sparkline square-wave fix, DB connection retry, MVC writer hardening (v10)
 
 Fixed the "NET PREMIUM" sparkline that rendered as a square wave whipsawing between fixed rails (-$7.8M / +$21.2M), plus the DB-write 500s and MVC auto-collector reliability.

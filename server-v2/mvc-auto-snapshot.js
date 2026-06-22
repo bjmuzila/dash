@@ -121,6 +121,10 @@ async function collectOnce(base, opts = {}) {
   const dexRow = highestRow(chain, 'netDEX');
 
   const totalNetGEX = chain.reduce((s, r) => s + Number(r.netGEX ?? 0), 0);
+  // Gross sum of |GEX| across strikes — the correct dominance denominator.
+  // (Previously totalAbsNetGEX stored Math.abs(totalNetGEX), which made GEX
+  // dominance pin at ~100 and inflated the confidence Hit score.)
+  const totalAbsGexSum = chain.reduce((s, r) => s + Math.abs(Number(r.netGEX ?? 0)), 0);
   const totalNetGEX_Vol = chain.reduce((s, r) => s + Number(r.netVolGEX ?? 0), 0);
   const totalNetDEX_OI = chain.reduce((s, r) => s + Number(r.netDEX ?? 0), 0);
   const totalNetDEX_Vol = chain.reduce((s, r) => s + Number(r.volNetDEX ?? 0), 0);
@@ -155,7 +159,7 @@ async function collectOnce(base, opts = {}) {
     netDEXStrike: dexRow?.strike ?? nearestStrike ?? null,
     totalNetDEX_OI,
     totalNetDEX_Vol,
-    totalAbsNetGEX: Math.abs(totalNetGEX),
+    totalAbsNetGEX: totalAbsGexSum,
     gexFlip,
     triggerType: manual ? 'manual' : `auto-${INTERVAL_MIN}m`,
     expiration: expiry,

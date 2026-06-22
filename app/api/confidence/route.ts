@@ -15,6 +15,7 @@ const CHOP_BAND = 15;         // stayed within +/- this band of the level = chop
 const ANALOG_GEX_TOL = 0.25;  // gex-dominance similarity window (fraction)
 const ANALOG_MAX = 120;       // cap prior days scanned
 const EM_FALLBACK_FRACT = 0.004; // EM proxy = 0.4% of price if no intraday range
+const EM_FLOOR_FRACT = 0.006;    // EM never smaller than 0.6% of price (proximity/flip scale)
 
 // ── ES → SPX conversion (cash basis) ─────────────────────────────────────────
 // impliedSPX = es - (esClose - spxClose). The basis (esClose - spxClose) is the
@@ -64,6 +65,8 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
 /**
  * Pick the active MVC PRICE level + signed GEX/DEX from a snapshot row.
  * NOTE: mvcValue* are $B GEX magnitudes, NOT prices. The price level is the
@@ -104,15 +107,28 @@ function rowTimeET(r: MvcRecord): string {
 
 function pickLevel(r: MvcRecord) {
   const level = num(r.strikeOIVol) ?? num(r.strikeVolOnly) ?? num(r.spxPrice) ?? 0;
-  const netGex = num(r.totalNetGEX_OI) ?? num(r.totalNetGEX_Vol) ?? 0;
+  // GEX *at the MVC strike* (not the chain's net sum). Used as the dominance
+  // numerator and as the level's signed-GEX regime input.
+  const strikeGex =
+    num(r.mvcValueOIVol) ?? num(r.mvcValueVolOnly) ?? num(r.totalNetGEX_OI) ?? 0;
+  const netTotal = num(r.totalNetGEX_OI) ?? num(r.totalNetGEX_Vol) ?? 0;
   const netDex = num(r.totalNetDEX_OI) ?? num(r.totalNetDEX_Vol) ?? num(r.netDEXStrike) ?? 0;
+  // Gross sum of |GEX| across strikes (dominance denominator). Old rows wrote
+  // abs(netSum) here, which equals |strikeGex| only by accident — guard against
+  // that degenerate case so dominance can't pin at exactly 100 on legacy data.
+  const storedAbs = num(r.totalAbsNetGEX);
+  const totalAbsNetGEX =
+    storedAbs != null && storedAbs > Math.abs(strikeGex) * 1.0001
+      ? storedAbs
+      : Math.abs(netTotal); // legacy/degenerate → fall back to net-sum scale
   return {
     level,
-    netGex,
+    netGex: strikeGex,         // signed GEX at the level (regime + dominance numerator)
+    netTotal,                  // chain net sum (kept for readouts)
     netDex,
     spx: num(r.spxPrice) ?? level,
     es: num(r.esPrice) ?? num(r.spxPrice) ?? level, // display reference only
-    totalAbsNetGEX: num(r.totalAbsNetGEX) ?? Math.abs(netGex),
+    totalAbsNetGEX,
     gexFlip: num(r.gexFlip),
     ts: Number(r.timestamp) || 0,
   };
@@ -369,8 +385,18 @@ export async function GET(req: NextRequest) {
     const intradayRange =
       todaySpx.length > 1 ? (Math.max(...todaySpx) - Math.min(...todaySpx)) / 2 : 0;
     const refPrice = cur.spx || todaySpx[todaySpx.length - 1] || cur.level || 0;
-    const emSize =
-      emOverride ?? (intradayRange > 0 ? intradayRange : refPrice * EM_FALLBACK_FRACT);
+    // Proximity scale for scoring: realized half-range, floored modestly (0.3% of
+    // price) so it's never degenerate early but stays tighter than the EM floor —
+    // this is what gives the scores real strike-to-strike contrast.
+    const proxScale = Math.max(intradayRange, refPrice * 0.003);
+    // EM scale for proximity/flip. The realized intraday half-range is too small
+    // early in the session (and often smaller than the MVC↔price gap), which floors
+    // proximity & flip-proximity at 0 all day. Floor it at 0.6% of price.
+    const emFloor = refPrice * EM_FLOOR_FRACT;
+    const emSize = Math.max(
+      emOverride ?? (intradayRange > 0 ? intradayRange : refPrice * EM_FALLBACK_FRACT),
+      emFloor
+    );
     // Session progress from the RTH clock (cadence-independent: works for 5m,
     // 30m, or any snapshot interval). Past dates are complete.
     const sessionProgress = sessionProgressET(date);
@@ -386,6 +412,14 @@ export async function GET(req: NextRequest) {
     const curRegime = Math.sign(cur.netGex);
 
     let hits = 0, pivots = 0, chops = 0, sampleSize = 0;
+    // Same-cluster rejection tracking: a prior analog "rejected" when its MVC
+    // strike sat within REJECT_CLUSTER_PTS of TODAY's level AND price pivoted
+    // away from it. sessionsSinceDefense = analog-index of the most recent such
+    // defense (0 = a defense among the most recent analog day scanned).
+    const REJECT_CLUSTER_PTS = 15;
+    let clusterTouches = 0, clusterRejections = 0;
+    let sessionsSinceDefense: number | null = null;
+    let analogIdx = -1;
     const drop = { regime: 0, dominance: 0, noSeries: 0, neverEngaged: 0, noRef: 0 };
     const analogDetail: Array<{ date: string; level: number; gexMag: number; outcome: Outcome }> = [];
 
@@ -409,9 +443,21 @@ export async function GET(req: NextRequest) {
       const outcome = classifyFromSpxSeries(ref.level, spxSeries);
       if (outcome === "miss") { drop.neverEngaged++; continue; }
       sampleSize++;
+      analogIdx++;
       if (outcome === "hit") hits++;
       else if (outcome === "pivot") pivots++;
       else if (outcome === "chop") chops++;
+
+      // Same-cluster rejection rate: only count analogs whose MVC strike was in
+      // the SAME price cluster as today's level — that's "this wall's" defense
+      // history, not the whole regime's. A pivot = a rejection (defended).
+      if (Math.abs(ref.level - cur.level) <= REJECT_CLUSTER_PTS) {
+        clusterTouches++;
+        if (outcome === "pivot") {
+          clusterRejections++;
+          if (sessionsSinceDefense == null) sessionsSinceDefense = analogIdx; // most-recent first
+        }
+      }
       if (analogDetail.length < 30)
         analogDetail.push({ date: d.date, level: ref.level, gexMag: pastGexMag, outcome });
     }
@@ -423,20 +469,46 @@ export async function GET(req: NextRequest) {
             hitRate: (hits + pivots + chops) / sampleSize, // engaged the level
             pivotRate: pivots / sampleSize,
             chopRate: chops / sampleSize,
+            // Same-cluster defense history (this wall, not the whole regime).
+            rejectionRate: clusterTouches > 0 ? clusterRejections / clusterTouches : 0,
+            sessionsSinceDefense: sessionsSinceDefense ?? undefined,
           }
         : null;
+
+    // Relative GEX rank of the current level among TODAY's distinct MVC strikes.
+    // Each snapshot stores only its own MVC strike's GEX, so we rank by the peak
+    // |GEX| seen at each distinct strike today: 1.0 = the day's dominant magnet,
+    // 0.8 = 2nd, 0.6 = 3rd… A normalized stand-in for raw GEX size.
+    function gexRankFor(level: number, rows: MvcRecord[]): number {
+      const peak = new Map<number, number>(); // strike → max |gex|
+      for (const r of rows) {
+        const k = strikeOf(r);
+        if (k == null) continue;
+        const g = Math.abs(num(r.mvcValueOIVol) ?? num(r.mvcValueVolOnly) ?? num(r.totalNetGEX_OI) ?? 0);
+        const key = Math.round(k);
+        peak.set(key, Math.max(peak.get(key) ?? 0, g));
+      }
+      if (peak.size === 0) return 1;
+      const ranked = [...peak.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+      const idx = ranked.indexOf(Math.round(level));
+      const rank = idx < 0 ? ranked.length - 1 : idx; // unseen → treat as lowest
+      return clamp(1 - rank * 0.2, 0.2, 1); // 1.0, 0.8, 0.6, 0.4, 0.2 floor
+    }
+    const curGexRank = gexRankFor(cur.level, todayRows);
 
     // 3) Score (SPX-based).
     const ctx: LevelContext = {
       level: cur.level,
       price: cur.spx,
       emSize,
+      intradayRange: proxScale,
       totalAbsNetGEX: cur.totalAbsNetGEX,
       netGexAtLevel: cur.netGex,
       netDexAtLevel: cur.netDex,
       gexFlip: cur.gexFlip,
       isOpexOr0DTE,
       sessionProgress,
+      gexRank: curGexRank,
     };
     const result = scoreConfidence(ctx, history);
 
@@ -559,14 +631,24 @@ export async function GET(req: NextRequest) {
         level: seg.strike,
         price: seg.act.spx,
         emSize,
+        intradayRange: proxScale,
         totalAbsNetGEX: seg.act.totalAbsNetGEX,
         netGexAtLevel: seg.act.netGex,
         netDexAtLevel: seg.act.netDex,
         gexFlip: seg.act.gexFlip,
         isOpexOr0DTE,
         sessionProgress,
+        gexRank: gexRankFor(seg.strike, todayRows),
       };
-      const segScore = scoreConfidence(segCtx, history);
+      // The cluster rejection history was measured around cur.level — only apply
+      // it to segments in that same price cluster; others get the regime rates
+      // without a misattributed defense boost.
+      const segHistory: HistoricalAnalogStats | null = history
+        ? Math.abs(seg.strike - cur.level) <= REJECT_CLUSTER_PTS
+          ? history
+          : { ...history, rejectionRate: 0, sessionsSinceDefense: undefined }
+        : null;
+      const segScore = scoreConfidence(segCtx, segHistory);
 
       return {
         strike: seg.strike,
@@ -587,9 +669,18 @@ export async function GET(req: NextRequest) {
         overshoot: Math.round(stats.overshoot),
         closestApproach: Number.isFinite(stats.closestApproach) ? Math.round(stats.closestApproach) : null,
         minToTouch: stats.minToTouch,
-        distAtStart: Number.isFinite(stats.distAtStart) ? Math.round(stats.distAtStart) : null,
+        // Distance SPX was from this strike when it became the MVC. Prefer the
+        // time-series window start; fall back to the activation snapshot's own SPX
+        // (always present) when no intraday SPX series exists for the date.
+        distAtStart: Number.isFinite(stats.distAtStart)
+          ? Math.round(stats.distAtStart)
+          : seg.act.spx != null && Number.isFinite(seg.act.spx)
+            ? Math.round(Math.abs(seg.act.spx - seg.strike))
+            : null,
         // Per-strike confidence score
-        score: { hit: segScore.hit, pivot: segScore.pivot, chop: segScore.chop },
+        score: { hit: segScore.hit, pivot: segScore.pivot, chop: segScore.chop, break: segScore.break, netWallBias: segScore.netWallBias },
+        gexRank: Math.round(segScore.factors.gexRank * 100),
+        rejectionRate: Math.round(segScore.factors.rejectionRate * 100),
         gammaRegime: segScore.factors.gammaRegime,
         // Activation stats for the expandable detail
         stats: {
@@ -614,10 +705,11 @@ export async function GET(req: NextRequest) {
       spx: cur.spx,
       es: cur.es,
       emSize,
-      netGex: cur.netGex,
+      netGex: cur.netTotal,
       netDex: cur.netDex,
       gexFlip: cur.gexFlip,
       gexMagnitude: curGexMag,
+      gexRank: curGexRank,
       sessionProgress,
       score: result,
       dayOutcome,

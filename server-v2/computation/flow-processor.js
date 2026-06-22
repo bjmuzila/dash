@@ -74,10 +74,14 @@ class FlowProcessor {
    * @param {number} [opts.maxPrints] hard cap on retained prints
    * @param {number} [opts.tapeCap] hard cap on the per-order tape (default 200)
    */
-  constructor({ windowMs = 5 * 60 * 1000, maxPrints = 50000, tapeCap = 200 } = {}) {
+  constructor({ windowMs = 5 * 60 * 1000, maxPrints = 50000, tapeCap = 500, tapeFloorPremium = 10000 } = {}) {
     this.windowMs = windowMs;
     this.maxPrints = maxPrints;
     this.tapeCap = tapeCap;
+    // Server-side noise floor: prints below this premium ($) never enter the
+    // tape, so the cap isn't consumed by tiny prints that evict real blocks
+    // before the client's ≥$100k filter can ever see them (flow logic §5.3).
+    this.tapeFloorPremium = tapeFloorPremium;
     /** @type {Array<{time,side,type,size,price,premium}>} */
     this.prints = [];
     /** streamerSymbol -> last trade price, for the tick-rule side fallback. */
@@ -135,6 +139,11 @@ class FlowProcessor {
       bucket = bullish ? 'bull' : 'bear';
     }
     const tapeSide = side === 'buy' || side === 'sell' ? side : 'buy';
+    // The tape is an SPX-only flow view; non-SPX underlyings never belong on it
+    // and must not consume cap slots (previously filtered only at read time,
+    // after the cap had already evicted real SPX blocks).
+    const isSpx = parsed.root === 'SPX' || parsed.root === 'SPXW';
+    if (!isSpx) return;
     // Coalesce prints on the same contract + side into 500ms aggregate orders.
     // The tape is oldest-first, so the candidate to merge into is the last entry;
     // merge when it shares symbol+side+action and falls in the same 500ms slot.
@@ -153,6 +162,9 @@ class FlowProcessor {
       last.size = newSize;
       last.premium += premium;
     } else {
+      // Always open the slot so small prints in the window coalesce into it
+      // (premium accumulates). The noise floor is applied at read time in
+      // bucket(), so a sweep that starts small can still grow into a real block.
       this.tape.push({
         ts: slot * 500, // pin to the 500ms slot start so later prints coalesce
         symbol: streamerSymbol,
@@ -168,8 +180,28 @@ class FlowProcessor {
         premium,
         isOtm,
       });
+      // Evict by counting only above-floor blocks, so a burst of sub-floor
+      // 500ms slots can't push real ≥floor blocks out of the cap before the
+      // read-time filter in bucket() ever sees them. Drop oldest sub-floor
+      // slots first; only trim real blocks once they alone exceed the cap.
       if (this.tape.length > this.tapeCap) {
-        this.tape.splice(0, this.tape.length - this.tapeCap);
+        const realCount = this.tape.reduce(
+          (n, o) => n + (o.premium >= this.tapeFloorPremium ? 1 : 0), 0);
+        if (realCount > this.tapeCap) {
+          // Too many real blocks: keep the newest tapeCap of everything.
+          this.tape.splice(0, this.tape.length - this.tapeCap);
+        } else {
+          // Drop oldest sub-floor slots until within cap (keep all real blocks).
+          let over = this.tape.length - this.tapeCap;
+          for (let i = 0; i < this.tape.length && over > 0; ) {
+            if (this.tape[i].premium < this.tapeFloorPremium) {
+              this.tape.splice(i, 1);
+              over--;
+            } else {
+              i++;
+            }
+          }
+        }
       }
     }
   }
@@ -226,9 +258,9 @@ class FlowProcessor {
       buyPct,
       prints: this.prints.length,
       // Per-order tape (capped, oldest-first) for the dashboard FlowTape.
-      // SPX-only: the tape is an SPX flow view regardless of the active feed
-      // symbol, so non-SPX underlyings (e.g. NVDA) yield an empty tape.
-      tape: this.tape.filter((o) => o.underlying === 'SPX' || o.underlying === 'SPXW'),
+      // SPX-only (see addPrint); noise floor applied here so coalesced sweeps
+      // that grew past the floor are kept, while never-grew slots are dropped.
+      tape: this.tape.filter((o) => o.premium >= this.tapeFloorPremium),
     };
   }
 
