@@ -1,13 +1,19 @@
 // Confidence scoring engine for MVC levels.
 // Pure, dependency-free, server- and client-safe.
 //
-// Produces three 0-100 scores for the CURRENT MVC level:
-//   - hit    : probability ES reaches / interacts with the level today
-//   - pivot  : probability the level acts as a reversal once approached
-//   - chop   : probability of range-bound / sticky action around the level
+// Two-stage probability model for the CURRENT MVC level:
+//   Stage 1 — HIT ("reach"): probability price gets to / interacts with the level
+//             today. Stands alone (0-100).
+//   Stage 2 — GIVEN a hit, exactly one of these happens, so they are CONDITIONAL
+//             probabilities that PARTITION the outcome space and sum to 100%:
+//               - pivot : the level rejects price (reversal / defended wall)
+//               - chop  : range-bound / sticky action around the level
+//               - break : price slices THROUGH the level (fails to hold)
 //
-// Each score = blend(liveRulePrior, historicalAnalogRate). When no historical
-// analogs exist, weight collapses to the live prior so the page still works.
+// Raw structural scores blend(liveRulePrior, historicalAnalogRate) and absorb the
+// rejection-rate / GEX-rank / regime adjustments; the three Stage-2 scores are
+// then renormalized to sum to 100. When no historical analogs exist, weight
+// collapses to the live prior so the page still works.
 
 export interface LevelContext {
   /** The MVC price level we are scoring (SPX or ES points). */
@@ -265,10 +271,25 @@ export function scoreConfidence(
   if (ctx.gexRank != null && ctx.gexRank < 0.8)
     notes.push(`Secondary magnet (GEX rank ${Math.round(clamp01(ctx.gexRank) * 100)}%) → structural credit discounted.`);
 
+  // ── Two-stage probability model ───────────────────────────────────────────
+  // Stage 1: HIT = "reach" — does price get to the level at all? Stands alone.
+  // Stage 2: GIVEN a hit, exactly one of {pivot, chop, break} happens, so they
+  // are CONDITIONAL probabilities that must partition the outcome space → sum to
+  // 100%. We renormalize the three raw structural scores (which already carry the
+  // rejection-rate / rank / regime adjustments) into a true conditional split.
   const hitPct = Math.round(hit * 100);
-  const pivotPct = Math.round(pivot * 100);
-  const chopPct = Math.round(chop * 100);
-  const brkPct = Math.round(brk * 100);
+  const condSum = pivot + chop + brk;
+  let pivotPct: number, chopPct: number, brkPct: number;
+  if (condSum > 0) {
+    pivotPct = Math.round((pivot / condSum) * 100);
+    brkPct = Math.round((brk / condSum) * 100);
+    chopPct = Math.max(0, 100 - pivotPct - brkPct); // remainder absorbs rounding → exact 100
+  } else {
+    // Degenerate (all three zero) → split evenly so the bar still renders.
+    pivotPct = 33; chopPct = 34; brkPct = 33;
+  }
+  // Net Wall Bias now compares the two DECISIVE on-touch outcomes: a defended
+  // pivot vs a clean break (chop is the indecisive middle). −100..100.
   const netWallBias = pivotPct - brkPct;
   if (netWallBias >= 25) notes.push(`Net Wall Bias +${netWallBias} → lean defense / continuation if it holds.`);
   else if (netWallBias <= -25) notes.push(`Net Wall Bias ${netWallBias} → respect the break; don't fight it.`);

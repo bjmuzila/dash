@@ -59,6 +59,28 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_mvc_date ON mvc_snapshots(date);
     CREATE INDEX IF NOT EXISTS idx_mvc_ts ON mvc_snapshots(timestamp);
 
+    -- Confidence-score calibration log. One row per scored MVC level per day.
+    -- Scores are captured as-predicted; the actual_* columns are graded once the
+    -- session is final (date < today or session complete). Grading rule:
+    --   held  = pivot OR chop  (wall defended)   broke = clean break-through.
+    -- reach_hit = price actually got to the level. Used to measure whether the
+    -- Reach/Reject/Break probabilities are calibrated (predicted % vs actual %).
+    CREATE TABLE IF NOT EXISTS confidence_log (
+      id SERIAL PRIMARY KEY,
+      date TEXT NOT NULL UNIQUE,
+      level REAL NOT NULL,
+      regime TEXT,
+      reach REAL, pivot REAL, chop REAL, "break" REAL, "netWallBias" REAL,
+      scored_at BIGINT NOT NULL,
+      touched INTEGER,            -- 1 = price reached the level (grades Reach)
+      actual_outcome TEXT,        -- 'pivot' | 'chop' | 'break' | 'miss'
+      held INTEGER,               -- 1 = defended (pivot|chop), given touched
+      broke INTEGER,              -- 1 = clean break-through, given touched
+      graded_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_conflog_date ON confidence_log(date);
+    CREATE INDEX IF NOT EXISTS idx_conflog_graded ON confidence_log(graded_at);
+
     CREATE TABLE IF NOT EXISTS premium_flow (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       time TEXT, "callPremium" REAL, "putPremium" REAL, "netPremium" REAL, "spxPrice" REAL
@@ -700,6 +722,48 @@ export async function getMvcSnapshots(date?: string, limit = 200): Promise<MvcRe
   return queryAll<MvcRecord>(
     "SELECT * FROM mvc_snapshots ORDER BY timestamp DESC LIMIT ?",
     [limit]
+  );
+}
+
+// ── Confidence calibration log ─────────────────────────────────────────────────
+
+export interface ConfidenceLogRecord {
+  id?: number;
+  date: string;
+  level: number;
+  regime: string | null;
+  reach: number; pivot: number; chop: number; break: number; netWallBias: number;
+  scored_at: number;
+  touched: number | null;
+  actual_outcome: string | null; // 'pivot' | 'chop' | 'break' | 'miss'
+  held: number | null;
+  broke: number | null;
+  graded_at: number | null;
+}
+
+/** Upsert one day's scored + graded calibration row (one row per date). */
+export async function upsertConfidenceLog(r: ConfidenceLogRecord): Promise<void> {
+  await pgQuery(
+    `INSERT INTO confidence_log
+       (date, level, regime, reach, pivot, chop, "break", "netWallBias",
+        scored_at, touched, actual_outcome, held, broke, graded_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT (date) DO UPDATE SET
+       level = EXCLUDED.level, regime = EXCLUDED.regime,
+       reach = EXCLUDED.reach, pivot = EXCLUDED.pivot, chop = EXCLUDED.chop,
+       "break" = EXCLUDED."break", "netWallBias" = EXCLUDED."netWallBias",
+       scored_at = EXCLUDED.scored_at, touched = EXCLUDED.touched,
+       actual_outcome = EXCLUDED.actual_outcome, held = EXCLUDED.held,
+       broke = EXCLUDED.broke, graded_at = EXCLUDED.graded_at`,
+    [r.date, r.level, r.regime, r.reach, r.pivot, r.chop, r.break, r.netWallBias,
+     r.scored_at, r.touched, r.actual_outcome, r.held, r.broke, r.graded_at]
+  );
+}
+
+/** All graded calibration rows (oldest → newest). */
+export async function getGradedConfidenceLog(): Promise<ConfidenceLogRecord[]> {
+  return queryAll<ConfidenceLogRecord>(
+    `SELECT * FROM confidence_log WHERE graded_at IS NOT NULL ORDER BY date ASC`
   );
 }
 

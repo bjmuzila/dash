@@ -102,6 +102,45 @@ Here’s the fully integrated and polished version based on your newest logic:
 **Description:** Metrics are hovering near the middle of today's range.  
 **Actionable Edge:** Dealer flows are currently balanced. Rely primarily on price action and technical levels. Monitor for intraday shifts.
 
----
 
-This version fully adopts your newest structure and priorities while keeping the useful additions (combined table + high-impact regimes) for completeness. Ready for the next update whenever you have more!
+
+Core Strengths to Preserve
+Prioritize DEX flips/velocity and combined regimes (these provide the highest-conviction signals).
+Keep percentile-based thresholds (e.g., top/bottom 35%) and visuals (blinking red, fuchsia).
+Retain the Combined Scenarios table and High-Impact Regimes—they enable quick decision-making.
+
+Additions for Fuller Greek Coverage
+Integrate these as new subsections or expand existing ones:Position Greeks Management (Your Own Book)
+Delta: In positive GEX + positive DEX regimes, keep net delta near neutral or slightly long. In negative GEX, lean directional but size smaller due to acceleration risk.
+Gamma: Long gamma shines in negative GEX breakouts (convexity helps). Short gamma (premium selling) works best in high positive GEX pinning.
+Theta: Aggressive decay in 0DTE favors short premium in pinning regimes. Avoid holding long options through midday theta burn unless CHEX/VEX strongly support.
+Vega: Monitor for IV crush (pairs well with positive VEX). Long vega/vol products in vol spikes + high VEX.
+Expanded VEX/CHEX Usage
+VEX: Add condition — "Only trade upside bias when VEX positive and VIX/IV is declining." Track intraday VEX velocity for vol-triggered flows.
+CHEX: Weight more heavily after 2 PM ET. Add "Charm Reversal" trigger: Strongly positive CHEX + price near put wall = high-probability late-day bid.
+
+New/Enhanced Sections to AddGamma Flip Zones & Transitions (High Priority)
+Trigger: Price approaching or crossing major GEX flip level (where net GEX shifts positive ↔ negative).
+Visuals: Bright yellow/orange highlight + alert.
+Description: "Approaching Gamma Regime Shift."
+Actionable Edge: Expect volatility expansion. Switch from mean-reversion to momentum strategies. High conviction when aligned with DEX velocity.Per-Strike & Wall Integration
+Overlay key GEX strikes (max gamma, call/put walls, zero gamma).
+Positive GEX + price near call wall → resistance/pinning.
+Negative GEX + breach of put wall → acceleration lower.
+Volatility & Regime Context
+High IV Rank + Negative GEX: Favor long straddles or momentum.
+Low IV + High Positive GEX: Premium selling / iron condors / butterflies.
+Track expected move (from IV) vs. GEX-implied pinning range.
+Risk & Execution Guidelines
+Position Sizing: Reduce size in neutral/fallback or during rapid DEX velocity until direction clarifies.
+Confluence: Always require 2+ signals + price action (e.g., candlestick rejection at GEX level).
+Time-of-Day: Morning — lean on GEX/DEX; Afternoon — prioritize CHEX.
+Stops & Exits: Tight stops in negative GEX. Scale out into pinning levels in positive GEX.
+Fallback Reminder: When metrics are mid-range, default to technicals, volume, and order flow. Monitor for shifts.
+
+Implementation Tips
+Dashboard: Add regime color overlay on your chart (green = dealer-supported bullish, red = amplified bearish, yellow = flip risk, gray = neutral).
+Backtesting: Test thresholds on recent 0DTE sessions (focus on win rate, avg P&L in each regime).
+Alerts: Set for DEX flips > $15B, GEX percentile crossings, and CHEX surges post-2 PM.
+Complementary Tools: Pair with your GEX scripts, premium flow, unusualwhales data, and real-time DXLink feeds.
+Iteration: Log trades with which regime triggered them. Review weekly to refine percentiles/velocity thresholds.

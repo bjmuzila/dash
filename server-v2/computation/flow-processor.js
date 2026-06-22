@@ -260,6 +260,7 @@ class FlowProcessor {
       // Per-order tape (capped, oldest-first) for the dashboard FlowTape.
       // SPX-only (see addPrint); noise floor applied here so coalesced sweeps
       // that grew past the floor are kept, while never-grew slots are dropped.
+      // isOtm is frozen at print time (moneyness at the moment the order printed).
       tape: this.tape.filter((o) => o.premium >= this.tapeFloorPremium),
     };
   }

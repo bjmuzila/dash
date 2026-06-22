@@ -149,19 +149,6 @@ function rgba(hex: string, a: number) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
-const OUTCOME_COLOR: Record<Analog["outcome"], string> = {
-  hit: METRIC.hit,
-  pivot: METRIC.pivot,
-  chop: METRIC.chop,
-  miss: "#6B7280",
-};
-const OUTCOME_ICON: Record<Analog["outcome"], string> = {
-  hit: "◎",   // reached/through
-  pivot: "⟲", // reversed
-  chop: "≈",  // sticky
-  miss: "·",
-};
-
 // Day-outcome archetype → color + glyph. Reversals/squeezes = pivot purple,
 // breakouts/cascades = directional (green/red), pins/chop = chop orange.
 const SCENARIO: Record<DayOutcome["kind"], { color: string; icon: string }> = {
@@ -256,7 +243,7 @@ function Gauge({ label, value, hint, tip, accent }: { label: string; value: numb
 
 /** Net Wall Bias = pivot − break, shown as a centered signed meter
  *  (−100 break ⟵ 0 ⟶ +100 defend). Green right = wall defends, red left = break. */
-function BiasMeter({ value }: { value: number }) {
+function BiasMeter({ value, note, noteColor }: { value: number; note?: string; noteColor?: string }) {
   const v = Math.max(-100, Math.min(100, value));
   const defend = v >= 0;
   const col = Math.abs(v) < 12 ? METRIC.chop : defend ? HOME_THEME.green : HOME_THEME.red;
@@ -290,6 +277,14 @@ function BiasMeter({ value }: { value: number }) {
         <span style={{ color: rgba(HOME_THEME.green, 0.8) }}>Defend →</span>
       </div>
       <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{read}</span>
+      {note && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, paddingTop: 8, marginTop: 2,
+          borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase",
+            color: noteColor ?? HOME_THEME.muted, flexShrink: 0, marginTop: 2 }}>Bias</span>
+          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{note}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -306,7 +301,7 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
     : `linear-gradient(90deg, ${rgba(color, 0.45)}, ${color})`;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <span style={{ width: 110, fontSize: 11, color: HOME_THEME.text, opacity: 0.85 }}>
+      <span style={{ width: 78, fontSize: 11, color: HOME_THEME.text, opacity: 0.85, flexShrink: 0 }}>
         <Tip text={tip}>{label}</Tip>
       </span>
       <div style={{ flex: 1, height: h, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden",
@@ -331,18 +326,21 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
  *  three outcomes (reject / chop / break) are renormalized to sum to 100% so they
  *  read as a true probability split — display-only, the engine scores stay raw. */
 function MvcHero({
-  level, spx, reach, pivot, chop, brk, wall, provisional,
+  level, spx, reach, pivot, chop, brk, wall, provisional, headline, metrics,
 }: {
   level: number; spx: number | null; reach: number;
   pivot: number; chop: number; brk: number;
   wall: "call" | "put" | "neutral"; provisional: boolean;
+  headline?: string;
+  metrics?: { netGex: number; netDex: number; gexFlip: number | null; emSize: number; gexRank: number; sessionProgress: number };
 }) {
   const dist = spx != null ? Math.round(Math.abs(spx - level)) : null;
-  // Normalize the on-touch outcomes to a 100% split (guard all-zero).
-  const sum = pivot + chop + brk || 1;
-  const reject = Math.round((pivot / sum) * 100);
-  const breakP = Math.round((brk / sum) * 100);
-  const chopP = Math.max(0, 100 - reject - breakP); // remainder absorbs rounding
+  // pivot/chop/break already arrive as a conditional-on-hit split summing to 100
+  // (renormalized in the engine). Use directly; re-derive chop as the remainder
+  // only to absorb any upstream rounding so the bar always totals 100.
+  const reject = pivot;
+  const breakP = brk;
+  const chopP = Math.max(0, 100 - reject - breakP);
   const lean = reject >= breakP;
   const leanColor = Math.abs(reject - breakP) < 12 ? METRIC.chop : lean ? HOME_THEME.green : HOME_THEME.red;
   const wallLabel = wall === "call" ? "Call Wall" : wall === "put" ? "Put Wall" : "Level";
@@ -403,6 +401,27 @@ function MvcHero({
           <span><span style={{ color: METRIC.break }}>■</span> Break {breakP}%</span>
         </div>
       </div>
+
+      {/* Headline read (top structural note) */}
+      {headline && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
+          <span style={{ color: leanColor, marginTop: 1, flexShrink: 0 }}>▸</span>
+          <span>{headline}</span>
+        </div>
+      )}
+
+      {/* Mechanics strip — folded in from the old Read panel */}
+      {metrics && (
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", paddingTop: 4, borderTop: `1px solid ${HOME_THEME.border}`,
+          fontSize: 11, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.85 }}>
+          <span>Net GEX {fmt(metrics.netGex, 0)}</span>
+          <span>Net DEX {fmt(metrics.netDex, 0)}</span>
+          <span>Flip {fmt(metrics.gexFlip)}</span>
+          <span>EM ±{fmt(metrics.emSize)}</span>
+          <span>GEX rank {Math.round((metrics.gexRank ?? 1) * 100)}%</span>
+          <span>Session {Math.round(metrics.sessionProgress * 100)}%</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -584,10 +603,10 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
 }
 
 const GAUGE_TIP = {
-  Hit: "Hit = probability price reaches / interacts with the MVC level.",
-  Pivot: "Pivot = probability the level acts as a reversal once approached.",
-  Chop: "Chop = probability of range-bound / sticky action around the level.",
-  Break: "Break = probability price slices THROUGH the level instead of holding — highest in negative-gamma regimes at a dominant level.",
+  Hit: "Hit (Reach) = probability price gets to / interacts with the MVC level today. Stage 1 — stands alone.",
+  Pivot: "Pivot = GIVEN a touch, probability the level rejects price (reversal / defended wall). Conditional — Pivot + Chop + Break sum to 100%.",
+  Chop: "Chop = GIVEN a touch, probability of range-bound / sticky action at the level. Conditional — Pivot + Chop + Break sum to 100%.",
+  Break: "Break = GIVEN a touch, probability price slices THROUGH instead of holding. Conditional — Pivot + Chop + Break sum to 100%. Highest in negative-gamma at a dominant level.",
 };
 const FACTOR_TIP = {
   proximity: "Proximity: how close price is to the MVC level, scaled by the Estimated Move. On the level = 100.",
@@ -607,20 +626,140 @@ function biasLine(s: ScoreResult): { text: string; color: string } {
     return { text: "Strong magnet → watch for interaction & chop (dealers dampen moves in positive gamma).", color: METRIC.chop };
   if (f.gammaRegime === "negative" && dominant)
     return { text: "Dominant level in negative gamma → moves accelerate; expect breakthrough over clean pinning.", color: HOME_THEME.red };
-  if (s.pivot >= s.hit && s.pivot >= s.chop)
-    return { text: "Reversal-leaning → level may reject price on approach; watch for a pivot.", color: METRIC.pivot };
-  if (s.chop >= s.hit)
-    return { text: "Range-bound bias → sticky action likely around the level.", color: METRIC.chop };
-  return { text: "Magnet bias → price likely to gravitate toward and interact with the level.", color: METRIC.hit };
+  // Stage-2 lean: compare the conditional on-touch outcomes against each other
+  // (they share the same 100% scale). Reach (s.hit) is a separate stage.
+  if (s.pivot >= s.chop && s.pivot >= s.break)
+    return { text: `If touched, reversal-leaning (${s.pivot}%) → wall likely rejects price; watch for a pivot.`, color: METRIC.pivot };
+  if (s.break >= s.chop && s.break >= s.pivot)
+    return { text: `If touched, break-leaning (${s.break}%) → wall likely fails; respect the move through.`, color: HOME_THEME.red };
+  return { text: `If touched, range-bound (${s.chop}%) → sticky action likely around the level.`, color: METRIC.chop };
 }
 
-function noteColor(n: string): string {
-  const t = n.toLowerCase();
-  if (t.includes("dominant")) return HOME_THEME.green;
-  if (t.includes("positive-gamma") || t.includes("0dte") || t.includes("opex")) return HOME_THEME.orange;
-  if (t.includes("negative-gamma")) return HOME_THEME.red;
-  if (t.includes("historical")) return HOME_THEME.cyan;
-  return HOME_THEME.text;
+// ── Calibration (how accurate is the score, measured against history) ─────────
+interface RelRow { bucket: string; n: number; predicted: number; actual: number }
+interface RelTable { rows: RelRow[]; sample: number; brier: number | null }
+interface CalibResp {
+  gradedDays: number; touchedDays: number;
+  reach: RelTable; reject: RelTable; break: RelTable;
+  netWallBias: { sample: number; accuracy: number | null };
+  heldRule: string; note: string; error?: string; detail?: string;
+}
+
+/** Verdict from a Brier score: <0.18 strong, <0.25 beats coin flip, else weak. */
+function brierVerdict(b: number | null): { text: string; color: string } {
+  if (b == null) return { text: "no data", color: HOME_THEME.muted };
+  if (b < 0.18) return { text: "well-calibrated", color: HOME_THEME.green };
+  if (b < 0.25) return { text: "beats a coin flip", color: METRIC.chop };
+  return { text: "weak / uncalibrated", color: HOME_THEME.red };
+}
+
+function ReliabilityBlock({ title, accent, table }: { title: string; accent: string; table: RelTable }) {
+  const v = brierVerdict(table.brier);
+  return (
+    <div style={{ flex: 1, minWidth: 240, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: accent }}>{title}</span>
+        <span style={{ fontSize: 10, fontFamily: "monospace", color: v.color }}>
+          Brier {table.brier ?? "—"} · {v.text}
+        </span>
+      </div>
+      {table.rows.length === 0 ? (
+        <span style={{ fontSize: 11, color: HOME_THEME.muted }}>No graded samples yet.</span>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {table.rows.map((r) => {
+            // Calibration error = |predicted − actual|. Small = trustworthy.
+            const err = Math.abs(r.predicted - r.actual);
+            const errColor = err <= 10 ? HOME_THEME.green : err <= 20 ? METRIC.chop : HOME_THEME.red;
+            return (
+              <div key={r.bucket} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontFamily: "monospace" }}>
+                <span style={{ width: 64, color: HOME_THEME.muted }}>{r.bucket}</span>
+                <div style={{ flex: 1, height: 14, position: "relative", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>
+                  {/* predicted marker */}
+                  <div title={`predicted ${r.predicted}%`} style={{ position: "absolute", top: -2, bottom: -2, left: `calc(${r.predicted}% - 1px)`, width: 2, background: HOME_THEME.muted }} />
+                  {/* actual fill */}
+                  <div title={`actual ${r.actual}%`} style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: `${r.actual}%`, background: rgba(accent, 0.55), borderRadius: 3 }} />
+                </div>
+                <span style={{ width: 92, textAlign: "right", color: errColor }}>
+                  {r.predicted}→{r.actual}% <span style={{ color: HOME_THEME.muted }}>·n{r.n}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CalibrationPanel() {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<CalibResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async (refresh: boolean) => {
+    setLoading(true); setErr(null);
+    try {
+      const res = await fetch(`/api/confidence/calibration${refresh ? "?refresh=1" : ""}`, { cache: "no-store" });
+      const json: CalibResp = await res.json();
+      if (!res.ok) throw new Error(json.detail || json.error || `HTTP ${res.status}`);
+      setData(json);
+    } catch (e) { setErr(String(e)); } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { if (open && !data) void load(false); }, [open, data, load]);
+
+  return (
+    <div style={{ ...homePanelStyle, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <button onClick={() => setOpen((v) => !v)}
+          style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0,
+            fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.purple,
+            display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span>{open ? "▾" : "▸"}</span> Calibration · How accurate is this?
+        </button>
+        {open && (
+          <button onClick={() => void load(true)} disabled={loading} style={{ ...homeSecondaryButtonStyle, fontSize: 10, padding: "3px 10px" }}>
+            {loading ? "Grading…" : "Re-grade history"}
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+          {err ? (
+            <span style={{ fontSize: 12, color: HOME_THEME.red }}>{err}</span>
+          ) : !data ? (
+            <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{loading ? "Loading…" : "—"}</span>
+          ) : data.gradedDays === 0 ? (
+            <span style={{ fontSize: 12, color: HOME_THEME.text }}>
+              No graded history yet. Click <strong>Re-grade history</strong> to score &amp; grade past MVC days.
+            </span>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.85 }}>
+                <span>{data.gradedDays} graded days</span>
+                <span>{data.touchedDays} reached the level</span>
+                {data.netWallBias.accuracy != null && (
+                  <span>Net Wall Bias direction: <strong style={{ color: data.netWallBias.accuracy >= 55 ? HOME_THEME.green : HOME_THEME.red }}>{data.netWallBias.accuracy}%</strong> right (n{data.netWallBias.sample})</span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                <ReliabilityBlock title="Reach (touch)" accent={METRIC.hit} table={data.reach} />
+                <ReliabilityBlock title="Reject | touched" accent={METRIC.pivot} table={data.reject} />
+                <ReliabilityBlock title="Break | touched" accent={METRIC.break} table={data.break} />
+              </div>
+              <div style={{ fontSize: 11, color: HOME_THEME.muted, lineHeight: 1.5 }}>
+                Bars = actual outcome rate; the vertical tick = what the score predicted for that bucket. Aligned = trustworthy.
+                {" "}{data.note} <span style={{ opacity: 0.7 }}>({data.heldRule})</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function ConfidenceScorePage() {
@@ -728,96 +867,58 @@ export default function ConfidenceScorePage() {
           </div>
         ) : (
           <>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <Gauge label="Hit" value={s.hit} hint="Reaches / interacts with the level" tip={GAUGE_TIP.Hit} accent={METRIC.hit} />
-              <Gauge label="Pivot" value={s.pivot} hint="Reverses once approached" tip={GAUGE_TIP.Pivot} accent={METRIC.pivot} />
-              <Gauge label="Chop" value={s.chop} hint="Range-bound / sticky around it" tip={GAUGE_TIP.Chop} accent={METRIC.chop} />
-              <Gauge label="Break" value={s.break} hint="Slices through / fails to hold" tip={GAUGE_TIP.Break} accent={METRIC.break} />
+            {/* Stage 1: does price REACH the level? Stands alone. */}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "0 0 auto" }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: METRIC.hit }}>Stage 1 · Reach</span>
+                <div style={{ display: "flex", gap: 16, flex: 1 }}>
+                  <Gauge label="Hit" value={s.hit} hint="Probability price gets to the level" tip={GAUGE_TIP.Hit} accent={METRIC.hit} />
+                </div>
+              </div>
+              {/* Stage 2: GIVEN a touch, exactly one happens → these sum to 100%. */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 300 }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+                  Stage 2 · If touched <span style={{ opacity: 0.6 }}>(sums to 100%)</span>
+                </span>
+                <div style={{ display: "flex", gap: 16, flex: 1 }}>
+                  <Gauge label="Pivot" value={s.pivot} hint="Rejects / reverses off it" tip={GAUGE_TIP.Pivot} accent={METRIC.pivot} />
+                  <Gauge label="Chop" value={s.chop} hint="Range-bound / sticky on it" tip={GAUGE_TIP.Chop} accent={METRIC.chop} />
+                  <Gauge label="Break" value={s.break} hint="Slices through / fails to hold" tip={GAUGE_TIP.Break} accent={METRIC.break} />
+                </div>
+              </div>
             </div>
 
-            {/* Net Wall Bias meter — the single defend-vs-break decision read */}
-            <BiasMeter value={s.netWallBias} />
+            {/* Net Wall Bias meter + structural bias read — one decision block */}
+            <BiasMeter value={s.netWallBias} note={bias?.text} noteColor={bias?.color} />
 
-            {/* Actionable bias line */}
-            {bias && (
-              <div style={{ ...homePanelStyle, padding: "12px 18px", borderLeft: `3px solid ${bias.color}`,
-                display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: bias.color }}>Bias</span>
-                <span style={{ fontSize: 13, color: HOME_THEME.text }}>{bias.text}</span>
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <div className="conf-hover" style={{ ...homePanelStyle, padding: 20, flex: 1, minWidth: 300, display: "flex", flexDirection: "column", gap: 12, borderLeft: `2px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>
+            {/* Live Structure — compact factor grid + regime/history badges */}
+            <div className="conf-hover" style={{ ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 12, borderLeft: `2px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                 <SectionTitle text="Live Structure" accent={HOME_THEME.cyan} />
-                <FactorBar label="Proximity" value={s.factors.proximity} tip={FACTOR_TIP.proximity} accent={METRIC.hit} />
-                <FactorBar label="GEX dominance" value={s.factors.gexMagnitude} tip={FACTOR_TIP.gexMagnitude} accent={METRIC.hit} emphasize={s.factors.gexMagnitude >= 0.9} />
-                <FactorBar label="GEX rank" value={s.factors.gexRank} tip={FACTOR_TIP.gexRank} accent={METRIC.hit} emphasize={s.factors.gexRank >= 1} />
-                <FactorBar label="Rejection rate" value={s.factors.rejectionRate} tip={FACTOR_TIP.rejectionRate} accent={METRIC.pivot} emphasize={s.factors.rejectionRate >= 0.6} />
-                <FactorBar label="Flip proximity" value={s.factors.flipProximity} tip={FACTOR_TIP.flipProximity} accent={METRIC.pivot} />
-                <FactorBar label="DEX bias" value={s.factors.dexBias} tip={FACTOR_TIP.dexBias} signed />
-                <FactorBar label="Time weight" value={s.factors.timeWeight} tip={FACTOR_TIP.timeWeight} accent={METRIC.chop} />
-                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                  <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
                     color: s.factors.gammaRegime === "positive" ? HOME_THEME.green : s.factors.gammaRegime === "negative" ? HOME_THEME.red : HOME_THEME.text,
-                    background: "rgba(255,255,255,0.05)" }}>
+                    background: "rgba(255,255,255,0.05)", border: `1px solid ${rgba(s.factors.gammaRegime === "positive" ? HOME_THEME.green : s.factors.gammaRegime === "negative" ? HOME_THEME.red : HOME_THEME.muted, 0.3)}` }}>
                     {s.factors.gammaRegime} gamma
+                  </span>
+                  <span title={s.sampleSize > 0
+                    ? `Score blends ${Math.round(s.historyWeight * 100)}% historical from ${s.sampleSize} analog day${s.sampleSize === 1 ? "" : "s"}.`
+                    : "No analog history yet — live-structure prior only."}
+                    style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+                    color: s.sampleSize > 0 ? HOME_THEME.purple : HOME_THEME.muted, background: "rgba(255,255,255,0.05)",
+                    border: `1px solid ${rgba(s.sampleSize > 0 ? HOME_THEME.purple : HOME_THEME.muted, 0.3)}` }}>
+                    {s.sampleSize > 0 ? `${Math.round(s.historyWeight * 100)}% hist · ${s.sampleSize}` : "live only"}
                   </span>
                 </div>
               </div>
-
-              <div className="conf-hover" style={{ ...homePanelStyle, padding: 20, flex: 1, minWidth: 300, display: "flex", flexDirection: "column", gap: 10, borderLeft: `2px solid ${rgba(HOME_THEME.purple, 0.4)}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <SectionTitle text={`${s.sampleSize} Analog${s.sampleSize === 1 ? "" : "s"} · ${Math.round(s.historyWeight * 100)}% Weight`} accent={HOME_THEME.purple} />
-                </div>
-                {data.history ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                    {([["Engaged", data.history.hitRate, METRIC.hit, "◎"], ["Pivot", data.history.pivotRate, METRIC.pivot, "⟲"], ["Chop", data.history.chopRate, METRIC.chop, "≈"]] as const).map(([lbl, rate, col, ic]) => (
-                      <div key={lbl} className="conf-hover" style={{ textAlign: "center", padding: "10px 4px", borderRadius: 8,
-                        background: `radial-gradient(circle at 50% 0%, ${rgba(col, 0.12)}, rgba(255,255,255,0.02))`,
-                        border: `1px solid ${rgba(col, 0.25)}` }}>
-                        <div style={{ fontSize: 22, fontWeight: 800, color: col, textShadow: `0 0 14px ${rgba(col, 0.3)}` }}>{Math.round(rate * 100)}%</div>
-                        <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.8, textTransform: "uppercase", letterSpacing: ".06em" }}>
-                          <span style={{ color: col, marginRight: 3 }}>{ic}</span>{lbl}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <span style={{ fontSize: 12, color: HOME_THEME.text }}>No analog levels found yet — score is live-structure only. It strengthens as daily MVC history accumulates.</span>
-                )}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-                  {data.analogs.map((a) => (
-                    <span key={a.date} title={`${a.date} · level ${fmt(a.level)} · gamma dominance ${(a.gexMag * 100).toFixed(0)}% · ${a.outcome}`}
-                      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9, fontFamily: "monospace", padding: "3px 7px", borderRadius: 4,
-                        color: OUTCOME_COLOR[a.outcome], background: rgba(OUTCOME_COLOR[a.outcome], 0.08), border: `1px solid ${rgba(OUTCOME_COLOR[a.outcome], 0.3)}` }}>
-                      <span style={{ fontSize: 11 }}>{OUTCOME_ICON[a.outcome]}</span>{a.date.slice(5)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="conf-hover" style={{ ...homePanelStyle, padding: 20, display: "flex", flexDirection: "column", gap: 10, borderLeft: `2px solid ${rgba(HOME_THEME.orange, 0.4)}` }}>
-              <SectionTitle text="Read" accent={HOME_THEME.orange} />
-              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                {s.notes.map((n, i) => {
-                  const c = noteColor(n);
-                  return (
-                    <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: HOME_THEME.text, lineHeight: 1.5 }}>
-                      <span style={{ color: c, marginTop: 1, flexShrink: 0 }}>▸</span>
-                      <span>{n}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 6, fontSize: 11, color: HOME_THEME.text, fontFamily: "monospace", opacity: 0.85 }}>
-                <span>Net GEX {fmt(data.netGex, 0)}</span>
-                <span>Net DEX {fmt(data.netDex, 0)}</span>
-                <span>Flip {fmt(data.gexFlip)}</span>
-                <span>EM ±{fmt(data.emSize)}</span>
-                <span>GEX rank {Math.round((data.gexRank ?? 1) * 100)}%</span>
-                <span>Session {Math.round(data.sessionProgress * 100)}%</span>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", columnGap: 20, rowGap: 8 }}>
+                <FactorBar label="Proximity" value={s.factors.proximity} tip={FACTOR_TIP.proximity} accent={METRIC.hit} />
+                <FactorBar label="GEX dom." value={s.factors.gexMagnitude} tip={FACTOR_TIP.gexMagnitude} accent={METRIC.hit} emphasize={s.factors.gexMagnitude >= 0.9} />
+                <FactorBar label="GEX rank" value={s.factors.gexRank} tip={FACTOR_TIP.gexRank} accent={METRIC.hit} emphasize={s.factors.gexRank >= 1} />
+                <FactorBar label="Rejection" value={s.factors.rejectionRate} tip={FACTOR_TIP.rejectionRate} accent={METRIC.pivot} emphasize={s.factors.rejectionRate >= 0.6} />
+                <FactorBar label="Flip prox." value={s.factors.flipProximity} tip={FACTOR_TIP.flipProximity} accent={METRIC.pivot} />
+                <FactorBar label="DEX bias" value={s.factors.dexBias} tip={FACTOR_TIP.dexBias} signed />
+                <FactorBar label="Time wt." value={s.factors.timeWeight} tip={FACTOR_TIP.timeWeight} accent={METRIC.chop} />
               </div>
             </div>
 
@@ -825,7 +926,6 @@ export default function ConfidenceScorePage() {
             {data.dayOutcome && (() => {
               const o = data.dayOutcome;
               const sc = SCENARIO[o.kind];
-              const wallLabel = o.wall === "call" ? "Call Wall" : o.wall === "put" ? "Put Wall" : "Level";
               return (
                 <div className="conf-hover" style={{ ...homePanelStyle, padding: 20, display: "flex", flexDirection: "column", gap: 14,
                   borderLeft: `2px solid ${rgba(sc.color, 0.55)}`,
@@ -854,6 +954,11 @@ export default function ConfidenceScorePage() {
                     brk={s.break}
                     wall={o.wall}
                     provisional={!o.final}
+                    headline={s.notes[0]}
+                    metrics={{
+                      netGex: data.netGex, netDex: data.netDex, gexFlip: data.gexFlip,
+                      emSize: data.emSize, gexRank: data.gexRank ?? 1, sessionProgress: data.sessionProgress,
+                    }}
                   />
 
                   {/* So-far roll-up: live MVC + how prior anchors resolved */}
@@ -861,18 +966,11 @@ export default function ConfidenceScorePage() {
                     <SoFarRollup timeline={data.mvcTimeline} />
                   )}
 
-                  {/* Strike + archetype headline */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 34, lineHeight: 1, color: sc.color, textShadow: `0 0 16px ${rgba(sc.color, 0.4)}` }}>{sc.icon}</span>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                      <span style={{ fontSize: 22, fontWeight: 800, color: sc.color }}>{o.title}</span>
-                      <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.85 }}>
-                        MV strike <span style={{ fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{fmt(data.level)}</span>
-                        <span style={{ opacity: 0.5 }}> · </span>{wallLabel}
-                        <span style={{ opacity: 0.5 }}> · </span>
-                        <span style={{ color: o.touched ? sc.color : HOME_THEME.muted, fontWeight: 700 }}>{o.status}</span>
-                      </span>
-                    </div>
+                  {/* Archetype headline — icon + name + status (level/wall live in the hero) */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 28, lineHeight: 1, color: sc.color, textShadow: `0 0 16px ${rgba(sc.color, 0.4)}` }}>{sc.icon}</span>
+                    <span style={{ fontSize: 20, fontWeight: 800, color: sc.color }}>{o.title}</span>
+                    <span style={{ fontSize: 13, color: o.touched ? sc.color : HOME_THEME.muted, fontWeight: 700 }}>{o.status}</span>
                   </div>
 
                   {/* What happened */}
@@ -920,11 +1018,8 @@ export default function ConfidenceScorePage() {
                     </div>
                   )}
 
-                  {/* Mechanics readout + data-source provenance */}
+                  {/* Data-source provenance (mechanics now live in the timeline rows) */}
                   <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: HOME_THEME.text, fontFamily: "monospace", opacity: 0.85 }}>
-                    {o.touched && <span>Reversal {o.maxAway} pts</span>}
-                    {o.touched && <span>Band ±{o.maxBand} pts</span>}
-                    {o.touched && <span>Overshoot {o.overshoot} pts</span>}
                     <span title={o.seriesSource === "es5m"
                       ? `True 5-min SPX reconstructed from ES candles · basis ${o.basis ?? "—"} · ${o.bars ?? "?"} bars`
                       : `30-min MVC snapshots (no ES candles for this date) · ${o.bars ?? "?"} pts`}
@@ -939,6 +1034,9 @@ export default function ConfidenceScorePage() {
                 </div>
               );
             })()}
+
+            {/* Calibration — measured accuracy of the score vs realized history */}
+            <CalibrationPanel />
 
             {/* Collapsible tuning reference (display-only) */}
             {data.thresholds && (

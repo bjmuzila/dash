@@ -2163,7 +2163,10 @@ class TastytradeProxy {
         price: Number(ev.price),
         size: Number.isFinite(sz) ? sz : 0, // snapshot Trade events can omit size → NaN; guard it
         quote,
-        spot: this.spot,
+        // this.spot lags at 0 until the underlying streamer quote arrives; fall
+        // back to the authoritative market-state spot (set on every quote + GEX
+        // recompute) so isOtm is classified correctly from the very first print.
+        spot: this.spot || marketState.getSpot(),
       });
       return;
     }

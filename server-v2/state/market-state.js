@@ -155,6 +155,11 @@ function setSpot(spot) {
   if (spot > 0) setState({ spot });
 }
 
+/** Current authoritative spot (broker scale). 0 until first quote/GEX recompute. */
+function getSpot() {
+  return state.spot || 0;
+}
+
 /** Update auxiliary VIX / ES future quotes (and their prior closes). */
 function setAux(patch) {
   const next = {};
@@ -200,6 +205,7 @@ module.exports = {
   setGexUpdate,
   setFlow,
   setSpot,
+  getSpot,
   setAux,
   setExpirations,
   setExpiry,

@@ -80,7 +80,10 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Futures",
     Icon: FootIcon,
     forceAccordion: true,
-    items: [{ label: "Footprint", href: "/footprint" }],
+    items: [
+      { label: "Footprint", href: "/footprint" },
+      { label: "ES Candles", href: "/es-candles" },
+    ],
   },
   {
     id: "stock-market",
