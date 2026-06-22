@@ -188,7 +188,13 @@ export default function NquQuotePill() {
           // EXT, prior close in REG). Falls through to Yahoo when broker is dark.
           const b = broker.get(sym);
           if (b) {
-            const price = (b.mark > 0 ? b.mark : b.last) || last || 0;
+            // Futures: prefer LAST trade (matches TradingView's NQU/ESU print);
+            // mark/mid can sit ~10pt off in thin hours. Equities/indices keep
+            // mark-first (mid is steadier).
+            const isFut = sym.startsWith("/");
+            const price = isFut
+              ? (b.last > 0 ? b.last : b.mark) || last || 0
+              : (b.mark > 0 ? b.mark : b.last) || last || 0;
             const baseline = ext ? (b.close > 0 ? b.close : b.prevClose) : (b.prevClose > 0 ? b.prevClose : b.close);
             if (price > 0) {
               last = price;

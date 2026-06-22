@@ -67,6 +67,8 @@ const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 1_440);
 // Disk persistence: today's footprint is mirrored here so a server-v2 restart
 // reloads the session instead of starting empty. File is keyed by ET session day.
 const ES_FOOTPRINT_FILE = path.join(__dirname, '.es-footprint.json');
+// Idle mode persisted across restarts/reconnects so a page reload reflects it.
+const IDLE_STATE_FILE = path.join(__dirname, '.idle-state.json');
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
@@ -647,12 +649,29 @@ async function fetchUnderlyingQuotes(symbols) {
     else equities.push(up);
   }
 
+  // TEMP manual prev-close overrides — the holiday (no CME settle) corrupts the
+  // futures baseline, so the day-change %/+- is wrong. Keyed by product root
+  // (matches /ESU26, /ESU6, /ES:XCME, etc). Remove once a clean settle prints.
+  // TODO: clear after the next normal session settle.
+  const FUT_PREVCLOSE_OVERRIDE = {
+    NQ: 30719.75,
+    // ES: 0000.00,  // fill in if ESU is also off
+  };
+  const futRoot = (sym) => {
+    const m = String(sym || '').toUpperCase().match(/^\/([A-Z]+)/);
+    return m ? m[1].replace(/[FGHJKMNQUVXZ]\d{0,2}$/, '') : '';
+  };
+
   const assign = (origSym, it) => {
+    const override = FUT_PREVCLOSE_OVERRIDE[futRoot(origSym)];
+    const prevClose = override != null ? override : n(it?.['prev-close']);
     out.set(origSym, {
       last: n(it?.last),
       mark: n(it?.mark),
-      close: n(it?.close),
-      prevClose: n(it?.['prev-close']),
+      // In EXT the baseline is `close` (today's regular close); for the broken
+      // holiday session use the override there too so EXT day-change is right.
+      close: override != null ? override : n(it?.close),
+      prevClose,
     });
   };
 
@@ -687,12 +706,17 @@ async function fetchUnderlyingQuotes(symbols) {
   }
   await batchParam('index', [...new Set(indices)], (root) => idxOriginals.get(root) || root);
 
-  // Futures: resolve each to its TT market-data symbol, then a by-type call.
+  // Futures: the watchlist uses synthetic symbols like /NQU26 that are NOT real
+  // Tastytrade symbols (TT uses /NQU6, single-digit year). Querying by symbol
+  // 404s ("No streamer-symbol"), so resolve the FRONT active contract by product
+  // code instead, then pull its by-type quote with the real TT symbol.
   for (const fut of futures) {
     const orig = list.find((s) => s.toUpperCase() === fut) || fut;
+    const product = futRoot(fut); // e.g. /NQU26 -> NQ
     try {
-      const { marketDataParam } = await resolveUnderlying(fut);
-      const json = await ttGet(`/market-data/by-type?${marketDataParam}`);
+      const ttSymbol = await resolveFrontFutureTtSymbol(product);
+      if (!ttSymbol) { console.warn(`[WATCH-QUOTES] no front contract for ${product}`); continue; }
+      const json = await ttGet(`/market-data/by-type?future=${encodeURIComponent(ttSymbol)}`);
       const it = json?.data?.items?.[0];
       if (it) assign(orig, it);
     } catch (err) {
@@ -701,6 +725,31 @@ async function fetchUnderlyingQuotes(symbols) {
   }
 
   return out;
+}
+
+// Cache the front-contract TT symbol per product code for a few minutes — the
+// front contract only changes at the quarterly roll, so we don't re-query the
+// futures list on every poll.
+const _frontFutCache = new Map(); // productCode -> { at, ttSymbol }
+const FRONT_FUT_TTL_MS = 5 * 60 * 1000;
+
+/** Resolve the front (nearest non-expired) active future's TT market-data symbol
+ *  for a product code (e.g. "NQ" -> "/NQU6"). Returns null on failure. */
+async function resolveFrontFutureTtSymbol(productCode) {
+  const code = String(productCode || '').toUpperCase();
+  if (!code) return null;
+  const hit = _frontFutCache.get(code);
+  if (hit && Date.now() - hit.at < FRONT_FUT_TTL_MS) return hit.ttSymbol;
+  const json = await ttGet(`/instruments/futures?product-code[]=${encodeURIComponent(code)}`);
+  const items = json?.data?.items || [];
+  const today = todayYmd().ymd;
+  const active = items
+    .filter((it) => (it['streamer-symbol'] || it.symbol) && (it['expiration-date'] || '') >= today)
+    .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
+  const front = active[0] || items.find((it) => it.symbol || it['streamer-symbol']);
+  const ttSymbol = front?.symbol || front?.['streamer-symbol'] || null;
+  if (ttSymbol) _frontFutCache.set(code, { at: Date.now(), ttSymbol });
+  return ttSymbol;
 }
 
 /**
@@ -1188,7 +1237,10 @@ class TastytradeProxy {
     this.firstSubAt = 0;      // ms timestamp of first subscribe (grace-period anchor)
     this.oiTimer = null;
     this.flowTimer = null;
-    this.idle = false;
+    this.idle = (() => {
+      try { return !!JSON.parse(fs.readFileSync(IDLE_STATE_FILE, 'utf8')).idle; }
+      catch { return false; }
+    })();
     this.spot = 0;
     this.spotSymbol = null; // resolved dxLink streamer symbol for the underlying
     this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
@@ -1350,6 +1402,11 @@ class TastytradeProxy {
     this.flowTimer = setInterval(() => {
       marketState.setFlow(this.flow.bucket(SYMBOL));
     }, FLOW_AGGREGATE_MS);
+
+    // If idle was persisted ON, re-apply the pause: start() always wires the
+    // loop timers, so force a clean toggle to tear them back down.
+    if (this.idle) { this.idle = false; this.setIdle(true); }
+    else { marketState.setStatus({ idle: false }); }
     return this;
   }
 
@@ -1481,6 +1538,7 @@ class TastytradeProxy {
       if (!this.footprintFlushTimer) this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
       if (!this.footprintSaveTimer) this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
     }
+    try { fs.writeFileSync(IDLE_STATE_FILE, JSON.stringify({ idle: next }), 'utf8'); } catch {}
     marketState.setStatus({ idle: next });
   }
 
@@ -2450,8 +2508,9 @@ class TastytradeProxy {
   async reconnect() {
     marketState.setStatus({ reconnecting: true });
     try { this.stop(); } catch {}
-    // Reset idle so start() wires its timers back up.
-    this.idle = false;
+    // Restore persisted idle (start() re-applies the pause if it was ON).
+    try { this.idle = !!JSON.parse(fs.readFileSync(IDLE_STATE_FILE, 'utf8')).idle; }
+    catch { this.idle = false; }
     await this.start();
     marketState.setStatus({ reconnecting: false });
     return true;

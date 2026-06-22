@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-06-21 (session 40) — Overview NQU watchlist quote (broker AH-aware) + sidebar collapsed by default
+
+Added a new NQU quote to the Overview top-right toolbar with a click-to-open gainers dropdown, switched its prices to the real-time broker feed (extended-hours aware), and set the left sidebar to start collapsed.
+
+### NQU toolbar quote + dropdown (`components/dashboard/NquQuotePill.tsx` — new)
+- Inline NQU quote styled like the existing SPX/ESU/VIX tickers (label + price + `+chg (+pct%)` on the left), with a right-aligned sparkline, placed next to SPX with a divider.
+- Clicking the price opens a portal dropdown of the watchlist sorted **highest→lowest gainer**. Each row: label + price on line 1, `+/-` change and `+/-%` on line 2, a right-aligned sparkline + **EXT/REG** badge, with a faint gradient divider between rows.
+- Dropdown excludes **ESU, NQU, and VIX** (NQU still drives the main pill). Row fonts nudged up.
+- **REG/EXT label** is computed from the live ET clock (REG = 09:30–16:00 ET, EXT everything else), re-checked every 30s, so it flips at 4pm immediately without waiting on data.
+
+### Home toolbar (`app/home/page.tsx`)
+- Removed the "SPX / GEX" text label; moved the **clock to the start** of the top-right toolbar; kept VIX/ESU/SPX; added `<NquQuotePill />` inline after SPX.
+
+### Quotes API spark series (`app/api/quotes-batch/route.ts`)
+- Added `?spark=1` → returns a downsampled (~24-pt) intraday close series per symbol for the sparklines, plus a `session` field.
+- Sparkline window **resets at 09:30 ET and 20:00 ET** (DST-aware boundary math); REG/EXT classification is separate (REG = 09:30–16:00 ET).
+
+### Broker (Tastytrade) after-hours quotes
+- `server-v2/proxy-tastytrade.js`: new `fetchUnderlyingQuotes()` — batched `/market-data/by-type` per class (equity/index/future) returning `last`/`mark`/`close`/`prev-close` (update in extended hours). Futures resolve the **front active contract by product code** via new `resolveFrontFutureTtSymbol()` — fixes the `No streamer-symbol for future /NQU26` error (TT uses `/NQU6`, not the synthetic `/NQU26`).
+- Futures price prefers **last trade** (matches TradingView) over mark/mid.
+- TEMP manual prev-close override `FUT_PREVCLOSE_OVERRIDE = { NQ: 30719.75 }` for the holiday (no-settle) baseline — **remove after the next clean settle** (TODO in code).
+- `server-v2/server-with-proxy.js`: new `GET /proxy/quotes?symbols=` route. New Next forwarder `app/api/tt-quotes/route.ts`.
+- Pill fetches broker + Yahoo in parallel: broker drives price + baseline (4pm close in EXT, prior close in REG); Yahoo drives the sparkline; falls back to Yahoo if the broker is dark.
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- **Collapsed by default.** Only an explicit saved preference (`"0"`) expands it on load.
+
+### Open follow-ups
+- Remove `FUT_PREVCLOSE_OVERRIDE` once a clean CME settle prints.
+- AH **sparkline** is still Yahoo (delayed ~15m); only price/change are broker real-time.
+- Not type-checked this session — the Linux sandbox was unavailable (`HYPERVISOR_VIRT_DISABLED`); verified by inspection. Run a build / `/push` to confirm.
+
+---
+
 ## 2026-06-21 (session 39) — Thor-style sidebar restyle + quotes removed
 
 Rebuilt the dashboard sidebar (`components/shared/Sidebar.tsx`) to match the supplied "Thor" reference, themed with `HOME_THEME`. No changes needed to `LayoutShell.tsx`.

@@ -209,7 +209,8 @@ export default function Sidebar() {
   const { isSignedIn } = useUser();
   const { orderedItems, reorder } = useNavOrder();
 
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed by default; only the user's explicitly saved preference expands it.
+  const [collapsed, setCollapsed] = useState(true);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [socialsOpen, setSocialsOpen] = useState(false);
@@ -219,7 +220,8 @@ export default function Sidebar() {
   useEffect(() => {
     setMounted(true);
     try {
-      setCollapsed(localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1");
+      // Default collapsed; expand only if the user previously chose to ("0").
+      setCollapsed(localStorage.getItem(COLLAPSE_STORAGE_KEY) !== "0");
     } catch {
       /* ignore */
     }
