@@ -269,18 +269,18 @@ export default function NquQuotePill() {
       >
         {/* Text on the left — same inline style as SPX/ESU/VIX */}
         <span style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-          <span style={{ fontSize: "clamp(8px,0.8vw,11px)", color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          <span style={{ fontSize: 12, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
             {pill?.label ?? "NQU"}
           </span>
-          <span style={{ fontFamily: "monospace", fontSize: "clamp(10px,1.15vw,16px)", fontWeight: 800, color: "#fff" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>
             {fmtPrice(pill?.last ?? null)}
           </span>
-          <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px,0.78vw,11px)", fontWeight: 500, color: pillColor }}>
+          <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: pillColor }}>
             {pillChg && <span style={{ marginRight: 4 }}>{pillChg}</span>}({fmtPct(pill?.pct ?? null)})
           </span>
         </span>
         {/* Sparkline — right-aligned after the text */}
-        <Sparkline data={pill?.spark ?? []} up={pillUp} width={64} height={22} />
+        <Sparkline data={pill?.spark ?? []} up={pillUp} width={56} height={22} />
       </button>
 
       {open && mounted && createPortal(

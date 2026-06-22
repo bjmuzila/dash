@@ -67,22 +67,33 @@ function strikeLabel(orders: FlowOrder[], bucket: "bull" | "bear") {
   return `Top strike ${strike.toLocaleString()}`;
 }
 
-function buildHistory(orders: FlowOrder[]) {
+type HistPoint = { ts: number; value: number; _i?: number };
+
+function buildHistory(orders: FlowOrder[]): HistPoint[] {
   if (!orders.length) return [];
   const sorted = [...orders].sort((a, b) => a.ts - b.ts);
   const step = Math.max(1, Math.floor(sorted.length / 60));
   let running = 0;
-  const points: number[] = [];
+  const points: HistPoint[] = [];
   for (let i = 0; i < sorted.length; i++) {
     const order = sorted[i];
     running += order.premium * (order.bucket === "bull" ? 1 : -1);
-    if (i % step === 0 || i === sorted.length - 1) points.push(running);
+    if (i % step === 0 || i === sorted.length - 1) points.push({ ts: order.ts, value: running });
   }
   return points;
 }
 
-function Sparkline({ data, color }: { data: number[]; color: string }) {
+function fmtClock(ts: number) {
+  if (!ts) return "--:--";
+  return new Date(ts).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  });
+}
+
+function Sparkline({ data, color }: { data: HistPoint[]; color: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<{ x: number; pt: HistPoint } | null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -103,8 +114,9 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
       return;
     }
 
-    const min = Math.min(...data);
-    const max = Math.max(...data);
+    const vals = data.map(d => d.value);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
     const range = max - min || 1;
     const x = (i: number) => (i / (data.length - 1)) * W;
     const y = (v: number) => H - ((v - min) / range) * (H - 6) - 3;
@@ -114,7 +126,7 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
     grad.addColorStop(1, "rgba(0,0,0,0)");
 
     ctx.beginPath();
-    data.forEach((v, i) => (i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v))));
+    data.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p.value)) : ctx.lineTo(x(i), y(p.value))));
     ctx.lineTo(W, H);
     ctx.lineTo(0, H);
     ctx.closePath();
@@ -122,13 +134,55 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
     ctx.fill();
 
     ctx.beginPath();
-    data.forEach((v, i) => (i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v))));
+    data.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p.value)) : ctx.lineTo(x(i), y(p.value))));
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
     ctx.stroke();
-  }, [color, data]);
 
-  return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />;
+    // Hover crosshair + marker
+    if (hover) {
+      const i = hover.pt._i ?? 0;
+      const px = x(i);
+      const py = y(hover.pt.value);
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, H);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+  }, [color, data, hover]);
+
+  function onMove(e: React.MouseEvent<HTMLDivElement>) {
+    if (data.length < 2) return;
+    const rect = wrapRef.current!.getBoundingClientRect();
+    const relX = e.clientX - rect.left;
+    const i = Math.max(0, Math.min(data.length - 1, Math.round((relX / rect.width) * (data.length - 1))));
+    setHover({ x: relX, pt: { ...data[i], _i: i } });
+  }
+
+  return (
+    <div ref={wrapRef} style={{ width: "100%", height: "100%", position: "relative" }}
+      onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />
+      {hover && (
+        <div style={{
+          position: "absolute", top: 2,
+          left: Math.min(Math.max(hover.x - 48, 0), (wrapRef.current?.offsetWidth ?? 220) - 96),
+          pointerEvents: "none", background: "rgba(8,16,26,0.95)", border: "1px solid #2a3f55",
+          borderRadius: 4, padding: "3px 6px", fontSize: 9, lineHeight: 1.35, whiteSpace: "nowrap",
+          fontVariantNumeric: "tabular-nums", zIndex: 5, boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
+        }}>
+          <div style={{ color: "#8aa4be" }}>{fmtClock(hover.pt.ts)} ET</div>
+          <div style={{ color: hover.pt.value >= 0 ? "#00e676" : "#ff4757", fontWeight: 700 }}>{fmtPrem(hover.pt.value)}</div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function MetricCard({
@@ -416,8 +470,8 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
     };
   }, [accumTick, flow.orders.length, flow.spxPrice, flow.esPrice]);
 
-  const histMin = premHistory.length ? Math.min(...premHistory) : 0;
-  const histMax = premHistory.length ? Math.max(...premHistory) : 0;
+  const histMin = premHistory.length ? Math.min(...premHistory.map(p => p.value)) : 0;
+  const histMax = premHistory.length ? Math.max(...premHistory.map(p => p.value)) : 0;
   const persistedPayload = useMemo(() => ({
     orders: flow.orders.map(serializeOrder),
     stats: {

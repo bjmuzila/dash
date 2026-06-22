@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-06-22 (session 42) — Econ-calendar USA filters, Trump-calendar history trim, snapshot-flow hover, ticker data-box auto-scale, NET GEX units fix
+
+UI/UX and data-filtering pass on the home dashboard and economic calendar.
+
+### Economic calendar — USA-only Medium/Low filters
+- `app/economic-calendar/page.tsx` and `components/dashboard/EconCalendarPanel.tsx`: added `medium-usd` and `low-usd` filter options mirroring the existing `high-usd` (`impact === X && country === "USD"`). Homepage panel default-on set changed to `["high-usd", "medium-usd", "trump"]`.
+- `components/shared/EconCalendarDiscordBtn.tsx`: `includeTemplateEvent()` now restricts Medium to USD so the Discord-shared template image matches the default-on filters.
+
+### Trump calendar — drop historical events
+- `app/api/trump-calendar/route.ts`: added a `minDate()` cutoff (`LOOKBACK_DAYS = 0`, today-forward) so the 2,600+ historical factba.se events are filtered out before mapping.
+
+### Snapshot Flow — Net Premium hover tooltip
+- `components/dashboard/SnapshotPanel.tsx`: `buildHistory()` now returns `{ts, value}[]`; the Net Premium `Sparkline` gained mouse tracking with a crosshair, marker dot, and a tooltip showing time (ET) + net premium at the cursor.
+
+### Header ticker — single scaling "data box"
+- `app/home/page.tsx`: wrapped both ticker rows in a box that auto-scales via a JS ResizeObserver (measures natural width vs. column width, applies inline `transform: scale()`), so the clock/VIX/ESU/SPX/NQU row and the NET GEX/CALL WALL/PUT WALL/FLIP/MVC row shrink together as one unit and NQU never clips. Converted the rows' `vw`/clamp fonts to fixed px (top row larger than bottom). Bottom row indented 13px to align "NET GEX" under the clock digits.
+- `app/globals.css`: removed the prior progressive-hide / container-query CSS (scaling is now JS-driven).
+
+### NET GEX header units fix
+- `app/home/page.tsx`: `netGex` is denominated in billions but was passed to `fmtMoney` (expects raw dollars), rendering `+$7` instead of `+$7.20B`. Added `fmtMoneyB()` and used it for the header value.
+
 ## 2026-06-22 (session 41) — SPX session-rollover OI/vol refresh, dev-page calls+puts+net, GEX sign/clarity fixes
 
 Diagnosed the "GEX chart looks identical to yesterday" issue, hardened the OI/volume refresh across SPX's ~23h session boundary, rebuilt the dev probe to show calls + puts + net in one shot, added an independent OI cross-check, and clarified the strike popup's OI-vs-Vol GEX so a negative bar with a positive composite is self-explaining. Version bumped to `2026.6.22-v3`.

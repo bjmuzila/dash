@@ -22,6 +22,14 @@ interface CalEvent {
 
 const EXCLUDE = ["executive time", "pool call", "in-town pool"];
 
+// Only keep events from this many days ago forward (drops years of history)
+const LOOKBACK_DAYS = 0;
+function minDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - LOOKBACK_DAYS);
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
 let _cache: { body: CalEvent[]; ts: number } = { body: [], ts: 0 };
 const CACHE_TTL = 30 * 60 * 1000; // 30 min
 
@@ -43,7 +51,9 @@ export async function GET() {
     const raw: FactbaEvent[] | { events: FactbaEvent[] } = await res.json();
     const items: FactbaEvent[] = Array.isArray(raw) ? raw : (raw as { events: FactbaEvent[] }).events ?? [];
 
+    const cutoff = minDate();
     const events: CalEvent[] = items
+      .filter(ev => (ev.date ?? "") >= cutoff)
       .filter(ev => {
         const name = String(ev.details || ev.type || ev.daily_text || "").toLowerCase();
         return !EXCLUDE.some(x => name.includes(x));

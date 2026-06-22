@@ -64,24 +64,28 @@ function fullDayLabel(dateStr: string, today: string): string {
   return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
 }
 
-type FilterKey = "high-usd" | "high" | "medium" | "low" | "trump" | "all";
+type FilterKey = "high-usd" | "high" | "medium-usd" | "medium" | "low-usd" | "low" | "trump" | "all";
 
 const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
-  { value: "high-usd", label: "High·USD", color: "#ef4444" },
-  { value: "high",     label: "High",     color: "#ef4444" },
-  { value: "medium",   label: "Medium",   color: "#f59e0b" },
-  { value: "low",      label: "Low",      color: "#3a5570" },
-  { value: "trump",    label: "TRUMP",    color: "#a855f7" },
-  { value: "all",      label: "All",      color: "#fff"    },
+  { value: "high-usd",   label: "High·USD",   color: "#ef4444" },
+  { value: "high",       label: "High",       color: "#ef4444" },
+  { value: "medium-usd", label: "Medium·USD", color: "#f59e0b" },
+  { value: "medium",     label: "Medium",     color: "#f59e0b" },
+  { value: "low-usd",    label: "Low·USD",    color: "#3a5570" },
+  { value: "low",        label: "Low",        color: "#3a5570" },
+  { value: "trump",      label: "TRUMP",      color: "#a855f7" },
+  { value: "all",        label: "All",        color: "#fff"    },
 ];
 
 function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   if (active.has("all")) return true;
   if (active.has("trump")   && ev.impact === "President") return true;
-  if (active.has("high-usd") && ev.impact === "High" && ev.country === "USD") return true;
-  if (active.has("high")     && ev.impact === "High") return true;
-  if (active.has("medium")   && ev.impact === "Medium") return true;
-  if (active.has("low")      && ev.impact === "Low") return true;
+  if (active.has("high-usd")   && ev.impact === "High"   && ev.country === "USD") return true;
+  if (active.has("high")       && ev.impact === "High") return true;
+  if (active.has("medium-usd") && ev.impact === "Medium" && ev.country === "USD") return true;
+  if (active.has("medium")     && ev.impact === "Medium") return true;
+  if (active.has("low-usd")    && ev.impact === "Low"    && ev.country === "USD") return true;
+  if (active.has("low")        && ev.impact === "Low") return true;
   return false;
 }
 
@@ -91,7 +95,7 @@ export default function EconCalendarPanel() {
   const [error,         setError]         = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "medium", "trump"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "medium-usd", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);

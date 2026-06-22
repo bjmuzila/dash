@@ -169,7 +169,7 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   }
 }
 
-/* Hide change% spans in ticker row when viewport is narrow */
-@media (max-width: 900px) {
-  .ticker-chg { display: none !important; }
-}
+/* Ticker "data box" scaling is handled in JS (home/page.tsx): a ResizeObserver
+   measures the natural box width vs. the column width and applies an inline
+   transform:scale() so the whole ticker shrinks as one unit and NQU never
+   clips. No CSS rules needed here. */

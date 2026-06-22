@@ -85,6 +85,12 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
+// Net GEX header value is already denominated in BILLIONS of dollars.
+function fmtMoneyB(vB: number) {
+  if (!isFinite(vB)) return "--";
+  return fmtMoney(vB * 1e9);
+}
+
 function fmtExpiryLabel(dateStr: string, label: string) {
   return label || dateStr;
 }
@@ -316,6 +322,33 @@ export default function HomePage() {
   const [now, setNow] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
   const [gexMode, setGexMode] = useState<GexMode>("net");
+
+  // ── Ticker auto-fit: scale the whole ticker box down so it always fits its
+  // column, measuring real widths so NQU never clips at any window size. ──
+  const tickerCqRef = useRef<HTMLDivElement | null>(null);   // the column-width container
+  const tickerBoxRef = useRef<HTMLDivElement | null>(null);  // the natural-width ticker
+  const tickerScaleRef = useRef(1);
+  const [tickerScale, setTickerScale] = useState(1);
+  const [tickerBoxH, setTickerBoxH] = useState(0); // natural (unscaled) box height, px
+  useEffect(() => {
+    const cq = tickerCqRef.current, box = tickerBoxRef.current;
+    if (!cq || !box) return;
+    const fit = () => {
+      const s = tickerScaleRef.current || 1;
+      const avail = cq.clientWidth;
+      // offsetWidth/Height are the box's UN-scaled box size (transform doesn't affect layout box)
+      const natural = box.offsetWidth;
+      const next = natural > 0 ? Math.min(1, avail / natural) : 1;
+      if (Math.abs(next - s) > 0.005) { tickerScaleRef.current = next; setTickerScale(next); }
+      setTickerBoxH(box.offsetHeight);
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(cq);
+    ro.observe(box);
+    fit();
+    return () => ro.disconnect();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
   const [showOI, setShowOI] = useState(false);
   const [showDex, setShowDex] = useState(false);
@@ -826,72 +859,74 @@ export default function HomePage() {
           </div>
 
           <div style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
-            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "clamp(4px, 0.8vw, 14px)", marginBottom: 6, flexWrap: "nowrap", minWidth: 0, overflow: "hidden" }}>
+            <div ref={tickerCqRef} className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative", overflow: "hidden" }}>
+             <div ref={tickerBoxRef} style={{ display: "inline-block", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
+              <div className="ticker-row" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "nowrap", minWidth: 0 }}>
                 {/* Clock — moved to the start of the toolbar; SPX/GEX label removed */}
-                <div style={{ display: "flex", alignItems: "center", gap: "clamp(4px, 0.6vw, 8px)", flexShrink: 0 }}>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "clamp(2px,0.3vw,5px) clamp(6px,0.9vw,12px)", borderRadius: 6, fontFamily: "monospace", fontSize: "clamp(11px, 1.3vw, 18px)", fontWeight: 700, color: "#fff", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{etTime}</div>
+                <div className="ticker-clock" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "5px 12px", borderRadius: 6, fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#fff", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{etTime}</div>
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
                 {/* VIX — label+price never shrink; change% hidden via className */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
-                  {vixPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
+                  <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
+                  {vixPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
                 {/* ESU */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
-                  {esuPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
+                  <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
+                  {esuPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
                 {/* SPX */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: "clamp(8px, 0.8vw, 11px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: "clamp(10px, 1.15vw, 16px)", fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
-                  <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: "clamp(8px, 0.78vw, 11px)", fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
+                  <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+                  <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
                 </div>
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
                 {/* NQU quote — inline next to SPX; click price to open all quotes (top gainers first) */}
                 <div style={{ flexShrink: 0 }}>
                   <NquQuotePill />
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexWrap: "nowrap", justifyContent: "space-between", minWidth: 0, overflow: "hidden" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,1vw,14px)", flexShrink: 1, flexWrap: "nowrap", minWidth: 0, overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoney(netGex)}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", minWidth: 0, paddingLeft: 13 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0, flexWrap: "nowrap", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoneyB(netGex)}</span>
                   </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
                   </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
                   </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: "clamp(11px,1.1vw,16px)", fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)", flexShrink: 0 }}>
-                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "clamp(6px,0.7vw,10px)", marginLeft: "auto", flexShrink: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "clamp(3px,0.35vw,5px)" }}>
-                    <span style={{ fontSize: "clamp(10px,0.95vw,13px)", color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
-                    <span style={{ fontFamily: "monospace", fontSize: "clamp(13px,1.3vw,18px)", fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>
                   <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
-                    style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: "clamp(8px,0.78vw,11px)", fontWeight: 700, padding: "4px clamp(6px,0.9vw,12px)", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
                     {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
                   </button>
                 </div>
               </div>
+             </div>
             </div>
 
             <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>

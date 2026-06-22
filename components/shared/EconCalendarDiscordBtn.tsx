@@ -46,7 +46,7 @@ function isHighPriority(ev: CalEvent): boolean {
 }
 
 function includeTemplateEvent(ev: CalEvent): boolean {
-  return ev.impact === "President" || ev.impact === "Medium" || (ev.impact === "High" && ev.country === "USD");
+  return ev.impact === "President" || (ev.impact === "Medium" && ev.country === "USD") || (ev.impact === "High" && ev.country === "USD");
 }
 
 const HEADLINE_PRIORITY_RULES: Array<{ rank: number; rules: RegExp[] }> = [
