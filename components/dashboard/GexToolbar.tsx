@@ -11,6 +11,9 @@ interface GexToolbarProps {
   showOI:        boolean;
   showDex:       boolean;
   showFlipCurve: boolean;
+  showGhost5:    boolean;
+  showGhost15:   boolean;
+  showGhost30:   boolean;
   // DTE picker
   expirations:   string[];
   selectedExpiry: string;
@@ -20,6 +23,9 @@ interface GexToolbarProps {
   onToggleOI:    () => void;
   onToggleDex:   () => void;
   onToggleFlip:  () => void;
+  onToggleGhost5:  () => void;
+  onToggleGhost15: () => void;
+  onToggleGhost30: () => void;
   onRefresh:     () => Promise<void>;
   /** Ref to the GEX chart container — used for snap/discord screenshot */
   containerRef?: RefObject<HTMLElement | null>;
@@ -90,12 +96,17 @@ const SEP = () => <span style={{ color: "#1a2a3a", flexShrink: 0 }}>|</span>;
 
 export default function GexToolbar({
   gexMode, dataMode, showOI, showDex, showFlipCurve,
+  showGhost5, showGhost15, showGhost30,
   expirations, selectedExpiry, onExpiry,
   onGexMode, onDataMode,
   onToggleOI, onToggleDex, onToggleFlip,
+  onToggleGhost5, onToggleGhost15, onToggleGhost30,
   onRefresh,
   containerRef, discordMessage,
 }: GexToolbarProps) {
+  // Prior-state ghost overlays are only meaningful in Net-GEX + OI mode
+  // (baselines store OI-based net GEX only).
+  const ghostEnabled = gexMode === "net" && dataMode === "oi-vol";
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
   // Only show 0DTE and 1DTE
   const visibleExpirations = expirations.slice(0, 2);
@@ -150,6 +161,15 @@ export default function GexToolbar({
       <ToggleBtn label="OI Overlay" active={showOI}        onClick={onToggleOI} />
       <ToggleBtn label="Net DEX"    active={showDex}       onClick={onToggleDex} />
       <ToggleBtn label="GEX Flip"   active={showFlipCurve} onClick={onToggleFlip} />
+
+      {ghostEnabled && (
+        <>
+          <SEP />
+          <ToggleBtn label="5m"  active={showGhost5}  onClick={onToggleGhost5} />
+          <ToggleBtn label="15m" active={showGhost15} onClick={onToggleGhost15} />
+          <ToggleBtn label="30m" active={showGhost30} onClick={onToggleGhost30} />
+        </>
+      )}
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
         <button onClick={trigger} style={{ ...btnStyle, fontSize: TOOLBAR_FONT_SIZE, padding: TOOLBAR_BUTTON_PADDING }}>{btnLabel}</button>

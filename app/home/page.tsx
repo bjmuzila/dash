@@ -353,6 +353,10 @@ export default function HomePage() {
   const [showOI, setShowOI] = useState(false);
   const [showDex, setShowDex] = useState(false);
   const [showFlipCurve, setShowFlipCurve] = useState(false);
+  // Prior-state ghost overlays (5/15/30 min ago) drawn behind live GEX bars.
+  const [showGhost5, setShowGhost5]   = useState(false);
+  const [showGhost15, setShowGhost15] = useState(false);
+  const [showGhost30, setShowGhost30] = useState(false);
   // Strike-detail popup: selected strike, click anchor, and which popup style to
   // preview (card | drawer | modal — toggled in the toolbar so all 3 can be tested).
   const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
@@ -728,6 +732,11 @@ export default function HomePage() {
   // rolling-difference boxes. Only polls while a strike is selected.
   const strikeBaselines = useStrikeGexHistory(selectedStrike ? selectedExpiry : "", [5, 15, 30]);
 
+  // Chart ghost-bar baselines — poll the full chain whenever any prior-state
+  // overlay (5/15/30 min) is enabled.
+  const anyGhost = showGhost5 || showGhost15 || showGhost30;
+  const chartBaselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", [5, 15, 30]);
+
   // Strike → full ChainRow lookup so the heatmap rows can open the same popup.
   const chartRowByStrike = useMemo(
     () => new Map(chartRows.map((r) => [r.strike, r])),
@@ -790,9 +799,15 @@ export default function HomePage() {
                 onExpiry={handleExpiry}
                 onGexMode={setGexMode}
                 onDataMode={setDataMode}
+                showGhost5={showGhost5}
+                showGhost15={showGhost15}
+                showGhost30={showGhost30}
                 onToggleOI={() => setShowOI(v => !v)}
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
+                onToggleGhost5={() => setShowGhost5(v => !v)}
+                onToggleGhost15={() => setShowGhost15(v => !v)}
+                onToggleGhost30={() => setShowGhost30(v => !v)}
                 onRefresh={handleRefresh}
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
@@ -812,6 +827,10 @@ export default function HomePage() {
                     showOI={showOI}
                     showDex={showDex}
                     showFlipCurve={showFlipCurve}
+                    baselines={chartBaselines}
+                    showGhost5={showGhost5}
+                    showGhost15={showGhost15}
+                    showGhost30={showGhost30}
                     expiry={selectedExpiry}
                     onStrikeClick={(row, pos) => setSelectedStrike({ row, pos })}
                   />

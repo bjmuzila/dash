@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type ChainRow } from "@/lib/calculations/calculations";
+import { type GexBaselines } from "@/hooks/useStrikeGexHistory";
 
 export type GexMode   = "net" | "call-put";
 export type DataMode  = "oi-vol" | "vol-only";
@@ -19,9 +20,23 @@ interface GexChartProps {
   showDex?:       boolean;
   showFlipCurve?: boolean;
   expiry?:        string;
+  /** Per-strike net GEX baselines keyed by age ("open"|"5"|"15"|"30"). */
+  baselines?:     GexBaselines;
+  /** Show the prior-state ghost layer for each age. */
+  showGhost5?:    boolean;
+  showGhost15?:   boolean;
+  showGhost30?:   boolean;
   /** Fired when a bar/strike is clicked. Carries the row + click position. */
   onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
 }
+
+// Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
+// live bar's color, drawn behind the current bar.
+const GHOST_TINTS: Record<string, { pos: string; neg: string }> = {
+  "5":  { pos: "rgba(41,182,246,0.30)", neg: "rgba(255,179,0,0.30)" },
+  "15": { pos: "rgba(41,182,246,0.22)", neg: "rgba(255,179,0,0.22)" },
+  "30": { pos: "rgba(41,182,246,0.15)", neg: "rgba(255,179,0,0.15)" },
+};
 
 // ─── Padding — matches vanilla exactly ────────────────────────────────────────
 const PAD_T = 20;
@@ -122,6 +137,10 @@ export default function GexChart({
   showOI     = false,
   showDex    = false,
   showFlipCurve = false,
+  baselines,
+  showGhost5  = false,
+  showGhost15 = false,
+  showGhost30 = false,
   onStrikeClick,
 }: GexChartProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
@@ -298,6 +317,56 @@ export default function GexChart({
         ctx.shadowBlur = 0;
       }
     };
+
+    // ── Prior-state ghost layers (5/15/30 min) ──────────────────────────────
+    // Baselines are OI-based net GEX (all the history writer stores), so only
+    // overlay them in Net-GEX / OI+Vol mode where `getNet` is comparable.
+    // Per-strike logic:
+    //   • GEX fell  (|prior| > |live|): draw the taller, lighter PRIOR bar
+    //     BEHIND the live bar so the decline shows as a faded halo.
+    //   • GEX rose  (|prior| < |live|): the live bar already covers the prior
+    //     level, so shade only the RISE portion (live↔prior) in the light tint
+    //     as a cap, leaving the solid part below.
+    // A flip in sign is treated as a full ghost (prior drawn behind in its own
+    // color/sign).
+    const ghostAges: string[] = [];
+    if (showGhost30) ghostAges.push("30");
+    if (showGhost15) ghostAges.push("15");
+    if (showGhost5)  ghostAges.push("5");
+    if (ghostAges.length && baselines && !isCallPut && !isVol) {
+      // Older → newer so the most recent (5m) sits on top of the older halos.
+      for (const age of ghostAges) {
+        const tint = GHOST_TINTS[age];
+        data.forEach((r, i) => {
+          const prior = baselines[r.strike]?.[age];
+          if (prior == null || !Number.isFinite(prior)) return;
+          const live = getNet(r);
+          if (Math.abs(prior - live) < 1e-6) return;
+          const x  = xAt(i);
+          const sameSign = (prior >= 0) === (live >= 0);
+          const col = prior >= 0 ? tint.pos : tint.neg;
+
+          if (!sameSign || Math.abs(prior) > Math.abs(live)) {
+            // Decline (or sign flip): faded prior bar behind the live bar.
+            const yTop = prior >= 0 ? clamp(yFor(prior), PAD_T, yZero) : yZero;
+            const yBot = prior >= 0 ? yZero : clamp(yFor(prior), yZero, PAD_T + cH);
+            const h    = Math.abs(yBot - yTop);
+            if (h < 0.5) return;
+            ctx.fillStyle = col;
+            ctx.fillRect(x - barW / 2, yTop, barW, h);
+          } else {
+            // Rise: shade only the gap between prior level and live level (cap).
+            const yLive  = clamp(yFor(live),  PAD_T, PAD_T + cH);
+            const yPrior = clamp(yFor(prior), PAD_T, PAD_T + cH);
+            const yTop = Math.min(yLive, yPrior);
+            const h    = Math.abs(yPrior - yLive);
+            if (h < 0.5) return;
+            ctx.fillStyle = col;
+            ctx.fillRect(x - barW / 2, yTop, barW, h);
+          }
+        });
+      }
+    }
 
     data.forEach((r, i) => {
       const x = xAt(i);
@@ -529,6 +598,11 @@ export default function GexChart({
       : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
     if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
     if (showFlipCurve) legend.push(["#f97316", gexProfile ? "Profile" : "GEX curve"]);
+    if (!isCallPut && !isVol) {
+      if (showGhost5)  legend.push(["rgba(41,182,246,0.30)", "5m ago"]);
+      if (showGhost15) legend.push(["rgba(41,182,246,0.22)", "15m ago"]);
+      if (showGhost30) legend.push(["rgba(41,182,246,0.15)", "30m ago"]);
+    }
     legend.forEach(([col, lbl], i) => {
       const lx = PAD_L + i * 72;
       ctx.fillStyle = col;        ctx.fillRect(lx, 5, 8, 7);
@@ -539,7 +613,7 @@ export default function GexChart({
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
     ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, tooltip?.row.strike]);
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);

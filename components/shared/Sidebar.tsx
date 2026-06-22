@@ -83,6 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Footprint", href: "/footprint" },
       { label: "ES Candles", href: "/es-candles" },
+      { label: "Fails", href: "/fails" },
     ],
   },
   {
