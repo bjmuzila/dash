@@ -227,21 +227,6 @@ export default function GexChart({
     // yFor maps a GEX value to canvas Y — 0 maps to yZero, +maxG maps to PAD_T
     const yFor   = (v: number) => yZero - (v / maxG) * (cH / 2);
 
-    // ── Zero-crossing shading ──
-    let zeroCrossX: number | null = null;
-    for (let i = 0; i < data.length - 1; i++) {
-      const a = getNet(data[i]), b = getNet(data[i + 1]);
-      if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
-        zeroCrossX = xAt(i) + (Math.abs(a) / (Math.abs(a) + Math.abs(b))) * gap;
-        break;
-      }
-    }
-    // ── Zero-crossing shading ──
-    if (zeroCrossX !== null) {
-      ctx.fillStyle = "rgba(255, 179, 0, 0.08)";
-      ctx.fillRect(zeroCrossX, PAD_T, 3, cH);
-    }
-
     // ── Zero line ──
     ctx.strokeStyle = "rgba(40, 70, 100, 0.6)";
     ctx.lineWidth = 0.8;

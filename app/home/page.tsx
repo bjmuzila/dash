@@ -669,15 +669,20 @@ export default function HomePage() {
 
   // OI + Vol mode = OI-based net GEX PLUS volume-based net GEX (matches the label).
   // Vol Only mode = volume-based component alone.
-  const netGexLive = useMemo(
-    () => chartRows.reduce((sum, row) => {
-      const v = dataMode === "vol-only"
-        ? (row.netVolGEX ?? 0)
-        : (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
-      return sum + v;
-    }, 0),
-    [chartRows, dataMode]
-  );
+  // Total net GEX — identical definition to the Insights → Exposure Stack page
+  // (computeExposureSnapshot): full chain, contracts = open interest + volume,
+  // net = (callGamma·callContracts − putGamma·putContracts) · spot² · 0.01 · 100, in $B.
+  const netGexLive = useMemo(() => {
+    const s = chartSpot;
+    if (!(s > 0)) return 0;
+    const total = chartRows.reduce((sum, row) => {
+      const callContracts = (row.callOI ?? 0) + (row.callVolume ?? 0);
+      const putContracts  = (row.putOI ?? 0) + (row.putVolume ?? 0);
+      const g = ((row.callGamma ?? 0) * callContracts) - ((row.putGamma ?? 0) * putContracts);
+      return sum + g * s * s * 0.01 * 100;
+    }, 0);
+    return total / 1e9;
+  }, [chartRows, chartSpot]);
   // Throttle the displayed value so the header doesn't jitter on every WS tick.
   const [netGex, setNetGexDisplay] = useState(0);
   const netGexLiveRef = useRef(0);
@@ -709,7 +714,7 @@ export default function HomePage() {
     }
     return best;
   }, [chartRows]);
-  const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot), [chartRows, chartSpot]);
+  const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot, dataMode), [chartRows, chartSpot, dataMode]);
 
   const etTime = now?.toLocaleTimeString("en-US", {
     timeZone: "America/New_York",

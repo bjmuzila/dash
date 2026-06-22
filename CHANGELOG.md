@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-06-21 (session 39) — Thor-style sidebar restyle + quotes removed
+
+Rebuilt the dashboard sidebar (`components/shared/Sidebar.tsx`) to match the supplied "Thor" reference, themed with `HOME_THEME`. No changes needed to `LayoutShell.tsx`.
+
+### Sidebar redesign (`components/shared/Sidebar.tsx`)
+- **Expanded (240px):** logo + `SPX / GEX` wordmark, labeled nav rows. Multi-item groups (Gex, Stock Market, Personal, Dev) are now expandable accordions with a nested left-rail item list; the active group auto-opens. Single-item groups (Footprint) render as direct links. Active route shows as a solid cyan pill.
+- **Collapsed (76px):** icon-only rail with dark hover-tooltip pills (caret); multi-item groups get a hover flyout of their items; social row collapses to a single `⋯` button that fans out on hover.
+- **Collapse toggle** ("Collapse Sidebar" row) above the socials, persisted to `localStorage` (`sidebar-collapsed-v1`). `mounted` guard avoids hydration mismatch on the stored width.
+- **Socials:** Telegram, Twitter, Discord, Reddit added with `href="#"` placeholders.
+- Replaced emoji group buttons + flyout-portal nav with inline SVG icons (placeholders pending user's icon swap).
+- Preserved: all routes, `NAV_GROUPS`, drag-reorder + `sidebar-nav-order-v1`, Clerk `UserButton`, dev-only gating.
+
+### Quotes removed
+- Deleted the live quotes ticker: the `Quotes` JSX section, `useSidebarQuotes` hook + call, `QUOTE_SYMBOLS`, and all quote helpers (`quoteNumber`, `normalizeSym`, `rawNum`, `pctFromQuote`, `fmtPct`). A flex spacer now pushes the footer to the bottom.
+
+### Notes
+- `tsc` not run this session (Linux sandbox unavailable: `HYPERVISOR_VIRT_DISABLED`); types reviewed manually against `strict`. Run `npx tsc --noEmit` / `npm run dev` to confirm.
+
+## 2026-06-21 (session 38) — GEX chart line cleanup + GEX-flip profile aligned to reference formula
+
+Removed two stray vertical lines from the Net GEX chart, then reworked the GEX-flip profile math to match the canonical SqueezeMetrics/perfiliev formula and respond to the OI+Vol / Vol Only toggle.
+
+### Net GEX chart line removal (`components/dashboard/GexChart.tsx`)
+- Removed the **zero-crossing shading** band — a faint-orange 3px `fillRect` drawn at the first net-GEX sign change (rendered as a stray full-height vertical at ~7,435). Deleted both the `fillRect` draw and the now-unused `zeroCrossX` scan loop. (Was hard to trace because it was a `fillRect`, not a stroked line; identified by hooking the live canvas context and dumping draw calls.)
+- Gated the **GEX-flip vertical marker** behind the `showFlipCurve` toggle. Previously it drew on every 0DTE view regardless of the `+ GEX Flip` button state (guard was `is0DTE && flip…`, now `showFlipCurve && is0DTE && flip…`).
+
+### GEX-flip profile math (`lib/calculations/calculations.ts` — `computeGEXProfile`)
+- Aligned the spot-sweep profile to the reference script: **60 levels** over **0.8×–1.2× spot** (was 401 over 0.75×–1.25×).
+- Trading-day annualization: `T = dte/262`, 0DTE floored to `1/262` (was `dte/365`, floored `1/252`).
+- Flip point now the **first** (lowest-strike) interpolated zero crossing via `posStrike − (posStrike−negStrike)·posGamma/(posGamma−negGamma)` (was nearest-to-spot).
+- GEX formula set to `Σ BS_gamma(P,K,IV,T) × contracts × 100 × P²` — dropped the `× 0.01` "per 1% move" factor (constant scale; does not move the flip, makes the curve 100× taller, auto-fit by the chart's independent profile scaling).
+- **Mode-aware contracts:** new `dataMode` param (`"oi-vol" | "vol-only"`). OI+Vol uses `OI + volume`; Vol Only uses `volume` only. Both the profile curve and the flip point now shift with the toggle. Wired through from `app/home/page.tsx` (`computeGEXProfile(chartRows, chartSpot, dataMode)`).
+- Note: ChainRow carries no expiration date, so the reference's Ex-Next / Ex-Monthly series are omitted (neither is plotted).
+
+### Home header total net GEX (`app/home/page.tsx`)
+- Rewrote `netGexLive` to match the **Insights → Exposure Stack** definition: full chain, `contracts = OI + volume`, `(callGamma·callContracts − putGamma·putContracts) · spot² · 0.01 · 100`, in $B. (Was windowed `netGEX + netVolGEX`.) **Verify the header formatter expects $B units.**
+
+### Open follow-ups
+- `findGEXFlip` (the fallback flip source) is not yet mode-aware.
+- `app/mobile/page.tsx` calls `computeGEXProfile` without passing `dataMode` (defaults to `oi-vol`, won't switch with its toggle).
+
+---
+
 ## 2026-06-21 (session 37) — Toolbar ESU price/day-change fix + DB pool reconnect hardening
 
 Fixed the Overview top-bar **ESU** quote (wrong day-change %, flicker, off-grid price) and hardened the Postgres writers against a connection-drop log-spam loop.

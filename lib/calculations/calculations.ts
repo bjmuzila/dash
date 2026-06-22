@@ -206,49 +206,66 @@ export interface GEXProfile {
   flipPoint: number | null;  // interpolated gamma-zero
 }
 
-export function computeGEXProfile(chain: ChainRow[], spot: number): GEXProfile | null {
-  // Need at least some rows with IV data
+export function computeGEXProfile(
+  chain: ChainRow[],
+  spot: number,
+  dataMode: "oi-vol" | "vol-only" = "oi-vol",
+): GEXProfile | null {
+  // Contract basis per data mode (matches the bar chart's OI+Vol / Vol Only toggle):
+  //   oi-vol   → open interest + volume
+  //   vol-only → volume only
+  const callContracts = (r: ChainRow) =>
+    dataMode === "vol-only"
+      ? (r.callVolume ?? 0)
+      : (r.callOI ?? 0) + (r.callVolume ?? 0);
+  const putContracts = (r: ChainRow) =>
+    dataMode === "vol-only"
+      ? (r.putVolume ?? 0)
+      : (r.putOI ?? 0) + (r.putVolume ?? 0);
+
+  // Need at least some rows with IV data + contracts under the active basis
   const rows = chain.filter(r =>
     (r.callIV ?? 0) > 0 && (r.putIV ?? 0) > 0 &&
-    (r.callOI ?? 0) + (r.putOI ?? 0) > 0 &&
+    callContracts(r) + putContracts(r) > 0 &&
     (r.dte ?? 0) >= 0
   );
   if (rows.length < 5) return null;
 
-  const lo = spot * 0.75, hi = spot * 1.25;
-  const N = 401;
+  // Match reference (SqueezeMetrics/perfiliev) gamma-profile script exactly:
+  //   levels = linspace(0.8*spot, 1.2*spot, 60)
+  const lo = spot * 0.8, hi = spot * 1.2;
+  const N = 60;
   const levels: number[] = Array.from({ length: N }, (_, i) => lo + (hi - lo) * (i / (N - 1)));
   const values: number[] = [];
 
   for (const S of levels) {
     let net = 0;
     for (const r of rows) {
-      const T = Math.max((r.dte ?? 0) / 365, 1 / 252);
+      // Reference annualization: trading days / 262, with 0DTE floored to 1/262.
+      const dte = r.dte ?? 0;
+      const T = dte <= 0 ? 1 / 262 : dte / 262;
       const callG = bsGamma(S, r.strike, r.callIV!, T);
       const putG  = bsGamma(S, r.strike, r.putIV!,  T);
-      // GEX = OI × 100 × S² × 0.01 × gamma  (= OI × S² × gamma)
-      net += (r.callOI ?? 0) * 100 * S * S * 0.01 * callG;
-      net -= (r.putOI  ?? 0) * 100 * S * S * 0.01 * putG;
+      // TotalGEX(P) = Σ BS_gamma(P,K,IV,T) × contracts × 100 × P²
+      net += callContracts(r) * 100 * S * S * callG;
+      net -= putContracts(r) * 100 * S * S * putG;
     }
     values.push(net / 1e9);
   }
 
-  // Interpolate gamma-zero closest to spot
+  // Gamma flip: reference takes the FIRST sign change (lowest strike), interpolated.
+  //   zeroGamma = posStrike − (posStrike − negStrike) × posGamma/(posGamma − negGamma)
+  // (ChainRow carries no expiration date, so the reference's Ex-Next / Ex-Monthly
+  //  series are omitted — neither is plotted; only the All-Expiries curve + flip are.)
   let flipPoint: number | null = null;
-  const crossings: number[] = [];
   for (let i = 0; i < values.length - 1; i++) {
     const a = values[i], b = values[i + 1];
-    if (a === 0) { crossings.push(levels[i]); continue; }
-    if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
-      crossings.push(levels[i] + (levels[i + 1] - levels[i]) * (Math.abs(a) / (Math.abs(a) + Math.abs(b))));
+    if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
+      flipPoint = levels[i + 1] - ((levels[i + 1] - levels[i]) * b / (b - a));
+      break;
     }
   }
-  if (crossings.length) {
-    flipPoint = crossings.reduce((best, c) =>
-      Math.abs(c - spot) < Math.abs(best - spot) ? c : best
-    );
-    flipPoint = Math.round(flipPoint * 10) / 10;
-  }
+  if (flipPoint !== null) flipPoint = Math.round(flipPoint * 10) / 10;
 
   return { levels, values, flipPoint };
 }
