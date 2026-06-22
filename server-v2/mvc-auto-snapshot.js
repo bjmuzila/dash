@@ -19,11 +19,24 @@
 const INTERVAL_MIN = 5;                       // snapshot cadence (minutes)
 const INTERVAL_MS = INTERVAL_MIN * 60 * 1000; // 5 minutes
 
+// Server-to-server calls to the protected /api/* routes must carry the shared
+// internal token, or Clerk middleware redirects them to "/" and returns the
+// landing-page HTML ("Unexpected token '<'"). Same pattern as levels-auto-publish.
+function internalHeaders(extra = {}) {
+  return Object.assign(
+    {},
+    extra,
+    process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+  );
+}
+
 // Runtime on/off switch for the auto-collector. The interval keeps firing but
 // collectOnce() short-circuits when disabled, so the owner dashboard can pause
 // auto-snapshotting without restarting the server. Manual snapshots ignore this.
-let autoEnabled = true;
-function setMvcAutoEnabled(on) { autoEnabled = !!on; }
+// Default ON unless MVC_AUTO=0/false in env. A stray /proxy/mvc-auto toggle no
+// longer silently kills the loop for the whole process lifetime without trace.
+let autoEnabled = !(process.env.MVC_AUTO === '0' || process.env.MVC_AUTO === 'false');
+function setMvcAutoEnabled(on) { autoEnabled = !!on; console.log(`[auto-mvc] auto-collector ${autoEnabled ? 'ENABLED' : 'PAUSED'}`); }
 function isMvcAutoEnabled() { return autoEnabled; }
 
 function nowParts() {
@@ -79,12 +92,15 @@ function highestRow(chain, field) {
 
 async function collectOnce(base, opts = {}) {
   const manual = !!opts.manual;
-  if (!manual && !autoEnabled) return;          // auto paused via dashboard
-  if (!isRTH()) { return manual ? { ok: false, error: 'outside RTH' } : undefined; }
+  if (!manual && !autoEnabled) { console.log('[auto-mvc] skip — auto-collector PAUSED'); return; }
+  if (!isRTH()) {
+    if (!manual) console.log('[auto-mvc] skip — outside RTH');
+    return manual ? { ok: false, error: 'outside RTH' } : undefined;
+  }
 
   let data;
   try {
-    const res = await fetch(`${base}/api/gex`, { cache: 'no-store' });
+    const res = await fetch(`${base}/api/gex`, { cache: 'no-store', headers: internalHeaders() });
     if (!res.ok) { console.log(`[auto-mvc] /api/gex ${res.status} — skip`); return manual ? { ok: false, error: `/api/gex ${res.status}` } : undefined; }
     data = await res.json();
   } catch (e) {
@@ -148,7 +164,7 @@ async function collectOnce(base, opts = {}) {
   try {
     const res = await fetch(`${base}/api/snapshots/mvc`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     const json = await res.json();
@@ -168,27 +184,44 @@ async function collectOnce(base, opts = {}) {
  */
 function startMvcAutoSnapshot(port) {
   const base = `http://localhost:${port}`;
-  const min = new Date().getMinutes();
-  const sec = new Date().getSeconds();
-  const minsToNext = INTERVAL_MIN - (min % INTERVAL_MIN) || INTERVAL_MIN;
-  const delayMs = (minsToNext * 60 - sec) * 1000;
 
-  console.log(`[auto-mvc] enabled — every ${INTERVAL_MIN}m during RTH, first scheduled run in ${Math.round(delayMs / 60000)}m`);
+  // ms until the next INTERVAL_MIN wall-clock boundary (:00/:05/:10…).
+  function msToNextBoundary() {
+    const now = new Date();
+    const min = now.getMinutes();
+    const sec = now.getSeconds();
+    const ms = now.getMilliseconds();
+    const minsToNext = INTERVAL_MIN - (min % INTERVAL_MIN) || INTERVAL_MIN;
+    return (minsToNext * 60 - sec) * 1000 - ms;
+  }
+
+  console.log(`[auto-mvc] enabled — every ${INTERVAL_MIN}m during RTH, first scheduled run in ${Math.round(msToNextBoundary() / 60000)}m`);
 
   // One-time startup test: fire once ~20s after boot (lets the feed warm up) so
-  // you can verify collection without waiting for the next :00/:30 boundary.
-  // Subject to the same RTH gate, so it silently no-ops off-hours.
+  // you can verify collection without waiting for the next boundary. Subject to
+  // the same auto/RTH gates (each logs its own skip reason now).
   setTimeout(() => {
     console.log('[auto-mvc] startup test run…');
     void collectOnce(base);
-  }, 20_000).unref();
+  }, 20_000);
 
+  // Self-rescheduling boundary loop. Re-arming from a fresh msToNextBoundary()
+  // after every fire keeps the cadence locked to :00/:05/:10 even if the host
+  // idled/slept and a setInterval would have drifted or stalled. No .unref():
+  // the loop must survive even if it were the only thing on the event loop.
+  let stopped = false;
   let timer = null;
-  setTimeout(() => {
-    void collectOnce(base);
-    timer = setInterval(() => void collectOnce(base), INTERVAL_MS);
-  }, delayMs).unref();
-  return () => { if (timer) clearInterval(timer); };
+  function arm() {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      console.log(`[auto-mvc] tick ${new Date().toISOString()}`);
+      void collectOnce(base);
+      arm();
+    }, msToNextBoundary());
+  }
+  arm();
+
+  return () => { stopped = true; if (timer) clearTimeout(timer); };
 }
 
 module.exports = { startMvcAutoSnapshot, collectOnce, setMvcAutoEnabled, isMvcAutoEnabled };

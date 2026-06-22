@@ -191,8 +191,12 @@ function computeExposureSnapshot(chain: ChainResponse, fallbackSpot?: number, ts
     for (const strike of group.strikes ?? []) {
       const call = strike.call ?? {};
       const put = strike.put ?? {};
-      const callContracts = Number(call["open-interest"] ?? call.openInterest ?? 0) + Number(call.volume ?? 0);
-      const putContracts = Number(put["open-interest"] ?? put.openInterest ?? 0) + Number(put.volume ?? 0);
+      // OI-only basis to match the server-computed totals path
+      // (accumulateExposureTotals / gex-calculator use OI, not OI+volume).
+      // Mixing in volume here made the fallback path disagree by a large,
+      // jittery margin every refresh → DEX "all over the place".
+      const callContracts = Number(call["open-interest"] ?? call.openInterest ?? 0);
+      const putContracts = Number(put["open-interest"] ?? put.openInterest ?? 0);
 
       totals.gex += ((Number(call.gamma ?? 0) * callContracts) - (Number(put.gamma ?? 0) * putContracts)) * spot * spot * 0.01 * 100;
       totals.dex += (Math.abs(Number(call.delta ?? 0)) * callContracts - Math.abs(Number(put.delta ?? 0)) * putContracts) * spot * 100;
@@ -1171,7 +1175,9 @@ export default function InsightsPage() {
     if (!t) return null;
     const spot = Number(payload?.spot ?? fallbackSpot ?? 0) || 0;
     const totalGEX = Number(t.totalGEX ?? 0);
-    const netDEX = Number(t.totalDeltaCall ?? 0) - Number(t.totalDeltaPut ?? 0);
+    // totalDeltaPut is already stored negative (see computation/vex-chex.js),
+    // so net delta is call + put, NOT call − put (subtracting double-counts).
+    const netDEX = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
     const totalCHEX = Number(t.totalCHEX ?? 0);
     const totalVEX = Number(t.totalVEX ?? 0);
     const ts = Number(payload?.updatedAt ?? Date.now()) || Date.now();
