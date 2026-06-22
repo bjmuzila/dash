@@ -40,6 +40,11 @@ const { startEodGexRecorder } = require('./eod-gex-recorder');
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
 
+// Maintenance mode: when ON, the Next middleware serves /maintenance to every
+// non-owner request. Toggled at runtime from the owner dashboard; defaults from
+// MAINTENANCE_MODE env at boot (resets to that default on restart/redeploy).
+let maintenanceMode = process.env.MAINTENANCE_MODE === '1' || process.env.MAINTENANCE_MODE === 'true';
+
 // ---------------------------------------------------------------------------
 // REST snapshot router (/proxy/*)
 // ---------------------------------------------------------------------------

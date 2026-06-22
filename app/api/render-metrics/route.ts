@@ -85,8 +85,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       window: windowParam,
       bandwidth: { value: null, unit: "MB",    window: windowParam, spark: [] },
-      memory:    { value: null, unit: "bytes", window: windowParam },
-      cpu:       { value: null, unit: "cpu",   window: windowParam },
+      memory:    { value: null, unit: "bytes", window: windowParam, spark: [] },
+      cpu:       { value: null, unit: "cpu",   window: windowParam, spark: [] },
       fetchedAt: new Date().toISOString(),
       unconfigured: true,
     });
@@ -119,8 +119,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     window:    windowParam,
     bandwidth: { value: sum(bwSeries),      unit: "MB",    window: windowParam, spark: sparkline(bwSparkSeries ?? bwSeries) },
-    memory:    { value: memFn(memSeries),   unit: "bytes", window: windowParam },
-    cpu:       { value: cpuFn(cpuSeries),   unit: "cpu",   window: windowParam },
+    memory:    { value: memFn(memSeries),   unit: "bytes", window: windowParam, spark: sparkline(memSeries) },
+    cpu:       { value: cpuFn(cpuSeries),   unit: "cpu",   window: windowParam, spark: sparkline(cpuSeries) },
     fetchedAt: end,
   });
 }

@@ -65,6 +65,35 @@ function etHM(ts: number): string {
   });
 }
 
+// ── Order-feed aggregation (shared by the feed + the Biggest Print card) ───────
+type FeedMode = "raw" | "agg";
+interface FeedRow { ts: number; side: "buy" | "sell"; price: number; size: number; count: number; }
+const FEED_AGG_MS = 1000;
+
+/**
+ * Combine same-side prints within each FEED_AGG_MS window into one row (last price
+ * wins). In "raw" mode each print maps to its own row. Returned newest-first.
+ */
+function aggregatePrints(prints: EsBigTrade[], mode: FeedMode): FeedRow[] {
+  if (mode === "raw") {
+    return prints.map((t) => ({ ts: t.ts, side: t.side, price: t.price, size: t.size, count: 1 }));
+  }
+  const cells = new Map<string, FeedRow>();
+  for (const t of prints) {
+    const win = Math.floor(t.ts / FEED_AGG_MS) * FEED_AGG_MS;
+    const key = `${win}:${t.side}`;
+    const c = cells.get(key);
+    if (c) {
+      c.size += t.size;
+      c.count += 1;
+      if (t.ts >= c.ts) { c.ts = t.ts; c.price = t.price; }
+    } else {
+      cells.set(key, { ts: t.ts, side: t.side, price: t.price, size: t.size, count: 1 });
+    }
+  }
+  return [...cells.values()].sort((a, b) => b.ts - a.ts);
+}
+
 /**
  * Draw evenly-spaced ET time ticks along the bottom of a lane. `xOf` maps a
  * timestamp to a canvas x. Both lanes call this with the SAME [minTs,maxTs] so
@@ -459,6 +488,9 @@ export default function FootprintPage() {
 
   // Rolling order feed (below the lanes): collapsible, scrollable.
   const [feedOpen, setFeedOpen] = useState(true);
+  // Feed mode lifted to the page so the Biggest Print card can match it:
+  // "raw" = per-tick, "agg" = same-side prints combined per 1000ms.
+  const [feedMode, setFeedMode] = useState<FeedMode>("raw");
 
   // What drives bubble size: "total" (buy+sell) or "net" (|buy−sell|, matches the
   // Delta Profile bar so a small bar reads as a small bubble).
@@ -503,9 +535,12 @@ export default function FootprintPage() {
     const buyVol = buy.reduce((a, t) => a + t.size, 0);
     const sellVol = sell.reduce((a, t) => a + t.size, 0);
     const net = buyVol - sellVol;
-    const biggest = inSession.reduce<EsBigTrade | null>((m, t) => (!m || t.size > m.size ? t : m), null);
+    // Biggest "print" follows the feed mode: in agg mode it's the largest same-side
+    // 1s-combined order; in raw mode it's the largest single tick.
+    const biggest = aggregatePrints(inSession, feedMode)
+      .reduce<FeedRow | null>((m, r) => (!m || r.size > m.size ? r : m), null);
     return { buyCount: buy.length, sellCount: sell.length, buyVol, sellVol, net, biggest };
-  }, [trades, currentSession]);
+  }, [trades, currentSession, feedMode]);
 
   const label = symbol ? symbol.replace(/:.*/, "") : "ESU6";
 
@@ -631,7 +666,7 @@ export default function FootprintPage() {
         <StatCard label="Net Delta (prints)" value={`${stats.net >= 0 ? "+" : ""}${fmtInt(stats.net)}`} color={stats.net >= 0 ? BUY : SELL} sub={`${fmtInt(stats.buyVol)} buy / ${fmtInt(stats.sellVol)} sell`} />
         <StatCard label="Buy Orders" value={fmtInt(stats.buyCount)} color={BUY} sub={`${fmtInt(stats.buyVol)} contracts`} />
         <StatCard label="Sell Orders" value={fmtInt(stats.sellCount)} color={SELL} sub={`${fmtInt(stats.sellVol)} contracts`} />
-        <StatCard label="Biggest Print" value={stats.biggest ? fmtInt(stats.biggest.size) : "—"} color={stats.biggest ? (stats.biggest.side === "buy" ? BUY : SELL) : "#94a3b8"} sub={stats.biggest ? `${stats.biggest.side.toUpperCase()} @ ${stats.biggest.price.toFixed(2)}` : "waiting for prints"} />
+        <StatCard label={feedMode === "agg" ? "Biggest Order (1s)" : "Biggest Print"} value={stats.biggest ? fmtInt(stats.biggest.size) : "—"} color={stats.biggest ? (stats.biggest.side === "buy" ? BUY : SELL) : "#94a3b8"} sub={stats.biggest ? `${stats.biggest.side.toUpperCase()} @ ${stats.biggest.price.toFixed(2)}` : "waiting for prints"} />
       </div>
 
       {/* Min-size filter */}
@@ -742,53 +777,22 @@ export default function FootprintPage() {
       {/* Rolling order feed. Aggregates from RAW prints so a big order that filled
           as many small ticks isn't lost to the size filter before being combined;
           the min-size filter is applied AFTER aggregation. */}
-      <OrderFeed rawTrades={rawTrades} open={feedOpen} onToggle={() => setFeedOpen((v) => !v)} minSize={minSize} />
+      <OrderFeed rawTrades={rawTrades} open={feedOpen} onToggle={() => setFeedOpen((v) => !v)} minSize={minSize} mode={feedMode} setMode={setFeedMode} />
     </div>
   );
 }
 
 // ── Rolling order feed ────────────────────────────────────────────────────────
 
-type FeedMode = "raw" | "agg";
-interface FeedRow { ts: number; side: "buy" | "sell"; price: number; size: number; count: number; }
-
-function OrderFeed({ rawTrades, open, onToggle, minSize }: {
+function OrderFeed({ rawTrades, open, onToggle, minSize, mode, setMode }: {
   rawTrades: EsBigTrade[]; open: boolean; onToggle: () => void; minSize: number;
+  mode: FeedMode; setMode: (m: FeedMode) => void;
 }) {
-  // raw = every print; agg = combine same-side prints in each 1000ms window into one
-  // row (so a big order that filled as many ticks shows as one large row).
-  const [mode, setMode] = useState<FeedMode>("raw");
-  const AGG_MS = 1000;
-
-  // Newest first. Cap the rendered rows so a full session day stays smooth to scroll.
+  // Aggregate (or not) from RAW prints, THEN filter the resulting rows by min size —
+  // so an order built from sub-threshold ticks still shows once combined.
   const rows = useMemo<FeedRow[]>(() => {
-    if (mode === "raw") {
-      // Raw mode: filter individual prints by min size, as before.
-      return rawTrades
-        .filter((t) => t.size >= minSize)
-        .slice()
-        .reverse()
-        .slice(0, 500)
-        .map((t) => ({ ts: t.ts, side: t.side, price: t.price, size: t.size, count: 1 }));
-    }
-    // Agg mode: combine ALL raw same-side prints per 1s window FIRST, then filter the
-    // COMBINED size by minSize — so an order built from sub-threshold ticks still shows.
-    const cells = new Map<string, FeedRow>();
-    for (const t of rawTrades) {
-      const win = Math.floor(t.ts / AGG_MS) * AGG_MS;
-      const key = `${win}:${t.side}`;
-      const c = cells.get(key);
-      if (c) {
-        c.size += t.size;
-        c.count += 1;
-        if (t.ts >= c.ts) { c.ts = t.ts; c.price = t.price; } // last print's price
-      } else {
-        cells.set(key, { ts: t.ts, side: t.side, price: t.price, size: t.size, count: 1 });
-      }
-    }
-    return [...cells.values()]
+    return aggregatePrints(rawTrades, mode)
       .filter((r) => r.size >= minSize)
-      .sort((a, b) => b.ts - a.ts)
       .slice(0, 500);
   }, [rawTrades, mode, minSize]);
 

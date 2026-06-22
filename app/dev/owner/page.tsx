@@ -43,8 +43,8 @@ interface PageStatus {
 
 interface RenderMetrics {
   bandwidth: { value: number | null; unit: string; window: string; spark?: number[] };
-  memory:    { value: number | null; unit: string; window: string };
-  cpu:       { value: number | null; unit: string; window: string };
+  memory:    { value: number | null; unit: string; window: string; spark?: number[] };
+  cpu:       { value: number | null; unit: string; window: string; spark?: number[] };
   fetchedAt: string;
 }
 
@@ -1051,6 +1051,13 @@ export default function OwnerDashboard() {
     ? Math.round((Date.now() - server.lastFeedAt) / 1000)
     : null;
 
+  // Threshold accents for the Render memory/cpu cards — shared by the value text
+  // and its sparkline so the trend line matches the card's status color.
+  const memMb = (renderMetrics?.memory.value ?? 0) / 1024 / 1024;
+  const memAccent = memMb > 400 ? HOME_THEME.red : memMb > 200 ? HOME_THEME.orange : HOME_THEME.green;
+  const cpuPct = (renderMetrics?.cpu.value ?? 0) * 100;
+  const cpuAccent = cpuPct > 80 ? HOME_THEME.red : cpuPct > 40 ? HOME_THEME.orange : HOME_THEME.green;
+
   return (
     <div style={homeShellStyle}>
       {/* Header */}
@@ -1151,22 +1158,18 @@ export default function OwnerDashboard() {
                   ? `${(renderMetrics.memory.value / 1024).toFixed(0)} KB`
                   : `${(renderMetrics.memory.value / 1024 / 1024).toFixed(0)} MB`
                 : "—"}
-              accent={(() => {
-                const mb = (renderMetrics?.memory.value ?? 0) / 1024 / 1024;
-                return mb > 400 ? HOME_THEME.red : mb > 200 ? HOME_THEME.orange : HOME_THEME.green;
-              })()}
+              accent={memAccent}
               mono
+              footer={<Sparkline data={renderMetrics?.memory.spark ?? []} accent={memAccent} />}
             />
             <StatCard
               label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
               value={renderMetrics?.cpu.value != null
                 ? `${(renderMetrics.cpu.value * 100).toFixed(1)}%`
                 : "—"}
-              accent={(() => {
-                const pct = (renderMetrics?.cpu.value ?? 0) * 100;
-                return pct > 80 ? HOME_THEME.red : pct > 40 ? HOME_THEME.orange : HOME_THEME.green;
-              })()}
+              accent={cpuAccent}
               mono
+              footer={<Sparkline data={renderMetrics?.cpu.spark ?? []} accent={cpuAccent} />}
             />
             <div style={{ containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px", overflow: "hidden" }}>
               <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>Updated</div>
