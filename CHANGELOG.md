@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-06-22 (session 45) — Multi-greek dropdown theming, SPY/QQQ volume refresh + greek basis, pre-open volume reset, version bump v7
+
+Fixed the mult-greek expiry dropdown styling, addressed SPY/QQQ option volume showing 0 (no auto-refresh + REST staleness), restored the VOL-only tab, and added a 9:30 ET pre-open volume reset so the new session starts clean.
+
+### Mult-greek expiry dropdown — dark theming
+- `app/mult-greek/page.tsx`: native `<select>` options inherited the OS light background. Styled each `<option>` with `background: #0b0f1a` + theme text color and added `colorScheme: "dark"` on the select so the popup renders dark in Chrome/Edge.
+
+### SPY/QQQ chain auto-refresh
+- `app/mult-greek/page.tsx` and `app/options-chain/page.tsx` loaded the chain only once (mount / GO / manual refresh) with no polling. Added a 60s `setInterval` that cache-bust re-pulls `/api/chains` while the market is open so per-strike volume accumulates through the session instead of staying frozen at the one-shot load.
+- `app/options-chain/page.tsx`: added `isSessionLive()` helper (trading day + 9:30–16:00 ET) gating the poll.
+
+### Greek contract basis
+- `app/mult-greek/page.tsx`: greek was computed volume-only in VOL mode, reading blank pre-open (session volume still 0). Confirmed OI+VOL is the default; restored the OI+VOL / VOL toggle so a VOL-only tab is available on demand while OI+VOL keeps the view populated pre-open.
+
+### Pre-open volume reset (server-v2)
+- `server-v2/proxy-tastytrade.js`: TastyTrade REST per-strike `volume` carries the PRIOR session's cumulative figure until their backend resets at the 9:30 ET cash open. Added `etMinutesNow()` / `isPreOpenEt()` helpers and zeroed `volume` in `fetchChainFull` before 9:30 ET. OI is untouched. Requires server-v2 restart.
+
+### Version
+- `package.json`: bumped to `2026.6.22-v7`.
+
 ## 2026-06-22 (session 44) — Net-premium sparkline whole-night history, flow sell-side classifier fix, version bump v6
 
 Snapshot Flow panel: made the net-premium sparkline span the whole session, fixed the buy/sell flow misclassification that zeroed out sell volume, and removed the SPX price pill.

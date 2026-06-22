@@ -676,8 +676,7 @@ export interface MvcRecord {
 export async function ensureMvcTable(): Promise<void> { /* handled in ensureAllTables */ }
 
 export async function insertMvcSnapshot(r: Omit<MvcRecord, "id">): Promise<number> {
-  const pool = await getDb();
-  const result = await pool.query(
+  const result = await pgQuery(
     `INSERT INTO mvc_snapshots (timestamp,date,day,time,"strikeOIVol","mvcValueOIVol","pctOI_Vol","volumeOIVol",
       "totalNetGEX_OI","strikeVolOnly","mvcValueVolOnly","pctVol_Only","volumeVolOnly","totalNetGEX_Vol",
       "spxPrice","esPrice","netDEXStrike","totalNetDEX_OI","totalNetDEX_Vol","totalAbsNetGEX","gexFlip","triggerType",expiration)
