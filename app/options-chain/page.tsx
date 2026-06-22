@@ -623,6 +623,8 @@ export default function OptionsChainPage() {
           borderBottom: `1px solid ${HT.border}`,
           flexShrink: 0,
           flexWrap: "wrap",
+          position: "relative", // ADD: own stacking context so dropdowns paint above chain
+          zIndex: 50,           // ADD: above chain scroll area + highlighted rows (zIndex:1)
         }}
       >
         <span style={{ fontSize: 11, fontWeight: 800, color: "#00e5ff", letterSpacing: "0.14em", textTransform: "uppercase" }}>

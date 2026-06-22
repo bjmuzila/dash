@@ -110,7 +110,6 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
 ];
 
 const TABLES: { id: string; label: string }[] = [
-  { id: "eod_gex",            label: "EOD GEX" },
   { id: "mvc_snapshots",      label: "MVC Snaps" },
   { id: "premium_flow",       label: "Prem Flow" },
   { id: "greeks_ts",          label: "Greeks TS" },
@@ -118,6 +117,7 @@ const TABLES: { id: string; label: string }[] = [
   { id: "es_candles",         label: "ES Candles" },
   { id: "bzila_snapshots",    label: "Bzila Snaps" },
   { id: "flow_calls",         label: "Flow Calls" },
+  { id: "eod_gex",            label: "EOD GEX" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

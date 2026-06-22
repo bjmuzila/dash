@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-22 (session 43) — Options chain strike ordering (descending), version bump v4
+
+Reversed the options-chain strike sort so higher strikes render at the top and lower strikes at the bottom.
+
+### Options chain — strike ordering
+- `app/options-chain/page.tsx:569`: `visibleRows` sort changed from `a.strike - b.strike` (ascending) to `b.strike - a.strike` (descending). Higher strikes now appear at top of the table, matching the intended "High to low" layout that the comment already described.
+
+### Version
+- `package.json`: bumped `2026.6.22-v3` → `2026.6.22-v4`.
+
 ## 2026-06-22 (session 42) — Econ-calendar USA filters, Trump-calendar history trim, snapshot-flow hover, ticker data-box auto-scale, NET GEX units fix
 
 UI/UX and data-filtering pass on the home dashboard and economic calendar.

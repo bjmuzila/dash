@@ -69,6 +69,75 @@ function strikeLabel(orders: FlowOrder[], bucket: "bull" | "bear") {
 
 type HistPoint = { ts: number; value: number; _i?: number };
 
+/** Minutes-since-ET-midnight for an instant. */
+function etMinutes(d: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d).reduce((a, p) => ({ ...a, [p.type]: p.value }), {} as Record<string, string>);
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+/** ET YYYY-MM-DD key for an instant. */
+function etDateKey(d: Date): string {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(d).reduce((a, x) => ({ ...a, [x.type]: x.value }), {} as Record<string, string>);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+const RTH_OPEN_MIN = 9 * 60 + 30;   // 09:30 ET
+const RTH_CLOSE_MIN = 16 * 60;      // 16:00 ET
+const EXT_OPEN_MIN = 18 * 60;       // 18:00 ET
+
+/** Start of the currently-active session as an epoch-ms instant.
+ *  Sessions break only at the two opens (matches SPX):
+ *    RTH opens 09:30 → window is 09:30 of today
+ *    EXT opens 18:00 → window is the most recent 18:00 (yesterday if before 09:30)
+ *  09:30–18:00 belongs to today's RTH; 18:00→next 09:30 is one continuous EXT line. */
+function sessionStartMs(now = new Date()): number {
+  const mins = etMinutes(now);
+  // Build an ET wall-clock instant at hh:mm today, returned as epoch ms.
+  const atEt = (h: number, m: number, dayShift = 0): number => {
+    const base = new Date(now.getTime() + dayShift * 86_400_000);
+    const key = etDateKey(base);
+    // Parse "YYYY-MM-DD" + offset by computing the ET-vs-local skew at `now`.
+    const [Y, Mo, D] = key.split("-").map(Number);
+    const guessLocal = new Date(Y, Mo - 1, D, h, m, 0, 0);
+    const etShown = etMinutes(guessLocal);
+    const skewMin = (h * 60 + m) - etShown;       // how far local clock is from ET for this wall time
+    return guessLocal.getTime() + skewMin * 60_000;
+  };
+  if (mins >= RTH_OPEN_MIN && mins < EXT_OPEN_MIN) {
+    return atEt(9, 30);                            // today's RTH open
+  }
+  // EXT: either after 18:00 today, or before 09:30 (yesterday's 18:00 open)
+  return mins >= EXT_OPEN_MIN ? atEt(18, 0) : atEt(18, 0, -1);
+}
+
+/** Load the persisted net-premium series for the currently-active session,
+ *  bounded to the session-start instant. Spans both ET date partitions so the
+ *  EXT line that crosses midnight is reconstructed whole. Sorted ascending. */
+async function fetchSessionPremHistory(): Promise<HistPoint[]> {
+  const now = new Date();
+  const startMs = sessionStartMs(now);
+  const keys = Array.from(new Set([etDateKey(new Date(startMs)), etDateKey(now)]));
+  const results = await Promise.all(
+    keys.map(date =>
+      fetch(`/api/snapshots/premium?date=${date}&limit=2000`)
+        .then(r => (r.ok ? r.json() : { rows: [] }))
+        .catch(() => ({ rows: [] }))
+    )
+  );
+  const rows = results.flatMap(r => (Array.isArray(r?.rows) ? r.rows : []));
+  return rows
+    .map((row: { timestamp?: number; netPremium?: number }) => ({
+      ts: Number(row.timestamp ?? 0),
+      value: Number(row.netPremium ?? 0),
+    }))
+    .filter(p => p.ts >= startMs)
+    .sort((a, b) => a.ts - b.ts);
+}
+
 function buildHistory(orders: FlowOrder[]): HistPoint[] {
   if (!orders.length) return [];
   const sorted = [...orders].sort((a, b) => a.ts - b.ts);
@@ -348,6 +417,9 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
     });
   }, [serverOrders, serverBucket, seed]);
   const accumRef = useRef<Record<string, number>>({});
+  // Persisted whole-night net-premium series (from premium_flow table), so the
+  // sparkline spans the full session instead of just the live ~200-print tape.
+  const [dbPremHistory, setDbPremHistory] = useState<HistPoint[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const sessionRef = useRef<string>(getSnapshotSessionKey());
@@ -394,9 +466,19 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
     }).catch(() => {});
   }, [seed]);
 
+  // ── Hydrate the whole-night net-premium series and keep it fresh ───────────
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetchSessionPremHistory().then(h => { if (alive) setDbPremHistory(h); }).catch(() => {});
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   // Refresh just triggers a re-render — does NOT clear accumulated data
   const doRefresh = useCallback(async () => {
     setNow(Date.now());
+    fetchSessionPremHistory().then(setDbPremHistory).catch(() => {});
   }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
@@ -432,7 +514,20 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
   const bearVol = flow.cumulativeBearVol;
   const bullDetail = `BC + SP premium flow${flow.orders.length ? ` - ${strikeLabel(flow.orders, "bull")}` : ""}`;
   const bearDetail = `SC + BP premium flow${flow.orders.length ? ` - ${strikeLabel(flow.orders, "bear")}` : ""}`;
-  const premHistory = useMemo(() => buildHistory(flow.orders), [flow.orders]);
+  // Whole-night series: persisted history (full session) + the live tail that
+  // hasn't been flushed to the DB yet. The live tape is a running net-premium
+  // accumulator (only ~200 prints), so offset it onto the DB's last value so
+  // the joined line stays continuous instead of restarting from zero.
+  const premHistory = useMemo(() => {
+    const live = buildHistory(flow.orders);
+    if (!dbPremHistory.length) return live;
+    const lastDb = dbPremHistory[dbPremHistory.length - 1];
+    const tail = live.filter(p => p.ts > lastDb.ts);
+    if (!tail.length) return dbPremHistory;
+    const liveBaseAtJoin = live.find(p => p.ts > lastDb.ts)?.value ?? 0;
+    const offset = lastDb.value - liveBaseAtJoin;
+    return [...dbPremHistory, ...tail.map(p => ({ ts: p.ts, value: p.value + offset }))];
+  }, [flow.orders, dbPremHistory]);
   const netPrem = flow.netPremiumFlow;
 
   const tops = useMemo(() => {

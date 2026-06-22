@@ -21,11 +21,16 @@ const Svg = ({ size = 20, children }: IconProps & { children: React.ReactNode })
   </svg>
 );
 const HomeIcon = (p: IconProps) => <Svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Svg>;
-const GridIcon = (p: IconProps) => <Svg {...p}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Svg>;
-const FootIcon = (p: IconProps) => <Svg {...p}><path d="M4 16c0-3 1-6 1-9a3 3 0 0 1 6 0c0 2-1 4-1 6" /><path d="M14 18c0-2 1-4 1-6a2.5 2.5 0 0 1 5 0c0 3-1 5-1 8" /></Svg>;
-const ChartIcon = (p: IconProps) => <Svg {...p}><path d="M3 3v18h18" /><path d="M7 14l3-4 3 3 4-6" /></Svg>;
-const UserIcon = (p: IconProps) => <Svg {...p}><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></Svg>;
-const WrenchIcon = (p: IconProps) => <Svg {...p}><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2z" /></Svg>;
+// GEX — funnel / radar (approximates the screenshot's funnel-with-scan-lines)
+const GridIcon = (p: IconProps) => <Svg {...p}><path d="M3 4h18l-6 7v7l-6 3v-10z" /><line x1="3" y1="7.5" x2="21" y2="7.5" /><line x1="6.5" y1="11" x2="17.5" y2="11" /></Svg>;
+// Futures — hourglass + contract page
+const FootIcon = (p: IconProps) => <Svg {...p}><path d="M4 3h7M4 21h7M5 3c0 4 5 5 5 9s-5 5-5 9M10 3c0 4-5 5-5 9s5 5 5 9" /><path d="M14 5h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /><line x1="15.5" y1="9" x2="18.5" y2="9" /><line x1="15.5" y1="12" x2="18.5" y2="12" /></Svg>;
+// Stock Market — bull & bear over a trading pit (hexagon)
+const ChartIcon = (p: IconProps) => <Svg {...p}><path d="M5 7c0-1.5 1-2 2-1.5M5 7l-1.5-1M5 7v2.5M5 9.5l1.5 1.5" /><path d="M19 7c0-1.5-1-2-2-1.5M19 7l1.5-1M19 7v2.5M19 9.5l-1.5 1.5" /><path d="M12 4v8" /><path d="M12 13l-7 3v3l7 2 7-2v-3z" /></Svg>;
+// Personal — house with safe + person
+const UserIcon = (p: IconProps) => <Svg {...p}><path d="M3 10l8-6 8 6" /><path d="M5 9.5V20h11V9.5" /><circle cx="10" cy="14.5" r="2.3" /><line x1="10" y1="14.5" x2="11.4" y2="13.1" /><circle cx="19" cy="17" r="2.2" /><path d="M15.5 21.5c0-1.6 1.5-2.5 3.5-2.5s3.5.9 3.5 2.5" /></Svg>;
+// Admin — gear + key + badge
+const WrenchIcon = (p: IconProps) => <Svg {...p}><circle cx="7.5" cy="7.5" r="2.4" /><path d="M7.5 3.6v1.5M7.5 9.9v1.5M3.6 7.5h1.5M9.9 7.5h1.5M4.7 4.7l1.1 1.1M10.3 10.3l-1.1-1.1M10.3 4.7l-1.1 1.1M4.7 10.3l1.1-1.1" /><circle cx="14" cy="15" r="2.2" /><path d="M15.7 16.7l4 4M18 19l1.3-1.3M19.3 20.3l1.3-1.3" /></Svg>;
 const CollapseIcon = (p: IconProps) => <Svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /><path d="M14 9l-2 3 2 3" /></Svg>;
 const ExpandIcon = (p: IconProps) => <Svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /><path d="M12 9l2 3-2 3" /></Svg>;
 const ChevronIcon = ({ open }: { open: boolean }) => (
@@ -40,17 +45,19 @@ const TelegramIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill=
 const TwitterIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M23 4.9c-.8.4-1.7.6-2.6.8a4.5 4.5 0 0 0 2-2.5c-.9.5-1.9.9-2.9 1.1a4.5 4.5 0 0 0-7.7 4.1A12.8 12.8 0 0 1 2.5 3.6a4.5 4.5 0 0 0 1.4 6 4.4 4.4 0 0 1-2-.6v.1a4.5 4.5 0 0 0 3.6 4.4 4.5 4.5 0 0 1-2 .1 4.5 4.5 0 0 0 4.2 3.1A9 9 0 0 1 1 18.6a12.7 12.7 0 0 0 6.9 2c8.3 0 12.8-6.9 12.8-12.8v-.6c.9-.6 1.6-1.4 2.3-2.3z" /></svg>;
 const DiscordIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19.5 5.5A16 16 0 0 0 15.6 4l-.3.5a14 14 0 0 1 3.4 1.1 13 13 0 0 0-11.4 0A14 14 0 0 1 10.7 4.5L10.4 4a16 16 0 0 0-3.9 1.5C3.9 9.4 3.2 13.2 3.5 17a16 16 0 0 0 4.9 2.5l.6-1a10 10 0 0 1-1.7-.8l.4-.3a11 11 0 0 0 9.6 0l.4.3a10 10 0 0 1-1.7.8l.6 1A16 16 0 0 0 21.5 17c.4-4.4-.6-8.2-2-11.5zM9.5 14.5c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.6.8 1.6 1.8-.7 1.8-1.6 1.8zm5 0c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.6.8 1.6 1.8-.7 1.8-1.6 1.8z" /></svg>;
 const RedditIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M22 12a2.1 2.1 0 0 0-3.5-1.5 10.3 10.3 0 0 0-5.3-1.7l.9-4.1 2.9.6a1.5 1.5 0 1 0 .2-1l-3.3-.7a.5.5 0 0 0-.6.4l-1 4.8a10.3 10.3 0 0 0-5.4 1.7 2.1 2.1 0 1 0-2.3 3.4 4 4 0 0 0 0 .6c0 3 3.6 5.5 8 5.5s8-2.5 8-5.5a4 4 0 0 0 0-.6A2.1 2.1 0 0 0 22 12zM7 13.5a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0zm8.4 4c-1 1-3.4 1-4.4 1s-3.4 0-4.4-1a.5.5 0 0 1 .7-.7c.6.6 2 .7 3.7.7s3.1-.1 3.7-.7a.5.5 0 0 1 .7.7zm-.4-2.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z" /></svg>;
+const XIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644z" /></svg>;
+const YouTubeIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.5a3 3 0 0 0-2.1-2.1C19 4.9 12 4.9 12 4.9s-7 0-8.9.5A3 3 0 0 0 1 7.5 31 31 0 0 0 .5 12 31 31 0 0 0 1 16.5a3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 23.5 12 31 31 0 0 0 23 7.5zM9.75 15.5v-7l6 3.5z" /></svg>;
+const TikTokIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82a4.28 4.28 0 0 1-1.06-2.82h-3.2v12.93a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .76-5.06v-3.3a5.86 5.86 0 0 0-.76-.05 5.89 5.89 0 1 0 5.89 5.89V9.01a7.5 7.5 0 0 0 4.37 1.4V7.2a4.28 4.28 0 0 1-3.41-1.38z" /></svg>;
 
 const SOCIALS = [
-  { id: "telegram", label: "Telegram", href: "#", Icon: TelegramIcon, color: "#229ED9" },
-  { id: "twitter", label: "Twitter", href: "#", Icon: TwitterIcon, color: "#1DA1F2" },
-  { id: "discord", label: "Discord", href: "#", Icon: DiscordIcon, color: "#5865F2" },
-  { id: "reddit", label: "Reddit", href: "#", Icon: RedditIcon, color: "#FF4500" },
+  { id: "x", label: "X", href: "https://x.com/BzilaTrades", Icon: XIcon, color: "#ffffff" },
+  { id: "youtube", label: "YouTube", href: "https://www.youtube.com/@bzilatrades", Icon: YouTubeIcon, color: "#FF0000" },
+  { id: "tiktok", label: "TikTok", href: "https://www.tiktok.com/@bzilatrades", Icon: TikTokIcon, color: "#25F4EE" },
 ];
 
 type NavItem = { label: string; href: string };
 type IconCmp = (p: IconProps) => React.ReactElement;
-type NavGroup = { id: string; label: string; Icon: IconCmp; devOnly?: boolean; items: NavItem[] };
+type NavGroup = { id: string; label: string; Icon: IconCmp; devOnly?: boolean; forceAccordion?: boolean; items: NavItem[] };
 
 // Routes preserved from the prior NAV_GROUPS list.
 const NAV_GROUPS: NavGroup[] = [
@@ -70,6 +77,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "futures",
     label: "Futures",
     Icon: FootIcon,
+    forceAccordion: true,
     items: [{ label: "Footprint", href: "/footprint" }],
   },
   {
@@ -88,6 +96,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Journal", href: "/trading" },
       { label: "Budget", href: "/budget" },
+      { label: "To-Do", href: "/personal/todo" },
     ],
   },
   {
@@ -261,7 +270,7 @@ export default function Sidebar() {
   const renderGroup = (group: NavGroup) => {
     const Icon = group.Icon;
     const groupActive = group.items.some((item) => isActive(item.href));
-    const single = group.items.length === 1;
+    const single = group.items.length === 1 && !group.forceAccordion;
     const isOpen = openGroup === group.id;
 
     // COLLAPSED: render the group icon; hovering shows a tooltip and (for
@@ -279,7 +288,7 @@ export default function Sidebar() {
             width: 44,
             height: 44,
             borderRadius: 12,
-            color: groupActive ? HOME_THEME.cyan : HOME_THEME.muted,
+            color: groupActive ? HOME_THEME.cyan : HOME_THEME.text,
             transition: "all 0.15s",
             ...(groupActive ? cyanFill : { border: "1px solid transparent" }),
           }}
@@ -307,7 +316,7 @@ export default function Sidebar() {
                 zIndex: 10002,
               }}
             >
-              <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", padding: "2px 8px" }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, letterSpacing: "0.12em", textTransform: "uppercase", padding: "2px 8px" }}>
                 {group.label}
               </span>
               {orderedItems(group).map((item) => (
@@ -398,7 +407,7 @@ export default function Sidebar() {
         >
           <Icon />
           <span style={{ flex: 1, textAlign: "left" }}>{group.label}</span>
-          <span style={{ color: HOME_THEME.muted, display: "flex" }}><ChevronIcon open={isOpen} /></span>
+          <span style={{ color: HOME_THEME.text, display: "flex" }}><ChevronIcon open={isOpen} /></span>
         </button>
 
         <div
@@ -426,6 +435,8 @@ export default function Sidebar() {
                     setDragHref(null);
                   }}
                   onDragEnd={() => setDragHref(null)}
+                  onMouseEnter={() => setHovered(`i-${item.href}`)}
+                  onMouseLeave={() => setHovered((h) => (h === `i-${item.href}` ? null : h))}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -435,11 +446,15 @@ export default function Sidebar() {
                     fontSize: 13,
                     fontWeight: active ? 700 : 500,
                     letterSpacing: "0.01em",
-                    color: active ? HOME_THEME.text : HOME_THEME.muted,
+                    color: active ? HOME_THEME.text : HOME_THEME.text,
                     cursor: "grab",
                     opacity: isDragging ? 0.4 : 1,
                     transition: "opacity 0.12s, color 0.12s, background 0.12s",
-                    ...(active ? { background: HOME_THEME.cyan, color: "#05060A", fontWeight: 700, boxShadow: "0 0 16px rgba(0,240,255,0.35)" } : {}),
+                    ...(active
+                      ? { background: HOME_THEME.cyan, color: "#05060A", fontWeight: 700, boxShadow: "0 0 16px rgba(0,240,255,0.35)" }
+                      : hovered === `i-${item.href}`
+                      ? { background: "rgba(0,240,255,0.10)", color: HOME_THEME.text }
+                      : {}),
                   }}
                 >
                   {item.label}
@@ -536,7 +551,7 @@ export default function Sidebar() {
             borderRadius: 12,
             border: "1px solid transparent",
             background: "transparent",
-            color: HOME_THEME.muted,
+            color: HOME_THEME.text,
             fontSize: 14,
             fontWeight: 500,
             cursor: "pointer",
@@ -570,10 +585,12 @@ export default function Sidebar() {
                   height: 36,
                   borderRadius: 10,
                   textDecoration: "none",
-                  color: hovered === `s-${id}` ? color : HOME_THEME.muted,
-                  background: hovered === `s-${id}` ? "rgba(255,255,255,0.06)" : "transparent",
-                  border: `1px solid ${HOME_THEME.border}`,
-                  transition: "all 0.15s",
+                  color: hovered === `s-${id}` ? color : "#ffffff",
+                  background: `${color}1a`,
+                  border: `1px solid #ffffff55`,
+                  boxShadow: hovered === `s-${id}` ? `0 0 22px ${color}aa, 0 0 8px ${color}88` : `0 0 14px ${color}66, 0 0 4px ${color}44`,
+                  transform: hovered === `s-${id}` ? "translateY(-1px)" : "none",
+                  transition: "all 0.18s",
                 }}
               >
                 <Icon />
@@ -638,9 +655,11 @@ export default function Sidebar() {
                       height: 34,
                       borderRadius: 9,
                       textDecoration: "none",
-                      color: hovered === `sc-${id}` ? color : HOME_THEME.text,
-                      background: "rgba(255,255,255,0.04)",
-                      transition: "color 0.15s",
+                      color: hovered === `sc-${id}` ? color : "#ffffff",
+                      background: `${color}1a`,
+                      border: `1px solid #ffffff55`,
+                      boxShadow: hovered === `sc-${id}` ? `0 0 22px ${color}aa, 0 0 8px ${color}88` : `0 0 14px ${color}66, 0 0 4px ${color}44`,
+                      transition: "all 0.18s",
                     }}
                   >
                     <Icon />
@@ -652,7 +671,7 @@ export default function Sidebar() {
         )}
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
-          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }} />
+          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: { width: 44, height: 44 } } }} />
         </div>
       </div>
     </nav>
