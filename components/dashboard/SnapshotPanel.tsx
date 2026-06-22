@@ -184,11 +184,21 @@ function Sparkline({ data, color }: { data: HistPoint[]; color: string }) {
     }
 
     const vals = data.map(d => d.value);
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
+    // Clamp the Y-scale to the 2nd–98th percentile so a couple of outlier points
+    // (e.g. stale/corrupt persisted rows) can't compress the real signal into a
+    // flat rail and produce a square-wave look. The line itself still draws the
+    // true values; only the autoscale ignores the extremes.
+    const sorted = [...vals].sort((a, b) => a - b);
+    const pct = (p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * p)))];
+    let min = pct(0.02);
+    let max = pct(0.98);
+    if (!(max > min)) { min = Math.min(...vals); max = Math.max(...vals); }
     const range = max - min || 1;
     const x = (i: number) => (i / (data.length - 1)) * W;
-    const y = (v: number) => H - ((v - min) / range) * (H - 6) - 3;
+    const y = (v: number) => {
+      const c = v < min ? min : v > max ? max : v; // clamp outliers into view
+      return H - ((c - min) / range) * (H - 6) - 3;
+    };
 
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, color === "#ff9f40" ? "rgba(255,159,64,.28)" : "rgba(0,230,118,.28)");
@@ -417,6 +427,29 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
     });
   }, [serverOrders, serverBucket, seed]);
   const accumRef = useRef<Record<string, number>>({});
+
+  // Live in-memory net-premium series. We sample the corrected signed
+  // netPremiumFlow each time it moves. This is the authoritative line for the
+  // current session — the persisted premium_flow rows are only a cold-start
+  // fallback (and historically were corrupted by a max-magnitude latch bug,
+  // which squared off the sparkline). One sample per ~3s, capped at 600 points.
+  const liveSeriesRef = useRef<HistPoint[]>([]);
+  const [liveSeries, setLiveSeries] = useState<HistPoint[]>([]);
+  useEffect(() => {
+    const v = flow.netPremiumFlow;
+    if (v == null || !Number.isFinite(v)) return;
+    const arr = liveSeriesRef.current;
+    const now = Date.now();
+    const last = arr[arr.length - 1];
+    if (last && now - last.ts < 3000) {
+      last.value = v; // coalesce sub-3s updates into the latest sample
+    } else {
+      arr.push({ ts: now, value: v });
+      if (arr.length > 600) arr.shift();
+    }
+    setLiveSeries([...arr]);
+  }, [flow.netPremiumFlow]);
+
   // Persisted whole-night net-premium series (from premium_flow table), so the
   // sparkline spans the full session instead of just the live ~200-print tape.
   const [dbPremHistory, setDbPremHistory] = useState<HistPoint[]>([]);
@@ -528,15 +561,20 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
   // accumulator (only ~200 prints), so offset it onto the DB's last value so
   // the joined line stays continuous instead of restarting from zero.
   const premHistory = useMemo(() => {
-    const live = buildHistory(flow.orders);
-    if (!dbPremHistory.length) return live;
-    const lastDb = dbPremHistory[dbPremHistory.length - 1];
-    const tail = live.filter(p => p.ts > lastDb.ts);
-    if (!tail.length) return dbPremHistory;
-    const liveBaseAtJoin = live.find(p => p.ts > lastDb.ts)?.value ?? 0;
-    const offset = lastDb.value - liveBaseAtJoin;
-    return [...dbPremHistory, ...tail.map(p => ({ ts: p.ts, value: p.value + offset }))];
-  }, [flow.orders, dbPremHistory]);
+    // The live in-memory series (sampled from the corrected signed netPremiumFlow)
+    // is the source of truth for the current session. The persisted premium_flow
+    // rows are only a prefix to extend the line back to session start, and only
+    // for points OLDER than the live series — never overlapping it. This avoids
+    // the old square-wave: corrupt/latched DB rows can't override live values.
+    if (liveSeries.length >= 2) {
+      const firstLiveTs = liveSeries[0].ts;
+      const prefix = dbPremHistory.filter(p => p.ts < firstLiveTs);
+      return [...prefix, ...liveSeries];
+    }
+    // Cold start (no live samples yet): show whatever persisted history exists.
+    if (dbPremHistory.length) return dbPremHistory;
+    return buildHistory(flow.orders);
+  }, [liveSeries, dbPremHistory, flow.orders]);
   const netPrem = flow.netPremiumFlow;
 
   const tops = useMemo(() => {

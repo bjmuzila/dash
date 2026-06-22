@@ -116,6 +116,12 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
     CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
     CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);
+    -- Composite index for point-mode baseline queries (open/5/15/30): the
+    -- DISTINCT ON (strike) ... ORDER BY strike, timestamp scans need date+expiry
+    -- filtering with strike/timestamp ordering. Without this the popup's
+    -- option-strike-gex-history?mode=point call took ~25s; with it, sub-second.
+    CREATE INDEX IF NOT EXISTS idx_osgh_lookup
+      ON option_strike_gex_history (date, expiry, strike, timestamp DESC);
 
     CREATE TABLE IF NOT EXISTS trades (
       id SERIAL PRIMARY KEY, timestamp TEXT NOT NULL,
@@ -481,15 +487,38 @@ export function persistDb(): void {}
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
 
+// A query in flight when the socket dies (Postgres restart/recovery, idle-conn
+// reaped, Render connection churn) rejects with one of these. The pool's
+// 'error' handler only covers IDLE clients, so an in-flight drop still surfaces
+// as a route 500. Retry once on a fresh client — the dead one is discarded and
+// the pool hands back a new connection.
+function isTransientConnError(err: unknown): boolean {
+  const msg = (err as { message?: string })?.message ?? "";
+  const code = (err as { code?: string })?.code ?? "";
+  return /Connection terminated|ECONNRESET|server closed the connection|terminating connection|Client has encountered a connection error/i.test(msg)
+    || code === "ECONNRESET" || code === "57P01" || code === "08006" || code === "08003";
+}
+
+export async function pgQuery(sql: string, params: unknown[] = []) {
+  const pool = await getDb();
+  try {
+    return await pool.query(sql, params);
+  } catch (err) {
+    if (!isTransientConnError(err)) throw err;
+    console.warn("[db] transient connection error, retrying once:", (err as Error).message);
+    await new Promise(r => setTimeout(r, 150));
+    return await pool.query(sql, params);
+  }
+}
+
 export async function queryAll<T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = []
 ): Promise<T[]> {
-  const pool = await getDb();
   // Convert ? placeholders to $1, $2, ...
   let i = 0;
   const pgSql = sql.replace(/\?/g, () => `$${++i}`);
-  const result = await pool.query(pgSql, params);
+  const result = await pgQuery(pgSql, params);
   return result.rows as T[];
 }
 
@@ -691,8 +720,7 @@ export interface PremiumFlowRecord {
 export async function ensurePremiumFlowTable(): Promise<void> { /* handled in ensureAllTables */ }
 
 export async function insertPremiumFlow(r: Omit<PremiumFlowRecord, "id">): Promise<void> {
-  const pool = await getDb();
-  await pool.query(
+  await pgQuery(
     `INSERT INTO premium_flow (timestamp,date,time,"callPremium","putPremium","netPremium","spxPrice")
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [r.timestamp, r.date, r.time, r.callPremium, r.putPremium, r.netPremium, r.spxPrice]
@@ -975,8 +1003,7 @@ export interface BzilaSnapshotRecord {
 export async function ensureBzilaSnapshotsTable(): Promise<void> { /* handled in ensureAllTables */ }
 
 export async function insertBzilaSnapshot(r: { timestamp: number; date: string; time: string; ticker: string; session?: string; orders: unknown[]; stats: unknown }): Promise<number> {
-  const pool = await getDb();
-  const result = await pool.query(
+  const result = await pgQuery(
     `INSERT INTO bzila_snapshots (timestamp,date,time,ticker,session,orders,stats) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
     [r.timestamp, r.date, r.time, r.ticker, r.session ?? "rth",
      JSON.stringify(r.orders ?? []), JSON.stringify(r.stats ?? {})]

@@ -337,9 +337,13 @@ export function useSpxFlow(enabled = true) {
     if (stats.putVol    != null && stats.putVol    > s.cumulativePutVol)    s.cumulativePutVol    = stats.putVol;
     if (stats.buyVol    != null && stats.buyVol    > s.cumulativeBuyVol)    s.cumulativeBuyVol    = stats.buyVol;
     if (stats.sellVol   != null && stats.sellVol   > s.cumulativeSellVol)   s.cumulativeSellVol   = stats.sellVol;
-    if (stats.netPremium  != null && Math.abs(stats.netPremium)  > Math.abs(s.netPremiumFlow))  s.netPremiumFlow  = stats.netPremium;
-    if (stats.callPremium != null && Math.abs(stats.callPremium) > Math.abs(s.callPremiumFlow)) s.callPremiumFlow = stats.callPremium;
-    if (stats.putPremium  != null && Math.abs(stats.putPremium)  > Math.abs(s.putPremiumFlow))  s.putPremiumFlow  = stats.putPremium;
+    // Premium is a SIGNED live value that legitimately swings +/- through the
+    // session, not a monotonic counter. A max-magnitude guard latched it at the
+    // largest value ever seen, which froze the readout and squared off the
+    // sparkline (flat plateaus + sharp jumps). Track the latest value instead.
+    if (stats.netPremium  != null) s.netPremiumFlow  = stats.netPremium;
+    if (stats.callPremium != null) s.callPremiumFlow = stats.callPremium;
+    if (stats.putPremium  != null) s.putPremiumFlow  = stats.putPremium;
     // Server resends the full capped tape each message: once it hits the cap the
     // length stops growing, so a length-only guard freezes the panel. Replace
     // whenever the newest order differs (covers capped + post-restart shrink).

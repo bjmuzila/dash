@@ -134,23 +134,43 @@ class FlowProcessor {
       const bullish = (side === 'buy' && isCall) || (side === 'sell' && !isCall);
       bucket = bullish ? 'bull' : 'bear';
     }
-    this.tape.push({
-      ts: time,
-      symbol: streamerSymbol,
-      underlying: parsed.root,
-      expiration: parsed.expiration,
-      strike: parsed.strike,
-      type: parsed.type,
-      side: side === 'buy' || side === 'sell' ? side : 'buy',
-      action,
-      bucket,
-      price,
-      size,
-      premium,
-      isOtm,
-    });
-    if (this.tape.length > this.tapeCap) {
-      this.tape.splice(0, this.tape.length - this.tapeCap);
+    const tapeSide = side === 'buy' || side === 'sell' ? side : 'buy';
+    // Coalesce prints on the same contract + side into 1-second aggregate orders.
+    // The tape is oldest-first, so the candidate to merge into is the last entry;
+    // merge when it shares symbol+side+action and falls in the same 1s slot.
+    const slot = Math.floor(time / 1000);
+    const last = this.tape[this.tape.length - 1];
+    if (
+      last &&
+      last.symbol === streamerSymbol &&
+      last.side === tapeSide &&
+      last.action === action &&
+      Math.floor(last.ts / 1000) === slot
+    ) {
+      const newSize = last.size + size;
+      // Size-weighted average fill price across the aggregated prints.
+      last.price = newSize > 0 ? (last.price * last.size + price * size) / newSize : price;
+      last.size = newSize;
+      last.premium += premium;
+    } else {
+      this.tape.push({
+        ts: slot * 1000, // pin to the 1s slot start so later prints coalesce
+        symbol: streamerSymbol,
+        underlying: parsed.root,
+        expiration: parsed.expiration,
+        strike: parsed.strike,
+        type: parsed.type,
+        side: tapeSide,
+        action,
+        bucket,
+        price,
+        size,
+        premium,
+        isOtm,
+      });
+      if (this.tape.length > this.tapeCap) {
+        this.tape.splice(0, this.tape.length - this.tapeCap);
+      }
     }
   }
 

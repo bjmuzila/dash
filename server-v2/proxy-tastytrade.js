@@ -336,6 +336,27 @@ function etFiveMinSlot(ts) {
 }
 
 /**
+ * Minutes-since-midnight in ET for an epoch-ms timestamp (defaults to now).
+ * Used to gate the pre-open volume reset: TastyTrade REST per-strike `volume`
+ * carries the PRIOR session's cumulative figure until their backend resets at
+ * the 9:30 ET cash open, so before 9:30 we force it to 0.
+ */
+function etMinutesNow(ts = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(ts));
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const hour = map.hour === '24' ? 0 : Number(map.hour || 0);
+  return hour * 60 + Number(map.minute || 0);
+}
+
+/** True before the 9:30 ET cash open — REST option volume is stale until then. */
+function isPreOpenEt(ts = Date.now()) {
+  return etMinutesNow(ts) < 9 * 60 + 30;
+}
+
+/**
  * Resolve the front (nearest-expiry, active) /ES future's dxLink streamer symbol.
  * Uses the futures list for the ES product and picks the soonest non-expired
  * contract. Returns e.g. "/ESU25:XCME".
@@ -940,6 +961,9 @@ async function fetchChainFull(ticker, expiration = '') {
   // (confirmed working); index-option[] returned nothing and broke SPX.
   const mdMap = await fetchOptionMarketData(scoped.map((c) => c.occSymbol), 'equity-option');
   const underlyingPrice = await fetchUnderlyingSpot(ticker);
+  // Before 9:30 ET, REST `volume` still holds the prior session's cumulative
+  // total — zero it so the new session starts clean. OI is untouched.
+  const preOpen = isPreOpenEt();
 
   // Group into nested expGroups -> strikes -> { call, put }.
   const expMap = new Map();
@@ -957,7 +981,7 @@ async function fetchChainFull(ticker, expiration = '') {
       'streamer-symbol': c.streamerSymbol || '',
       'open-interest': md.oi || 0,
       openInterest: md.oi || 0,
-      volume: md.volume || 0,
+      volume: preOpen ? 0 : (md.volume || 0),
       delta: md.delta || 0,
       gamma: md.gamma || 0,
       theta: md.theta || 0,
