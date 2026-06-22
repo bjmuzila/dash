@@ -776,7 +776,7 @@ export default function HomePage() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", flexShrink: 0 }}>
                 <span style={{ color: C.cyan }}><BarChart2 /></span>
                 <span style={{ color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>NET GEX</span>
-                <span style={{ marginLeft: "auto", fontSize: 11, color: "#4a6a88" }}>Drag to pan · Scroll to zoom</span>
+                <span suppressHydrationWarning style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em" }}>{etTime}</span>
               </div>
               {/* Full-featured toolbar */}
               <GexToolbar

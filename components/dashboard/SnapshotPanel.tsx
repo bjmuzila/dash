@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSpxFlow, type FlowOrder } from "@/hooks/useSpxFlow";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, currentSession, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
+import { saveBzilaLiveSnapshot, getLatestBzilaSnapshotToday, savePremiumFlowSnapshot, currentSession, type BzilaLiveSnapshotOrder } from "@/lib/snapdb";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
@@ -469,16 +469,25 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
   // ── Hydrate the whole-night net-premium series and keep it fresh ───────────
   useEffect(() => {
     let alive = true;
-    const load = () => fetchSessionPremHistory().then(h => { if (alive) setDbPremHistory(h); }).catch(() => {});
+    const load = () => fetchSessionPremHistory().then(h => {
+      // Never let a sparse/empty fetch shrink an already-populated series.
+      if (alive) setDbPremHistory(prev => (h.length >= prev.length ? h : prev));
+    }).catch(() => {});
     load();
     const id = setInterval(load, 60_000);
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Refresh just triggers a re-render — does NOT clear accumulated data
+  // Refresh just triggers a re-render — does NOT clear accumulated data.
+  // Only (re)fetch the night history if it never loaded; never replace a
+  // populated series (a sparse fetch must not collapse the sparkline).
   const doRefresh = useCallback(async () => {
     setNow(Date.now());
-    fetchSessionPremHistory().then(setDbPremHistory).catch(() => {});
+    setDbPremHistory(prev => {
+      if (prev.length) return prev;
+      fetchSessionPremHistory().then(h => { if (h.length) setDbPremHistory(h); }).catch(() => {});
+      return prev;
+    });
   }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
@@ -600,6 +609,14 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
       if (now - lastPersistRef.current < 5000) return;
       try {
         await saveBzilaLiveSnapshot(persistedPayload);
+        // Persist a net-premium time-series point so the sparkline can render the
+        // whole session (the premium_flow table had no writer on server-v2).
+        void savePremiumFlowSnapshot(
+          persistedPayload.stats.callPremium,
+          persistedPayload.stats.putPremium,
+          persistedPayload.stats.netPremium,
+          persistedPayload.stats.spxPrice,
+        ).catch(() => {});
         lastPersistRef.current = now;
         window.dispatchEvent(new CustomEvent("db-mvc-updated", { detail: { triggerType: "bzila-live-snapshot" } }));
       } catch (err) {
@@ -620,7 +637,6 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
       <div style={{ padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block", background: flow.connected ? "#00e676" : "#ef4444" }} />
         <span style={{ fontSize: 8, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
-        {flow.spxPrice > 0 && <span style={{ fontSize: 9, fontFamily: "inherit", color: "#3a5570", marginLeft: 4 }}>SPX {flow.spxPrice.toFixed(2)}</span>}
         <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>
           {btnLabel}
         </button>

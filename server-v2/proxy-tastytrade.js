@@ -2023,7 +2023,7 @@ class TastytradeProxy {
         this._publishEsFut();
         return;
       }
-      this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize) });
+      this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize), t: Date.now() });
       return;
     }
 

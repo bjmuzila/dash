@@ -21,19 +21,44 @@ function getLatestBuySellPct(records) {
   return Number(latest?.buyPct || 0);
 }
 
+/** A quote older than this (ms) can't be trusted for at/outside-spread
+ *  classification — a stale low ask makes every later print look like a
+ *  buy (`price >= ask`), which collapses sell volume to ~0. */
+const QUOTE_FRESH_MS = 2500;
+
 /**
- * Infer aggressor side from a print vs the prevailing quote.
+ * Infer aggressor side from a print vs the prevailing quote (Lee-Ready) with a
+ * tick-rule fallback when the quote is stale or the print sits outside a stale
+ * spread.
+ * @param {number} price trade price
+ * @param {object|null} quote prevailing quote { bid, ask, t? }
+ * @param {number} [lastTrade] previous trade price for this symbol (tick rule)
+ * @param {number} [now] current epoch ms
  * @returns {'buy'|'sell'|'mid'|'unknown'}
  */
-function inferSide(price, quote) {
-  if (!quote || quote.bid == null || quote.ask == null) return 'unknown';
+function inferSide(price, quote, lastTrade = null, now = Date.now()) {
+  const tick = () => {
+    if (lastTrade == null || !(lastTrade > 0)) return 'unknown';
+    if (price > lastTrade) return 'buy';
+    if (price < lastTrade) return 'sell';
+    return 'unknown';
+  };
+  if (!quote || quote.bid == null || quote.ask == null) return tick();
   const { bid, ask } = quote;
-  if (!(ask >= bid)) return 'unknown';
+  if (!(ask >= bid)) return tick();
+  const fresh = quote.t == null || (now - quote.t) <= QUOTE_FRESH_MS;
   const mid = (bid + ask) / 2;
+  // Inside the spread is reliable regardless of freshness.
+  if (price > bid && price < ask) {
+    if (price > mid) return 'buy';
+    if (price < mid) return 'sell';
+    return 'mid';
+  }
+  // At/outside the spread: only trust a fresh quote; otherwise the quote has
+  // likely lagged the market — defer to the tick rule.
+  if (!fresh) return tick();
   if (price >= ask) return 'buy';
   if (price <= bid) return 'sell';
-  if (price > mid) return 'buy';
-  if (price < mid) return 'sell';
   return 'mid';
 }
 
@@ -55,6 +80,8 @@ class FlowProcessor {
     this.tapeCap = tapeCap;
     /** @type {Array<{time,side,type,size,price,premium}>} */
     this.prints = [];
+    /** streamerSymbol -> last trade price, for the tick-rule side fallback. */
+    this.lastTradePx = new Map();
     /**
      * Capped FIFO of recent per-order tape entries, oldest-first. Each entry is
      * already in the FlowOrder shape the dashboard's FlowTape consumes.
@@ -76,7 +103,9 @@ class FlowProcessor {
   addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0 }) {
     const parsed = parseOptionSymbol(streamerSymbol);
     if (!parsed || !(price > 0) || !(size > 0)) return;
-    const side = inferSide(price, quote);
+    const lastTrade = this.lastTradePx.get(streamerSymbol);
+    const side = inferSide(price, quote, lastTrade, time);
+    this.lastTradePx.set(streamerSymbol, price);
     const premium = price * size * 100;
     this.prints.push({
       time,
@@ -186,6 +215,7 @@ class FlowProcessor {
   reset() {
     this.prints = [];
     this.tape = [];
+    this.lastTradePx.clear();
   }
 }
 

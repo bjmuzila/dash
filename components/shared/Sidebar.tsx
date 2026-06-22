@@ -66,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "GEX",
     Icon: GridIcon,
     items: [
+      { label: "Home", href: "/home" },
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Insights", href: "/insights" },
@@ -350,7 +351,8 @@ export default function Sidebar() {
           {single ? (
             <Link href={target!} style={{ textDecoration: "none" }}>{rowInner}</Link>
           ) : (
-            rowInner
+            // Collapsed multi-item group: clicking the icon navigates to the top item.
+            <Link href={orderedItems(group)[0]?.href ?? group.items[0].href} style={{ textDecoration: "none" }}>{rowInner}</Link>
           )}
         </div>
       );
@@ -671,7 +673,7 @@ export default function Sidebar() {
         )}
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
-          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: { width: 44, height: 44 } } }} />
+          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: { width: 56, height: 56 } } }} />
         </div>
       </div>
     </nav>

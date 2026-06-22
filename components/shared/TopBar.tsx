@@ -84,19 +84,6 @@ function etDateStr(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
-function etClock() {
-  const d = etNow();
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-}
-
-function etSession() {
-  const d = etNow();
-  const mins = d.getHours() * 60 + d.getMinutes();
-  if (mins >= 570 && mins < 960) return "RTH";   // 9:30 – 16:00
-  if (mins >= 960 && mins < 1020) return "AH";   // 16:00 – 17:00
-  return "EXTH";
-}
-
 // 9:30am–4:00pm ET
 function isRTH() {
   const d = etNow();
@@ -146,8 +133,6 @@ function saveTodayCloses(es: number, spx: number, date?: string) {
 export default function TopBar() {
   const router = useRouter();
   const pathname = usePathname();
-  const [clock, setClock] = useState("—");
-  const [session, setSession] = useState("ET");
   const [ddOpen, setDdOpen] = useState(false);
   const [ttLive, setTtLive] = useState(false);
 
@@ -169,14 +154,6 @@ export default function TopBar() {
 
   // persisted close references
   const closesRef = useRef<{ es: number; spx: number }>({ es: 0, spx: 0 });
-
-  // ── clock ──
-  useEffect(() => {
-    const tick = () => { setClock(etClock()); setSession(etSession()); };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
 
   // ── seed prev-closes from batch quotes on mount ──
   useEffect(() => {
@@ -427,15 +404,8 @@ export default function TopBar() {
           <span style={{ color: "#e8edf5", fontSize: 18 }}>GEX</span>
         </div>
 
-        {/* Clock + VIX */}
+        {/* VIX */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, padding: TOPBAR_PILL_PADDING, border: "1px solid #1e3050", borderRadius: 999, background: "rgba(7,16,27,.8)" }}>
-          <span suppressHydrationWarning style={{ fontSize: TOPBAR_TIME_SIZE, fontWeight: 800, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", minWidth: 118, display: "inline-block" }}>
-            {clock}
-          </span>
-          <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#5a7a99", letterSpacing: ".14em", textTransform: "uppercase", minWidth: 34 }}>
-            {session}
-          </span>
-          <span style={{ color: "#1e3050" }}>|</span>
           <span style={{ fontSize: TOPBAR_LABEL_SIZE, color: "#3a5570", letterSpacing: ".14em", textTransform: "uppercase" }}>VIX</span>
           <span style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8c060", fontVariantNumeric: "tabular-nums" }}>
             {vix.price > 0 ? fmt(vix.price) : "—"}
