@@ -147,7 +147,10 @@ async function fetchChainGex(base, chainTicker) {
   // /api/gex routes to /proxy/gex (market-state), but we need the chain for
   // SPY/QQQ. Use /api/chains which proxies to TT and returns the raw chain.
   // Get the first available expiration first.
-  const expRes = await fetch(`${base}/api/expirations?ticker=${encodeURIComponent(chainTicker)}`, { cache: 'no-store' });
+  const expRes = await fetch(`${base}/api/expirations?ticker=${encodeURIComponent(chainTicker)}`, {
+    cache: 'no-store',
+    headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+  });
   if (!expRes.ok) throw new Error(`expirations for ${chainTicker} returned ${expRes.status}`);
   const expJson = await expRes.json();
 
@@ -163,7 +166,10 @@ async function fetchChainGex(base, chainTicker) {
 
   const chainRes = await fetch(
     `${base}/api/chains?ticker=${encodeURIComponent(chainTicker)}&expiration=${encodeURIComponent(expiry)}&range=all`,
-    { cache: 'no-store' }
+    {
+      cache: 'no-store',
+      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+    }
   );
   if (!chainRes.ok) throw new Error(`chains for ${chainTicker} returned ${chainRes.status}`);
   const chainJson = await chainRes.json();

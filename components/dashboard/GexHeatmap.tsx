@@ -61,14 +61,27 @@ export default function GexHeatmap({
 }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
+  const anchorStrikeRef = useRef<number | null>(null);
   const useVol = dataMode === "vol-only";
 
   const denseChain = densifyChainRows(chain);
   const rowByStrike = new Map(denseChain.map(r => [r.strike, r]));
   const allStrikes = [...new Set(denseChain.map(r => r.strike))].sort((a, b) => b - a);
-  const atmStrike = spotPrice > 0
+  const nearestStrike = spotPrice > 0
     ? allStrikes.reduce((best, s) => Math.abs(s - spotPrice) < Math.abs(best - spotPrice) ? s : best, allStrikes[0] ?? spotPrice)
     : (allStrikes[0] ?? 0);
+
+  // Hysteresis anchor: only re-center the window once spot moves >1 strike from the
+  // current anchor. Prevents add-one/drop-one window flashing on every tick. (See [[heatmap]] note.)
+  const strikeStep = allStrikes.length > 1 ? Math.abs(allStrikes[0] - allStrikes[1]) : 1;
+  if (
+    anchorStrikeRef.current == null ||
+    !allStrikes.includes(anchorStrikeRef.current) ||
+    Math.abs(nearestStrike - anchorStrikeRef.current) > strikeStep * 1.5
+  ) {
+    anchorStrikeRef.current = nearestStrike;
+  }
+  const atmStrike = anchorStrikeRef.current;
   const atmIdx = allStrikes.indexOf(atmStrike);
   const lo = Math.max(0, atmIdx - win);
   const hi = Math.min(allStrikes.length - 1, atmIdx + win);

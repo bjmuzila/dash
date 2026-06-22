@@ -679,6 +679,13 @@ async function probeRest({ ticker, expiry, type, strike }) {
   const oi = n(it['open-interest']);
   const vol = n(it.volume);
   const g = feeds.Greeks;
+  // Vanna/charm are not in the REST greeks feed — derive them from Black-Scholes
+  // exactly as the live path does (_recompute): per-year BS, then unit-scaled
+  // (vanna ÷100 per 1% vol, charm ÷365 per day). Needs IV + time-to-expiry.
+  const T = yearsToExpiry(best.expiration);
+  const bs = (spot > 0 && g.iv > 0 && T > 0)
+    ? bsGreeks({ S: spot, K: best.strike, T, sigma: g.iv, r: RISK_FREE, type })
+    : null;
   const exposures = (spot > 0)
     ? {
         spot,
@@ -689,8 +696,8 @@ async function probeRest({ ticker, expiry, type, strike }) {
         dex: sign * Math.abs(g.delta || 0) * oi * 100 * spot,
         vex: sign * (g.vega || 0) * oi * 100 * spot,
         thetaExp: sign * (g.theta || 0) * oi * 100 * spot,
-        vannaExp: null, // no vanna in REST greeks
-        charmExp: null, // no charm in REST greeks
+        vannaExp: bs ? sign * (bs.vanna / 100) * oi * 100 * spot : null,
+        charmExp: bs ? sign * (bs.charm / 365) * oi * 100 * spot : null,
       }
     : { spot: null, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
 
