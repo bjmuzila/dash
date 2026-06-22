@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-22 (session 44) — Net-premium sparkline whole-night history, flow sell-side classifier fix, version bump v6
+
+Snapshot Flow panel: made the net-premium sparkline span the whole session, fixed the buy/sell flow misclassification that zeroed out sell volume, and removed the SPX price pill.
+
+### Net Premium sparkline — whole-night history
+- `components/dashboard/SnapshotPanel.tsx`: sparkline was built only from `flow.orders` (the server flow tape, hard-capped at ~200 prints in `flow-processor.js`), so it could never show more than the recent slice. Now hydrates a persisted `premium_flow` series for the active session and merges the live tail on top.
+- Added `sessionStartMs()` / `sessionDateKeys()` / `etMinutes()` / `etDateKey()` helpers: session breaks only at the two SPX opens — RTH 09:30 and EXT 18:00 — so 18:00→next-09:30 is one continuous line crossing midnight (fetched across both ET date partitions). 09:30–18:00 belongs to today's RTH.
+- `fetchSessionPremHistory()` bounds rows to the session-start instant and sorts ascending.
+- **Writer was missing:** `lib/snapdb.ts:savePremiumFlowSnapshot` existed but was never called on server-v2, so the `premium_flow` table had only one stale row (2026-06-16). Wired it into the existing 5s autosave loop in SnapshotPanel so net-premium points now persist.
+- Refresh no longer resets the sparkline: `doRefresh` only fetches when the night history never loaded, and neither refresh nor the 60s poll will replace a populated series with a smaller/empty one.
+
+### Flow buy/sell classifier — sell volume fix
+- `server-v2/computation/flow-processor.js`: `/proxy/flow` was showing `buyPct ~99.97%` (callSellVol 1, putSellVol 4) — nearly every print misclassified as a buy because `inferSide`'s `price >= ask` fired against stale, lagging cached quotes. Rewrote `inferSide` to always trust inside-spread classification, only trust at/outside-spread calls when the quote is fresh (≤2500ms), and otherwise fall back to the tick rule vs. the symbol's prior trade price.
+- Added per-symbol `lastTradePx` tracking in `addPrint` (cleared in `reset()`).
+- `server-v2/proxy-tastytrade.js`: Quote handler now stamps each cached quote with `t: Date.now()` for the freshness check.
+
+### Snapshot header
+- `components/dashboard/SnapshotPanel.tsx`: removed the `SPX <price>` pill next to the SNAPSHOT label.
+
+### Version
+- `package.json`: bumped `2026.6.22-v5` → `2026.6.22-v6`.
+
+> Note: server-v2 changes (classifier + quote timestamp) require a server restart to take effect. `tsc`/tests not run this session (sandbox hypervisor disabled) — verify with a local build before deploy.
+
 ## 2026-06-22 (session 43) — Options chain strike ordering (descending), version bump v4
 
 Reversed the options-chain strike sort so higher strikes render at the top and lower strikes at the bottom.

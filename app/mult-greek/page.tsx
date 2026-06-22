@@ -173,9 +173,10 @@ function computeRows(
   const out: ComputedRow[] = rows.map(r => {
     const cd = liveData[r.callSym ?? ""] || {};
     const pd = liveData[r.putSym  ?? ""] || {};
-    const volOnly = contractMode === "vol";
-    const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
-    const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
+    // Always count OI + volume. VOL-only zeroed OI, so the greek read as
+    // volume-only and went blank pre-open when session volume is still 0.
+    const cc = (cd.oi ?? 0) + (cd.vol ?? 0);
+    const pc = (pd.oi ?? 0) + (pd.vol ?? 0);
     return {
       strike: r.strike,
       isATM: r.strike === atmStrike,
@@ -209,13 +210,13 @@ function computeTotals(
   contractMode: "oivol" | "vol",
 ): Record<NetCol, number> {
   const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
-  const volOnly = contractMode === "vol";
 
   strikes.forEach(r => {
     const cd = liveData[r.callSym ?? ""] || {};
     const pd = liveData[r.putSym  ?? ""] || {};
-    const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
-    const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
+    // Always count OI + volume (see computeRows note).
+    const cc = (cd.oi ?? 0) + (cd.vol ?? 0);
+    const pc = (pd.oi ?? 0) + (pd.vol ?? 0);
     totals.gex  += ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
     totals.dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
     totals.chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
@@ -374,7 +375,9 @@ export default function MultGreekPage() {
   const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
-  const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
+  // Contract basis is fixed at OI+VOL (volume-only made the greek read blank
+  // pre-open). Kept as a const so the panel/calc props are unchanged.
+  const contractMode = "oivol" as const;
   const [intensity, setIntensity] = useState(1.75);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>({ state: "idle", msg: "READY" });
   const [lastUpdate, setLastUpdate] = useState("");
@@ -540,6 +543,18 @@ export default function MultGreekPage() {
     await loadAll(exp, true);
   }, [loadAll]);
 
+  // Auto-refresh: TT REST per-strike volume accumulates through the session and
+  // resets stale at the open, so the one-shot load lands volume=0 for SPY/QQQ
+  // (SPX is the only live-streamed underlying). Re-pull (cache-busted) every 60s
+  // while the market is open so volume fills in for all three tickers.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const exp = activeExpiryRef.current;
+      if (exp && isMarketOpen()) loadAll(exp, true);
+    }, 60000);
+    return () => clearInterval(id);
+  }, [loadAll]);
+
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
   const statusColors: Record<string, string> = {
@@ -570,12 +585,12 @@ export default function MultGreekPage() {
           style={{
             background: "rgba(0,0,0,0.4)", color: HT.text, border: `1px solid ${HT.border}`,
             borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer",
-            fontFamily: "monospace",
+            fontFamily: "monospace", colorScheme: "dark",
           }}
         >
-          <option value="">-- Expiry --</option>
+          <option value="" style={{ background: "#0b0f1a", color: HT.text }}>-- Expiry --</option>
           {expirations.map(exp => (
-            <option key={exp.date} value={exp.date}>{exp.label}</option>
+            <option key={exp.date} value={exp.date} style={{ background: "#0b0f1a", color: HT.text }}>{exp.label}</option>
           ))}
         </select>
 
@@ -593,22 +608,15 @@ export default function MultGreekPage() {
 
         <span style={{ color: HT.border }}>|</span>
 
-        {/* Contract mode toggle */}
+        {/* Contract basis — always OI + volume so the greek isn't volume-only
+            (volume-only read blank pre-open while session volume is still 0). */}
         <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
-          {(["oivol", "vol"] as const).map(m => (
-            <button
-              key={m}
-              onClick={() => setContractMode(m)}
-              style={{
-                padding: "2px 10px", fontSize: 9, fontWeight: 800, borderRadius: 3,
-                border: "none", cursor: "pointer",
-                background: contractMode === m ? "rgba(0,229,255,.15)" : "transparent",
-                color: contractMode === m ? HT.cyan : "#64748b",
-              }}
-            >
-              {m === "oivol" ? "OI+VOL" : "VOL"}
-            </button>
-          ))}
+          <span style={{
+            padding: "2px 10px", fontSize: 9, fontWeight: 800, borderRadius: 3,
+            background: "rgba(0,229,255,.15)", color: HT.cyan,
+          }}>
+            OI+VOL
+          </span>
         </div>
 
         <span style={{ color: HT.border }}>|</span>

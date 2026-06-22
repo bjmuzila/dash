@@ -192,6 +192,18 @@ function isTradingDay(date: Date): boolean {
   return true;
 }
 
+// True during the live RTH session (9:30–16:00 ET on a trading day). Per-strike
+// volume only accumulates from real session prints, so it reads 0 from 9:00–9:30
+// even though OI (settled overnight) is already populated. We poll the chain
+// through the session so volume climbs as trades print instead of staying frozen
+// at the stale 0 from the page's one-shot load.
+function isSessionLive(): boolean {
+  const et = etToday();
+  if (!isTradingDay(et)) return false;
+  const mins = et.getHours() * 60 + et.getMinutes();
+  return mins >= 9 * 60 + 30 && mins < 16 * 60;
+}
+
 function buildExpiries() {
   const today = etToday();
   const list: Array<{ value: string; label: string }> = [];
@@ -449,6 +461,17 @@ export default function OptionsChainPage() {
       loadChain("SPX", defaultExpiry);
     }
   }, []);
+
+  // Poll the active chain every 60s during the live session so per-strike volume
+  // accumulates after the open instead of staying pinned at the 9:00–9:30 zero.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const exp = selectedExpiryRef.current;
+      if (exp && activeTicker && isSessionLive()) loadChain(activeTicker, exp, true);
+    }, 60000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTicker]);
 
   // Fetch the ticker's REAL listed expirations whenever the active ticker
   // changes. Replaces the fabricated calendar list so the dropdown only ever
