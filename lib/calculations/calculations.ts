@@ -194,6 +194,20 @@ export function formatGEX(value: number): string {
 // Returns { levels, values } arrays for the profile curve (values in $B/1% move)
 // and the interpolated gamma-zero flip point.
 
+// Live fraction of the RTH session (09:30–16:00 ET) still remaining: 1 before
+// the open, 0 at/after the close. Gives 0DTE a realistic time-to-expiry instead
+// of the 1/262 full-day floor, which inflated the gamma-flip ~60pts intraday.
+function rthFractionLeft(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour12: false,
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date());
+  const g = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  const nowSec = g("hour") * 3600 + g("minute") * 60 + g("second");
+  const open = 9.5 * 3600, close = 16 * 3600, len = close - open;
+  return Math.min(Math.max((close - nowSec) / len, 0), 1);
+}
+
 function bsGamma(S: number, K: number, vol: number, T: number): number {
   if (T <= 0 || vol <= 0 || S <= 0 || K <= 0) return 0;
   const sqrtT = Math.sqrt(T);
@@ -244,9 +258,13 @@ export function computeGEXProfile(
   for (const S of levels) {
     let net = 0;
     for (const r of rows) {
-      // Reference annualization: trading days / 262, with 0DTE floored to 1/262.
+      // Reference annualization: trading days / 262. For 0DTE, use the live RTH
+      // fraction remaining (floored to ~1 five-min bar) instead of a full day,
+      // so the gamma-flip tracks real intraday decay.
       const dte = r.dte ?? 0;
-      const T = dte <= 0 ? 1 / 262 : dte / 262;
+      const T = dte <= 0
+        ? Math.max(rthFractionLeft(), 1 / 78) / 262
+        : dte / 262;
       const callG = bsGamma(S, r.strike, r.callIV!, T);
       const putG  = bsGamma(S, r.strike, r.putIV!,  T);
       // TotalGEX(P) = Σ BS_gamma(P,K,IV,T) × contracts × 100 × P²
@@ -256,18 +274,23 @@ export function computeGEXProfile(
     values.push(net / 1e9);
   }
 
-  // Gamma flip: reference takes the FIRST sign change (lowest strike), interpolated.
+  // Gamma flip: collect ALL sign changes, then take the one nearest spot.
   //   zeroGamma = posStrike − (posStrike − negStrike) × posGamma/(posGamma − negGamma)
+  // (Sharp 0DTE gamma can produce spurious far-tail crossings; the regime flip is
+  //  the crossing closest to spot, matching findGEXFlip's bar-based behavior.)
   // (ChainRow carries no expiration date, so the reference's Ex-Next / Ex-Monthly
   //  series are omitted — neither is plotted; only the All-Expiries curve + flip are.)
-  let flipPoint: number | null = null;
+  const crossings: number[] = [];
   for (let i = 0; i < values.length - 1; i++) {
     const a = values[i], b = values[i + 1];
     if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
-      flipPoint = levels[i + 1] - ((levels[i + 1] - levels[i]) * b / (b - a));
-      break;
+      const z = levels[i + 1] - ((levels[i + 1] - levels[i]) * b / (b - a));
+      if (Number.isFinite(z)) crossings.push(z);
     }
   }
+  let flipPoint: number | null = crossings.length
+    ? crossings.reduce((best, c) => (Math.abs(c - spot) < Math.abs(best - spot) ? c : best))
+    : null;
   if (flipPoint !== null) flipPoint = Math.round(flipPoint * 10) / 10;
 
   return { levels, values, flipPoint };
