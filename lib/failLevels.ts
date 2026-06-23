@@ -361,3 +361,345 @@ function countPierces(bars: EsCandle[], level: RefLevel, bufferPts: number, conf
   }
   return n;
 }
+
+// ─── Auction Market Theory (AMT) layer ────────────────────────────────────────
+// Today's Initial Balance, day-type classification, and a per-level AMT read of
+// each reference level (overnight = thin/weak acceptance, prior-day/week = strong
+// acceptance). No value-area / volume-profile — pure price + IB. All ES points.
+
+export type DayType =
+  | "trend-up" | "trend-down" | "balance" | "reversal-up" | "reversal-down" | "forming";
+
+export interface InitialBalance {
+  high: number;
+  low: number;
+  mid: number;
+  locked: boolean;        // true once past 10:30 ET
+  brokeHigh: boolean;     // price extended above IB high
+  brokeLow: boolean;      // price extended below IB low
+}
+
+export interface AmtLevelRead {
+  kind: LevelKind;
+  label: string;
+  short: string;
+  acceptance: "strong" | "weak";   // PDH/PDL/PWH/PWL = strong, ON = thin/weak
+  read: string;                    // AMT one-liner
+  bias: "long" | "short" | "neutral";
+}
+
+export interface AmtResult {
+  ib: InitialBalance | null;
+  dayType: DayType;
+  dayTypeLabel: string;
+  dayTypeDetail: string;
+  levelReads: AmtLevelRead[];
+  bias: { lean: "long" | "short" | "neutral"; text: string };
+}
+
+const IB_OPEN = 9 * 60 + 30;    // 09:30
+const IB_END = 10 * 60 + 30;    // 10:30 ET
+
+function etMinutes(ts: number): number {
+  return etParts(ts).minutes;
+}
+
+/** Today's Initial Balance from the 09:30–10:30 ET bars. */
+function computeIb(todayBars: EsCandle[]): InitialBalance | null {
+  const ibBars = todayBars.filter((b) => {
+    const m = etMinutes(b.timestamp);
+    return m >= IB_OPEN && m < IB_END;
+  });
+  const hl = hiLo(ibBars);
+  if (!hl) return null;
+  const last = todayBars[todayBars.length - 1];
+  const lastMin = last ? etMinutes(last.timestamp) : IB_OPEN;
+  const post = todayBars.filter((b) => etMinutes(b.timestamp) >= IB_END);
+  const brokeHigh = post.some((b) => b.high > hl.high);
+  const brokeLow = post.some((b) => b.low < hl.low);
+  return {
+    high: hl.high,
+    low: hl.low,
+    mid: (hl.high + hl.low) / 2,
+    locked: lastMin >= IB_END,
+    brokeHigh,
+    brokeLow,
+  };
+}
+
+/**
+ * AMT read for today: IB interaction, day-type classification, and per-level
+ * acceptance reads — no value area.
+ */
+export function computeAmt(candles: EsCandle[], todayDate: string): AmtResult {
+  const levels = computeRefLevels(candles, todayDate);
+  const todayBars = candles
+    .filter((c) => c.date === todayDate)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  const ib = computeIb(todayBars);
+
+  const rthToday = todayBars.filter((b) => isRthBar(b.timestamp));
+  const last = rthToday[rthToday.length - 1] ?? todayBars[todayBars.length - 1];
+  const close = last?.close ?? null;
+
+  // ── Day-type classification (IB-driven) ──
+  let dayType: DayType = "forming";
+  let dayTypeLabel = "Forming";
+  let dayTypeDetail = "Auction still developing — IB not yet locked.";
+
+  if (ib && close != null) {
+    const range = ib.high - ib.low || 1;
+    const ext = Math.max(0, close - ib.high, ib.low - close);
+    const extMult = ext / range;
+    if (ib.brokeHigh && !ib.brokeLow && close > ib.high) {
+      dayType = "trend-up"; dayTypeLabel = "Trend ↑";
+      dayTypeDetail = `Sustained above IB high${extMult >= 1 ? " with range extension" : ""}.`;
+    } else if (ib.brokeLow && !ib.brokeHigh && close < ib.low) {
+      dayType = "trend-down"; dayTypeLabel = "Trend ↓";
+      dayTypeDetail = `Sustained below IB low${extMult >= 1 ? " with range extension" : ""}.`;
+    } else if (ib.brokeHigh && close < ib.low) {
+      dayType = "reversal-down"; dayTypeLabel = "Reversal ↓";
+      dayTypeDetail = "Took out highs early, then rotated back below IB.";
+    } else if (ib.brokeLow && close > ib.high) {
+      dayType = "reversal-up"; dayTypeLabel = "Reversal ↑";
+      dayTypeDetail = "Took out lows early, then rotated back above IB.";
+    } else if (ib.brokeHigh && ib.brokeLow) {
+      dayType = "balance"; dayTypeLabel = "Balance / Two-sided";
+      dayTypeDetail = "Probed both IB extremes — rotational, mean-reverting auction.";
+    } else if (ib.locked) {
+      dayType = "balance"; dayTypeLabel = "Balance";
+      dayTypeDetail = "Holding inside IB — range-bound; fade the extremes.";
+    }
+  }
+
+  // ── Per-level AMT reads ──
+  const levelReads: AmtLevelRead[] = levels.map((lv) => {
+    const isOn = lv.kind === "onHigh" || lv.kind === "onLow";
+    const acceptance: AmtLevelRead["acceptance"] = isOn ? "weak" : "strong";
+    const isHigh = lv.side === "above";
+
+    let read: string;
+    let bias: AmtLevelRead["bias"];
+    if (isOn) {
+      read = `Thin overnight ${isHigh ? "high" : "low"} — prime probe/fade target; poor ${isHigh ? "highs" : "lows"} reverse.`;
+      bias = "neutral";
+    } else {
+      read = `Prior-session ${isHigh ? "high" : "low"} — strong ${isHigh ? "resistance" : "support"} on a retest.`;
+      bias = isHigh ? "short" : "long";
+    }
+    return { kind: lv.kind, label: lv.label, short: lv.short, acceptance, read, bias };
+  });
+
+  // ── Overall bias ──
+  let lean: "long" | "short" | "neutral" = "neutral";
+  let text = "Two-sided auction — trade the reference levels, no strong directional lean.";
+  if (dayType === "trend-up") { lean = "long"; text = "Trend up — favor break-&-retest longs above IB/PDH; stops below IB low."; }
+  else if (dayType === "trend-down") { lean = "short"; text = "Trend down — favor break-&-retest shorts below IB/PDL; stops above IB high."; }
+  else if (dayType === "reversal-up") { lean = "long"; text = "Reversal up — early low taken then reclaimed; long back above IB."; }
+  else if (dayType === "reversal-down") { lean = "short"; text = "Reversal down — poor high then back below IB; short the rollover."; }
+  else if (dayType === "balance") { lean = "neutral"; text = "Balance day — fade ONH/PDH and ONL/PDL back toward the IB mid; avoid the middle."; }
+
+  return {
+    ib,
+    dayType,
+    dayTypeLabel,
+    dayTypeDetail,
+    levelReads,
+    bias: { lean, text },
+  };
+}
+
+// ─── AMT entry triggers ───────────────────────────────────────────────────────
+// Rule-based scalping setups built on the reference levels + IB. Each trigger is
+// detected from completed 5m ES bars and carries entry/stop/target guidance in
+// ES points. Direction long/short; freshness = bars since it fired.
+
+export type TriggerKind =
+  | "break-retest-long"     // A: ONH/PDH break & retest holds
+  | "break-retest-short"    // D: ONL/PDL breakdown & retest fails
+  | "ib-extension-long"     // C: IB-high break that also clears ONH
+  | "ib-extension-short"    // C': IB-low break that also clears ONL
+  | "poor-high-short"       // E: probe above PDH/ONH then rolls over
+  | "poor-low-long"         // E': probe below PDL/ONL then reclaims
+  | "balance-break-short"   // F: balance breaks down, leaves LVN
+  | "balance-break-long";   // F: balance breaks up
+
+export interface Trigger {
+  kind: TriggerKind;
+  code: string;             // "A" / "D" / "E" …
+  title: string;
+  direction: "long" | "short";
+  ref: string;              // reference level short, e.g. "PDH"
+  ts: number;               // bar ts the trigger confirmed
+  barsAgo: number;          // how many 5m bars since it fired (0 = current)
+  entry: number;            // suggested entry (ES)
+  stop: number;             // suggested stop (ES)
+  target: number;           // suggested target (ES)
+  confluence: string;       // checklist note
+  active: boolean;          // fresh enough to still be actionable
+}
+
+const FRESH_BARS = 4;       // a trigger stays "active" ~20 min after firing
+
+function rrTarget(entry: number, stop: number, mult: number): number {
+  return entry + (entry - stop) * mult;
+}
+
+/**
+ * Detect AMT entry triggers from today's RTH bars given the reference levels and
+ * AMT context. Returns newest-first. Levels are matched by kind so we can label
+ * the reference (PDH/ONH/…); VA/IB come from `amt`.
+ */
+export function detectTriggers(
+  candles: EsCandle[],
+  todayDate: string,
+  amt?: AmtResult,
+): Trigger[] {
+  const ctx = amt ?? computeAmt(candles, todayDate);
+  const levels = computeRefLevels(candles, todayDate);
+  const bars = candles
+    .filter((c) => c.date === todayDate && isRthBar(c.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (bars.length < 2) return [];
+
+  const lastIdx = bars.length - 1;
+  const ib = ctx.ib;
+  const byKind = new Map(levels.map((l) => [l.kind, l]));
+  const out: Trigger[] = [];
+  const buf = 0.5;
+
+  const push = (t: Omit<Trigger, "barsAgo" | "active">) => {
+    const idx = bars.findIndex((b) => b.timestamp === t.ts);
+    const barsAgo = idx >= 0 ? lastIdx - idx : 999;
+    out.push({ ...t, barsAgo, active: barsAgo <= FRESH_BARS });
+  };
+
+  // Helper: did price break a high-level then pull back and hold above it?
+  const highLevels: Array<["PDH" | "ONH", LevelKind]> = [["ONH", "onHigh"], ["PDH", "pdHigh"]];
+  const lowLevels: Array<["PDL" | "ONL", LevelKind]> = [["ONL", "onLow"], ["PDL", "pdLow"]];
+
+  // ── A: Break & retest long (ONH/PDH) ──
+  for (const [ref, kind] of highLevels) {
+    const lv = byKind.get(kind);
+    if (!lv) continue;
+    for (let i = 1; i < bars.length - 1; i++) {
+      const broke = bars[i].close > lv.price + buf && bars[i - 1].close <= lv.price + buf;
+      if (!broke) continue;
+      // look for a pullback that retests then closes back up
+      for (let j = i + 1; j <= Math.min(bars.length - 1, i + 4); j++) {
+        const retest = bars[j].low <= lv.price + buf && bars[j].close > lv.price && bars[j].close >= bars[j].open;
+        if (retest) {
+          const entry = bars[j].close;
+          const stop = Math.min(lv.price - buf, bars[j].low) - buf;
+          push({ kind: "break-retest-long", code: "A", title: `${ref} Break & Retest`, direction: "long", ref, ts: bars[j].timestamp, entry, stop, target: rrTarget(entry, stop, 2), confluence: "Break held on retest — pair with HVN / GEX support.", });
+          break;
+        }
+      }
+    }
+  }
+
+  // ── D: Breakdown & retest short (ONL/PDL) ──
+  for (const [ref, kind] of lowLevels) {
+    const lv = byKind.get(kind);
+    if (!lv) continue;
+    for (let i = 1; i < bars.length - 1; i++) {
+      const broke = bars[i].close < lv.price - buf && bars[i - 1].close >= lv.price - buf;
+      if (!broke) continue;
+      for (let j = i + 1; j <= Math.min(bars.length - 1, i + 4); j++) {
+        const retest = bars[j].high >= lv.price - buf && bars[j].close < lv.price && bars[j].close <= bars[j].open;
+        if (retest) {
+          const entry = bars[j].close;
+          const stop = Math.max(lv.price + buf, bars[j].high) + buf;
+          push({ kind: "break-retest-short", code: "D", title: `${ref} Breakdown & Retest`, direction: "short", ref, ts: bars[j].timestamp, entry, stop, target: rrTarget(entry, stop, 2), confluence: "Failed retest from below — pair with HVN / GEX resistance.", });
+          break;
+        }
+      }
+    }
+  }
+
+  // ── E: Poor-high rejection short (probe above then roll over) ──
+  for (const [ref, kind] of highLevels) {
+    const lv = byKind.get(kind);
+    if (!lv) continue;
+    for (let i = 1; i < bars.length; i++) {
+      const probe = bars[i].high > lv.price + buf;
+      const rejected = bars[i].close < lv.price && bars[i].close < bars[i].open;
+      if (probe && rejected) {
+        const entry = bars[i].close;
+        const stop = bars[i].high + buf;
+        push({ kind: "poor-high-short", code: "E", title: `Poor High @ ${ref}`, direction: "short", ref, ts: bars[i].timestamp, entry, stop, target: rrTarget(entry, stop, 2), confluence: "Weak acceptance above the high — fade the poor high.", });
+      }
+    }
+  }
+
+  // ── E': Poor-low rejection long (probe below then reclaim) ──
+  for (const [ref, kind] of lowLevels) {
+    const lv = byKind.get(kind);
+    if (!lv) continue;
+    for (let i = 1; i < bars.length; i++) {
+      const probe = bars[i].low < lv.price - buf;
+      const reclaimed = bars[i].close > lv.price && bars[i].close > bars[i].open;
+      if (probe && reclaimed) {
+        const entry = bars[i].close;
+        const stop = bars[i].low - buf;
+        push({ kind: "poor-low-long", code: "E", title: `Poor Low @ ${ref}`, direction: "long", ref, ts: bars[i].timestamp, entry, stop, target: rrTarget(entry, stop, 2), confluence: "Weak acceptance below the low — reclaim long off the poor low.", });
+      }
+    }
+  }
+
+  // ── C / C': IB breakout extension that also clears ONH/ONL ──
+  if (ib && ib.locked) {
+    const onH = byKind.get("onHigh");
+    const onL = byKind.get("onLow");
+    for (let i = 1; i < bars.length; i++) {
+      if (etMinutes(bars[i].timestamp) < IB_END) continue;
+      const clearsHi = bars[i].close > ib.high + buf && (!onH || bars[i].close > onH.price);
+      const prevBelow = bars[i - 1].close <= ib.high + buf;
+      if (clearsHi && prevBelow) {
+        const entry = bars[i].close;
+        const stop = ib.low - buf;
+        push({ kind: "ib-extension-long", code: "C", title: "IB-High Extension", direction: "long", ref: "IBH", ts: bars[i].timestamp, entry, stop, target: entry + (ib.high - ib.low) * 2, confluence: "IB-high break clearing ONH — expansion; target 2× IB range.", });
+      }
+      const clearsLo = bars[i].close < ib.low - buf && (!onL || bars[i].close < onL.price);
+      const prevAbove = bars[i - 1].close >= ib.low - buf;
+      if (clearsLo && prevAbove) {
+        const entry = bars[i].close;
+        const stop = ib.high + buf;
+        push({ kind: "ib-extension-short", code: "C", title: "IB-Low Extension", direction: "short", ref: "IBL", ts: bars[i].timestamp, entry, stop, target: entry - (ib.high - ib.low) * 2, confluence: "IB-low break clearing ONL — expansion; target 2× IB range.", });
+      }
+    }
+  }
+
+  // ── F: Balance-to-imbalance break (out of ON range) ──
+  const onH = byKind.get("onHigh");
+  const onL = byKind.get("onLow");
+  if (onH && onL) {
+    for (let i = 2; i < bars.length; i++) {
+      // crude "balance": prior two bars inside the ON range
+      const inBal = bars[i - 1].high <= onH.price && bars[i - 1].low >= onL.price &&
+                    bars[i - 2].high <= onH.price && bars[i - 2].low >= onL.price;
+      if (!inBal) continue;
+      if (bars[i].close < onL.price - buf) {
+        const entry = bars[i].close;
+        const stop = onH.price + buf;
+        push({ kind: "balance-break-short", code: "F", title: "Balance → Imbalance ↓", direction: "short", ref: "ONL", ts: bars[i].timestamp, entry, stop, target: rrTarget(entry, stop, 1.5), confluence: "Break below balance low on volume — imbalance breakout.", });
+      } else if (bars[i].close > onH.price + buf) {
+        const entry = bars[i].close;
+        const stop = onL.price - buf;
+        push({ kind: "balance-break-long", code: "F", title: "Balance → Imbalance ↑", direction: "long", ref: "ONH", ts: bars[i].timestamp, entry, stop, target: rrTarget(entry, stop, 1.5), confluence: "Break above balance high on volume — imbalance breakout.", });
+      }
+    }
+  }
+
+  // De-dup identical (kind, ts) and sort newest-first.
+  const seen = new Set<string>();
+  const dedup = out.filter((t) => {
+    const k = `${t.kind}-${t.ts}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  dedup.sort((a, b) => b.ts - a.ts);
+  return dedup;
+}

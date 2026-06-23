@@ -22,7 +22,8 @@ interface PointResponse {
 export function useStrikeGexHistory(
   expiry: string,
   ages: number[] = [5, 15, 30],
-  pollMs = 30_000
+  pollMs = 30_000,
+  tolerant = false
 ): GexBaselines {
   const [baselines, setBaselines] = useState<GexBaselines>({});
   const agesKey = ages.join(",");
@@ -38,7 +39,9 @@ export function useStrikeGexHistory(
         const r = await fetch(
           `/api/snapshots/option-strike-gex-history?expiry=${encodeURIComponent(
             expiry
-          )}&mode=point&ages=${encodeURIComponent(agesKey)}`,
+          )}&mode=point&ages=${encodeURIComponent(agesKey)}${
+            tolerant ? "&tolerant=1" : ""
+          }`,
           { cache: "no-store" }
         );
         if (!r.ok) return;
@@ -55,7 +58,7 @@ export function useStrikeGexHistory(
       cancelled = true;
       clearInterval(id);
     };
-  }, [expiry, agesKey, pollMs]);
+  }, [expiry, agesKey, pollMs, tolerant]);
 
   return baselines;
 }

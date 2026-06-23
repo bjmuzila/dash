@@ -735,7 +735,7 @@ export default function HomePage() {
   // Chart ghost-bar baselines — poll the full chain whenever any prior-state
   // overlay (5/15/30 min) is enabled.
   const anyGhost = showGhost5 || showGhost15 || showGhost30;
-  const chartBaselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", [5, 15, 30]);
+  const chartBaselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", [5, 15, 30], 30_000, true);
 
   // Strike → full ChainRow lookup so the heatmap rows can open the same popup.
   const chartRowByStrike = useMemo(

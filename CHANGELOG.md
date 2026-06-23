@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-06-22 (session 51) — New `/fails` page: ESU look-above/below fails + AMT + merged IB
+
+Built a standalone Fails page (`app/fails/page.tsx` + `lib/failLevels.ts`) tracking failed breakouts ("look above & fail" / "look below & fail") of key auction reference levels, driven entirely off the existing 5m ES candle feed (`useEsCandles`) — no new API/table. Linked in the sidebar under the Futures group.
+
+### Reference levels & fail detection (`lib/failLevels.ts`)
+- Computes overnight H/L (prior 18:00→09:30 ET globex), previous-day RTH H/L, and previous-week H/L from the candle history.
+- Fail = price pierces a level intrabar but a bar closes back through it within 2 bars; tracks poke distance, close-back, and follow-through. Live per-level status (idle/testing/broke/failed), today's fail log, and a ~20-session fail-rate stats engine (replays each prior day's levels).
+
+### Auction Market Theory layer
+- Today's Initial Balance (09:30–10:30 ET) + day-type classification (Trend ↑/↓, Balance, Reversal ↑/↓, Forming) from IB interaction.
+- Per-level AMT read: overnight = thin/weak acceptance (fade target), prior-day/week = strong acceptance (retest support/resistance), with long/short/neutral bias and an overall day bias line.
+- Entry-trigger detector (`detectTriggers`): rule-based scalping setups — A break-&-retest long, D breakdown-&-retest short, C/C′ IB-extension long/short (clearing ONH/ONL), E poor-high/low fades, F balance-to-imbalance breaks. Each emits entry/stop/target (ES pts), confluence note, and freshness (active ≤20m). Surfaced as an "Active Setups" grid.
+
+### ESU-only + value-area removed
+- Page is ESU-specific: candles filtered to symbols containing `ESU` (`/ESU6`, `/ESU26:XCME`, …) with a fallback to all candles during rollover. Dropped the SPX/ES toggle, the `/ws/gex` basis WebSocket, and all SPX conversion — prices display as raw ESU points.
+- Removed value-area logic entirely (no VAH/VAL/POC); day-type is pure IB + price, the VAL-rejection (B) trigger and VA-confluence tags are gone.
+
+### Merged IB from Insights
+- Exported `LiveIb` from `components/insights/IbLogic.tsx` and embedded it on `/fails` (locked-DB persistence, break alerts w/ timestamps, formed-first/vs-mid stats, rules-in-play engine). Removed the IB Logic tab from `/insights` (tab type, TABS entry, render, import) so it lives only on Fails. IB stays on the default /ES feed.
+- Rules-in-play now compute while the IB is still forming (pre-10:30) and render as PROVISIONAL with an amber "not locked" badge — previously hidden until lock. Rules cards laid out in a ~2-row grid.
+
+### Polish
+- Matched the shared `homeTheme` panel styling (shell/header/content/panel + hover lift). All gray fonts switched to white across `/fails` and the IB component (kept colored semantic text and the offline live-dot tint).
+
+> Note: `next build` / `tsc` not run any session (sandbox virtualization disabled this whole session) — verify locally before pushing.
+
+## 2026-06-22 (session 50) — New lean `/greeks` page: graphs, gamma-logic feed, velocity, vol
+
+Built a focused standalone Greeks page (`app/greeks/page.tsx`) because the Insights Exposure Stack had unreliable sparklines and hit-or-miss greek values. `/insights` left untouched; new page linked in the sidebar (GEX group, above Insights).
+
+### Core page
+- Four cards — GEX / DEX / CHEX / VEX — each with a robust zero-cross graph (green-above / red-below shading, bold zero baseline, glow line, Line/Bars toggle). Data from `/api/insights/gex` totals, seeded from `queryGreeksToday()` so graphs aren't blank on first paint; every live reading persisted via `saveGreeksSnapshot`. Polls every 30s, ignores empty/zero responses (no card-wipe), shows "feed idle" instead of `--`.
+- Removed the GEX+VEX card per request; grid is a clean 2×2.
+
+### Sparkline reliability + axis fixes
+- Old sparkline drew once into a 0-width canvas during layout → blank "half the time". New `ZeroCrossGraph` redraws on ResizeObserver + window resize + post-layout frame.
+- X-axis fixed to today's RTH window 9:30 AM–6:00 PM ET with hour gridlines. First `sessionBounds()` impl mis-computed the ET offset (axis read "6 AM"); rewrote with a correct `etOffsetMs()` UTC-offset calc.
+- Hover crosshair + tooltip (value + ET time). Fixed "Invalid Date": `timestamp` is a Postgres BIGINT → arrives as a string over JSON; coerce `Number(r.timestamp)` on seed, normalize seconds-vs-ms on live path.
+- Bars sized off the gap between consecutive points (not axis/count) so sparse data isn't one fat block.
+
+### Gamma-logic feed (if-this-then-that)
+- Rules engine (`evaluateGamma`) over current greeks + intraday percentiles → scrolling signal feed with active-now chips, timestamped history, **Edge:** action lines, and pulsing background for critical events. Priority-ordered per the spec (DEX flip → velocity → deep-neg gamma → regimes → tiers → neutral fallback). Dedups so the same condition doesn't re-spam every poll.
+
+### Velocity (rate of change)
+- `velocityOf()` measures ~10-min Δ per greek + acceleration (2nd derivative, interval-independent). Per-card `↑/↓ Δ/10m` readout. New feed signals: Rapid DEX Surge (>$15B), GEX Velocity Surge/Weakening (>30% range), CHEX Ramp, VEX Shift, Extreme Acceleration, Accelerating Dealer Alignment (bull/bear), Velocity Cooling.
+
+### Volatility card + vol-aware rules
+- VolCard below the grid: VIX 30D / VIX1D / 10D realized / IV Rank / VRP, IV FALLING▼/RISING▲ badge, regime read. Fed by `/api/insights/vix`. Rules added: High IV Rank + Neg GEX → straddles; Low IV + High Pos GEX → premium selling; Active Vanna Upside gated on IV actually falling.
+
+### Polish
+- Page now scrolls — was clipped by `<main>`'s `overflow:hidden`; wrapped content in `flex:1; minHeight:0; overflowY:auto`.
+- Per-Greek identity colors (cool neon): GEX cyan, DEX violet, CHEX teal, VEX magenta; Vol card slate/blue. All orange removed. Sign shown via a small green/red POSITIVE/NEGATIVE badge.
+
+> Note: `next build` not run this session (sandbox virtualization disabled) — verify locally before pushing.
+
+## 2026-06-22 (session 49) — Dev page CHEX/Vanna readout (REST probe BS-derived)
+
+Charm exposure (CHEX) and Vanna exposure showed "n/a" on the `/dev` Symbol Probe. Root cause was data-source, not a bug: the dev page probes via `/proxy/probe-rest`, and the TastyTrade REST greeks feed (`/market-data/by-type`) returns only gamma/delta/theta/vega — no charm or vanna — so the proxy hardcoded `charmExp: null` / `vannaExp: null`.
+
+### REST probe now derives vanna/charm from Black-Scholes
+- `server-v2/proxy-tastytrade.js` (`probeRest`, exposures block ~L682): added a `bsGreeks({ S: spot, K: best.strike, T: yearsToExpiry(best.expiration), sigma: g.iv, r: RISK_FREE, type })` call, gated on `spot>0 && iv>0 && T>0`. `vannaExp` and `charmExp` are now computed with the same conventions as the live `_recompute` path: BS per-year output unit-scaled (vanna ÷100 per 1% vol, charm ÷365 per day), then `sign · scaled · OI · 100 · spot` (calls +, puts −). Falls back to `null` when IV/T unavailable.
+- No client change needed — `app/dev/page.tsx` already renders `charmExp`/`vannaExp` rows; they just stop showing "n/a" once populated.
+- CHEX formula (reference): `charm = −φ(d₁)·(2rT − d₂σ√T)/(2Tσ√T)` per year → `/365` per day; per-strike `CHEX = (charmCall·callOI − charmPut·putOI)·spot·100`.
+- Restart server-v2 to pick up.
+
 ## 2026-06-22 (session 48) — MVC auto-snapshot fix (internal-token auth), flow-tape big-order retention (v13)
 
 Fixed the MVC auto-collector that was never writing auto rows (all snapshots in the DB were manual), and the SPX Flow Tape showing nothing above the $100k filter.

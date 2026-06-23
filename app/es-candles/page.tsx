@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, HistogramSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, HistogramData } from "lightweight-charts";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useEsBigTrades } from "@/hooks/useEsBigTrades";
 
 function etClock(ts = Date.now()) {
   return new Date(ts).toLocaleTimeString("en-US", {
@@ -19,6 +20,114 @@ function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
 }
 
+// One painted heatmap cell: a strike bucket at a given 5-min slot.
+type GexCell = { strike: number; net: number };
+type GexColumn = { slotTs: number; cells: GexCell[]; max: number; top3: number[] };
+
+// 5-min-binned big-trade bubble (price = ES price, signed = net of merged prints).
+type Bubble = { slotTs: number; price: number; size: number; side: "buy" | "sell" };
+// 5-min net delta bar.
+type DeltaBar = { slotTs: number; net: number };
+
+// Volume-by-price profile + value-area levels, derived from candle OHLCV.
+type ProfileBin = { price: number; volume: number };
+type VolumeProfile = {
+  bins: ProfileBin[];      // ascending by price
+  maxVol: number;
+  poc: number | null;      // point of control (max-volume price)
+  vah: number | null;      // value area high
+  val: number | null;      // value area low
+  lvn: number | null;      // most significant low-volume node inside the range
+};
+
+/**
+ * Build a session volume profile from candle OHLCV. Tick volume isn't available
+ * per price, so each candle's volume is spread evenly across the price bins its
+ * [low, high] range touches (standard candle-based profile approximation).
+ * Value area = the contiguous 70% of volume around the POC.
+ */
+function buildVolumeProfile(
+  candles: Array<{ high: number; low: number; close: number; open: number; volume: number }>,
+  binSize: number
+): VolumeProfile {
+  const empty: VolumeProfile = { bins: [], maxVol: 0, poc: null, vah: null, val: null, lvn: null };
+  if (!candles.length || !(binSize > 0)) return empty;
+  let lo = Infinity, hi = -Infinity;
+  for (const c of candles) { if (c.low < lo) lo = c.low; if (c.high > hi) hi = c.high; }
+  if (!(hi > lo)) return empty;
+
+  const floorBin = (p: number) => Math.floor(p / binSize) * binSize;
+  const vol = new Map<number, number>();
+  for (const c of candles) {
+    const b0 = floorBin(c.low), b1 = floorBin(c.high);
+    const n = Math.max(1, Math.round((b1 - b0) / binSize) + 1);
+    const per = (c.volume || 0) / n;
+    for (let b = b0; b <= b1 + 1e-9; b += binSize) vol.set(b, (vol.get(b) ?? 0) + per);
+  }
+  const bins: ProfileBin[] = [...vol.entries()]
+    .map(([price, volume]) => ({ price, volume }))
+    .sort((a, b) => a.price - b.price);
+  if (!bins.length) return empty;
+
+  let pocIdx = 0;
+  for (let i = 1; i < bins.length; i++) if (bins[i].volume > bins[pocIdx].volume) pocIdx = i;
+  const total = bins.reduce((s, b) => s + b.volume, 0);
+  const target = total * 0.7;
+
+  // Expand around the POC until 70% of volume is captured (value area).
+  let loI = pocIdx, hiI = pocIdx, acc = bins[pocIdx].volume;
+  while (acc < target && (loI > 0 || hiI < bins.length - 1)) {
+    const below = loI > 0 ? bins[loI - 1].volume : -1;
+    const above = hiI < bins.length - 1 ? bins[hiI + 1].volume : -1;
+    if (above >= below) { hiI++; acc += Math.max(0, above); }
+    else { loI--; acc += Math.max(0, below); }
+  }
+
+  // LVN: lowest-volume bin inside the traded range (local minimum), excluding edges.
+  let lvnIdx = -1;
+  for (let i = 1; i < bins.length - 1; i++) {
+    if (bins[i].volume < bins[i - 1].volume && bins[i].volume < bins[i + 1].volume) {
+      if (lvnIdx < 0 || bins[i].volume < bins[lvnIdx].volume) lvnIdx = i;
+    }
+  }
+
+  return {
+    bins,
+    maxVol: bins[pocIdx].volume,
+    poc: bins[pocIdx].price,
+    vah: bins[hiI].price,
+    val: bins[loI].price,
+    lvn: lvnIdx >= 0 ? bins[lvnIdx].price : null,
+  };
+}
+
+// Floor a ms timestamp to its 5-minute ET slot, returned as a UTC ms boundary
+// aligned to the candle grid (candles use raw ms flooring of /ES bars).
+function slotFloorMs(ts: number): number {
+  return Math.floor(ts / 300_000) * 300_000;
+}
+
+/**
+ * Exact port of the GEX heatmap's metricBg() → returns an rgba string.
+ * Positive GEX = cyan (41,182,246), negative = red (255,71,87). The 3 largest
+ * magnitudes get rank floors so the dominant walls always stand out; everything
+ * else follows a power curve scaled by `intensity`.
+ */
+function gexColor(value: number, maxValue: number, intensity: number, top3: number[]): string | null {
+  const n = value || 0;
+  const m = maxValue || 0;
+  if (m === 0 || !n) return null;
+  const pos = n >= 0;
+  const rank = top3.indexOf(Math.abs(n)) + 1;
+  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+  if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
+  if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+  const ratio = Math.min(Math.abs(n) / m, 1);
+  const eased = Math.pow(ratio * (intensity || 0.1), 1.4);
+  const alpha = Math.min(0.18, 0.02 + eased * 0.16);
+  return pos ? `rgba(41,182,246,${alpha.toFixed(3)})` : `rgba(255,71,87,${alpha.toFixed(3)})`;
+}
+
 export default function EsCandlesPage() {
   usePageLoadStatus({ pageKey: "es-candles", pageLabel: "ES Candles", path: "/es-candles" });
 
@@ -31,6 +140,69 @@ export default function EsCandlesPage() {
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
+
+  // Heatmap overlay state.
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  // Bottom lane canvases (bubbles + delta), x-aligned to the chart time axis.
+  const bubbleLaneRef = useRef<HTMLCanvasElement>(null);
+  const deltaLaneRef = useRef<HTMLCanvasElement>(null);
+  const drawLanesRef = useRef<() => void>(() => {});
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [intensity, setIntensity] = useState(0.5); // matches the home heatmap slider default
+  // Column history keyed by 5-min slot ms. One column per slot; latest slot is
+  // updated in place as fresh gex messages arrive within the same 5-min window.
+  const columnsRef = useRef<Map<number, GexColumn>>(new Map());
+  // Imperative redraw hook set up by the overlay effect; apply() calls it when a
+  // new gex snapshot lands so in-place column updates repaint immediately.
+  const drawOverlayRef = useRef<() => void>(() => {});
+  // Basis (esFut - spx) kept in a ref so the overlay draw reads it without
+  // re-subscribing. Updated by the WS listener.
+  const basisRef = useRef(0);
+  // Front expiry from the live feed; drives the one-time history backfill.
+  const [feedExpiry, setFeedExpiry] = useState<string>("");
+  const didBackfillRef = useRef(false);
+
+  // Big trades + per-minute delta from the same /ws/gex feed (footprint source).
+  const { trades: rawTrades, delta: rawDelta } = useEsBigTrades();
+  const [showBubbles, setShowBubbles] = useState(true);
+  const [showDelta, setShowDelta] = useState(true);
+  const [showProfile, setShowProfile] = useState(true);
+
+  // Session volume profile from today's candles (ES price). 1-pt bins.
+  const profile = useMemo(() => {
+    const today = rows.length ? rows[rows.length - 1].date : "";
+    const todays = today ? rows.filter((r) => r.date === today) : rows;
+    return buildVolumeProfile(todays, 1);
+  }, [rows]);
+
+  // Bin big trades into 5-min × price bubbles (ES price), merging same-side
+  // prints in the same slot at the same rounded price into one bubble.
+  const bubbles = useMemo<Bubble[]>(() => {
+    const byKey = new Map<string, Bubble>();
+    for (const t of rawTrades) {
+      if (!(t.size > 0) || !(t.price > 0)) continue;
+      const slotTs = slotFloorMs(t.ts);
+      const price = Math.round(t.price); // 1-pt price bucket
+      const key = `${slotTs}|${price}|${t.side}`;
+      const cur = byKey.get(key);
+      if (cur) cur.size += t.size;
+      else byKey.set(key, { slotTs, price, size: t.size, side: t.side });
+    }
+    return [...byKey.values()];
+  }, [rawTrades]);
+
+  // Bin per-minute delta into 5-min net bars.
+  const deltaBars = useMemo<DeltaBar[]>(() => {
+    const bySlot = new Map<number, number>();
+    for (const d of rawDelta) {
+      const slotTs = slotFloorMs(d.ts);
+      bySlot.set(slotTs, (bySlot.get(slotTs) ?? 0) + Number(d.net || 0));
+    }
+    return [...bySlot.entries()].map(([slotTs, net]) => ({ slotTs, net }));
+  }, [rawDelta]);
+
+  // Repaint the bubble/delta lanes whenever the binned data changes.
+  useEffect(() => { drawLanesRef.current(); }, [bubbles, deltaBars]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
   // chart plots ES, so we offset by the live basis (esFut - spx) before drawing.
@@ -54,14 +226,50 @@ export default function EsCandlesPage() {
     let dead = false;
 
     const apply = (d: Record<string, unknown>) => {
-      setLevels((prev) => ({
-        callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
-        putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
-        gexFlip:  d.gexFlip  != null ? Number(d.gexFlip)  || null : prev.gexFlip,
-        mvc:      prev.mvc,
-        spx:      Number(d.spot ?? 0)  > 0 ? Number(d.spot)  : prev.spx,
-        esFut:    Number(d.esFut ?? 0) > 0 ? Number(d.esFut) : prev.esFut,
-      }));
+      const spx = Number(d.spot ?? 0);
+      const esFut = Number(d.esFut ?? 0);
+      const exp = typeof d.expiry === "string" ? d.expiry : "";
+      if (exp) setFeedExpiry((cur) => cur || exp);
+      setLevels((prev) => {
+        const nextSpx = spx > 0 ? spx : prev.spx;
+        const nextEs = esFut > 0 ? esFut : prev.esFut;
+        if (nextSpx != null && nextEs != null) basisRef.current = nextEs - nextSpx;
+        return {
+          callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
+          putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
+          gexFlip:  d.gexFlip  != null ? Number(d.gexFlip)  || null : prev.gexFlip,
+          mvc:      prev.mvc,
+          spx:      nextSpx,
+          esFut:    nextEs,
+        };
+      });
+
+      // Snapshot per-strike GEX into the current 5-min column.
+      const gexRows = d.gexRows;
+      if (Array.isArray(gexRows) && gexRows.length) {
+        const cells: GexCell[] = [];
+        for (const r of gexRows as Array<Record<string, unknown>>) {
+          const strike = Number(r.strike ?? 0);
+          // server-v2 emits `netGEX`; legacy/flat rows use `net_gex`/`netGexVal`.
+          const net = Number(r.netGEX ?? r.net_gex ?? r.netGexVal ?? 0);
+          if (!(strike > 0) || !Number.isFinite(net)) continue;
+          cells.push({ strike, net });
+        }
+        if (cells.length) {
+          const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
+          const max = absVals.length ? Math.max(...absVals) : 1;
+          const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
+          const slotTs = slotFloorMs(Date.now());
+          const map = columnsRef.current;
+          map.set(slotTs, { slotTs, cells, max, top3 });
+          // Cap history to one trading day of 5-min slots.
+          if (map.size > 200) {
+            const oldest = Math.min(...map.keys());
+            map.delete(oldest);
+          }
+          drawOverlayRef.current(); // repaint with the fresh/updated column
+        }
+      }
     };
 
     const handle = (raw: string) => {
@@ -94,6 +302,36 @@ export default function EsCandlesPage() {
       if (ws) { ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
     };
   }, []);
+
+  // One-time history backfill: once the front expiry is known, pull today's
+  // 5-min GEX columns from Postgres and seed columnsRef. Live WS columns for the
+  // same slots take precedence (don't overwrite a fresher in-session column).
+  useEffect(() => {
+    if (!feedExpiry || didBackfillRef.current) return;
+    didBackfillRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&expiry=${encodeURIComponent(feedExpiry)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        const cols = Array.isArray(json.columns) ? (json.columns as GexColumn[]) : [];
+        if (cancelled || !cols.length) return;
+        const map = columnsRef.current;
+        for (const col of cols) {
+          if (!map.has(col.slotTs)) map.set(col.slotTs, col); // live wins on collisions
+        }
+        drawOverlayRef.current();
+      } catch {
+        // best-effort backfill; live feed still populates going forward
+        didBackfillRef.current = false; // allow a retry if expiry re-fires
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [feedExpiry]);
 
   useEffect(() => {
     let canceled = false;
@@ -250,6 +488,222 @@ export default function EsCandlesPage() {
     }
   }, [levels]);
 
+  // ── Heatmap canvas overlay ────────────────────────────────────────────────
+  // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
+  // vertically (strike → next strike up, converted SPX→ES) and the 5-min slot
+  // horizontally, colored by the exact GEX heatmap gradient.
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    const chart = chartApiRef.current;
+    const series = candleSeriesRef.current;
+    if (!canvas || !chart || !series) return;
+
+    const draw = () => {
+      const ctx = canvas.getContext("2d");
+      const parent = canvas.parentElement;
+      if (!ctx || !parent) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const w = parent.clientWidth;
+      const h = parent.clientHeight;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      const ts = chart.timeScale();
+      const basis = basisRef.current;
+      const SLOT_MS = 300_000;
+      // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
+      const slotX = (slotTs: number): { left: number; w: number } | null => {
+        const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
+        const xEndRaw = ts.timeToCoordinate(((slotTs + SLOT_MS) / 1000) as UTCTimestamp);
+        if (x0 == null) return null;
+        const x1 = xEndRaw != null ? xEndRaw : x0 + 8;
+        return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
+      };
+
+      // ── 1) GEX heatmap cells ──
+      if (showHeatmap) {
+        const cols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+        for (const col of cols) {
+          const sx = slotX(col.slotTs);
+          if (!sx) continue;
+          const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
+          for (let i = 0; i < sorted.length; i++) {
+            const cell = sorted[i];
+            const color = gexColor(cell.net, col.max, intensity, col.top3);
+            if (!color) continue;
+            const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
+            const pTop = series.priceToCoordinate(nextStrike + basis);
+            const pBot = series.priceToCoordinate(cell.strike + basis);
+            if (pTop == null || pBot == null) continue;
+            const top = Math.min(pTop, pBot);
+            const cellH = Math.max(1, Math.abs(pBot - pTop));
+            ctx.fillStyle = color;
+            ctx.fillRect(sx.left, top, sx.w, cellH);
+          }
+        }
+      }
+
+      // ── 2) Right-edge volume profile + value-area lines ──
+      if (showProfile && profile.bins.length) {
+        const maxProfW = Math.min(220, w * 0.28);
+        for (const b of profile.bins) {
+          const yTop = series.priceToCoordinate(b.price + 1);
+          const yBot = series.priceToCoordinate(b.price);
+          if (yTop == null || yBot == null) continue;
+          const top = Math.min(yTop, yBot);
+          const bh = Math.max(1, Math.abs(yBot - yTop) - 0.5);
+          const barW = (b.volume / (profile.maxVol || 1)) * maxProfW;
+          const inVA = profile.val != null && profile.vah != null && b.price >= profile.val && b.price <= profile.vah;
+          const isPoc = profile.poc != null && Math.abs(b.price - profile.poc) < 0.5;
+          ctx.fillStyle = isPoc ? "rgba(245,197,24,.85)" : inVA ? "rgba(245,158,11,.55)" : "rgba(255,255,255,.30)";
+          ctx.fillRect(w - barW, top, barW, bh);
+        }
+        // Value-area level lines + labels.
+        const lvl = (price: number | null, color: string, label: string) => {
+          if (price == null) return;
+          const y = series.priceToCoordinate(price);
+          if (y == null) return;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.setLineDash(label === "LVN" ? [6, 4] : []);
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = color;
+          ctx.font = "10px Inter, system-ui, sans-serif";
+          ctx.fillText(label, 6, y - 3);
+        };
+        lvl(profile.vah, "rgba(255,255,255,.45)", "VAH");
+        lvl(profile.poc, "rgba(245,197,24,.9)", "POC");
+        lvl(profile.val, "rgba(255,255,255,.45)", "VAL");
+        lvl(profile.lvn, "rgba(245,158,11,.9)", "LVN");
+      }
+    };
+
+    drawOverlayRef.current = draw;
+
+    const ts = chart.timeScale();
+    ts.subscribeVisibleLogicalRangeChange(draw);
+    const ro = new ResizeObserver(draw);
+    if (canvas.parentElement) ro.observe(canvas.parentElement);
+    draw();
+
+    return () => {
+      ts.unsubscribeVisibleLogicalRangeChange(draw);
+      ro.disconnect();
+      drawOverlayRef.current = () => {};
+    };
+  }, [showHeatmap, intensity, rows, showProfile, profile]);
+
+  // ── Bottom lanes: big-trade bubbles + 5m net delta ────────────────────────
+  // Both are x-aligned to the chart time axis via the chart's timeToCoordinate
+  // (lane canvases share the chart's width and left edge), like the reference.
+  useEffect(() => {
+    const chart = chartApiRef.current;
+    if (!chart) return;
+    const SLOT_MS = 300_000;
+
+    const sizeCanvas = (cv: HTMLCanvasElement | null) => {
+      if (!cv) return null;
+      const dpr = window.devicePixelRatio || 1;
+      const w = cv.clientWidth, h = cv.clientHeight;
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+        cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+      }
+      const ctx = cv.getContext("2d");
+      if (!ctx) return null;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      return { ctx, w, h };
+    };
+
+    const draw = () => {
+      const ts = chart.timeScale();
+      const slotX = (slotTs: number) => {
+        const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
+        const xEnd = ts.timeToCoordinate(((slotTs + SLOT_MS) / 1000) as UTCTimestamp);
+        if (x0 == null) return null;
+        const x1 = xEnd != null ? xEnd : x0 + 8;
+        return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
+      };
+
+      // Bubbles lane: green buy / red sell, radius ∝ √size, y = vertical jitter
+      // by side (buys upper half, sells lower half) like the reference timeline.
+      const bub = sizeCanvas(bubbleLaneRef.current);
+      if (bub) {
+        const { ctx, w, h } = bub;
+        ctx.strokeStyle = "rgba(255,255,255,.10)";
+        ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+        if (showBubbles && bubbles.length) {
+          const maxSize = Math.max(1, ...bubbles.map((b) => b.size));
+          for (const b of bubbles) {
+            const sx = slotX(b.slotTs);
+            if (!sx) continue;
+            const cx = sx.left + sx.w / 2;
+            const r = Math.max(2, Math.min(h / 2 - 2, 2 + Math.sqrt(b.size / maxSize) * (h / 2 - 4)));
+            const buy = b.side === "buy";
+            const cy = buy ? h / 2 - r - 1 : h / 2 + r + 1;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fillStyle = buy ? "rgba(48,209,88,.45)" : "rgba(255,91,91,.45)";
+            ctx.fill();
+            ctx.lineWidth = 1.2;
+            ctx.strokeStyle = buy ? "rgba(48,209,88,.95)" : "rgba(255,91,91,.95)";
+            ctx.stroke();
+          }
+        }
+        ctx.fillStyle = "rgba(255,255,255,.45)";
+        ctx.font = "10px Inter, system-ui, sans-serif";
+        ctx.fillText("BIG TRADE BUBBLES", 6, 12);
+      }
+
+      // Delta lane: one net bar per 5-min slot, green/red around a zero line.
+      const del = sizeCanvas(deltaLaneRef.current);
+      if (del) {
+        const { ctx, w, h } = del;
+        const zeroY = h / 2;
+        ctx.strokeStyle = "rgba(255,255,255,.14)";
+        ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(w, zeroY); ctx.stroke();
+        if (showDelta && deltaBars.length) {
+          const maxAbs = Math.max(1, ...deltaBars.map((d) => Math.abs(d.net)));
+          for (const d of deltaBars) {
+            const sx = slotX(d.slotTs);
+            if (!sx) continue;
+            const barH = (Math.abs(d.net) / maxAbs) * (h / 2 - 4);
+            const up = d.net >= 0;
+            ctx.fillStyle = up ? "rgba(48,209,88,.8)" : "rgba(255,91,91,.8)";
+            const bx = sx.left + 1, bw = Math.max(1, sx.w - 2);
+            if (up) ctx.fillRect(bx, zeroY - barH, bw, barH);
+            else ctx.fillRect(bx, zeroY, bw, barH);
+          }
+        }
+        ctx.fillStyle = "rgba(255,255,255,.45)";
+        ctx.font = "10px Inter, system-ui, sans-serif";
+        ctx.fillText("DELTA PROFILE (5m)", 6, 12);
+      }
+    };
+
+    drawLanesRef.current = draw;
+    const ts = chart.timeScale();
+    ts.subscribeVisibleLogicalRangeChange(draw);
+    const ro = new ResizeObserver(draw);
+    if (bubbleLaneRef.current) ro.observe(bubbleLaneRef.current);
+    if (deltaLaneRef.current) ro.observe(deltaLaneRef.current);
+    draw();
+
+    return () => {
+      ts.unsubscribeVisibleLogicalRangeChange(draw);
+      ro.disconnect();
+      drawLanesRef.current = () => {};
+    };
+  }, [showBubbles, showDelta, bubbles, deltaBars, rows]);
+
   return (
     <div className="flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)" }}>
@@ -264,6 +718,42 @@ export default function EsCandlesPage() {
           <span className="rounded border px-2 py-1 text-white/70" style={{ borderColor: "rgba(255,255,255,.12)" }}>
             {`${rows.length} candles`}
           </span>
+          <button
+            onClick={() => setShowHeatmap((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showHeatmap ? "#29b6f6" : "#94a3b8" }}
+          >
+            Heatmap {showHeatmap ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={() => setShowBubbles((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showBubbles ? "#30d158" : "#94a3b8" }}
+          >
+            Bubbles {showBubbles ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={() => setShowDelta((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showDelta ? "#f5c518" : "#94a3b8" }}
+          >
+            Delta {showDelta ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={() => setShowProfile((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showProfile ? "#f59e0b" : "#94a3b8" }}
+          >
+            Profile {showProfile ? "ON" : "OFF"}
+          </button>
+          <label className="flex items-center gap-1.5 text-white/55">
+            intensity
+            <input
+              type="range" min={0.05} max={1} step={0.05} value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+              style={{ width: 90 }}
+            />
+          </label>
           <button onClick={() => void refresh()} className="rounded border px-3 py-1 text-xs" style={{ borderColor: "rgba(255,255,255,.12)", color: "#ffb4b4" }}>
             Refresh
           </button>
@@ -308,14 +798,26 @@ export default function EsCandlesPage() {
         })()}
       </div>
 
-      <div className="flex-1 px-4 pb-4">
-        <div className="relative h-full min-h-[520px] overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "radial-gradient(circle at top, rgba(255,91,91,.12), rgba(6,8,13,.96) 50%)" }}>
+      <div className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+        {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
+        <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
           <div ref={chartRef} className="absolute inset-0" />
+          <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 2 }} />
           {rows.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/50">
               {connected ? "Waiting for live 5m ES candles" : "Loading candles…"}
             </div>
           ) : null}
+        </div>
+
+        {/* Big-trade bubbles lane (time-aligned to the chart) */}
+        <div className="relative overflow-hidden rounded-xl border" style={{ height: 86, borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)" }}>
+          <canvas ref={bubbleLaneRef} className="absolute inset-0 h-full w-full" />
+        </div>
+
+        {/* Delta profile lane (time-aligned to the chart) */}
+        <div className="relative overflow-hidden rounded-xl border" style={{ height: 72, borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)" }}>
+          <canvas ref={deltaLaneRef} className="absolute inset-0 h-full w-full" />
         </div>
       </div>
     </div>

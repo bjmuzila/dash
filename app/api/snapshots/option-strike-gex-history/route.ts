@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getOptionStrikeRollingNetGex,
   getOptionStrikeNetGexAsOf,
+  getOptionStrikeNetGexAsOfOrNearest,
   getOptionStrikeNetGexAtOpen,
+  getOptionStrikeGexSlots,
   insertOptionStrikeGexRows,
 } from "@/lib/db";
 
@@ -60,6 +62,30 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "expiry is required", rows: [] });
     }
 
+    // mode=heatmap → today's per-strike net GEX collapsed to one reading per
+    // (strike, 5-min slot), pre-bucketed into heatmap columns (one per slot)
+    // with per-column max + top-3 magnitudes for the intensity gradient. Powers
+    // the ES Candles heatmap backfill so history shows immediately on load.
+    if (mode === "heatmap") {
+      const slots = await getOptionStrikeGexSlots(date, expiry);
+      const bySlot = new Map<number, Array<{ strike: number; net: number }>>();
+      for (const r of slots) {
+        if (!(r.strike > 0) || !Number.isFinite(r.net_gex)) continue;
+        let arr = bySlot.get(r.slot_ts);
+        if (!arr) { arr = []; bySlot.set(r.slot_ts, arr); }
+        arr.push({ strike: r.strike, net: r.net_gex });
+      }
+      const columns = [...bySlot.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([slotTs, cells]) => {
+          const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
+          const max = absVals.length ? Math.max(...absVals) : 1;
+          const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
+          return { slotTs, cells, max, top3 };
+        });
+      return NextResponse.json({ mode: "heatmap", columns });
+    }
+
     // mode=point → per-strike net GEX baselines at the open + each requested age
     // (minutes ago). The popup subtracts these from the live value to get the
     // rolling difference for the open/5m/15m/30m boxes.
@@ -69,10 +95,16 @@ export async function GET(req: NextRequest) {
         .map((a) => Math.max(1, Math.min(240, Number(a.trim()))))
         .filter((a) => Number.isFinite(a));
       const now = Date.now();
+      // tolerant=1 → fall back to the nearest snapshot when nothing is exactly
+      // `age` minutes old (chart ghost overlay). Default (popup) stays exact.
+      const tolerant = searchParams.get("tolerant") === "1";
+      const asOf = tolerant
+        ? getOptionStrikeNetGexAsOfOrNearest
+        : getOptionStrikeNetGexAsOf;
 
       const [openRows, ...ageRowSets] = await Promise.all([
         getOptionStrikeNetGexAtOpen(date, expiry),
-        ...ages.map((m) => getOptionStrikeNetGexAsOf(date, expiry, now - m * 60 * 1000)),
+        ...ages.map((m) => asOf(date, expiry, now - m * 60 * 1000)),
       ]);
 
       // baselines[strike] = { open, "5", "15", "30" } net GEX values.

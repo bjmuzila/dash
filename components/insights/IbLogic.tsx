@@ -127,67 +127,80 @@ function computeIb(candles: EsCandle[]): IbState {
 
 interface AppliedRule { title: string; detail: string; color: string; }
 
-/** Evaluate which reference rules currently apply given the live IB state. */
+/**
+ * Evaluate which reference rules currently apply given the live IB state.
+ *
+ * Rules now compute as soon as there is IB data — not only after 10:30 ET. While
+ * the window is still forming, the developing high/low/mid/formed-first drive the
+ * same probability reads, surfaced as PROVISIONAL (they can still flip until the
+ * IB locks). Only the post-10:30 "Range Mode" timing rule stays gated, since it's
+ * meaningless before the IB closes.
+ */
 function applicableRules(ib: IbState): AppliedRule[] {
   const out: AppliedRule[] = [];
   if (!ib.hasData) return out;
 
-  if (ib.done) {
+  const tag = ib.done ? "" : " (provisional — IB still forming)";
+
+  // Lead notice while forming so it's clear these are developing reads.
+  if (!ib.done) {
+    out.push({ title: "IB Forming · Provisional Reads", color: "#ffb300",
+      detail: `Tracking the 9:30–10:30 ET range live${ib.range > 0 ? ` — current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}` : ""}. The reads below use the developing range and can still change; they lock at 10:30 ET.` });
+  } else {
     out.push({ title: "Inside Day Exception", color: "#00e5ff",
       detail: "IB window complete. Only 0.6% of days stay fully inside the IB — plan for at least one breakout." });
-
-    if (ib.aboveMid === true) {
-      out.push({ title: "Above-Mid Dominance (ES)", color: "#00e676",
-        detail: "Price is above the IB midpoint → 83.5% historical probability of an eventual IB High breakout." });
-    } else if (ib.aboveMid === false) {
-      out.push({ title: "Below-Mid Dominance (ES)", color: "#ff5252",
-        detail: "Price is below the IB midpoint → 94.9% historical probability of an eventual IB Low breakdown. Fading carries ~5% survival." });
-    }
-
-    if (ib.lowFirst === true) {
-      out.push({ title: "Low Formed First", color: "#7cff6b",
-        detail: "Session low printed before the high → upward path skew: 78.79% break IB High later, only 19.7% reverse to IB Low." });
-    } else if (ib.lowFirst === false) {
-      out.push({ title: "High Formed First", color: "#ffb300",
-        detail: "Session high printed before the low → watch for downside rotation / double-cross risk." });
-    }
-
-    if (etDayOfWeek() === 2) {
-      if (ib.lowFirst === false) {
-        out.push({ title: "Tuesday · High First", color: "#ff5ec4",
-          detail: "Tuesday + IB High first → first break skews to IB Low first (58.33%)." });
-      } else if (ib.lowFirst === true) {
-        out.push({ title: "Tuesday · Low First", color: "#ff5ec4",
-          detail: "Tuesday + IB Low first → first break skews to IB High first (64.29%)." });
-      }
-    }
-
-    if (ib.rangePct > 0 && ib.rangePct <= 1) {
-      out.push({ title: "Volatility Compression", color: "#ffb300",
-        detail: `IB range is compressed (${ib.rangePct.toFixed(2)}% ≤ 1%). A 5m close below IB Low = 98.01% continued-downside trigger; fading carries ~0% edge.` });
-    }
-
-    const nowMins = etNowMins();
-    if (!ib.brokeHigh && !ib.brokeLow && nowMins > 11 * 60) {
-      out.push({ title: "Timing Curve · Range Mode", color: "#94a3b8",
-        detail: "Past 11:00 ET with no breakout — 84.1% of breakouts hit by now. Shift from breakout to range/premium-decay playbook." });
-    } else if (ib.firstBreak && ib.firstBreakMins != null) {
-      const mins = ib.firstBreakMins - IB_CLOSE;
-      out.push({ title: "Timing Curve · Early Break", color: "#00e676",
-        detail: `First break (${ib.firstBreak.toUpperCase()}) ~${Math.max(0, mins)}m after IB close. 84.1% of breakouts occur within 30m; avg 18m / median 2m.` });
-    }
-
-    if (ib.doubleBreak) {
-      out.push({ title: "Double Breach (ES)", color: "#ff1744",
-        detail: "Both IB sides broken — the ~40% ES double-cross whiplash profile. Trend-continuation conviction is reduced." });
-    } else if (ib.brokeHigh || ib.brokeLow) {
-      out.push({ title: "Single-Break Trend Day", color: "#00e676",
-        detail: "One clean side broken — modern ES regime: 75.59% single-break trend days, 22.05% double-breach risk. Respect the first break." });
-    }
-  } else {
-    out.push({ title: "IB Forming", color: "#5a7a99",
-      detail: `Tracking 9:30–10:30 ET range live. ${ib.range > 0 ? `Current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}.` : ""} Stats unlock at 10:30 ET.` });
   }
+
+  if (ib.aboveMid === true) {
+    out.push({ title: "Above-Mid Dominance (ES)", color: "#00e676",
+      detail: `Price is above the IB midpoint → 83.5% historical probability of an eventual IB High breakout${tag}.` });
+  } else if (ib.aboveMid === false) {
+    out.push({ title: "Below-Mid Dominance (ES)", color: "#ff5252",
+      detail: `Price is below the IB midpoint → 94.9% historical probability of an eventual IB Low breakdown. Fading carries ~5% survival${tag}.` });
+  }
+
+  if (ib.lowFirst === true) {
+    out.push({ title: "Low Formed First", color: "#7cff6b",
+      detail: `Session low printed before the high → upward path skew: 78.79% break IB High later, only 19.7% reverse to IB Low${tag}.` });
+  } else if (ib.lowFirst === false) {
+    out.push({ title: "High Formed First", color: "#ffb300",
+      detail: `Session high printed before the low → watch for downside rotation / double-cross risk${tag}.` });
+  }
+
+  if (etDayOfWeek() === 2) {
+    if (ib.lowFirst === false) {
+      out.push({ title: "Tuesday · High First", color: "#ff5ec4",
+        detail: `Tuesday + IB High first → first break skews to IB Low first (58.33%)${tag}.` });
+    } else if (ib.lowFirst === true) {
+      out.push({ title: "Tuesday · Low First", color: "#ff5ec4",
+        detail: `Tuesday + IB Low first → first break skews to IB High first (64.29%)${tag}.` });
+    }
+  }
+
+  if (ib.rangePct > 0 && ib.rangePct <= 1) {
+    out.push({ title: "Volatility Compression", color: "#ffb300",
+      detail: `IB range is compressed (${ib.rangePct.toFixed(2)}% ≤ 1%). A 5m close below IB Low = 98.01% continued-downside trigger; fading carries ~0% edge${tag}.` });
+  }
+
+  // Timing-curve "Range Mode" only makes sense once the IB has closed.
+  const nowMins = etNowMins();
+  if (ib.done && !ib.brokeHigh && !ib.brokeLow && nowMins > 11 * 60) {
+    out.push({ title: "Timing Curve · Range Mode", color: "#ffffff",
+      detail: "Past 11:00 ET with no breakout — 84.1% of breakouts hit by now. Shift from breakout to range/premium-decay playbook." });
+  } else if (ib.firstBreak && ib.firstBreakMins != null) {
+    const mins = ib.firstBreakMins - IB_CLOSE;
+    out.push({ title: "Timing Curve · Early Break", color: "#00e676",
+      detail: `First break (${ib.firstBreak.toUpperCase()}) ~${Math.max(0, mins)}m after IB close. 84.1% of breakouts occur within 30m; avg 18m / median 2m.` });
+  }
+
+  if (ib.doubleBreak) {
+    out.push({ title: "Double Breach (ES)", color: "#ff1744",
+      detail: `Both IB sides broken — the ~40% ES double-cross whiplash profile. Trend-continuation conviction is reduced${tag}.` });
+  } else if (ib.brokeHigh || ib.brokeLow) {
+    out.push({ title: "Single-Break Trend Day", color: "#00e676",
+      detail: `One clean side broken — modern ES regime: 75.59% single-break trend days, 22.05% double-breach risk. Respect the first break${tag}.` });
+  }
+
   return out;
 }
 
@@ -236,7 +249,7 @@ function mergeLocked(live: IbState, locked: IbLevelsRecord, candles: EsCandle[])
   };
 }
 
-function LiveIb() {
+export function LiveIb() {
   const { candles } = useEsCandles();
   const [locked, setLocked] = useState<IbLevelsRecord | null>(null);
   const savedRef = useRef(false);
@@ -347,7 +360,7 @@ function LiveIb() {
             )}
           </span>
           {ib.doubleBreak && (
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: "#9fb3c8", border: "1px solid rgba(255,255,255,.12)", padding: "5px 10px", borderRadius: 6, fontFamily: "monospace" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: "#ffffff", border: "1px solid rgba(255,255,255,.12)", padding: "5px 10px", borderRadius: 6, fontFamily: "monospace" }}>
               ⬆ {etTimeLabel(ib.brokeHighTs) || "—"} · ⬇ {etTimeLabel(ib.brokeLowTs) || "—"}
             </span>
           )}
@@ -357,7 +370,7 @@ function LiveIb() {
       </div>
 
       {!ib.hasData ? (
-        <div style={{ fontSize: 13, color: "#5a7a99", padding: "12px 0" }}>
+        <div style={{ fontSize: 13, color: "#ffffff", padding: "12px 0" }}>
           No ES candle data yet for today’s IB window. Live IB populates from the 5m ES candle feed during 9:30–10:30 ET.
         </div>
       ) : (
@@ -373,19 +386,42 @@ function LiveIb() {
             {stat("vs Mid", ib.aboveMid == null ? "—" : ib.aboveMid ? "ABOVE" : "BELOW", ib.aboveMid ? "#00e676" : "#ff5252")}
           </div>
 
-          <div style={{ fontSize: 10, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
-            Rules In Play ({rules.length})
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
+              Rules In Play ({rules.length})
+            </span>
+            {!ib.done && (
+              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#ffb300", border: "1px solid #ffb30055", background: "#ffb3001a", padding: "3px 8px", borderRadius: 6 }}>
+                Provisional · not locked
+              </span>
+            )}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {rules.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#5a7a99" }}>No rules triggered yet.</div>
-            ) : rules.map((r) => (
-              <div key={r.title} style={{ borderLeft: `3px solid ${r.color}`, paddingLeft: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: r.color }}>{r.title}</div>
-                <div style={{ fontSize: 12, color: "#ffffff", lineHeight: 1.5, marginTop: 2 }}>{highlightPct(r.detail)}</div>
-              </div>
-            ))}
-          </div>
+          {rules.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#ffffff" }}>No rules triggered yet.</div>
+          ) : (
+            <div style={{
+              display: "grid",
+              // Flow rule cards across ~2 rows: half the count per row (min 1),
+              // capped so cards stay readable; wraps responsively on narrow widths.
+              gridTemplateColumns: `repeat(${Math.min(Math.max(1, Math.ceil(rules.length / 2)), 4)}, minmax(0, 1fr))`,
+              gap: 10,
+            }}>
+              {rules.map((r) => (
+                <div key={r.title} style={{
+                  borderLeft: `3px solid ${r.color}`,
+                  borderTop: "1px solid rgba(255,255,255,.08)",
+                  borderRight: "1px solid rgba(255,255,255,.08)",
+                  borderBottom: "1px solid rgba(255,255,255,.08)",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  background: "rgba(255,255,255,.02)",
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: r.color }}>{r.title}</div>
+                  <div style={{ fontSize: 12, color: "#ffffff", lineHeight: 1.5, marginTop: 4 }}>{highlightPct(r.detail)}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -504,7 +540,7 @@ export default function IbLogic() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2, flexShrink: 0 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>IB Logic &amp; AI</div>
-          <div style={{ fontSize: 10, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>Initial Balance · ES Futures</div>
+          <div style={{ fontSize: 10, color: "#ffffff", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>Initial Balance · ES Futures</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button onClick={trigger} style={btnStyle}>{btnLabel}</button>
@@ -518,13 +554,13 @@ export default function IbLogic() {
       {/* Static IB Logic Reference hidden from user view */}
       <div style={{ display: "none" }}>
       <div style={{ marginBottom: 6, marginTop: 8 }}>
-        <div style={{ fontSize: 11, color: "#5a7a99", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
+        <div style={{ fontSize: 11, color: "#ffffff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Static IB Logic Reference
         </div>
         <div style={{ fontSize: 22, color: "#eef7ff", fontWeight: 800 }}>
           Initial Balance Logic, Listed Out
         </div>
-        <div style={{ fontSize: 12, color: "#5a7a99", marginTop: 6 }}>
+        <div style={{ fontSize: 12, color: "#ffffff", marginTop: 6 }}>
           Full probability map. The live tracker above applies the relevant rules to today’s session automatically.
         </div>
       </div>
@@ -536,7 +572,7 @@ export default function IbLogic() {
         <div style={{ fontSize: 11, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Reference Summary
         </div>
-        <div style={{ fontSize: 13, color: "#9fb3c8", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, color: "#ffffff", lineHeight: 1.55 }}>
           IB logic is a probability map, not a prediction engine. The core read is:
           first hour sets the range, midpoint tells directional pressure, the first break
           matters most, and compressed days can expand fast.
@@ -559,7 +595,7 @@ export default function IbLogic() {
             }}>
               {row.title}
             </div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: "#9fb3c8", fontSize: 13, lineHeight: 1.55 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, color: "#ffffff", fontSize: 13, lineHeight: 1.55 }}>
               {row.items.map((item, i) => (
                 <li key={i} style={{ marginBottom: 6 }}>{item}</li>
               ))}

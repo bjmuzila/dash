@@ -29,6 +29,7 @@ interface ScoreResult {
   chop: number;
   break: number;
   netWallBias: number;
+  openAtMVC: boolean;
   factors: ScoreFactors;
   historyWeight: number;
   sampleSize: number;
@@ -395,10 +396,13 @@ function MvcHero({
           <Seg pct={chopP} color={METRIC.chop} label="Chop" />
           <Seg pct={breakP} color={METRIC.break} label="Break" />
         </div>
-        <div style={{ display: "flex", gap: 16, fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
+        <div style={{ display: "flex", gap: 16, fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted, flexWrap: "wrap" }}>
           <span><span style={{ color: METRIC.pivot }}>■</span> Reject {reject}%</span>
           <span><span style={{ color: METRIC.chop }}>■</span> Chop {chopP}%</span>
           <span><span style={{ color: METRIC.break }}>■</span> Break {breakP}%</span>
+          <span style={{ marginLeft: "auto", opacity: 0.7 }} title="MVC study base rates: $SPX 0DTE, assumes intraday IV 16–45%.">
+            study base: 55 / 26 / 17
+          </span>
         </div>
       </div>
 
@@ -420,6 +424,9 @@ function MvcHero({
           <span>EM ±{fmt(metrics.emSize)}</span>
           <span>GEX rank {Math.round((metrics.gexRank ?? 1) * 100)}%</span>
           <span>Session {Math.round(metrics.sessionProgress * 100)}%</span>
+          <span style={{ marginLeft: "auto", opacity: 0.65 }} title="The study base rates assume intraday IV between 16% and 45%. Outside that band the probabilities may not hold.">
+            ⚠ study valid for IV 16–45%
+          </span>
         </div>
       )}
     </div>
@@ -890,6 +897,21 @@ export default function ConfidenceScorePage() {
 
             {/* Net Wall Bias meter + structural bias read — one decision block */}
             <BiasMeter value={s.netWallBias} note={bias?.text} noteColor={bias?.color} />
+
+            {/* 84% open-at-MVC alert — high-priority setup callout */}
+            {s.openAtMVC && (
+              <div style={{ ...homePanelStyle, padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+                borderLeft: `3px solid ${HOME_THEME.green}`,
+                background: `radial-gradient(circle at 0% 0%, ${rgba(HOME_THEME.green, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+                <span style={{ fontSize: 22, color: HOME_THEME.green }}>⤞</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Opened AT the MVC — 85% pivot setup</span>
+                  <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.85 }}>
+                    Study: price pivots within the first 15 min and closes the overnight gap ~85% of the time.
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Live Structure — compact factor grid + regime/history badges */}
             <div className="conf-hover" style={{ ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 12, borderLeft: `2px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>

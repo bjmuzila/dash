@@ -32,10 +32,10 @@ interface GexChartProps {
 
 // Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
 // live bar's color, drawn behind the current bar.
-const GHOST_TINTS: Record<string, { pos: string; neg: string }> = {
-  "5":  { pos: "rgba(41,182,246,0.30)", neg: "rgba(255,179,0,0.30)" },
-  "15": { pos: "rgba(41,182,246,0.22)", neg: "rgba(255,179,0,0.22)" },
-  "30": { pos: "rgba(41,182,246,0.15)", neg: "rgba(255,179,0,0.15)" },
+const GHOST_TINTS: Record<string, { pos: string; neg: string; line: string }> = {
+  "5":  { pos: "rgba(41,182,246,0.30)", neg: "rgba(255,179,0,0.30)", line: "rgba(255,255,255,0.95)" },
+  "15": { pos: "rgba(41,182,246,0.22)", neg: "rgba(255,179,0,0.22)", line: "rgba(255,255,255,0.75)" },
+  "30": { pos: "rgba(41,182,246,0.15)", neg: "rgba(255,179,0,0.15)", line: "rgba(255,255,255,0.55)" },
 };
 
 // ─── Padding — matches vanilla exactly ────────────────────────────────────────
@@ -333,7 +333,9 @@ export default function GexChart({
     if (showGhost30) ghostAges.push("30");
     if (showGhost15) ghostAges.push("15");
     if (showGhost5)  ghostAges.push("5");
-    if (ghostAges.length && baselines && !isCallPut && !isVol) {
+    let ghostDrawn = 0;
+    const ghostActive = ghostAges.length > 0;
+    if (ghostActive && baselines && !isCallPut && !isVol) {
       // Older → newer so the most recent (5m) sits on top of the older halos.
       for (const age of ghostAges) {
         const tint = GHOST_TINTS[age];
@@ -342,6 +344,7 @@ export default function GexChart({
           if (prior == null || !Number.isFinite(prior)) return;
           const live = getNet(r);
           if (Math.abs(prior - live) < 1e-6) return;
+          ghostDrawn++;
           const x  = xAt(i);
           const sameSign = (prior >= 0) === (live >= 0);
           const col = prior >= 0 ? tint.pos : tint.neg;
@@ -354,6 +357,9 @@ export default function GexChart({
             if (h < 0.5) return;
             ctx.fillStyle = col;
             ctx.fillRect(x - barW / 2, yTop, barW, h);
+            ctx.strokeStyle = tint.line;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x - barW / 2 + 0.5, yTop + 0.5, barW - 1, h - 1);
           } else {
             // Rise: shade only the gap between prior level and live level (cap).
             const yLive  = clamp(yFor(live),  PAD_T, PAD_T + cH);
@@ -363,9 +369,22 @@ export default function GexChart({
             if (h < 0.5) return;
             ctx.fillStyle = col;
             ctx.fillRect(x - barW / 2, yTop, barW, h);
+            ctx.strokeStyle = tint.line;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x - barW / 2 + 0.5, yTop + 0.5, barW - 1, h - 1);
           }
         });
       }
+    }
+    // Ghost requested but unsupported in this mode, or no history yet.
+    if (ghostActive && (isCallPut || isVol)) {
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+      ctx.fillText("Prior GEX shows in Net GEX · OI+Vol mode", W / 2, PAD_T + 24);
+    } else if (ghostActive && ghostDrawn === 0) {
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+      ctx.fillText("No prior GEX history yet for this expiry", W / 2, PAD_T + 24);
     }
 
     data.forEach((r, i) => {

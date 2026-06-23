@@ -7,10 +7,9 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/
 import { queryGreeksToday, saveGreeksSnapshot, queryExpirationCache, saveExpirationCache, queryPlaybookFeedToday, savePlaybookSignal } from "@/lib/snapdb";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
-import IbLogic from "@/components/insights/IbLogic";
 import MarketQualityTerminal from "@/components/insights/MarketQualityTerminal";
 
-type InsightsTab = "exposure" | "vix" | "ib" | "mqt";
+type InsightsTab = "exposure" | "vix" | "mqt";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1013,7 +1012,6 @@ const TABS: { id: InsightsTab; label: string }[] = [
   { id: "exposure", label: "Exposure Stack" },
   { id: "vix",      label: "VIX / Vol" },
   { id: "mqt",      label: "Market Quality" },
-  { id: "ib",       label: "IB Logic & AI" },
 ];
 
 export default function InsightsPage() {
@@ -1706,9 +1704,6 @@ export default function InsightsPage() {
             <MarketQualityTerminal />
           </div>
         )}
-
-        {/* ── IB LOGIC TAB ─────────────────────────────────────────────────── */}
-        {tab === "ib" && <IbLogic />}
 
         {/* ── TOP 10 TAB ───────────────────────────────────────────────────── */}
       </div>

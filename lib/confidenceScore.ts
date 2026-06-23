@@ -42,7 +42,29 @@ export interface LevelContext {
    *  dominant magnet, 0.8 = 2nd, 0.6 = 3rd… A normalized substitute for raw GEX
    *  size so a strong-but-not-top strike doesn't inflate pivot odds. Default 1. */
   gexRank?: number;
+  /** Open-at-MVC special case: price OPENED at the MVC (first ~15 min, on the
+   *  level). The study found an 84% pivot-and-close-the-gap rate in this setup, so
+   *  when true we anchor pivot to that elevated rate. */
+  openAtMVC?: boolean;
 }
+
+/**
+ * Empirical MVC base rates: $SPX index, 0DTE only, valid for intraday IV ~16–45%.
+ * Used as the PRIOR the live structural scores are anchored to (structure then
+ * tilts around these), rather than building each score from a flat low base.
+ *   - reach : MVC is met 75% of the time.
+ *   - When met → pivot 55% / within-range(±$5) 26% (chop) / outside-range 17% (break).
+ *   - openAtMVC: opens at MVC → 85% pivot + closes the overnight gap in first 15m.
+ */
+export const STUDY = {
+  reach: 0.75,
+  pivot: 0.55,
+  chop: 0.26,
+  break: 0.17,
+  openAtMVCPivot: 0.85,
+  ivLow: 16,
+  ivHigh: 45,
+} as const;
 
 export interface HistoricalAnalogStats {
   /** Number of past analog levels found. 0 → no historical signal. */
@@ -67,6 +89,8 @@ export interface ConfidenceResult {
   /** Net Wall Bias = pivot − break, range -100..100. Positive (large) = expect the
    *  wall to defend / hold; negative = respect the break. The single decision read. */
   netWallBias: number; // -100..100
+  /** True when the open-at-MVC 84% setup is active (price opened on the level). */
+  openAtMVC: boolean;
   /** Per-factor contributions for the live prior (for UI explainability). */
   factors: {
     proximity: number; // 0..1 (1 = on top of level)
@@ -271,6 +295,26 @@ export function scoreConfidence(
   if (ctx.gexRank != null && ctx.gexRank < 0.8)
     notes.push(`Secondary magnet (GEX rank ${Math.round(clamp01(ctx.gexRank) * 100)}%) → structural credit discounted.`);
 
+  // ── Study base-rate anchoring ─────────────────────────────────────────────
+  // Pull each structural score toward the empirical MVC base rate (reach 75% /
+  // pivot 55% / chop 26% / break 17%). The live structure
+  // (gamma/proximity/DEX + rejection history) then TILTS around that anchor rather
+  // than driving from a flat low base. ANCHOR = how much the study prior pulls.
+  const ANCHOR = 0.5; // 50% study base rate, 50% live structure
+  hit = ANCHOR * STUDY.reach + (1 - ANCHOR) * hit;
+  pivot = ANCHOR * STUDY.pivot + (1 - ANCHOR) * pivot;
+  chop = ANCHOR * STUDY.chop + (1 - ANCHOR) * chop;
+  brk = ANCHOR * STUDY.break + (1 - ANCHOR) * brk;
+  notes.push(`Anchored to MVC study base rates (reach ${Math.round(STUDY.reach * 100)}% · pivot ${Math.round(STUDY.pivot * 100)}% / chop ${Math.round(STUDY.chop * 100)}% / break ${Math.round(STUDY.break * 100)}%).`);
+
+  // Special case: price OPENED at the MVC → study's 84% pivot-and-close-the-gap.
+  // Pull pivot hard toward 0.84 and reach toward certainty (it's already there).
+  if (ctx.openAtMVC) {
+    pivot = 0.7 * STUDY.openAtMVCPivot + 0.3 * pivot;
+    hit = Math.max(hit, 0.9);
+    notes.push(`Opened AT the MVC → ${Math.round(STUDY.openAtMVCPivot * 100)}% setup: expect a pivot + overnight-gap close in the first 15 min.`);
+  }
+
   // ── Two-stage probability model ───────────────────────────────────────────
   // Stage 1: HIT = "reach" — does price get to the level at all? Stands alone.
   // Stage 2: GIVEN a hit, exactly one of {pivot, chop, break} happens, so they
@@ -301,6 +345,7 @@ export function scoreConfidence(
     chop: chopPct,
     break: brkPct,
     netWallBias,
+    openAtMVC: ctx.openAtMVC ?? false,
     factors: { ...prior.factors, rejectionRate },
     historyWeight,
     sampleSize: history?.sampleSize ?? 0,

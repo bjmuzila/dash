@@ -1191,6 +1191,38 @@ export async function getOptionStrikeRollingNetGex(
 }
 
 /**
+ * Per-strike net GEX for an entire day, collapsed to ONE reading per
+ * (strike, 5-minute slot) — the latest snapshot within each slot. Powers the
+ * ES Candles heatmap backfill: each distinct slot becomes a heatmap column.
+ *
+ * `slot_ts` is the floor of `timestamp` to the 5-minute grid (ms), so it lines
+ * up with the candle grid the overlay draws against. Ordered by slot then
+ * strike for easy client-side bucketing.
+ */
+export async function getOptionStrikeGexSlots(
+  date: string,
+  expiry: string
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON ((FLOOR(timestamp / 300000) * 300000), strike)
+            (FLOOR(timestamp / 300000) * 300000)::bigint AS slot_ts,
+            strike,
+            net_gex
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND expiry = $2
+      ORDER BY (FLOOR(timestamp / 300000) * 300000) ASC, strike ASC, timestamp DESC`,
+    [date, expiry]
+  );
+  return result.rows.map((row) => ({
+    slot_ts: Number(row.slot_ts ?? 0),
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+  }));
+}
+
+/**
  * Per-strike net GEX as it read at the most recent snapshot AT OR BEFORE
  * `asOfTimestamp` (point-in-time, not an average). Used by the strike-detail
  * popup to compute rolling differences (current − reading N minutes ago).
@@ -1209,6 +1241,39 @@ export async function getOptionStrikeNetGexAsOf(
         AND expiry = $2
         AND timestamp <= $3
       ORDER BY strike ASC, timestamp DESC`,
+    [date, expiry, asOfTimestamp]
+  );
+  return result.rows.map((row) => ({
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+    timestamp: Number(row.timestamp ?? 0),
+  }));
+}
+
+/**
+ * Per-strike net GEX as of a target time, but TOLERANT of sparse history:
+ * prefers the latest row at-or-before `asOfTimestamp`; if a strike has no row
+ * that old, falls back to that strike's nearest available row instead of
+ * dropping it. Keeps the ghost overlay populated after-hours / right after the
+ * writer starts, when nothing is yet `age` minutes old.
+ */
+export async function getOptionStrikeNetGexAsOfOrNearest(
+  date: string,
+  expiry: string,
+  asOfTimestamp: number
+): Promise<Array<{ strike: number; net_gex: number; timestamp: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON (strike) strike, net_gex, timestamp
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND expiry = $2
+      ORDER BY strike ASC,
+               (timestamp <= $3) DESC,
+               CASE WHEN timestamp <= $3
+                    THEN $3 - timestamp
+                    ELSE timestamp - $3
+               END ASC`,
     [date, expiry, asOfTimestamp]
   );
   return result.rows.map((row) => ({

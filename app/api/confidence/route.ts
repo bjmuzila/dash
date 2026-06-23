@@ -496,6 +496,16 @@ export async function GET(req: NextRequest) {
     }
     const curGexRank = gexRankFor(cur.level, todayRows);
 
+    // Open-at-MVC 84% setup: price OPENED on the level. True only for the live
+    // session, within the first ~15 min (15/390 ≈ 0.038 of RTH), and when SPX sits
+    // within a touch of the MVC strike. The day's open SPX = first snapshot's spx.
+    const FIRST_15M = 15 / 390;
+    const openSpx = todaySpx.length ? todaySpx[0] : cur.spx;
+    const openAtMVC =
+      date === todayET() &&
+      sessionProgress > 0 && sessionProgress <= FIRST_15M &&
+      Number.isFinite(openSpx) && Math.abs(openSpx - cur.level) <= HIT_PTS;
+
     // 3) Score (SPX-based).
     const ctx: LevelContext = {
       level: cur.level,
@@ -509,6 +519,7 @@ export async function GET(req: NextRequest) {
       isOpexOr0DTE,
       sessionProgress,
       gexRank: curGexRank,
+      openAtMVC,
     };
     const result = scoreConfidence(ctx, history);
 

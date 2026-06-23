@@ -1,23 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { LiveIb } from "@/components/insights/IbLogic";
 import {
   HOME_THEME,
   homeButtonStyle,
   homeContentStyle,
   homeHeaderStyle,
   homePanelStyle,
-  homeSecondaryButtonStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
 import {
   computeRefLevels,
   scanToday,
   computeStats,
+  computeAmt,
+  detectTriggers,
   type FailEvent,
   type LevelStatus,
+  type AmtResult,
+  type Trigger,
 } from "@/lib/failLevels";
 
 // rgba helper matching the convention used across pages.
@@ -45,12 +49,23 @@ function etClock(ts: number) {
 }
 
 const STATE_META: Record<LevelStatus["state"], { label: string; color: string }> = {
-  idle:    { label: "Idle",    color: HOME_THEME.muted },
+  idle:    { label: "Idle",    color: HOME_THEME.text },
   testing: { label: "Testing", color: HOME_THEME.orange },
   above:   { label: "Broke ↑", color: HOME_THEME.green },
   below:   { label: "Broke ↓", color: HOME_THEME.red },
   failed:  { label: "Failed",  color: HOME_THEME.red },
 };
+
+function dayTypeColor(dt: AmtResult["dayType"]): string {
+  if (dt === "trend-up" || dt === "reversal-up") return HOME_THEME.green;
+  if (dt === "trend-down" || dt === "reversal-down") return HOME_THEME.red;
+  if (dt === "balance") return HOME_THEME.orange;
+  return HOME_THEME.text;
+}
+
+function biasColor(b: "long" | "short" | "neutral"): string {
+  return b === "long" ? HOME_THEME.green : b === "short" ? HOME_THEME.red : HOME_THEME.text;
+}
 
 function SectionTitle({ text, accent }: { text: string; accent: string }) {
   return (
@@ -63,50 +78,20 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
 export default function FailsPage() {
   usePageLoadStatus({ pageKey: "fails", pageLabel: "Fails", path: "/fails" });
 
-  const { candles, connected, refresh } = useEsCandles();
+  const { candles: allCandles, connected, refresh } = useEsCandles();
 
-  // Live ES/SPX basis (esFut - spx) for SPX-equivalent display, from /ws/gex.
-  const [basis, setBasis] = useState(0);
-  useEffect(() => {
-    let ws: WebSocket | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    let dead = false;
+  // This page is ESU-specific (Sept ES). Candle symbols come through as /ESU6,
+  // /ESU26, /ESU26:XCME, etc. — keep only those. If the feed tags candles
+  // generically (e.g. "/ES") and nothing matches, fall back to all so the page
+  // never goes blank during a contract rollover.
+  const candles = useMemo(() => {
+    const esu = allCandles.filter((c) => (c.symbol ?? "").toUpperCase().includes("ESU"));
+    return esu.length ? esu : allCandles;
+  }, [allCandles]);
 
-    const handle = (raw: string) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(raw); } catch { return; }
-      const d = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
-      const spx = Number(d.spot ?? 0);
-      const es = Number(d.esFut ?? 0);
-      if (spx > 0 && es > 0) setBasis(es - spx);
-    };
-    const connect = () => {
-      if (dead) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { schedule(); return; }
-      ws.onmessage = (e) => handle(String(e.data));
-      ws.onerror = () => { try { ws?.close(); } catch {} };
-      ws.onclose = () => { if (!dead) schedule(); };
-    };
-    const schedule = () => {
-      if (dead) return;
-      if (retry) clearTimeout(retry);
-      retry = setTimeout(connect, 2500);
-    };
-    connect();
-    return () => {
-      dead = true;
-      if (retry) clearTimeout(retry);
-      if (ws) { ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
-    };
-  }, []);
-
-  // SPX-equivalent display: subtract basis from ES level. Toggle to show raw ES.
-  const [showSpx, setShowSpx] = useState(true);
-  const px = (esVal: number) => (showSpx ? esVal - basis : esVal);
-  const fmt = (esVal: number) => px(esVal).toFixed(2);
-  const unit = showSpx ? "SPX" : "ES";
+  // ESU-only page — prices shown as raw ESU futures points (no SPX conversion).
+  const fmt = (esVal: number) => esVal.toFixed(2);
+  const unit = "ESU";
 
   const today = todayETStr();
   const levels = useMemo(() => computeRefLevels(candles, today), [candles, today]);
@@ -120,6 +105,13 @@ export default function FailsPage() {
   );
   const { stats, log } = useMemo(() => computeStats(candles, 20), [candles]);
 
+  const amt = useMemo(() => computeAmt(candles, today), [candles, today]);
+  const triggers = useMemo(() => detectTriggers(candles, today, amt), [candles, today, amt]);
+  const amtReadByKind = useMemo(
+    () => new Map(amt.levelReads.map((r) => [r.kind, r])),
+    [amt],
+  );
+
   const lastClose = todayBars[todayBars.length - 1]?.close ?? null;
 
   return (
@@ -132,7 +124,7 @@ export default function FailsPage() {
       {/* header */}
       <div style={homeHeaderStyle}>
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>Fails</span>
+          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>ESU Fails</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: HOME_THEME.text, opacity: 0.85 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%",
               background: connected ? HOME_THEME.green : HOME_THEME.muted,
@@ -141,30 +133,90 @@ export default function FailsPage() {
           </span>
           <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
             {lastClose != null ? `${unit} ${fmt(lastClose)}` : "—"}
-            {basis ? <span style={{ opacity: 0.55 }}> · basis {basis > 0 ? "+" : ""}{basis.toFixed(2)}</span> : null}
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowSpx((s) => !s)}
-            style={{ ...homeSecondaryButtonStyle, borderColor: HOME_THEME.cyan, color: HOME_THEME.cyan }}>
-            {unit}
-          </button>
           <button onClick={() => void refresh()} style={homeButtonStyle}>Refresh</button>
         </div>
       </div>
 
       <div style={{ ...homeContentStyle, overflow: "auto" }}>
+        {/* AMT day-type + bias banner */}
+        {(() => {
+          const dtCol = dayTypeColor(amt.dayType);
+          const blCol = biasColor(amt.bias.lean);
+          return (
+            <div className="fail-hover" style={{ ...homePanelStyle, padding: "16px 20px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16,
+              borderLeft: `3px solid ${dtCol}`,
+              background: `radial-gradient(circle at 0% 0%, ${rgba(dtCol, 0.1)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
+                <SectionTitle text="Day Type · AMT" accent={HOME_THEME.text} />
+                <span style={{ fontSize: 22, fontWeight: 800, color: dtCol, lineHeight: 1 }}>{amt.dayTypeLabel}</span>
+              </div>
+              <div style={{ flex: 1, minWidth: 240, display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>{amt.dayTypeDetail}</span>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <span style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+                    color: blCol, background: "rgba(255,255,255,0.05)", border: `1px solid ${rgba(blCol, 0.35)}`, flexShrink: 0 }}>
+                    {amt.bias.lean}
+                  </span>
+                  <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{amt.bias.text}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Live Initial Balance (merged from Insights) — full IB tracker:
+            locked-DB persistence, break alerts, formed-first/vs-mid stats,
+            and the rules-in-play probability engine. */}
+        <LiveIb />
+
+        {/* Active AMT setups */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <SectionTitle text="Active Setups" accent={HOME_THEME.cyan} />
+            <span style={{ fontSize: 10, color: HOME_THEME.text }}>AMT entry triggers · first 2h strongest</span>
+          </div>
+          {(() => {
+            const active = triggers.filter((t) => t.active);
+            const recent = triggers.filter((t) => !t.active).slice(0, 6);
+            if (!triggers.length) {
+              return <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No triggers detected yet today.</div>;
+            }
+            return (
+              <>
+                {active.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+                    {active.map((t, i) => <TriggerCard key={`a-${t.kind}-${t.ts}-${i}`} t={t} fmt={fmt} live />)}
+                  </div>
+                )}
+                {recent.length > 0 && (
+                  <details>
+                    <summary style={{ cursor: "pointer", fontSize: 11, color: HOME_THEME.text, padding: "4px 0" }}>
+                      Earlier triggers today ({recent.length})
+                    </summary>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginTop: 8 }}>
+                      {recent.map((t, i) => <TriggerCard key={`r-${t.kind}-${t.ts}-${i}`} t={t} fmt={fmt} />)}
+                    </div>
+                  </details>
+                )}
+              </>
+            );
+          })()}
+        </div>
+
         {/* live status panel */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <SectionTitle text="Live Status" accent={HOME_THEME.cyan} />
-            <span style={{ fontSize: 11, color: HOME_THEME.muted }}>
+            <span style={{ fontSize: 11, color: HOME_THEME.text }}>
               Overnight · Prev-day · Prev-week highs & lows
             </span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
             {statuses.length === 0 ? (
-              <div style={{ ...homePanelStyle, gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.muted }}>
+              <div style={{ ...homePanelStyle, gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
                 {connected ? "Waiting for ES candles to build levels…" : "Loading candles…"}
               </div>
             ) : statuses.map((s) => {
@@ -185,15 +237,29 @@ export default function FailsPage() {
                   <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>{s.level.label}</span>
                   <span style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, fontFamily: "monospace", color: HOME_THEME.text }}>{fmt(s.level.price)}</span>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, marginTop: 2 }}>
-                    <span style={{ color: HOME_THEME.muted }}>
+                    <span style={{ color: HOME_THEME.text }}>
                       {dist != null ? (
                         <>dist <span style={{ fontFamily: "monospace", color: dist >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{dist >= 0 ? "+" : ""}{dist.toFixed(2)}</span></>
                       ) : "—"}
                     </span>
-                    <span style={{ color: HOME_THEME.muted, opacity: 0.8 }}>
+                    <span style={{ color: HOME_THEME.text, opacity: 0.8 }}>
                       {s.lastEvent ? `fail ${etClock(s.lastEvent.failTs)} · poke ${s.lastEvent.pokePts.toFixed(2)}` : "no fail today"}
                     </span>
                   </div>
+                  {(() => {
+                    const r = amtReadByKind.get(s.level.kind);
+                    if (!r) return null;
+                    const bc = biasColor(r.bias);
+                    return (
+                      <div style={{ marginTop: 4, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}`, display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <Tag color={r.acceptance === "strong" ? HOME_THEME.cyan : HOME_THEME.text}>{r.acceptance} acceptance</Tag>
+                          {r.bias !== "neutral" ? <Tag color={bc}>{r.bias}</Tag> : null}
+                        </div>
+                        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.4 }}>{r.read}</span>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -204,7 +270,7 @@ export default function FailsPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionTitle text={`Today's Fails${todayEvents.length ? ` (${todayEvents.length})` : ""}`} accent={HOME_THEME.orange} />
           {todayEvents.length === 0 ? (
-            <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.muted }}>No fails logged today yet.</div>
+            <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No fails logged today yet.</div>
           ) : (
             <FailTable rows={[...todayEvents].reverse()} fmt={fmt} unit={unit} />
           )}
@@ -214,11 +280,11 @@ export default function FailsPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <SectionTitle text="Fail Rate" accent={HOME_THEME.purple} />
-            <span style={{ fontSize: 10, color: HOME_THEME.muted }}>last ~20 sessions</span>
+            <span style={{ fontSize: 10, color: HOME_THEME.text }}>last ~20 sessions</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
             {stats.length === 0 ? (
-              <div style={{ ...homePanelStyle, gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.muted }}>
+              <div style={{ ...homePanelStyle, gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
                 Building history…
               </div>
             ) : stats.map((st) => {
@@ -233,7 +299,7 @@ export default function FailsPage() {
                   <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
                     <div style={{ width: `${pct}%`, height: "100%", background: accent }} />
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HOME_THEME.muted }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HOME_THEME.text }}>
                     <span>{st.fails} fails</span>
                     <span>{st.breaks} breaks</span>
                     <span>{st.tests} tests</span>
@@ -248,7 +314,7 @@ export default function FailsPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionTitle text={`Recent Fail Log${log.length ? ` (${log.length})` : ""}`} accent={HOME_THEME.cyan} />
           {log.length === 0 ? (
-            <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.muted }}>No historical fails in window.</div>
+            <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No historical fails in window.</div>
           ) : (
             <FailTable rows={log.slice(0, 60)} fmt={fmt} unit={unit} showDate />
           )}
@@ -266,7 +332,7 @@ function FailTable({
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 12 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.muted }}>
+            <tr style={{ color: HOME_THEME.text }}>
               {showDate && <Th>Date</Th>}
               <Th>Time</Th>
               <Th>Level</Th>
@@ -284,20 +350,66 @@ function FailTable({
               const color = above ? HOME_THEME.red : HOME_THEME.green;
               return (
                 <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  {showDate && <Td color={HOME_THEME.muted}>{new Date(e.failTs).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}</Td>}
-                  <Td color={HOME_THEME.muted}>{etClock(e.failTs)}</Td>
+                  {showDate && <Td color={HOME_THEME.text}>{new Date(e.failTs).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}</Td>}
+                  <Td color={HOME_THEME.text}>{etClock(e.failTs)}</Td>
                   <Td><span style={{ color: HOME_THEME.text, fontWeight: 700 }}>{e.short}</span></Td>
                   <Td><span style={{ color }}>{tag}</span></Td>
                   <Td right mono color={HOME_THEME.text}>{fmt(e.level)}</Td>
                   <Td right mono color={HOME_THEME.orange}>{e.pokePts.toFixed(2)}</Td>
-                  <Td right mono color={HOME_THEME.muted}>{fmt(e.closeBack)}</Td>
-                  <Td right mono color={e.followThruPts > 0 ? HOME_THEME.green : HOME_THEME.muted}>{e.followThruPts.toFixed(2)}</Td>
+                  <Td right mono color={HOME_THEME.text}>{fmt(e.closeBack)}</Td>
+                  <Td right mono color={e.followThruPts > 0 ? HOME_THEME.green : HOME_THEME.text}>{e.followThruPts.toFixed(2)}</Td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function Tag({ children, color }: { children: React.ReactNode; color: string }) {
+  return (
+    <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase",
+      color, background: "rgba(255,255,255,0.05)", border: `1px solid ${rgba(color, 0.3)}` }}>
+      {children}
+    </span>
+  );
+}
+
+function TriggerCard({ t, fmt, live = false }: { t: Trigger; fmt: (es: number) => string; live?: boolean }) {
+  const col = t.direction === "long" ? HOME_THEME.green : HOME_THEME.red;
+  return (
+    <div className="fail-hover" style={{ ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 10,
+      opacity: live ? 1 : 0.72,
+      borderLeft: `2px solid ${rgba(col, 0.6)}`,
+      background: `radial-gradient(circle at 0% 0%, ${rgba(col, live ? 0.1 : 0.05)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 800, width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 4, color: col, border: `1px solid ${rgba(col, 0.4)}`, background: "rgba(255,255,255,0.04)" }}>{t.code}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text }}>{t.title}</span>
+        </div>
+        <Tag color={col}>{t.direction}</Tag>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        <Stat label="Entry" val={fmt(t.entry)} color={HOME_THEME.text} />
+        <Stat label="Stop" val={fmt(t.stop)} color={HOME_THEME.red} />
+        <Stat label="Target" val={fmt(t.target)} color={HOME_THEME.green} />
+      </div>
+      <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.4 }}>{t.confluence}</span>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: HOME_THEME.text }}>
+        <span>{t.ref}</span>
+        <span>{t.barsAgo === 0 ? "just now" : `${t.barsAgo * 5}m ago`}{live ? " · active" : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, val, color }: { label: string; val: string; color: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: HOME_THEME.text }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, fontFamily: "monospace", color }}>{val}</span>
     </div>
   );
 }
