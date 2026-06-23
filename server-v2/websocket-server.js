@@ -80,6 +80,7 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   // GEX broadcast throttle state.
   let lastGexSentAt = 0;
   let lastGexPayload = null;
+  let lastFlowPayload = null;
 
   server.on('upgrade', (request, socket, head) => {
     let pathname;
@@ -145,7 +146,18 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
         out.push(msg('gex', { ...gexData, updatedAt: state.updatedAt }, state.symbol));
       }
     }
-    if (changed.has('flow')) out.push(msg('flow', state.flow, state.symbol));
+    if (changed.has('flow')) {
+      // The flow tape is re-published every 500ms and carries the full per-order
+      // prints array (grows over the session). Overnight / quiet periods it's the
+      // same payload resent twice a second to every client — a multi-GB/night
+      // bleed. Skip when byte-identical to the last flow frame we sent; a genuine
+      // new print changes the payload and goes out immediately.
+      const flowKey = JSON.stringify(state.flow);
+      if (flowKey !== lastFlowPayload) {
+        lastFlowPayload = flowKey;
+        out.push(msg('flow', state.flow, state.symbol));
+      }
+    }
     // Full esCandles array goes out only in the connect-time snapshot (written via
     // setStateSilent, so it never lands in changedKeys here). Live updates arrive
     // as a small esCandlesDelta — re-typed as 'esCandles' so the client's existing
