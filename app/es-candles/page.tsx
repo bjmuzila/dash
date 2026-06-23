@@ -23,9 +23,12 @@ type GexColumn = { slotTs: number; cells: GexCell[] };
 type GexMetric = "voloi" | "vol";
 
 // 5-min-binned big-trade bubble (price = ES price, signed = net of merged prints).
+// maxPrint = the single LARGEST trade in the slot — bubbles are sized by this so
+// a slot with one big block dwarfs a slot of scattered small lots (true size read,
+// like a per-trade footprint).
 type Bubble = {
   slotTs: number; price: number; size: number; side: "buy" | "sell";
-  buy: number; sell: number; total: number; net: number;
+  buy: number; sell: number; total: number; net: number; maxPrint: number;
 };
 // 5-min net delta bar.
 type DeltaBar = { slotTs: number; net: number };
@@ -300,14 +303,15 @@ export default function EsCandlesPage() {
   // size = that dominant side's volume — so a heavy sell slot stays a big red
   // bubble even when net delta is near zero (late sellers being absorbed).
   const bubbles = useMemo<Bubble[]>(() => {
-    const bySlot = new Map<number, { buy: number; sell: number; pxVol: number; vol: number }>();
+    const bySlot = new Map<number, { buy: number; sell: number; pxVol: number; vol: number; maxPrint: number }>();
     for (const t of rawTrades) {
       if (!(t.size > 0) || !(t.price > 0)) continue;
       const slotTs = slotFloorMs(t.ts);
-      const agg = bySlot.get(slotTs) ?? { buy: 0, sell: 0, pxVol: 0, vol: 0 };
+      const agg = bySlot.get(slotTs) ?? { buy: 0, sell: 0, pxVol: 0, vol: 0, maxPrint: 0 };
       if (t.side === "buy") agg.buy += t.size; else agg.sell += t.size;
       agg.pxVol += t.price * t.size;
       agg.vol += t.size;
+      if (t.size > agg.maxPrint) agg.maxPrint = t.size; // largest single block in the slot
       bySlot.set(slotTs, agg);
     }
     return [...bySlot.entries()].map(([slotTs, a]) => {
@@ -317,7 +321,7 @@ export default function EsCandlesPage() {
         price: a.vol > 0 ? a.pxVol / a.vol : 0,
         size: buyDom ? a.buy : a.sell, // dominant aggressor volume
         side: (buyDom ? "buy" : "sell") as "buy" | "sell",
-        buy: a.buy, sell: a.sell, total: a.vol, net: a.buy - a.sell,
+        buy: a.buy, sell: a.sell, total: a.vol, net: a.buy - a.sell, maxPrint: a.maxPrint,
       };
     });
   }, [rawTrades]);
@@ -439,26 +443,19 @@ export default function EsCandlesPage() {
       retry = setTimeout(connect, 2500);
     };
 
-    const gatePoll = setInterval(() => {
-      if (dead) return;
-      if (esShouldConnectRef.current) {
-        if (!ws) connect();
-      } else if (ws) {
-        if (retry) clearTimeout(retry);
-        const w = ws;
-        ws = null;
-        if (w) { w.onclose = null; try { w.close(); } catch {} }
-      }
-    }, 1000);
-
-    if (esShouldConnectRef.current) connect();
+    // Value-driven bandwidth gate: re-runs when esShouldConnect flips.
+    if (esShouldConnect) connect();
     return () => {
       dead = true;
-      clearInterval(gatePoll);
       if (retry) clearTimeout(retry);
-      if (ws) { ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
+      if (ws) {
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws?.close(); } catch {} };
+        else { ws.onopen = null; try { ws.close(); } catch {} }
+      }
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esShouldConnect]);
 
   // Heatmap history backfill. Effective expiry = the DTE picker selection, or
   // the live front expiry when nothing is picked. Re-runs whenever the picker
@@ -1040,25 +1037,30 @@ export default function EsCandlesPage() {
         ctx.strokeStyle = "rgba(255,255,255,.06)";
         ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
         if (showBubbles && bubbles.length) {
-          // Size metric: total slot volume (default) or |net delta|. Color is
-          // ALWAYS the dominant aggressor side — green = net buyers lifting offers,
-          // red = net sellers hitting bids. A cluster of big RED bubbles at a level
-          // = aggressive selling getting absorbed (the footprint read), exactly
-          // like the reference: every slot shows, sizes flow tiny→huge.
-          const metricOf = (b: Bubble) => (bubbleMetric === "net" ? Math.abs(b.net) : b.total);
+          // Size metric: the slot's LARGEST single print (default) or |net delta|.
+          // Sizing on the biggest block — not summed volume — is what gives the
+          // true small→big spread: one 491-lot trade dwarfs a slot of scattered
+          // 20-lots, like a per-trade footprint. Color is ALWAYS the dominant
+          // aggressor side: green = buyers lifting offers, red = sellers hitting
+          // bids. A big red bubble at a level = aggressive selling being absorbed.
+          const metricOf = (b: Bubble) => (bubbleMetric === "net" ? Math.abs(b.net) : b.maxPrint);
 
           // Radius range. rMin keeps the quietest slots as small visible dots so
-          // the heavy ones pop against them; rCap fills most of the lane, capped by
-          // column pitch so neighbors never overlap when zoomed out.
-          const rCap = Math.max(9, Math.min(h * 0.48, pitch * 0.5));
+          // the heavy ones pop against them. rCap is much bigger now (the largest
+          // bubbles intentionally overlap neighbors, like the reference) — it fills
+          // the full lane half-height and allows up to ~1.4× the column pitch.
+          const rCap = Math.max(9, Math.min(h * 0.5, pitch * 1.4));
           const rMin = 2.5;
 
-          // Continuous, percentile-anchored scale over ALL slots (no gating). The
-          // 92nd-pct value is "full size", so a single blowout print doesn't crush
-          // everyone else into dots — but genuine heavy slots still hit rCap.
+          // Continuous scale over ALL slots (no gating). Anchor "full size" near
+          // the TOP of the largest-print distribution (98th pct) so only the
+          // genuinely biggest block fills rCap and everything else scales DOWN
+          // proportionally — this is what gives the tiny→huge spread instead of
+          // everything saturating to max. (98th, not 100th, so a lone freak print
+          // doesn't crush the rest into dots.)
           const asc = bubbles.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
           const ref = asc.length
-            ? Math.max(1, asc[Math.floor(asc.length * 0.92)] ?? asc[asc.length - 1])
+            ? Math.max(1, asc[Math.floor(asc.length * 0.98)] ?? asc[asc.length - 1])
             : 1;
 
           // Draw smallest first so heavy prints sit on top.
@@ -1066,9 +1068,11 @@ export default function EsCandlesPage() {
           for (const b of ordered) {
             const cx = barCenter(b.slotTs);
             if (cx == null) continue;
-            const t = Math.min(1, metricOf(b) / ref); // 0..1, clamped at the 92nd pct
-            // sqrt → bubble AREA scales with volume, the truthful visual encoding.
-            const r = rMin + Math.sqrt(t) * (rCap - rMin);
+            const t = Math.min(1, metricOf(b) / ref); // 0..1, clamped near the top
+            // Near-linear radius (mild pow) → a half-size slot reads as a clearly
+            // smaller bubble, not a near-max one. sqrt was bunching the middle up
+            // toward the cap; this keeps small slots genuinely small.
+            const r = rMin + Math.pow(t, 0.85) * (rCap - rMin);
             const buy = b.side === "buy";
             // Fill alpha ramps with size so big bubbles also read as more solid.
             const fillA = 0.45 + t * 0.5;
@@ -1079,12 +1083,24 @@ export default function EsCandlesPage() {
             ctx.lineWidth = 1.25;
             ctx.strokeStyle = buy ? "rgba(80,255,130,.9)" : "rgba(255,120,120,.9)";
             ctx.stroke();
+            // Contract-count label on bubbles big enough to hold text (like the
+            // reference's 491/306/204). r >= 11 ≈ fits ~3 digits at 10px.
+            if (r >= 11) {
+              ctx.fillStyle = "rgba(255,255,255,.92)";
+              ctx.font = `bold ${Math.min(12, Math.max(9, Math.round(r * 0.7)))}px Inter, system-ui, sans-serif`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(String(b.maxPrint), cx, rowY);
+            }
           }
+          // Reset text alignment so the lane caption below draws left-aligned.
+          ctx.textAlign = "left";
+          ctx.textBaseline = "alphabetic";
         }
         ctx.fillStyle = "rgba(255,255,255,.45)";
         ctx.font = "10px Inter, system-ui, sans-serif";
         ctx.fillText(
-          `BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"} · green = buys · red = sells`,
+          `BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "largest print"} · green = buys · red = sells`,
           6, 12,
         );
       }
@@ -1445,8 +1461,12 @@ export default function EsCandlesPage() {
                 </span>
               </div>
               <div className="flex items-center justify-between gap-3">
+                <span className="text-white/50">Largest print</span>
+                <span className="font-mono font-bold text-white">{bubbleHover.b.maxPrint.toLocaleString("en-US")}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-white/50">Total</span>
-                <span className="font-mono font-bold text-white">{bubbleHover.b.total.toLocaleString("en-US")}</span>
+                <span className="font-mono text-white/80">{bubbleHover.b.total.toLocaleString("en-US")}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span style={{ color: "#30d158" }}>Buy</span>

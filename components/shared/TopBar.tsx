@@ -349,28 +349,19 @@ export default function TopBar() {
       reconnect = setTimeout(connect, 2000);
     };
 
-    // Bandwidth gate: connect only while visible+active (owner exempt from idle).
-    const gatePoll = setInterval(() => {
-      if (closed) return;
-      if (shouldConnectRef.current) {
-        if (!ws) connect();
-      } else if (ws) {
-        if (reconnect) clearTimeout(reconnect);
-        const w = ws;
-        ws = null;
-        if (w) { w.onclose = null; try { w.close(); } catch (_) {} }
-      }
-    }, 1000);
-
-    if (shouldConnectRef.current) connect();
+    // Value-driven bandwidth gate: re-runs when shouldConnect flips.
+    if (shouldConnect) connect();
     return () => {
       closed = true;
-      clearInterval(gatePoll);
       if (reconnect) clearTimeout(reconnect);
-      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch (_) {} }
+      if (ws) {
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws?.close(); } catch (_) {} };
+        else { ws.onopen = null; try { ws.close(); } catch (_) {} }
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [shouldConnect]);
 
   // ── close dropdown on outside click ──
   useEffect(() => {

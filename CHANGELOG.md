@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-23 (session 58) — Sidebar Notes panel (per-user) + home stat-bar full-width stretch
+
+### Sidebar Notes panel (`components/shared/Sidebar.tsx`)
+- New per-user quick-jot **Notes** panel filling the empty space between the nav and the Collapse footer (expanded + signed-in only). `useNotes(user?.id)` hook persists to `localStorage` keyed `sidebar-notes-v1:${clerkUserId}` — survives resets, isolated per login, cleared on sign-out.
+- Add / edit / delete with timestamps (`formatNoteTime`: time-only if today, else "Mon D h:mm"). Header + add input share **one row** to save vertical space (single-line `<input>`, Enter saves). Each note card: **text + timestamp on the same first row** (timestamp right-aligned); edit/delete buttons collapse to 0 height at rest and slide open on hover, so a note is one line tall when idle.
+- Styling matches the app glass-card system: translucent `rgba(13,17,25,0.45)` + `blur(16px)`, ~14px radius, near-invisible hairline border, faint cyan tint + glow on hover; inputs same treatment; soft white-fade gradient divider above the panel.
+
+### Home stat bar full-width stretch (`app/home/page.tsx`)
+- Top ticker row (VIX/ESU/SPX/NQU) and the metrics row (NET GEX/CALL WALL/PUT WALL/FLIP/MVC) now `width:100%` + `justify-content: space-between` so they spread edge-to-edge and grow with the window (no cap) instead of sitting compressed on the left. Flattened the metrics row (removed the left-cluster wrapper + MVC `marginLeft:auto`) so all five items are evenly justified siblings.
+- `tickerBoxRef` switched from `inline-block` natural width to `width:100%`; the `tickerScale` auto-fit now only acts as a **clip guard** (shrinks via `scrollWidth/clientWidth` overflow ratio when items can't fit a narrow column), never wastes space on wide ones.
+
+---
+
 ## 2026-06-23 (session 57) — Sidebar Quick Pages (drag-to-pin) + collapsed nested-anchor hydration fix
 
 Sidebar UX additions. All edits in `components/shared/Sidebar.tsx`.

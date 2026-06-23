@@ -217,6 +217,57 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_budget_entries_profile ON budget_entries(profile_id);
     CREATE INDEX IF NOT EXISTS idx_budget_entries_occurred ON budget_entries(occurred_at);
 
+    -- Check-register rows: one line item per row, ordered down the page. The
+    -- amount lands under one bank column (coastal/truist/secu); a single running
+    -- balance is computed client-side. A row with is_beginning=1 seeds the start.
+    -- Negative amount = payment, positive = income.
+    CREATE TABLE IF NOT EXISTS budget_register (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      entry_date TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      label TEXT NOT NULL DEFAULT '',
+      bank TEXT NOT NULL DEFAULT 'secu',
+      amount REAL NOT NULL DEFAULT 0,
+      is_beginning INTEGER NOT NULL DEFAULT 0,
+      recurring_tag TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_register_profile ON budget_register(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_register_date ON budget_register(entry_date);
+
+    -- Recurring rules: a payment/income that repeats (weekly/biweekly/monthly).
+    -- Occurrences are computed live for the displayed month, not stored as rows.
+    -- amount is signed (payment negative, income positive). anchor_date is the
+    -- first/reference occurrence; for monthly we repeat on that day-of-month.
+    CREATE TABLE IF NOT EXISTS budget_recurring (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      label TEXT NOT NULL DEFAULT '',
+      bank TEXT NOT NULL DEFAULT 'secu',
+      amount REAL NOT NULL DEFAULT 0,
+      frequency TEXT NOT NULL DEFAULT 'monthly',
+      anchor_date TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_recurring_profile ON budget_recurring(profile_id);
+
+    -- Amazon delivery log: one row per work day (date, gross pay, gas cost).
+    CREATE TABLE IF NOT EXISTS budget_amazon (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      work_date TEXT NOT NULL,
+      pay REAL NOT NULL DEFAULT 0,
+      gas REAL NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, work_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_amazon_profile ON budget_amazon(profile_id);
+
     CREATE TABLE IF NOT EXISTS waitlist (
       id SERIAL PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -1387,6 +1438,163 @@ export async function listBudgetEntries(profileId: number, limit = 200): Promise
   return queryAll<BudgetEntryRecord>(
     "SELECT * FROM budget_entries WHERE profile_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?",
     [profileId, limit]
+  );
+}
+
+// ── Check register: one line item per row, single running balance ─────────────
+export type RegisterBank = "coastal" | "truist" | "secu";
+export interface BudgetRegisterRecord {
+  id: number;
+  profile_id: number;
+  entry_date: string;
+  sort_order: number;
+  label: string;
+  bank: RegisterBank;
+  amount: number;
+  is_beginning: number;
+  recurring_tag?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function insertRegisterRow(input: {
+  profile_id: number;
+  entry_date: string;
+  sort_order: number;
+  label: string;
+  bank: RegisterBank;
+  amount: number;
+  is_beginning?: number;
+  recurring_tag?: string | null;
+}): Promise<BudgetRegisterRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_register (profile_id, entry_date, sort_order, label, bank, amount, is_beginning, recurring_tag)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [input.profile_id, input.entry_date, input.sort_order, input.label, input.bank, input.amount, input.is_beginning ?? 0, input.recurring_tag ?? null]
+  );
+  return result.rows[0] as BudgetRegisterRecord;
+}
+
+export async function updateRegisterRow(profileId: number, id: number, patch: { entry_date?: string; label?: string; bank?: RegisterBank; amount?: number }): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE budget_register
+       SET entry_date = COALESCE($3, entry_date),
+           label = COALESCE($4, label),
+           bank = COALESCE($5, bank),
+           amount = COALESCE($6, amount),
+           updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1 AND profile_id = $2`,
+    [id, profileId, patch.entry_date ?? null, patch.label ?? null, patch.bank ?? null, patch.amount ?? null]
+  );
+}
+
+export async function deleteRegisterRow(profileId: number, id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM budget_register WHERE id = $1 AND profile_id = $2 AND is_beginning = 0`, [id, profileId]);
+}
+
+export async function deleteRegisterByTag(profileId: number, fromDate: string, toDate: string, tag: string): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `DELETE FROM budget_register WHERE profile_id = $1 AND entry_date >= $2 AND entry_date <= $3 AND recurring_tag = $4`,
+    [profileId, fromDate, toDate, tag]
+  );
+}
+
+export async function listRegister(profileId: number, fromDate: string, toDate: string): Promise<BudgetRegisterRecord[]> {
+  return queryAll<BudgetRegisterRecord>(
+    "SELECT * FROM budget_register WHERE profile_id = ? AND entry_date >= ? AND entry_date <= ? ORDER BY entry_date ASC, sort_order ASC, id ASC",
+    [profileId, fromDate, toDate]
+  );
+}
+
+// ── Recurring rules ───────────────────────────────────────────────────────────
+export type RecurringFrequency = "weekly" | "biweekly" | "monthly";
+export interface BudgetRecurringRecord {
+  id: number;
+  profile_id: number;
+  label: string;
+  bank: RegisterBank;
+  amount: number;
+  frequency: RecurringFrequency;
+  anchor_date: string;
+  active: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function insertRecurring(input: { profile_id: number; label: string; bank: RegisterBank; amount: number; frequency: RecurringFrequency; anchor_date: string }): Promise<BudgetRecurringRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_recurring (profile_id, label, bank, amount, frequency, anchor_date)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [input.profile_id, input.label, input.bank, input.amount, input.frequency, input.anchor_date]
+  );
+  return result.rows[0] as BudgetRecurringRecord;
+}
+
+export async function updateRecurring(profileId: number, id: number, patch: { label?: string; bank?: RegisterBank; amount?: number; frequency?: RecurringFrequency; anchor_date?: string; active?: number }): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE budget_recurring
+       SET label = COALESCE($3, label),
+           bank = COALESCE($4, bank),
+           amount = COALESCE($5, amount),
+           frequency = COALESCE($6, frequency),
+           anchor_date = COALESCE($7, anchor_date),
+           active = COALESCE($8, active),
+           updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1 AND profile_id = $2`,
+    [id, profileId, patch.label ?? null, patch.bank ?? null, patch.amount ?? null, patch.frequency ?? null, patch.anchor_date ?? null, patch.active ?? null]
+  );
+}
+
+export async function deleteRecurring(profileId: number, id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM budget_recurring WHERE id = $1 AND profile_id = $2`, [id, profileId]);
+}
+
+export async function listRecurring(profileId: number): Promise<BudgetRecurringRecord[]> {
+  return queryAll<BudgetRecurringRecord>(
+    "SELECT * FROM budget_recurring WHERE profile_id = ? ORDER BY id ASC",
+    [profileId]
+  );
+}
+
+// ── Amazon delivery log ───────────────────────────────────────────────────────
+export interface BudgetAmazonRecord {
+  id: number;
+  profile_id: number;
+  work_date: string;
+  pay: number;
+  gas: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function upsertAmazonRow(input: { profile_id: number; work_date: string; pay: number; gas: number }): Promise<BudgetAmazonRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_amazon (profile_id, work_date, pay, gas)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT(profile_id, work_date) DO UPDATE SET pay = EXCLUDED.pay, gas = EXCLUDED.gas, updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [input.profile_id, input.work_date, input.pay, input.gas]
+  );
+  return result.rows[0] as BudgetAmazonRecord;
+}
+
+export async function deleteAmazonRow(profileId: number, id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM budget_amazon WHERE id = $1 AND profile_id = $2`, [id, profileId]);
+}
+
+export async function listAmazonRows(profileId: number, fromDate: string, toDate: string): Promise<BudgetAmazonRecord[]> {
+  return queryAll<BudgetAmazonRecord>(
+    "SELECT * FROM budget_amazon WHERE profile_id = ? AND work_date >= ? AND work_date <= ? ORDER BY work_date ASC, id ASC",
+    [profileId, fromDate, toDate]
   );
 }
 

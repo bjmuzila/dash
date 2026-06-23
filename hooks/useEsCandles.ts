@@ -154,30 +154,22 @@ export function useEsCandles() {
       reconnectRef.current = setTimeout(connect, 2500);
     };
 
-    // Bandwidth gate: connect only while visible+active (owner exempt from idle).
-    const gatePoll = setInterval(() => {
-      if (unmountedRef.current) return;
-      if (shouldConnectRef.current) {
-        if (!wsRef.current) connect();
-      } else if (wsRef.current) {
-        if (reconnectRef.current) clearTimeout(reconnectRef.current);
-        const ws = wsRef.current;
-        wsRef.current = null;
-        if (ws) { ws.onclose = null; try { ws.close(); } catch {} }
-        setConnected(false);
-      }
-    }, 1000);
-
-    if (shouldConnectRef.current) connect();
+    // Value-driven bandwidth gate: re-runs when shouldConnect flips. Connect when
+    // allowed; the cleanup tears down when not (no polling).
+    if (shouldConnect) connect();
     return () => {
       unmountedRef.current = true;
-      clearInterval(gatePoll);
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       const ws = wsRef.current;
       wsRef.current = null;
-      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
+      if (ws) {
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws.close(); } catch {} };
+        else { ws.onopen = null; try { ws.close(); } catch {} }
+      }
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldConnect]);
 
   // Enrich today's bars with 5/14-day slot averages.
   const candles = useMemo<EsCandle[]>(() => {

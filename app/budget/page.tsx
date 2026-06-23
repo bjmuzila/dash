@@ -7,452 +7,573 @@ import { HOME_THEME } from "@/components/shared/homeTheme";
 // prerendering this page throws "Missing publishableKey". Render at request time.
 export const dynamic = "force-dynamic";
 
+type Bank = "coastal" | "truist" | "secu";
 type BudgetProfile = { id: number; name: string; currency: string };
-type BudgetCategory = { id: number; profile_id: number; name: string; amount: number; period: string; color?: string | null };
-type BudgetEntry = {
+type RegisterRow = {
   id: number;
-  profile_id: number;
-  category_id?: number | null;
-  type: "income" | "expense";
+  entry_date: string;
+  sort_order: number;
+  label: string;
+  bank: Bank;
   amount: number;
-  title: string;
-  notes?: string | null;
-  occurred_at: string;
+  is_beginning: number;
+  recurring_tag?: string | null;
 };
+type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
+type Frequency = "weekly" | "biweekly" | "monthly";
+type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 
-const PERIODS = ["daily", "weekly", "monthly", "yearly"];
+const BANKS: Bank[] = ["coastal", "truist", "secu"];
+const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST", secu: "SECU" };
+const FREQS: Frequency[] = ["weekly", "biweekly", "monthly"];
+const FREQ_LABEL: Record<Frequency, string> = { weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
 
 function fmtMoney(amount: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(amount || 0);
 }
+// Short "M-D" like the screenshot (7-1).
+function shortDate(iso: string): string {
+  const [, m, d] = iso.split("-").map(Number);
+  return `${m}-${d}`;
+}
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function todayIso(): string {
+  return isoDate(new Date());
+}
+function currentMonth(): string {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+}
+function weekday(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "short" });
+}
+function addDays(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return isoDate(dt);
+}
 
-function getAccent(index: number) {
-  const colors = ["#66a6ff", "#f97316", "#f43f5e", "#22c55e", "#facc15", "#a78bfa"];
-  return colors[index % colors.length];
+// All dates a recurring rule fires within "YYYY-MM". Weekly/biweekly step from
+// the anchor by 7/14 days; monthly repeats on the anchor's day-of-month
+// (clamped to the month's length so the 31st still lands in shorter months).
+function occurrencesInMonth(rule: RecurringRule, month: string): string[] {
+  const [y, m] = month.split("-").map(Number);
+  const first = `${month}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const last = `${month}-${String(lastDay).padStart(2, "0")}`;
+  const out: string[] = [];
+
+  if (rule.frequency === "monthly") {
+    const day = Math.min(Number(rule.anchor_date.split("-")[2]), lastDay);
+    out.push(`${month}-${String(day).padStart(2, "0")}`);
+    return out;
+  }
+
+  const step = rule.frequency === "weekly" ? 7 : 14;
+  let cursor = rule.anchor_date;
+  // Walk back to just before the month, then forward through it.
+  while (cursor > first) cursor = addDays(cursor, -step);
+  while (cursor < first) cursor = addDays(cursor, step);
+  let guard = 0;
+  while (cursor <= last && guard < 10) {
+    out.push(cursor);
+    cursor = addDays(cursor, step);
+    guard++;
+  }
+  return out;
 }
 
 export default function BudgetPage() {
   const [profile, setProfile] = useState<BudgetProfile | null>(null);
-  const [profiles, setProfiles] = useState<BudgetProfile[]>([]);
-  const [categories, setCategories] = useState<BudgetCategory[]>([]);
-  const [entries, setEntries] = useState<BudgetEntry[]>([]);
+  const [month, setMonth] = useState(currentMonth());
+  const [register, setRegister] = useState<RegisterRow[]>([]);
+  const [recurring, setRecurring] = useState<RecurringRule[]>([]);
+  const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterType, setFilterType] = useState<"all" | "expense" | "income">("all");
-  const [showComposer, setShowComposer] = useState(false);
-  const [profileName, setProfileName] = useState("Default");
-  const [categoryName, setCategoryName] = useState("");
-  const [categoryAmount, setCategoryAmount] = useState("0");
-  const [categoryPeriod, setCategoryPeriod] = useState("monthly");
-  const [entryTitle, setEntryTitle] = useState("");
-  const [entryAmount, setEntryAmount] = useState("");
-  const [entryType, setEntryType] = useState<"expense" | "income">("expense");
-  const [entryCategoryId, setEntryCategoryId] = useState<string>("");
-  const [entryNotes, setEntryNotes] = useState("");
+  const [tab, setTab] = useState<"register" | "amazon">("register");
 
-  const refresh = async () => {
+  // Add-row composer
+  const [rwDate, setRwDate] = useState(todayIso());
+  const [rwLabel, setRwLabel] = useState("");
+  const [rwBank, setRwBank] = useState<Bank>("secu");
+  const [rwSign, setRwSign] = useState<"-" | "+">("-"); // payments default negative
+  const [rwAmount, setRwAmount] = useState("");
+
+  // Recurring rules manager
+  const [showRecurring, setShowRecurring] = useState(false);
+
+  // Amazon composer
+  const [azDate, setAzDate] = useState(todayIso());
+  const [azPay, setAzPay] = useState("");
+  const [azGas, setAzGas] = useState("");
+
+  const currency = profile?.currency || "USD";
+
+  const refresh = async (m = month) => {
     setLoading(true);
-    const res = await fetch("/api/budget", { cache: "no-store" });
+    const res = await fetch(`/api/budget?month=${m}`, { cache: "no-store" });
     const data = await res.json();
     setProfile(data.profile);
-    setProfiles(data.profiles || []);
-    setCategories(data.categories || []);
-    setEntries(data.entries || []);
-    setProfileName(data.profile?.name || "Default");
+    setRegister(data.register || []);
+    setRecurring(data.recurring || []);
+    setAmazonRows(data.amazonRows || []);
     setLoading(false);
   };
 
   useEffect(() => {
-    void refresh();
-  }, []);
+    void refresh(month);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month]);
 
-  const activeCurrency = profile?.currency || "USD";
-
-  const visibleEntries = useMemo(
-    () => entries.filter((entry) => filterType === "all" ? true : entry.type === filterType),
-    [entries, filterType]
-  );
-
-  const totals = useMemo(() => {
-    const income = entries.filter((e) => e.type === "income").reduce((sum, e) => sum + e.amount, 0);
-    const expense = entries.filter((e) => e.type === "expense").reduce((sum, e) => sum + e.amount, 0);
-    const budget = categories.reduce((sum, c) => sum + c.amount, 0);
-    const remaining = income - expense - budget;
-    const spentPct = budget > 0 ? Math.min(100, (expense / budget) * 100) : 0;
-    return { income, expense, budget, remaining, spentPct };
-  }, [entries, categories]);
-
-  const categoryRows = useMemo(() => {
-    return categories.map((cat, index) => {
-      const spent = entries
-        .filter((entry) => entry.type === "expense" && entry.category_id === cat.id)
-        .reduce((sum, entry) => sum + entry.amount, 0);
-      const percent = cat.amount > 0 ? Math.min(100, (spent / cat.amount) * 100) : 0;
-      return {
-        ...cat,
-        spent,
-        left: cat.amount - spent,
-        percent,
-        accent: cat.color || getAccent(index),
-      };
-    }).sort((a, b) => b.spent - a.spent);
-  }, [categories, entries]);
-
-  const chartPoints = useMemo(() => {
-    const ordered = [...entries].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
-    let running = 0;
-    return ordered.map((entry, index) => {
-      running += entry.type === "income" ? entry.amount : -entry.amount;
-      return { x: index, y: running };
-    });
-  }, [entries]);
-
-  const chartPath = useMemo(() => {
-    if (!chartPoints.length) return "";
-    const maxY = Math.max(...chartPoints.map((p) => p.y), 1);
-    const minY = Math.min(...chartPoints.map((p) => p.y), 0);
-    const width = 320;
-    const height = 160;
-    const span = Math.max(maxY - minY, 1);
-    return chartPoints.map((point, index) => {
-      const x = chartPoints.length === 1 ? 0 : (index / (chartPoints.length - 1)) * width;
-      const y = height - ((point.y - minY) / span) * height;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    }).join(" ");
-  }, [chartPoints]);
-
-  const saveCategory = async () => {
+  const post = async (payload: Record<string, unknown>) => {
     await fetch("/api/budget", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "category",
-        profileName,
-        name: categoryName.trim(),
-        amount: Number(categoryAmount),
-        period: categoryPeriod,
-      }),
+      body: JSON.stringify({ profileName: profile?.name ?? "Default", ...payload }),
     });
-    setCategoryName("");
-    setCategoryAmount("0");
-    await refresh();
+    await refresh(month);
   };
 
-  const saveEntry = async () => {
-    await fetch("/api/budget", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "entry",
-        profileName,
-        title: entryTitle.trim(),
-        amount: Number(entryAmount),
-        type: entryType,
-        categoryId: entryCategoryId || null,
-        notes: entryNotes.trim(),
-        occurredAt: new Date().toISOString(),
-      }),
-    });
-    setEntryTitle("");
-    setEntryAmount("");
-    setEntryNotes("");
-    setShowComposer(false);
-    await refresh();
-  };
+  // Build the displayed register: seed per-bank beginning balances, then merge
+  // manual rows with live-computed recurring occurrences (sorted by date), then
+  // run each bank's own running balance. Recurring rows are synthetic (id<0).
+  const computed = useMemo(() => {
+    const bal: Record<Bank, number> = { coastal: 0, truist: 0, secu: 0 };
+    const beginningByBank: Record<Bank, number | null> = { coastal: null, truist: null, secu: null };
 
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
-  const today = new Date().getDate();
-  const dayPct = Math.min(100, (today / daysInMonth) * 100);
+    for (const r of register) {
+      if (r.is_beginning) {
+        bal[r.bank] = r.amount;
+        beginningByBank[r.bank] = r.amount;
+      }
+    }
+    const anyBeginning = BANKS.some((b) => beginningByBank[b] !== null);
+
+    // Manual (non-beginning) rows.
+    type Line = { id: number; entry_date: string; sort_order: number; label: string; bank: Bank; amount: number; recurring: boolean };
+    const lines: Line[] = register
+      .filter((r) => !r.is_beginning)
+      .map((r) => ({ id: r.id, entry_date: r.entry_date, sort_order: r.sort_order, label: r.label, bank: r.bank, amount: r.amount, recurring: false }));
+
+    // Recurring occurrences for this month (synthetic negative ids per rule+date).
+    for (const rule of recurring) {
+      if (!rule.active) continue;
+      for (const date of occurrencesInMonth(rule, month)) {
+        lines.push({ id: -(rule.id * 100 + Number(date.split("-")[2])), entry_date: date, sort_order: 40, label: rule.label, bank: rule.bank, amount: rule.amount, recurring: true });
+      }
+    }
+
+    lines.sort((a, b) => (a.entry_date < b.entry_date ? -1 : a.entry_date > b.entry_date ? 1 : a.sort_order - b.sort_order));
+
+    const rows: ({ id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; balances: Record<Bank, number>; total: number })[] = [];
+    if (anyBeginning) {
+      rows.push({
+        id: -1, entry_date: register.find((r) => r.is_beginning)?.entry_date ?? `${month}-01`,
+        label: "BEGINNING", bank: "secu", amount: 0, is_beginning: 1, recurring: false,
+        balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu,
+      });
+    }
+
+    let income = 0;
+    let payments = 0;
+    for (const ln of lines) {
+      bal[ln.bank] += ln.amount; // signed: payment negative, income positive
+      if (ln.amount > 0) income += ln.amount;
+      else payments += ln.amount;
+      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
+    }
+
+    return { rows, income, payments, beginningByBank, anyBeginning, totals: { ...bal }, grandTotal: bal.coastal + bal.truist + bal.secu };
+  }, [register, recurring, month]);
+
+  const amazonComputed = useMemo(() => {
+    const rows = amazonRows.map((r) => ({ ...r, net: r.pay - r.gas }));
+    const totalPay = rows.reduce((s, r) => s + r.pay, 0);
+    const totalGas = rows.reduce((s, r) => s + r.gas, 0);
+    return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
+  }, [amazonRows]);
+
+  const monthLabel = (() => {
+    const [y, m] = month.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  })();
+
+  const addRow = async () => {
+    if (!rwLabel.trim() || rwAmount.trim() === "") return;
+    const signed = (rwSign === "-" ? -1 : 1) * Math.abs(Number(rwAmount));
+    await post({ action: "registerRow", date: rwDate, label: rwLabel.trim().toUpperCase(), bank: rwBank, amount: signed });
+    setRwLabel("");
+    setRwAmount("");
+  };
+  const editRow = async (id: number, patch: Record<string, unknown>) => post({ action: "updateRow", id, ...patch });
+  const deleteRow = async (id: number) => post({ action: "deleteRow", id });
+  const saveBeginning = async (balances: Record<Bank, number>) =>
+    post({ action: "setBeginning", month, balances });
+  const addRecurring = async (rule: { label: string; bank: Bank; amount: number; frequency: Frequency; anchorDate: string }) =>
+    post({ action: "recurringAdd", ...rule });
+  const updateRecurringRule = async (id: number, patch: Record<string, unknown>) =>
+    post({ action: "recurringUpdate", id, ...patch });
+  const deleteRecurringRule = async (id: number) => post({ action: "recurringDelete", id });
+  const saveAmazon = async () => {
+    if (azDate.trim() === "" || (azPay.trim() === "" && azGas.trim() === "")) return;
+    await post({ action: "amazon", date: azDate, pay: Number(azPay || 0), gas: Number(azGas || 0) });
+    setAzPay("");
+    setAzGas("");
+  };
+  const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "hidden", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 18 }}>
-        <div style={{ ...homeCard(), padding: 18, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.18em", color: HOME_THEME.cyan }}>Budget</div>
-            <div style={{ fontSize: 28, fontWeight: 900, marginTop: 6, lineHeight: 1.05 }}>Monthly Spending</div>
-            <div style={{ fontSize: 13, color: HOME_THEME.muted, marginTop: 6 }}>Persistent PostgreSQL storage, no proxy, same visual language as home.</div>
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
+        {/* Title banner — mirrors the PAYMENTS / month layout from the sheet */}
+        <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
+          <div style={{ textAlign: "center", padding: "12px 18px 6px" }}>
+            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: "0.16em" }}>PAYMENTS</div>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted, marginTop: 2 }}>{monthLabel.toUpperCase()}</div>
           </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-            <select value={profileName} onChange={(e) => setProfileName(e.target.value)} style={fieldStyle()}>
-              {profiles.length ? profiles.map((item) => <option key={item.id} value={item.name}>{item.name}</option>) : <option value="Default">Default</option>}
-            </select>
-            <button onClick={refresh} style={ghostButton()}>Refresh</button>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap", padding: "10px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
+            <div>
+              <div style={labelCap()}>Month</div>
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ ...field(), width: 170 }} />
+            </div>
+            <BeginningEditor beginningByBank={computed.beginningByBank} onSave={saveBeginning} currency={currency} />
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16 }}>
+        {/* Current balance per bank + combined total */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
           {[
-            { label: "Income", value: fmtMoney(totals.income, activeCurrency), color: HOME_THEME.green },
-            { label: "Expenses", value: fmtMoney(totals.expense, activeCurrency), color: HOME_THEME.red },
-            { label: "Budgets", value: fmtMoney(totals.budget, activeCurrency), color: HOME_THEME.orange },
-            { label: "Remaining", value: fmtMoney(totals.remaining, activeCurrency), color: totals.remaining >= 0 ? HOME_THEME.cyan : HOME_THEME.red },
-          ].map((tile) => (
-            <div key={tile.label} style={{ ...homeCard(), padding: 18, minHeight: 110 }}>
-              <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.16em", color: HOME_THEME.muted }}>{tile.label}</div>
-              <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900, color: tile.color }}>{tile.value}</div>
+            { label: "Coastal", value: computed.totals.coastal, color: computed.totals.coastal < 0 ? HOME_THEME.red : HOME_THEME.text },
+            { label: "Truist", value: computed.totals.truist, color: computed.totals.truist < 0 ? HOME_THEME.red : HOME_THEME.text },
+            { label: "SECU", value: computed.totals.secu, color: computed.totals.secu < 0 ? HOME_THEME.red : HOME_THEME.text },
+            { label: "Total (all banks)", value: computed.grandTotal, color: computed.grandTotal < 0 ? HOME_THEME.red : HOME_THEME.cyan },
+          ].map((t) => (
+            <div key={t.label} style={{ ...card(), padding: 16 }}>
+              <div style={labelCap()}>{t.label}</div>
+              <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
             </div>
           ))}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 16, minHeight: 0, flex: 1 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
-            <div style={{ ...homeCard(), padding: 18 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 900 }}>Monthly Spending</div>
-                  <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>{fmtMoney(totals.budget - totals.expense, activeCurrency)} left of {fmtMoney(totals.budget || totals.income, activeCurrency)}</div>
-                </div>
-                <div style={{ width: 34, height: 34, borderRadius: 999, background: "rgba(255,255,255,0.06)", display: "grid", placeItems: "center", color: HOME_THEME.cyan }}>↻</div>
-              </div>
-              <div style={{ position: "relative", marginTop: 6, marginBottom: 10 }}>
-                <div style={{ height: 18, borderRadius: 999, background: "rgba(255,255,255,0.10)", overflow: "hidden" }}>
-                  <div style={{ width: `${totals.spentPct}%`, height: "100%", borderRadius: 999, background: `linear-gradient(90deg, rgba(102,166,255,0.65), rgba(0,240,255,0.75))` }} />
-                </div>
-                <div style={{ position: "absolute", left: `${dayPct}%`, top: -6, width: 3, height: 30, background: "rgba(255,255,255,0.6)", transform: "translateX(-50%)" }} />
-                <div style={{ position: "absolute", left: `${Math.max(0, dayPct - 4)}%`, top: -24, padding: "4px 8px", borderRadius: 8, background: "#000", fontSize: 11, color: "#fff", transform: "translateX(-50%)" }}>Today</div>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: HOME_THEME.muted }}>
-                <span>{monthStart.toLocaleString("en-US", { month: "short" })}. 1</span>
-                <span>{monthStart.toLocaleString("en-US", { month: "short" })}. {daysInMonth}</span>
-              </div>
-              <div style={{ marginTop: 10, fontSize: 13, color: HOME_THEME.muted }}>
-                You can keep spending {fmtMoney(Math.max(totals.budget - totals.expense, 0) / Math.max(daysInMonth - today + 1, 1), activeCurrency)} for {Math.max(daysInMonth - today, 0)} more days
-              </div>
-            </div>
-
-            <div style={{ ...homeCard(), padding: 18, minHeight: 260 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 900 }}>Balance Trend</div>
-                  <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>Running balance from saved entries.</div>
-                </div>
-              </div>
-              <div style={{ height: 200, borderRadius: 18, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, padding: 14 }}>
-                <svg viewBox="0 0 320 160" width="100%" height="100%" preserveAspectRatio="none">
-                  <defs>
-                    <linearGradient id="budgetFill" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="0%" stopColor="rgba(102,166,255,0.45)" />
-                      <stop offset="100%" stopColor="rgba(102,166,255,0.02)" />
-                    </linearGradient>
-                  </defs>
-                  {[0, 40, 80, 120, 160].map((y) => (
-                    <line key={y} x1="0" x2="320" y1={y} y2={y} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 6" />
-                  ))}
-                  {chartPath && (
-                    <>
-                      <path d={`${chartPath} L 320 160 L 0 160 Z`} fill="url(#budgetFill)" />
-                      <path d={chartPath} fill="none" stroke={HOME_THEME.cyan} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </>
-                  )}
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
-            <div style={{ ...homeCard(), padding: 18, minHeight: 0, flex: 1, overflow: "auto" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 900 }}>Categories</div>
-                  <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>Budgets by category with saved amounts.</div>
-                </div>
-                {loading && <div style={{ fontSize: 12, color: HOME_THEME.muted }}>Loading...</div>}
-              </div>
-
-              <div style={{ display: "grid", gap: 12 }}>
-                {categoryRows.map((cat) => (
-                  <div key={cat.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 16, padding: 14 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <div style={{ width: 42, height: 42, borderRadius: 999, border: `3px solid ${cat.accent}`, display: "grid", placeItems: "center", color: cat.accent, fontSize: 18, background: "rgba(255,255,255,0.03)" }}>•</div>
-                        <div>
-                          <div style={{ fontSize: 15, fontWeight: 800 }}>{cat.name}</div>
-                          <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 4 }}>{cat.period} • {cat.spent} entries tracked</div>
-                        </div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 18, fontWeight: 900 }}>{fmtMoney(cat.spent, activeCurrency)} / {fmtMoney(cat.amount, activeCurrency)}</div>
-                        <div style={{ fontSize: 11, color: cat.left >= 0 ? HOME_THEME.green : HOME_THEME.red, marginTop: 4 }}>{fmtMoney(cat.left, activeCurrency)} left</div>
-                      </div>
-                    </div>
-                    <div style={{ marginTop: 12, height: 8, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-                      <div style={{ width: `${cat.percent}%`, height: "100%", borderRadius: 999, background: cat.accent }} />
-                    </div>
-                  </div>
-                ))}
-                {!categoryRows.length && <div style={{ color: HOME_THEME.muted, fontSize: 12 }}>Add a category to start.</div>}
-              </div>
-
-              <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr 0.8fr", gap: 10 }}>
-                <input value={categoryName} onChange={(e) => setCategoryName(e.target.value)} placeholder="Category" style={fieldStyle()} />
-                <input value={categoryAmount} onChange={(e) => setCategoryAmount(e.target.value)} placeholder="Amount" type="number" style={fieldStyle()} />
-                <select value={categoryPeriod} onChange={(e) => setCategoryPeriod(e.target.value)} style={fieldStyle()}>
-                  {PERIODS.map((period) => <option key={period} value={period}>{period}</option>)}
-                </select>
-                <button onClick={saveCategory} style={primaryButton()}>Save</button>
-              </div>
-            </div>
-
-            <div style={{ ...homeCard(), padding: 18, minHeight: 0, flex: 1, overflow: "auto", position: "relative" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 900 }}>Transactions</div>
-                  <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>Saved permanently in PostgreSQL.</div>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {(["all", "expense", "income"] as const).map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => setFilterType(type)}
-                      style={{
-                        ...pillButton(filterType === type),
-                        textTransform: "capitalize",
-                      }}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gap: 10 }}>
-                {visibleEntries.map((entry) => (
-                  <div key={entry.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 14, padding: 12, display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.title}</div>
-                      <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {new Date(entry.occurred_at).toLocaleString()} {entry.notes ? `• ${entry.notes}` : ""}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 900, color: entry.type === "income" ? HOME_THEME.green : HOME_THEME.red }}>
-                        {entry.type === "income" ? "+" : "-"}{fmtMoney(entry.amount, activeCurrency)}
-                      </div>
-                      <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 4 }}>{entry.type}</div>
-                    </div>
-                  </div>
-                ))}
-                {!visibleEntries.length && <div style={{ color: HOME_THEME.muted, fontSize: 12 }}>No entries in this filter.</div>}
-              </div>
-            </div>
-          </div>
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {([["register", "Payments"], ["amazon", "Amazon"]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
+          ))}
+          {tab === "register" && (
+            <button onClick={() => setShowHpay((v) => !v)} style={{ ...pill(false), marginLeft: 4 }}>+ Auto H PAY (bi-weekly)</button>
+          )}
+          {loading && <span style={{ fontSize: 12, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
+
+        {showHpay && tab === "register" && (
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto auto", gap: 10, alignItems: "end" }}>
+            <div><div style={labelCap()}>First pay date</div><input type="date" value={hpayAnchor} onChange={(e) => setHpayAnchor(e.target.value)} style={field()} /></div>
+            <div><div style={labelCap()}>Amount</div><input type="number" value={hpayAmount} onChange={(e) => setHpayAmount(e.target.value)} style={field()} /></div>
+            <div><div style={labelCap()}>Bank</div><select value={hpayBank} onChange={(e) => setHpayBank(e.target.value as Bank)} style={field()}>{BANKS.map((b) => <option key={b} value={b}>{BANK_LABEL[b]}</option>)}</select></div>
+            <button onClick={generateHpay} style={primary()}>Generate</button>
+            <button onClick={() => setShowHpay(false)} style={ghost()}>Cancel</button>
+            <div style={{ gridColumn: "1 / -1", fontSize: 11, color: HOME_THEME.muted }}>Inserts H PAY every 14 days through {monthLabel}. Re-running replaces the prior set.</div>
+          </div>
+        )}
+
+        {/* Content */}
+        <div style={{ ...card(), flex: 1, minHeight: 0, overflow: "auto", padding: 0 }}>
+          {tab === "register" ? (
+            <RegisterTable rows={computed.rows} currency={currency} onEdit={editRow} onDelete={deleteRow} />
+          ) : (
+            <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
+          )}
+        </div>
+
+        {/* Composer */}
+        {tab === "register" ? (
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 1fr 130px 90px 130px 110px", gap: 10, alignItems: "center" }}>
+            <input type="date" value={rwDate} onChange={(e) => setRwDate(e.target.value)} style={field()} />
+            <input value={rwLabel} onChange={(e) => setRwLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Item (RENT, H PAY, VENMO…)" style={field()} />
+            <select value={rwBank} onChange={(e) => setRwBank(e.target.value as Bank)} style={field()}>{BANKS.map((b) => <option key={b} value={b}>{BANK_LABEL[b]}</option>)}</select>
+            <select value={rwSign} onChange={(e) => setRwSign(e.target.value as "-" | "+")} style={field()}>
+              <option value="-">− Pay</option>
+              <option value="+">+ Income</option>
+            </select>
+            <input value={rwAmount} onChange={(e) => setRwAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Amount" type="number" style={field()} />
+            <button onClick={addRow} style={primary()}>Add Row</button>
+          </div>
+        ) : (
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 1fr 1fr 110px", gap: 10, alignItems: "center" }}>
+            <input type="date" value={azDate} onChange={(e) => setAzDate(e.target.value)} style={field()} />
+            <input value={azPay} onChange={(e) => setAzPay(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Pay" type="number" style={field()} />
+            <input value={azGas} onChange={(e) => setAzGas(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Gas" type="number" style={field()} />
+            <button onClick={saveAmazon} style={primary()}>Add Day</button>
+          </div>
+        )}
       </div>
-
-      <button
-        onClick={() => setShowComposer((v) => !v)}
-        style={{
-          position: "fixed",
-          right: 22,
-          bottom: 22,
-          width: 64,
-          height: 64,
-          borderRadius: 20,
-          border: "none",
-          background: "linear-gradient(180deg, #5860ff, #7f6cff)",
-          color: "#fff",
-          fontSize: 34,
-          fontWeight: 400,
-          boxShadow: "0 18px 40px rgba(88,96,255,0.35)",
-          cursor: "pointer",
-        }}
-      >
-        +
-      </button>
-
-      {showComposer && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(3,5,10,0.72)", backdropFilter: "blur(8px)", display: "grid", placeItems: "center", padding: 20 }}>
-          <div style={{ width: "min(560px, 100%)", ...homeCard(), padding: 18 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 900 }}>Add Transaction</div>
-                <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>This saves directly to PostgreSQL.</div>
-              </div>
-              <button onClick={() => setShowComposer(false)} style={ghostButton()}>Close</button>
-            </div>
-            <div style={{ display: "grid", gap: 10 }}>
-              <input value={entryTitle} onChange={(e) => setEntryTitle(e.target.value)} placeholder="Title" style={fieldStyle()} />
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
-                <input value={entryAmount} onChange={(e) => setEntryAmount(e.target.value)} placeholder="Amount" type="number" style={fieldStyle()} />
-                <select value={entryType} onChange={(e) => setEntryType(e.target.value as "expense" | "income")} style={fieldStyle()}>
-                  <option value="expense">Expense</option>
-                  <option value="income">Income</option>
-                </select>
-              </div>
-              <select value={entryCategoryId} onChange={(e) => setEntryCategoryId(e.target.value)} style={fieldStyle()}>
-                <option value="">No category</option>
-                {categories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-              </select>
-              <textarea value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} placeholder="Notes" rows={4} style={{ ...fieldStyle(), resize: "vertical" }} />
-              <button onClick={saveEntry} style={primaryButton()}>Save Transaction</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function homeCard(): React.CSSProperties {
-  return {
-    background: HOME_THEME.panelBg,
-    backdropFilter: "blur(16px)",
-    borderRadius: 18,
-    border: `1px solid ${HOME_THEME.border}`,
-    boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+function BeginningEditor({ beginningByBank, onSave, currency }: { beginningByBank: Record<Bank, number | null>; onSave: (balances: Record<Bank, number>) => void; currency: string }) {
+  const [open, setOpen] = useState(false);
+  const [vals, setVals] = useState<Record<Bank, string>>({ coastal: "", truist: "", secu: "" });
+
+  const startEdit = () => {
+    setVals({
+      coastal: beginningByBank.coastal !== null ? String(beginningByBank.coastal) : "",
+      truist: beginningByBank.truist !== null ? String(beginningByBank.truist) : "",
+      secu: beginningByBank.secu !== null ? String(beginningByBank.secu) : "",
+    });
+    setOpen(true);
   };
+  const save = () => {
+    onSave({ coastal: Number(vals.coastal || 0), truist: Number(vals.truist || 0), secu: Number(vals.secu || 0) });
+    setOpen(false);
+  };
+
+  const anySet = BANKS.some((b) => beginningByBank[b] !== null);
+
+  if (!open) {
+    return (
+      <div>
+        <div style={labelCap()}>Current balances</div>
+        <button onClick={startEdit} style={ghost()}>
+          {anySet
+            ? BANKS.map((b) => `${BANK_LABEL[b]} ${fmtMoney(beginningByBank[b] ?? 0, currency)}`).join("   ")
+            : "Set starting balances"}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={labelCap()}>Current balances (each account)</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {BANKS.map((b) => (
+          <div key={b} style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
+            <input value={vals[b]} onChange={(e) => setVals((p) => ({ ...p, [b]: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="0.00" type="number" style={{ ...field(), width: 110 }} />
+          </div>
+        ))}
+        <button onClick={save} style={{ ...primary(), alignSelf: "flex-end" }}>Save</button>
+      </div>
+    </div>
+  );
 }
 
-function fieldStyle(): React.CSSProperties {
-  return {
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: `1px solid ${HOME_THEME.border}`,
-    background: "rgba(0,0,0,0.30)",
-    color: HOME_THEME.text,
-    outline: "none",
-    width: "100%",
-    fontSize: 13,
-  };
+function RegisterTable({
+  rows,
+  currency,
+  onEdit,
+  onDelete,
+}: {
+  rows: (RegisterRow & { balances: Record<Bank, number>; total: number })[];
+  currency: string;
+  onEdit: (id: number, patch: Record<string, unknown>) => void;
+  onDelete: (id: number) => void;
+}) {
+  const cols: Bank[] = ["coastal", "truist", "secu"];
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <thead>
+        <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panelBgStrong, backdropFilter: "blur(8px)", zIndex: 1 }}>
+          <th style={th("left")}>Date</th>
+          <th style={th("left")}>Item</th>
+          {cols.map((c) => <th key={c} style={th("right")}>{BANK_LABEL[c]}</th>)}
+          <th style={th("right")}>Total</th>
+          <th style={th("center")}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.length === 0 && (
+          <tr><td colSpan={7} style={{ padding: "22px 16px", textAlign: "center", color: HOME_THEME.muted }}>Set starting balances, then add rows below.</td></tr>
+        )}
+        {rows.map((r) => {
+          const isIncome = !r.is_beginning && r.amount > 0;
+          return (
+            <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, background: r.is_beginning ? "rgba(255,255,255,0.05)" : "transparent" }}>
+              <td style={{ padding: "8px 16px", whiteSpace: "nowrap", color: HOME_THEME.muted, fontWeight: 700 }}>
+                {r.is_beginning ? "" : shortDate(r.entry_date)}
+              </td>
+              <td style={{ padding: "8px 16px" }}>
+                {r.is_beginning ? (
+                  <span style={{ fontWeight: 900, letterSpacing: "0.06em" }}>BEGINNING</span>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 800 }} />
+                    <span
+                      title="Amount applied to this row"
+                      style={{ fontSize: 11, fontWeight: 800, padding: "1px 7px", borderRadius: 6, background: isIncome ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.14)", color: isIncome ? HOME_THEME.green : HOME_THEME.red }}
+                    >
+                      <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />
+                    </span>
+                    <span style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>{BANK_LABEL[r.bank]}</span>
+                  </div>
+                )}
+              </td>
+              {cols.map((c) => {
+                const here = r.bank === c;
+                const v = r.balances[c];
+                return (
+                  <td key={c} style={{ padding: "8px 16px", textAlign: "right", fontWeight: here ? 900 : 600, color: v < 0 ? HOME_THEME.red : here ? HOME_THEME.text : "rgba(255,255,255,0.55)", background: here && !r.is_beginning ? (isIncome ? "rgba(16,185,129,0.10)" : "rgba(255,255,255,0.03)") : "transparent" }}>
+                    {fmtMoney(v, currency)}
+                  </td>
+                );
+              })}
+              <td style={{ padding: "8px 16px", textAlign: "right", fontWeight: 900, color: r.total < 0 ? HOME_THEME.red : HOME_THEME.cyan }}>
+                {fmtMoney(r.total, currency)}
+              </td>
+              <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                {!r.is_beginning && <DeleteButton onClick={() => onDelete(r.id)} />}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
 }
 
-function primaryButton(): React.CSSProperties {
-  return {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "1px solid rgba(0,240,255,0.25)",
-    background: "linear-gradient(180deg, rgba(0,240,255,0.16), rgba(0,240,255,0.05))",
-    color: HOME_THEME.cyan,
-    fontWeight: 900,
-    textTransform: "uppercase",
-    letterSpacing: "0.08em",
-    cursor: "pointer",
-  };
+// Clear, always-visible red delete control used in both tables.
+function DeleteButton({ onClick }: { onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title="Remove this row"
+      aria-label="Remove this row"
+      style={{
+        width: 26,
+        height: 26,
+        borderRadius: 8,
+        border: `1px solid ${hover ? HOME_THEME.red : "rgba(239,68,68,0.35)"}`,
+        background: hover ? "rgba(239,68,68,0.22)" : "rgba(239,68,68,0.08)",
+        color: HOME_THEME.red,
+        cursor: "pointer",
+        fontSize: 16,
+        lineHeight: 1,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "all 0.12s ease",
+      }}
+    >
+      ×
+    </button>
+  );
 }
 
-function ghostButton(): React.CSSProperties {
-  return {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: `1px solid ${HOME_THEME.border}`,
-    background: "rgba(255,255,255,0.04)",
-    color: HOME_THEME.text,
-    fontWeight: 800,
-    cursor: "pointer",
-  };
+function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: number })[]; currency: string; onDelete: (id: number) => void }) {
+  const totalPay = rows.reduce((s, r) => s + r.pay, 0);
+  const totalGas = rows.reduce((s, r) => s + r.gas, 0);
+  const totalNet = totalPay - totalGas;
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <thead>
+        <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panelBgStrong, backdropFilter: "blur(8px)", zIndex: 1 }}>
+          <th style={th("left")}>Date</th>
+          <th style={th("right")}>Pay</th>
+          <th style={th("right")}>Gas</th>
+          <th style={th("right")}>Net Pay</th>
+          <th style={th("center")}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.length === 0 && (
+          <tr><td colSpan={5} style={{ padding: "22px 16px", color: HOME_THEME.muted, textAlign: "center" }}>No Amazon days logged this month yet.</td></tr>
+        )}
+        {rows.map((r) => (
+          <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
+              <span style={{ fontWeight: 800 }}>{shortDate(r.work_date)}</span>
+              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 11 }}>{weekday(r.work_date)}</span>
+            </td>
+            <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
+            <td style={{ padding: "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
+            <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 900, color: r.net >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtMoney(r.net, currency)}</td>
+            <td style={{ padding: "10px 12px", textAlign: "center" }}>
+              <DeleteButton onClick={() => onDelete(r.id)} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+      {rows.length > 0 && (
+        <tfoot>
+          <tr style={{ position: "sticky", bottom: 0, background: HOME_THEME.panelBgStrong, backdropFilter: "blur(8px)" }}>
+            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 11, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
+            <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
+            <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
+            <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtMoney(totalNet, currency)}</td>
+            <td />
+          </tr>
+        </tfoot>
+      )}
+    </table>
+  );
 }
 
-function pillButton(active: boolean): React.CSSProperties {
-  return {
-    padding: "8px 12px",
-    borderRadius: 999,
-    border: active ? "1px solid rgba(0,240,255,0.35)" : `1px solid ${HOME_THEME.border}`,
-    background: active ? "rgba(0,240,255,0.12)" : "rgba(255,255,255,0.04)",
-    color: active ? HOME_THEME.cyan : HOME_THEME.text,
-    fontSize: 12,
-    fontWeight: 800,
-    cursor: "pointer",
-  };
+// Inline-editable text (label).
+function EditableText({ value, onCommit, style }: { value: string; onCommit: (v: string) => void; style?: React.CSSProperties }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => { setEditing(false); if (draft !== value) onCommit(draft.trim()); }}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 13 }}
+      />
+    );
+  }
+  return <span onClick={() => setEditing(true)} style={{ ...style, cursor: "text", borderBottom: "1px dotted rgba(139,148,167,0.35)" }}>{value}</span>;
+}
+
+// Inline-editable signed money (amount). Shows the signed value, edits as a number.
+function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="number"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => { setEditing(false); const n = Number(draft); if (n !== value && draft.trim() !== "") onCommit(n); }}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(String(value)); setEditing(false); } }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 13, width: 100, textAlign: "right" }}
+      />
+    );
+  }
+  return <span onClick={() => setEditing(true)} style={{ cursor: "text" }}>{fmtMoney(value)}</span>;
+}
+
+function th(align: "left" | "right" | "center"): React.CSSProperties {
+  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
+}
+function card(): React.CSSProperties {
+  return { background: HOME_THEME.panelBg, backdropFilter: "blur(16px)", borderRadius: 18, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 18px 40px rgba(0,0,0,0.22)" };
+}
+function field(): React.CSSProperties {
+  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 13 };
+}
+function labelCap(): React.CSSProperties {
+  return { fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
+}
+function primary(): React.CSSProperties {
+  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(0,240,255,0.25)", background: "linear-gradient(180deg, rgba(0,240,255,0.16), rgba(0,240,255,0.05))", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap" };
+}
+function ghost(): React.CSSProperties {
+  return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" };
+}
+function pill(active: boolean): React.CSSProperties {
+  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(0,240,255,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(0,240,255,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 13, fontWeight: 800, cursor: "pointer" };
 }

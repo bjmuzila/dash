@@ -342,10 +342,13 @@ export default function HomePage() {
     if (!cq || !box) return;
     const fit = () => {
       const s = tickerScaleRef.current || 1;
-      const avail = cq.clientWidth;
-      // offsetWidth/Height are the box's UN-scaled box size (transform doesn't affect layout box)
-      const natural = box.offsetWidth;
-      const next = natural > 0 ? Math.min(1, avail / natural) : 1;
+      // The box is width:100% and its rows use space-between, so it normally
+      // fills the column exactly (stretches with the window). It only needs to
+      // SHRINK when the items' minimum widths can't fit: in that case the box
+      // overflows and scrollWidth > clientWidth. Use that ratio as a clip guard.
+      // (scrollWidth/clientWidth are layout-box values, unaffected by transform.)
+      const overflow = box.scrollWidth / Math.max(1, box.clientWidth);
+      const next = overflow > 1.001 ? Math.min(1, s / overflow) : 1;
       if (Math.abs(next - s) > 0.005) { tickerScaleRef.current = next; setTickerScale(next); }
       setTickerBoxH(box.offsetHeight);
     };
@@ -610,43 +613,30 @@ export default function HomePage() {
       gexWsReconnectRef.current = setTimeout(connect, 2000);
     };
 
-    const closeSocket = () => {
-      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
-      const ws = gexWsRef.current;
-      gexWsRef.current = null;
-      if (ws) { ws.onclose = null; try { ws.close(); } catch {} }
-      setStatus("RECONNECTING");
-    };
-
-    // React to the bandwidth gate: connect when it allows, drop the socket when
-    // it doesn't. This is what makes a backgrounded/idle client cost zero.
-    const gatePoll = setInterval(() => {
-      if (unmountedRef.current) return;
-      if (shouldConnectRef.current) {
-        if (!gexWsRef.current) connect();
-      } else if (gexWsRef.current) {
-        closeSocket();
-      }
-    }, 1000);
-
-    if (shouldConnectRef.current) connect();
+    // Value-driven gate: this effect re-runs whenever `shouldConnect` flips
+    // (tab background/foreground, idle timeout). When allowed, connect; when not,
+    // the cleanup below tears the socket down. No polling, no churn.
+    if (shouldConnect) connect();
 
     return () => {
       unmountedRef.current = true;
-      clearInterval(gatePoll);
       if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
       const ws = gexWsRef.current;
       gexWsRef.current = null;
       if (ws) {
-        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-        try { ws.close(); } catch {}
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => { try { ws.close(); } catch {} };
+        } else {
+          ws.onopen = null;
+          try { ws.close(); } catch {}
+        }
       }
     };
-    // Run once: the socket lives for the page's lifetime. The current expiry is
-    // read from selectedExpiryRef on each (re)connect, so we never tear down the
-    // socket on expiry changes.
+    // Re-runs only when the bandwidth gate flips. The current expiry is read from
+    // selectedExpiryRef on each (re)connect, so expiry changes don't churn this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [shouldConnect]);
 
   // Load chain symbols for heatmap WS subscription (separate from GEX chart data)
   const loadChain = useCallback(async (expiry: string) => {
@@ -818,6 +808,10 @@ export default function HomePage() {
                 <span style={{ color: C.cyan }}><BarChart2 /></span>
                 <span style={{ color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>NET GEX</span>
                 <span suppressHydrationWarning style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em" }}>{etTime}</span>
+                <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
+                  style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
+                </button>
               </div>
               {/* Full-featured toolbar */}
               <GexToolbar
@@ -911,8 +905,8 @@ export default function HomePage() {
 
           <div className="home-col home-col-right" style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
             <div ref={tickerCqRef} className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative", overflow: "hidden" }}>
-             <div ref={tickerBoxRef} style={{ display: "inline-block", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
-              <div className="ticker-row" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "nowrap", minWidth: 0 }}>
+             <div ref={tickerBoxRef} style={{ display: "block", width: "100%", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
+              <div className="ticker-row" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "nowrap", minWidth: 0, width: "100%", justifyContent: "space-between" }}>
                 {/* Clock removed — now lives only in the NET GEX chart header */}
                 {/* VIX — label+price never shrink; change% hidden via className */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
@@ -940,8 +934,7 @@ export default function HomePage() {
                   <NquQuotePill />
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", minWidth: 0, paddingLeft: 13 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0, flexWrap: "nowrap", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", width: "100%", minWidth: 0, paddingLeft: 13 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoneyB(netGex)}</span>
@@ -961,17 +954,11 @@ export default function HomePage() {
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexShrink: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>
-                  <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
-                    style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
-                    {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
-                  </button>
-                </div>
               </div>
              </div>
             </div>
