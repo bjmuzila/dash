@@ -250,18 +250,21 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
      column. `auto-fit`/`auto-fill` grids already reflow, so they're untouched.
      Tailwind grid-cols-N utilities are handled separately below.
      ──────────────────────────────────────────────────────────────────────── */
+  /* 2–3 column grids → single column (panels / wide cards). */
   main [style*="grid-template-columns: repeat(2"],
   main [style*="grid-template-columns:repeat(2"],
   main [style*="grid-template-columns: repeat(3"],
-  main [style*="grid-template-columns:repeat(3"],
+  main [style*="grid-template-columns:repeat(3"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* 4+ column grids → two columns (dense stat tiles stay scannable, not a tall
+     single stack). repeat(7,…) is left intact — it's a weekday/calendar grid. */
   main [style*="grid-template-columns: repeat(4"],
   main [style*="grid-template-columns:repeat(4"],
   main [style*="grid-template-columns: repeat(5"],
   main [style*="grid-template-columns:repeat(5"],
   main [style*="grid-template-columns: repeat(6"],
   main [style*="grid-template-columns:repeat(6"],
-  main [style*="grid-template-columns: repeat(7"],
-  main [style*="grid-template-columns:repeat(7"],
   main [style*="grid-template-columns: repeat(8"],
   main [style*="grid-template-columns:repeat(8"],
   main [style*="grid-template-columns: repeat(9"],
@@ -270,7 +273,7 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   main [style*="grid-template-columns:repeat(10"],
   main [style*="grid-template-columns: repeat(12"],
   main [style*="grid-template-columns:repeat(12"] {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: 1fr 1fr !important;
   }
   /* Re-exempt responsive auto grids that legitimately use repeat(auto-…). */
   main [style*="repeat(auto-fit"],

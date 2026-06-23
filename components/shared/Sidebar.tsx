@@ -82,7 +82,6 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: FootIcon,
     forceAccordion: true,
     items: [
-      { label: "Footprint", href: "/footprint" },
       { label: "ES Candles", href: "/es-candles" },
       { label: "Fails", href: "/fails" },
     ],
