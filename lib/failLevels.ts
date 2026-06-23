@@ -59,11 +59,13 @@ export interface FailStat {
 // ── ET helpers ────────────────────────────────────────────────────────────────
 
 function etParts(ts: number) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return { date: "", minutes: NaN }; // guard: invalid/missing ts (prod feed)
   const p = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(new Date(ts));
+  }).formatToParts(d);
   const m: Record<string, string> = {};
   p.forEach((x) => { m[x.type] = x.value; });
   const hh = m.hour === "24" ? "00" : m.hour;

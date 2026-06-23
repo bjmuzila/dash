@@ -55,12 +55,20 @@ export function useEsBigTrades() {
     const ingest = (payload: unknown) => {
       if (!payload || typeof payload !== "object") return;
       const p = payload as Partial<EsBigTradesPayload>;
-      setData({
-        symbol: p.symbol ?? null,
-        updatedAt: Number(p.updatedAt ?? Date.now()),
-        seeded: Boolean(p.seeded),
-        trades: Array.isArray(p.trades) ? p.trades : [],
-        delta: Array.isArray(p.delta) ? p.delta : [],
+      // MERGE, don't replace. Throttled / partial frames may omit `trades` or
+      // `delta` (the server re-sends only what changed). Replacing with [] on
+      // those frames made the bubbles/delta lanes blink empty — keep the last
+      // non-empty arrays unless the frame actually carries new ones.
+      setData((prev) => {
+        const nextTrades = Array.isArray(p.trades) ? p.trades : prev.trades;
+        const nextDelta = Array.isArray(p.delta) ? p.delta : prev.delta;
+        return {
+          symbol: p.symbol ?? prev.symbol,
+          updatedAt: Number(p.updatedAt ?? Date.now()),
+          seeded: Boolean(p.seeded ?? prev.seeded),
+          trades: nextTrades,
+          delta: nextDelta,
+        };
       });
     };
 

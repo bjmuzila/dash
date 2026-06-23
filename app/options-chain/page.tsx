@@ -105,18 +105,24 @@ const QUOTE_PANEL_TICKERS = [
 const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
 type GreekMode = typeof GREEK_MODES[number];
-const CHAIN_COLUMNS = ["Strike", "Greek", "Volume", "OI"] as const;
 
-type ChainColumn = (typeof CHAIN_COLUMNS)[number];
+// Number of expirations shown side-by-side across the matrix.
+const EXP_COLUMNS = 7;
 
-type MockRow = {
-  strike: number;
+// Per-strike, per-expiration greek values.
+type GreekCell = {
   gex: number;
   dex: number;
   chex: number;
   vex: number;
-  volume: number;
-  oi: number;
+};
+
+// One expiration's column: its date + a strike→greek map.
+type ExpColumn = {
+  expiration: string;
+  label: string;
+  cells: Map<number, GreekCell>;
+  underlying: number;
 };
 
 function etToday(): Date {
@@ -241,8 +247,14 @@ function fmtMoney(value: number) {
   return `${sign}$${abs.toFixed(0)}`;
 }
 
-function fmtInt(value: number) {
-  return Math.round(value).toLocaleString("en-US");
+// Compact column header for an expiration: "Mon 06-23".
+function fmtExpHeader(iso: string): string {
+  const dt = new Date(iso + "T12:00:00");
+  if (Number.isNaN(dt.getTime())) return iso;
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${days[dt.getDay()]} ${mm}-${dd}`;
 }
 
 function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]) {
@@ -260,23 +272,46 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
-interface LiveEntry {
-  iv?: number | null;
-  delta?: number | null;
-  gamma?: number | null;
-  theta?: number | null;
-  vega?: number | null;
-  oi?: number;
-  vol?: number;
-  bid?: number;
-  ask?: number;
-  _ws?: boolean;
-}
+// Parse one expiration's chain payload into strike→greek cells.
+// GEX/DEX/CHEX/VEX use the same formulas the single-expiry view used:
+//   contracts = OI + volume (per side); GEX = (γc·cc − γp·pc)·S²·0.01·100, etc.
+function parseExpiration(items: unknown[], expDate: string, spot: number): Map<number, GreekCell> {
+  const cells = new Map<number, GreekCell>();
+  const target = (items as { "expiration-date"?: string; strikes?: unknown[] }[]).filter(
+    i => String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10),
+  );
+  const groups = target.length ? target : (items as { strikes?: unknown[] }[]);
+  const S = spot > 0 ? spot : 0;
 
-interface StrikeRow {
-  strike: number;
-  callSym: string | null;
-  putSym: string | null;
+  groups.forEach(group => {
+    (group.strikes || []).forEach((item: unknown) => {
+      const it = item as Record<string, unknown>;
+      const strike = parseFloat(String(it["strike-price"] || 0));
+      if (!strike) return;
+
+      const c = it.call as Record<string, unknown> | undefined;
+      const p = it.put as Record<string, unknown> | undefined;
+      const num = (o: Record<string, unknown> | undefined, k: string) =>
+        o ? parseFloat(String(o[k])) || 0 : 0;
+      const cnt = (o: Record<string, unknown> | undefined) =>
+        o ? (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0) +
+            (parseInt(String(o.volume ?? 0), 10) || 0)
+          : 0;
+
+      const cc = cnt(c);
+      const pc = cnt(p);
+      const live = cc > 0 || pc > 0;
+
+      cells.set(strike, {
+        gex:  live ? (num(c, "gamma") * cc - num(p, "gamma") * pc) * S * S * 0.01 * 100 : 0,
+        dex:  live ? (Math.abs(num(c, "delta")) * cc - Math.abs(num(p, "delta")) * pc) * S * 100 : 0,
+        chex: live ? (-num(c, "theta") * cc + num(p, "theta") * pc) * S * 100 : 0,
+        vex:  live ? (num(c, "vega") * cc - num(p, "vega") * pc) * S * 100 : 0,
+      });
+    });
+  });
+
+  return cells;
 }
 
 export default function OptionsChainPage() {
@@ -298,120 +333,97 @@ export default function OptionsChainPage() {
   const pageRef = useRef<HTMLDivElement>(null);
   const [chainError, setChainError] = useState<string | null>(null);
 
-  // Live WS data ref + batched subscription
-  const liveDataRef = useRef<Record<string, LiveEntry>>({});
-  const strikeRowsRef = useRef<StrikeRow[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
+  // The 7-expiration matrix. Each entry holds one expiration's strike→greek map.
+  const expColumnsRef = useRef<ExpColumn[]>([]);
   const loadTokenRef = useRef(0);
-  const subscribedSymbolsRef = useRef<string[]>([]);
+  // Re-entrancy + rate guards for loadChain. A render loop or overlapping
+  // triggers were firing the full 7-expiration fetch (×noCache) back-to-back,
+  // hammering TT upstream. Block while a load is in flight, and enforce a min
+  // gap between loads unless the caller is an explicit user refresh (force).
+  const loadInFlightRef = useRef(false);
+  const lastLoadAtRef = useRef(0);
+  const LOAD_MIN_INTERVAL_MS = 5000;
   // Set by GO when the ticker changes; consumed by the expirations effect to
   // load the chain only after a valid expiry for the new ticker is resolved.
   const pendingGoRef = useRef(false);
   // Live mirror of selectedExpiry so the expirations effect (which only re-runs
   // on ticker change) always validates against the user's current choice.
   const selectedExpiryRef = useRef("");
+  // Live mirror of the full expiries list so loadChain (recreated each render)
+  // always slices the 7 starting at the user's selected expiry.
+  const expiriesRef = useRef<Array<{ value: string; label: string }>>([]);
 
-  // Build strikes from chain JSON
-  const buildStrikes = (expGroups: unknown[]): StrikeRow[] => {
-    const map: Record<string, StrikeRow> = {};
-    (expGroups as { strikes?: unknown[] }[]).forEach(expGroup => {
-      (expGroup.strikes || []).forEach((item: unknown) => {
-        const it = item as Record<string, unknown>;
-        const strike = parseFloat(String(it["strike-price"] || 0));
-        if (!strike) return;
-        const key = strike.toFixed(2);
-        if (!map[key]) map[key] = { strike, callSym: null, putSym: null };
-        const r = map[key];
-        for (const side of ["call", "put"] as const) {
-          const o = it[side] as Record<string, unknown> | undefined;
-          if (!o) continue;
-          const sym = String(o["streamer-symbol"] || o.symbol || "");
-          if (side === "call") r.callSym = sym; else r.putSym = sym;
-          if (sym && !(liveDataRef.current[sym]?._ws)) {
-            liveDataRef.current[sym] = {
-              iv:    parseFloat(String(o["implied-volatility"])) || undefined,
-              delta: parseFloat(String(o.delta)) || undefined,
-              gamma: parseFloat(String(o.gamma)) || undefined,
-              theta: parseFloat(String(o.theta)) || undefined,
-              vega:  parseFloat(String(o.vega))  || undefined,
-              oi:    parseInt(String(o["open-interest"] || o.openInterest || 0), 10) || 0,
-              vol:   parseInt(String(o.volume || 0), 10) || 0,
-            };
-          }
-        }
-      });
-    });
-    return Object.values(map).sort((a, b) => a.strike - b.strike);
-  };
-
-  // Load chain + batch subscribe symbols
-  const loadChain = async (ticker: string, expDate: string, bustCache = false) => {
+  // Load the 7 closest expirations starting at `startExp`, building a strike→
+  // greek map per expiration. Each expiration is one /api/chains call.
+  const loadChain = async (ticker: string, startExp: string, bustCache = false, force = false) => {
+    // Drop overlapping calls, and rate-limit non-forced (auto/poll) loads. User
+    // refresh/GO pass force=true to bypass the min-interval but still serialize.
+    if (loadInFlightRef.current) return;
+    const now = Date.now();
+    if (!force && now - lastLoadAtRef.current < LOAD_MIN_INTERVAL_MS) return;
+    loadInFlightRef.current = true;
+    lastLoadAtRef.current = now;
     loadTokenRef.current += 1;
     const token = loadTokenRef.current;
     const bust = bustCache ? `&noCache=1` : "";
 
+    // 7 expirations: the selected one + the next 6 from the listed expiries.
+    const all = expiriesRef.current.length ? expiriesRef.current : expiries;
+    const startIdx = Math.max(0, all.findIndex(e => e.value === startExp));
+    const targets = all.slice(startIdx, startIdx + EXP_COLUMNS);
+    if (!targets.length) targets.push({ value: startExp, label: startExp });
+
     try {
       setChainError(null);
-      setLoadProgress(10); // Fetching chain data
-      const res = await fetch(
-        `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`
+      setLoadProgress(8);
+
+      const results = await Promise.all(
+        targets.map(async (t, i) => {
+          const res = await fetch(
+            `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(t.value)}&range=all${bust}`,
+          );
+          const json = await res.json().catch(() => null);
+          if (token === loadTokenRef.current) {
+            setLoadProgress(8 + Math.round(((i + 1) / targets.length) * 84));
+          }
+          const data = (json?.data as Record<string, unknown> | undefined) ?? undefined;
+          const items = (data?.items as unknown[]) ?? [];
+          const underlying = parseFloat(String(data?.underlyingPrice ?? 0)) || 0;
+          return {
+            expiration: t.value,
+            label: t.label,
+            underlying,
+            cells: parseExpiration(items, t.value, underlying),
+          } as ExpColumn;
+        }),
       );
-      const json = await res.json();
+
       if (token !== loadTokenRef.current) return;
 
-      const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
-      if (!items.length) {
-        strikeRowsRef.current = [];
+      const cols = results.filter(c => c.cells.size > 0);
+      if (!cols.length) {
+        expColumnsRef.current = [];
         setUnderlyingPrice(0);
-        setChainError(`No live chain payload returned for ${ticker} ${expDate}.`);
+        setChainError(`No live chain payload returned for ${ticker}.`);
         setLoadProgress(0);
         setRefreshSeed(s => s + 0.01);
         return;
       }
 
-      setLoadProgress(30); // Parsing strikes
-      const target = (items as { "expiration-date"?: string }[]).filter(i =>
-        String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
-      );
-      const strikes = buildStrikes(target.length ? target : items as unknown[]);
-      if (!strikes.length) {
-        strikeRowsRef.current = [];
-        setUnderlyingPrice(0);
-        setChainError(`No live strikes resolved for ${ticker} ${expDate}.`);
-        setLoadProgress(0);
-        setRefreshSeed(s => s + 0.01);
-        return;
-      }
-      strikeRowsRef.current = strikes;
-
-      // Extract underlying price from API response
-      const underlyingPrice = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
-      if (underlyingPrice > 0) {
-        setUnderlyingPrice(underlyingPrice);
-      } else {
-        setUnderlyingPrice(0);
-      }
-
-      setLoadProgress(50); // Subscribing to symbols
-      // Batch subscribe all symbols at once
-      const allSymbols = new Set<string>();
-      strikes.forEach(row => {
-        if (row.callSym) allSymbols.add(row.callSym);
-        if (row.putSym) allSymbols.add(row.putSym);
-      });
-
-      const symbolList = [...allSymbols];
-      subscribedSymbolsRef.current = symbolList;
+      expColumnsRef.current = results; // keep all 7 slots (empty ones render blank)
+      const spot = cols.find(c => c.underlying > 0)?.underlying ?? 0;
+      setUnderlyingPrice(spot);
       setLoadProgress(100);
-      setTimeout(() => setLoadProgress(0), 1000);
-
+      setTimeout(() => setLoadProgress(0), 800);
       setRefreshSeed(s => s + 0.01);
     } catch (err) {
       console.error(`[OptionsChain] Load failed for ${ticker}:`, err);
-      strikeRowsRef.current = [];
+      expColumnsRef.current = [];
       setUnderlyingPrice(0);
-      setChainError(`Live chain load failed for ${ticker} ${expDate}.`);
+      setChainError(`Live chain load failed for ${ticker}.`);
       setLoadProgress(0);
+    } finally {
+      loadInFlightRef.current = false;
     }
   };
 
@@ -428,7 +440,7 @@ export default function OptionsChainPage() {
   }, [activeTicker, selectedExpiry, displayPercent, refreshSeed]);
 
   const doRefresh = async () => {
-    await loadChain(activeTicker, selectedExpiry, true);
+    await loadChain(activeTicker, selectedExpiry, true, true); // force: user refresh
     setRefreshSeed((value) => value + 1);
   };
 
@@ -448,11 +460,12 @@ export default function OptionsChainPage() {
     if (tickerChanged) {
       pendingGoRef.current = true;
     } else {
-      loadChain(ticker, selectedExpiry);
+      loadChain(ticker, selectedExpiry, true, true); // force: user GO
     }
   }, [tickerInput, selectedExpiry, activeTicker, loadChain]);
 
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
+  useEffect(() => { expiriesRef.current = expiries; }, [expiries]);
 
   // Auto-load SPX on mount
   useEffect(() => {
@@ -462,12 +475,15 @@ export default function OptionsChainPage() {
     }
   }, []);
 
-  // Poll the active chain every 60s during the live session so per-strike volume
-  // accumulates after the open instead of staying pinned at the 9:00–9:30 zero.
+  // Poll the active matrix every 60s during the live session so the 7-expiration
+  // GEX values track intraday OI/volume + greek drift instead of staying frozen.
   useEffect(() => {
     const id = setInterval(() => {
       const exp = selectedExpiryRef.current;
-      if (exp && activeTicker && isSessionLive()) loadChain(activeTicker, exp, true);
+      // Poll WITHOUT noCache so the server chain cache can absorb repeats across
+      // clients; the cache TTL still refreshes intraday OI/greek drift. Bypassing
+      // the cache every 60s per open tab was hammering TT upstream.
+      if (exp && activeTicker && isSessionLive()) loadChain(activeTicker, exp, false);
     }, 60000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -515,7 +531,7 @@ export default function OptionsChainPage() {
         // A ticker-change GO is waiting on a valid expiry — load the chain now.
         if (pendingGoRef.current) {
           pendingGoRef.current = false;
-          loadChain(ticker, validExpiry);
+          loadChain(ticker, validExpiry, true, true); // force: user GO after expiry snap
         }
       } catch {
         /* keep fallback calendar list */
@@ -531,93 +547,86 @@ export default function OptionsChainPage() {
 
   const [underlyingPrice, setUnderlyingPrice] = useState(0);
 
-  const { rows, spot } = useMemo(() => {
-    const strikes = strikeRowsRef.current;
-    if (!strikes.length) {
-      return { rows: [] as MockRow[], spot: 0 };
-    }
-
-    // Use underlying price from chain data, fallback to middle strike
-    const atmStrike = underlyingPrice > 0 ? underlyingPrice : (strikes.length ? strikes[Math.floor(strikes.length / 2)].strike : 100);
-    const realRows: MockRow[] = strikes.map(r => {
-      const cd = liveDataRef.current[r.callSym ?? ""] || {};
-      const pd = liveDataRef.current[r.putSym ?? ""] || {};
-      const cc = ((cd.oi ?? 0) + (cd.vol ?? 0)) || 0;
-      const pc = ((pd.oi ?? 0) + (pd.vol ?? 0)) || 0;
-      return {
-        strike: r.strike,
-        gex: cc > 0 || pc > 0 ? ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * atmStrike * atmStrike * 0.01 * 100 : 0,
-        dex: cc > 0 || pc > 0 ? (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * atmStrike * 100 : 0,
-        chex: cc > 0 || pc > 0 ? (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * atmStrike * 100 : 0,
-        vex: cc > 0 || pc > 0 ? ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * atmStrike * 100 : 0,
-        volume: (cd.vol ?? 0) + (pd.vol ?? 0),
-        oi: (cd.oi ?? 0) + (pd.oi ?? 0),
-      };
-    });
-
-    return { rows: realRows, spot: atmStrike };
+  // The 7 expiration columns (some may be empty placeholders) + the spot used
+  // to center the strike window. Rebuilt whenever a load completes.
+  const { columns, spot } = useMemo(() => {
+    const cols = expColumnsRef.current;
+    if (!cols.length) return { columns: [] as ExpColumn[], spot: 0 };
+    const atmStrike =
+      underlyingPrice > 0
+        ? underlyingPrice
+        : cols.find(c => c.underlying > 0)?.underlying ?? 0;
+    return { columns: cols, spot: atmStrike };
   }, [activeTicker, expiries, refreshSeed, selectedExpiry, underlyingPrice]);
 
-  const nearestStrike = useMemo(() => {
-    if (!rows.length) return 0;
-    return rows.reduce((best, row) => (
-      Math.abs(row.strike - spot) < Math.abs(best - spot) ? row.strike : best
-    ), rows[0].strike);
-  }, [rows, spot]);
+  // Union of every strike listed across all 7 expirations, sorted ascending.
+  const allStrikes = useMemo(() => {
+    const set = new Set<number>();
+    columns.forEach(c => c.cells.forEach((_v, k) => set.add(k)));
+    return [...set].sort((a, b) => a - b);
+  }, [columns]);
 
-  const totalRows = rows.length;
+  const nearestStrike = useMemo(() => {
+    if (!allStrikes.length) return 0;
+    const ref = spot > 0 ? spot : allStrikes[Math.floor(allStrikes.length / 2)];
+    return allStrikes.reduce(
+      (best, s) => (Math.abs(s - ref) < Math.abs(best - ref) ? s : best),
+      allStrikes[0],
+    );
+  }, [allStrikes, spot]);
+
+  const totalRows = allStrikes.length;
   const autoDisplayPercent = useMemo(() => {
     const requestedCount = Math.max(1, Math.round(totalRows * (displayPercent / 100)));
     if (displayPercent === 10 && requestedCount < 10) return 20;
     return displayPercent;
   }, [displayPercent, totalRows]);
 
-  const visibleRows = useMemo(() => {
-    if (!rows.length) return [];
-    if (autoDisplayPercent >= 100) return rows;
+  // The strike window shown (centered on spot), high → low.
+  const visibleStrikes = useMemo(() => {
+    if (!allStrikes.length) return [] as number[];
+    if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a);
 
     const targetCount = Math.min(
-      rows.length,
-      Math.max(10, Math.round(rows.length * (autoDisplayPercent / 100))),
+      allStrikes.length,
+      Math.max(10, Math.round(allStrikes.length * (autoDisplayPercent / 100))),
     );
-    const atmIndex = rows.findIndex((row) => row.strike === nearestStrike);
+    const atmIndex = allStrikes.findIndex(s => s === nearestStrike);
     const half = Math.floor(targetCount / 2);
     let start = Math.max(0, atmIndex - half);
-    let end = Math.min(rows.length, start + targetCount);
+    let end = Math.min(allStrikes.length, start + targetCount);
+    if (end - start < targetCount) start = Math.max(0, end - targetCount);
 
-    if (end - start < targetCount) {
-      start = Math.max(0, end - targetCount);
-    }
+    return allStrikes.slice(start, end).sort((a, b) => b - a);
+  }, [allStrikes, autoDisplayPercent, nearestStrike]);
 
-    return rows.slice(start, end).sort((a, b) => b.strike - a.strike); // High to low
-  }, [autoDisplayPercent, nearestStrike, rows]);
+  // Active-greek value lookup: column index → strike → number.
+  const valueAt = useCallback(
+    (col: ExpColumn, strike: number): number | null => {
+      const cell = col.cells.get(strike);
+      if (!cell) return null;
+      return cell[greekMode];
+    },
+    [greekMode],
+  );
 
-  const maxByColumn = useMemo(() => {
-    const base: Record<Lowercase<ChainColumn>, number> = {
-      strike: 1,
-      greek: 1,
-      volume: 1,
-      oi: 1,
-    };
-
-    visibleRows.forEach((row) => {
-      const greekVal = row[greekMode as keyof MockRow] as number;
-      base.greek = Math.max(base.greek, Math.abs(greekVal));
-      base.volume = Math.max(base.volume, Math.abs(row.volume));
-      base.oi = Math.max(base.oi, Math.abs(row.oi));
+  // Per-column max + top-3 (by |active greek|) over the VISIBLE strikes, so each
+  // expiration colors against its own scale (per-column intensity).
+  const colScales = useMemo(() => {
+    return columns.map(col => {
+      const vals: number[] = [];
+      visibleStrikes.forEach(s => {
+        const v = valueAt(col, s);
+        if (v != null && v !== 0) vals.push(Math.abs(v));
+      });
+      const sorted = [...vals].sort((a, b) => b - a);
+      return { max: sorted[0] ?? 1, top3: sorted.slice(0, 3) };
     });
+  }, [columns, visibleStrikes, valueAt]);
 
-    return base;
-  }, [visibleRows, greekMode]);
-
-  const top3ByColumn = useMemo(() => {
-    const greekValues = visibleRows.map((row) => Math.abs(row[greekMode as keyof MockRow] as number)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3);
-    return {
-      greek: greekValues,
-      volume: visibleRows.map((row) => Math.abs(row.volume)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
-      oi: visibleRows.map((row) => Math.abs(row.oi)).filter((value) => value > 0).sort((a, b) => b - a).slice(0, 3),
-    };
-  }, [visibleRows, greekMode]);
+  // Always render EXP_COLUMNS slots so the grid keeps a stable width even before
+  // all 7 expirations resolve (or when a ticker lists fewer than 7).
+  const gridCols = Math.max(columns.length, EXP_COLUMNS);
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
@@ -779,32 +788,41 @@ export default function OptionsChainPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "80px repeat(3, minmax(80px, 1fr))",
+          gridTemplateColumns: `100px repeat(${gridCols}, minmax(78px, 1fr))`,
           background: HT.panelBgStrong,
           borderBottom: `1px solid ${HT.border}`,
           flexShrink: 0,
           fontSize: 9,
           fontWeight: 800,
-          letterSpacing: "0.1em",
+          letterSpacing: "0.06em",
           textTransform: "uppercase",
         }}
       >
-        {["Strike", greekMode.toUpperCase(), "Volume", "OI"].map((column, index) => (
-          <div
-            key={column}
-            style={{
-              padding: "5px 8px",
-              textAlign: index === 0 ? "left" : "right",
-              color: index === 0 ? HT.muted : HT.cyan,
-            }}
-          >
-            {column}
-          </div>
-        ))}
+        <div style={{ padding: "5px 8px", textAlign: "left", color: HT.muted }}>Strike</div>
+        {Array.from({ length: gridCols }).map((_, i) => {
+          const col = columns[i];
+          return (
+            <div
+              key={col?.expiration ?? `col-${i}`}
+              style={{
+                padding: "5px 8px",
+                textAlign: "right",
+                color: HT.cyan,
+                borderLeft: "1px solid rgba(255,255,255,.05)",
+                lineHeight: 1.25,
+              }}
+            >
+              <div>{greekMode.toUpperCase()}</div>
+              <div style={{ fontSize: 8, color: HT.muted, fontWeight: 700, letterSpacing: 0 }}>
+                {col ? fmtExpHeader(col.expiration) : "—"}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        {!strikeRowsRef.current.length ? (
+        {!visibleStrikes.length ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 12, color: "#4a6a88" }}>
             <div style={{ textAlign: "center" }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
@@ -815,25 +833,18 @@ export default function OptionsChainPage() {
               </div>
             </div>
           </div>
-        ) : visibleRows.map((row) => {
-          const isATM = row.strike === nearestStrike;
+        ) : visibleStrikes.map((strike) => {
+          const isATM = strike === nearestStrike;
           const rowStyle = isATM
             ? { background: "rgba(255,179,0,.07)", outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
 
-          const greekValue = row[greekMode];
-          const numericCells: Array<{ key: string; value: number; text: string }> = [
-            { key: "greek", value: greekValue, text: fmtMoney(greekValue) },
-            { key: "volume", value: row.volume, text: fmtInt(row.volume) },
-            { key: "oi", value: row.oi, text: fmtInt(row.oi) },
-          ];
-
           return (
             <div
-              key={row.strike}
+              key={strike}
               style={{
                 display: "grid",
-                gridTemplateColumns: "80px repeat(3, minmax(80px, 1fr))",
+                gridTemplateColumns: `100px repeat(${gridCols}, minmax(78px, 1fr))`,
                 ...rowStyle,
               }}
             >
@@ -849,24 +860,28 @@ export default function OptionsChainPage() {
                   borderRight: "1px solid rgba(255,255,255,.06)",
                 }}
               >
-                {Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)}
+                {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
               </div>
 
-              {numericCells.map((cell) => {
+              {Array.from({ length: gridCols }).map((_, i) => {
+                const col = columns[i];
+                const value = col ? valueAt(col, strike) : null;
+                const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
                 return (
                   <div
-                    key={cell.key}
+                    key={col?.expiration ?? `c-${i}`}
                     style={{
                       padding: "4px 6px",
                       fontSize: 11,
                       fontFamily: "monospace",
                       textAlign: "right",
-                      color: "#ffffff",
-                      background: cell.key === "greek" ? metricBg(cell.value, maxByColumn.greek, intensity, top3ByColumn.greek) : "transparent",
+                      color: value == null ? "#3a4a5e" : "#ffffff",
+                      background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
+                      borderLeft: "1px solid rgba(255,255,255,.04)",
                       fontWeight: 700,
                     }}
                   >
-                    {cell.text}
+                    {value == null ? "·" : fmtMoney(value)}
                   </div>
                 );
               })}

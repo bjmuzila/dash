@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 
+// Clerk publishableKey isn't present at build time (mounted at runtime), so
+// prerendering this page throws "Missing publishableKey". Render at request time.
+export const dynamic = "force-dynamic";
+
 type BudgetProfile = { id: number; name: string; currency: string };
 type BudgetCategory = { id: number; profile_id: number; name: string; amount: number; period: string; color?: string | null };
 type BudgetEntry = {

@@ -43,8 +43,18 @@ function todayETStr(): string {
 }
 
 function etClock(ts: number) {
-  return new Date(ts).toLocaleTimeString("en-US", {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—"; // guard invalid/missing ts
+  return d.toLocaleTimeString("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function etDate(ts: number) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—"; // guard invalid/missing ts
+  return d.toLocaleDateString("en-US", {
+    timeZone: "America/New_York", month: "short", day: "numeric",
   });
 }
 
@@ -350,7 +360,7 @@ function FailTable({
               const color = above ? HOME_THEME.red : HOME_THEME.green;
               return (
                 <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  {showDate && <Td color={HOME_THEME.text}>{new Date(e.failTs).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}</Td>}
+                  {showDate && <Td color={HOME_THEME.text}>{etDate(e.failTs)}</Td>}
                   <Td color={HOME_THEME.text}>{etClock(e.failTs)}</Td>
                   <Td><span style={{ color: HOME_THEME.text, fontWeight: 700 }}>{e.short}</span></Td>
                   <Td><span style={{ color }}>{tag}</span></Td>

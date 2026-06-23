@@ -16,8 +16,11 @@ function toChartTime(ts: number): UTCTimestamp {
 }
 
 // One painted heatmap cell: a strike bucket at a given 5-min slot.
-type GexCell = { strike: number; net: number };
-type GexColumn = { slotTs: number; cells: GexCell[]; max: number; top3: number[] };
+// netOiVol = gamma×(OI+vol), netVol = gamma×vol only. The active metric is
+// chosen at draw time by gexMetric so the toggle re-renders without new data.
+type GexCell = { strike: number; netOiVol: number; netVol: number };
+type GexColumn = { slotTs: number; cells: GexCell[] };
+type GexMetric = "voloi" | "vol";
 
 // 5-min-binned big-trade bubble (price = ES price, signed = net of merged prints).
 type Bubble = {
@@ -52,19 +55,6 @@ function etMinutes(ts: number): number {
 function isRthSlot(ts: number): boolean {
   const mins = etMinutes(ts);
   return mins >= 570 && mins < 960; // 9:30 = 570, 16:00 = 960
-}
-
-/**
- * Bubble scaling group. The 3:45–4:15 ET close (945–975) carries blowout
- * auction volume that would otherwise crush the rest of the RTH session's
- * scaling, so it gets its OWN group.
- *   eod = 15:45–16:15 ET, rth = 9:30–16:00 (excluding eod), ovn = everything else
- */
-function bubbleSession(ts: number): "eod" | "rth" | "ovn" {
-  const mins = etMinutes(ts);
-  if (mins >= 945 && mins < 975) return "eod"; // 15:45 = 945, 16:15 = 975
-  if (mins >= 570 && mins < 960) return "rth";
-  return "ovn";
 }
 
 /**
@@ -194,6 +184,11 @@ export default function EsCandlesPage() {
   const [showMvcLine, setShowMvcLine] = useState(true);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [intensity, setIntensity] = useState(0.5); // matches the home heatmap slider default
+  // Heatmap metric: "voloi" = gamma×(OI+vol), "vol" = gamma×vol only. Mirrored
+  // in a ref so the WS-driven overlay draw reads it without re-subscribing.
+  const [gexMetric, setGexMetric] = useState<GexMetric>("voloi");
+  const gexMetricRef = useRef<GexMetric>("voloi");
+  gexMetricRef.current = gexMetric;
   // Column history keyed by 5-min slot ms. One column per slot; latest slot is
   // updated in place as fresh gex messages arrive within the same 5-min window.
   const columnsRef = useRef<Map<number, GexColumn>>(new Map());
@@ -398,18 +393,17 @@ export default function EsCandlesPage() {
         const cells: GexCell[] = [];
         for (const r of gexRows as Array<Record<string, unknown>>) {
           const strike = Number(r.strike ?? 0);
-          // server-v2 emits `netGEX`; legacy/flat rows use `net_gex`/`netGexVal`.
-          const net = Number(r.netGEX ?? r.net_gex ?? r.netGexVal ?? 0);
-          if (!(strike > 0) || !Number.isFinite(net)) continue;
-          cells.push({ strike, net });
+          // server-v2 emits netGEX (gamma×OI) and netVolGEX (gamma×vol).
+          const netOi = Number(r.netGEX ?? r.net_gex ?? r.netGexVal ?? 0);
+          const netVol = Number(r.netVolGEX ?? 0);
+          if (!(strike > 0)) continue;
+          const netOiVol = (Number.isFinite(netOi) ? netOi : 0) + (Number.isFinite(netVol) ? netVol : 0);
+          cells.push({ strike, netOiVol, netVol: Number.isFinite(netVol) ? netVol : 0 });
         }
         if (cells.length) {
-          const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
-          const max = absVals.length ? Math.max(...absVals) : 1;
-          const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
           const slotTs = slotFloorMs(Date.now());
           const map = columnsRef.current;
-          map.set(slotTs, { slotTs, cells, max, top3 });
+          map.set(slotTs, { slotTs, cells });
           // Keep ~2 full days of 5-min slots (a 24h day = 288 slots). The old
           // 200 cap chopped off the morning columns mid-session, making the
           // all-day heatmap vanish from the left.
@@ -484,11 +478,19 @@ export default function EsCandlesPage() {
         );
         if (!res.ok) return;
         const json = await res.json();
-        const cols = Array.isArray(json.columns) ? (json.columns as GexColumn[]) : [];
-        if (cancelled || !cols.length) return;
+        // History API only persists net_gex (OI-based) — no volume split. Map it
+        // into netOiVol; netVol stays 0 (Vol-only mode is blank for historical /
+        // non-front-expiry columns, which is honest rather than duplicating OI).
+        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number }> };
+        const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
+        if (cancelled || !raw.length) return;
         const map = columnsRef.current;
-        for (const col of cols) {
-          if (!map.has(col.slotTs)) map.set(col.slotTs, col); // live wins on collisions
+        for (const col of raw) {
+          if (map.has(col.slotTs)) continue; // live wins on collisions
+          const cells: GexCell[] = col.cells
+            .filter((c) => c.strike > 0 && Number.isFinite(c.net))
+            .map((c) => ({ strike: c.strike, netOiVol: c.net, netVol: 0 }));
+          map.set(col.slotTs, { slotTs: col.slotTs, cells });
         }
         drawOverlayRef.current();
       } catch { /* live feed still populates the front expiry going forward */ }
@@ -748,13 +750,20 @@ export default function EsCandlesPage() {
 
     const defs: Array<{ price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [];
 
-    // GEX levels (Call/Put/Flip/MVC) — toggled by showLevels.
+    // Call/Put/Flip — toggled by the Levels button.
     if (showLevels) {
       defs.push(
         { price: toEs(levels.callWall), color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
         { price: toEs(levels.putWall),  color: "#ff5b5b", title: "Put Wall",  style: LineStyle.Dashed, width: 1 },
         { price: toEs(levels.gexFlip),  color: "#f5c518", title: "Flip",      style: LineStyle.Dashed, width: 1 },
-        { price: toEs(levels.mvc),      color: "#4aa3ff", title: "MVC",       style: LineStyle.Dashed, width: 1 },
+      );
+    }
+
+    // MVC — controlled ONLY by the MVC button (independent of Levels), so the
+    // current MVC marker stays on the chart whenever MVC is on.
+    if (showMvcLine) {
+      defs.push(
+        { price: toEs(levels.mvc), color: "#4aa3ff", title: "MVC", style: LineStyle.Dashed, width: 1 },
       );
     }
 
@@ -780,7 +789,7 @@ export default function EsCandlesPage() {
       });
       priceLinesRef.current.push(pl);
     }
-  }, [levels, showLevels, showSessions, sessionLevels]);
+  }, [levels, showLevels, showMvcLine, showSessions, sessionLevels]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
@@ -834,13 +843,20 @@ export default function EsCandlesPage() {
         buf.height = Math.max(1, Math.round(h));
         const bctx = buf.getContext("2d");
         if (bctx) {
+          // Active metric, read from the ref so live WS draws pick it up.
+          const metric = gexMetricRef.current;
+          const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
           for (const col of cols) {
             const sx = slotX(col.slotTs);
             if (!sx) continue;
+            // Per-column max + top-3 magnitudes for THIS metric (drives color/rank).
+            const absVals = col.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
+            const colMax = absVals.length ? Math.max(...absVals) : 1;
+            const colTop3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
             const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
             for (let i = 0; i < sorted.length; i++) {
               const cell = sorted[i];
-              const color = gexColor(cell.net, col.max, intensity, col.top3);
+              const color = gexColor(valOf(cell), colMax, intensity, colTop3);
               if (!color) continue;
               const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
               const pTop = series.priceToCoordinate(nextStrike + basis);
@@ -912,7 +928,7 @@ export default function EsCandlesPage() {
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
       // start the next flat segment — so you never see the vertical move.
-      if (showLevels && showMvcLine && mvcHistory.length) {
+      if (showMvcLine && mvcHistory.length) {
         ctx.save();
         ctx.strokeStyle = "rgba(255,255,255,.95)"; // MVC — thick white
         ctx.lineWidth = 3;
@@ -963,7 +979,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
 
   // ── Bottom lanes: big-trade bubbles + 5m net delta ────────────────────────
   // Both are x-aligned to the chart time axis via the chart's timeToCoordinate
@@ -1015,64 +1031,84 @@ export default function EsCandlesPage() {
       })();
 
       // Bubbles lane: one bubble per 5-min slot. Green = buy aggressor, red =
-      // sell. Volume-gated (quiet slots hidden), small + semi-transparent, and
-      // offset by side (buys above the line, sells below) so they don't pile up.
+      // sell. "Bigger, bolder, fewer" — only the genuinely large prints show,
+      // but those are large, solid, and clearly sized by volume.
       const bub = sizeCanvas(bubbleLaneRef.current);
       if (bub) {
         const { ctx, w, h } = bub;
         const rowY = h / 2;
-        ctx.strokeStyle = "rgba(255,255,255,.08)";
+        ctx.strokeStyle = "rgba(255,255,255,.06)";
         ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
         if (showBubbles && bubbles.length) {
-          // Size metric: total slot volume, or |net delta| (balanced slots stay
-          // small even when busy). Color is always the dominant aggressor side.
+          // Size metric: total slot volume, or |net delta|. Default is total —
+          // ABSORPTION (the thing worth seeing) is heavy two-sided volume where
+          // neither side wins, so it shows as big total / small net. Sizing on
+          // total keeps those slots large; the absorption ring (below) then marks
+          // the ones that are heavy AND balanced.
           const metricOf = (b: Bubble) => (bubbleMetric === "net" ? Math.abs(b.net) : b.total);
 
-          // Smaller + guaranteed gaps: cap diameter well under the column.
-          const rCap = Math.max(2.5, Math.min(h * 0.36, pitch * 0.34));
-          const rMin = 1;
-          // Per-session scaling against each group's OWN distribution. Three
-          // groups: rth, overnight, and the 3:45–4:15 close (eod) — the EOD
-          // auction blowout is scaled among itself so it doesn't crush RTH.
-          const scaleFor = (group: Bubble[]) => {
-            const asc = group.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
-            if (!asc.length) return null;
-            const gate = asc[Math.floor(asc.length * 0.6)] ?? 0;            // hide more quiet slots
-            const refHi = Math.max(gate + 1, asc[Math.floor(asc.length * 0.97)] ?? asc[asc.length - 1]);
-            const span = Math.max(1, refHi - gate);
-            return { gate, span };
-          };
-          const scales: Record<"eod" | "rth" | "ovn", ReturnType<typeof scaleFor>> = {
-            eod: scaleFor(bubbles.filter((b) => bubbleSession(b.slotTs) === "eod")),
-            rth: scaleFor(bubbles.filter((b) => bubbleSession(b.slotTs) === "rth")),
-            ovn: scaleFor(bubbles.filter((b) => bubbleSession(b.slotTs) === "ovn")),
-          };
+          // BIG radius range — bubbles fill most of the lane height, capped by
+          // column pitch so neighbors never overlap when zoomed out.
+          const rCap = Math.max(6, Math.min(h * 0.46, pitch * 0.46));
+          const rMin = 3;
+          // ONE session-wide scale (no eod/rth/ovn split — it starved each group
+          // of points and flattened the contrast). High-contrast: gate at the
+          // MEDIAN so the quiet bottom half is hidden entirely, and measure the
+          // span up to the 92nd pct so survivors spread across the full lane.
+          const asc = bubbles.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
+          const gate = asc.length ? (asc[Math.floor(asc.length * 0.5)] ?? 0) : 0;
+          const refHi = asc.length
+            ? Math.max(gate + 1, asc[Math.floor(asc.length * 0.92)] ?? asc[asc.length - 1])
+            : 1;
+          const span = Math.max(1, refHi - gate);
+
+          // Absorption test: a slot is "absorbed" when its volume clears the
+          // median (heavier half) yet its net imbalance is a small fraction of
+          // that volume — big aggressor flow getting eaten by a passive wall.
+          // These get a bright ring so absorption separates visually from
+          // one-sided momentum bursts. (volGate uses the same median as `gate`,
+          // computed on total volume, which is the metric in default mode.)
+          const volMedian = bubbles.map((b) => b.total).filter((v) => v > 0).sort((a, b) => a - b);
+          const volGate = volMedian.length ? (volMedian[Math.floor(volMedian.length * 0.5)] ?? 0) : 0;
+          const isAbsorption = (b: Bubble) =>
+            b.total >= volGate && b.total > 0 && Math.abs(b.net) / b.total <= 0.25;
 
           // Draw smallest first so heavy prints sit on top.
           const ordered = [...bubbles].sort((a, b) => metricOf(a) - metricOf(b));
           for (const b of ordered) {
             const m = metricOf(b);
-            const sc = scales[bubbleSession(b.slotTs)];
-            if (!sc || m < sc.gate || !(m > 0)) continue; // per-session gate
+            if (m < gate || !(m > 0)) continue; // hide the quiet bottom half
             const cx = barCenter(b.slotTs);
             if (cx == null) continue;
-            const t = Math.min(1, Math.max(0, (m - sc.gate) / sc.span));
-            // Power 1.5 → small slots stay tiny, big ones clearly grow (real spread).
-            const r = rMin + Math.pow(t, 1.5) * (rCap - rMin);
+            const t = Math.min(1, Math.max(0, (m - gate) / span));
+            // pow<1 → area-biased growth with extra low-end lift, so the jump from
+            // gate to giant is dramatic (high contrast) without tiny slots vanishing.
+            const r = rMin + Math.pow(t, 0.42) * (rCap - rMin);
             const buy = b.side === "buy";
-            const fillA = 0.10 + t * 0.32; // semi-transparent; heavier = denser
+            const absorbed = isAbsorption(b);
+            // Bold solid-ish fill that ramps with size.
+            const fillA = 0.5 + t * 0.45;
             ctx.beginPath();
-            ctx.arc(cx, rowY, r, 0, Math.PI * 2); // single centerline row
+            ctx.arc(cx, rowY, r, 0, Math.PI * 2);
             ctx.fillStyle = buy ? `rgba(48,209,88,${fillA.toFixed(2)})` : `rgba(255,91,91,${fillA.toFixed(2)})`;
             ctx.fill();
-            ctx.lineWidth = 0.9;
-            ctx.strokeStyle = buy ? "rgba(48,209,88,.6)" : "rgba(255,91,91,.6)";
+            // Absorption → thick bright-white ring; otherwise the usual side-tinted ring.
+            if (absorbed) {
+              ctx.lineWidth = 2.5;
+              ctx.strokeStyle = "rgba(255,255,255,.95)";
+            } else {
+              ctx.lineWidth = 1.25;
+              ctx.strokeStyle = buy ? "rgba(80,255,130,.95)" : "rgba(255,120,120,.95)";
+            }
             ctx.stroke();
           }
         }
         ctx.fillStyle = "rgba(255,255,255,.45)";
         ctx.font = "10px Inter, system-ui, sans-serif";
-        ctx.fillText(`BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"}`, 6, 12);
+        ctx.fillText(
+          `BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"} · ⃝ white = absorption`,
+          6, 12,
+        );
       }
 
       // Delta lane: one net bar per 5-min slot + a cumulative-delta line (running
@@ -1315,6 +1351,14 @@ export default function EsCandlesPage() {
           >
             PDH/ON {showSessions ? "ON" : "OFF"}
           </button>
+          <button
+            onClick={() => setGexMetric((m) => (m === "voloi" ? "vol" : "voloi"))}
+            className="rounded border px-3 py-1 text-xs font-mono"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: gexMetric === "vol" ? "#f0997b" : "#5dcaa5" }}
+            title="Heatmap metric: Vol+OI net GEX or Volume-only net GEX"
+          >
+            {gexMetric === "vol" ? "GEX: Vol" : "GEX: Vol+OI"}
+          </button>
           <label className="flex items-center gap-1.5 text-white/55">
             intensity
             <input
@@ -1438,6 +1482,11 @@ export default function EsCandlesPage() {
                   {bubbleHover.b.net >= 0 ? "+" : ""}{bubbleHover.b.net.toLocaleString("en-US")}
                 </span>
               </div>
+              {bubbleHover.b.total > 0 && Math.abs(bubbleHover.b.net) / bubbleHover.b.total <= 0.25 ? (
+                <div className="mt-1 text-center font-mono text-[11px] font-bold" style={{ color: "#fff" }}>
+                  ⃝ ABSORPTION
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

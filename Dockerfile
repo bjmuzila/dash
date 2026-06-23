@@ -23,8 +23,9 @@ WORKDIR /app
 # ---- deps ----
 FROM base AS deps
 COPY package.json package-lock.json* ./
-# Use ci when a lockfile exists, else fall back to install.
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# Prefer `npm ci` (fast, exact). Fall back to `npm install` if the lockfile is
+# out of sync with package.json (e.g. picomatch drift) so the build self-heals.
+RUN npm ci || npm install --no-audit --no-fund
 
 # ---- build ----
 FROM base AS build
@@ -34,6 +35,8 @@ COPY . .
 # Pass them via --build-arg / compose build.args so the client bundle is correct.
 ARG NEXT_PUBLIC_OWNER_USER_ID
 ENV NEXT_PUBLIC_OWNER_USER_ID=${NEXT_PUBLIC_OWNER_USER_ID}
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
 RUN npm run build
 
 # ---- runtime ----

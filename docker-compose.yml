@@ -6,6 +6,9 @@ services:
         # NEXT_PUBLIC_* are inlined into the client bundle at BUILD time.
         # Set this in .env (compose reads it) so the owner-only UI works.
         NEXT_PUBLIC_OWNER_USER_ID: ${NEXT_PUBLIC_OWNER_USER_ID:-}
+        # Clerk key must be present at BUILD time too — prerendering pages that
+        # init Clerk (/budget, /_not-found) throws "Missing publishableKey" otherwise.
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
     image: bzila-dashboard:latest
     restart: unless-stopped
     # server-v2 reads .env.local at boot (dotenv override:true). Mount your real

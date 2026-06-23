@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-06-23 (session 57) — Sidebar Quick Pages (drag-to-pin) + collapsed nested-anchor hydration fix
+
+Sidebar UX additions. All edits in `components/shared/Sidebar.tsx`.
+
+### Quick Pages pinned zone
+- New user-pinned shortcut zone rendered **directly above Home**. Up to 4 slots (`QUICK_MAX`).
+- Pin by expanding any group's dropdown and dragging an item up into the zone. Dropping onto an occupied slot **replaces** it; dropping on empty space appends. Pinned pages also remain in their original group.
+- Hover a pinned item to reveal an **×** unpin button; pinned items can be dragged to reorder within the zone.
+- Zone is hidden when empty unless a drag from a group is in progress (keeps the rail clean). Works collapsed (2-letter chips) and expanded (labeled rows).
+- Persisted to `localStorage` key `sidebar-quick-pages-v1`; stale hrefs (no longer in nav) are filtered on load. New `useQuickPages()` hook (pin/unpin/reorderQuick) + flat `NAV_ITEM_BY_HREF` lookup. Drag state extended with `dragSource` ("group" | "quick") so group drags pin and in-zone drags reorder.
+
+### Hydration fix (`<a>` cannot be a descendant of `<a>`)
+- Collapsed multi-item groups previously wrapped the hover-flyout (which contains item `<Link>`s) in an outer `<Link>` → invalid nested anchors + hydration error. Replaced the outer wrapper with a `role="link"` `<div>` that navigates via `useRouter().push` (Enter/Space supported). Single-item groups keep their `<Link>`.
+- Quick Pages expanded rows also avoid nesting: the unpin `<button>` is a sibling of the row `<Link>`, absolutely positioned, not a child.
+
+### ⚠️ Note (unresolved this session)
+- Localhost **WS data-loading issue** (`ws://localhost:3002/ws/gex` connection fails, chain stuck on "LOADING SPX CHAIN") was investigated but **not resolved**. Ruled out: server down (logs show feed + GEX broadcast healthy), data flow, `GEX_WS_PATH` override (unset), middleware (`ws` excluded from matcher), Next stealing the upgrade (no upgrade handler attached — `getRequestHandler` only). Code path (`websocket-server.js` upgrade handler, path match) looks correct → points to runtime/env. **Next step:** read the Network-tab `ws/gex` row status (101 vs failed/pending/absent) to localize. Unrelated to the Sidebar edits.
+
+---
+
+## 2026-06-23 (session 56) — ES Candles: dual-axis fix (ES/SPX), prior-day frozen basis, bubble rework + disappear fix, heatmap Vol/Vol+OI toggle, MVC decoupled
+
+Reworked `/es-candles` axis, footprint bubbles, and heatmap metric. All edits in `app/es-candles/page.tsx` + `hooks/useEsBigTrades.ts`.
+
+### Price axis (ES vs SPX)
+- Replaced the invisible left-scale companion-candle approach (was unreliable) — left axis hidden, **right axis = ES only**.
+- SPX shown as a cyan badge pinned at the live ES price + a white label that follows the crosshair (right gutter), via `chart.subscribeCrosshairMove` + last-close → `priceToCoordinate`.
+- **Frozen prior-day basis:** new effect reads prior-day ES 16:00 close from `historical` (the `time='16:00'`/`slotKey …T16:00` RTH bar — NOT the last overnight 23:55 bar) and prior-day SPX close from `/api/eod-gex?symbol=$SPX`; `prevBasisRef = esClose − spxClose`. `effectiveBasis()` prefers this frozen basis because the live feed `spot` (broker SPX) mis-scales and can read ABOVE ES (saw live basis −46.54 vs DB +72). 6/22 is the current source row.
+
+### Footprint bubbles ("bigger, bolder, fewer")
+- Larger radius range (`rCap` → `h*0.46`/`pitch*0.46`, `rMin` 3), `sqrt(t)` area scaling, bold fills (alpha 0.45→0.90) + bright rings; gate 40th pct / span to 95th pct.
+- **Disappear bug fixed at the source:** `useEsBigTrades.ingest` now MERGES — throttled/partial `esBigTrades` frames that omit `trades`/`delta` no longer reset them to `[]` (which blanked the lanes between full frames). Also fixes the Footprint page.
+- Lanes + heatmap now repaint on every candle update + a rAF-coalesced safety repaint on visible-time-range change (1s interval).
+
+### Heatmap metric toggle
+- New toolbar button **GEX: Vol+OI ↔ GEX: Vol**. `GexCell` now stores `netOiVol` (gamma×(OI+vol)) and `netVol` (gamma×vol, server `netVolGEX`); metric chosen at draw time via `gexMetricRef`, per-column max/top-3 recomputed for the active metric. Switch re-renders instantly from cached columns.
+- Limitation: history/non-front-expiry backfill only persists `net_gex` (OI) → **Vol-only mode is blank for historical columns**; would need `option_strike_gex_history` to also store `netVolGEX`.
+
+### MVC
+- Decoupled MVC from the Levels toggle: MVC step line + dashed marker now gated by `showMvcLine` ONLY; the `Levels` button controls just Call Wall / Put Wall / Flip.
+
+### ⚠️ Follow-ups
+- GEX level lines (Call/Put/Flip/MVC) still convert SPX→ES with the **live** basis — if the live basis is wrong they're mispositioned; consider switching them to `effectiveBasis()`.
+- `eod_gex` has only ONE SPX EOD row (6/22); the frozen basis needs the EOD recorder to populate daily (server-uptime issue — recorder logic is fine).
+
+---
+
 ## 2026-06-23 (session 55, infra) — Render → Hetzner + Cloudflare migration; owner-dash Postgres health + Hetzner hosting metrics
 
 Migrated the whole stack off Render hosting onto a Hetzner Cloud VPS fronted by Cloudflare, with no app-logic changes. `server-v2` (Next.js + `/ws/gex` + TT/dxLink feed + in-process schedulers) runs as a single Node process in Docker on the box; Render Postgres (Virginia) kept as-is. Drivers: egress cost + overall cost.

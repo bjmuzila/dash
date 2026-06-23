@@ -353,8 +353,15 @@ function TickerPanel({
                     textAlign: "center", color: "#ffffff",
                     background: metricBg(r[c], computed.maxAbs[c], topRank, intensity),
                     fontWeight: weight,
-                    ...(topRank === 1 ? { outline: `1px solid ${r[c] >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", position: "relative", zIndex: 1 } : {}),
+                    position: "relative",
+                    ...(topRank === 1 ? { outline: `1px solid ${r[c] >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
                   }}>
+                    {topRank === 1 && (
+                      <span style={{
+                        position: "absolute", top: 1, left: 2, fontSize: 9, lineHeight: 1,
+                        color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
+                      }}>★</span>
+                    )}
                     <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                   </div>
                 );
