@@ -43,15 +43,33 @@ type VolumeProfile = {
   lvn: number | null;      // most significant low-volume node inside the range
 };
 
-/** True if a slot ms timestamp falls in the RTH window (9:30–16:00 ET). */
-function isRthSlot(ts: number): boolean {
+/** Minutes-since-ET-midnight for a slot timestamp. */
+function etMinutes(ts: number): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
   }).formatToParts(new Date(ts));
   const m: Record<string, string> = {};
   parts.forEach((p) => { m[p.type] = p.value; });
-  const mins = Number(m.hour) * 60 + Number(m.minute);
+  return Number(m.hour) * 60 + Number(m.minute);
+}
+
+/** True if a slot ms timestamp falls in the RTH window (9:30–16:00 ET). */
+function isRthSlot(ts: number): boolean {
+  const mins = etMinutes(ts);
   return mins >= 570 && mins < 960; // 9:30 = 570, 16:00 = 960
+}
+
+/**
+ * Bubble scaling group. The 3:45–4:15 ET close (945–975) carries blowout
+ * auction volume that would otherwise crush the rest of the RTH session's
+ * scaling, so it gets its OWN group.
+ *   eod = 15:45–16:15 ET, rth = 9:30–16:00 (excluding eod), ovn = everything else
+ */
+function bubbleSession(ts: number): "eod" | "rth" | "ovn" {
+  const mins = etMinutes(ts);
+  if (mins >= 945 && mins < 975) return "eod"; // 15:45 = 945, 16:15 = 975
+  if (mins >= 570 && mins < 960) return "rth";
+  return "ovn";
 }
 
 /**
@@ -162,9 +180,10 @@ export default function EsCandlesPage() {
   // Bubble hover tooltip state (the bubble under the cursor + its lane x/y).
   const [bubbleHover, setBubbleHover] = useState<{ x: number; y: number; b: Bubble } | null>(null);
   const drawLanesRef = useRef<() => void>(() => {});
-  // Today's MVC history (strikeOIVol per snapshot, already converted SPX→ES).
-  // Drawn as horizontal step segments on the price overlay.
-  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; es: number }>>([]);
+  // Today's MVC history: raw SPX strikeOIVol per snapshot. Converted to ES at
+  // DRAW time using the live ESU basis (same as the other levels), so the line
+  // tracks the current /ESU price — not the stale per-row esPrice.
+  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
   const [showMvcLine, setShowMvcLine] = useState(true);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [intensity, setIntensity] = useState(0.5); // matches the home heatmap slider default
@@ -186,6 +205,8 @@ export default function EsCandlesPage() {
   const [showBubbles, setShowBubbles] = useState(true);
   const [showDelta, setShowDelta] = useState(true);
   const [showProfile, setShowProfile] = useState(true);
+  // Bubble size metric: "total" = all volume in the slot, "net" = |buy − sell|.
+  const [bubbleMetric, setBubbleMetric] = useState<"total" | "net">("total");
 
   // Session volume profile from today's candles (ES price). 1-pt bins.
   const profile = useMemo(() => {
@@ -291,8 +312,10 @@ export default function EsCandlesPage() {
           const slotTs = slotFloorMs(Date.now());
           const map = columnsRef.current;
           map.set(slotTs, { slotTs, cells, max, top3 });
-          // Cap history to one trading day of 5-min slots.
-          if (map.size > 200) {
+          // Keep ~2 full days of 5-min slots (a 24h day = 288 slots). The old
+          // 200 cap chopped off the morning columns mid-session, making the
+          // all-day heatmap vanish from the left.
+          if (map.size > 600) {
             const oldest = Math.min(...map.keys());
             map.delete(oldest);
           }
@@ -362,8 +385,8 @@ export default function EsCandlesPage() {
     return () => { cancelled = true; };
   }, [feedExpiry]);
 
-  // Load today's full MVC history (strikeOIVol) and refresh every 60s. Each row
-  // carries spxPrice/esPrice so we convert the SPX MVC level to ES per-row.
+  // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
+  // ES conversion happens at draw time with the live basis.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -373,16 +396,11 @@ export default function EsCandlesPage() {
         const json = await res.json();
         const rows = Array.isArray(json.rows) ? json.rows : [];
         const pts = rows
-          .map((r: Record<string, unknown>) => {
-            const ts = Number(r.timestamp ?? 0);
-            const spxLvl = Number(r.strikeOIVol ?? 0);
-            const spx = Number(r.spxPrice ?? 0);
-            const es = Number(r.esPrice ?? 0);
-            const basis = spx > 0 && es > 0 ? es - spx : 0;
-            return { ts, es: spxLvl + basis, ok: ts > 0 && spxLvl > 0 };
-          })
-          .filter((p: { ok: boolean }) => p.ok)
-          .map(({ ts, es }: { ts: number; es: number }) => ({ ts, es }))
+          .map((r: Record<string, unknown>) => ({
+            ts: Number(r.timestamp ?? 0),
+            spx: Number(r.strikeOIVol ?? 0),
+          }))
+          .filter((p: { ts: number; spx: number }) => p.ts > 0 && p.spx > 0)
           .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
         if (!cancelled) setMvcHistory(pts);
       } catch { /* keep last */ }
@@ -563,25 +581,49 @@ export default function EsCandlesPage() {
       };
 
       // ── 1) GEX heatmap cells ──
+      // Rendered to an offscreen buffer, then composited back through a blur so
+      // adjacent strike/time cells melt into smooth bands instead of hard tiles.
       if (showHeatmap) {
         const cols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
-        for (const col of cols) {
-          const sx = slotX(col.slotTs);
-          if (!sx) continue;
-          const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
-          for (let i = 0; i < sorted.length; i++) {
-            const cell = sorted[i];
-            const color = gexColor(cell.net, col.max, intensity, col.top3);
-            if (!color) continue;
-            const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
-            const pTop = series.priceToCoordinate(nextStrike + basis);
-            const pBot = series.priceToCoordinate(cell.strike + basis);
-            if (pTop == null || pBot == null) continue;
-            const top = Math.min(pTop, pBot);
-            const cellH = Math.max(1, Math.abs(pBot - pTop));
-            ctx.fillStyle = color;
-            ctx.fillRect(sx.left, top, sx.w, cellH);
+
+        // Offscreen buffer at the same CSS size (the main ctx is already DPR-
+        // scaled, so we draw in CSS px here too).
+        const buf = document.createElement("canvas");
+        buf.width = Math.max(1, Math.round(w));
+        buf.height = Math.max(1, Math.round(h));
+        const bctx = buf.getContext("2d");
+        if (bctx) {
+          for (const col of cols) {
+            const sx = slotX(col.slotTs);
+            if (!sx) continue;
+            const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
+            for (let i = 0; i < sorted.length; i++) {
+              const cell = sorted[i];
+              const color = gexColor(cell.net, col.max, intensity, col.top3);
+              if (!color) continue;
+              const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
+              const pTop = series.priceToCoordinate(nextStrike + basis);
+              const pBot = series.priceToCoordinate(cell.strike + basis);
+              if (pTop == null || pBot == null) continue;
+              const top = Math.min(pTop, pBot);
+              const cellH = Math.max(1, Math.abs(pBot - pTop));
+              bctx.fillStyle = color;
+              // Slight bleed (+1px each side) so neighbors overlap before blur.
+              bctx.fillRect(sx.left - 0.5, top - 0.5, sx.w + 1, cellH + 1);
+            }
           }
+          // Composite the buffer back with a Gaussian blur → smooth blending.
+          ctx.save();
+          ctx.filter = "blur(3px)";
+          ctx.drawImage(buf, 0, 0, w, h);
+          ctx.filter = "none";
+          // Second, sharper pass at low opacity keeps the hot cores readable.
+          ctx.globalAlpha = 0.55;
+          ctx.filter = "blur(0.6px)";
+          ctx.drawImage(buf, 0, 0, w, h);
+          ctx.filter = "none";
+          ctx.globalAlpha = 1;
+          ctx.restore();
         }
       }
 
@@ -624,6 +666,46 @@ export default function EsCandlesPage() {
         lvl(profile.val, "rgba(255,255,255,.45)", "VAL");
         lvl(profile.lvn, "rgba(245,158,11,.9)", "LVN");
       }
+
+      // ── 3) MVC history as horizontal step segments (no vertical connectors) ──
+      // Each constant-value run draws as one flat line from its first timestamp
+      // to the change point; when MVC jumps we lift the pen (small gap), then
+      // start the next flat segment — so you never see the vertical move.
+      if (showMvcLine && mvcHistory.length) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,255,255,.95)"; // MVC — thick white
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.setLineDash([]);
+        const xOf = (t: number) => ts.timeToCoordinate((Math.floor(t / 1000)) as UTCTimestamp);
+        let runStartX: number | null = null;
+        let runY: number | null = null;
+        let prevX: number | null = null;
+        const flush = (endX: number | null) => {
+          if (runStartX != null && runY != null && endX != null && endX > runStartX) {
+            ctx.beginPath(); ctx.moveTo(runStartX, runY); ctx.lineTo(endX, runY); ctx.stroke();
+          }
+        };
+        for (let i = 0; i < mvcHistory.length; i++) {
+          const p = mvcHistory[i];
+          const x = xOf(p.ts);
+          // Convert SPX MVC level → ES using the live ESU basis (esFut − spx),
+          // the same basis the Call/Put/Flip lines use.
+          const y = series.priceToCoordinate(p.spx + basis);
+          if (x == null || y == null) { flush(prevX); runStartX = null; runY = null; prevX = null; continue; }
+          if (runY == null) { runStartX = x; runY = y; }
+          else if (Math.abs(y - runY) > 0.5) {
+            // Value changed: close the previous flat run up to here, leave a gap,
+            // start a fresh run at the new level.
+            flush(x);
+            runStartX = x; runY = y;
+          }
+          prevX = x;
+        }
+        // Extend the final run to the latest bar / right edge of data.
+        flush(prevX);
+        ctx.restore();
+      }
     };
 
     drawOverlayRef.current = draw;
@@ -639,7 +721,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, rows, showProfile, profile]);
+  }, [showHeatmap, intensity, rows, showProfile, profile, showMvcLine, mvcHistory]);
 
   // ── Bottom lanes: big-trade bubbles + 5m net delta ────────────────────────
   // Both are x-aligned to the chart time axis via the chart's timeToCoordinate
@@ -700,45 +782,55 @@ export default function EsCandlesPage() {
         ctx.strokeStyle = "rgba(255,255,255,.08)";
         ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
         if (showBubbles && bubbles.length) {
-          const rCap = Math.max(3, Math.min(h * 0.42, pitch * 0.42));
-          const rMin = 2;
-          // RTH carries far more volume than the overnight session, so each is
-          // gated and size-scaled against ITS OWN distribution — otherwise RTH
-          // bubbles all max out and overnight ones vanish.
+          // Size metric: total slot volume, or |net delta| (balanced slots stay
+          // small even when busy). Color is always the dominant aggressor side.
+          const metricOf = (b: Bubble) => (bubbleMetric === "net" ? Math.abs(b.net) : b.total);
+
+          // Smaller + guaranteed gaps: cap diameter well under the column.
+          const rCap = Math.max(2.5, Math.min(h * 0.36, pitch * 0.34));
+          const rMin = 1;
+          // Per-session scaling against each group's OWN distribution. Three
+          // groups: rth, overnight, and the 3:45–4:15 close (eod) — the EOD
+          // auction blowout is scaled among itself so it doesn't crush RTH.
           const scaleFor = (group: Bubble[]) => {
-            const asc = group.map((b) => b.size).sort((a, b) => a - b);
+            const asc = group.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
             if (!asc.length) return null;
-            const gate = asc[Math.floor(asc.length * 0.45)] ?? 0;          // hide quiet slots
-            const refHi = Math.max(gate + 1, asc[Math.floor(asc.length * 0.95)] ?? asc[asc.length - 1]);
+            const gate = asc[Math.floor(asc.length * 0.6)] ?? 0;            // hide more quiet slots
+            const refHi = Math.max(gate + 1, asc[Math.floor(asc.length * 0.97)] ?? asc[asc.length - 1]);
             const span = Math.max(1, refHi - gate);
             return { gate, span };
           };
-          const rthScale = scaleFor(bubbles.filter((b) => isRthSlot(b.slotTs)));
-          const ovnScale = scaleFor(bubbles.filter((b) => !isRthSlot(b.slotTs)));
+          const scales: Record<"eod" | "rth" | "ovn", ReturnType<typeof scaleFor>> = {
+            eod: scaleFor(bubbles.filter((b) => bubbleSession(b.slotTs) === "eod")),
+            rth: scaleFor(bubbles.filter((b) => bubbleSession(b.slotTs) === "rth")),
+            ovn: scaleFor(bubbles.filter((b) => bubbleSession(b.slotTs) === "ovn")),
+          };
 
           // Draw smallest first so heavy prints sit on top.
-          const ordered = [...bubbles].sort((a, b) => a.size - b.size);
+          const ordered = [...bubbles].sort((a, b) => metricOf(a) - metricOf(b));
           for (const b of ordered) {
-            const sc = isRthSlot(b.slotTs) ? rthScale : ovnScale;
-            if (!sc || b.size < sc.gate || !(b.size > 0)) continue; // per-session gate
+            const m = metricOf(b);
+            const sc = scales[bubbleSession(b.slotTs)];
+            if (!sc || m < sc.gate || !(m > 0)) continue; // per-session gate
             const cx = barCenter(b.slotTs);
             if (cx == null) continue;
-            const t = Math.min(1, Math.max(0, (b.size - sc.gate) / sc.span));
-            const r = rMin + Math.pow(t, 0.85) * (rCap - rMin);
+            const t = Math.min(1, Math.max(0, (m - sc.gate) / sc.span));
+            // Power 1.5 → small slots stay tiny, big ones clearly grow (real spread).
+            const r = rMin + Math.pow(t, 1.5) * (rCap - rMin);
             const buy = b.side === "buy";
-            const fillA = 0.12 + t * 0.30; // semi-transparent; heavier = denser
+            const fillA = 0.10 + t * 0.32; // semi-transparent; heavier = denser
             ctx.beginPath();
             ctx.arc(cx, rowY, r, 0, Math.PI * 2); // single centerline row
             ctx.fillStyle = buy ? `rgba(48,209,88,${fillA.toFixed(2)})` : `rgba(255,91,91,${fillA.toFixed(2)})`;
             ctx.fill();
-            ctx.lineWidth = 1;
-            ctx.strokeStyle = buy ? "rgba(48,209,88,.7)" : "rgba(255,91,91,.7)";
+            ctx.lineWidth = 0.9;
+            ctx.strokeStyle = buy ? "rgba(48,209,88,.6)" : "rgba(255,91,91,.6)";
             ctx.stroke();
           }
         }
         ctx.fillStyle = "rgba(255,255,255,.45)";
         ctx.font = "10px Inter, system-ui, sans-serif";
-        ctx.fillText("BIG TRADE BUBBLES", 6, 12);
+        ctx.fillText(`BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"}`, 6, 12);
       }
 
       // Delta lane: one net bar per 5-min slot, green/red around a zero line.
@@ -804,7 +896,7 @@ export default function EsCandlesPage() {
       canvas?.removeEventListener("mouseleave", onLeave);
       drawLanesRef.current = () => {};
     };
-  }, [showBubbles, showDelta, bubbles, deltaBars, rows]);
+  }, [showBubbles, showDelta, bubbles, deltaBars, rows, bubbleMetric]);
 
   return (
     <div className="flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
@@ -835,6 +927,14 @@ export default function EsCandlesPage() {
             Bubbles {showBubbles ? "ON" : "OFF"}
           </button>
           <button
+            onClick={() => setBubbleMetric((m) => (m === "total" ? "net" : "total"))}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: "#cbd5e1" }}
+            title="Bubble size = total volume vs net delta"
+          >
+            Size: {bubbleMetric === "net" ? "Net Δ" : "Total"}
+          </button>
+          <button
             onClick={() => setShowDelta((v) => !v)}
             className="rounded border px-3 py-1 text-xs"
             style={{ borderColor: "rgba(255,255,255,.12)", color: showDelta ? "#f5c518" : "#94a3b8" }}
@@ -847,6 +947,13 @@ export default function EsCandlesPage() {
             style={{ borderColor: "rgba(255,255,255,.12)", color: showProfile ? "#f59e0b" : "#94a3b8" }}
           >
             Profile {showProfile ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={() => setShowMvcLine((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showMvcLine ? "#ffffff" : "#94a3b8" }}
+          >
+            MVC {showMvcLine ? "ON" : "OFF"}
           </button>
           <label className="flex items-center gap-1.5 text-white/55">
             intensity
@@ -862,20 +969,6 @@ export default function EsCandlesPage() {
         </div>
       </div>
 
-      <div className="grid gap-3 p-4 md:grid-cols-3">
-        <div className="rounded-xl border p-4" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.03)" }}>
-          <div className="text-[10px] uppercase tracking-[0.2em] text-white/45">Last Close</div>
-          <div className="mt-2 text-3xl font-black text-white">{lastCandle ? lastCandle.close.toFixed(2) : "—"}</div>
-        </div>
-        <div className="rounded-xl border p-4" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.03)" }}>
-          <div className="text-[10px] uppercase tracking-[0.2em] text-white/45">Last Volume</div>
-          <div className="mt-2 text-3xl font-black text-white">{lastCandle ? lastCandle.volume.toLocaleString("en-US") : "—"}</div>
-        </div>
-        <div className="rounded-xl border p-4" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.03)" }}>
-          <div className="text-[10px] uppercase tracking-[0.2em] text-white/45">Updated</div>
-          <div className="mt-2 text-3xl font-black text-white">{lastCandle ? etClock(lastCandle.timestamp) : "—"}</div>
-        </div>
-      </div>
 
       <div className="flex flex-wrap items-center gap-4 px-4 pb-1 text-xs">
         {(() => {
@@ -903,8 +996,10 @@ export default function EsCandlesPage() {
       <div className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
-          <div ref={chartRef} className="absolute inset-0" />
-          <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 2 }} />
+          {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
+              candlesticks always render on the top visible layer. */}
+          <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
+          <div ref={chartRef} className="absolute inset-0" style={{ zIndex: 2 }} />
           {rows.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/50">
               {connected ? "Waiting for live 5m ES candles" : "Loading candles…"}

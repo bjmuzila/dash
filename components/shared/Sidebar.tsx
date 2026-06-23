@@ -499,33 +499,50 @@ export default function Sidebar() {
         transition: "width 0.22s ease",
       }}
     >
-      {/* ── Logo / wordmark ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: collapsed ? "16px 0" : "18px 18px", justifyContent: collapsed ? "center" : "flex-start", flexShrink: 0 }}>
+      {/* ── Row 1: CB Edge logo ── */}
+      {!collapsed && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "18px 18px 6px", flexShrink: 0 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ width: "100%", maxWidth: 180, height: "auto", display: "block" }} />
+        </div>
+      )}
+
+      {/* ── White gradient line above Home ── */}
+      <div
+        style={{
+          height: 1,
+          margin: collapsed ? "10px 14px 0" : "10px 18px 0",
+          background: "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%)",
+          flexShrink: 0,
+        }}
+      />
+
+      {/* ── Row 2: Home button (highlight only when active) ── */}
+      <div style={{ display: "flex", alignItems: "center", padding: collapsed ? "10px 0 0" : "6px 18px 0", justifyContent: collapsed ? "center" : "flex-start", flexShrink: 0 }}>
         <Link
           href="/home"
           title="Home"
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
-            width: 40,
-            height: 40,
+            justifyContent: collapsed ? "center" : "flex-start",
+            gap: 14,
+            width: collapsed ? 44 : "100%",
+            height: collapsed ? 44 : 40,
+            padding: collapsed ? 0 : "0 14px",
             borderRadius: 12,
             flexShrink: 0,
             textDecoration: "none",
-            color: isActive("/home") ? HOME_THEME.cyan : HOME_THEME.cyan,
-            ...cyanFill,
+            color: isActive("/home") ? HOME_THEME.cyan : HOME_THEME.text,
+            fontSize: 14,
+            fontWeight: isActive("/home") ? 700 : 500,
+            transition: "all 0.15s",
+            ...(isActive("/home") ? cyanFill : { border: "1px solid transparent" }),
           }}
         >
           <HomeIcon />
+          {!collapsed && <span style={{ flex: 1, textAlign: "left" }}>Home</span>}
         </Link>
-        {!collapsed && (
-          <span style={{ display: "flex", alignItems: "baseline", gap: 4, fontSize: 18, fontWeight: 800, letterSpacing: "0.02em" }}>
-            <span style={{ color: HOME_THEME.cyan }}>SPX</span>
-            <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>/</span>
-            <span style={{ color: HOME_THEME.text }}>GEX</span>
-          </span>
-        )}
       </div>
 
       <div style={{ height: 1, background: HOME_THEME.border, margin: collapsed ? "4px 14px" : "4px 18px" }} />
