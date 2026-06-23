@@ -101,6 +101,21 @@ function handleProxyRest(req, res) {
     case '/proxy/health':
       sendJson(res, 200, { ok: true, ts: Date.now() });
       return true;
+    case '/proxy/self-metrics': {
+      // The app's own footprint, reported from inside the container. Hetzner's
+      // cloud API exposes CPU + network but NOT memory, so the owner dashboard's
+      // memory box reads this instead. rss = resident set size (real RAM held).
+      const mu = process.memoryUsage();
+      sendJson(res, 200, {
+        rss: mu.rss,
+        heapUsed: mu.heapUsed,
+        heapTotal: mu.heapTotal,
+        external: mu.external,
+        uptimeSec: Math.round(process.uptime()),
+        ts: Date.now(),
+      });
+      return true;
+    }
     default:
       sendJson(res, 404, { error: 'unknown proxy route', path: pathname });
       return true;

@@ -760,7 +760,7 @@ export default function OwnerDashboard() {
 
       // Render hosting metrics (live window on general refresh)
       try {
-        const rm = await fetch("/api/render-metrics?window=live", { cache: "no-store" });
+        const rm = await fetch("/api/hetzner-metrics?window=live", { cache: "no-store" });
         if (rm.ok) { setRenderMetrics(await rm.json()); setRenderWindow("live"); }
       } catch { /* non-fatal */ }
 
@@ -906,7 +906,7 @@ export default function OwnerDashboard() {
     setRenderWindow(w);
     setRenderLoading(true);
     try {
-      const rm = await fetch(`/api/render-metrics?window=${w}`, { cache: "no-store" });
+      const rm = await fetch(`/api/hetzner-metrics?window=${w}`, { cache: "no-store" });
       if (rm.ok) setRenderMetrics(await rm.json());
     } catch { /* non-fatal */ } finally {
       setRenderLoading(false);
@@ -1159,10 +1159,10 @@ export default function OwnerDashboard() {
           </div>
         </div>
 
-        {/* ── Render hosting metrics ── */}
+        {/* ── Hetzner hosting metrics ── */}
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <SectionLabel>Render · Hosting</SectionLabel>
+            <SectionLabel>Hetzner · Hosting</SectionLabel>
             <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
               {(["live", "weekly", "monthly"] as const).map(w => (
                 <button
@@ -1200,7 +1200,7 @@ export default function OwnerDashboard() {
               footer={<Sparkline data={renderMetrics?.bandwidth.spark ?? []} accent={HOME_THEME.cyan} />}
             />
             <StatCard
-              label={`Memory · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
+              label="Memory · App RSS"
               value={renderMetrics?.memory.value != null
                 ? renderMetrics.memory.value < 1024 * 1024
                   ? `${(renderMetrics.memory.value / 1024).toFixed(0)} KB`
