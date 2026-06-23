@@ -523,6 +523,8 @@ export default function OwnerDashboard() {
   // displayed uptime forward without drift across snapshots.
   const uptimeBaseRef = useRef<{ uptime: number; at: number } | null>(null);
   const [dbStats, setDbStats] = useState<DbStats>({});
+  // Postgres health: { ok, latencyMs } from /api/db/health (SELECT 1 probe).
+  const [dbHealth, setDbHealth] = useState<{ ok: boolean; latencyMs: number } | null>(null);
   const [pageStatuses, setPageStatuses] = useState<PageStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -687,6 +689,15 @@ export default function OwnerDashboard() {
         }
       });
       setDbStats(counts);
+
+      // Postgres health probe (SELECT 1). Non-fatal: on any failure show DOWN.
+      try {
+        const hr = await fetch("/api/db/health", { cache: "no-store" });
+        const hj = await hr.json().catch(() => null);
+        setDbHealth({ ok: !!hj?.ok && hr.ok, latencyMs: Number(hj?.latencyMs ?? 0) });
+      } catch {
+        setDbHealth({ ok: false, latencyMs: 0 });
+      }
 
       if (pageRes.status === "fulfilled" && pageRes.value.ok) {
         const j = await pageRes.value.json();
@@ -1100,6 +1111,7 @@ export default function OwnerDashboard() {
           <StatusBadge ok={wsConnected} label={wsConnected ? "Proxy WS" : "Proxy WS Offline"} />
           <StatusBadge ok={dxOk} label={`dxLink Feed ${server.dxLinkState || "—"}`} />
           <StatusBadge ok={ttOk} label={`TT ${ttOk ? "Auth" : "Unauth"}`} />
+          <StatusBadge ok={!!dbHealth?.ok} label={dbHealth == null ? "Postgres —" : dbHealth.ok ? "Postgres OK" : "Postgres DOWN"} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {lastRefresh && (
@@ -1128,8 +1140,14 @@ export default function OwnerDashboard() {
         {/* ── KPI cards ── */}
         <div>
           <SectionLabel>System</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(9, minmax(0, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gap: 10 }}>
             <StatCard label="Server Uptime" value={displayUptime != null ? fmtUptime(displayUptime) : "—"} accent={HOME_THEME.green} mono />
+            <StatCard
+              label="Postgres"
+              value={dbHealth == null ? "—" : dbHealth.ok ? `OK · ${dbHealth.latencyMs}ms` : "DOWN"}
+              accent={dbHealth == null ? HOME_THEME.cyan : dbHealth.ok ? HOME_THEME.green : HOME_THEME.red}
+              mono
+            />
             <StatCard label="Idle Mode" value={server.idleMode == null ? "—" : server.idleMode ? "ON" : "OFF"} accent={server.idleMode ? HOME_THEME.red : HOME_THEME.green} />
             <StatCard label="dxLink Feed (TT→Proxy)" value={server.dxLinkState || "—"} accent={dxOk ? HOME_THEME.green : HOME_THEME.red} mono />
             <StatCard label="TT Auth" value={server.ttAuthenticated == null ? "—" : ttOk ? "OK" : "FAIL"} accent={ttOk ? HOME_THEME.green : HOME_THEME.red} />
