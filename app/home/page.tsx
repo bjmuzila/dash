@@ -8,6 +8,7 @@ import GexToolbar from "@/components/dashboard/GexToolbar";
 import NquQuotePill from "@/components/dashboard/NquQuotePill";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import FlowTape from "@/components/dashboard/FlowTape";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
@@ -309,6 +310,12 @@ const SettingsIcon = () => (
 );
 
 export default function HomePage() {
+  // Bandwidth gate: socket stays open only while the tab is visible AND the user
+  // is active (15-min idle timeout; owner exempt). Drives connect/disconnect.
+  const shouldConnect = useWsLifecycle();
+  const shouldConnectRef = useRef(shouldConnect);
+  shouldConnectRef.current = shouldConnect;
+
   const wsRef = useRef<WebSocket | null>(null);
   const gexWsRef = useRef<WebSocket | null>(null);
   const gexWsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -596,14 +603,37 @@ export default function HomePage() {
 
     const scheduleReconnect = () => {
       if (unmountedRef.current) return;
+      // Don't reconnect while the lifecycle gate says we shouldn't be live
+      // (backgrounded tab, or 15-min user inactivity). The gate flip re-opens us.
+      if (!shouldConnectRef.current) return;
       if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
       gexWsReconnectRef.current = setTimeout(connect, 2000);
     };
 
-    connect();
+    const closeSocket = () => {
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      const ws = gexWsRef.current;
+      gexWsRef.current = null;
+      if (ws) { ws.onclose = null; try { ws.close(); } catch {} }
+      setStatus("RECONNECTING");
+    };
+
+    // React to the bandwidth gate: connect when it allows, drop the socket when
+    // it doesn't. This is what makes a backgrounded/idle client cost zero.
+    const gatePoll = setInterval(() => {
+      if (unmountedRef.current) return;
+      if (shouldConnectRef.current) {
+        if (!gexWsRef.current) connect();
+      } else if (gexWsRef.current) {
+        closeSocket();
+      }
+    }, 1000);
+
+    if (shouldConnectRef.current) connect();
 
     return () => {
       unmountedRef.current = true;
+      clearInterval(gatePoll);
       if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
       const ws = gexWsRef.current;
       gexWsRef.current = null;

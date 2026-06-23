@@ -1,0 +1,32 @@
+services:
+  dashboard:
+    build:
+      context: .
+      args:
+        # NEXT_PUBLIC_* are inlined into the client bundle at BUILD time.
+        # Set this in .env (compose reads it) so the owner-only UI works.
+        NEXT_PUBLIC_OWNER_USER_ID: ${NEXT_PUBLIC_OWNER_USER_ID:-}
+    image: bzila-dashboard:latest
+    restart: unless-stopped
+    # server-v2 reads .env.local at boot (dotenv override:true). Mount your real
+    # secrets file there. Keep PORT here in sync with the EXPOSE/healthcheck.
+    env_file:
+      # .env.local is the single source of truth for PORT and all secrets
+      # (server-v2 loads it with dotenv override:true). Next's rewrite also reads
+      # process.env.PORT, so the in-process loopback always matches. Set
+      # APP_PORT below to whatever PORT you put in .env.local (3001 or 3002).
+      - .env.local
+    environment:
+      NODE_ENV: production
+      TZ: America/New_York
+    ports:
+      # Bind to localhost only — Cloudflare reaches the origin via cloudflared
+      # tunnel (no public port). Do NOT expose to 0.0.0.0 without TLS+firewall.
+      # APP_PORT must equal PORT in .env.local. See DEPLOY_CLOUDFLARE.md.
+      - "127.0.0.1:${APP_PORT:-3001}:${APP_PORT:-3001}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||'3001')+'/proxy/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

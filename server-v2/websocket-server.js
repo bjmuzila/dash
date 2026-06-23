@@ -23,6 +23,27 @@ const WS_PATH = process.env.GEX_WS_PATH || '/ws/gex';
 // (seconds) in the snapshot status so the owner dashboard can render it.
 const PROCESS_START_MS = Date.now();
 
+// Caps for the connect-time snapshot. Mobile clients reconnect constantly
+// (network handoffs, screen on/off), and each reconnect replays this snapshot.
+// The full flow tape + candle history is the single biggest payload the server
+// sends, so trim them on connect — the client backfills full history from SQL
+// separately, and the FlowTape only renders a scrolling window. Live broadcasts
+// are unaffected. Env-tunable.
+const SNAPSHOT_TAPE_MAX = Number(process.env.SNAPSHOT_TAPE_MAX || 150);
+const SNAPSHOT_CANDLES_MAX = Number(process.env.SNAPSHOT_CANDLES_MAX || 120);
+
+function trimSnapshotFlow(flow) {
+  if (!flow || !Array.isArray(flow.tape)) return flow;
+  if (flow.tape.length <= SNAPSHOT_TAPE_MAX) return flow;
+  // Keep the most recent N orders (tape is oldest-first).
+  return { ...flow, tape: flow.tape.slice(-SNAPSHOT_TAPE_MAX) };
+}
+
+function trimSnapshotCandles(candles) {
+  if (!Array.isArray(candles) || candles.length <= SNAPSHOT_CANDLES_MAX) return candles;
+  return candles.slice(-SNAPSHOT_CANDLES_MAX);
+}
+
 function buildSnapshot(state) {
   return {
     symbol: state.symbol,
@@ -41,8 +62,8 @@ function buildSnapshot(state) {
     putWall: state.putWall,
     gexFlip: state.gexFlip,
     totalNetGex: state.totalNetGex,
-    flow: state.flow,
-    esCandles: state.esCandles,
+    flow: trimSnapshotFlow(state.flow),
+    esCandles: trimSnapshotCandles(state.esCandles),
     esBigTrades: state.esBigTrades,
     status: {
       ...state.status,
@@ -74,6 +95,22 @@ function msg(type, data, symbol) {
 // outbound — most of it identical overnight. Coalesce sends to this cadence and
 // skip when the payload is byte-identical to the last one we sent.
 const GEX_BROADCAST_MS = Number(process.env.GEX_BROADCAST_MS || 6000);
+// Slower GEX broadcast cadence outside regular trading hours — SPX options
+// aren't trading, so the chain barely moves and clients don't need 6s freshness.
+const GEX_BROADCAST_MS_OFFHOURS = Number(process.env.GEX_BROADCAST_MS_OFFHOURS || 30000);
+
+// Lightweight ET regular-trading-hours check (Mon–Fri 9:30–16:00 ET). Used only
+// to coarsen broadcast cadence off-hours; not a market-holiday calendar (the
+// flow skip-if-unchanged already zeroes out quiet periods, so holidays during
+// "RTH" hours just fall back to the 6s cadence over an unchanging payload).
+function isRthNow() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = et.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = et.getHours() * 60 + et.getMinutes();
+  return mins >= 570 && mins < 960; // 9:30 (570) – 16:00 (960)
+}
 
 function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   const wss = new WebSocket.Server({ noServer: true });
@@ -140,7 +177,8 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
         expiry: state.expiry,
       };
       const dedupeKey = JSON.stringify(gexData);
-      if (now - lastGexSentAt >= GEX_BROADCAST_MS && dedupeKey !== lastGexPayload) {
+      const minInterval = isRthNow() ? GEX_BROADCAST_MS : GEX_BROADCAST_MS_OFFHOURS;
+      if (now - lastGexSentAt >= minInterval && dedupeKey !== lastGexPayload) {
         lastGexSentAt = now;
         lastGexPayload = dedupeKey;
         out.push(msg('gex', { ...gexData, updatedAt: state.updatedAt }, state.symbol));

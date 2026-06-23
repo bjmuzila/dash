@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import {
   queryEsCandlesToday,
   queryEsCandlesHistorical,
@@ -72,6 +73,9 @@ function buildSlotAverages(historical: EsCandleRecord[], today: string, nDays: n
 }
 
 export function useEsCandles() {
+  const shouldConnect = useWsLifecycle();
+  const shouldConnectRef = useRef(shouldConnect);
+  shouldConnectRef.current = shouldConnect;
   const [todayRows, setTodayRows] = useState<EsCandleRecord[]>([]);
   const [historical, setHistorical] = useState<EsCandleRecord[]>([]);
   const [connected, setConnected] = useState(false);
@@ -133,7 +137,7 @@ export function useEsCandles() {
     };
 
     const connect = () => {
-      if (unmountedRef.current) return;
+      if (unmountedRef.current || !shouldConnectRef.current) return;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       let ws: WebSocket;
       try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
@@ -145,14 +149,29 @@ export function useEsCandles() {
       ws.onclose = () => { setConnected(false); schedule(); };
     };
     const schedule = () => {
-      if (unmountedRef.current) return;
+      if (unmountedRef.current || !shouldConnectRef.current) return;
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       reconnectRef.current = setTimeout(connect, 2500);
     };
 
-    connect();
+    // Bandwidth gate: connect only while visible+active (owner exempt from idle).
+    const gatePoll = setInterval(() => {
+      if (unmountedRef.current) return;
+      if (shouldConnectRef.current) {
+        if (!wsRef.current) connect();
+      } else if (wsRef.current) {
+        if (reconnectRef.current) clearTimeout(reconnectRef.current);
+        const ws = wsRef.current;
+        wsRef.current = null;
+        if (ws) { ws.onclose = null; try { ws.close(); } catch {} }
+        setConnected(false);
+      }
+    }, 1000);
+
+    if (shouldConnectRef.current) connect();
     return () => {
       unmountedRef.current = true;
+      clearInterval(gatePoll);
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       const ws = wsRef.current;
       wsRef.current = null;

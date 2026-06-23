@@ -476,6 +476,7 @@ function VolCard({ vol }: { vol: VolData | null }) {
         <VolStat label="VIX1D" value={oneD} color="#93c5fd" />
         <VolStat label="10D Realized" value={vol?.realized_10d} color="#818cf8" />
         <VolStat label="IV Rank" value={ivRank} suffix="%" color="#38bdf8" />
+        <VolStat label="IV %ile" value={vol?.iv_percentile} suffix="%" color="#22d3ee" />
         <VolStat label="VRP" value={vrp ?? undefined} color={vrp != null && vrp >= 0 ? "#00e676" : "#ff5252"} />
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: "#d7e6e8", lineHeight: 1.5 }}>{regimeMsg}</div>

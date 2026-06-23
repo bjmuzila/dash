@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useEsBigTrades } from "@/hooks/useEsBigTrades";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -156,16 +157,18 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 
 export default function EsCandlesPage() {
   usePageLoadStatus({ pageKey: "es-candles", pageLabel: "ES Candles", path: "/es-candles" });
+  const esShouldConnect = useWsLifecycle();
+  const esShouldConnectRef = useRef(esShouldConnect);
+  esShouldConnectRef.current = esShouldConnect;
 
   // Single source of truth: SQL load (today + ~20d history) + live /ws/gex merge.
-  const { candles: rows, connected, refresh } = useEsCandles();
+  const { candles: rows, historical, connected, refresh } = useEsCandles();
 
   const chartRef = useRef<HTMLDivElement>(null);
   // Capture target for the Snap / Discord buttons (chart + lanes panel).
   const captureRef = useRef<HTMLDivElement>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const spxSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
 
@@ -176,6 +179,13 @@ export default function EsCandlesPage() {
   const deltaLaneRef = useRef<HTMLCanvasElement>(null);
   // Bubble hover tooltip state (the bubble under the cursor + its lane x/y).
   const [bubbleHover, setBubbleHover] = useState<{ x: number; y: number; b: Bubble } | null>(null);
+  // Right-axis SPX readouts. liveSpx = badge pinned at the last ES price (y in
+  // px within the chart). crossSpx = SPX at the crosshair (y in px), shown only
+  // while hovering the chart. Both = ES − effective basis.
+  const [liveSpx, setLiveSpx] = useState<{ y: number; spx: number } | null>(null);
+  const [crossSpx, setCrossSpx] = useState<{ y: number; spx: number } | null>(null);
+  // Frozen prior-day closes (ES 16:00 − SPX 16:00) → prior-day basis source.
+  const [prevCloses, setPrevCloses] = useState<{ es: number; spx: number; date: string } | null>(null);
   const drawLanesRef = useRef<() => void>(() => {});
   // Today's MVC history: raw SPX strikeOIVol per snapshot. Converted to ES at
   // DRAW time using the live ESU basis (same as the other levels), so the line
@@ -193,6 +203,10 @@ export default function EsCandlesPage() {
   // Basis (esFut - spx) kept in a ref so the overlay draw reads it without
   // re-subscribing. Updated by the WS listener.
   const basisRef = useRef(0);
+  // Frozen prior-day basis = prior-day ES 16:00 close − prior-day SPX 16:00
+  // close. Used to derive SPX from ES on the right axis OVERNIGHT / pre-open,
+  // until the 9:30 ET open when the live basis takes over. 0 = not available.
+  const prevBasisRef = useRef(0);
   // Front expiry from the live feed; drives the one-time history backfill.
   const [feedExpiry, setFeedExpiry] = useState<string>("");
   // Expirations offered by the feed + the one the heatmap history is showing.
@@ -417,7 +431,7 @@ export default function EsCandlesPage() {
     };
 
     const connect = () => {
-      if (dead) return;
+      if (dead || !esShouldConnectRef.current) return;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
       catch { schedule(); return; }
@@ -426,14 +440,27 @@ export default function EsCandlesPage() {
       ws.onclose = () => { if (!dead) schedule(); };
     };
     const schedule = () => {
-      if (dead) return;
+      if (dead || !esShouldConnectRef.current) return;
       if (retry) clearTimeout(retry);
       retry = setTimeout(connect, 2500);
     };
 
-    connect();
+    const gatePoll = setInterval(() => {
+      if (dead) return;
+      if (esShouldConnectRef.current) {
+        if (!ws) connect();
+      } else if (ws) {
+        if (retry) clearTimeout(retry);
+        const w = ws;
+        ws = null;
+        if (w) { w.onclose = null; try { w.close(); } catch {} }
+      }
+    }, 1000);
+
+    if (esShouldConnectRef.current) connect();
     return () => {
       dead = true;
+      clearInterval(gatePoll);
       if (retry) clearTimeout(retry);
       if (ws) { ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
     };
@@ -498,6 +525,16 @@ export default function EsCandlesPage() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Basis used to derive SPX from ES on the right axis.
+  // The live feed's `spot` (broker SPX) is unreliable / mis-scaled — it can quote
+  // ABOVE ES intraday, producing a wrong negative basis. The prior-day DB closes
+  // (ES 16:00 − SPX 16:00) give the correct positive basis, so we PREFER the
+  // frozen prior-day basis and only fall back to the live basis if it's missing.
+  const effectiveBasis = useCallback(() => {
+    if (prevBasisRef.current) return prevBasisRef.current;
+    return basisRef.current; // fallback: live basis (until DB closes load)
+  }, []);
+
   useEffect(() => {
     let canceled = false;
     const init = async () => {
@@ -517,11 +554,11 @@ export default function EsCandlesPage() {
           horzLines: { color: "rgba(255,255,255,.06)" },
         },
         rightPriceScale: {
+          visible: true,
           borderColor: "rgba(255,255,255,.10)",
         },
         leftPriceScale: {
-          visible: true,
-          borderColor: "rgba(255,255,255,.10)",
+          visible: false,
         },
         timeScale: {
           borderColor: "rgba(255,255,255,.10)",
@@ -534,6 +571,8 @@ export default function EsCandlesPage() {
           horzLine: { visible: false, labelVisible: false },
         },
         localization: {
+          // Right axis carries ES only (clean). The SPX equivalent is shown as
+          // a badge at the live price + on the crosshair label (see below).
           priceFormatter: (price: number) => price.toFixed(2),
           timeFormatter: (time: unknown) => {
             if (typeof time === "number") {
@@ -555,23 +594,8 @@ export default function EsCandlesPage() {
         downColor: "#ff5b5b",
         borderVisible: false,
       });
-      // Invisible companion CANDLE series bound to the LEFT scale, carrying the
-      // same OHLC minus basis (= SPX). Because it's the same series type with the
-      // same shape, it autoscales identically to the real candles, so the LEFT
-      // (SPX) axis lines up pixel-for-pixel with the RIGHT (ES) axis at any zoom.
-      const spxSeries = chart.addSeries(CandlestickSeries, {
-        priceScaleId: "left",
-        upColor: "rgba(0,0,0,0)",
-        downColor: "rgba(0,0,0,0)",
-        wickUpColor: "rgba(0,0,0,0)",
-        wickDownColor: "rgba(0,0,0,0)",
-        borderVisible: false,
-        lastValueVisible: false,
-        priceLineVisible: false,
-      });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
-      spxSeriesRef.current = spxSeries;
 
       const ro = new ResizeObserver(() => {
         chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
@@ -584,13 +608,23 @@ export default function EsCandlesPage() {
       const onDblClick = () => {
         chart.timeScale().fitContent();
         chart.priceScale("right").applyOptions({ autoScale: true });
-        try { chart.priceScale("left").applyOptions({ autoScale: true }); } catch {}
         drawOverlayRef.current();
       };
       container.addEventListener("dblclick", onDblClick);
 
+      // Crosshair SPX readout: convert the ES price under the cursor → SPX and
+      // pin a label at that y. Cleared when the cursor leaves the chart.
+      const onCrosshair = (param: { point?: { y: number }; seriesData?: Map<unknown, unknown> }) => {
+        if (!param.point) { setCrossSpx(null); return; }
+        const es = candleSeries.coordinateToPrice(param.point.y);
+        if (es == null) { setCrossSpx(null); return; }
+        setCrossSpx({ y: param.point.y, spx: (es as number) - effectiveBasis() });
+      };
+      chart.subscribeCrosshairMove(onCrosshair);
+
       return () => {
         ro.disconnect();
+        chart.unsubscribeCrosshairMove(onCrosshair);
         container.removeEventListener("dblclick", onDblClick);
       };
     };
@@ -604,25 +638,8 @@ export default function EsCandlesPage() {
       chartApiRef.current?.remove();
       chartApiRef.current = null;
       candleSeriesRef.current = null;
-      spxSeriesRef.current = null;
     };
   }, []);
-
-  // Feed the invisible SPX companion candles (OHLC − basis) so the LEFT axis
-  // reads SPX, aligned to the candles. Re-runs when candles or basis change.
-  useEffect(() => {
-    const spx = spxSeriesRef.current;
-    if (!spx) return;
-    const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
-    const data: CandlestickData[] = rows.map((row) => ({
-      time: toChartTime(row.timestamp),
-      open: row.open - basis,
-      high: row.high - basis,
-      low: row.low - basis,
-      close: row.close - basis,
-    }));
-    spx.setData(data);
-  }, [rows, levels.esFut, levels.spx]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -644,7 +661,77 @@ export default function EsCandlesPage() {
       chart.timeScale().fitContent();
       didFitRef.current = true;
     }
+    updateLiveSpxRef.current();
+    // Live candle updates shift the time axis without always firing a logical-
+    // range change, which left the bubble/delta lanes (and heatmap) painting a
+    // stale or cleared frame — the "bubbles sometimes disappear" bug. Repaint
+    // both whenever candle data changes.
+    drawOverlayRef.current();
+    drawLanesRef.current();
   }, [rows]);
+
+  // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
+  // right gutter. Recomputed on data, basis, and pan/zoom (range subscribe).
+  const updateLiveSpxRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    updateLiveSpxRef.current = () => {
+      const series = candleSeriesRef.current;
+      if (!series || !rows.length) { setLiveSpx(null); return; }
+      const lastEs = rows[rows.length - 1].close;
+      const y = series.priceToCoordinate(lastEs);
+      if (y == null) { setLiveSpx(null); return; }
+      setLiveSpx({ y, spx: lastEs - effectiveBasis() });
+    };
+    updateLiveSpxRef.current();
+    const chart = chartApiRef.current;
+    const onRange = () => updateLiveSpxRef.current();
+    chart?.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+    return () => { chart?.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); };
+  }, [rows, prevCloses, levels.esFut, levels.spx]);
+
+  // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
+  // WS frame has arrived recently. basis = esFut − spx.
+  useEffect(() => {
+    if (levels.esFut != null && levels.spx != null) {
+      basisRef.current = levels.esFut - levels.spx;
+    }
+  }, [levels.esFut, levels.spx]);
+
+  // Frozen prior-day basis for the overnight / pre-open right axis.
+  // prior-day ES 16:00 close (es_candles) − prior-day SPX 16:00 close (eod_gex).
+  // Recomputed when history loads; refreshed every 5 min to roll past midnight.
+  useEffect(() => {
+    let cancelled = false;
+    const compute = async () => {
+      // Prior-day ES RTH close = the 16:00 ET bar of the most recent past day.
+      const esBars = historical
+        .filter((c) => ((c.slotKey ?? "").slice(11, 16) === "16:00" || (c.time ?? "").slice(0, 5) === "16:00"))
+        .filter((c) => Number(c.close) > 0)
+        .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+      const esRow = esBars.length ? esBars[esBars.length - 1] : null;
+      if (!esRow) return;
+      const esClose = Number(esRow.close);
+      const esDate = esRow.date ?? (esRow.slotKey ?? "").slice(0, 10);
+
+      // Prior-day SPX close from eod_gex. Prefer the row matching the ES date;
+      // else the most recent SPX EOD available.
+      try {
+        const res = await fetch(`/api/eod-gex?symbol=$SPX&limit=30`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const spxRows: Array<{ date: string; spot: number }> = Array.isArray(json.rows) ? json.rows : [];
+        const match = spxRows.find((r) => r.date === esDate) ?? spxRows[0];
+        const spxClose = Number(match?.spot ?? 0);
+        if (!cancelled && esClose > 0 && spxClose > 0) {
+          prevBasisRef.current = esClose - spxClose;
+          setPrevCloses({ es: esClose, spx: spxClose, date: esDate });
+        }
+      } catch { /* keep last frozen basis */ }
+    };
+    void compute();
+    const id = setInterval(compute, 300_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [historical]);
 
   // Draw GEX level lines (Call Wall / Put Wall / Flip / MVC) on the candle series,
   // converting SPX-point levels to ES via the live basis (esFut - spx).
@@ -1094,6 +1181,31 @@ export default function EsCandlesPage() {
     };
   }, [showBubbles, showDelta, bubbles, deltaBars, rows, bubbleMetric]);
 
+  // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
+  // change AND a low-rate interval, so the lanes/overlay never get stranded on
+  // a stale frame after a live tick or autoscale. Cheap: only repaints on change.
+  useEffect(() => {
+    const chart = chartApiRef.current;
+    if (!chart) return;
+    let raf = 0;
+    const repaint = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        drawOverlayRef.current();
+        drawLanesRef.current();
+        updateLiveSpxRef.current();
+      });
+    };
+    const tsApi = chart.timeScale();
+    tsApi.subscribeVisibleTimeRangeChange(repaint);
+    const id = setInterval(repaint, 1000);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(id);
+      tsApi.unsubscribeVisibleTimeRangeChange(repaint);
+    };
+  }, []);
+
   return (
     <div className="es-candles-root flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)" }}>
@@ -1250,6 +1362,36 @@ export default function EsCandlesPage() {
               candlesticks always render on the top visible layer. */}
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
           <div ref={chartRef} className="absolute inset-0" style={{ zIndex: 2 }} />
+          {/* SPX equivalent of the live ES price, pinned at the right gutter. */}
+          {liveSpx ? (
+            <div
+              className="pointer-events-none absolute z-10 rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+              style={{
+                top: Math.max(2, liveSpx.y - 9),
+                right: 64,
+                background: "rgba(41,182,246,.92)",
+                color: "#001018",
+                whiteSpace: "nowrap",
+              }}
+            >
+              SPX {liveSpx.spx.toFixed(2)}
+            </div>
+          ) : null}
+          {/* SPX at the crosshair, follows the cursor's y on the right gutter. */}
+          {crossSpx ? (
+            <div
+              className="pointer-events-none absolute z-10 rounded px-1.5 py-0.5 font-mono text-[11px]"
+              style={{
+                top: Math.max(2, crossSpx.y - 9),
+                right: 64,
+                background: "rgba(255,255,255,.85)",
+                color: "#001018",
+                whiteSpace: "nowrap",
+              }}
+            >
+              SPX {crossSpx.spx.toFixed(2)}
+            </div>
+          ) : null}
           {rows.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/50">
               {connected ? "Waiting for live 5m ES candles" : "Loading candles…"}

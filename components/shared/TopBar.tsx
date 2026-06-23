@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import SnapButton from "./SnapButton";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 
 const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
@@ -133,6 +134,9 @@ function saveTodayCloses(es: number, spx: number, date?: string) {
 export default function TopBar() {
   const router = useRouter();
   const pathname = usePathname();
+  const shouldConnect = useWsLifecycle();
+  const shouldConnectRef = useRef(shouldConnect);
+  shouldConnectRef.current = shouldConnect;
   const [ddOpen, setDdOpen] = useState(false);
   const [ttLive, setTtLive] = useState(false);
 
@@ -320,6 +324,7 @@ export default function TopBar() {
     };
 
     const connect = () => {
+      if (closed || !shouldConnectRef.current) return;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
       catch { schedule(); return; }
@@ -339,14 +344,28 @@ export default function TopBar() {
       ws.onclose = () => { if (!closed) schedule(); };
     };
     const schedule = () => {
-      if (closed) return;
+      if (closed || !shouldConnectRef.current) return;
       if (reconnect) clearTimeout(reconnect);
       reconnect = setTimeout(connect, 2000);
     };
 
-    connect();
+    // Bandwidth gate: connect only while visible+active (owner exempt from idle).
+    const gatePoll = setInterval(() => {
+      if (closed) return;
+      if (shouldConnectRef.current) {
+        if (!ws) connect();
+      } else if (ws) {
+        if (reconnect) clearTimeout(reconnect);
+        const w = ws;
+        ws = null;
+        if (w) { w.onclose = null; try { w.close(); } catch (_) {} }
+      }
+    }, 1000);
+
+    if (shouldConnectRef.current) connect();
     return () => {
       closed = true;
+      clearInterval(gatePoll);
       if (reconnect) clearTimeout(reconnect);
       if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch (_) {} }
     };
