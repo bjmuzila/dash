@@ -149,8 +149,25 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
      stacked content isn't cut off. (Scoped to direct structural wrappers.) */
   main > div > div { min-height: 0; }
 
-  /* ES Candles: make the page root scroll on mobile (it's h-full flex w/o scroll). */
+  /* ES Candles: make the page root scroll vertically on mobile (it's h-full flex
+     w/o scroll). Layout is kept as-is per request. */
   .es-candles-root { overflow-y: auto !important; height: auto !important; min-height: 100%; }
+  /* Toggle row: one horizontally-scrollable strip instead of wrapping into many
+     rows that crush the chart. Children keep their size and scroll sideways. */
+  .es-candles-toggles {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    width: 100%;
+    padding-bottom: 4px;
+    justify-content: flex-start !important;
+  }
+  .es-candles-toggles > * { flex: 0 0 auto !important; }
+  /* Give the chart + lanes a real height once the page scrolls (flex-1 collapses
+     when the root is auto-height). */
+  .es-candles-root .flex-1 { flex: 0 0 auto !important; min-height: 60vh; }
 
   /* Wide data tables: let them scroll sideways inside their own box instead of
      forcing the whole page wider than the screen. */
@@ -164,7 +181,13 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   /* Comfortable tap targets for nav/buttons on touch screens. */
   main button, main a[role="button"], main select { min-height: 38px; }
 
-  /* ── Home page: stack the 55/45 split into a single column. ── */
+  /* ── Home page: stack into a single column, GEX chart on top, heatmap below.
+     The two source columns are flattened into one flex column and reordered:
+       1. GEX chart   (left col, first child)
+       2. Heatmap     (right col, last child)
+       3. Ticker strip (right col, first child)
+       4. Flow tabs   (left col, last child)
+     ── */
   .home-split {
     flex-direction: column !important;
     overflow-y: auto !important;
@@ -173,19 +196,39 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
     padding: 12px !important;
     gap: 16px !important;
   }
-  .home-col,
+  /* Make both columns contents-only so their children join one shared column. */
   .home-col-left,
   .home-col-right {
-    width: 100% !important;
-    height: auto !important;
-    overflow: visible !important;
-    min-height: 0 !important;
+    display: contents !important;
   }
-  /* The GEX chart & heatmap panels use flex-grow inside a fixed-height parent;
-     once stacked they collapse, so give them explicit mobile heights. */
-  .home-col-left > div:first-child { flex: 0 0 auto !important; height: 360px !important; }
-  .home-col-left > div:last-child { flex: 0 0 auto !important; height: 320px !important; margin-top: 16px !important; }
-  .home-col-right > div:last-of-type { flex: 0 0 auto !important; min-height: 420px !important; }
+  /* GEX chart panel — top. */
+  .home-col-left > div:first-child {
+    order: 1;
+    flex: 0 0 auto !important;
+    height: 360px !important;
+    width: 100% !important;
+  }
+  /* Heatmap panel — directly under the chart. */
+  .home-col-right > div:last-of-type {
+    order: 2;
+    flex: 0 0 auto !important;
+    min-height: 420px !important;
+    width: 100% !important;
+    margin-top: 0 !important;
+  }
+  /* Ticker strip — below the heatmap. */
+  .home-col-right > div:first-of-type {
+    order: 3;
+    width: 100% !important;
+  }
+  /* Flow tabs panel — last. */
+  .home-col-left > div:last-child {
+    order: 4;
+    flex: 0 0 auto !important;
+    height: 320px !important;
+    width: 100% !important;
+    margin-top: 0 !important;
+  }
 
   /* Ticker strip: allow wrapping so VIX / ES / SPX don't clip off-screen. */
   .home-col-right .ticker-row { flex-wrap: wrap !important; row-gap: 6px; }

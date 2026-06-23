@@ -18,17 +18,8 @@ function MenuIcon() {
   );
 }
 
-function CloseIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
-
 function MobileTopBar() {
-  const { isMobile, drawerOpen, toggleDrawer } = useMobileNav();
+  const { isMobile } = useMobileNav();
   if (!isMobile) return null;
   return (
     <div
@@ -47,27 +38,45 @@ function MobileTopBar() {
         zIndex: 9998,
       }}
     >
-      <button
-        aria-label={drawerOpen ? "Close menu" : "Open menu"}
-        onClick={toggleDrawer}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 40,
-          height: 40,
-          borderRadius: 10,
-          border: `1px solid ${HOME_THEME.border}`,
-          background: "rgba(255,255,255,0.04)",
-          color: HOME_THEME.text,
-          cursor: "pointer",
-        }}
-      >
-        {drawerOpen ? <CloseIcon /> : <MenuIcon />}
-      </button>
+      {/* Hamburger moved out to a always-visible floating button (FloatingMenuButton).
+          Reserve its footprint so the logo doesn't sit under it. */}
+      <div style={{ width: 44, flexShrink: 0 }} />
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto", display: "block" }} />
     </div>
+  );
+}
+
+function FloatingMenuButton() {
+  const { isMobile, drawerOpen, openDrawer } = useMobileNav();
+  // Only on mobile, and only while the drawer is closed (the drawer itself has a
+  // close control + tap-out backdrop). Pinned top-left, always on top.
+  if (!isMobile || drawerOpen) return null;
+  return (
+    <button
+      aria-label="Open menu"
+      onClick={openDrawer}
+      style={{
+        position: "fixed",
+        top: "calc(env(safe-area-inset-top, 0px) + 10px)",
+        left: "calc(env(safe-area-inset-left, 0px) + 10px)",
+        zIndex: 10050,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        border: `1px solid rgba(0,240,255,0.35)`,
+        background: "rgba(13,17,25,0.92)",
+        backdropFilter: "blur(12px)",
+        color: HOME_THEME.cyan,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.5), 0 0 12px rgba(0,240,255,0.18)",
+        cursor: "pointer",
+      }}
+    >
+      <MenuIcon />
+    </button>
   );
 }
 
@@ -104,6 +113,7 @@ function ShellInner({ children }: { children: React.ReactNode }) {
       }}
     >
       <MobileTopBar />
+      <FloatingMenuButton />
       <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}>
         <DrawerOverlay />
         <Sidebar />

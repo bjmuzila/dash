@@ -1101,7 +1101,7 @@ export default function EsCandlesPage() {
           <div className="text-xs font-bold uppercase tracking-[0.24em]" style={{ color: "#ff5b5b" }}>ES 5m Candles</div>
           <div className="mt-1 text-xs text-white/70">5m ES candles from Postgres, merged live over /ws/gex.</div>
         </div>
-        <div className="flex items-center gap-3 text-xs">
+        <div className="es-candles-toggles flex items-center gap-3 text-xs">
           <span className="rounded border px-2 py-1" style={{ borderColor: "rgba(255,255,255,.12)", color: status === "live" ? "#30d158" : "#94a3b8" }}>
             {status.toUpperCase()}
           </span>

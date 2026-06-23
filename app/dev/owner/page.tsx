@@ -69,40 +69,45 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
   {
     id: "gex", label: "Gex", emoji: "📊",
     items: [
-      { label: "Overview", href: "/overview" },
-      { label: "Est. Move", href: "/estimated-move" },
-      { label: "Options Chain", href: "/options-chain" },
+      { label: "Home", href: "/home" },
       { label: "Multi Greek", href: "/mult-greek" },
+      { label: "Options Chain", href: "/options-chain" },
+      { label: "Greeks", href: "/greeks" },
       { label: "Insights", href: "/insights" },
       { label: "Confidence", href: "/confidence-score" },
+      { label: "Est. Moves FE", href: "/em" },
     ],
   },
   {
-    id: "footprint", label: "Footprint", emoji: "👣",
+    id: "futures", label: "Futures", emoji: "📉",
     items: [
-      { label: "Big Orders", href: "/footprint" },
+      { label: "ES Candles", href: "/es-candles" },
+      { label: "Fails", href: "/fails" },
     ],
   },
   {
     id: "stock-market", label: "Stock Market", emoji: "📈",
     items: [
       { label: "Premarket", href: "/premarket" },
-      { label: "Database", href: "/database" },
       { label: "Econ Calendar", href: "/economic-calendar" },
     ],
   },
   {
     id: "personal", label: "Personal", emoji: "🧑",
     items: [
-      { label: "Trading", href: "/trading" },
+      { label: "Journal", href: "/trading" },
       { label: "Budget", href: "/budget" },
+      { label: "To-Do", href: "/personal/todo" },
     ],
   },
   {
-    id: "dev", label: "Dev", emoji: "🛠️",
+    id: "admin", label: "Admin", emoji: "🛠️",
     items: [
       { label: "Owner", href: "/dev/owner" },
+      { label: "Admin", href: "/dev/admin" },
+      { label: "Database", href: "/database" },
       { label: "Dev", href: "/dev" },
+      { label: "Est. Moves BE", href: "/estimated-move" },
       { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
     ],
