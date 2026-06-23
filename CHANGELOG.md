@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-06-22 (session 53) — GEX chart prior-state ghost overlay (5/15/30m)
+
+Added a "prior GEX" ghost layer to the NET GEX chart (`components/dashboard/GexChart.tsx`) showing the per-strike net GEX 5/15/30 min ago behind the live bars, plus supporting data plumbing and a toolbar control. Versions bumped through `2026.6.22-v21`.
+
+### Ghost overlay (GexChart.tsx)
+- New props: `baselines`, `showGhost5/15/30`. Renders a faded prior-state bar behind each live bar (Net GEX + OI+Vol mode only — baselines store OI-based net GEX).
+- Per-strike logic: GEX **down** → taller faded prior bar drawn behind (halo); GEX **up** → only the rise portion (live↔prior) shaded as a cap on top.
+- Outline color encodes direction using the chart's own palette: **yellow `#ffb300`** when GEX shrank, **blue `#29b6f6`** when it grew (replaced the initial white outline).
+- Legend shows the active timeframe with ↓/↑ in each color; on-chart note when a toggle is on but no history exists, or when in an unsupported mode.
+
+### Toolbar (GexToolbar.tsx) + home wiring (app/home/page.tsx)
+- Three `5m / 15m / 30m` toggles, shown only in Net GEX + OI+Vol mode.
+- Toggles are **mutually exclusive** — enabling one clears the others.
+- `show5/15/30` state added; chart baselines polled (full chain) whenever any toggle is on, via `chartBaselines`.
+
+### Data: nearest-snapshot fallback
+- `lib/db.ts`: new `getOptionStrikeNetGexAsOfOrNearest` — prefers the latest row at-or-before the target age, else the strike's nearest available row, so ghosts populate after-hours / right after the writer starts.
+- `app/api/snapshots/option-strike-gex-history/route.ts`: `tolerant=1` query param selects the nearest-fallback query (chart uses it; popup stays exact).
+- `hooks/useStrikeGexHistory.ts`: added `tolerant` arg threaded into the fetch URL.
+
+### UI cleanup
+- Removed the duplicate ticker-row clock from the top toolbar (`app/home/page.tsx`); the live ET clock now lives only in the NET GEX chart header.
+
+---
+
 ## 2026-06-22 (session 52) — Confidence Score overhaul: two-stage model, MVC study anchoring, calibration tracker, UI consolidation
 
 Major rework of the `/confidence-score` page and its scoring engine (`lib/confidenceScore.ts` + `app/api/confidence/route.ts`), plus a new calibration system and a global date-picker fix. Versions bumped through `2026.6.22-v17`.

@@ -950,7 +950,7 @@ export default function GreeksPage() {
       </div>
 
       {/* Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
+      <div className="greeks-cards" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
         <GreekCard
           icon="■" label="GEX" subtitle="Gamma Exposure" mode={mode} fmt={fmtB} accent="#22d3ee"
           valueStr={fmtB(gexVal)} value={gexVal} velocity={gexVelStr} data={gexData}

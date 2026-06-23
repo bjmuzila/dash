@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 
 import { HOME_THEME } from "./homeTheme";
+import { useMobileNav } from "./MobileNavContext";
 
 // ─── geometry ──────────────────────────────────────────────────────────────
 const WIDTH_EXPANDED = 240;
@@ -222,9 +223,13 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { isSignedIn } = useUser();
   const { orderedItems, reorder } = useNavOrder();
+  const { isMobile, drawerOpen } = useMobileNav();
 
   // Collapsed by default; only the user's explicitly saved preference expands it.
-  const [collapsed, setCollapsed] = useState(true);
+  // On mobile the sidebar is always rendered expanded inside the drawer.
+  const [collapsedPref, setCollapsedPref] = useState(true);
+  const collapsed = isMobile ? false : collapsedPref;
+  const setCollapsed = setCollapsedPref;
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [socialsOpen, setSocialsOpen] = useState(false);
@@ -476,27 +481,44 @@ export default function Sidebar() {
 
   if (!mounted) {
     // Avoid hydration mismatch on the localStorage-driven width.
+    // On mobile the sidebar is a drawer (overlaid), so it occupies no inline width.
+    if (isMobile) return null;
     return <nav style={{ width: WIDTH_EXPANDED, flexShrink: 0 }} />;
   }
+
+  // ── Mobile drawer geometry: fixed off-canvas panel that slides in. ──
+  const mobileNavStyle: React.CSSProperties = isMobile
+    ? {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        bottom: 0,
+        width: Math.min(WIDTH_EXPANDED + 40, 300),
+        maxWidth: "85vw",
+        transform: drawerOpen ? "translateX(0)" : "translateX(-105%)",
+        transition: "transform 0.26s ease",
+        zIndex: 10001,
+        boxShadow: drawerOpen ? "0 0 40px rgba(0,0,0,0.6)" : "none",
+        paddingTop: "env(safe-area-inset-top, 0px)",
+      }
+    : { width: collapsed ? WIDTH_COLLAPSED : WIDTH_EXPANDED, flexShrink: 0, transition: "width 0.22s ease" };
 
   return (
     <nav
       style={{
-        width: collapsed ? WIDTH_COLLAPSED : WIDTH_EXPANDED,
-        flexShrink: 0,
+        ...mobileNavStyle,
         display: "flex",
         flexDirection: "column",
-        height: "100%",
-        position: "relative",
-        zIndex: 10000,
-        background: "rgba(13,17,25,0.62)",
+        height: isMobile ? undefined : "100%",
+        position: isMobile ? "fixed" : "relative",
+        zIndex: isMobile ? 10001 : 10000,
+        background: isMobile ? "rgba(10,13,20,0.98)" : "rgba(13,17,25,0.62)",
         backdropFilter: "blur(16px)",
         borderRight: `1px solid ${HOME_THEME.border}`,
-        overflowX: "visible",
+        overflowX: isMobile ? "hidden" : "visible",
         overflowY: "auto",
         scrollbarWidth: "none",
         fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
-        transition: "width 0.22s ease",
       }}
     >
       {/* ── Row 1: CB Edge logo ── */}
@@ -555,7 +577,9 @@ export default function Sidebar() {
       {/* spacer pushes footer to the bottom */}
       <div style={{ flex: "1 1 0", minHeight: 20 }} />
 
-      {/* ── Collapse toggle ── */}
+      {/* ── Collapse toggle (desktop only; on mobile the sidebar is a drawer) ── */}
+      {!isMobile && (
+      <>
       <div style={{ height: 1, background: HOME_THEME.border, margin: collapsed ? "4px 14px" : "4px 18px" }} />
       <div style={{ display: "flex", justifyContent: collapsed ? "center" : "flex-start", padding: collapsed ? "8px 0" : "6px 10px" }}>
         <button
@@ -587,6 +611,8 @@ export default function Sidebar() {
           {collapsed && <Tooltip label="Expand" show={hovered === "__collapse"} />}
         </button>
       </div>
+      </>
+      )}
 
       {/* ── Socials + user ── */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "10px 0 14px", paddingBottom: "calc(14px + env(safe-area-inset-bottom, 0px))", flexShrink: 0 }}>

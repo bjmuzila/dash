@@ -648,7 +648,7 @@ export default function MultGreekPage() {
       </div>
 
       {/* Panels */}
-      <div style={{ flex: 1, display: "flex", gap: 8, padding: 8, overflow: "hidden", minHeight: 0 }}>
+      <div className="mg-panels" style={{ flex: 1, display: "flex", gap: 8, padding: 8, overflow: "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}

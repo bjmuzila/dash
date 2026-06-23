@@ -6,6 +6,8 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData }
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEsBigTrades } from "@/hooks/useEsBigTrades";
+import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
 
 function toChartTime(ts: number): UTCTimestamp {
@@ -159,6 +161,8 @@ export default function EsCandlesPage() {
   const { candles: rows, connected, refresh } = useEsCandles();
 
   const chartRef = useRef<HTMLDivElement>(null);
+  // Capture target for the Snap / Discord buttons (chart + lanes panel).
+  const captureRef = useRef<HTMLDivElement>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const spxSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -220,9 +224,61 @@ export default function EsCandlesPage() {
   const { trades: rawTrades, delta: rawDelta } = useEsBigTrades();
   const [showBubbles, setShowBubbles] = useState(true);
   const [showDelta, setShowDelta] = useState(true);
-  const [showProfile, setShowProfile] = useState(true);
+  const [showProfile, setShowProfile] = useState(false);
+  const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
+  const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   // Bubble size metric: "total" = all volume in the slot, "net" = |buy − sell|.
-  const [bubbleMetric, setBubbleMetric] = useState<"total" | "net">("total");
+  const [bubbleMetric, setBubbleMetric] = useState<"total" | "net">("net");
+
+  // Prior-day H/L and overnight H/L from the candle history (ES prices).
+  //
+  // Overnight = the MOST RECENT completed-or-forming session from one 16:00 ET
+  // close to the next 9:30 ET open:
+  //   • before 9:30 today        → overnight still building (prior 16:00 → now)
+  //   • between 9:30 and 16:00    → overnight FROZEN (prior 16:00 → today 9:30)
+  //   • after 16:00 today         → a NEW overnight starts (today 16:00 → now)
+  // So ONH/ONL update through the overnight, lock at the 9:30 open, and reset at
+  // the next 16:00 close. Depends on `rows` AND a 60s clock so it rolls forward.
+  const [clockTick, setClockTick] = useState(0);
+  useEffect(() => { const id = setInterval(() => setClockTick((n) => n + 1), 60_000); return () => clearInterval(id); }, []);
+  const sessionLevels = useMemo(() => {
+    if (!rows.length) return null;
+    void clockTick; // re-evaluate on the clock so the window rolls forward
+    const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+
+    // Build the ms boundaries for "today" in ET from the current time.
+    const now = Date.now();
+    const nowMin = etMinutes(now);
+    // Midnight-ET ms for a given timestamp (floor to the ET day).
+    const etMidnight = (ts: number) => ts - etMinutes(ts) * 60_000 - (new Date(ts).getSeconds() * 1000 + new Date(ts).getMilliseconds());
+    const todayMid = etMidnight(now);
+    const open0930 = todayMid + 570 * 60_000;
+    const close1600 = todayMid + 960 * 60_000;
+
+    // Overnight window [start, end).
+    let onStart: number, onEnd: number;
+    if (nowMin >= 960) { onStart = close1600; onEnd = now; }          // after close → new O/N
+    else if (nowMin >= 570) { onStart = close1600 - 86_400_000; onEnd = open0930; } // RTH → frozen
+    else { onStart = close1600 - 86_400_000; onEnd = now; }            // pre-open → building
+
+    // Prior day = the most recent ET day strictly before today.
+    const today = dayKey(now);
+    const days = [...new Set(rows.map((r) => r.date || dayKey(r.timestamp)))].sort();
+    const prevDay = days.filter((d) => d < today).pop();
+
+    let pdh = -Infinity, pdl = Infinity, onh = -Infinity, onl = Infinity;
+    for (const r of rows) {
+      const d = r.date || dayKey(r.timestamp);
+      if (prevDay && d === prevDay) { if (r.high > pdh) pdh = r.high; if (r.low < pdl) pdl = r.low; }
+      if (r.timestamp >= onStart && r.timestamp < onEnd) { if (r.high > onh) onh = r.high; if (r.low < onl) onl = r.low; }
+    }
+    return {
+      pdh: Number.isFinite(pdh) ? pdh : null,
+      pdl: Number.isFinite(pdl) ? pdl : null,
+      onh: Number.isFinite(onh) ? onh : null,
+      onl: Number.isFinite(onl) ? onl : null,
+    };
+  }, [rows, clockTick]);
 
   // Session volume profile from today's candles (ES price). 1-pt bins.
   const profile = useMemo(() => {
@@ -298,6 +354,12 @@ export default function EsCandlesPage() {
       if (Array.isArray(d.expirations) && d.expirations.length) {
         setExpirations(d.expirations.map(String));
       }
+      // gexFlip isn't sent by the feed — compute it from gexRows like the home
+      // page does (zero-crossing of the net-GEX profile nearest spot).
+      let computedFlip: number | null = null;
+      if (Array.isArray(d.gexRows) && d.gexRows.length) {
+        computedFlip = findGEXFlip(d.gexRows as ChainRow[], spx > 0 ? spx : undefined);
+      }
       setLevels((prev) => {
         const nextSpx = spx > 0 ? spx : prev.spx;
         const nextEs = esFut > 0 ? esFut : prev.esFut;
@@ -305,7 +367,7 @@ export default function EsCandlesPage() {
         return {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
-          gexFlip:  d.gexFlip  != null ? Number(d.gexFlip)  || null : prev.gexFlip,
+          gexFlip:  computedFlip != null ? computedFlip : (d.gexFlip != null ? Number(d.gexFlip) || null : prev.gexFlip),
           mvc:      prev.mvc,
           spx:      nextSpx,
           esFut:    nextEs,
@@ -424,7 +486,11 @@ export default function EsCandlesPage() {
           }))
           .filter((p: { ts: number; spx: number }) => p.ts > 0 && p.spx > 0)
           .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
-        if (!cancelled) setMvcHistory(pts);
+        if (cancelled) return;
+        setMvcHistory(pts);
+        // Latest MVC (SPX points) → the legend chip value.
+        const latest = pts.length ? pts[pts.length - 1].spx : 0;
+        if (latest > 0) setLevels((prev) => ({ ...prev, mvc: latest }));
       } catch { /* keep last */ }
     };
     void load();
@@ -464,6 +530,8 @@ export default function EsCandlesPage() {
         },
         crosshair: {
           mode: CrosshairMode.Normal,
+          vertLine: { visible: false, labelVisible: false },
+          horzLine: { visible: false, labelVisible: false },
         },
         localization: {
           priceFormatter: (price: number) => price.toFixed(2),
@@ -511,7 +579,20 @@ export default function EsCandlesPage() {
       ro.observe(container);
       chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
 
-      return () => ro.disconnect();
+      // Double-click anywhere on the chart → recenter: fit all candles in the
+      // time axis and snap both price scales back to autoscale (right axis right).
+      const onDblClick = () => {
+        chart.timeScale().fitContent();
+        chart.priceScale("right").applyOptions({ autoScale: true });
+        try { chart.priceScale("left").applyOptions({ autoScale: true }); } catch {}
+        drawOverlayRef.current();
+      };
+      container.addEventListener("dblclick", onDblClick);
+
+      return () => {
+        ro.disconnect();
+        container.removeEventListener("dblclick", onDblClick);
+      };
     };
 
     let cleanup: void | (() => void);
@@ -578,26 +659,41 @@ export default function EsCandlesPage() {
     const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
     const toEs = (spxLevel: number | null) => (spxLevel != null ? spxLevel + basis : null);
 
-    const defs: Array<{ price: number | null; color: string; title: string }> = [
-      { price: toEs(levels.callWall), color: "#30d158", title: "Call Wall" },
-      { price: toEs(levels.putWall),  color: "#ff5b5b", title: "Put Wall" },
-      { price: toEs(levels.gexFlip),  color: "#f5c518", title: "Flip" },
-      { price: toEs(levels.mvc),      color: "#4aa3ff", title: "MVC" },
-    ];
+    const defs: Array<{ price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [];
+
+    // GEX levels (Call/Put/Flip/MVC) — toggled by showLevels.
+    if (showLevels) {
+      defs.push(
+        { price: toEs(levels.callWall), color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
+        { price: toEs(levels.putWall),  color: "#ff5b5b", title: "Put Wall",  style: LineStyle.Dashed, width: 1 },
+        { price: toEs(levels.gexFlip),  color: "#f5c518", title: "Flip",      style: LineStyle.Dashed, width: 1 },
+        { price: toEs(levels.mvc),      color: "#4aa3ff", title: "MVC",       style: LineStyle.Dashed, width: 1 },
+      );
+    }
+
+    // Session levels (prior-day + overnight H/L) — already ES prices, no basis.
+    if (showSessions && sessionLevels) {
+      defs.push(
+        { price: sessionLevels.pdh, color: "#9ca3af", title: "PDH", style: LineStyle.Dotted, width: 1 },
+        { price: sessionLevels.pdl, color: "#9ca3af", title: "PDL", style: LineStyle.Dotted, width: 1 },
+        { price: sessionLevels.onh, color: "#60a5fa", title: "ONH", style: LineStyle.Dotted, width: 1 },
+        { price: sessionLevels.onl, color: "#60a5fa", title: "ONL", style: LineStyle.Dotted, width: 1 },
+      );
+    }
 
     for (const d of defs) {
       if (d.price == null || !(d.price > 0)) continue;
       const pl = series.createPriceLine({
         price: d.price,
         color: d.color,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
+        lineWidth: d.width,
+        lineStyle: d.style,
         axisLabelVisible: true,
         title: d.title,
       });
       priceLinesRef.current.push(pl);
     }
-  }, [levels]);
+  }, [levels, showLevels, showSessions, sessionLevels]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
@@ -729,7 +825,7 @@ export default function EsCandlesPage() {
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
       // start the next flat segment — so you never see the vertical move.
-      if (showMvcLine && mvcHistory.length) {
+      if (showLevels && showMvcLine && mvcHistory.length) {
         ctx.save();
         ctx.strokeStyle = "rgba(255,255,255,.95)"; // MVC — thick white
         ctx.lineWidth = 3;
@@ -780,7 +876,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, rows, showProfile, profile, showMvcLine, mvcHistory]);
+  }, [showHeatmap, intensity, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
 
   // ── Bottom lanes: big-trade bubbles + 5m net delta ────────────────────────
   // Both are x-aligned to the chart time axis via the chart's timeToCoordinate
@@ -999,7 +1095,7 @@ export default function EsCandlesPage() {
   }, [showBubbles, showDelta, bubbles, deltaBars, rows, bubbleMetric]);
 
   return (
-    <div className="flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
+    <div className="es-candles-root flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)" }}>
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.24em]" style={{ color: "#ff5b5b" }}>ES 5m Candles</div>
@@ -1091,6 +1187,22 @@ export default function EsCandlesPage() {
           >
             MVC {showMvcLine ? "ON" : "OFF"}
           </button>
+          <button
+            onClick={() => setShowLevels((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showLevels ? "#a78bfa" : "#94a3b8" }}
+            title="Call Wall / Put Wall / Flip / MVC lines"
+          >
+            Levels {showLevels ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={() => setShowSessions((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showSessions ? "#60a5fa" : "#94a3b8" }}
+            title="Prior-day H/L + overnight H/L"
+          >
+            PDH/ON {showSessions ? "ON" : "OFF"}
+          </button>
           <label className="flex items-center gap-1.5 text-white/55">
             intensity
             <input
@@ -1102,6 +1214,8 @@ export default function EsCandlesPage() {
           <button onClick={() => void refresh()} className="rounded border px-3 py-1 text-xs" style={{ borderColor: "rgba(255,255,255,.12)", color: "#ffb4b4" }}>
             Refresh
           </button>
+          <BoxSnapBtn targetRef={captureRef} label="ES Candles" />
+          <BoxDiscordBtn targetRef={captureRef} label="ES Candles" />
         </div>
       </div>
 
@@ -1129,7 +1243,7 @@ export default function EsCandlesPage() {
         })()}
       </div>
 
-      <div className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+      <div ref={captureRef} className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
           {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
