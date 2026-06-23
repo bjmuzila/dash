@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-06-23 (session 54) — ES Candles page: GEX heatmap, footprint lanes, volume profile, session levels
+
+Built out `/es-candles` (Futures group) into a full futures order-flow chart on top of `useEsCandles` (SQL + `/ws/gex`). Versions bumped through `2026.6.22-v22`.
+
+### Candlesticks + axes
+- Wired the page to live 5m ES candles (`useEsCandles`); removed the disabled feed and the Last Close/Volume/Updated stat boxes.
+- Dual price axis: **right = ESU**, **left = SPX** (invisible companion candle series fed OHLC − live basis, so both axes align pixel-for-pixel at any zoom).
+- `fitContent()` only on first load (no auto-recenter); **double-click** recenters + resets both scales to autoscale. Crosshair lines/labels removed. Flat panel background (no red gradient).
+
+### GEX heatmap overlay
+- Canvas overlay behind the chart (candles on top) painting one column per 5-min GEX snapshot, exact `metricBg` gradient (cyan +GEX / red −GEX, top-3 rank floors, intensity slider). Offscreen-buffer blur for smooth blending; dimmed so candles read through.
+- Historical backfill from `option_strike_gex_history` (new `mode=heatmap` API + `getOptionStrikeGexSlots` db helper) seeds today's columns on load; column cap raised 200→600 so a full day persists. Custom dark **DTE picker** chooses which expiry drives the heatmap (front = live; non-front = history-only).
+
+### Footprint lanes (from `useEsBigTrades`)
+- **Big-trade bubbles** lane (one per 5-min slot, single row, color = dominant aggressor): per-session scaling (RTH / overnight / 3:45–4:15 EOD groups), volume-gated, log/linear sizing capped to column pitch, hover tooltip (time, total, buy/sell, net). Size toggle Total vs **Net Δ** (default Net).
+- **Delta lane**: 5-min net bars + a white **Cumulative Delta** line that resets at the 9:30 ET RTH open.
+
+### Levels
+- GEX level lines (Call Wall / Put Wall / Flip / MVC) — Flip computed via `findGEXFlip` (not in feed), MVC polled from `mvc_snapshots`. Single **Levels** toggle (off by default).
+- **MVC step line**: every today MVC plotted as horizontal segments (no vertical connectors), thick white, ES-basis adjusted.
+- **Session levels** (**PDH/ON** toggle, off by default): prior-day H/L + rolling overnight H/L (16:00→9:30 ET window that builds overnight, freezes at the open, resets at the next close).
+- **Volume profile** (right edge, off by default): POC/VAH/VAL/LVN from candle volume-by-price.
+
+---
+
 ## 2026-06-22 (session 53) — GEX chart prior-state ghost overlay (5/15/30m)
 
 Added a "prior GEX" ghost layer to the NET GEX chart (`components/dashboard/GexChart.tsx`) showing the per-strike net GEX 5/15/30 min ago behind the live bars, plus supporting data plumbing and a toolbar control. Versions bumped through `2026.6.22-v21`.

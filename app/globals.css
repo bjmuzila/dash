@@ -241,6 +241,69 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
     height: auto !important;
     flex: 0 0 auto !important;
   }
+
+  /* ────────────────────────────────────────────────────────────────────────
+     GLOBAL GRID COLLAPSE (app-wide)
+     Most pages lay out cards/panels with inline `gridTemplateColumns` using
+     either repeat(N,...) or explicit fractional tracks. On phones these force
+     content off-screen. Collapse the common fixed-count signatures to a single
+     column. `auto-fit`/`auto-fill` grids already reflow, so they're untouched.
+     Tailwind grid-cols-N utilities are handled separately below.
+     ──────────────────────────────────────────────────────────────────────── */
+  main [style*="grid-template-columns: repeat(2"],
+  main [style*="grid-template-columns:repeat(2"],
+  main [style*="grid-template-columns: repeat(3"],
+  main [style*="grid-template-columns:repeat(3"],
+  main [style*="grid-template-columns: repeat(4"],
+  main [style*="grid-template-columns:repeat(4"],
+  main [style*="grid-template-columns: repeat(5"],
+  main [style*="grid-template-columns:repeat(5"],
+  main [style*="grid-template-columns: repeat(6"],
+  main [style*="grid-template-columns:repeat(6"],
+  main [style*="grid-template-columns: repeat(7"],
+  main [style*="grid-template-columns:repeat(7"],
+  main [style*="grid-template-columns: repeat(8"],
+  main [style*="grid-template-columns:repeat(8"],
+  main [style*="grid-template-columns: repeat(9"],
+  main [style*="grid-template-columns:repeat(9"],
+  main [style*="grid-template-columns: repeat(10"],
+  main [style*="grid-template-columns:repeat(10"],
+  main [style*="grid-template-columns: repeat(12"],
+  main [style*="grid-template-columns:repeat(12"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* Re-exempt responsive auto grids that legitimately use repeat(auto-…). */
+  main [style*="repeat(auto-fit"],
+  main [style*="repeat(auto-fill"] {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)) !important;
+  }
+
+  /* Two/three explicit fractional splits → single column (panel layouts). */
+  main [style*="grid-template-columns: 1fr 1fr"],
+  main [style*="grid-template-columns:1fr 1fr"],
+  main [style*="grid-template-columns: 1fr 2fr"],
+  main [style*="grid-template-columns: 2fr 1fr"],
+  main [style*="grid-template-columns: 1.1fr 0.9fr"],
+  main [style*="grid-template-columns: 1.2fr 0.8fr"],
+  main [style*="grid-template-columns: 1fr 140px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Tailwind grid utilities: collapse multi-column to single on phones.
+     (Targets the static utilities; responsive md:/lg: variants only apply at
+     wider widths so they're irrelevant here.) */
+  main .grid-cols-2, main .grid-cols-3, main .grid-cols-4,
+  main .grid-cols-5, main .grid-cols-6, main .grid-cols-7 {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Explicit horizontal flex rows (flexDirection:"row") wrap on phones so
+     side-by-side panels with min-widths stack instead of overflowing. Toolbars
+     already set their own flexWrap, so re-wrapping them is harmless. */
+  main [style*="flex-direction: row"],
+  main [style*="flex-direction:row"] {
+    flex-wrap: wrap !important;
+  }
 }
 
 /* Ticker "data box" scaling is handled in JS (home/page.tsx): a ResizeObserver
