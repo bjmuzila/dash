@@ -32,10 +32,10 @@ interface GexChartProps {
 
 // Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
 // live bar's color, drawn behind the current bar.
-const GHOST_TINTS: Record<string, { pos: string; neg: string; line: string }> = {
-  "5":  { pos: "rgba(41,182,246,0.30)", neg: "rgba(255,179,0,0.30)", line: "rgba(255,255,255,0.95)" },
-  "15": { pos: "rgba(41,182,246,0.22)", neg: "rgba(255,179,0,0.22)", line: "rgba(255,255,255,0.75)" },
-  "30": { pos: "rgba(41,182,246,0.15)", neg: "rgba(255,179,0,0.15)", line: "rgba(255,255,255,0.55)" },
+const GHOST_TINTS: Record<string, { pos: string; neg: string }> = {
+  "5":  { pos: "rgba(41,182,246,0.30)", neg: "rgba(255,179,0,0.30)" },
+  "15": { pos: "rgba(41,182,246,0.22)", neg: "rgba(255,179,0,0.22)" },
+  "30": { pos: "rgba(41,182,246,0.15)", neg: "rgba(255,179,0,0.15)" },
 };
 
 // ─── Padding — matches vanilla exactly ────────────────────────────────────────
@@ -348,8 +348,12 @@ export default function GexChart({
           const x  = xAt(i);
           const sameSign = (prior >= 0) === (live >= 0);
           const col = prior >= 0 ? tint.pos : tint.neg;
+          // Direction of the move (magnitude of net GEX) over the timeframe:
+          //   went DOWN → yellow outline (#ffb300), went UP → blue outline (#29b6f6).
+          const wentDown   = Math.abs(prior) > Math.abs(live);
+          const lineColor  = wentDown ? "#ffb300" : "#29b6f6";
 
-          if (!sameSign || Math.abs(prior) > Math.abs(live)) {
+          if (!sameSign || wentDown) {
             // Decline (or sign flip): faded prior bar behind the live bar.
             const yTop = prior >= 0 ? clamp(yFor(prior), PAD_T, yZero) : yZero;
             const yBot = prior >= 0 ? yZero : clamp(yFor(prior), yZero, PAD_T + cH);
@@ -357,7 +361,7 @@ export default function GexChart({
             if (h < 0.5) return;
             ctx.fillStyle = col;
             ctx.fillRect(x - barW / 2, yTop, barW, h);
-            ctx.strokeStyle = tint.line;
+            ctx.strokeStyle = lineColor;
             ctx.lineWidth = 1;
             ctx.strokeRect(x - barW / 2 + 0.5, yTop + 0.5, barW - 1, h - 1);
           } else {
@@ -369,7 +373,7 @@ export default function GexChart({
             if (h < 0.5) return;
             ctx.fillStyle = col;
             ctx.fillRect(x - barW / 2, yTop, barW, h);
-            ctx.strokeStyle = tint.line;
+            ctx.strokeStyle = lineColor;
             ctx.lineWidth = 1;
             ctx.strokeRect(x - barW / 2 + 0.5, yTop + 0.5, barW - 1, h - 1);
           }
@@ -617,10 +621,10 @@ export default function GexChart({
       : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
     if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
     if (showFlipCurve) legend.push(["#f97316", gexProfile ? "Profile" : "GEX curve"]);
-    if (!isCallPut && !isVol) {
-      if (showGhost5)  legend.push(["rgba(41,182,246,0.30)", "5m ago"]);
-      if (showGhost15) legend.push(["rgba(41,182,246,0.22)", "15m ago"]);
-      if (showGhost30) legend.push(["rgba(41,182,246,0.15)", "30m ago"]);
+    if (!isCallPut && !isVol && ghostAges.length) {
+      const tf = ghostAges[0]; // only one active at a time
+      legend.push(["#ffb300", `${tf}m ↓`]);
+      legend.push(["#29b6f6", `${tf}m ↑`]);
     }
     legend.forEach(([col, lbl], i) => {
       const lx = PAD_L + i * 72;

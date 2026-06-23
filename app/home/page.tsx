@@ -807,9 +807,9 @@ export default function HomePage() {
                 onToggleOI={() => setShowOI(v => !v)}
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
-                onToggleGhost5={() => setShowGhost5(v => !v)}
-                onToggleGhost15={() => setShowGhost15(v => !v)}
-                onToggleGhost30={() => setShowGhost30(v => !v)}
+                onToggleGhost5={() => { setShowGhost5(v => !v); setShowGhost15(false); setShowGhost30(false); }}
+                onToggleGhost15={() => { setShowGhost15(v => !v); setShowGhost5(false); setShowGhost30(false); }}
+                onToggleGhost30={() => { setShowGhost30(v => !v); setShowGhost5(false); setShowGhost15(false); }}
                 onRefresh={handleRefresh}
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
@@ -883,11 +883,7 @@ export default function HomePage() {
             <div ref={tickerCqRef} className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative", overflow: "hidden" }}>
              <div ref={tickerBoxRef} style={{ display: "inline-block", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
               <div className="ticker-row" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "nowrap", minWidth: 0 }}>
-                {/* Clock — moved to the start of the toolbar; SPX/GEX label removed */}
-                <div className="ticker-clock" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  <div style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.10)", padding: "5px 12px", borderRadius: 6, fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#fff", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{etTime}</div>
-                </div>
-                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
+                {/* Clock removed — now lives only in the NET GEX chart header */}
                 {/* VIX — label+price never shrink; change% hidden via className */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
                   <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>

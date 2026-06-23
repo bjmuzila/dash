@@ -7,14 +7,6 @@ import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEsBigTrades } from "@/hooks/useEsBigTrades";
 
-function etClock(ts = Date.now()) {
-  return new Date(ts).toLocaleTimeString("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
@@ -169,6 +161,7 @@ export default function EsCandlesPage() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const spxSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
 
@@ -198,7 +191,30 @@ export default function EsCandlesPage() {
   const basisRef = useRef(0);
   // Front expiry from the live feed; drives the one-time history backfill.
   const [feedExpiry, setFeedExpiry] = useState<string>("");
-  const didBackfillRef = useRef(false);
+  // Expirations offered by the feed + the one the heatmap history is showing.
+  // Empty selectedExpiry = follow the live front expiry.
+  const [expirations, setExpirations] = useState<string[]>([]);
+  const [selectedExpiry, setSelectedExpiry] = useState<string>("");
+  // Mirror in a ref so the WS handler can decide whether to ingest live columns
+  // (only when showing the front expiry — a non-front pick is history-only).
+  const selectedExpiryRef = useRef("");
+  useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
+  const [dteOpen, setDteOpen] = useState(false);
+  const dteBoxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!dteOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (dteBoxRef.current && !dteBoxRef.current.contains(e.target as Node)) setDteOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [dteOpen]);
+
+  // DTE relative to today ET (today's expiry = 0DTE, not −1).
+  const dteOf = (exp: string): number => {
+    const todayEt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    return Math.round((Date.parse(exp + "T00:00:00Z") - Date.parse(todayEt + "T00:00:00Z")) / 86_400_000);
+  };
 
   // Big trades + per-minute delta from the same /ws/gex feed (footprint source).
   const { trades: rawTrades, delta: rawDelta } = useEsBigTrades();
@@ -267,7 +283,6 @@ export default function EsCandlesPage() {
   }>({ callWall: null, putWall: null, gexFlip: null, mvc: null, spx: null, esFut: null });
 
   const status = connected ? "live" : "offline";
-  const lastCandle = rows[rows.length - 1];
 
   // Listen to /ws/gex for the GEX levels + ES basis inputs.
   useEffect(() => {
@@ -280,6 +295,9 @@ export default function EsCandlesPage() {
       const esFut = Number(d.esFut ?? 0);
       const exp = typeof d.expiry === "string" ? d.expiry : "";
       if (exp) setFeedExpiry((cur) => cur || exp);
+      if (Array.isArray(d.expirations) && d.expirations.length) {
+        setExpirations(d.expirations.map(String));
+      }
       setLevels((prev) => {
         const nextSpx = spx > 0 ? spx : prev.spx;
         const nextEs = esFut > 0 ? esFut : prev.esFut;
@@ -296,7 +314,11 @@ export default function EsCandlesPage() {
 
       // Snapshot per-strike GEX into the current 5-min column.
       const gexRows = d.gexRows;
-      if (Array.isArray(gexRows) && gexRows.length) {
+      // Live gexRows are the FRONT expiry. If the DTE picker is on a different
+      // expiry, the heatmap is history-only — don't mix live front columns in.
+      const liveExpiry = exp || "";
+      const ingestLive = !selectedExpiryRef.current || selectedExpiryRef.current === liveExpiry;
+      if (ingestLive && Array.isArray(gexRows) && gexRows.length) {
         const cells: GexCell[] = [];
         for (const r of gexRows as Array<Record<string, unknown>>) {
           const strike = Number(r.strike ?? 0);
@@ -355,17 +377,20 @@ export default function EsCandlesPage() {
     };
   }, []);
 
-  // One-time history backfill: once the front expiry is known, pull today's
-  // 5-min GEX columns from Postgres and seed columnsRef. Live WS columns for the
-  // same slots take precedence (don't overwrite a fresher in-session column).
+  // Heatmap history backfill. Effective expiry = the DTE picker selection, or
+  // the live front expiry when nothing is picked. Re-runs whenever the picker
+  // changes: clears the column map and reloads that expiry's day of history.
+  const heatmapExpiry = selectedExpiry || feedExpiry;
   useEffect(() => {
-    if (!feedExpiry || didBackfillRef.current) return;
-    didBackfillRef.current = true;
+    if (!heatmapExpiry) return;
     let cancelled = false;
+    // When the picker changes, wipe the existing columns so we don't mix expiries.
+    columnsRef.current.clear();
+    drawOverlayRef.current();
     (async () => {
       try {
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&expiry=${encodeURIComponent(feedExpiry)}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&expiry=${encodeURIComponent(heatmapExpiry)}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -377,13 +402,10 @@ export default function EsCandlesPage() {
           if (!map.has(col.slotTs)) map.set(col.slotTs, col); // live wins on collisions
         }
         drawOverlayRef.current();
-      } catch {
-        // best-effort backfill; live feed still populates going forward
-        didBackfillRef.current = false; // allow a retry if expiry re-fires
-      }
+      } catch { /* live feed still populates the front expiry going forward */ }
     })();
     return () => { cancelled = true; };
-  }, [feedExpiry]);
+  }, [heatmapExpiry]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
   // ES conversion happens at draw time with the live basis.
@@ -431,6 +453,10 @@ export default function EsCandlesPage() {
         rightPriceScale: {
           borderColor: "rgba(255,255,255,.10)",
         },
+        leftPriceScale: {
+          visible: true,
+          borderColor: "rgba(255,255,255,.10)",
+        },
         timeScale: {
           borderColor: "rgba(255,255,255,.10)",
           timeVisible: true,
@@ -461,8 +487,23 @@ export default function EsCandlesPage() {
         downColor: "#ff5b5b",
         borderVisible: false,
       });
+      // Invisible companion CANDLE series bound to the LEFT scale, carrying the
+      // same OHLC minus basis (= SPX). Because it's the same series type with the
+      // same shape, it autoscales identically to the real candles, so the LEFT
+      // (SPX) axis lines up pixel-for-pixel with the RIGHT (ES) axis at any zoom.
+      const spxSeries = chart.addSeries(CandlestickSeries, {
+        priceScaleId: "left",
+        upColor: "rgba(0,0,0,0)",
+        downColor: "rgba(0,0,0,0)",
+        wickUpColor: "rgba(0,0,0,0)",
+        wickDownColor: "rgba(0,0,0,0)",
+        borderVisible: false,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
+      spxSeriesRef.current = spxSeries;
 
       const ro = new ResizeObserver(() => {
         chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
@@ -482,8 +523,25 @@ export default function EsCandlesPage() {
       chartApiRef.current?.remove();
       chartApiRef.current = null;
       candleSeriesRef.current = null;
+      spxSeriesRef.current = null;
     };
   }, []);
+
+  // Feed the invisible SPX companion candles (OHLC − basis) so the LEFT axis
+  // reads SPX, aligned to the candles. Re-runs when candles or basis change.
+  useEffect(() => {
+    const spx = spxSeriesRef.current;
+    if (!spx) return;
+    const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
+    const data: CandlestickData[] = rows.map((row) => ({
+      time: toChartTime(row.timestamp),
+      open: row.open - basis,
+      high: row.high - basis,
+      low: row.low - basis,
+      close: row.close - basis,
+    }));
+    spx.setData(data);
+  }, [rows, levels.esFut, levels.spx]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -612,16 +670,16 @@ export default function EsCandlesPage() {
               bctx.fillRect(sx.left - 0.5, top - 0.5, sx.w + 1, cellH + 1);
             }
           }
-          // Composite the buffer back with a Gaussian blur → smooth blending.
+          // Composite back at reduced opacity: a soft blurred pass for the
+          // blend, then a lighter crisp pass. Kept dim so candles read clearly
+          // through it (the heatmap is context, not the foreground).
           ctx.save();
-          ctx.filter = "blur(3px)";
+          ctx.globalAlpha = 0.6;
+          ctx.filter = "blur(2.5px)";
           ctx.drawImage(buf, 0, 0, w, h);
           ctx.filter = "none";
-          // Second, sharper pass at low opacity keeps the hot cores readable.
-          ctx.globalAlpha = 0.55;
-          ctx.filter = "blur(0.6px)";
-          ctx.drawImage(buf, 0, 0, w, h);
-          ctx.filter = "none";
+          ctx.globalAlpha = 0.45;
+          ctx.drawImage(buf, 0, 0, w, h); // sharp, dimmed
           ctx.globalAlpha = 1;
           ctx.restore();
         }
@@ -706,6 +764,7 @@ export default function EsCandlesPage() {
         flush(prevX);
         ctx.restore();
       }
+
     };
 
     drawOverlayRef.current = draw;
@@ -833,7 +892,8 @@ export default function EsCandlesPage() {
         ctx.fillText(`BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"}`, 6, 12);
       }
 
-      // Delta lane: one net bar per 5-min slot, green/red around a zero line.
+      // Delta lane: one net bar per 5-min slot + a cumulative-delta line (running
+      // sum of net delta) that resets at each RTH open (9:30 ET).
       const del = sizeCanvas(deltaLaneRef.current);
       if (del) {
         const { ctx, w, h } = del;
@@ -841,21 +901,61 @@ export default function EsCandlesPage() {
         ctx.strokeStyle = "rgba(255,255,255,.14)";
         ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(w, zeroY); ctx.stroke();
         if (showDelta && deltaBars.length) {
-          const maxAbs = Math.max(1, ...deltaBars.map((d) => Math.abs(d.net)));
-          for (const d of deltaBars) {
+          const sorted = [...deltaBars].sort((a, b) => a.slotTs - b.slotTs);
+          const maxAbs = Math.max(1, ...sorted.map((d) => Math.abs(d.net)));
+
+          // ── bars ──
+          for (const d of sorted) {
             const sx = slotX(d.slotTs);
             if (!sx) continue;
             const barH = (Math.abs(d.net) / maxAbs) * (h / 2 - 4);
             const up = d.net >= 0;
-            ctx.fillStyle = up ? "rgba(48,209,88,.8)" : "rgba(255,91,91,.8)";
+            ctx.fillStyle = up ? "rgba(48,209,88,.55)" : "rgba(255,91,91,.55)";
             const bx = sx.left + 1, bw = Math.max(1, sx.w - 2);
             if (up) ctx.fillRect(bx, zeroY - barH, bw, barH);
             else ctx.fillRect(bx, zeroY, bw, barH);
           }
+
+          // ── cumulative delta (running sum of net delta), reset at RTH open ──
+          // Build running sums with resets, then scale to the lane.
+          const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+          // Session id = the ET date of the most recent 9:30 open. Slots before
+          // 9:30 roll into the PRIOR day's session, so CVD runs continuously
+          // through the overnight and only resets when the next 9:30 hits.
+          const sessionId = (ts: number) => {
+            if (etMinutes(ts) >= 570) return dayKey(ts);
+            return dayKey(ts - 86_400_000); // before the open → prior session day
+          };
+          const cvd: Array<{ slotTs: number; sum: number }> = [];
+          let running = 0;
+          let prevSession: string | null = null;
+          for (const d of sorted) {
+            const session = sessionId(d.slotTs);
+            if (session !== prevSession) { running = 0; prevSession = session; }
+            running += d.net;
+            cvd.push({ slotTs: d.slotTs, sum: running });
+          }
+          const cvdMax = Math.max(1, ...cvd.map((c) => Math.abs(c.sum)));
+          const cvdY = (sum: number) => zeroY - (sum / cvdMax) * (h / 2 - 4);
+
+          ctx.save();
+          ctx.strokeStyle = "rgba(255,255,255,.95)";
+          ctx.lineWidth = 1.6;
+          ctx.lineJoin = "round";
+          let started = false;
+          for (const c of cvd) {
+            const cx = barCenter(c.slotTs);
+            if (cx == null) continue;
+            const y = cvdY(c.sum);
+            if (!started) { ctx.beginPath(); ctx.moveTo(cx, y); started = true; }
+            else ctx.lineTo(cx, y);
+          }
+          if (started) ctx.stroke();
+          ctx.restore();
         }
         ctx.fillStyle = "rgba(255,255,255,.45)";
         ctx.font = "10px Inter, system-ui, sans-serif";
-        ctx.fillText("DELTA PROFILE (5m)", 6, 12);
+        ctx.fillText("DELTA (5m) · white = Cumulative Delta (RTH reset)", 6, 12);
       }
     };
 
@@ -912,6 +1012,42 @@ export default function EsCandlesPage() {
           <span className="rounded border px-2 py-1 text-white/70" style={{ borderColor: "rgba(255,255,255,.12)" }}>
             {`${rows.length} candles`}
           </span>
+          <div ref={dteBoxRef} className="relative">
+            <button
+              onClick={() => setDteOpen((v) => !v)}
+              className="flex items-center gap-2 rounded border px-3 py-1 text-xs"
+              style={{ borderColor: "rgba(255,255,255,.12)", background: "rgba(255,255,255,.04)", color: "#cbd5e1" }}
+              title="Heatmap expiry / DTE"
+            >
+              <span className="font-mono">
+                {selectedExpiry ? `${dteOf(selectedExpiry)}DTE` : "Front"}
+              </span>
+              <span className="text-white/40" style={{ transform: dteOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+            </button>
+            {dteOpen ? (
+              <div
+                className="absolute left-0 z-50 mt-1 max-h-72 w-48 overflow-y-auto rounded-lg border py-1 shadow-2xl"
+                style={{ borderColor: "rgba(255,255,255,.12)", background: "rgba(12,16,22,.98)", backdropFilter: "blur(8px)" }}
+              >
+                {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
+                  value: exp, label: `${dteOf(exp)}DTE`, sub: exp,
+                }))].map((opt) => {
+                  const active = selectedExpiry === opt.value;
+                  return (
+                    <button
+                      key={opt.value || "front"}
+                      onClick={() => { setSelectedExpiry(opt.value); setDteOpen(false); }}
+                      className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
+                      style={{ background: active ? "rgba(41,182,246,.18)" : "transparent", color: active ? "#7dd3fc" : "rgba(255,255,255,.75)" }}
+                    >
+                      <span className="font-mono font-semibold">{opt.label}</span>
+                      <span className="text-white/35">{opt.sub}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
           <button
             onClick={() => setShowHeatmap((v) => !v)}
             className="rounded border px-3 py-1 text-xs"
