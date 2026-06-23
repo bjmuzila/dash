@@ -1,47 +1,49 @@
 {
-    "name": "bzila-dashboard",
-    "version": "2026.6.23-v4",
-    "private": true,
-    "workspaces": [],
-    "scripts": {
-        "dev": "node server-v2/server-with-proxy.js",
-        "dev:full": "node server-v2/server-with-proxy.js",
-        "dev:old": "node server/server-with-proxy.js",
-        "build": "next build --no-lint",
-        "test": "tsx --test tests/**/*.test.ts",
-        "start": "node server-v2/server-with-proxy.js",
-        "start:old": "node server/server-with-proxy.js",
-        "bot": "node discord-bot.js",
-        "bot:register": "node register-commands.js"
-    },
-    "dependencies": {
-        "@clerk/nextjs": "^6.33.4",
-        "@clerk/themes": "^2.4.43",
-        "clsx": "^2.1.1",
-        "discord.js": "^14.16.3",
-        "dotenv": "^17.4.2",
-        "googleapis": "^144.0.0",
-        "html2canvas": "^1.4.1",
-        "lightweight-charts": "^5.0.0",
-        "next": "^15.3.3",
-        "pg": "^8.21.0",
-        "puppeteer": "^24.0.0",
-        "react": "^19",
-        "react-dom": "^19",
-        "tailwind-merge": "^2.3.0",
-        "tesseract.js": "^5.1.1",
-        "ws": "^8.18.0",
-        "xlsx": "^0.18.5",
-        "autoprefixer": "^10.4.19",
-        "postcss": "^8.4.38",
-        "tailwindcss": "^3.4.3",
-        "typescript": "^5",
-        "@types/node": "^20",
-        "@types/pg": "^8.20.0",
-        "@types/react": "^19",
-        "@types/react-dom": "^19"
-    },
-    "devDependencies": {
-        "tsx": "^4.22.4"
-    }
+    "name":  "bzila-dashboard",
+    "version":  "2026.6.23-v10",
+    "private":  true,
+    "workspaces":  [
+
+                   ],
+    "scripts":  {
+                    "dev":  "node server-v2/server-with-proxy.js",
+                    "dev:full":  "node server-v2/server-with-proxy.js",
+                    "dev:old":  "node server/server-with-proxy.js",
+                    "build":  "next build --no-lint",
+                    "test":  "tsx --test tests/**/*.test.ts",
+                    "start":  "node server-v2/server-with-proxy.js",
+                    "start:old":  "node server/server-with-proxy.js",
+                    "bot":  "node discord-bot.js",
+                    "bot:register":  "node register-commands.js"
+                },
+    "dependencies":  {
+                         "@clerk/nextjs":  "^6.33.4",
+                         "@clerk/themes":  "^2.4.43",
+                         "clsx":  "^2.1.1",
+                         "discord.js":  "^14.16.3",
+                         "dotenv":  "^17.4.2",
+                         "googleapis":  "^144.0.0",
+                         "html2canvas":  "^1.4.1",
+                         "lightweight-charts":  "^5.0.0",
+                         "next":  "^15.3.3",
+                         "pg":  "^8.21.0",
+                         "puppeteer":  "^24.0.0",
+                         "react":  "^19",
+                         "react-dom":  "^19",
+                         "tailwind-merge":  "^2.3.0",
+                         "tesseract.js":  "^5.1.1",
+                         "ws":  "^8.18.0",
+                         "xlsx":  "^0.18.5",
+                         "autoprefixer":  "^10.4.19",
+                         "postcss":  "^8.4.38",
+                         "tailwindcss":  "^3.4.3",
+                         "typescript":  "^5",
+                         "@types/node":  "^20",
+                         "@types/pg":  "^8.20.0",
+                         "@types/react":  "^19",
+                         "@types/react-dom":  "^19"
+                     },
+    "devDependencies":  {
+                            "tsx":  "^4.22.4"
+                        }
 }
