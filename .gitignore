@@ -26,3 +26,4 @@ build_spx_ohlc_5m/
 *.key
 *credentials*.json
 _ARCHIVED_DO_NOT_EDIT/
+.env

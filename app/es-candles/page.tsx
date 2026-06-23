@@ -237,7 +237,7 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   // Bubble size metric: "total" = all volume in the slot, "net" = |buy − sell|.
-  const [bubbleMetric, setBubbleMetric] = useState<"total" | "net">("net");
+  const [bubbleMetric, setBubbleMetric] = useState<"total" | "net">("total");
 
   // Prior-day H/L and overnight H/L from the candle history (ES prices).
   //
@@ -1040,73 +1040,51 @@ export default function EsCandlesPage() {
         ctx.strokeStyle = "rgba(255,255,255,.06)";
         ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
         if (showBubbles && bubbles.length) {
-          // Size metric: total slot volume, or |net delta|. Default is total —
-          // ABSORPTION (the thing worth seeing) is heavy two-sided volume where
-          // neither side wins, so it shows as big total / small net. Sizing on
-          // total keeps those slots large; the absorption ring (below) then marks
-          // the ones that are heavy AND balanced.
+          // Size metric: total slot volume (default) or |net delta|. Color is
+          // ALWAYS the dominant aggressor side — green = net buyers lifting offers,
+          // red = net sellers hitting bids. A cluster of big RED bubbles at a level
+          // = aggressive selling getting absorbed (the footprint read), exactly
+          // like the reference: every slot shows, sizes flow tiny→huge.
           const metricOf = (b: Bubble) => (bubbleMetric === "net" ? Math.abs(b.net) : b.total);
 
-          // BIG radius range — bubbles fill most of the lane height, capped by
+          // Radius range. rMin keeps the quietest slots as small visible dots so
+          // the heavy ones pop against them; rCap fills most of the lane, capped by
           // column pitch so neighbors never overlap when zoomed out.
-          const rCap = Math.max(6, Math.min(h * 0.46, pitch * 0.46));
-          const rMin = 3;
-          // ONE session-wide scale (no eod/rth/ovn split — it starved each group
-          // of points and flattened the contrast). High-contrast: gate at the
-          // MEDIAN so the quiet bottom half is hidden entirely, and measure the
-          // span up to the 92nd pct so survivors spread across the full lane.
-          const asc = bubbles.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
-          const gate = asc.length ? (asc[Math.floor(asc.length * 0.5)] ?? 0) : 0;
-          const refHi = asc.length
-            ? Math.max(gate + 1, asc[Math.floor(asc.length * 0.92)] ?? asc[asc.length - 1])
-            : 1;
-          const span = Math.max(1, refHi - gate);
+          const rCap = Math.max(9, Math.min(h * 0.48, pitch * 0.5));
+          const rMin = 2.5;
 
-          // Absorption test: a slot is "absorbed" when its volume clears the
-          // median (heavier half) yet its net imbalance is a small fraction of
-          // that volume — big aggressor flow getting eaten by a passive wall.
-          // These get a bright ring so absorption separates visually from
-          // one-sided momentum bursts. (volGate uses the same median as `gate`,
-          // computed on total volume, which is the metric in default mode.)
-          const volMedian = bubbles.map((b) => b.total).filter((v) => v > 0).sort((a, b) => a - b);
-          const volGate = volMedian.length ? (volMedian[Math.floor(volMedian.length * 0.5)] ?? 0) : 0;
-          const isAbsorption = (b: Bubble) =>
-            b.total >= volGate && b.total > 0 && Math.abs(b.net) / b.total <= 0.25;
+          // Continuous, percentile-anchored scale over ALL slots (no gating). The
+          // 92nd-pct value is "full size", so a single blowout print doesn't crush
+          // everyone else into dots — but genuine heavy slots still hit rCap.
+          const asc = bubbles.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
+          const ref = asc.length
+            ? Math.max(1, asc[Math.floor(asc.length * 0.92)] ?? asc[asc.length - 1])
+            : 1;
 
           // Draw smallest first so heavy prints sit on top.
-          const ordered = [...bubbles].sort((a, b) => metricOf(a) - metricOf(b));
+          const ordered = [...bubbles].filter((b) => metricOf(b) > 0).sort((a, b) => metricOf(a) - metricOf(b));
           for (const b of ordered) {
-            const m = metricOf(b);
-            if (m < gate || !(m > 0)) continue; // hide the quiet bottom half
             const cx = barCenter(b.slotTs);
             if (cx == null) continue;
-            const t = Math.min(1, Math.max(0, (m - gate) / span));
-            // pow<1 → area-biased growth with extra low-end lift, so the jump from
-            // gate to giant is dramatic (high contrast) without tiny slots vanishing.
-            const r = rMin + Math.pow(t, 0.42) * (rCap - rMin);
+            const t = Math.min(1, metricOf(b) / ref); // 0..1, clamped at the 92nd pct
+            // sqrt → bubble AREA scales with volume, the truthful visual encoding.
+            const r = rMin + Math.sqrt(t) * (rCap - rMin);
             const buy = b.side === "buy";
-            const absorbed = isAbsorption(b);
-            // Bold solid-ish fill that ramps with size.
-            const fillA = 0.5 + t * 0.45;
+            // Fill alpha ramps with size so big bubbles also read as more solid.
+            const fillA = 0.45 + t * 0.5;
             ctx.beginPath();
             ctx.arc(cx, rowY, r, 0, Math.PI * 2);
             ctx.fillStyle = buy ? `rgba(48,209,88,${fillA.toFixed(2)})` : `rgba(255,91,91,${fillA.toFixed(2)})`;
             ctx.fill();
-            // Absorption → thick bright-white ring; otherwise the usual side-tinted ring.
-            if (absorbed) {
-              ctx.lineWidth = 2.5;
-              ctx.strokeStyle = "rgba(255,255,255,.95)";
-            } else {
-              ctx.lineWidth = 1.25;
-              ctx.strokeStyle = buy ? "rgba(80,255,130,.95)" : "rgba(255,120,120,.95)";
-            }
+            ctx.lineWidth = 1.25;
+            ctx.strokeStyle = buy ? "rgba(80,255,130,.9)" : "rgba(255,120,120,.9)";
             ctx.stroke();
           }
         }
         ctx.fillStyle = "rgba(255,255,255,.45)";
         ctx.font = "10px Inter, system-ui, sans-serif";
         ctx.fillText(
-          `BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"} · ⃝ white = absorption`,
+          `BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "total vol"} · green = buys · red = sells`,
           6, 12,
         );
       }
@@ -1192,9 +1170,11 @@ export default function EsCandlesPage() {
       if (!canvas || !showBubbles || !bubbles.length) { setBubbleHover(null); return; }
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
+      // Every slot with volume is drawn now, so any of them is hoverable.
       let best: Bubble | null = null;
       let bestDx = Infinity;
       for (const b of bubbles) {
+        if (!(b.total > 0)) continue;
         const cx = ts.timeToCoordinate((b.slotTs / 1000) as UTCTimestamp);
         if (cx == null) continue;
         const dx = Math.abs(cx - mx);
@@ -1483,8 +1463,8 @@ export default function EsCandlesPage() {
                 </span>
               </div>
               {bubbleHover.b.total > 0 && Math.abs(bubbleHover.b.net) / bubbleHover.b.total <= 0.25 ? (
-                <div className="mt-1 text-center font-mono text-[11px] font-bold" style={{ color: "#fff" }}>
-                  ⃝ ABSORPTION
+                <div className="mt-1 rounded text-center font-mono text-[10px] font-bold tracking-wide" style={{ color: "#0b0b0b", background: "#facc15", padding: "1px 0" }}>
+                  ABSORPTION · heavy, balanced
                 </div>
               ) : null}
             </div>

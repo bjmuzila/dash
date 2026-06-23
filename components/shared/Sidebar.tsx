@@ -80,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Insights", href: "/insights" },
       { label: "Confidence", href: "/confidence-score" },
       { label: "Estimated Moves Front End", href: "/em" },
+      { label: "Help & Docs", href: "/docs" },
     ],
   },
   {
@@ -342,13 +343,19 @@ export default function Sidebar() {
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
   const visibleGroups = NAV_GROUPS.filter((g) => !g.devOnly || isSignedIn);
 
+  // When the active page is pinned to Quick Pages, the highlight lives on the
+  // Quick chip — don't also light up (or auto-open) its original group.
+  const quickSet = new Set(quick);
+  const isActiveInGroup = (href: string) => isActive(href) && !quickSet.has(href);
+
   // Auto-open the group that contains the active route (expanded mode only).
+  // Skip if the active page is pinned — it's surfaced in Quick Pages instead.
   useEffect(() => {
     if (collapsed) return;
-    const match = visibleGroups.find((g) => g.items.length > 1 && g.items.some((i) => isActive(i.href)));
+    const match = visibleGroups.find((g) => g.items.length > 1 && g.items.some((i) => isActiveInGroup(i.href)));
     if (match) setOpenGroup(match.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname, collapsed, isSignedIn]);
+  }, [pathname, collapsed, isSignedIn, quick]);
 
   const cyanFill = {
     background: "rgba(0,240,255,0.12)",
@@ -360,7 +367,7 @@ export default function Sidebar() {
   //    expanded = labeled row, expandable if it has >1 item) ──
   const renderGroup = (group: NavGroup) => {
     const Icon = group.Icon;
-    const groupActive = group.items.some((item) => isActive(item.href));
+    const groupActive = group.items.some((item) => isActiveInGroup(item.href));
     const single = group.items.length === 1 && !group.forceAccordion;
     const isOpen = openGroup === group.id;
 
@@ -601,12 +608,10 @@ export default function Sidebar() {
   const renderQuickPages = () => {
     const isGroupDrag = dragSource === "group";
     const hasItems = quick.length > 0;
-    // Hide entirely when empty and nothing is being dragged from a group —
-    // keeps the sidebar clean until the user pins something.
-    if (!hasItems && !isGroupDrag) return null;
 
     const items = quick.map((href) => NAV_ITEM_BY_HREF.get(href)).filter(Boolean) as NavItem[];
-    const showHint = !hasItems && isGroupDrag;
+    // Empty placeholder slots so the user can always see where to drag (up to QUICK_MAX).
+    const emptyCount = Math.max(0, QUICK_MAX - items.length);
 
     // ----- COLLAPSED: row of small square chips -----
     if (collapsed) {
@@ -672,39 +677,26 @@ export default function Sidebar() {
               </div>
             );
           })}
-          {showHint && (
+          {/* Always-visible empty placeholder slots — show where to drag. */}
+          {Array.from({ length: emptyCount }).map((_, i) => (
             <div
-              onDragOver={(e) => { e.preventDefault(); setQuickDropActive(true); }}
+              key={`empty-${i}`}
+              onDragOver={(e) => { if (isGroupDrag) { e.preventDefault(); setQuickDropActive(true); } }}
               onDragLeave={() => setQuickDropActive(false)}
               onDrop={onQuickZoneDrop}
+              title="Drag a page here to pin it"
               style={{
                 width: 44, height: 36, borderRadius: 10,
-                border: `1px dashed ${quickDropActive ? HOME_THEME.cyan : "rgba(0,240,255,0.4)"}`,
-                background: quickDropActive ? "rgba(0,240,255,0.12)" : "transparent",
+                border: `1px dashed ${quickDropActive && isGroupDrag ? HOME_THEME.cyan : "rgba(0,240,255,0.30)"}`,
+                background: quickDropActive && isGroupDrag ? "rgba(0,240,255,0.12)" : "transparent",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                color: HOME_THEME.cyan,
+                color: "rgba(0,240,255,0.45)",
+                transition: "border-color 0.15s, background 0.15s",
               }}
             >
-              <StarIcon size={16} />
+              {i === 0 && !hasItems ? <StarIcon size={16} /> : <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>}
             </div>
-          )}
-          {/* invisible catch-all so a drop anywhere in the collapsed zone still pins */}
-          {isGroupDrag && hasItems && quick.length < QUICK_MAX && (
-            <div
-              onDragOver={(e) => { e.preventDefault(); setQuickDropActive(true); }}
-              onDragLeave={() => setQuickDropActive(false)}
-              onDrop={onQuickZoneDrop}
-              style={{
-                width: 44, height: 22, borderRadius: 8,
-                border: `1px dashed ${quickDropActive ? HOME_THEME.cyan : "rgba(0,240,255,0.35)"}`,
-                background: quickDropActive ? "rgba(0,240,255,0.12)" : "transparent",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                color: HOME_THEME.cyan, fontSize: 16, lineHeight: 1,
-              }}
-            >
-              +
-            </div>
-          )}
+          ))}
         </div>
       );
     }
@@ -729,12 +721,7 @@ export default function Sidebar() {
           <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quick Pages</span>
         </div>
 
-        {items.length === 0 ? (
-          <div style={{ padding: "8px 10px", fontSize: 11, color: HOME_THEME.muted, fontStyle: "italic", textAlign: "center" }}>
-            Drop a page here
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {items.map((item) => {
               const active = isActive(item.href);
               const dragging = dragHref === item.href;
@@ -794,8 +781,26 @@ export default function Sidebar() {
                 </div>
               );
             })}
+            {/* Always-visible empty placeholder rows — show where to drag. */}
+            {Array.from({ length: emptyCount }).map((_, i) => (
+              <div
+                key={`empty-${i}`}
+                onDragOver={(e) => { if (isGroupDrag) { e.preventDefault(); setQuickDropActive(true); } }}
+                onDragLeave={() => setQuickDropActive(false)}
+                onDrop={onQuickZoneDrop}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  gap: 8, padding: "8px 10px", borderRadius: 10,
+                  border: `1px dashed ${quickDropActive && isGroupDrag ? HOME_THEME.cyan : "rgba(0,240,255,0.25)"}`,
+                  background: quickDropActive && isGroupDrag ? "rgba(0,240,255,0.08)" : "transparent",
+                  fontSize: 11, fontStyle: "italic", color: "rgba(0,240,255,0.5)",
+                  transition: "border-color 0.15s, background 0.15s",
+                }}
+              >
+                {i === 0 && !hasItems ? "Drag a page here to pin it" : "Empty slot"}
+              </div>
+            ))}
           </div>
-        )}
       </div>
     );
   };
