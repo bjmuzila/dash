@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-23 (session 55, infra) — Render → Hetzner + Cloudflare migration; owner-dash Postgres health + Hetzner hosting metrics
+
+Migrated the whole stack off Render hosting onto a Hetzner Cloud VPS fronted by Cloudflare, with no app-logic changes. `server-v2` (Next.js + `/ws/gex` + TT/dxLink feed + in-process schedulers) runs as a single Node process in Docker on the box; Render Postgres (Virginia) kept as-is. Drivers: egress cost + overall cost.
+
+### Containerization / deploy
+- Added `Dockerfile` (node:20-bookworm-slim, multi-stage; tzdata + `TZ=America/New_York` for the ET-gated MVC/EOD/weekly schedulers; dropped chromium — puppeteer/tesseract/etc. are declared but unused at runtime), `docker-compose.yml` (`.env.local` as single source of truth for `PORT`/secrets, `APP_PORT` host mapping, `/proxy/health` healthcheck, restart policy), `.dockerignore`.
+- `npm ci || npm install` fallback (repo lockfile had a `picomatch` drift). `next build` needs Clerk + owner build-args inlined: `NEXT_PUBLIC_OWNER_USER_ID`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `NEXT_PUBLIC_APP_NAME` passed as ARG/ENV + compose `build.args`.
+- 2 GB swap on the 4 GB box so `next build` can't OOM.
+
+### Infrastructure
+- **VPS:** Hetzner CPX21 (3 vCPU / 4 GB / 80 GB), **Ashburn us-east** (next to Render's Virginia Postgres → single-digit-ms DB latency), Ubuntu 26.04, server `cb-edge-prod` (IP 178.156.137.36, server id 144288812).
+- **Cloudflare Tunnel** (`cloudflared`, no inbound ports): `/etc/cloudflared/config.yml` routes `cbedge.net`, `www.cbedge.net`, `dash.cbedge.net` → `127.0.0.1:3002`; systemd service. Old Render DNS (`A 216.24.57.1`, `www → dash-1fa2.onrender.com`) deleted; all three hostnames now proxied CNAMEs to the tunnel. SSL Full. Render web service suspended.
+- `DEPLOY_CLOUDFLARE.md` runbook (provisioning, tunnel, cache rules, **§2b secrets rotation**, cutover, verification).
+
+### Owner dashboard features
+- **Postgres health:** new `app/api/db/health/route.ts` (`SELECT 1` + latency via `lib/db` `pgQuery`). Owner page shows a "Postgres OK/DOWN" header badge + a "Postgres · OK · Nms" System card. (Route is auth-gated like the rest of `/api/*`.)
+- **Hetzner hosting metrics:** new `app/api/hetzner-metrics/route.ts` (CPU + network from the Hetzner Cloud API, normalized to the old Render shape so the UI renders unchanged). Hetzner has no RAM metric → memory box now reads the app's own RSS from a new `/proxy/self-metrics` route on `server-v2`. Owner section relabeled "Render · Hosting" → "Hetzner · Hosting"; metrics fetches repointed `render-metrics` → `hetzner-metrics`. New env: `HETZNER_API_TOKEN`, `HETZNER_SERVER_ID`.
+
+### ⚠️ Follow-ups
+- **Rotate exposed secrets** (shared in session / public in repo `.env`): Hetzner API token, TT refresh token + client secret, Postgres password, Render API key, Discord bot token, Google service-account key. See `DEPLOY_CLOUDFLARE.md` §2b.
+- Render web service is **suspended** (rollback safety), not deleted. Postgres kept.
+
+---
+
 ## 2026-06-23 (session 54) — ES Candles page: GEX heatmap, footprint lanes, volume profile, session levels
 
 Built out `/es-candles` (Futures group) into a full futures order-flow chart on top of `useEsCandles` (SQL + `/ws/gex`). Versions bumped through `2026.6.22-v22`.
