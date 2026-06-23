@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-06-22 (session 52) — Confidence Score overhaul: two-stage model, MVC study anchoring, calibration tracker, UI consolidation
+
+Major rework of the `/confidence-score` page and its scoring engine (`lib/confidenceScore.ts` + `app/api/confidence/route.ts`), plus a new calibration system and a global date-picker fix. Versions bumped through `2026.6.22-v17`.
+
+### Scoring engine — new factors & two-stage model
+- Added **Net Wall Bias** (`pivot − break`, −100..100) as the single defend-vs-break decision read.
+- Added **rejection-rate boost**: same-cluster historical rejection rate (time-decayed, sample-size weighted) lifts Pivot and lowers Break — "history of actual rejections beats raw size."
+- Added **relative GEX rank** (1.0 = day's dominant MVC strike, 0.8 = 2nd…) computed from today's distinct MVC strikes; discounts strong-but-secondary walls in Pivot/Break.
+- **Two-stage probability model**: Hit = "Reach" (stands alone); Pivot/Chop/Break are now CONDITIONAL on a touch and renormalized to sum to 100%. Net Wall Bias and the bias line reason within the conditional split.
+
+### MVC study base rates (neutral wording — no source name)
+- Added a `STUDY` anchor: reach **75%** / pivot **55%** / chop **26%** / break **17%**, with **85%** open-at-MVC pivot. Each structural score is blended 50% toward the base rate so structure tilts around an empirical prior instead of a flat low base.
+- **Open-at-MVC 85% setup**: detected in the route (live session, first ~15 min, SPX within 8 pts of the level) → pulls Pivot toward 0.85 and surfaces a green call-out banner.
+- IV 16–45% validity window noted as a caveat (tooltip + hero footnote), not enforced.
+
+### Calibration tracker (answers "how accurate is it")
+- New `confidence_log` Postgres table + `upsertConfidenceLog`/`getGradedConfidenceLog` helpers in `lib/db.ts` (one graded row per day; held = pivot|chop, broke = clean break-through).
+- New `app/api/confidence/calibration/route.ts`: `?refresh=1` backfills + grades every completed day from `mvc_snapshots` (scored from the structural prior only, no self-referential history blend), buckets predictions, returns predicted-vs-actual reliability + Brier scores for Reach / Reject|touched / Break|touched, plus Net Wall Bias directional accuracy.
+- New collapsible **Calibration panel** on the page: reliability bars (actual fill + predicted tick), Brier verdicts, sample sizes, low-sample warning.
+
+### UI consolidation (data-overload cleanup)
+- Added a **hero MVC card** at the top of the Outcome box: MVC level + Reach% + on-touch Reject/Chop/Break split, folded-in metrics strip + headline note + study base reference (`55 / 26 / 17`) + IV caveat.
+- Removed the redundant **Analogs panel** (history now a compact badge in Live Structure) and the **"Read" notes panel** (folded into hero).
+- **Live Structure** condensed to a compact auto-fit factor grid with inline regime/history badges (~half the height); shorter labels, tighter label column.
+- Merged the standalone **Bias line into the Net Wall Bias meter**; trimmed the Outcome box to hero + So-far rollup + archetype narrative + timeline (dropped duplicate mechanics strip + status line). Moved the "So far" rollup to the top of the Outcome box.
+
+### Global fix
+- **Date-picker calendar icon**: replaced the `filter: invert(1)` rule in `app/globals.css` with a custom cyan calendar SVG indicator — guaranteed visible on every dark-themed date/time input across all pages (Confidence, Database, Trading, EM Tracker Admin).
+
+> Note: `next build` / `tsc` not run (sandbox virtualization disabled all session) — run `npx tsc --noEmit` and click "Re-grade history" once before relying on the calibration numbers.
+
 ## 2026-06-22 (session 51) — New `/fails` page: ESU look-above/below fails + AMT + merged IB
 
 Built a standalone Fails page (`app/fails/page.tsx` + `lib/failLevels.ts`) tracking failed breakouts ("look above & fail" / "look below & fail") of key auction reference levels, driven entirely off the existing 5m ES candle feed (`useEsCandles`) — no new API/table. Linked in the sidebar under the Futures group.

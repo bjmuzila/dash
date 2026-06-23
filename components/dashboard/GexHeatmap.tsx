@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { densifyChainRows, type ChainRow } from "@/lib/calculations/calculations";
 
 interface HeatmapRow {
@@ -62,7 +62,6 @@ export default function GexHeatmap({
   const bodyRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const anchorStrikeRef = useRef<number | null>(null);
-  const [view, setView] = useState<"heatmap" | "table">("heatmap");
   const useVol = dataMode === "vol-only";
 
   const denseChain = densifyChainRows(chain);
@@ -152,14 +151,6 @@ export default function GexHeatmap({
     return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
   }
 
-  // Divergent bar width (0–50%) for the table view: scaled against the column's robust max.
-  function barPct(key: keyof typeof maxMap, val: number | null): number {
-    const n = val == null || !Number.isFinite(val) ? 0 : val;
-    const m = maxMap[key] || 0;
-    if (m === 0 || !n) return 0;
-    return Math.min(Math.abs(n) / m, 1) * 50;
-  }
-
   const aboveATM = rows.filter(r => r.strike > (atm?.strike ?? 0));
   const belowATM = rows.filter(r => r.strike <= (atm?.strike ?? 0));
   const rankSide = (arr: HeatmapRow[]) => {
@@ -196,41 +187,8 @@ export default function GexHeatmap({
     );
   }
 
-  const tabBtn = (id: "heatmap" | "table", label: string) => (
-    <button
-      onClick={() => setView(id)}
-      style={{
-        padding: "3px 12px",
-        fontSize: 9,
-        fontWeight: 700,
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        cursor: "pointer",
-        border: "1px solid",
-        borderColor: view === id ? "rgba(0,229,255,0.5)" : "#13283c",
-        borderRadius: 4,
-        background: view === id ? "rgba(0,229,255,0.12)" : "transparent",
-        color: view === id ? "#00e5ff" : "#5a7a98",
-      }}
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
-      <div style={{
-        display: "flex",
-        gap: 6,
-        padding: "5px 8px",
-        background: "var(--overview-header-bg, #070c14)",
-        borderBottom: "1px solid var(--overview-border-soft, #0d1f30)",
-        flexShrink: 0,
-      }}>
-        {tabBtn("heatmap", "Heatmap")}
-        {tabBtn("table", "Table")}
-      </div>
-
       <div style={{
         display: "grid",
         gridTemplateColumns: "68px repeat(5, 1fr)",
@@ -306,35 +264,6 @@ export default function GexHeatmap({
 
               {COLS.map(c => {
                 const v = vals[c.key];
-                if (view === "table") {
-                  const n = v == null || !Number.isFinite(v) ? 0 : v;
-                  const pos = n >= 0;
-                  const pct = barPct(c.key, v);
-                  return (
-                    <div key={c.key} style={{
-                      position: "relative",
-                      padding: "4px 6px",
-                      fontSize: 10,
-                      fontFamily: "inherit",
-                      textAlign: "center",
-                      color: "#ffffff",
-                      borderLeft: "1px solid #0a1420",
-                      overflow: "hidden",
-                    }}>
-                      {/* divergent bar grows from the center toward the value's sign */}
-                      <div style={{
-                        position: "absolute",
-                        top: 2,
-                        bottom: 2,
-                        left: pos ? "50%" : `${50 - pct}%`,
-                        width: `${pct}%`,
-                        background: pos ? "rgba(38,166,91,0.55)" : "rgba(214,48,49,0.55)",
-                        borderRadius: 2,
-                      }} />
-                      <span style={{ position: "relative", zIndex: 1 }}>{fmtG(v)}</span>
-                    </div>
-                  );
-                }
                 const topRank = topRanksByCol[c.key].get(row.strike) ?? 0;
                 return (
                   <div key={c.key} style={{

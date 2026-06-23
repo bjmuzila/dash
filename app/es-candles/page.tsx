@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CandlestickSeries, HistogramSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
-import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, HistogramData } from "lightweight-charts";
+import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEsBigTrades } from "@/hooks/useEsBigTrades";
@@ -25,7 +25,10 @@ type GexCell = { strike: number; net: number };
 type GexColumn = { slotTs: number; cells: GexCell[]; max: number; top3: number[] };
 
 // 5-min-binned big-trade bubble (price = ES price, signed = net of merged prints).
-type Bubble = { slotTs: number; price: number; size: number; side: "buy" | "sell" };
+type Bubble = {
+  slotTs: number; price: number; size: number; side: "buy" | "sell";
+  buy: number; sell: number; total: number; net: number;
+};
 // 5-min net delta bar.
 type DeltaBar = { slotTs: number; net: number };
 
@@ -39,6 +42,17 @@ type VolumeProfile = {
   val: number | null;      // value area low
   lvn: number | null;      // most significant low-volume node inside the range
 };
+
+/** True if a slot ms timestamp falls in the RTH window (9:30–16:00 ET). */
+function isRthSlot(ts: number): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date(ts));
+  const m: Record<string, string> = {};
+  parts.forEach((p) => { m[p.type] = p.value; });
+  const mins = Number(m.hour) * 60 + Number(m.minute);
+  return mins >= 570 && mins < 960; // 9:30 = 570, 16:00 = 960
+}
 
 /**
  * Build a session volume profile from candle OHLCV. Tick volume isn't available
@@ -137,7 +151,6 @@ export default function EsCandlesPage() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
 
@@ -146,7 +159,13 @@ export default function EsCandlesPage() {
   // Bottom lane canvases (bubbles + delta), x-aligned to the chart time axis.
   const bubbleLaneRef = useRef<HTMLCanvasElement>(null);
   const deltaLaneRef = useRef<HTMLCanvasElement>(null);
+  // Bubble hover tooltip state (the bubble under the cursor + its lane x/y).
+  const [bubbleHover, setBubbleHover] = useState<{ x: number; y: number; b: Bubble } | null>(null);
   const drawLanesRef = useRef<() => void>(() => {});
+  // Today's MVC history (strikeOIVol per snapshot, already converted SPX→ES).
+  // Drawn as horizontal step segments on the price overlay.
+  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; es: number }>>([]);
+  const [showMvcLine, setShowMvcLine] = useState(true);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [intensity, setIntensity] = useState(0.5); // matches the home heatmap slider default
   // Column history keyed by 5-min slot ms. One column per slot; latest slot is
@@ -175,20 +194,30 @@ export default function EsCandlesPage() {
     return buildVolumeProfile(todays, 1);
   }, [rows]);
 
-  // Bin big trades into 5-min × price bubbles (ES price), merging same-side
-  // prints in the same slot at the same rounded price into one bubble.
+  // ONE bubble per 5-min slot. side = dominant AGGRESSOR (more buy vs sell vol),
+  // size = that dominant side's volume — so a heavy sell slot stays a big red
+  // bubble even when net delta is near zero (late sellers being absorbed).
   const bubbles = useMemo<Bubble[]>(() => {
-    const byKey = new Map<string, Bubble>();
+    const bySlot = new Map<number, { buy: number; sell: number; pxVol: number; vol: number }>();
     for (const t of rawTrades) {
       if (!(t.size > 0) || !(t.price > 0)) continue;
       const slotTs = slotFloorMs(t.ts);
-      const price = Math.round(t.price); // 1-pt price bucket
-      const key = `${slotTs}|${price}|${t.side}`;
-      const cur = byKey.get(key);
-      if (cur) cur.size += t.size;
-      else byKey.set(key, { slotTs, price, size: t.size, side: t.side });
+      const agg = bySlot.get(slotTs) ?? { buy: 0, sell: 0, pxVol: 0, vol: 0 };
+      if (t.side === "buy") agg.buy += t.size; else agg.sell += t.size;
+      agg.pxVol += t.price * t.size;
+      agg.vol += t.size;
+      bySlot.set(slotTs, agg);
     }
-    return [...byKey.values()];
+    return [...bySlot.entries()].map(([slotTs, a]) => {
+      const buyDom = a.buy >= a.sell;
+      return {
+        slotTs,
+        price: a.vol > 0 ? a.pxVol / a.vol : 0,
+        size: buyDom ? a.buy : a.sell, // dominant aggressor volume
+        side: (buyDom ? "buy" : "sell") as "buy" | "sell",
+        buy: a.buy, sell: a.sell, total: a.vol, net: a.buy - a.sell,
+      };
+    });
   }, [rawTrades]);
 
   // Bin per-minute delta into 5-min net bars.
@@ -333,6 +362,36 @@ export default function EsCandlesPage() {
     return () => { cancelled = true; };
   }, [feedExpiry]);
 
+  // Load today's full MVC history (strikeOIVol) and refresh every 60s. Each row
+  // carries spxPrice/esPrice so we convert the SPX MVC level to ES per-row.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/snapshots/mvc?limit=1000`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const rows = Array.isArray(json.rows) ? json.rows : [];
+        const pts = rows
+          .map((r: Record<string, unknown>) => {
+            const ts = Number(r.timestamp ?? 0);
+            const spxLvl = Number(r.strikeOIVol ?? 0);
+            const spx = Number(r.spxPrice ?? 0);
+            const es = Number(r.esPrice ?? 0);
+            const basis = spx > 0 && es > 0 ? es - spx : 0;
+            return { ts, es: spxLvl + basis, ok: ts > 0 && spxLvl > 0 };
+          })
+          .filter((p: { ok: boolean }) => p.ok)
+          .map(({ ts, es }: { ts: number; es: number }) => ({ ts, es }))
+          .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
+        if (!cancelled) setMvcHistory(pts);
+      } catch { /* keep last */ }
+    };
+    void load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   useEffect(() => {
     let canceled = false;
     const init = async () => {
@@ -384,18 +443,8 @@ export default function EsCandlesPage() {
         downColor: "#ff5b5b",
         borderVisible: false,
       });
-      const volumeSeries = chart.addSeries(HistogramSeries, {
-        priceFormat: { type: "volume" },
-        priceScaleId: "",
-        color: "rgba(255,255,255,.26)",
-      });
-      volumeSeries.priceScale().applyOptions({
-        scaleMargins: { top: 0.78, bottom: 0 },
-      });
-
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
-      volumeSeriesRef.current = volumeSeries;
 
       const ro = new ResizeObserver(() => {
         chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
@@ -415,15 +464,13 @@ export default function EsCandlesPage() {
       chartApiRef.current?.remove();
       chartApiRef.current = null;
       candleSeriesRef.current = null;
-      volumeSeriesRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
-    const volumeSeries = volumeSeriesRef.current;
     const chart = chartApiRef.current;
-    if (!candleSeries || !volumeSeries || !chart) return;
+    if (!candleSeries || !chart) return;
 
     const candleData: CandlestickData[] = rows.map((row) => ({
       time: toChartTime(row.timestamp),
@@ -432,20 +479,8 @@ export default function EsCandlesPage() {
       low: row.low,
       close: row.close,
     }));
-    const volumeData: HistogramData[] = rows.map((row) => {
-      const up = row.close >= row.open;
-      // Brighter bar when volume runs hot vs the 14-day slot average.
-      const hot = row.avg14 && row.avg14 > 0 ? row.volume / row.avg14 >= 1.5 : false;
-      const a = hot ? 0.7 : 0.42;
-      return {
-        time: toChartTime(row.timestamp),
-        value: row.volume,
-        color: up ? `rgba(48, 209, 88, ${a})` : `rgba(255, 91, 91, ${a})`,
-      };
-    });
 
     candleSeries.setData(candleData);
-    volumeSeries.setData(volumeData);
     // Fit once on first data load only — never re-center on live updates so the
     // user's pan/zoom is preserved.
     if (!didFitRef.current && candleData.length) {
@@ -552,7 +587,12 @@ export default function EsCandlesPage() {
 
       // ── 2) Right-edge volume profile + value-area lines ──
       if (showProfile && profile.bins.length) {
-        const maxProfW = Math.min(220, w * 0.28);
+        // Anchor bars at the plot-area's right edge — NOT the canvas edge — so
+        // they never cover the price axis (the right price-scale gutter).
+        let scaleW = 0;
+        try { scaleW = chart.priceScale("right").width(); } catch {}
+        const plotRight = Math.max(0, w - scaleW - 2);
+        const maxProfW = Math.min(220, plotRight * 0.28);
         for (const b of profile.bins) {
           const yTop = series.priceToCoordinate(b.price + 1);
           const yBot = series.priceToCoordinate(b.price);
@@ -563,7 +603,7 @@ export default function EsCandlesPage() {
           const inVA = profile.val != null && profile.vah != null && b.price >= profile.val && b.price <= profile.vah;
           const isPoc = profile.poc != null && Math.abs(b.price - profile.poc) < 0.5;
           ctx.fillStyle = isPoc ? "rgba(245,197,24,.85)" : inVA ? "rgba(245,158,11,.55)" : "rgba(255,255,255,.30)";
-          ctx.fillRect(w - barW, top, barW, bh);
+          ctx.fillRect(plotRight - barW, top, barW, bh);
         }
         // Value-area level lines + labels.
         const lvl = (price: number | null, color: string, label: string) => {
@@ -625,6 +665,12 @@ export default function EsCandlesPage() {
 
     const draw = () => {
       const ts = chart.timeScale();
+      // Bar CENTER x for a slot (lightweight-charts maps a time to the candle's
+      // center, so this lines a bubble up directly under its candle).
+      const barCenter = (slotTs: number): number | null => {
+        const x = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
+        return x == null ? null : x;
+      };
       const slotX = (slotTs: number) => {
         const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
         const xEnd = ts.timeToCoordinate(((slotTs + SLOT_MS) / 1000) as UTCTimestamp);
@@ -632,29 +678,61 @@ export default function EsCandlesPage() {
         const x1 = xEnd != null ? xEnd : x0 + 8;
         return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
       };
+      // Column pitch in px (center-to-center of adjacent 5-min bars). Drives the
+      // max bubble radius so bubbles shrink and never overlap when zoomed out.
+      const pitch = (() => {
+        const sorted = bubbles.map((b) => b.slotTs).sort((x, y) => x - y);
+        for (let i = 1; i < sorted.length; i++) {
+          const c0 = barCenter(sorted[i - 1]);
+          const c1 = barCenter(sorted[i]);
+          if (c0 != null && c1 != null && Math.abs(c1 - c0) > 0.5) return Math.abs(c1 - c0);
+        }
+        return 24;
+      })();
 
-      // Bubbles lane: green buy / red sell, radius ∝ √size, y = vertical jitter
-      // by side (buys upper half, sells lower half) like the reference timeline.
+      // Bubbles lane: one bubble per 5-min slot. Green = buy aggressor, red =
+      // sell. Volume-gated (quiet slots hidden), small + semi-transparent, and
+      // offset by side (buys above the line, sells below) so they don't pile up.
       const bub = sizeCanvas(bubbleLaneRef.current);
       if (bub) {
         const { ctx, w, h } = bub;
-        ctx.strokeStyle = "rgba(255,255,255,.10)";
-        ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+        const rowY = h / 2;
+        ctx.strokeStyle = "rgba(255,255,255,.08)";
+        ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
         if (showBubbles && bubbles.length) {
-          const maxSize = Math.max(1, ...bubbles.map((b) => b.size));
-          for (const b of bubbles) {
-            const sx = slotX(b.slotTs);
-            if (!sx) continue;
-            const cx = sx.left + sx.w / 2;
-            const r = Math.max(2, Math.min(h / 2 - 2, 2 + Math.sqrt(b.size / maxSize) * (h / 2 - 4)));
+          const rCap = Math.max(3, Math.min(h * 0.42, pitch * 0.42));
+          const rMin = 2;
+          // RTH carries far more volume than the overnight session, so each is
+          // gated and size-scaled against ITS OWN distribution — otherwise RTH
+          // bubbles all max out and overnight ones vanish.
+          const scaleFor = (group: Bubble[]) => {
+            const asc = group.map((b) => b.size).sort((a, b) => a - b);
+            if (!asc.length) return null;
+            const gate = asc[Math.floor(asc.length * 0.45)] ?? 0;          // hide quiet slots
+            const refHi = Math.max(gate + 1, asc[Math.floor(asc.length * 0.95)] ?? asc[asc.length - 1]);
+            const span = Math.max(1, refHi - gate);
+            return { gate, span };
+          };
+          const rthScale = scaleFor(bubbles.filter((b) => isRthSlot(b.slotTs)));
+          const ovnScale = scaleFor(bubbles.filter((b) => !isRthSlot(b.slotTs)));
+
+          // Draw smallest first so heavy prints sit on top.
+          const ordered = [...bubbles].sort((a, b) => a.size - b.size);
+          for (const b of ordered) {
+            const sc = isRthSlot(b.slotTs) ? rthScale : ovnScale;
+            if (!sc || b.size < sc.gate || !(b.size > 0)) continue; // per-session gate
+            const cx = barCenter(b.slotTs);
+            if (cx == null) continue;
+            const t = Math.min(1, Math.max(0, (b.size - sc.gate) / sc.span));
+            const r = rMin + Math.pow(t, 0.85) * (rCap - rMin);
             const buy = b.side === "buy";
-            const cy = buy ? h / 2 - r - 1 : h / 2 + r + 1;
+            const fillA = 0.12 + t * 0.30; // semi-transparent; heavier = denser
             ctx.beginPath();
-            ctx.arc(cx, cy, r, 0, Math.PI * 2);
-            ctx.fillStyle = buy ? "rgba(48,209,88,.45)" : "rgba(255,91,91,.45)";
+            ctx.arc(cx, rowY, r, 0, Math.PI * 2); // single centerline row
+            ctx.fillStyle = buy ? `rgba(48,209,88,${fillA.toFixed(2)})` : `rgba(255,91,91,${fillA.toFixed(2)})`;
             ctx.fill();
-            ctx.lineWidth = 1.2;
-            ctx.strokeStyle = buy ? "rgba(48,209,88,.95)" : "rgba(255,91,91,.95)";
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = buy ? "rgba(48,209,88,.7)" : "rgba(255,91,91,.7)";
             ctx.stroke();
           }
         }
@@ -697,9 +775,33 @@ export default function EsCandlesPage() {
     if (deltaLaneRef.current) ro.observe(deltaLaneRef.current);
     draw();
 
+    // Hover tooltip: pick the bubble whose column center is nearest the cursor.
+    const canvas = bubbleLaneRef.current;
+    const onMove = (e: MouseEvent) => {
+      if (!canvas || !showBubbles || !bubbles.length) { setBubbleHover(null); return; }
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      let best: Bubble | null = null;
+      let bestDx = Infinity;
+      for (const b of bubbles) {
+        const cx = ts.timeToCoordinate((b.slotTs / 1000) as UTCTimestamp);
+        if (cx == null) continue;
+        const dx = Math.abs(cx - mx);
+        if (dx < bestDx) { bestDx = dx; best = b; }
+      }
+      // Only show when reasonably close to a column (half a pitch).
+      if (best && bestDx <= 14) setBubbleHover({ x: mx, y: e.clientY - rect.top, b: best });
+      else setBubbleHover(null);
+    };
+    const onLeave = () => setBubbleHover(null);
+    canvas?.addEventListener("mousemove", onMove);
+    canvas?.addEventListener("mouseleave", onLeave);
+
     return () => {
       ts.unsubscribeVisibleLogicalRangeChange(draw);
       ro.disconnect();
+      canvas?.removeEventListener("mousemove", onMove);
+      canvas?.removeEventListener("mouseleave", onLeave);
       drawLanesRef.current = () => {};
     };
   }, [showBubbles, showDelta, bubbles, deltaBars, rows]);
@@ -811,8 +913,46 @@ export default function EsCandlesPage() {
         </div>
 
         {/* Big-trade bubbles lane (time-aligned to the chart) */}
-        <div className="relative overflow-hidden rounded-xl border" style={{ height: 86, borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)" }}>
+        <div className="relative rounded-xl border" style={{ height: 86, borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)" }}>
           <canvas ref={bubbleLaneRef} className="absolute inset-0 h-full w-full" />
+          {bubbleHover ? (
+            <div
+              className="pointer-events-none absolute z-20 rounded-lg border px-3 py-2 text-xs shadow-xl"
+              style={{
+                left: Math.min(Math.max(bubbleHover.x - 70, 4), 9999),
+                bottom: 92, // float just above the lane
+                borderColor: "rgba(255,255,255,.14)",
+                background: "rgba(10,14,20,.96)",
+                backdropFilter: "blur(6px)",
+                minWidth: 150,
+              }}
+            >
+              <div className="mb-1 font-mono text-[11px] text-white/55">
+                {new Date(bubbleHover.b.slotTs).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })} ET
+                <span className="ml-2" style={{ color: isRthSlot(bubbleHover.b.slotTs) ? "#30d158" : "#94a3b8" }}>
+                  {isRthSlot(bubbleHover.b.slotTs) ? "RTH" : "O/N"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-white/50">Total</span>
+                <span className="font-mono font-bold text-white">{bubbleHover.b.total.toLocaleString("en-US")}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span style={{ color: "#30d158" }}>Buy</span>
+                <span className="font-mono" style={{ color: "#30d158" }}>{bubbleHover.b.buy.toLocaleString("en-US")}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span style={{ color: "#ff5b5b" }}>Sell</span>
+                <span className="font-mono" style={{ color: "#ff5b5b" }}>{bubbleHover.b.sell.toLocaleString("en-US")}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-3 border-t pt-1" style={{ borderColor: "rgba(255,255,255,.1)" }}>
+                <span className="text-white/50">Net Δ</span>
+                <span className="font-mono font-bold" style={{ color: bubbleHover.b.net >= 0 ? "#30d158" : "#ff5b5b" }}>
+                  {bubbleHover.b.net >= 0 ? "+" : ""}{bubbleHover.b.net.toLocaleString("en-US")}
+                </span>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* Delta profile lane (time-aligned to the chart) */}

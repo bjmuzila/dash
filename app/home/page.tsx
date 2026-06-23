@@ -411,6 +411,8 @@ export default function HomePage() {
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
   // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
   const [intensity, setIntensity] = useState(1.75);
+  // Heatmap panel view: "heatmap" = colored cell backgrounds; "table" = divergent bars.
+  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table">("heatmap");
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
 
@@ -966,6 +968,28 @@ export default function HomePage() {
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 2, marginRight: 4, border: "1px solid rgba(0,229,255,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                      {(["heatmap", "table"] as const).map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => setHeatmapView(v)}
+                          style={{
+                            padding: "2px 10px",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            cursor: "pointer",
+                            border: "none",
+                            fontFamily: "inherit",
+                            background: heatmapView === v ? "rgba(0,229,255,0.14)" : "transparent",
+                            color: heatmapView === v ? "#00e5ff" : "#5a7a98",
+                          }}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={handleRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
@@ -987,7 +1011,7 @@ export default function HomePage() {
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX"].map((header, index) => (
-                        <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 ? "left" : "right", color: "#fff" }}>{header}</th>
+                        <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 || heatmapView === "table" ? "left" : "right", color: "#fff" }}>{header}</th>
                       ))}
                     </tr>
                   </thead>
@@ -1009,10 +1033,44 @@ export default function HomePage() {
                       // every cell, plus a right edge on the final column).
                       const atmBorder = "1px solid rgba(255,255,255,0.55)";
 
-                      // Numeric cell: background opacity from metricBg (intensity-scaled).
+                      // Left-anchored gradient bar (table view): width 0–100% scaled to the
+                      // column max, grows rightward from the left edge. Green = positive,
+                      // red = negative. Higher magnitude → darker/deeper gradient.
+                      const barEl = (value: number | null, colKey: string) => {
+                        if (value == null || !Number.isFinite(value)) return null;
+                        const max = heatmapColorMeta.max[colKey] ?? 1;
+                        const ratio = Math.min(Math.abs(value) / (max || 1), 1);
+                        const pct = ratio * 90; // biggest bar fills 90% of the cell
+                        if (!pct) return null;
+                        const pos = value >= 0;
+                        // Vibrant gradient: bright leading edge → saturated deep base.
+                        // Opacity deepens with magnitude so big bars read as more intense.
+                        const a = 0.5 + ratio * 0.5;
+                        const light = pos
+                          ? `rgba(74,255,150,${a.toFixed(2)})`
+                          : `rgba(255,86,110,${a.toFixed(2)})`;
+                        const dark = pos
+                          ? `rgba(0,140,70,${a.toFixed(2)})`
+                          : `rgba(190,20,40,${a.toFixed(2)})`;
+                        return (
+                          <div style={{
+                            position: "absolute",
+                            top: 3,
+                            bottom: 3,
+                            left: 0,
+                            width: `${pct}%`,
+                            background: `linear-gradient(90deg, ${dark} 0%, ${light} 100%)`,
+                            borderRadius: 2,
+                            pointerEvents: "none",
+                          }} />
+                        );
+                      };
+
+                      // Numeric cell: heatmap view paints a background; table view draws a bar.
                       const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
-                        const base: React.CSSProperties = { padding: "0 16px", textAlign: "right", lineHeight: 1.1, overflow: "hidden" };
-                        const bg = value == null
+                        const isTable = heatmapView === "table";
+                        const base: React.CSSProperties = { position: "relative", padding: "0 16px", textAlign: isTable ? "left" : "right", lineHeight: 1.1, overflow: "hidden" };
+                        const bg = isTable || value == null
                           ? "transparent"
                           : metricBg(value, heatmapColorMeta.max[colKey] ?? 1, intensity, heatmapColorMeta.top3[colKey] ?? []);
                         const atmEdges: React.CSSProperties = isAtm
@@ -1020,7 +1078,9 @@ export default function HomePage() {
                           : {};
                         return (
                           <td key={colIdx} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
-                            {text}
+                            {isTable
+                              ? barEl(value, colKey)
+                              : <span style={{ position: "relative", zIndex: 1 }}>{text}</span>}
                           </td>
                         );
                       };
@@ -1046,13 +1106,17 @@ export default function HomePage() {
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} style={{ padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: (() => { const v = row.netGexVal; return v == null ? "transparent" : metricBg(v, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []); })(), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                                <span style={{ flexShrink: 0, minWidth: 28 }}>
-                                  {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
-                                </span>
-                                <span>{row.netGex}</span>
-                              </div>
+                            <td key={1} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
+                              {heatmapView === "table" ? (
+                                barEl(row.netGexVal, "netGexVal")
+                              ) : (
+                                <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                                  <span style={{ flexShrink: 0, minWidth: 28 }}>
+                                    {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
+                                  </span>
+                                  <span>{row.netGex}</span>
+                                </div>
+                              )}
                             </td>
                             {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
                             {dataCell(row.dex, row.dexVal, "dexVal", 3)}
