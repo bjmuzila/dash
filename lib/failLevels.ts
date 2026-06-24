@@ -59,7 +59,10 @@ export interface FailStat {
 // ── ET helpers ────────────────────────────────────────────────────────────────
 
 function etParts(ts: number) {
-  const d = new Date(ts);
+  // Coerce: prod historical bars arrive with a STRING timestamp (pg BIGINT→JSON),
+  // and new Date('1782187200000') is Invalid Date — which silently NaN'd every
+  // RTH check and dropped prev-day/week levels. Number() makes it epoch ms again.
+  const d = new Date(Number(ts));
   if (isNaN(d.getTime())) return { date: "", minutes: NaN }; // guard: invalid/missing ts (prod feed)
   const p = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",

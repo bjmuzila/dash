@@ -360,17 +360,33 @@ export async function saveEsCandleSnapshot(candle: EsCandleRecord): Promise<void
   });
 }
 
+// Postgres BIGINT (timestamp) and REAL columns deserialize from JSON as STRINGS
+// via the API route. Downstream math — isRthBar(new Date(ts)), hiLo high/low
+// comparisons — needs real numbers, else new Date('1782187200000') is Invalid
+// Date and every RTH filter silently drops the bar. Coerce at the boundary.
+function normalizeCandle(r: EsCandleRecord): EsCandleRecord {
+  return {
+    ...r,
+    timestamp: Number(r.timestamp),
+    open:  Number(r.open),
+    high:  Number(r.high),
+    low:   Number(r.low),
+    close: Number(r.close),
+    volume: Number(r.volume),
+  };
+}
+
 export async function queryEsCandlesToday(): Promise<EsCandleRecord[]> {
   const today = etDateStr();
   const res   = await fetch(`/api/snapshots/candles?date=${today}&limit=2000`);
   const json  = await res.json();
-  return (json.rows ?? []) as EsCandleRecord[];
+  return ((json.rows ?? []) as EsCandleRecord[]).map(normalizeCandle);
 }
 
 export async function queryEsCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
   const res  = await fetch(`/api/snapshots/candles?daysBack=${daysBack}&limit=10000`);
   const json = await res.json();
-  return (json.rows ?? []) as EsCandleRecord[];
+  return ((json.rows ?? []) as EsCandleRecord[]).map(normalizeCandle);
 }
 
 // ── IB Levels (locked Initial Balance per day) ──────────────────────────────────
