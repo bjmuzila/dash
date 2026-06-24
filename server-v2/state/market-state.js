@@ -54,10 +54,6 @@ const state = {
   // Delta of just-changed 5m bars (forming bar + any newly-closed one). Emitted
   // on each flush so the WS broadcast carries only the moved bars, not all 600.
   esCandlesDelta: [],
-  // Front ES future big-order footprint: { symbol, updatedAt, trades[], delta[] }.
-  // trades = recent large prints (size + buy/sell aggressor); delta = per-minute
-  // signed-volume buckets. Powers the Footprint page bubbles + delta profile.
-  esBigTrades: null,
   // Feed health
   status: {
     ttAuthenticated: false,

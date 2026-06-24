@@ -6,7 +6,6 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData }
 import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
-import { useEsBigTrades } from "@/hooks/useEsBigTrades";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 
@@ -21,23 +20,6 @@ function toChartTime(ts: number): UTCTimestamp {
 type GexCell = { strike: number; netOiVol: number; netVol: number };
 type GexColumn = { slotTs: number; cells: GexCell[] };
 type GexMetric = "voloi" | "vol";
-
-// Big-trade bubble: per-SIDE aggregate of all prints inside a 1-second window.
-// A given second can yield a buy bubble AND a sell bubble independently; each is
-// shown only if its combined size clears BUBBLE_MIN_LOTS. size = that side's
-// 1-second total (= the bubble's lot count, drawn as the label).
-type Bubble = {
-  slotTs: number;        // 1-second window start (ms)
-  price: number;         // volume-weighted price of the window's prints
-  size: number;          // combined lots for this side in the window (label + sizing)
-  side: "buy" | "sell";
-  count: number;         // number of prints merged into this bubble
-};
-
-// Aggregation window + minimum combined size for a bubble to render.
-const BUBBLE_WINDOW_MS = 1000;
-const BUBBLE_MIN_LOTS = 100;
-const bubbleWindowMs = (ts: number) => Math.floor(ts / BUBBLE_WINDOW_MS) * BUBBLE_WINDOW_MS;
 
 // Volume-by-price profile + value-area levels, derived from candle OHLCV.
 type ProfileBin = { price: number; volume: number };
@@ -58,12 +40,6 @@ function etMinutes(ts: number): number {
   const m: Record<string, string> = {};
   parts.forEach((p) => { m[p.type] = p.value; });
   return Number(m.hour) * 60 + Number(m.minute);
-}
-
-/** True if a slot ms timestamp falls in the RTH window (9:30–16:00 ET). */
-function isRthSlot(ts: number): boolean {
-  const mins = etMinutes(ts);
-  return mins >= 570 && mins < 960; // 9:30 = 570, 16:00 = 960
 }
 
 /**
@@ -173,10 +149,6 @@ export default function EsCandlesPage() {
 
   // Heatmap overlay state.
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  // Bottom lane canvas (big-trade bubbles), x-aligned to the chart time axis.
-  const bubbleLaneRef = useRef<HTMLCanvasElement>(null);
-  // Bubble hover tooltip state (the bubble under the cursor + its lane x/y).
-  const [bubbleHover, setBubbleHover] = useState<{ x: number; y: number; b: Bubble } | null>(null);
   // Right-axis SPX readouts. liveSpx = badge pinned at the last ES price (y in
   // px within the chart). crossSpx = SPX at the crosshair (y in px), shown only
   // while hovering the chart. Both = ES − effective basis.
@@ -237,9 +209,6 @@ export default function EsCandlesPage() {
     return Math.round((Date.parse(exp + "T00:00:00Z") - Date.parse(todayEt + "T00:00:00Z")) / 86_400_000);
   };
 
-  // Big trades from the /ws/gex feed (footprint / bubble source).
-  const { trades: rawTrades } = useEsBigTrades();
-  const [showBubbles, setShowBubbles] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
@@ -300,41 +269,6 @@ export default function EsCandlesPage() {
     const todays = today ? rows.filter((r) => r.date === today) : rows;
     return buildVolumeProfile(todays, 1);
   }, [rows]);
-
-  // Aggregate prints into 1-SECOND windows, separately per side. Each (window,
-  // side) becomes a bubble only if its COMBINED lots clear BUBBLE_MIN_LOTS (100) —
-  // so a burst of smaller orders that adds up still shows, but quiet ticks don't.
-  // A single second can produce both a green (buy) and a red (sell) bubble.
-  const bubbles = useMemo<Bubble[]>(() => {
-    // key = `${windowMs}|${side}` → accumulated lots, price·vol, print count.
-    const byKey = new Map<string, { ts: number; side: "buy" | "sell"; lots: number; pxVol: number; count: number }>();
-    for (const t of rawTrades) {
-      if (!(t.size > 0) || !(t.price > 0)) continue;
-      const side = t.side === "buy" ? "buy" : "sell";
-      const ts = bubbleWindowMs(t.ts);
-      const key = `${ts}|${side}`;
-      const agg = byKey.get(key) ?? { ts, side, lots: 0, pxVol: 0, count: 0 };
-      agg.lots += t.size;
-      agg.pxVol += t.price * t.size;
-      agg.count += 1;
-      byKey.set(key, agg);
-    }
-    const out: Bubble[] = [];
-    for (const a of byKey.values()) {
-      if (a.lots <= BUBBLE_MIN_LOTS) continue; // combined-size floor
-      out.push({
-        slotTs: a.ts,
-        price: a.lots > 0 ? a.pxVol / a.lots : 0,
-        size: a.lots,
-        side: a.side,
-        count: a.count,
-      });
-    }
-    return out;
-  }, [rawTrades]);
-
-  // Repaint the bubble lane whenever the binned data changes.
-  useEffect(() => { drawLanesRef.current(); }, [bubbles]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
   // chart plots ES, so we offset by the live basis (esFut - spx) before drawing.
@@ -659,9 +593,8 @@ export default function EsCandlesPage() {
     }
     updateLiveSpxRef.current();
     // Live candle updates shift the time axis without always firing a logical-
-    // range change, which left the bubble lane (and heatmap) painting a stale or
-    // cleared frame — the "bubbles sometimes disappear" bug. Repaint whenever
-    // candle data changes.
+    // range change, which could leave the heatmap overlay painting a stale or
+    // cleared frame. Repaint whenever candle data changes.
     drawOverlayRef.current();
     drawLanesRef.current();
   }, [rows]);
@@ -971,148 +904,6 @@ export default function EsCandlesPage() {
     };
   }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
 
-  // ── Bottom lane: big-trade bubbles ────────────────────────────────────────
-  // Both are x-aligned to the chart time axis via the chart's timeToCoordinate
-  // (lane canvases share the chart's width and left edge), like the reference.
-  useEffect(() => {
-    const chart = chartApiRef.current;
-    if (!chart) return;
-
-    const sizeCanvas = (cv: HTMLCanvasElement | null) => {
-      if (!cv) return null;
-      const dpr = window.devicePixelRatio || 1;
-      const w = cv.clientWidth, h = cv.clientHeight;
-      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
-        cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-      }
-      const ctx = cv.getContext("2d");
-      if (!ctx) return null;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      return { ctx, w, h };
-    };
-
-    const draw = () => {
-      const ts = chart.timeScale();
-      // Bar CENTER x for a slot (lightweight-charts maps a time to the candle's
-      // center, so this lines a bubble up directly under its candle).
-      const barCenter = (slotTs: number): number | null => {
-        const x = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
-        return x == null ? null : x;
-      };
-
-      // Bubbles lane: one bubble per 1-second window PER SIDE (≥100 combined lots).
-      // Green = aggressive buys, red = aggressive sells. Size = the window's
-      // combined lot count, positioned at its real timestamp on the time axis.
-      const bub = sizeCanvas(bubbleLaneRef.current);
-      if (bub) {
-        const { ctx, w, h } = bub;
-        const rowY = h / 2;
-        ctx.strokeStyle = "rgba(255,255,255,.06)";
-        ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
-        if (showBubbles && bubbles.length) {
-          // Size = combined lots in the 1s window (the bubble's label).
-          const metricOf = (b: Bubble) => b.size;
-
-          // Radius range. rMin keeps small (just-over-100) bubbles as visible dots;
-          // rCap fills most of the lane half-height. 1s bubbles are positioned by
-          // timestamp and may overlap when big — that's expected, like the reference.
-          const rCap = Math.max(9, h * 0.46);
-          const rMin = 3;
-
-          // Continuous scale anchored near the TOP of the size distribution (95th
-          // pct) so only the genuinely biggest 1s burst fills rCap and the rest
-          // scale DOWN proportionally — true small→big spread. Floor the reference
-          // at 2× the min-lots so a quiet session of ~100-lot bubbles still varies.
-          const asc = bubbles.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
-          const ref = asc.length
-            ? Math.max(BUBBLE_MIN_LOTS * 2, asc[Math.floor(asc.length * 0.95)] ?? asc[asc.length - 1])
-            : 1;
-          const floor = BUBBLE_MIN_LOTS; // sizes start scaling from the 100-lot gate
-          const span = Math.max(1, ref - floor);
-
-          // Draw smallest first so heavy bursts sit on top.
-          const ordered = [...bubbles].sort((a, b) => metricOf(a) - metricOf(b));
-          for (const b of ordered) {
-            const cx = barCenter(b.slotTs);
-            if (cx == null) continue;
-            const t = Math.min(1, Math.max(0, (metricOf(b) - floor) / span)); // 0..1
-            // Near-linear radius (mild pow) so a 200-lot bubble reads clearly
-            // smaller than an 800-lot one.
-            const r = rMin + Math.pow(t, 0.8) * (rCap - rMin);
-            const buy = b.side === "buy";
-            const fillA = 0.45 + t * 0.5;
-            ctx.beginPath();
-            ctx.arc(cx, rowY, r, 0, Math.PI * 2);
-            ctx.fillStyle = buy ? `rgba(48,209,88,${fillA.toFixed(2)})` : `rgba(255,91,91,${fillA.toFixed(2)})`;
-            ctx.fill();
-            ctx.lineWidth = 1.25;
-            ctx.strokeStyle = buy ? "rgba(80,255,130,.9)" : "rgba(255,120,120,.9)";
-            ctx.stroke();
-            // Lot-count label on bubbles big enough to hold text.
-            if (r >= 11) {
-              ctx.fillStyle = "rgba(255,255,255,.92)";
-              ctx.font = `bold ${Math.min(12, Math.max(9, Math.round(r * 0.7)))}px Inter, system-ui, sans-serif`;
-              ctx.textAlign = "center";
-              ctx.textBaseline = "middle";
-              ctx.fillText(String(b.size), cx, rowY);
-            }
-          }
-          // Reset text alignment so the lane caption below draws left-aligned.
-          ctx.textAlign = "left";
-          ctx.textBaseline = "alphabetic";
-        }
-        ctx.fillStyle = "rgba(255,255,255,.45)";
-        ctx.font = "10px Inter, system-ui, sans-serif";
-        ctx.fillText(
-          `BIG TRADE BUBBLES · ≥${BUBBLE_MIN_LOTS} lots / 1s · green = buys · red = sells`,
-          6, 12,
-        );
-      }
-
-      // (Delta/CVD lane removed.)
-    };
-
-    drawLanesRef.current = draw;
-    const ts = chart.timeScale();
-    ts.subscribeVisibleLogicalRangeChange(draw);
-    const ro = new ResizeObserver(draw);
-    if (bubbleLaneRef.current) ro.observe(bubbleLaneRef.current);
-    draw();
-
-    // Hover tooltip: pick the bubble whose column center is nearest the cursor.
-    const canvas = bubbleLaneRef.current;
-    const onMove = (e: MouseEvent) => {
-      if (!canvas || !showBubbles || !bubbles.length) { setBubbleHover(null); return; }
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      // Pick the bubble whose center is nearest the cursor x.
-      let best: Bubble | null = null;
-      let bestDx = Infinity;
-      for (const b of bubbles) {
-        if (!(b.size > 0)) continue;
-        const cx = ts.timeToCoordinate((b.slotTs / 1000) as UTCTimestamp);
-        if (cx == null) continue;
-        const dx = Math.abs(cx - mx);
-        if (dx < bestDx) { bestDx = dx; best = b; }
-      }
-      // Only show when reasonably close to a bubble.
-      if (best && bestDx <= 14) setBubbleHover({ x: mx, y: e.clientY - rect.top, b: best });
-      else setBubbleHover(null);
-    };
-    const onLeave = () => setBubbleHover(null);
-    canvas?.addEventListener("mousemove", onMove);
-    canvas?.addEventListener("mouseleave", onLeave);
-
-    return () => {
-      ts.unsubscribeVisibleLogicalRangeChange(draw);
-      ro.disconnect();
-      canvas?.removeEventListener("mousemove", onMove);
-      canvas?.removeEventListener("mouseleave", onLeave);
-      drawLanesRef.current = () => {};
-    };
-  }, [showBubbles, bubbles, rows]);
-
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval, so the lanes/overlay never get stranded on
   // a stale frame after a live tick or autoscale. Cheap: only repaints on change.
@@ -1194,13 +985,6 @@ export default function EsCandlesPage() {
             style={{ borderColor: "rgba(255,255,255,.12)", color: showHeatmap ? "#29b6f6" : "#94a3b8" }}
           >
             Heatmap {showHeatmap ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowBubbles((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showBubbles ? "#30d158" : "#94a3b8" }}
-          >
-            Bubbles {showBubbles ? "ON" : "OFF"}
           </button>
           <button
             onClick={() => setShowProfile((v) => !v)}
@@ -1324,44 +1108,6 @@ export default function EsCandlesPage() {
           ) : null}
         </div>
 
-        {/* Big-trade bubbles lane (time-aligned to the chart) */}
-        <div className="relative rounded-xl border" style={{ height: 86, borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)" }}>
-          <canvas ref={bubbleLaneRef} className="absolute inset-0 h-full w-full" />
-          {bubbleHover ? (
-            <div
-              className="pointer-events-none absolute z-20 rounded-lg border px-3 py-2 text-xs shadow-xl"
-              style={{
-                left: Math.min(Math.max(bubbleHover.x - 70, 4), 9999),
-                bottom: 92, // float just above the lane
-                borderColor: "rgba(255,255,255,.14)",
-                background: "rgba(10,14,20,.96)",
-                backdropFilter: "blur(6px)",
-                minWidth: 150,
-              }}
-            >
-              <div className="mb-1 font-mono text-[11px] text-white/55">
-                {new Date(bubbleHover.b.slotTs).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" })} ET
-                <span className="ml-2" style={{ color: isRthSlot(bubbleHover.b.slotTs) ? "#30d158" : "#94a3b8" }}>
-                  {isRthSlot(bubbleHover.b.slotTs) ? "RTH" : "O/N"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span style={{ color: bubbleHover.b.side === "buy" ? "#30d158" : "#ff5b5b" }}>
-                  {bubbleHover.b.side === "buy" ? "Aggressive BUY" : "Aggressive SELL"}
-                </span>
-                <span className="font-mono font-bold text-white">{bubbleHover.b.size.toLocaleString("en-US")}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-white/50">Prints (1s)</span>
-                <span className="font-mono text-white/80">{bubbleHover.b.count.toLocaleString("en-US")}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-white/50">Avg price</span>
-                <span className="font-mono text-white/80">{bubbleHover.b.price.toFixed(2)}</span>
-              </div>
-            </div>
-          ) : null}
-        </div>
       </div>
     </div>
   );

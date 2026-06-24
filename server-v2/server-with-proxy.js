@@ -34,7 +34,6 @@ const next = require('next');
 const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
-const { startEsSeed } = require('./es-seed-loader');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -464,9 +463,6 @@ async function main() {
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
     require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
-    // Optional: seed the Footprint page from a transcribed ES T&S file when the
-    // live ES feed is quiet (after hours). Enabled with ES_SEED=1.
-    startEsSeed({ log: console });
   });
 
   const shutdown = () => {

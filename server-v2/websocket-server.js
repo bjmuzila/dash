@@ -73,7 +73,6 @@ function buildSnapshot(state) {
     totalNetGex: state.totalNetGex,
     flow: trimSnapshotFlow(state.flow),
     esCandles: trimSnapshotCandles(state.esCandles),
-    esBigTrades: state.esBigTrades,
     status: {
       ...state.status,
       // Server uptime in seconds (process lifetime).
@@ -112,13 +111,6 @@ const GEX_BROADCAST_MS_OFFHOURS = Number(process.env.GEX_BROADCAST_MS_OFFHOURS |
 // coarsen to this cadence outside RTH. During RTH the floor is 0 (content dedupe
 // alone gates it) so live prints stay instant. Env-tunable.
 const FLOW_BROADCAST_MS_OFFHOURS = Number(process.env.FLOW_BROADCAST_MS_OFFHOURS || 30000);
-// esBigTrades is the ES footprint buffer (bubbles + delta), flushed to state every
-// 1s and carrying the WHOLE growing session buffer (up to ES_BIG_TRADES_MAX ≈ 50k
-// prints) + a fresh updatedAt. Broadcast unthrottled, that was ~3MB/frame × 1/s ≈
-// multi-GB/hr to EACH client — the dominant bleed (FLOW/GEX were already gated).
-// Coalesce to this cadence (RTH) and skip when content is byte-identical.
-const ESBIG_BROADCAST_MS = Number(process.env.ESBIG_BROADCAST_MS || 5000);
-const ESBIG_BROADCAST_MS_OFFHOURS = Number(process.env.ESBIG_BROADCAST_MS_OFFHOURS || 30000);
 
 // Lightweight ET regular-trading-hours check (Mon–Fri 9:30–16:00 ET). Used only
 // to coarsen broadcast cadence off-hours; not a market-holiday calendar (the
@@ -140,8 +132,6 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   let lastGexPayload = null;
   let lastFlowPayload = null;
   let lastFlowSentAt = 0;
-  let lastEsBigPayload = null;
-  let lastEsBigSentAt = 0;
 
   // ── Outbound bandwidth accounting ───────────────────────────────────────────
   // Per-type cumulative byte totals since process start + a rolling 60s window
@@ -279,24 +269,6 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     // slotKey merge ingests it unchanged, carrying only the bars that moved.
     if (changed.has('esCandles')) out.push(msg('esCandles', state.esCandles, state.symbol));
     if (changed.has('esCandlesDelta')) out.push(msg('esCandles', state.esCandlesDelta, state.symbol));
-    if (changed.has('esBigTrades')) {
-      // Throttle the full ES footprint buffer the same way GEX is throttled: at
-      // most once per ESBIG_BROADCAST_MS, and skip if byte-identical to the last
-      // send. The buffer grows all session and the flush stamps a fresh updatedAt
-      // every 1s, so without this it re-ships ~3MB every second per client. Exclude
-      // updatedAt from the dedupe key so a changing timestamp on an unchanged buffer
-      // doesn't defeat the skip (mirrors the GEX/updatedAt handling).
-      const eb = state.esBigTrades || {};
-      const { updatedAt: _ebUpdatedAt, ...ebContent } = eb; // eslint-disable-line no-unused-vars
-      const ebKey = JSON.stringify(ebContent);
-      const now = Date.now();
-      const ebInterval = isRthNow() ? ESBIG_BROADCAST_MS : ESBIG_BROADCAST_MS_OFFHOURS;
-      if (now - lastEsBigSentAt >= ebInterval && ebKey !== lastEsBigPayload) {
-        lastEsBigSentAt = now;
-        lastEsBigPayload = ebKey;
-        out.push(msg('esBigTrades', state.esBigTrades, state.symbol));
-      }
-    }
     if (changed.has('spot') || changed.has('prevClose')) {
       out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose }, state.symbol));
     }

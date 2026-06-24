@@ -42,10 +42,67 @@ interface PageStatus {
 }
 
 interface RenderMetrics {
+  ok?: boolean;
   bandwidth: { value: number | null; unit: string; window: string; spark?: number[] };
   memory:    { value: number | null; unit: string; window: string; spark?: number[] };
   cpu:       { value: number | null; unit: string; window: string; spark?: number[] };
   fetchedAt: string;
+}
+
+// Merge a freshly-fetched metrics payload into the previous one, keeping the last
+// good value/spark for any field the new payload left null/empty. Hetzner's API
+// flakes intermittently (transient 5xx / rate-limit / empty series), which used to
+// blank the hosting cards "half the time". With this, a failed poll holds the last
+// reading instead of wiping it; only a real reading advances `fetchedAt`.
+function mergeRenderMetrics(prev: RenderMetrics | null, next: RenderMetrics): RenderMetrics {
+  if (!prev) return next;
+  const pick = (
+    a: RenderMetrics["cpu"], b: RenderMetrics["cpu"],
+  ): RenderMetrics["cpu"] => {
+    const value = b.value != null ? b.value : a.value;
+    const spark = b.spark && b.spark.length ? b.spark : a.spark;
+    return { ...b, value, spark };
+  };
+  // A window switch always wins (different time horizon → different numbers),
+  // even if that window's first fetch came back partial.
+  const windowChanged = next.cpu.window !== prev.cpu.window;
+  if (windowChanged) return next;
+  const gotReal = next.ok === true || next.cpu.value != null || next.bandwidth.value != null;
+  return {
+    ok: next.ok,
+    cpu: pick(prev.cpu, next.cpu),
+    bandwidth: pick(prev.bandwidth, next.bandwidth),
+    // Memory comes from /proxy/self-metrics (almost always present); still guard.
+    memory: pick(prev.memory, next.memory),
+    // Only advance the timestamp when we actually got fresh host data.
+    fetchedAt: gotReal ? next.fetchedAt : prev.fetchedAt,
+  };
+}
+
+// Cloudflare edge egress (from /api/cloudflare-metrics). Same shape conventions as
+// RenderMetrics' sub-fields so the merge/display helpers carry over.
+interface CfMetrics {
+  ok?: boolean;
+  egress: { value: number | null; unit: string; window: string; spark?: number[] };
+  fetchedAt: string;
+}
+
+// Merge guard for the Cloudflare card — identical intent to mergeRenderMetrics:
+// a flaky/empty CF GraphQL response holds the last good egress value instead of
+// blanking the card; only a real reading advances the timestamp. Window switch wins.
+function mergeCfMetrics(prev: CfMetrics | null, next: CfMetrics): CfMetrics {
+  if (!prev) return next;
+  if (next.egress.window !== prev.egress.window) return next;
+  const gotReal = next.ok === true || next.egress.value != null;
+  return {
+    ok: next.ok,
+    egress: {
+      ...next.egress,
+      value: next.egress.value != null ? next.egress.value : prev.egress.value,
+      spark: next.egress.spark && next.egress.spark.length ? next.egress.spark : prev.egress.spark,
+    },
+    fetchedAt: gotReal ? next.fetchedAt : prev.fetchedAt,
+  };
 }
 
 // Live /ws/gex outbound byte tally from /proxy/self-metrics → wsBandwidth.
@@ -576,6 +633,8 @@ export default function OwnerDashboard() {
   const [renderMetrics, setRenderMetrics] = useState<RenderMetrics | null>(null);
   const [renderWindow, setRenderWindow] = useState<"live" | "weekly" | "monthly">("live");
   const [renderLoading, setRenderLoading] = useState(false);
+  // Cloudflare edge egress (shares the render window selector).
+  const [cfMetrics, setCfMetrics] = useState<CfMetrics | null>(null);
 
   // Live /ws/gex outbound bandwidth, per-frame-type (from /proxy/self-metrics).
   // This is the in-app measurement that the host-level "Bandwidth" card can't
@@ -773,10 +832,28 @@ export default function OwnerDashboard() {
         if (wl.ok) { const j = await wl.json(); setWaitlistCount(j?.count ?? 0); }
       } catch { /* non-fatal */ }
 
-      // Render hosting metrics (live window on general refresh)
+      // Hetzner hosting metrics (live window on general refresh). Merge so a
+      // transient empty/failed Hetzner response holds the last good cards instead
+      // of blanking them. Only force the window back to "live" when this call
+      // actually returned host data (don't yank the user off a 7d/30d view on a
+      // failed background poll).
       try {
         const rm = await fetch("/api/hetzner-metrics?window=live", { cache: "no-store" });
-        if (rm.ok) { setRenderMetrics(await rm.json()); setRenderWindow("live"); }
+        if (rm.ok) {
+          const next = (await rm.json()) as RenderMetrics;
+          const gotReal = next.ok === true || next.cpu?.value != null || next.bandwidth?.value != null;
+          setRenderMetrics((prev) => mergeRenderMetrics(prev, next));
+          if (gotReal) setRenderWindow("live");
+        }
+      } catch { /* non-fatal */ }
+
+      // Cloudflare edge egress (live window) — merge-don't-blank like Hetzner.
+      try {
+        const cf = await fetch("/api/cloudflare-metrics?window=live", { cache: "no-store" });
+        if (cf.ok) {
+          const next = (await cf.json()) as CfMetrics;
+          setCfMetrics((prev) => mergeCfMetrics(prev, next));
+        }
       } catch { /* non-fatal */ }
 
       // Live /ws/gex outbound bandwidth (in-app, per-frame-type).
@@ -927,8 +1004,18 @@ export default function OwnerDashboard() {
     setRenderWindow(w);
     setRenderLoading(true);
     try {
-      const rm = await fetch(`/api/hetzner-metrics?window=${w}`, { cache: "no-store" });
-      if (rm.ok) setRenderMetrics(await rm.json());
+      const [rm, cf] = await Promise.all([
+        fetch(`/api/hetzner-metrics?window=${w}`, { cache: "no-store" }),
+        fetch(`/api/cloudflare-metrics?window=${w}`, { cache: "no-store" }),
+      ]);
+      if (rm.ok) {
+        const next = (await rm.json()) as RenderMetrics;
+        setRenderMetrics((prev) => mergeRenderMetrics(prev, next));
+      }
+      if (cf.ok) {
+        const next = (await cf.json()) as CfMetrics;
+        setCfMetrics((prev) => mergeCfMetrics(prev, next));
+      }
     } catch { /* non-fatal */ } finally {
       setRenderLoading(false);
     }
@@ -1180,10 +1267,10 @@ export default function OwnerDashboard() {
           </div>
         </div>
 
-        {/* ── Hetzner hosting metrics ── */}
+        {/* ── Hetzner hosting + Cloudflare edge metrics ── */}
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <SectionLabel>Hetzner · Hosting</SectionLabel>
+            <SectionLabel>Hosting · Hetzner + Cloudflare</SectionLabel>
             <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
               {(["live", "weekly", "monthly"] as const).map(w => (
                 <button
@@ -1208,9 +1295,22 @@ export default function OwnerDashboard() {
               ))}
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
             <StatCard
-              label={`Bandwidth · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
+              label={`CF Egress · ${renderWindow === "live" ? "24h" : renderWindow === "weekly" ? "7d" : "30d"}`}
+              value={cfMetrics?.egress.value != null
+                ? cfMetrics.egress.value < 1024
+                  ? `${cfMetrics.egress.value.toFixed(1)} MB`
+                  : cfMetrics.egress.value < 1024 * 1024
+                    ? `${(cfMetrics.egress.value / 1024).toFixed(2)} GB`
+                    : `${(cfMetrics.egress.value / 1024 / 1024).toFixed(2)} TB`
+                : "—"}
+              accent={HOME_THEME.orange}
+              mono
+              footer={<Sparkline data={cfMetrics?.egress.spark ?? []} accent={HOME_THEME.orange} />}
+            />
+            <StatCard
+              label={`Host Net · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
               value={renderMetrics?.bandwidth.value != null
                 ? renderMetrics.bandwidth.value < 1024
                   ? `${renderMetrics.bandwidth.value.toFixed(1)} MB`
@@ -1247,14 +1347,6 @@ export default function OwnerDashboard() {
                   ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
                   : "—"}
               </div>
-              <a
-                href="https://dashboard.render.com/web/srv-d8mk8se7r5hc739t138g"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ fontSize: "clamp(7px, 6.5cqw, 10px)", color: HOME_THEME.cyan, marginTop: 6, textDecoration: "none", fontWeight: 700, whiteSpace: "nowrap" }}
-              >
-                Render Dashboard ↗
-              </a>
             </div>
           </div>
 
@@ -1278,7 +1370,7 @@ export default function OwnerDashboard() {
               };
               const total = wsBw?.lastMinTotal ?? 0;
               // Frame types we care about, in display order; "other" catches the rest.
-              const KNOWN = ["flow", "gex", "snapshot", "spot", "aux", "status", "esCandles", "esBigTrades"];
+              const KNOWN = ["flow", "gex", "snapshot", "spot", "aux", "status", "esCandles"];
               const lastMin: Record<string, number> = wsBw?.lastMin ?? {};
               const entries = Object.entries(lastMin)
                 .filter(([, b]) => b > 0)
@@ -1286,7 +1378,6 @@ export default function OwnerDashboard() {
               const ACCENT: Record<string, string> = {
                 flow: HOME_THEME.orange, gex: HOME_THEME.cyan, snapshot: HOME_THEME.purple,
                 spot: HOME_THEME.green, aux: "#38bdf8", status: HOME_THEME.muted, esCandles: "#a78bfa",
-                esBigTrades: HOME_THEME.red,
               };
               return (
                 <>

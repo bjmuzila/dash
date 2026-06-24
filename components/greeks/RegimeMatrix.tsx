@@ -35,16 +35,16 @@ interface Cell {
 // ── Row / column headers ──────────────────────────────────────────────────────
 // Rows vary GEX (outer) then VEX (inner); columns vary DEX (outer) then CEX.
 const ROW_DEFS = [
-  { gex: 1 as Sign,  vex: 1 as Sign,  label: "+ GEX / + VEX",  sub: "Stabilized Bull" },
-  { gex: 1 as Sign,  vex: -1 as Sign, label: "+ GEX / − VEX",  sub: "Suppressed Chop" },
-  { gex: -1 as Sign, vex: 1 as Sign,  label: "− GEX / + VEX",  sub: "Volatile Bull" },
-  { gex: -1 as Sign, vex: -1 as Sign, label: "− GEX / − VEX",  sub: "Volatile Bear" },
+  { gex: 1 as Sign,  vex: 1 as Sign,  label: "GEX↑ / VEX↑",  sub: "Stabilized Bull" },
+  { gex: 1 as Sign,  vex: -1 as Sign, label: "GEX↑ / VEX↓",  sub: "Suppressed Chop" },
+  { gex: -1 as Sign, vex: 1 as Sign,  label: "GEX↓ / VEX↑",  sub: "Volatile Bull" },
+  { gex: -1 as Sign, vex: -1 as Sign, label: "GEX↓ / VEX↓",  sub: "Volatile Bear" },
 ];
 const COL_DEFS = [
-  { dex: 1 as Sign,  cex: 1 as Sign,  label: "+ DEX / + CEX",  sub: "Bullish & Late Bid" },
-  { dex: 1 as Sign,  cex: -1 as Sign, label: "+ DEX / − CEX",  sub: "Bullish w/ Late Fade" },
-  { dex: -1 as Sign, cex: 1 as Sign,  label: "− DEX / + CEX",  sub: "Bearish w/ Late Bid" },
-  { dex: -1 as Sign, cex: -1 as Sign, label: "− DEX / − CEX",  sub: "Bearish & Late Drag" },
+  { dex: 1 as Sign,  cex: 1 as Sign,  label: "DEX↑ / CEX↑",  sub: "Bullish & Late Bid" },
+  { dex: 1 as Sign,  cex: -1 as Sign, label: "DEX↑ / CEX↓",  sub: "Bullish w/ Late Fade" },
+  { dex: -1 as Sign, cex: 1 as Sign,  label: "DEX↓ / CEX↑",  sub: "Bearish w/ Late Bid" },
+  { dex: -1 as Sign, cex: -1 as Sign, label: "DEX↓ / CEX↓",  sub: "Bearish & Late Drag" },
 ];
 
 // ── The 16 regimes ────────────────────────────────────────────────────────────
@@ -244,12 +244,18 @@ export default function RegimeMatrix({
         gap: 12, padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,.08)", flexWrap: "wrap",
       }}>
         <div style={{ maxWidth: 620 }}>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#67e8f9", letterSpacing: ".02em" }}>
+          <div style={{ fontSize: 17, fontWeight: 900, color: "#67e8f9", letterSpacing: ".02em" }}>
             Options Flow Regime Canvas
           </div>
-          <div style={{ fontSize: 11.5, color: "#9fb3c8", marginTop: 3, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: "#9fb3c8", marginTop: 3, lineHeight: 1.55 }}>
             4-Greek matrix tracking Gamma (GEX), Vanna (VEX), Delta (DEX) and Charm (CEX).
-            The live regime is highlighted; cells one Greek-flip away are dimly lit.
+            Each cell&apos;s <span style={{ color: "#00e676", fontWeight: 700 }}>name color</span> is
+            its bias — <span style={{ color: "#00e676", fontWeight: 700 }}>green = bullish</span>,
+            <span style={{ color: "#ff5252", fontWeight: 700 }}> red = bearish</span>,
+            <span style={{ color: "#facc15", fontWeight: 700 }}> yellow = mixed/chop</span>.
+            Arrows show each Greek&apos;s sign (<span style={{ color: "#00e676", fontWeight: 700 }}>↑ positive</span> /
+            <span style={{ color: "#ff5252", fontWeight: 700 }}> ↓ negative</span>). The live regime is glow-highlighted;
+            cells one Greek-flip away are dimly lit.
           </div>
         </div>
         {/* Live-sign legend + reset */}
@@ -261,10 +267,10 @@ export default function RegimeMatrix({
             const col = (v as number | null) == null ? "#9fb3c8" : s > 0 ? "#00e676" : "#ff5252";
             return (
               <span key={lbl as string} style={{
-                fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: col,
+                fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: col,
                 border: `1px solid ${col}55`, background: `${col}14`, padding: "3px 7px", borderRadius: 5,
               }}>
-                {lbl as string} {(v as number | null) == null ? "–" : s > 0 ? "+" : "−"}
+                {lbl as string} {(v as number | null) == null ? "–" : s > 0 ? "↑" : "↓"}
               </span>
             );
           })}
@@ -282,7 +288,7 @@ export default function RegimeMatrix({
         {/* ── Selector grid ── */}
         <div style={{ minWidth: 0, overflowX: "auto" }}>
           <div style={{
-            fontSize: 11, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+            fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
             textTransform: "uppercase", marginBottom: 8,
           }}>Regime Selector Grid</div>
 
@@ -290,7 +296,7 @@ export default function RegimeMatrix({
           <div style={{ display: "grid", gridTemplateColumns: "92px repeat(4, minmax(96px,1fr))", gap: 6, minWidth: 560 }}>
             {/* top-left corner cell */}
             <div style={{
-              fontSize: 8.5, color: "#64748b", fontWeight: 700, display: "flex",
+              fontSize: 10, color: "#64748b", fontWeight: 700, display: "flex",
               alignItems: "flex-end", justifyContent: "flex-start", padding: "0 0 4px 2px", lineHeight: 1.3,
             }}>
               GEX·VEX ↓<br />DEX·CEX →
@@ -304,8 +310,8 @@ export default function RegimeMatrix({
                   background: live ? "rgba(0,229,255,.08)" : "rgba(255,255,255,.02)",
                   borderRadius: 8, padding: "6px 6px", textAlign: "center",
                 }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{c.label}</div>
-                  <div style={{ fontSize: 8, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{c.sub}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{c.label}</div>
+                  <div style={{ fontSize: 9, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{c.sub}</div>
                 </div>
               );
             })}
@@ -331,19 +337,19 @@ export default function RegimeMatrix({
           </div>
 
           {/* legend */}
-          <div style={{ display: "flex", gap: 14, marginTop: 12, flexWrap: "wrap", fontSize: 10, color: "#9fb3c8" }}>
-            <Legend swatch="solid" label="Live regime (current signs)" />
-            <Legend swatch="dim" label="One Greek-flip away" />
-            <Legend swatch="bull" label="Bullish" />
-            <Legend swatch="bear" label="Bearish" />
-            <Legend swatch="mixed" label="Mixed / chop" />
+          <div style={{ display: "flex", gap: 14, marginTop: 12, flexWrap: "wrap", fontSize: 12, color: "#9fb3c8" }}>
+            <Legend swatch="solid" label="Live regime — glow border (current signs)" />
+            <Legend swatch="dim" label="One Greek-flip away — dim tint" />
+            <Legend swatch="bull" label="Green name = bullish bias" />
+            <Legend swatch="bear" label="Red name = bearish bias" />
+            <Legend swatch="mixed" label="Yellow name = mixed / chop" />
           </div>
         </div>
 
         {/* ── Behavior demonstration ── */}
         <div style={{ minWidth: 0 }}>
           <div style={{
-            fontSize: 11, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+            fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
             textTransform: "uppercase", marginBottom: 8,
           }}>Behavior Demonstration</div>
 
@@ -364,7 +370,7 @@ export default function RegimeMatrix({
             background: `linear-gradient(180deg,${detailColor}12,rgba(0,0,0,.3))`,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-              <div style={{ fontSize: 17, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
               {activeR === liveRow && activeC === liveCol && hasData && (
                 <span style={{
                   fontSize: 9, fontWeight: 800, letterSpacing: ".08em", color: "#00e676",
@@ -377,11 +383,11 @@ export default function RegimeMatrix({
             <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
               {([["GEX", detail.gex], ["VEX", detail.vex], ["DEX", detail.dex], ["CEX", detail.cex]] as [string, Sign][]).map(([lbl, s]) => (
                 <span key={lbl} style={{
-                  fontSize: 9.5, fontWeight: 800, fontFamily: "monospace",
+                  fontSize: 11, fontWeight: 800, fontFamily: "monospace",
                   color: s > 0 ? "#00e676" : "#ff5252",
                   border: `1px solid ${s > 0 ? "rgba(0,230,118,.4)" : "rgba(255,82,82,.4)"}`,
                   borderRadius: 5, padding: "2px 7px",
-                }}>{lbl} {s > 0 ? "+" : "−"}</span>
+                }}>{lbl} {s > 0 ? "↑" : "↓"}</span>
               ))}
             </div>
 
@@ -392,10 +398,10 @@ export default function RegimeMatrix({
               marginTop: 10, border: "1px solid rgba(0,229,255,.25)", borderRadius: 8,
               background: "rgba(0,229,255,.06)", padding: "9px 11px",
             }}>
-              <div style={{ fontSize: 9.5, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
                 ◆ Trading Implications (0DTE / SPX)
               </div>
-              <div style={{ fontSize: 12, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
+              <div style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
             </div>
           </div>
         </div>
@@ -430,8 +436,8 @@ function RowFragment({
         background: liveRowHdr ? "rgba(0,229,255,.08)" : "rgba(255,255,255,.02)",
         borderRadius: 8, padding: "6px 6px", display: "flex", flexDirection: "column", justifyContent: "center",
       }}>
-        <div style={{ fontSize: 10.5, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{rd.label}</div>
-        <div style={{ fontSize: 8, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{rd.sub}</div>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{rd.label}</div>
+        <div style={{ fontSize: 9, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{rd.sub}</div>
       </div>
 
       {/* 4 regime cells */}
@@ -461,23 +467,23 @@ function RowFragment({
             title={cell.name}
             style={{
               border, background: bg, boxShadow, borderRadius: 8, padding: "8px 7px",
-              minHeight: 58, textAlign: "left", cursor: "pointer", position: "relative",
+              minHeight: 64, textAlign: "left", cursor: "pointer", position: "relative",
               display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 4,
               transition: "transform .08s ease",
             }}
           >
             {isLive && (
               <span style={{
-                position: "absolute", top: 4, right: 5, fontSize: 8, fontWeight: 900,
+                position: "absolute", top: 4, right: 5, fontSize: 9, fontWeight: 900,
                 color: tone, letterSpacing: ".06em",
               }}>● LIVE</span>
             )}
             <div style={{
-              fontSize: 11, fontWeight: 800, lineHeight: 1.2,
+              fontSize: 12.5, fontWeight: 800, lineHeight: 1.2,
               color: isLive ? "#ffffff" : oneFlip ? "#e3edf5" : "#9aa9bb",
             }}>{cell.name}</div>
             {/* mini sign row */}
-            <div style={{ display: "flex", gap: 3, fontFamily: "monospace", fontSize: 8.5, fontWeight: 800 }}>
+            <div style={{ display: "flex", gap: 5, fontFamily: "monospace", fontSize: 11, fontWeight: 800 }}>
               <SignDot lbl="D" s={cell.dex} dim={!isLive && !oneFlip} />
               <SignDot lbl="C" s={cell.cex} dim={!isLive && !oneFlip} />
             </div>
@@ -492,7 +498,7 @@ function SignDot({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
   const col = s > 0 ? "#00e676" : "#ff5252";
   return (
     <span style={{ color: dim ? `${col}99` : col, letterSpacing: ".02em" }}>
-      {lbl}{s > 0 ? "+" : "−"}
+      {lbl}{s > 0 ? "↑" : "↓"}
     </span>
   );
 }
@@ -500,8 +506,8 @@ function SignDot({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
 function DetailRow({ label, body }: { label: string; body: string }) {
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 9.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 12, color: "#d7e6e8", lineHeight: 1.5 }}>{body}</div>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{body}</div>
     </div>
   );
 }

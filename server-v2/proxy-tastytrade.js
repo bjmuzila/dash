@@ -26,7 +26,6 @@ const path = require('path');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
 const { writeEsCandles } = require('./state/es-candle-writer');
-const { saveFootprint, loadFootprint, footprintDbEnabled } = require('./state/footprint-writer');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
@@ -60,30 +59,6 @@ const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 // depend on dxFeed reliably pushing the reset (it does so only sometimes).
 const SESSION_ROLL_HOUR_ET = Number(process.env.SESSION_ROLL_HOUR_ET || 18);
 const SESSION_ROLL_CHECK_MS = Number(process.env.SESSION_ROLL_CHECK_MS || 60000);
-// ES footprint: a print must be at least this many contracts to be BUFFERED for a
-// bubble. Default 100 — now that TimeAndSale delivers every tick, buffering all
-// 1-lots would balloon esBigTrades (and the per-second full-buffer broadcast) into
-// a multi-GB/hr outbound leak. 100 matches the client bubble floor, so nothing
-// visible is lost. NOTE: delta buckets aggregate EVERY print (before this gate),
-// so the delta/cumulative lane stays accurate regardless of this threshold.
-const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 100);
-// Footprint retention is now TIME-based: keep the whole current session day, not a
-// fixed count. These ceilings are just safety caps so a runaway feed can't grow the
-// buffers without bound — set high enough that a full RTH+ETH day fits comfortably.
-const ES_BIG_TRADES_MAX = Number(process.env.ES_BIG_TRADES_MAX || 50_000);
-// Broadcast downsampling: prints within this trailing window are sent RAW (per
-// print) so the live bubble edge is full-resolution. Older prints are collapsed
-// to one aggregate per 1s/side BEFORE broadcast (the client re-bins to 1s anyway,
-// so nothing visible is lost) — this is what stops the WS payload from growing
-// with total print count over the session. The full-fidelity buffer is still kept
-// in-memory + persisted to disk/Postgres for replay; only the wire payload shrinks.
-const ESBIG_RAW_WINDOW_MS = Number(process.env.ESBIG_RAW_WINDOW_MS || 5 * 60_000);
-const ESBIG_COLLAPSE_BUCKET_MS = Number(process.env.ESBIG_COLLAPSE_BUCKET_MS || 1000);
-const ES_DELTA_BUCKET_MS = Number(process.env.ES_DELTA_BUCKET_MS || 60_000);
-const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 1_440);
-// Disk persistence: today's footprint is mirrored here so a server-v2 restart
-// reloads the session instead of starting empty. File is keyed by ET session day.
-const ES_FOOTPRINT_FILE = path.join(__dirname, '.es-footprint.json');
 // Idle mode persisted across restarts/reconnects so a page reload reflects it.
 const IDLE_STATE_FILE = path.join(__dirname, '.idle-state.json');
 // Last RTH cash-basis (broker spot − esFut), persisted so an overnight restart
@@ -1248,14 +1223,10 @@ class DxLinkClient {
           if (this.pending.length) {
             const queued = this.pending.splice(0);
             const candleSubs = queued.filter((q) => q && q.__candle);
-            const tasSubs = queued.filter((q) => q && q.__tas);
-            const regular = queued.filter((q) => !(q && (q.__candle || q.__tas)));
+            const regular = queued.filter((q) => !(q && q.__candle));
             if (regular.length) this.subscribe(regular);
             for (const c of candleSubs) {
               this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [c.sub] });
-            }
-            for (const t of tasSubs) {
-              this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [t.sub] });
             }
           }
         }
@@ -1309,17 +1280,6 @@ class DxLinkClient {
     for (let i = 0; i < add.length; i += CHUNK) {
       this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: add.slice(i, i + CHUNK) });
     }
-  }
-
-  /** Subscribe ONE symbol to TimeAndSale only (tick-by-tick time & sales). Kept
-   *  separate from subscribe() so TAS rides only the ES future, not every option
-   *  contract (whole-chain TAS is heavy + unstable). */
-  subscribeTimeAndSale(symbol) {
-    const sub = { type: 'TimeAndSale', symbol };
-    // __tas marks it so the pending-flush sends it as-is instead of routing it
-    // through subscribe() (which would re-expand it into Quote/Greeks/etc).
-    if (!this.channelOpen) { this.pending.push({ __tas: true, sub }); return; }
-    this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [sub] });
   }
 
   /**
@@ -1438,17 +1398,10 @@ class TastytradeProxy {
     this.esCandlesDirty = false; // set when a candle slot changed since last flush
     this.esCandlesDirtySlots = new Set(); // slotKeys changed since last flush (delta broadcast)
     this.candleFlushTimer = null;
-    // Big-order footprint on the front ES future. We classify each ES Trade tick
-    // as buy (lifted ask) / sell (hit bid) using the live ES bid/ask, keep a ring
-    // buffer of the largest recent prints, and bucket signed delta over time.
+    // Live front-ES quote, used by _publishEsFut to clamp the last trade into the
+    // current spread (TradingView-style last-price display). Set by the Quote
+    // handler; esLastTrade is set by the Trade handler.
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
-    this.esBigTrades = [];        // session buffer of ES prints (newest last)
-    this.esDeltaBuckets = new Map(); // bucketStartMs -> { ts, buy, sell }
-    this.esFootprintDirty = false;
-    this.footprintFlushTimer = null;
-    this.esSessionDay = null;     // ET ymd the current footprint belongs to
-    this.esFootprintSaveDirty = false; // unsaved changes pending disk write
-    this.footprintSaveTimer = null;
     this.expiry = '';
     this.recomputeTimer = null;
     // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
@@ -1562,10 +1515,6 @@ class TastytradeProxy {
     this.spotSymbol = this.underlying.streamerSymbol;
     for (const c of contracts) this.contracts.set(c.streamerSymbol, c);
 
-    // Restore today's footprint (Postgres, else local file) BEFORE the live feed
-    // connects, so an early live tick can't start a fresh buffer ahead of the restore.
-    await this._loadFootprint();
-
     const { token, url } = await getQuoteToken();
     this.client = new DxLinkClient({
       url,
@@ -1592,16 +1541,6 @@ class TastytradeProxy {
       console.log(`[FEED] subscribed ES candles ${this.esCandleSymbol} from ${new Date(fromTime).toISOString()}`);
       // Flush aggregated candles to state + DB on a steady cadence.
       this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
-    }
-    // Flush the ES big-order footprint (bubbles + delta buckets) every second so
-    // the Footprint page tape stays live without spamming a broadcast per tick.
-    if (!this.footprintFlushTimer) {
-      this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
-    }
-    // Mirror the footprint to disk every 5s so a restart reloads the session.
-    // (Restore itself happens earlier, before the live feed connects.)
-    if (!this.footprintSaveTimer) {
-      this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
     }
 
     // Backfill OI/volume from REST now, then refresh periodically (OI only
@@ -1757,10 +1696,6 @@ class TastytradeProxy {
     if (this.esSymbol) syms.add(this.esSymbol);
     for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
     this.client.subscribe([...syms]);
-    // TimeAndSale (tick-by-tick) only on the ES future — powers the footprint
-    // bubbles with real per-print size + exchange aggressorSide. Re-issued here so
-    // it survives reconnects alongside the bulk subscribe above.
-    if (this.esSymbol) this.client.subscribeTimeAndSale(this.esSymbol);
     marketState.setStatus({ contractsSubscribed: syms.size });
   }
 
@@ -1797,17 +1732,12 @@ class TastytradeProxy {
       if (this.flowTimer) { clearInterval(this.flowTimer); this.flowTimer = null; }
       if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
       if (this.candleFlushTimer) { clearInterval(this.candleFlushTimer); this.candleFlushTimer = null; }
-      if (this.footprintFlushTimer) { clearInterval(this.footprintFlushTimer); this.footprintFlushTimer = null; }
-      if (this.footprintSaveTimer) { clearInterval(this.footprintSaveTimer); this.footprintSaveTimer = null; }
       if (this.sessionRollTimer) { clearTimeout(this.sessionRollTimer); this.sessionRollTimer = null; }
-      this._saveFootprintToDisk(); // final flush before going idle
     } else {
       if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
       if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
       if (!this.oiTimer) this._scheduleOiRefresh();
       if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
-      if (!this.footprintFlushTimer) this.footprintFlushTimer = setInterval(() => this._flushEsFootprint(), 1000);
-      if (!this.footprintSaveTimer) this.footprintSaveTimer = setInterval(() => this._saveFootprintToDisk(), 5000);
       // Resync the session key on resume (may have rolled while idle), then re-arm the watcher.
       this.optSessionKey = this._sessionKey();
       if (!this.sessionRollTimer) this._scheduleSessionRoll();
@@ -1979,214 +1909,6 @@ class TastytradeProxy {
     writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
-  /**
-   * Classify one front-ES print and fold it into the footprint state.
-   *
-   * Now fed by TimeAndSale, so `sideOverride` carries the exchange-provided
-   * aggressorSide ('buy'|'sell') — authoritative, used directly when present.
-   * When it's absent (Undefined aggressor), we fall back to the live ES bid/ask:
-   * at/above ask = aggressive BUY (lifted offer); at/below bid = aggressive SELL
-   * (hit bid); inside the spread, mid (>= mid -> buy). Each print's signed size
-   * accrues into a per-minute delta bucket; prints >= ES_BIG_TRADE_MIN are also
-   * kept individually for the bubble row.
-   */
-  _recordEsPrint(price, size, sideOverride = null) {
-    if (!(size > 0)) return;
-    let side = sideOverride === 'buy' || sideOverride === 'sell' ? sideOverride : null;
-    if (!side) {
-      const q = this.esQuote;
-      if (q && q.ask > 0 && price >= q.ask) side = 'buy';
-      else if (q && q.bid > 0 && price <= q.bid) side = 'sell';
-      else if (q && q.mid > 0) side = price >= q.mid ? 'buy' : 'sell';
-      else return; // no quote context yet — can't classify
-    }
-    const ts = Date.now();
-    const signed = side === 'buy' ? size : -size;
-
-    // New ET session day → clear the prior day's footprint so the page shows
-    // today only. (Retention is "current session / day".)
-    const day = todayYmd().ymd;
-    if (this.esSessionDay && this.esSessionDay !== day) {
-      this.esBigTrades = [];
-      this.esDeltaBuckets.clear();
-    }
-    this.esSessionDay = day;
-
-    // Per-minute signed-delta bucket.
-    const bucketStart = Math.floor(ts / ES_DELTA_BUCKET_MS) * ES_DELTA_BUCKET_MS;
-    const b = this.esDeltaBuckets.get(bucketStart) || { ts: bucketStart, buy: 0, sell: 0 };
-    if (side === 'buy') b.buy += size; else b.sell += size;
-    this.esDeltaBuckets.set(bucketStart, b);
-    // Safety cap only (time-pruned by day rollover above). Drop oldest if a runaway
-    // feed somehow exceeds a full day of minute buckets.
-    if (this.esDeltaBuckets.size > ES_DELTA_BUCKETS_MAX) {
-      const oldest = [...this.esDeltaBuckets.keys()].sort((a, c) => a - c)[0];
-      this.esDeltaBuckets.delete(oldest);
-    }
-
-    // Per-print buffer for the bubbles — kept for the whole session day.
-    if (size >= ES_BIG_TRADE_MIN) {
-      this.esBigTrades.push({ ts, price, size, side, signed });
-      // Safety cap only; normal retention is the day-rollover reset above.
-      if (this.esBigTrades.length > ES_BIG_TRADES_MAX) this.esBigTrades.shift();
-    }
-    this.esFootprintDirty = true;
-    this.esFootprintSaveDirty = true;
-  }
-
-  /**
-   * Downsample the raw print buffer for BROADCAST. Prints within the trailing
-   * ESBIG_RAW_WINDOW_MS are kept raw (full-resolution live edge); everything older
-   * is collapsed to one aggregate per ESBIG_COLLAPSE_BUCKET_MS (1s) per side. Each
-   * collapsed entry keeps the EsBigTrade shape {ts,price,size,side,signed} — a
-   * vol-weighted price and summed size — so the client ingests it unchanged (it
-   * re-bins to 1s and applies the 100-lot floor anyway, so the bubbles are
-   * visually identical). This caps the payload by TIME, not print count, killing
-   * the linear-growth bleed. The in-memory `this.esBigTrades` stays full-fidelity.
-   */
-  _downsampleEsTradesForBroadcast(now = Date.now()) {
-    const src = this.esBigTrades;
-    const n = src.length;
-    if (!n) return src;
-    const cutoff = now - ESBIG_RAW_WINDOW_MS;
-    // src is oldest-first (push/shift), so find the first index inside the window.
-    let split = 0;
-    while (split < n && src[split].ts < cutoff) split++;
-    if (split === 0) return src; // everything is within the raw window → no collapse
-    // Collapse the older head [0, split) into per-1s/side aggregates.
-    const byKey = new Map(); // `${bucketTs}|${side}` -> agg
-    for (let i = 0; i < split; i++) {
-      const t = src[i];
-      const bts = Math.floor(t.ts / ESBIG_COLLAPSE_BUCKET_MS) * ESBIG_COLLAPSE_BUCKET_MS;
-      const key = `${bts}|${t.side}`;
-      let a = byKey.get(key);
-      if (!a) { a = { ts: bts, side: t.side, size: 0, pxVol: 0 }; byKey.set(key, a); }
-      a.size += t.size;
-      a.pxVol += t.price * t.size;
-    }
-    const collapsed = new Array(byKey.size);
-    let j = 0;
-    for (const a of byKey.values()) {
-      const price = a.size > 0 ? a.pxVol / a.size : 0;
-      collapsed[j++] = {
-        ts: a.ts,
-        price,
-        size: a.size,
-        side: a.side,
-        signed: a.side === 'buy' ? a.size : -a.size,
-      };
-    }
-    collapsed.sort((x, y) => x.ts - y.ts);
-    // Older collapsed bubbles first, then the raw recent tail (already sorted).
-    return collapsed.concat(src.slice(split));
-  }
-
-  /** Push the current footprint (bubbles + delta buckets) to market-state. */
-  _flushEsFootprint() {
-    if (!this.esFootprintDirty) return;
-    this.esFootprintDirty = false;
-    const buckets = [...this.esDeltaBuckets.values()].sort((a, b) => a.ts - b.ts);
-    marketState.setState({
-      esBigTrades: {
-        symbol: this.esSymbol,
-        updatedAt: Date.now(),
-        seeded: false,
-        // Downsampled for the wire: last 5min raw + older collapsed to 1s/side.
-        trades: this._downsampleEsTradesForBroadcast(),
-        delta: buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell, net: x.buy - x.sell })),
-      },
-    });
-  }
-
-  /**
-   * Restore today's footprint on boot so a restart — on ANY machine sharing the
-   * DATABASE_URL — resumes the session instead of starting empty. Prefers Postgres
-   * (durable + cross-machine); falls back to the local disk file when no DB is set
-   * or the DB has no row yet. Anything tagged to a prior ET day is ignored.
-   */
-  async _loadFootprint() {
-    const today = todayYmd().ymd;
-
-    // 1) Postgres first (shared across machines).
-    if (footprintDbEnabled()) {
-      try {
-        const row = await loadFootprint(today);
-        if (row && row.payload) {
-          const applied = this._applyRestoredFootprint(today, row.payload, row.symbol);
-          if (applied > 0) {
-            console.log(`[ES-FP] restored ${applied} prints from Postgres`);
-            return;
-          }
-        }
-        console.log('[ES-FP] no Postgres footprint for today — trying local file');
-      } catch (e) {
-        console.log('[ES-FP] Postgres restore failed, trying local file:', e.message);
-      }
-    }
-
-    // 2) Local disk file fallback.
-    let saved;
-    try {
-      saved = JSON.parse(fs.readFileSync(ES_FOOTPRINT_FILE, 'utf8'));
-    } catch (e) {
-      console.log(`[ES-FP] no footprint to restore from ${ES_FOOTPRINT_FILE}: ${e.code || e.message}`);
-      return;
-    }
-    if (!saved || saved.day !== today) {
-      console.log(`[ES-FP] saved file is for ${saved && saved.day} (today ${today}) — discarding`);
-      return;
-    }
-    const applied = this._applyRestoredFootprint(today, saved, saved.symbol);
-    console.log(`[ES-FP] restored ${applied} prints from disk file`);
-  }
-
-  /**
-   * Load restored {trades, delta} into the in-memory buffers + republish to state.
-   * Returns the number of prints restored.
-   */
-  _applyRestoredFootprint(day, data, symbol) {
-    this.esSessionDay = day;
-    if (symbol && !this.esSymbol) this.esSymbol = symbol;
-    this.esBigTrades = Array.isArray(data.trades) ? data.trades : [];
-    this.esDeltaBuckets = new Map();
-    for (const d of (Array.isArray(data.delta) ? data.delta : [])) {
-      this.esDeltaBuckets.set(d.ts, { ts: d.ts, buy: d.buy, sell: d.sell });
-    }
-    // Republish so a freshly-connected page gets the restored buffer immediately.
-    this.esFootprintDirty = true;
-    this._flushEsFootprint();
-    return this.esBigTrades.length;
-  }
-
-  /**
-   * Mirror the current footprint (throttled by the save timer) to:
-   *   • Postgres (es_footprint, one row/day) — durable + shared across machines, and
-   *   • a local disk file — fast fallback when no DATABASE_URL is configured.
-   */
-  _saveFootprintToDisk() {
-    if (!this.esFootprintSaveDirty) return;
-    this.esFootprintSaveDirty = false;
-    const buckets = [...this.esDeltaBuckets.values()].sort((a, b) => a.ts - b.ts);
-    const delta = buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell }));
-    const payload = {
-      day: this.esSessionDay,
-      symbol: this.esSymbol,
-      savedAt: Date.now(),
-      trades: this.esBigTrades,
-      delta,
-    };
-    // Postgres (fire-and-forget; never throws into the timer).
-    if (this.esSessionDay) {
-      saveFootprint(this.esSessionDay, this.esSymbol, { trades: this.esBigTrades, delta }).catch(() => {});
-    }
-    // Local file fallback.
-    try {
-      fs.writeFileSync(ES_FOOTPRINT_FILE, JSON.stringify(payload), 'utf8');
-    } catch (e) {
-      console.log('[ES-FP] could not persist footprint to disk:', e.message);
-    }
-  }
-
   _onEvent(ev) {
     marketState.setStatus({ lastFeedAt: Date.now() });
     const sym = ev.eventSymbol;
@@ -2278,11 +2000,9 @@ class TastytradeProxy {
       if (sym === this.esSymbol) {
         const px = Number(ev.price);
         if (px > 0) {
-          // ES Trade is used ONLY for the live price (esFut) now. The footprint
-          // bubbles are fed by TimeAndSale below (real per-print size + exchange
-          // aggressorSide) — the conflated Trade event under-reported block sizes.
-          // esFut = last trade CLAMPED into the live bid/ask: matches TradingView's
-          // last-price display while tracking the market on a wide spread.
+          // ES Trade drives the live price (esFut): last trade CLAMPED into the
+          // live bid/ask, which matches TradingView's last-price display while
+          // tracking the market on a wide spread.
           this.esLastTrade = px;
           this._publishEsFut();
         }
@@ -2307,21 +2027,6 @@ class TastytradeProxy {
         // recompute) so isOtm is classified correctly from the very first print.
         spot: this.spot || marketState.getSpot(),
       });
-      return;
-    }
-
-    if (ev.eventType === 'TimeAndSale') {
-      // Tick-by-tick time & sales — the footprint bubble source. Only the ES
-      // future is subscribed to TAS. dxFeed aggressorSide is 'Buy'|'Sell'|'Undefined'
-      // (case can vary); use it directly when present, else fall back to the
-      // bid/ask inference inside _recordEsPrint.
-      if (sym !== this.esSymbol) return;
-      const px = Number(ev.price);
-      const sz = Number(ev.size);
-      if (!(px > 0) || !(sz > 0)) return;
-      const ag = String(ev.aggressorSide || '').toLowerCase();
-      const side = ag === 'buy' ? 'buy' : ag === 'sell' ? 'sell' : null;
-      this._recordEsPrint(px, sz, side);
       return;
     }
 

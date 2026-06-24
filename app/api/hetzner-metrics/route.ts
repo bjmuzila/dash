@@ -44,16 +44,29 @@ async function fetchMetrics(
   step: number,
 ): Promise<HetznerMetricsResp | null> {
   const url = `${BASE}/servers/${SERVER_ID}/metrics?type=${types}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&step=${step}`;
-  try {
-    const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
-      next: { revalidate: 60 },
-    });
-    if (!r.ok) return null;
-    return r.json();
-  } catch {
-    return null;
+  // Hetzner's metrics endpoint intermittently 5xx's / rate-limits, which used to
+  // return null and blank the owner cards "half the time". Retry a couple times
+  // with a short backoff before giving up. Treat 429/5xx as retryable; 4xx (bad
+  // token/id) is permanent, so bail immediately.
+  const ATTEMPTS = 3;
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    try {
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+        // Don't let Next cache a bad/empty response for 60s; we manage freshness.
+        cache: "no-store",
+      });
+      if (r.ok) return await r.json();
+      // Permanent client errors (except 429) won't fix themselves — stop early.
+      if (r.status >= 400 && r.status < 500 && r.status !== 429) return null;
+    } catch {
+      /* network error — fall through to retry */
+    }
+    if (attempt < ATTEMPTS - 1) {
+      await new Promise((res) => setTimeout(res, 250 * (attempt + 1)));
+    }
   }
+  return null;
 }
 
 function seriesValues(resp: HetznerMetricsResp | null, key: string): number[] {
@@ -98,6 +111,7 @@ export async function GET(req: NextRequest) {
   // No Hetzner creds (e.g. local dev): null payload (200) so UI shows "—".
   if (!TOKEN || !SERVER_ID) {
     return NextResponse.json({
+      ok: false,
       window: win,
       bandwidth: { value: null, unit: "MB", window: win, spark: [] },
       memory:    { value: memBytes, unit: "bytes", window: win, spark: [] },
@@ -140,7 +154,13 @@ export async function GET(req: NextRequest) {
   // Sparkline in MB/point for a readable trend.
   const bwSparkMb = downsample(netVals.map((bps) => (bps * step) / (1024 * 1024)));
 
+  // `ok` = we got at least one real Hetzner series this call. The client uses it
+  // to decide whether to overwrite its cards or keep the last good values — so a
+  // transient empty/failed upstream response no longer blanks the dashboard.
+  const ok = cpuVals.length > 0 || netVals.length > 0;
+
   return NextResponse.json({
+    ok,
     window: win,
     cpu:       { value: cpuFraction, unit: "cpu", window: win, spark: downsample(cpuVals.map((v) => v / 100)) },
     bandwidth: { value: bandwidthMb, unit: "MB",  window: win, spark: bwSparkMb },
