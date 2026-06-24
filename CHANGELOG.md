@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-06-23 (session 60) — Fix deploy pipeline: showHpay build break + push.ps1 staging bug
+
+### Root cause
+- VPS build failed repeatedly on `ReferenceError: showHpay is not defined` at `/budget` prerender. Local `app/budget/page.tsx` was already fixed (`showHpay` → `showRecurring`), but the **committed** file still had `showHpay` on line 272 — the edit was never committed.
+- Why: `push.ps1` staged only `git add package.json`, so every code edit (incl. the budget page) was silently dropped from commits while the version number still bumped. Surfaced after leaving Render because Render auto-pulled+built on push; the VPS requires a manual pull+build, so the missing files finally broke the build.
+
+### Fix (`push.ps1`)
+- Changed `git add package.json` → `git add -A` (stage all changes, not just the version file).
+- Added an `npm run build` gate before commit/push: aborts with a red message if the build fails, so prerender errors are caught locally (~50s) instead of on the VPS after a Docker rebuild.
+
+### Resolution
+- Committed all pending edits (`07356d8`); VPS `grep` confirmed `CLEAN`; build ran through and `dashboard-dashboard-1` started. Site live.
+
+### Workflow confirmed (saved to memory: deploy-windows-vs-vps)
+- Commit + push ONLY on Windows; VPS only pulls + builds (`git fetch && git reset --hard origin/main && docker compose up -d --build`). VPS has no git creds. A commit includes only STAGED files — `git add -A` stages everything in the folder (minus .gitignore) across all sessions.
+
+## 2026-06-23 (session 59) — Budget page rebuilt as owner-only check register + dark dropdowns
+
+### Budget check register (`app/budget/page.tsx`, `app/api/budget/route.ts`, `lib/db.ts`)
+- Rebuilt `/budget` from the old category/transaction UI into a **day-grouped check register** matching Brandon's spreadsheet. New tables in `lib/db.ts` (`budget_register`, `budget_recurring`, `budget_amazon`; auto-create in `ensureAllTables`).
+- Model: each row belongs to one bank (coastal/truist/secu) but the table shows a **single combined running BALANCE** seeded from per-bank BEGINNING balances. Columns: **DATE | LABEL | AMOUNT | BALANCE**. Day-group headers carry item count + **Daily Net** and **EOD Balance** together on the right; collapsible (▾). BEGINNING shows as a cyan **STARTING BALANCE** strip at the top (not inside a day group).
+- Per-bank current balances + SAVE editor sit top-right of the title banner (title = MONTH then **BUDGET**, 🏦 white). Income = green text, payments = red, no heavy fills/underline. Inline-editable label & amount; clear red row-delete buttons.
+- **Recurring** rules (weekly/biweekly/monthly) in `budget_recurring`; occurrences computed **live** per displayed month and merged into the register (not stored). Managed via 🔁 Recurring panel; AUTO badge (cyan) on those rows. Old hardcoded H PAY generator removed.
+- **Amazon** tab: Date / Pay / Gas / Net (= Pay − Gas) with month totals.
+
+### Budget access — owner-only (`app/api/budget/route.ts`, `lib/db.ts`)
+- Added `ownerGate()` via Clerk `auth()`: **401** if not signed in, **403** if `OWNER_USER_ID` is set and mismatched; falls back to any-signed-in when `OWNER_USER_ID` unset (anti-lockout). Works because the middleware matcher already includes `/(api)(.*)`.
+- Single stable profile key `"owner"`; `adoptDefaultBudgetProfile("owner")` renames the legacy shared `"Default"` profile on first load so existing data carries over. Client can no longer spoof which profile it writes to.
+
+### Global dark dropdowns (`app/globals.css`)
+- Added `select`/`option` styling (`color-scheme: dark` + custom cyan chevron, styled option list) to kill the gray native `<select>` popup **dashboard-wide**.
+
+### Deferred (saved to memory)
+- Full 4-role RBAC (Owner/Admin/Subscriber/Free via Clerk `publicMetadata.role`) + moving admin pages under `/admin/*` — **not built this session** (degraded tooling on a live dashboard). Only budget is gated so far.
+- ⚠️ Linux sandbox was down all session (`HYPERVISOR_VIRT_DISABLED`); changes verified by hand, **not** by `tsc`/build. Run `npm run build` before pushing.
+
+---
+
 ## 2026-06-23 (session 58) — Sidebar Notes panel (per-user) + home stat-bar full-width stretch
 
 ### Sidebar Notes panel (`components/shared/Sidebar.tsx`)

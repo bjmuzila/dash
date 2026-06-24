@@ -22,14 +22,22 @@ type GexCell = { strike: number; netOiVol: number; netVol: number };
 type GexColumn = { slotTs: number; cells: GexCell[] };
 type GexMetric = "voloi" | "vol";
 
-// 5-min-binned big-trade bubble (price = ES price, signed = net of merged prints).
-// maxPrint = the single LARGEST trade in the slot — bubbles are sized by this so
-// a slot with one big block dwarfs a slot of scattered small lots (true size read,
-// like a per-trade footprint).
+// Big-trade bubble: per-SIDE aggregate of all prints inside a 1-second window.
+// A given second can yield a buy bubble AND a sell bubble independently; each is
+// shown only if its combined size clears BUBBLE_MIN_LOTS. size = that side's
+// 1-second total (= the bubble's lot count, drawn as the label).
 type Bubble = {
-  slotTs: number; price: number; size: number; side: "buy" | "sell";
-  buy: number; sell: number; total: number; net: number; maxPrint: number;
+  slotTs: number;        // 1-second window start (ms)
+  price: number;         // volume-weighted price of the window's prints
+  size: number;          // combined lots for this side in the window (label + sizing)
+  side: "buy" | "sell";
+  count: number;         // number of prints merged into this bubble
 };
+
+// Aggregation window + minimum combined size for a bubble to render.
+const BUBBLE_WINDOW_MS = 1000;
+const BUBBLE_MIN_LOTS = 100;
+const bubbleWindowMs = (ts: number) => Math.floor(ts / BUBBLE_WINDOW_MS) * BUBBLE_WINDOW_MS;
 // 5-min net delta bar.
 type DeltaBar = { slotTs: number; net: number };
 
@@ -240,7 +248,6 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   // Bubble size metric: "total" = all volume in the slot, "net" = |buy − sell|.
-  const [bubbleMetric, setBubbleMetric] = useState<"total" | "net">("total");
 
   // Prior-day H/L and overnight H/L from the candle history (ES prices).
   //
@@ -299,31 +306,36 @@ export default function EsCandlesPage() {
     return buildVolumeProfile(todays, 1);
   }, [rows]);
 
-  // ONE bubble per 5-min slot. side = dominant AGGRESSOR (more buy vs sell vol),
-  // size = that dominant side's volume — so a heavy sell slot stays a big red
-  // bubble even when net delta is near zero (late sellers being absorbed).
+  // Aggregate prints into 1-SECOND windows, separately per side. Each (window,
+  // side) becomes a bubble only if its COMBINED lots clear BUBBLE_MIN_LOTS (100) —
+  // so a burst of smaller orders that adds up still shows, but quiet ticks don't.
+  // A single second can produce both a green (buy) and a red (sell) bubble.
   const bubbles = useMemo<Bubble[]>(() => {
-    const bySlot = new Map<number, { buy: number; sell: number; pxVol: number; vol: number; maxPrint: number }>();
+    // key = `${windowMs}|${side}` → accumulated lots, price·vol, print count.
+    const byKey = new Map<string, { ts: number; side: "buy" | "sell"; lots: number; pxVol: number; count: number }>();
     for (const t of rawTrades) {
       if (!(t.size > 0) || !(t.price > 0)) continue;
-      const slotTs = slotFloorMs(t.ts);
-      const agg = bySlot.get(slotTs) ?? { buy: 0, sell: 0, pxVol: 0, vol: 0, maxPrint: 0 };
-      if (t.side === "buy") agg.buy += t.size; else agg.sell += t.size;
+      const side = t.side === "buy" ? "buy" : "sell";
+      const ts = bubbleWindowMs(t.ts);
+      const key = `${ts}|${side}`;
+      const agg = byKey.get(key) ?? { ts, side, lots: 0, pxVol: 0, count: 0 };
+      agg.lots += t.size;
       agg.pxVol += t.price * t.size;
-      agg.vol += t.size;
-      if (t.size > agg.maxPrint) agg.maxPrint = t.size; // largest single block in the slot
-      bySlot.set(slotTs, agg);
+      agg.count += 1;
+      byKey.set(key, agg);
     }
-    return [...bySlot.entries()].map(([slotTs, a]) => {
-      const buyDom = a.buy >= a.sell;
-      return {
-        slotTs,
-        price: a.vol > 0 ? a.pxVol / a.vol : 0,
-        size: buyDom ? a.buy : a.sell, // dominant aggressor volume
-        side: (buyDom ? "buy" : "sell") as "buy" | "sell",
-        buy: a.buy, sell: a.sell, total: a.vol, net: a.buy - a.sell, maxPrint: a.maxPrint,
-      };
-    });
+    const out: Bubble[] = [];
+    for (const a of byKey.values()) {
+      if (a.lots <= BUBBLE_MIN_LOTS) continue; // combined-size floor
+      out.push({
+        slotTs: a.ts,
+        price: a.lots > 0 ? a.pxVol / a.lots : 0,
+        size: a.lots,
+        side: a.side,
+        count: a.count,
+      });
+    }
+    return out;
   }, [rawTrades]);
 
   // Bin per-minute delta into 5-min net bars.
@@ -1011,21 +1023,10 @@ export default function EsCandlesPage() {
         const x1 = xEnd != null ? xEnd : x0 + 8;
         return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
       };
-      // Column pitch in px (center-to-center of adjacent 5-min bars). Drives the
-      // max bubble radius so bubbles shrink and never overlap when zoomed out.
-      const pitch = (() => {
-        const sorted = bubbles.map((b) => b.slotTs).sort((x, y) => x - y);
-        for (let i = 1; i < sorted.length; i++) {
-          const c0 = barCenter(sorted[i - 1]);
-          const c1 = barCenter(sorted[i]);
-          if (c0 != null && c1 != null && Math.abs(c1 - c0) > 0.5) return Math.abs(c1 - c0);
-        }
-        return 24;
-      })();
 
-      // Bubbles lane: one bubble per 5-min slot. Green = buy aggressor, red =
-      // sell. "Bigger, bolder, fewer" — only the genuinely large prints show,
-      // but those are large, solid, and clearly sized by volume.
+      // Bubbles lane: one bubble per 1-second window PER SIDE (≥100 combined lots).
+      // Green = aggressive buys, red = aggressive sells. Size = the window's
+      // combined lot count, positioned at its real timestamp on the time axis.
       const bub = sizeCanvas(bubbleLaneRef.current);
       if (bub) {
         const { ctx, w, h } = bub;
@@ -1033,44 +1034,36 @@ export default function EsCandlesPage() {
         ctx.strokeStyle = "rgba(255,255,255,.06)";
         ctx.beginPath(); ctx.moveTo(0, rowY); ctx.lineTo(w, rowY); ctx.stroke();
         if (showBubbles && bubbles.length) {
-          // Size metric: the slot's LARGEST single print (default) or |net delta|.
-          // Sizing on the biggest block — not summed volume — is what gives the
-          // true small→big spread: one 491-lot trade dwarfs a slot of scattered
-          // 20-lots, like a per-trade footprint. Color is ALWAYS the dominant
-          // aggressor side: green = buyers lifting offers, red = sellers hitting
-          // bids. A big red bubble at a level = aggressive selling being absorbed.
-          const metricOf = (b: Bubble) => (bubbleMetric === "net" ? Math.abs(b.net) : b.maxPrint);
+          // Size = combined lots in the 1s window (the bubble's label).
+          const metricOf = (b: Bubble) => b.size;
 
-          // Radius range. rMin keeps the quietest slots as small visible dots so
-          // the heavy ones pop against them. rCap is much bigger now (the largest
-          // bubbles intentionally overlap neighbors, like the reference) — it fills
-          // the full lane half-height and allows up to ~1.4× the column pitch.
-          const rCap = Math.max(9, Math.min(h * 0.5, pitch * 1.4));
-          const rMin = 2.5;
+          // Radius range. rMin keeps small (just-over-100) bubbles as visible dots;
+          // rCap fills most of the lane half-height. 1s bubbles are positioned by
+          // timestamp and may overlap when big — that's expected, like the reference.
+          const rCap = Math.max(9, h * 0.46);
+          const rMin = 3;
 
-          // Continuous scale over ALL slots (no gating). Anchor "full size" near
-          // the TOP of the largest-print distribution (98th pct) so only the
-          // genuinely biggest block fills rCap and everything else scales DOWN
-          // proportionally — this is what gives the tiny→huge spread instead of
-          // everything saturating to max. (98th, not 100th, so a lone freak print
-          // doesn't crush the rest into dots.)
+          // Continuous scale anchored near the TOP of the size distribution (95th
+          // pct) so only the genuinely biggest 1s burst fills rCap and the rest
+          // scale DOWN proportionally — true small→big spread. Floor the reference
+          // at 2× the min-lots so a quiet session of ~100-lot bubbles still varies.
           const asc = bubbles.map(metricOf).filter((v) => v > 0).sort((a, b) => a - b);
           const ref = asc.length
-            ? Math.max(1, asc[Math.floor(asc.length * 0.98)] ?? asc[asc.length - 1])
+            ? Math.max(BUBBLE_MIN_LOTS * 2, asc[Math.floor(asc.length * 0.95)] ?? asc[asc.length - 1])
             : 1;
+          const floor = BUBBLE_MIN_LOTS; // sizes start scaling from the 100-lot gate
+          const span = Math.max(1, ref - floor);
 
-          // Draw smallest first so heavy prints sit on top.
-          const ordered = [...bubbles].filter((b) => metricOf(b) > 0).sort((a, b) => metricOf(a) - metricOf(b));
+          // Draw smallest first so heavy bursts sit on top.
+          const ordered = [...bubbles].sort((a, b) => metricOf(a) - metricOf(b));
           for (const b of ordered) {
             const cx = barCenter(b.slotTs);
             if (cx == null) continue;
-            const t = Math.min(1, metricOf(b) / ref); // 0..1, clamped near the top
-            // Near-linear radius (mild pow) → a half-size slot reads as a clearly
-            // smaller bubble, not a near-max one. sqrt was bunching the middle up
-            // toward the cap; this keeps small slots genuinely small.
-            const r = rMin + Math.pow(t, 0.85) * (rCap - rMin);
+            const t = Math.min(1, Math.max(0, (metricOf(b) - floor) / span)); // 0..1
+            // Near-linear radius (mild pow) so a 200-lot bubble reads clearly
+            // smaller than an 800-lot one.
+            const r = rMin + Math.pow(t, 0.8) * (rCap - rMin);
             const buy = b.side === "buy";
-            // Fill alpha ramps with size so big bubbles also read as more solid.
             const fillA = 0.45 + t * 0.5;
             ctx.beginPath();
             ctx.arc(cx, rowY, r, 0, Math.PI * 2);
@@ -1079,14 +1072,13 @@ export default function EsCandlesPage() {
             ctx.lineWidth = 1.25;
             ctx.strokeStyle = buy ? "rgba(80,255,130,.9)" : "rgba(255,120,120,.9)";
             ctx.stroke();
-            // Contract-count label on bubbles big enough to hold text (like the
-            // reference's 491/306/204). r >= 11 ≈ fits ~3 digits at 10px.
+            // Lot-count label on bubbles big enough to hold text.
             if (r >= 11) {
               ctx.fillStyle = "rgba(255,255,255,.92)";
               ctx.font = `bold ${Math.min(12, Math.max(9, Math.round(r * 0.7)))}px Inter, system-ui, sans-serif`;
               ctx.textAlign = "center";
               ctx.textBaseline = "middle";
-              ctx.fillText(String(b.maxPrint), cx, rowY);
+              ctx.fillText(String(b.size), cx, rowY);
             }
           }
           // Reset text alignment so the lane caption below draws left-aligned.
@@ -1096,7 +1088,7 @@ export default function EsCandlesPage() {
         ctx.fillStyle = "rgba(255,255,255,.45)";
         ctx.font = "10px Inter, system-ui, sans-serif";
         ctx.fillText(
-          `BIG TRADE BUBBLES · size = ${bubbleMetric === "net" ? "net Δ" : "largest print"} · green = buys · red = sells`,
+          `BIG TRADE BUBBLES · ≥${BUBBLE_MIN_LOTS} lots / 1s · green = buys · red = sells`,
           6, 12,
         );
       }
@@ -1182,17 +1174,17 @@ export default function EsCandlesPage() {
       if (!canvas || !showBubbles || !bubbles.length) { setBubbleHover(null); return; }
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
-      // Every slot with volume is drawn now, so any of them is hoverable.
+      // Pick the bubble whose center is nearest the cursor x.
       let best: Bubble | null = null;
       let bestDx = Infinity;
       for (const b of bubbles) {
-        if (!(b.total > 0)) continue;
+        if (!(b.size > 0)) continue;
         const cx = ts.timeToCoordinate((b.slotTs / 1000) as UTCTimestamp);
         if (cx == null) continue;
         const dx = Math.abs(cx - mx);
         if (dx < bestDx) { bestDx = dx; best = b; }
       }
-      // Only show when reasonably close to a column (half a pitch).
+      // Only show when reasonably close to a bubble.
       if (best && bestDx <= 14) setBubbleHover({ x: mx, y: e.clientY - rect.top, b: best });
       else setBubbleHover(null);
     };
@@ -1207,7 +1199,7 @@ export default function EsCandlesPage() {
       canvas?.removeEventListener("mouseleave", onLeave);
       drawLanesRef.current = () => {};
     };
-  }, [showBubbles, showDelta, bubbles, deltaBars, rows, bubbleMetric]);
+  }, [showBubbles, showDelta, bubbles, deltaBars, rows]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval, so the lanes/overlay never get stranded on
@@ -1297,14 +1289,6 @@ export default function EsCandlesPage() {
             style={{ borderColor: "rgba(255,255,255,.12)", color: showBubbles ? "#30d158" : "#94a3b8" }}
           >
             Bubbles {showBubbles ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setBubbleMetric((m) => (m === "total" ? "net" : "total"))}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: "#cbd5e1" }}
-            title="Bubble size = total volume vs net delta"
-          >
-            Size: {bubbleMetric === "net" ? "Net Δ" : "Total"}
           </button>
           <button
             onClick={() => setShowDelta((v) => !v)}
@@ -1451,38 +1435,25 @@ export default function EsCandlesPage() {
               }}
             >
               <div className="mb-1 font-mono text-[11px] text-white/55">
-                {new Date(bubbleHover.b.slotTs).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })} ET
+                {new Date(bubbleHover.b.slotTs).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" })} ET
                 <span className="ml-2" style={{ color: isRthSlot(bubbleHover.b.slotTs) ? "#30d158" : "#94a3b8" }}>
                   {isRthSlot(bubbleHover.b.slotTs) ? "RTH" : "O/N"}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-3">
-                <span className="text-white/50">Largest print</span>
-                <span className="font-mono font-bold text-white">{bubbleHover.b.maxPrint.toLocaleString("en-US")}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-white/50">Total</span>
-                <span className="font-mono text-white/80">{bubbleHover.b.total.toLocaleString("en-US")}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span style={{ color: "#30d158" }}>Buy</span>
-                <span className="font-mono" style={{ color: "#30d158" }}>{bubbleHover.b.buy.toLocaleString("en-US")}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span style={{ color: "#ff5b5b" }}>Sell</span>
-                <span className="font-mono" style={{ color: "#ff5b5b" }}>{bubbleHover.b.sell.toLocaleString("en-US")}</span>
-              </div>
-              <div className="mt-1 flex items-center justify-between gap-3 border-t pt-1" style={{ borderColor: "rgba(255,255,255,.1)" }}>
-                <span className="text-white/50">Net Δ</span>
-                <span className="font-mono font-bold" style={{ color: bubbleHover.b.net >= 0 ? "#30d158" : "#ff5b5b" }}>
-                  {bubbleHover.b.net >= 0 ? "+" : ""}{bubbleHover.b.net.toLocaleString("en-US")}
+                <span style={{ color: bubbleHover.b.side === "buy" ? "#30d158" : "#ff5b5b" }}>
+                  {bubbleHover.b.side === "buy" ? "Aggressive BUY" : "Aggressive SELL"}
                 </span>
+                <span className="font-mono font-bold text-white">{bubbleHover.b.size.toLocaleString("en-US")}</span>
               </div>
-              {bubbleHover.b.total > 0 && Math.abs(bubbleHover.b.net) / bubbleHover.b.total <= 0.25 ? (
-                <div className="mt-1 rounded text-center font-mono text-[10px] font-bold tracking-wide" style={{ color: "#0b0b0b", background: "#facc15", padding: "1px 0" }}>
-                  ABSORPTION · heavy, balanced
-                </div>
-              ) : null}
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-white/50">Prints (1s)</span>
+                <span className="font-mono text-white/80">{bubbleHover.b.count.toLocaleString("en-US")}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-white/50">Avg price</span>
+                <span className="font-mono text-white/80">{bubbleHover.b.price.toFixed(2)}</span>
+              </div>
             </div>
           ) : null}
         </div>

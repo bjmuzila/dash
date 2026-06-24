@@ -88,7 +88,17 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
 export default function FailsPage() {
   usePageLoadStatus({ pageKey: "fails", pageLabel: "Fails", path: "/fails" });
 
-  const { candles: allCandles, connected, refresh } = useEsCandles();
+  const { candles: liveCandles, historical, connected, refresh } = useEsCandles();
+
+  // useEsCandles returns ONLY today's bars in `candles`; `historical` holds the
+  // prior ~20 trading days. The fail-rate stats and historical fail log need
+  // that history, so merge both (dedup by slotKey, today's live bar wins).
+  const allCandles = useMemo(() => {
+    const map = new Map<string, (typeof liveCandles)[number]>();
+    for (const c of historical) map.set(c.slotKey, c as (typeof liveCandles)[number]);
+    for (const c of liveCandles) map.set(c.slotKey, c); // live/today overrides
+    return [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
+  }, [liveCandles, historical]);
 
   // This page is ESU-specific (Sept ES). Candle symbols come through as /ESU6,
   // /ESU26, /ESU26:XCME, etc. — keep only those. If the feed tags candles
