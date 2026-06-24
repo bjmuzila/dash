@@ -110,10 +110,19 @@ function slotFloorMs(ts: number): number {
 }
 
 /**
- * Exact port of the GEX heatmap's metricBg() → returns an rgba string.
- * Positive GEX = cyan (41,182,246), negative = red (255,71,87). The 3 largest
- * magnitudes get rank floors so the dominant walls always stand out; everything
- * else follows a power curve scaled by `intensity`.
+ * GEX heatmap color (ES Candles page variant). Positive GEX = cyan
+ * (41,182,246), negative = red (255,71,87). The 3 largest magnitudes get fixed
+ * rank floors so the dominant walls always stand out; everything else follows a
+ * curve scaled by `intensity`.
+ *
+ * Tuned vs. the home page's metricBg() so the LIGHTER (low-magnitude) zones are
+ * actually readable instead of washing out:
+ *   • exponent 0.6 (was 1.4 > 1, which crushed lows toward 0) — sub-1 lifts the
+ *     low/mid end so faint cells gain alpha quickly.
+ *   • intensity multiplies the eased curve OUTSIDE the pow (was inside, where it
+ *     compounded the crush), so the slider scales the whole field linearly.
+ *   • non-top-3 ceiling raised 0.18 → 0.30, floor 0.02 → 0.04, but still kept
+ *     strictly below the rank-3 wall (0.35) so the wall hierarchy is preserved.
  */
 function gexColor(value: number, maxValue: number, intensity: number, top3: number[]): string | null {
   const n = value || 0;
@@ -122,12 +131,42 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
   const pos = n >= 0;
   const rank = top3.indexOf(Math.abs(n)) + 1;
   if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
-  if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
-  if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+  if (rank === 2) return pos ? "rgba(41,182,246,0.55)" : "rgba(255,71,87,0.55)";
+  if (rank === 3) return pos ? "rgba(41,182,246,0.35)" : "rgba(255,71,87,0.35)";
   const ratio = Math.min(Math.abs(n) / m, 1);
-  const eased = Math.pow(ratio * (intensity || 0.1), 1.4);
-  const alpha = Math.min(0.18, 0.02 + eased * 0.16);
+  const eased = Math.pow(ratio, 0.6);
+  const alpha = Math.min(0.30, 0.04 + eased * (intensity || 0.1) * 0.26);
   return pos ? `rgba(41,182,246,${alpha.toFixed(3)})` : `rgba(255,71,87,${alpha.toFixed(3)})`;
+}
+
+// ── Greek-flow time-series overlay ──────────────────────────────────────────
+// A net-exposure curve (net DEX / GEX / CHEX / VEX over the session) drawn on
+// its OWN notional axis, independent of the candle price scale — like the
+// "Delta Flow vs price" overlay. Because GEX/DEX run in the billions while
+// CHEX/VEX run in the millions, the line is scaled to its own min/max each frame
+// and the axis ticks use a magnitude-aware short formatter, so a $2B line and a
+// $40M line both fill the panel and read cleanly (no "0.04B" weirdness).
+type FlowMetric = "dex" | "gex" | "chex" | "vex";
+type FlowPoint = { ts: number; value: number };
+
+// One row from /api/snapshots/greeks: gex/dex are in $billions, chex/vex in
+// $millions. We multiply back to raw $ so the axis labels read in real notional.
+const FLOW_META: Record<FlowMetric, { label: string; color: string; unit: number }> = {
+  dex:  { label: "Delta Flow",  color: "#ff5b5b", unit: 1e9 },
+  gex:  { label: "Gamma Flow",  color: "#29b6f6", unit: 1e9 },
+  chex: { label: "Charm Flow",  color: "#a78bfa", unit: 1e6 },
+  vex:  { label: "Vanna Flow",  color: "#f5c518", unit: 1e6 },
+};
+
+// Short signed $ notional: 2.15B, -500M, 40.0M, 900K, 0. Picks the unit per
+// VALUE (not per metric) so a mixed-magnitude axis never shows "0.04B".
+function fmtNotional(v: number): string {
+  const a = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (a >= 1e9) return `${sign}${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2)}B`;
+  if (a >= 1e6) return `${sign}${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
+  if (a >= 1e3) return `${sign}${(a / 1e3).toFixed(0)}K`;
+  return `${sign}${a.toFixed(0)}`;
 }
 
 export default function EsCandlesPage() {
@@ -136,8 +175,11 @@ export default function EsCandlesPage() {
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
 
-  // Single source of truth: SQL load (today + ~20d history) + live /ws/gex merge.
-  const { candles: rows, historical, connected, refresh } = useEsCandles();
+  // Single source of truth: rolling ~24h session (overnight + today) from the
+  // SQL load + live /ws/gex merge. sessionCandles spans the continuous ES
+  // session regardless of ET date, so the chart includes the overnight and
+  // follows into a new day (today-only `candles` is for IB / RelVol elsewhere).
+  const { sessionCandles: rows, historical, connected, refresh } = useEsCandles();
 
   const chartRef = useRef<HTMLDivElement>(null);
   // Capture target for the Snap / Discord buttons (chart + lanes panel).
@@ -146,6 +188,11 @@ export default function EsCandlesPage() {
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
+  // ET date of the latest bar the last fitContent() ran for. When the session
+  // rolls to a new ET day, new bars append far to the right; without re-fitting
+  // the viewport stays parked on the prior day (looks "stuck"), or a manual fit
+  // spans both sessions across the overnight gap and the time axis reads wrong.
+  const lastFitDayRef = useRef("");
 
   // Heatmap overlay state.
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -163,7 +210,7 @@ export default function EsCandlesPage() {
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
   const [showMvcLine, setShowMvcLine] = useState(true);
   const [showHeatmap, setShowHeatmap] = useState(true);
-  const [intensity, setIntensity] = useState(0.5); // matches the home heatmap slider default
+  const [intensity, setIntensity] = useState(0.65); // page-local default; tuned with gexColor so light zones read clearly
   // Heatmap metric: "voloi" = gamma×(OI+vol), "vol" = gamma×vol only. Mirrored
   // in a ref so the WS-driven overlay draw reads it without re-subscribing.
   const [gexMetric, setGexMetric] = useState<GexMetric>("voloi");
@@ -212,6 +259,12 @@ export default function EsCandlesPage() {
   const [showProfile, setShowProfile] = useState(false);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
+
+  // Greek-flow overlay: all four exposure curves (net DEX/GEX/CHEX/VEX) drawn at
+  // once, each normalized to its own range and slot-aligned to the candles.
+  // flowHistory holds today's per-metric snapshots from /api/snapshots/greeks.
+  const [showFlow, setShowFlow] = useState(false);
+  const [flowHistory, setFlowHistory] = useState<Record<FlowMetric, FlowPoint[]>>({ dex: [], gex: [], chex: [], vex: [] });
 
   // Prior-day H/L and overnight H/L from the candle history (ES prices).
   //
@@ -455,6 +508,52 @@ export default function EsCandlesPage() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Load today's Greek-flow time-series (net DEX/GEX/CHEX/VEX) and refresh every
+  // 60s. Each metric's stored value is human-scaled (gex/dex in $B, chex/vex in
+  // $M); multiply by its unit so the curve + axis read in raw notional. We split
+  // into per-metric arrays once so the draw just picks the active one.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/snapshots/greeks?limit=2000`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const raw = Array.isArray(json.rows) ? (json.rows as Array<Record<string, unknown>>) : [];
+        const rowsAsc = raw
+          .map((r) => ({
+            ts:   Number(r.timestamp ?? 0),
+            dex:  Number(r.dex ?? 0),
+            gex:  Number(r.gex ?? 0),
+            chex: Number(r.chex ?? 0),
+            vex:  Number(r.vex ?? 0),
+          }))
+          .filter((r) => r.ts > 0)
+          .sort((a, b) => a.ts - b.ts);
+        if (cancelled) return;
+        // Keep only the most recent ET day so the curve is the session in view,
+        // not a multi-day smear (the chart's session is ~30h but flow resets daily).
+        const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+        const lastDay = rowsAsc.length ? dayKey(rowsAsc[rowsAsc.length - 1].ts) : "";
+        const today = rowsAsc.filter((r) => dayKey(r.ts) === lastDay);
+        // Snap each snapshot to its 5-min candle slot so flow points land exactly
+        // on candle timestamps (last snapshot in a slot wins). A Map keyed by slot
+        // dedupes to one value per slot, matching the candle grid 1:1.
+        const build = (key: FlowMetric): FlowPoint[] => {
+          const bySlot = new Map<number, number>();
+          for (const r of today) bySlot.set(slotFloorMs(r.ts), r[key] * FLOW_META[key].unit);
+          return [...bySlot.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([ts, value]) => ({ ts, value }));
+        };
+        setFlowHistory({ dex: build("dex"), gex: build("gex"), chex: build("chex"), vex: build("vex") });
+      } catch { /* keep last */ }
+    };
+    void load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // Basis used to derive SPX from ES on the right axis.
   // The live feed's `spot` (broker SPX) is unreliable / mis-scaled — it can quote
   // ABOVE ES intraday, producing a wrong negative basis. The prior-day DB closes
@@ -585,11 +684,15 @@ export default function EsCandlesPage() {
     }));
 
     candleSeries.setData(candleData);
-    // Fit once on first data load only — never re-center on live updates so the
-    // user's pan/zoom is preserved.
-    if (!didFitRef.current && candleData.length) {
+    // Fit on first data load AND whenever the latest bar's ET day advances past
+    // the day we last fit for — so the chart follows the session into the new
+    // day instead of staying parked on the prior one. Within the same day we
+    // never re-center, preserving the user's pan/zoom on live updates.
+    const lastDay = candleData.length ? rows[rows.length - 1].date : "";
+    if (candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
       chart.timeScale().fitContent();
       didFitRef.current = true;
+      lastFitDayRef.current = lastDay;
     }
     updateLiveSpxRef.current();
     // Live candle updates shift the time axis without always firing a logical-
@@ -887,6 +990,104 @@ export default function EsCandlesPage() {
         ctx.restore();
       }
 
+      // ── 4) Greek-flow curves — all four, each normalized to its own range ──
+      // DEX/GEX (billions) and CHEX/VEX (millions) live on wildly different
+      // scales, so every line is normalized to ITS OWN visible-window min/max and
+      // shares one inset band: you read shape/direction across all four, and the
+      // real latest notional shows in each line's colored pill on the right.
+      // X is locked to the candle time scale AND clamped to the candle span, so a
+      // flow point never plots before the first or after the last candle.
+      if (showFlow) {
+        const xOf = (t: number) => ts.timeToCoordinate((Math.floor(t / 1000)) as UTCTimestamp);
+
+        // Candle time range (clamp window). Flow points outside [firstX,lastX]
+        // are dropped so the lines start/end with the candles, not beyond them.
+        let firstX = -Infinity, lastX = Infinity;
+        if (rows.length) {
+          const fx = xOf(rows[0].timestamp);
+          const lx = xOf(rows[rows.length - 1].timestamp);
+          if (fx != null) firstX = fx;
+          if (lx != null) lastX = lx;
+        }
+
+        // Shared inset band — same geometry for every metric.
+        const padTop = h * 0.06, padBot = h * 0.12;
+        const bandH = h - padTop - padBot;
+
+        ctx.save();
+        const order: FlowMetric[] = ["dex", "gex", "chex", "vex"];
+        type P = { x: number; v: number };
+        // Collect each metric's on-screen, in-range, sorted points + its range.
+        const drawn: Array<{ metric: FlowMetric; line: P[]; lo: number; hi: number }> = [];
+        for (const metric of order) {
+          const pts = flowHistory[metric] ?? [];
+          if (pts.length < 2) continue;
+          const line: P[] = [];
+          for (const p of pts) {
+            const x = xOf(p.ts);
+            if (x == null) continue;
+            if (x < firstX - 0.5 || x > lastX + 0.5) continue; // clamp to candles
+            if (x < -2 || x > w + 2) continue;                  // and to viewport
+            line.push({ x, v: p.value });
+          }
+          if (line.length < 2) continue;
+          line.sort((a, b) => a.x - b.x);
+          let lo = Infinity, hi = -Infinity;
+          for (const p of line) { if (p.v < lo) lo = p.v; if (p.v > hi) hi = p.v; }
+          if (!(hi > lo)) { const pad = Math.abs(hi) || 1; lo = hi - pad; hi = hi + pad; }
+          drawn.push({ metric, line, lo, hi });
+        }
+
+        // Each metric maps to the same band via its own [lo,hi].
+        for (const d of drawn) {
+          const yOf = (v: number) => padTop + (1 - (v - d.lo) / ((d.hi - d.lo) || 1)) * bandH;
+          const c = FLOW_META[d.metric].color;
+          ctx.beginPath();
+          ctx.moveTo(d.line[0].x, yOf(d.line[0].v));
+          for (const p of d.line) ctx.lineTo(p.x, yOf(p.v));
+          ctx.strokeStyle = c;
+          ctx.lineWidth = 1;
+          ctx.lineJoin = "round";
+          ctx.stroke();
+        }
+
+        // Right-edge value pills — one per line, stacked at the line's end y,
+        // nudged apart so they don't overlap. Each shows the real latest notional.
+        let scaleW2 = 0;
+        try { scaleW2 = chart.priceScale("right").width(); } catch {}
+        const labelRight = Math.max(48, w - scaleW2 - 6);
+        ctx.font = "10px Inter, system-ui, sans-serif";
+        ctx.textBaseline = "middle";
+        // Sort by end-y so we can spread overlapping pills vertically.
+        const pills = drawn
+          .map((d) => {
+            const yOf = (v: number) => padTop + (1 - (v - d.lo) / ((d.hi - d.lo) || 1)) * bandH;
+            const last = d.line[d.line.length - 1];
+            return { metric: d.metric, y: yOf(last.v), v: last.v };
+          })
+          .sort((a, b) => a.y - b.y);
+        let prevY = -Infinity;
+        for (const p of pills) {
+          let y = p.y;
+          if (y - prevY < 15) y = prevY + 15; // de-overlap
+          prevY = y;
+          const c = FLOW_META[p.metric].color;
+          const txt = `${p.metric.toUpperCase()} ${fmtNotional(p.v)}`;
+          const pw = ctx.measureText(txt).width + 10;
+          ctx.fillStyle = c;
+          ctx.globalAlpha = 0.92;
+          ctx.fillRect(labelRight - pw, y - 7, pw, 14);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = "#06080d";
+          ctx.textAlign = "right";
+          ctx.fillText(txt, labelRight - 5, y);
+        }
+
+        ctx.restore();
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+      }
+
     };
 
     drawOverlayRef.current = draw;
@@ -902,7 +1103,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory, showFlow, flowHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval, so the lanes/overlay never get stranded on
@@ -1017,6 +1218,24 @@ export default function EsCandlesPage() {
             PDH/ON {showSessions ? "ON" : "OFF"}
           </button>
           <button
+            onClick={() => setShowFlow((v) => !v)}
+            className="rounded border px-3 py-1 text-xs"
+            style={{ borderColor: "rgba(255,255,255,.12)", color: showFlow ? "#cbd5e1" : "#94a3b8" }}
+            title="Greek-flow curves — net DEX/GEX/CHEX/VEX, each normalized to its own range, slot-aligned to the candles"
+          >
+            Flow {showFlow ? "ON" : "OFF"}
+          </button>
+          {showFlow ? (
+            <span className="flex items-center gap-2 text-[10px] font-mono">
+              {(["dex", "gex", "chex", "vex"] as const).map((m) => (
+                <span key={m} className="flex items-center gap-1" title={FLOW_META[m].label}>
+                  <span style={{ display: "inline-block", width: 10, height: 2, background: FLOW_META[m].color }} />
+                  <span style={{ color: FLOW_META[m].color }}>{m.toUpperCase()}</span>
+                </span>
+              ))}
+            </span>
+          ) : null}
+          <button
             onClick={() => setGexMetric((m) => (m === "voloi" ? "vol" : "voloi"))}
             className="rounded border px-3 py-1 text-xs font-mono"
             style={{ borderColor: "rgba(255,255,255,.12)", color: gexMetric === "vol" ? "#f0997b" : "#5dcaa5" }}
@@ -1024,13 +1243,14 @@ export default function EsCandlesPage() {
           >
             {gexMetric === "vol" ? "GEX: Vol" : "GEX: Vol+OI"}
           </button>
-          <label className="flex items-center gap-1.5 text-white/55">
+          <label className="flex items-center gap-1.5 text-white/55" title="Heatmap brightness — raises the lighter low-GEX zones without blowing out the walls">
             intensity
             <input
-              type="range" min={0.05} max={1} step={0.05} value={intensity}
+              type="range" min={0.1} max={1} step={0.05} value={intensity}
               onChange={(e) => setIntensity(Number(e.target.value))}
-              style={{ width: 90 }}
+              style={{ width: 110 }}
             />
+            <span className="w-7 font-mono text-[10px] tabular-nums text-white/70">{intensity.toFixed(2)}</span>
           </label>
           <button onClick={() => void refresh()} className="rounded border px-3 py-1 text-xs" style={{ borderColor: "rgba(255,255,255,.12)", color: "#ffb4b4" }}>
             Refresh

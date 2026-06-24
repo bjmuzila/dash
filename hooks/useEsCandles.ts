@@ -80,6 +80,11 @@ export function useEsCandles() {
   const [historical, setHistorical] = useState<EsCandleRecord[]>([]);
   const [connected, setConnected] = useState(false);
   const liveMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
+  // Live bars for the rolling-session view, kept REGARDLESS of date so the
+  // overnight session (prior-day-dated bars) survives — liveMapRef above is
+  // today-only and feeds `candles` (IB / RelVol consumers expect today-only).
+  const sessionMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
+  const [sessionTick, setSessionTick] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
@@ -91,8 +96,12 @@ export function useEsCandles() {
     if (hist.length) setHistorical(hist);
     if (today.length) {
       // Merge — never wipe live bars already in the map.
-      for (const r of today) if (!liveMapRef.current.has(r.slotKey)) liveMapRef.current.set(r.slotKey, r);
+      for (const r of today) {
+        if (!liveMapRef.current.has(r.slotKey)) liveMapRef.current.set(r.slotKey, r);
+        if (!sessionMapRef.current.has(r.slotKey)) sessionMapRef.current.set(r.slotKey, r);
+      }
       setTodayRows([...liveMapRef.current.values()]);
+      setSessionTick((n) => n + 1);
     }
   }, []);
 
@@ -117,14 +126,19 @@ export function useEsCandles() {
     const ingest = (rows: unknown) => {
       if (!Array.isArray(rows)) return;
       let changed = false;
+      let sessionChanged = false;
       for (const raw of rows as EsCandleRecord[]) {
         if (!raw || !raw.slotKey) continue;
-        // Only merge today's live bars into the today set.
+        // Rolling-session map keeps every live bar (incl. overnight, any date).
+        sessionMapRef.current.set(raw.slotKey, raw);
+        sessionChanged = true;
+        // Today set is today-only (feeds `candles` for IB / RelVol).
         if (dateOf(raw) !== today) continue;
         liveMapRef.current.set(raw.slotKey, raw);
         changed = true;
       }
       if (changed) setTodayRows([...liveMapRef.current.values()]);
+      if (sessionChanged) setSessionTick((n) => n + 1);
     };
 
     const handle = (rawMsg: string) => {
@@ -184,5 +198,18 @@ export function useEsCandles() {
       });
   }, [todayRows, historical]);
 
-  return { candles, historical, connected, refresh };
+  // Rolling continuous-session view: ~30h of bars regardless of ET date, so the
+  // overnight (prior-day-dated) session is included and the chart follows into a
+  // new day. Merge DB history with the live session map; live wins on slotKey.
+  const sessionCandles = useMemo<EsCandleRecord[]>(() => {
+    void sessionTick; // re-run when live session bars arrive
+    const WINDOW_MS = 30 * 60 * 60 * 1000;
+    const cutoff = Date.now() - WINDOW_MS;
+    const map = new Map<string, EsCandleRecord>();
+    for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
+    for (const c of sessionMapRef.current.values()) if (c.timestamp >= cutoff) map.set(c.slotKey, c);
+    return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
+  }, [historical, sessionTick]);
+
+  return { candles, sessionCandles, historical, connected, refresh };
 }

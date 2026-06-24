@@ -47,6 +47,8 @@ interface RenderMetrics {
   memory:    { value: number | null; unit: string; window: string; spark?: number[] };
   cpu:       { value: number | null; unit: string; window: string; spark?: number[] };
   fetchedAt: string;
+  // True when HETZNER_API_TOKEN/SERVER_ID are missing (Host Net + CPU can't load).
+  unconfigured?: boolean;
 }
 
 // Merge a freshly-fetched metrics payload into the previous one, keeping the last
@@ -76,6 +78,7 @@ function mergeRenderMetrics(prev: RenderMetrics | null, next: RenderMetrics): Re
     memory: pick(prev.memory, next.memory),
     // Only advance the timestamp when we actually got fresh host data.
     fetchedAt: gotReal ? next.fetchedAt : prev.fetchedAt,
+    unconfigured: next.unconfigured,
   };
 }
 
@@ -85,6 +88,10 @@ interface CfMetrics {
   ok?: boolean;
   egress: { value: number | null; unit: string; window: string; spark?: number[] };
   fetchedAt: string;
+  // True when the route reports missing CLOUDFLARE_API_TOKEN/ZONE_ID — lets the
+  // card show an explicit "Setup needed" state instead of a silent "—" (which is
+  // indistinguishable from a transient GraphQL failure).
+  unconfigured?: boolean;
 }
 
 // Merge guard for the Cloudflare card — identical intent to mergeRenderMetrics:
@@ -102,6 +109,7 @@ function mergeCfMetrics(prev: CfMetrics | null, next: CfMetrics): CfMetrics {
       spark: next.egress.spark && next.egress.spark.length ? next.egress.spark : prev.egress.spark,
     },
     fetchedAt: gotReal ? next.fetchedAt : prev.fetchedAt,
+    unconfigured: next.unconfigured,
   };
 }
 
@@ -139,7 +147,6 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Greeks", href: "/greeks" },
-      { label: "Insights", href: "/insights" },
       { label: "Confidence", href: "/confidence-score" },
       { label: "Est. Moves FE", href: "/em" },
     ],
@@ -1291,10 +1298,14 @@ export default function OwnerDashboard() {
                   : cfMetrics.egress.value < 1024 * 1024
                     ? `${(cfMetrics.egress.value / 1024).toFixed(2)} GB`
                     : `${(cfMetrics.egress.value / 1024 / 1024).toFixed(2)} TB`
-                : "—"}
+                : cfMetrics?.unconfigured
+                  ? "Setup needed"
+                  : "—"}
               accent={HOME_THEME.orange}
               mono
-              footer={<Sparkline data={cfMetrics?.egress.spark ?? []} accent={HOME_THEME.orange} />}
+              footer={cfMetrics?.unconfigured && cfMetrics.egress.value == null
+                ? <div style={{ fontSize: 9, color: HOME_THEME.muted, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
+                : <Sparkline data={cfMetrics?.egress.spark ?? []} accent={HOME_THEME.orange} />}
             />
             <StatCard
               label={`Host Net · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
@@ -1302,10 +1313,14 @@ export default function OwnerDashboard() {
                 ? renderMetrics.bandwidth.value < 1024
                   ? `${renderMetrics.bandwidth.value.toFixed(1)} MB`
                   : `${(renderMetrics.bandwidth.value / 1024).toFixed(2)} GB`
-                : "—"}
+                : renderMetrics?.unconfigured
+                  ? "Setup needed"
+                  : "—"}
               accent={HOME_THEME.cyan}
               mono
-              footer={<Sparkline data={renderMetrics?.bandwidth.spark ?? []} accent={HOME_THEME.cyan} />}
+              footer={renderMetrics?.unconfigured && renderMetrics.bandwidth.value == null
+                ? <div style={{ fontSize: 9, color: HOME_THEME.muted, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
+                : <Sparkline data={renderMetrics?.bandwidth.spark ?? []} accent={HOME_THEME.cyan} />}
             />
             <StatCard
               label="Memory · App RSS"

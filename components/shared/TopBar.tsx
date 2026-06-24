@@ -9,7 +9,6 @@ const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
   { label: "Premarket",     href: "/premarket" },
   { label: "Database",      href: "/database" },
-  { label: "Insights",      href: "/insights" },
   { label: "Est. Move",     href: "/estimated-move" },
   { label: "Options Chain", href: "/options-chain" },
   { label: "Multi Greek",   href: "/mult-greek" },

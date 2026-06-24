@@ -38,7 +38,7 @@ const commands = [
           { name: 'GEX Chart',      value: 'gex-chart' },
           { name: 'Heatmap',        value: 'heatmap' },
           { name: 'Snapshot Flow',  value: 'snapshot-flow' },
-          { name: 'SPX Flow',       value: 'spx-flow' },
+          { name: 'Signals',        value: 'signals' },
           { name: 'MVC',            value: 'mvc' },
           { name: 'Exposure Stack', value: 'exposure-stack' },
           { name: 'Multi Greek',    value: 'multi-greek' },

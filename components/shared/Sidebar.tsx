@@ -83,7 +83,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Greeks", href: "/greeks" },
-      { label: "Insights", href: "/insights" },
       { label: "Confidence", href: "/confidence-score" },
       { label: "Estimated Moves Front End", href: "/em" },
       { label: "Help & Docs", href: "/docs" },

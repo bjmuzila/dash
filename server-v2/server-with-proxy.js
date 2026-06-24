@@ -462,6 +462,9 @@ async function main() {
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
     require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
+    // Overnight ES gap tracker: posts the 9:30 gap (vs prior 16:00 print) once the
+    // 09:30 candle lands, then updates fill % every 5m during RTH → /api/es-gap.
+    require('./es-gap-tracker').startEsGapTracker(PORT);
   });
 
   const shutdown = () => {

@@ -9,7 +9,7 @@ import NquQuotePill from "@/components/dashboard/NquQuotePill";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
-import FlowTape from "@/components/dashboard/FlowTape";
+import SignalsPanel from "@/components/dashboard/SignalsPanel";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
@@ -327,7 +327,7 @@ export default function HomePage() {
   const unmountedRef = useRef(false);
 
   const [now, setNow] = useState<Date | null>(null);
-  const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "spxflow">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "signals">("calendar");
   const [gexMode, setGexMode] = useState<GexMode>("net");
 
   // ── Ticker auto-fit: scale the whole ticker box down so it always fits its
@@ -900,7 +900,7 @@ export default function HomePage() {
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "snapshot", label: "Snapshot Flow", icon: <ActivityIcon /> },
-                  { id: "spxflow", label: "SPX Flow", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg> },
+                  { id: "signals", label: "Signals", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
@@ -918,9 +918,9 @@ export default function HomePage() {
                     <SnapshotPanel orders={flowOrders} bucket={flowBucket} />
                   </div>
                 )}
-                {activeTab === "spxflow" && (
+                {activeTab === "signals" && (
                   <div className="tab-panel-embed" style={{ margin: -24, height: "calc(100% + 48px)" }}>
-                    <FlowTape orders={flowOrders} connected={status === "LIVE"} />
+                    <SignalsPanel orders={flowOrders} bucket={flowBucket} esPrice={esFut} />
                   </div>
                 )}
               </div>

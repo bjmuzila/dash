@@ -333,6 +333,35 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_eod_gex_date ON eod_gex(date);
     CREATE INDEX IF NOT EXISTS idx_eod_gex_symbol ON eod_gex(symbol);
+
+    -- Overnight ES gap tracker: one row per trading day, keyed on date.
+    -- The gap is two EXACT 5-minute ES candle prints (never substituted):
+    --   prior_close = close of YESTERDAY's 15:55 bar  (the 16:00:00 ET print)
+    --   open_0930   = open  of TODAY's     09:30 bar  (the 09:30:00 ET print)
+    --   gap_pts     = open_0930 - prior_close   (signed; + = gap up, - = gap down)
+    -- Once open_0930 is written the row is locked=1 and the gap never changes
+    -- (mirrors ib_levels). Fill tracking ratchets toward prior_close and never
+    -- reverses: pct_filled climbs 0→100 as price retraces the gap, filled flips
+    -- 0→1 the moment price touches prior_close (stamped in fill_ts). extreme_after
+    -- is the furthest price has traveled toward the close (low for gap-up days,
+    -- high for gap-down days) — the high-water mark that drives pct_filled.
+    CREATE TABLE IF NOT EXISTS es_gap (
+      id            SERIAL PRIMARY KEY,
+      date          TEXT NOT NULL UNIQUE,
+      symbol        TEXT NOT NULL DEFAULT '/ES',
+      prior_close   DOUBLE PRECISION,
+      open_0930     DOUBLE PRECISION,
+      gap_pts       DOUBLE PRECISION,
+      gap_dir       TEXT,                 -- 'up' | 'down' | 'flat'
+      locked        INTEGER NOT NULL DEFAULT 0,
+      filled        INTEGER NOT NULL DEFAULT 0,
+      pct_filled    DOUBLE PRECISION NOT NULL DEFAULT 0,  -- 0..100, ratchets up
+      fill_ts       BIGINT,               -- epoch ms when price first touched prior_close
+      extreme_after DOUBLE PRECISION,     -- furthest price toward prior_close so far
+      open_ts       BIGINT,               -- epoch ms the row was posted (9:30 bar landed)
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_es_gap_date ON es_gap(date);
   `);
 }
 
@@ -1166,6 +1195,80 @@ export async function getBzilaSnapshots(date?: string, limit = 200): Promise<Bzi
     "SELECT * FROM bzila_snapshots ORDER BY timestamp DESC LIMIT ?",
     [limit]
   );
+}
+
+// ── ES Overnight Gap (one row per trading day) ─────────────────────────────────
+
+export interface EsGapRecord {
+  id?: number;
+  date: string;
+  symbol?: string;
+  prior_close: number | null;
+  open_0930: number | null;
+  gap_pts: number | null;
+  gap_dir: "up" | "down" | "flat" | null;
+  locked: number;
+  filled: number;
+  pct_filled: number;
+  fill_ts: number | null;
+  extreme_after: number | null;
+  open_ts: number | null;
+  updated_at?: string | null;
+}
+
+/**
+ * Post the day's gap row. Writes prior_close / open_0930 / gap_pts ONCE and locks
+ * the row (locked=1); a second call for the same date is a no-op on those fields
+ * (mirrors ib_levels' frozen-once rule). Safe to call repeatedly.
+ */
+export async function postEsGap(r: {
+  date: string;
+  symbol?: string;
+  prior_close: number;
+  open_0930: number;
+  gap_pts: number;
+  gap_dir: "up" | "down" | "flat";
+  open_ts: number;
+}): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO es_gap (date, symbol, prior_close, open_0930, gap_pts, gap_dir, locked, open_ts, extreme_after, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,1,$7,$4,CURRENT_TIMESTAMP)
+     ON CONFLICT(date) DO NOTHING`,
+    [r.date, r.symbol ?? "/ES", r.prior_close, r.open_0930, r.gap_pts, r.gap_dir, r.open_ts]
+  );
+}
+
+/**
+ * Push a fill update for the day. Ratchets toward prior_close and never reverses:
+ *   - pct_filled only increases (GREATEST against the stored value)
+ *   - filled only flips 0→1, and fill_ts is stamped once
+ *   - extreme_after tracks the furthest price toward the close
+ * No-op if the row isn't posted/locked yet.
+ */
+export async function updateEsGapFill(r: {
+  date: string;
+  pct_filled: number;
+  extreme_after: number;
+  filled: boolean;
+  fill_ts: number | null;
+}): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE es_gap SET
+       pct_filled    = GREATEST(es_gap.pct_filled, $2),
+       extreme_after = $3,
+       filled        = CASE WHEN es_gap.filled = 1 OR $4 THEN 1 ELSE 0 END,
+       fill_ts       = COALESCE(es_gap.fill_ts, $5),
+       updated_at    = CURRENT_TIMESTAMP
+     WHERE date = $1 AND locked = 1`,
+    [r.date, r.pct_filled, r.extreme_after, r.filled, r.fill_ts]
+  );
+}
+
+export async function getEsGap(date: string): Promise<EsGapRecord | null> {
+  const rows = await queryAll<EsGapRecord>(`SELECT * FROM es_gap WHERE date = ? LIMIT 1`, [date]);
+  return rows[0] ?? null;
 }
 
 // ── Expirations Cache ─────────────────────────────────────────────────────────
