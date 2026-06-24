@@ -801,6 +801,7 @@ export default function GreeksPage() {
   const [history, setHistory] = useState<GreekPoint[]>([]);
   const [latest, setLatest] = useState<GreekPoint | null>(null);
   const [lastRefresh, setLastRefresh] = useState("--");
+  const [lastPoll, setLastPoll] = useState("--"); // last auto-poll attempt (alive-check, independent of data)
   const [stale, setStale] = useState(false);
   const [mode, setMode] = useState<GraphMode>("line");
   const [vol, setVol] = useState<VolData | null>(null);
@@ -809,7 +810,13 @@ export default function GreeksPage() {
   const lastSigIdsRef = useRef<Set<string>>(new Set());
   const mountedRef = useRef(true);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Set true on (re)mount, false on unmount. Previously this only set false on
+  // cleanup — under React 18 Strict Mode (dev) the mount→unmount→remount cycle
+  // latched it false on the throwaway mount and never restored it, so the 30s
+  // poll fired but every tick saw mountedRef=false and skipped the update. Only
+  // the manual button (which ignores mountedRef) worked. Restoring true on mount
+  // keeps the auto-refresh alive.
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   // Seed from persisted snapshots so graphs aren't blank on first paint.
   useEffect(() => {
@@ -841,6 +848,9 @@ export default function GreeksPage() {
   }, []);
 
   const doRefresh = useCallback(async () => {
+    // Stamp every attempt so the header proves the poll loop is alive even when
+    // the payload is unchanged/empty (separates "loop dead" from "no new data").
+    setLastPoll(etTime());
     // Vol data (VIX / IV) fetched alongside — non-blocking, best-effort.
     fetch("/api/insights/vix", { cache: "no-store" })
       .then(res => res.ok ? res.json() : null)
@@ -934,7 +944,7 @@ export default function GreeksPage() {
         <div>
           <div style={{ fontSize: 20, fontWeight: 900, color: "#eef7ff", letterSpacing: ".03em" }}>Greeks</div>
           <div style={{ fontSize: 11, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em" }}>
-            SPX dealer exposure · last refresh {lastRefresh}{stale ? " · feed idle" : ""}
+            SPX dealer exposure · data {lastRefresh}{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

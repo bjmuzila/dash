@@ -263,7 +263,7 @@ export default function FailsPage() {
                       ) : "—"}
                     </span>
                     <span style={{ color: HOME_THEME.text, opacity: 0.8 }}>
-                      {s.lastEvent ? `fail ${etClock(s.lastEvent.failTs)} · poke ${s.lastEvent.pokePts.toFixed(2)}` : "no fail today"}
+                      {s.lastEvent ? `fail ${etClock(s.lastEvent.failTs)} · dd ${s.lastEvent.pokePts.toFixed(2)}` : "no fail today"}
                     </span>
                   </div>
                   {(() => {
@@ -358,9 +358,10 @@ function FailTable({
               <Th>Level</Th>
               <Th>Type</Th>
               <Th right>Level ({unit})</Th>
-              <Th right>Poke</Th>
+              <Th right>Drawdown</Th>
               <Th right>Close Back</Th>
               <Th right>Follow-thru</Th>
+              <Th right>R/R</Th>
             </tr>
           </thead>
           <tbody>
@@ -378,6 +379,14 @@ function FailTable({
                   <Td right mono color={HOME_THEME.orange}>{e.pokePts.toFixed(2)}</Td>
                   <Td right mono color={HOME_THEME.text}>{fmt(e.closeBack)}</Td>
                   <Td right mono color={e.followThruPts > 0 ? HOME_THEME.green : HOME_THEME.text}>{e.followThruPts.toFixed(2)}</Td>
+                  {(() => {
+                    const rr = e.pokePts > 0 ? e.followThruPts / e.pokePts : null;
+                    return (
+                      <Td right mono color={rr == null ? HOME_THEME.text : rr >= 1 ? HOME_THEME.green : HOME_THEME.red}>
+                        {rr == null ? "—" : `${rr.toFixed(2)}R`}
+                      </Td>
+                    );
+                  })()}
                 </tr>
               );
             })}
