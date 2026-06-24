@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { SignInButton } from "@clerk/nextjs";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import SplashScreen from "@/components/landing/SplashScreen";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
@@ -55,6 +56,7 @@ export default function LandingClient() {
         color: T.text,
       }}
     >
+      <SplashScreen />
       {/* Mobile: shrink the card so it fits an iPhone viewport without scrolling */}
       <style>{`
         @media (max-width: 640px) {

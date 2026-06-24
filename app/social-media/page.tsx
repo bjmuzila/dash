@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEsCandles } from "@/hooks/useEsCandles";
+import { computeRefLevels } from "@/lib/failLevels";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Social Media (admin) — turns the daily pre-market GEX read into social posts.
@@ -73,6 +75,16 @@ function toNum(v: string | number | null | undefined): number {
 function fmt(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return "";
   return v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: digits });
+}
+
+// Today's date in ET as YYYY-MM-DD — matches the fails page / failLevels window.
+function todayETStr(): string {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const m: Record<string, string> = {};
+  p.forEach((x) => { m[x.type] = x.value; });
+  return `${m.year}-${m.month}-${m.day}`;
 }
 
 // ── Bias from the options-flow regime ────────────────────────────────────────
@@ -277,8 +289,37 @@ export default function SocialMediaPage() {
   const [genState, setGenState] = useState<"idle" | "busy">("idle");
   const [genError, setGenError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   // Once the user edits a field we stop overwriting it on the next hydrate poll.
   const dirtyRef = useRef(false);
+
+  // ES overnight H/L sourced exactly like the Fails page: live + historical 5m ES
+  // candles → computeRefLevels → onHigh/onLow (prior 18:00 ET → 09:30 ET globex).
+  // Raw ESU futures points, same unit the Fails page and the daily-input API use.
+  const { candles: liveCandles, historical, refresh: refreshCandles } = useEsCandles();
+  const esOvernight = useMemo<{ high: number | null; low: number | null }>(() => {
+    const map = new Map<string, (typeof liveCandles)[number]>();
+    for (const c of historical) map.set(c.slotKey, c as (typeof liveCandles)[number]);
+    for (const c of liveCandles) map.set(c.slotKey, c); // today's live bar wins
+    const merged = [...map.values()];
+    const esu = merged.filter((c) => (c.symbol ?? "").toUpperCase().includes("ESU"));
+    const pool = esu.length ? esu : merged;
+    const levels = computeRefLevels(pool, todayETStr());
+    const onHigh = levels.find((l) => l.kind === "onHigh")?.price ?? null;
+    const onLow = levels.find((l) => l.kind === "onLow")?.price ?? null;
+    return { high: onHigh, low: onLow };
+  }, [liveCandles, historical]);
+  const ovnFromCandles = useMemo(
+    () =>
+      esOvernight.high != null && esOvernight.low != null
+        ? `${fmt(esOvernight.high)} / ${fmt(esOvernight.low)}`
+        : "",
+    [esOvernight.high, esOvernight.low],
+  );
+  // Latest candle-derived overnight string, read inside hydrate() without making
+  // it a dependency (keeps the API fetch from re-firing on every candle tick).
+  const ovnRef = useRef(ovnFromCandles);
+  ovnRef.current = ovnFromCandles;
 
   const today = useMemo(
     () => new Date().toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" }),
@@ -305,10 +346,13 @@ export default function SocialMediaPage() {
       const spot = d.spxSpot ?? NaN;
       const flip = d.gammaFlip ?? NaN;
       const netGex = d.netGex ?? NaN;
+      // ES overnight comes from the Fails-page candle logic. Fall back to the
+      // daily-input API value only if the candle feed hasn't produced one yet.
       const ovn =
-        d.esOvernightHigh != null && d.esOvernightLow != null
+        ovnRef.current ||
+        (d.esOvernightHigh != null && d.esOvernightLow != null
           ? `${fmt(d.esOvernightHigh)} / ${fmt(d.esOvernightLow)}`
-          : "";
+          : "");
       setForm({
         spot: d.spxSpot != null ? fmt(d.spxSpot) : "",
         flip: d.gammaFlip != null ? fmt(d.gammaFlip) : "",
@@ -331,6 +375,13 @@ export default function SocialMediaPage() {
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  // Keep the ES Overnight field tracking the live candle feed (Fails-page logic).
+  // Updates as new globex bars arrive, but never clobbers a manual edit.
+  useEffect(() => {
+    if (dirtyRef.current || !ovnFromCandles) return;
+    setForm((f) => (f.ovn === ovnFromCandles ? f : { ...f, ovn: ovnFromCandles }));
+  }, [ovnFromCandles]);
 
   const regime = regimeOf(form);
 
@@ -374,6 +425,19 @@ export default function SocialMediaPage() {
     }
   }, [form, regime.label, today]);
 
+  // Manual refresh — re-pulls the dashboard stats (and ES candles) and lets the
+  // Daily Input repopulate from live state. Clears the dirty flag so an explicit
+  // refresh overrides earlier auto-fill edits; manual typing after still sticks.
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    dirtyRef.current = false;
+    try {
+      await Promise.all([hydrate(), Promise.resolve(refreshCandles?.())]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [hydrate, refreshCandles]);
+
   return (
     <div id="page-social-media" className="sm-page">
       <style>{`
@@ -393,7 +457,10 @@ export default function SocialMediaPage() {
           --text2: #c9d4e3;
           --sm-muted: var(--muted, #8b94a7);
           --sm-border: var(--border, rgba(255,255,255,0.1));
-          --sm-mono: ui-monospace, "SF Mono", Menlo, monospace;
+          /* Arial across the whole page: the label tokens that used to map to a
+             monospace stack now resolve to Arial, so every element that
+             references --sm-mono renders in Arial without per-rule overrides. */
+          --sm-mono: Arial, "Helvetica Neue", sans-serif;
 
           flex: 1;
           min-height: 0;
@@ -403,12 +470,16 @@ export default function SocialMediaPage() {
           font-family: Arial, "Helvetica Neue", sans-serif;
           padding: 24px;
         }
-        #page-social-media * { box-sizing: border-box; }
+        #page-social-media, #page-social-media * { font-family: Arial, "Helvetica Neue", sans-serif; box-sizing: border-box; }
 
         .sm-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--sm-border); padding-bottom: 14px; margin-bottom: 22px; max-width: 1100px; margin-left: auto; margin-right: auto; }
         .sm-head h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; margin: 0; color: var(--text1); }
         .sm-tag { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); border: 1px solid var(--amber); border-radius: 3px; padding: 2px 6px; opacity: 0.85; }
         .sm-date { margin-left: auto; font-family: var(--sm-mono); font-size: 13px; color: var(--sm-muted); }
+        .sm-refresh { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 12px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
+        .sm-refresh:hover { background: var(--bg4); border-color: var(--cyan); }
+        .sm-refresh:active { transform: translateY(1px); }
+        .sm-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
         .sm-live { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cyan); display: flex; align-items: center; gap: 5px; }
         .sm-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); display: inline-block; }
 
@@ -481,6 +552,15 @@ export default function SocialMediaPage() {
         <span className="sm-tag">Admin</span>
         <span className="sm-live"><i />{hydrated ? "Live state" : "Hydrating…"}</span>
         <span className="sm-date">{today}</span>
+        <button
+          type="button"
+          className="sm-refresh"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          title="Re-pull live dashboard stats & ES overnight"
+        >
+          {refreshing ? "Refreshing…" : "↻ Refresh"}
+        </button>
       </div>
 
       <div className="sm-grid">

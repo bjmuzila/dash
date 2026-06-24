@@ -128,6 +128,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Database", href: "/database" },
       { label: "Dev", href: "/dev" },
       { label: "Estimated Moves BE", href: "/estimated-move" },
+      { label: "Social Media", href: "/social-media" },
       { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
     ],
