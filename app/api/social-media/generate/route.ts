@@ -43,11 +43,14 @@ Return ONLY a single JSON object, no markdown, no code fences, no commentary, wi
 
 interface DailyInputPayload {
   spxSpot?: number | null;
+  spxPrevClose?: number | null;
   gammaFlip?: number | null;
   callWall?: number | null;
   putWall?: number | null;
   expectedMove?: number | null;
   expectedMoveExpiry?: string | null;
+  emUpper?: number | null;
+  emLower?: number | null;
   netGex?: number | null;
   esOvernightHigh?: number | null;
   esOvernightLow?: number | null;
@@ -74,10 +77,12 @@ function formatUserMessage(d: DailyInputPayload): string {
     `CB Edge — SPX pre-market GEX read${d.date ? ` for ${d.date}` : ""}.`,
     ``,
     `SPX spot: ${num(d.spxSpot)}`,
+    `SPX prior-day close: ${num(d.spxPrevClose)}`,
     `Gamma flip: ${num(d.gammaFlip)}`,
     `Call wall: ${num(d.callWall)}`,
     `Put wall: ${num(d.putWall)}`,
     `Expected move (ATM straddle): ±${num(d.expectedMove)}${d.expectedMoveExpiry ? ` (exp ${d.expectedMoveExpiry})` : ""}`,
+    `Expected-move range (off the prior close): ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper) — these are the EM levels; cite them as the expected range, anchored to the ${num(d.spxPrevClose)} prior close.`,
     `Net GEX: ${d.netGex == null ? "n/a" : `${d.netGex >= 0 ? "+" : ""}${num(d.netGex, 2)}B`}`,
     `ES overnight high: ${num(d.esOvernightHigh)}`,
     `ES overnight low: ${num(d.esOvernightLow)}`,

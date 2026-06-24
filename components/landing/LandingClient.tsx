@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { SignInButton } from "@clerk/nextjs";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import SplashScreen from "@/components/landing/SplashScreen";
@@ -108,7 +109,7 @@ export default function LandingClient() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          padding: 20,
+          padding: "20px 20px 56px",
           overflowY: "auto",
         }}
       >
@@ -207,11 +208,51 @@ export default function LandingClient() {
           </div>
         </div>
       </div>
+
+      {/* Legal footer — visible pre-auth so visitors (and app stores / payment
+          processors) can reach the policies before signing up. */}
+      <div style={legalFooter} className="landing-legal-footer">
+        <Link href="/terms" style={legalLink}>Terms</Link>
+        <span style={legalDot}>·</span>
+        <Link href="/risk-disclosure" style={legalLink}>Risk Disclosure</Link>
+        <span style={legalDot}>·</span>
+        <Link href="/privacy" style={legalLink}>Privacy</Link>
+        <span style={legalDot}>·</span>
+        <Link href="/disclaimer" style={legalLink}>Disclaimer</Link>
+      </div>
     </div>
   );
 }
 
 /* ── styles ───────────────────────────────────────────────────────────── */
+
+const legalFooter: React.CSSProperties = {
+  position: "absolute",
+  bottom: 0,
+  left: 0,
+  right: 0,
+  zIndex: 3,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  padding: "12px 16px calc(12px + env(safe-area-inset-bottom, 0px))",
+  fontSize: 11.5,
+  color: T.muted,
+  background: "linear-gradient(180deg, transparent, rgba(5,6,10,0.7))",
+};
+
+const legalLink: React.CSSProperties = {
+  color: T.muted,
+  textDecoration: "none",
+  fontWeight: 600,
+  letterSpacing: "0.02em",
+};
+
+const legalDot: React.CSSProperties = {
+  color: "rgba(139,148,167,0.5)",
+};
 
 const card: React.CSSProperties = {
   position: "relative",

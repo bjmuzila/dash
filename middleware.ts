@@ -10,6 +10,10 @@ const isPublicRoute = createRouteMatcher([
   "/sign-up(.*)",
   "/api/waitlist(.*)",
   "/maintenance",
+  "/terms",
+  "/risk-disclosure",
+  "/privacy",
+  "/disclaimer",
 ]);
 
 // Owner Clerk user ID that bypasses maintenance mode. Set OWNER_USER_ID in env.
@@ -61,7 +65,11 @@ export default clerkMiddleware(async (auth, req) => {
     path === "/maintenance" ||
     path.startsWith("/sign-in") ||
     path.startsWith("/sign-up") ||
-    path.startsWith("/api/waitlist");
+    path.startsWith("/api/waitlist") ||
+    path === "/terms" ||
+    path === "/risk-disclosure" ||
+    path === "/privacy" ||
+    path === "/disclaimer";
   if (!exemptFromMaint && (await isMaintenanceOn(req))) {
     const { userId } = await auth();
     // Owner bypasses. If OWNER_USER_ID isn't configured yet, fall back to letting

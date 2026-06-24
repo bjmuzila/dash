@@ -149,24 +149,53 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 type FlowMetric = "dex" | "gex" | "chex" | "vex";
 type FlowPoint = { ts: number; value: number };
 
-// One row from /api/snapshots/greeks: gex/dex are in $billions, chex/vex in
-// $millions. We multiply back to raw $ so the axis labels read in real notional.
-const FLOW_META: Record<FlowMetric, { label: string; color: string; unit: number }> = {
-  dex:  { label: "Delta Flow",  color: "#ff5b5b", unit: 1e9 },
-  gex:  { label: "Gamma Flow",  color: "#29b6f6", unit: 1e9 },
-  chex: { label: "Charm Flow",  color: "#a78bfa", unit: 1e6 },
-  vex:  { label: "Vanna Flow",  color: "#f5c518", unit: 1e6 },
+// Values are stored exactly as the /greeks page holds them: gex/dex already in
+// $billions, chex/vex already in $millions. `unit` is the metric's native unit
+// (for the value formatter); `mult` converts the stored value to raw $ so all
+// four can share ONE honest vertical scale (with a real shared zero line).
+const FLOW_META: Record<FlowMetric, { label: string; color: string; unit: "B" | "M"; mult: number }> = {
+  dex:  { label: "Delta Flow",  color: "#ff5b5b", unit: "B", mult: 1e9 },
+  gex:  { label: "Gamma Flow",  color: "#29b6f6", unit: "B", mult: 1e9 },
+  chex: { label: "Charm Flow",  color: "#a78bfa", unit: "M", mult: 1e6 },
+  vex:  { label: "Vanna Flow",  color: "#f5c518", unit: "M", mult: 1e6 },
 };
 
-// Short signed $ notional: 2.15B, -500M, 40.0M, 900K, 0. Picks the unit per
-// VALUE (not per metric) so a mixed-magnitude axis never shows "0.04B".
-function fmtNotional(v: number): string {
+// Catmull-Rom → cubic-bezier smoothing for a gentle curve through points. `t` is
+// the tension (0 = straight, ~0.2 = gentle). Operates on screen-space points.
+function smoothPath(pts: Array<{ x: number; y: number }>, t = 0.2): string {
+  const n = pts.length;
+  if (n === 0) return "";
+  if (n === 1) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? p2;
+    const c1x = p1.x + ((p2.x - p0.x) / 6) * (t / 0.166667);
+    const c1y = p1.y + ((p2.y - p0.y) / 6) * (t / 0.166667);
+    const c2x = p2.x - ((p3.x - p1.x) / 6) * (t / 0.166667);
+    const c2y = p2.y - ((p3.y - p1.y) / 6) * (t / 0.166667);
+    d += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+// Format an already-scaled greek value in its native unit, matching the /greeks
+// cards: a value in $B (e.g. 2.78 → "+2.78B"; 0.42 → "+420M"), a value in $M
+// (e.g. -14.4 → "-14.4M"; 2200 → "+2.20B"). Carries up/down a tier when the
+// magnitude crosses 1000 so it never reads "0.42B" or "2200M".
+function fmtGreek(v: number, unit: "B" | "M"): string {
+  const s = v < 0 ? "-" : "+";
   const a = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (a >= 1e9) return `${sign}${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2)}B`;
-  if (a >= 1e6) return `${sign}${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
-  if (a >= 1e3) return `${sign}${(a / 1e3).toFixed(0)}K`;
-  return `${sign}${a.toFixed(0)}`;
+  if (unit === "B") {
+    if (a >= 1e3) return `${s}${(a / 1e3).toFixed(2)}T`;
+    if (a >= 1)   return `${s}${a.toFixed(2)}B`;
+    return `${s}${(a * 1e3).toFixed(0)}M`;
+  }
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(2)}B`;
+  if (a >= 1)   return `${s}${a.toFixed(1)}M`;
+  return `${s}${(a * 1e3).toFixed(0)}K`;
 }
 
 // Greek-flow mini-chart pinned top-left of the candle chart: all four greek
@@ -174,38 +203,130 @@ function fmtNotional(v: number): string {
 // billions and CHEX/VEX in the millions all fill the box and you compare shape /
 // direction). Each line that straddles zero gets its own faint zero guide. A
 // compact legend with current values sits along the top.
+const WINDOW_MS = 60 * 60 * 1000; // visible span = last 1 hour by default
+
 function GreekFlowChart({
-  flowHistory, width = 230, chartH = 84,
+  flowHistory, width = 460, chartH = 168,
 }: { flowHistory: Record<FlowMetric, FlowPoint[]>; width?: number; chartH?: number }) {
   const order: FlowMetric[] = ["dex", "gex", "chex", "vex"];
-  const padX = 4, padY = 5;
+  const padX = 6, padY = 6;
   const innerW = width - padX * 2;
   const innerH = chartH - padY * 2;
 
-  // Common x-domain = union of all metrics' timestamps, so the four lines share
-  // the same horizontal session span even if sampled at slightly different ts.
-  let tMin = Infinity, tMax = -Infinity;
-  for (const m of order) for (const p of flowHistory[m] ?? []) { if (p.ts < tMin) tMin = p.ts; if (p.ts > tMax) tMax = p.ts; }
-  const haveData = Number.isFinite(tMin) && Number.isFinite(tMax) && tMax > tMin;
-  const xOf = (ts: number) => padX + ((ts - tMin) / ((tMax - tMin) || 1)) * innerW;
+  // Newest point + full session bounds (the pan limits). Session is the ET day of
+  // the newest point, 9:30–6pm ET (same as /greeks) — used only to clamp how far
+  // back you can scroll, not as the visible span.
+  let newest = -Infinity;
+  for (const m of order) for (const p of flowHistory[m] ?? []) if (p.ts > newest) newest = p.ts;
+  const haveAny = Number.isFinite(newest);
+  const sessionFor = (at: number): { start: number; end: number } => {
+    const p = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(new Date(at));
+    const g: Record<string, string> = {};
+    p.forEach((x) => { g[x.type] = x.value; });
+    const asUtc = Date.UTC(+g.year, +g.month - 1, +g.day, +g.hour % 24, +g.minute, +g.second);
+    const off = asUtc - at;
+    const mk = (hh: number, mm: number) => Date.UTC(+g.year, +g.month - 1, +g.day, hh, mm, 0) - off;
+    return { start: mk(9, 30), end: mk(18, 0) };
+  };
+  const session = haveAny ? sessionFor(newest) : { start: 0, end: 1 };
 
-  const lines = order.map((m) => {
-    const pts = flowHistory[m] ?? [];
+  // Pan state. `anchorMs` = the ABSOLUTE right-edge timestamp of the visible 1hr
+  // window when scrolled back; null = follow live (right edge tracks the newest
+  // point). Using an absolute anchor (not a relative offset) is what makes the
+  // view "stay put" — new data extends `newest` but the frozen window doesn't
+  // move. Any manual pan sets the anchor; double-click / the LIVE chip clears it.
+  const [anchorMs, setAnchorMs] = useState<number | null>(null);
+  const followLive = anchorMs == null;
+  const anchorRef = useRef<number | null>(null); anchorRef.current = anchorMs;
+  const boundsRef = useRef({ min: 0, max: 1 });
+  const dragRef = useRef<{ x: number; anchor: number } | null>(null);
+
+  // Right edge can range from session-start+1hr (fully scrolled back) to newest.
+  const rightMin = haveAny ? session.start + WINDOW_MS : 1;
+  const rightMax = haveAny ? newest : 1;
+  boundsRef.current = { min: rightMin, max: rightMax };
+  const clampRight = (v: number) => Math.min(rightMax, Math.max(rightMin, v));
+  const rightEdge = followLive ? rightMax : clampRight(anchorMs as number);
+  const tMax = rightEdge;
+  const tMin = rightEdge - WINDOW_MS;
+  const inWin = (ts: number) => ts >= tMin - 1 && ts <= tMax + 1;
+  const haveData = haveAny && tMax > tMin;
+  const xOf = (ts: number) => padX + ((ts - tMin) / ((tMax - tMin) || 1)) * innerW;
+  const msPerPx = WINDOW_MS / (innerW || 1);
+
+  // Drag to pan: cursor RIGHT (+dx) reveals EARLIER data (right edge moves back).
+  const onDown = useCallback((e: React.MouseEvent) => {
+    dragRef.current = { x: e.clientX, anchor: anchorRef.current ?? boundsRef.current.max };
+  }, []);
+  const onMove = useCallback((e: React.MouseEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dxPx = e.clientX - d.x;
+    if (Math.abs(dxPx) < 2) return; // ignore micro-jitter / bare click
+    const b = boundsRef.current;
+    const next = Math.min(b.max, Math.max(b.min, d.anchor - dxPx * msPerPx));
+    setAnchorMs(next);
+  }, [msPerPx]);
+  const endDrag = useCallback(() => { dragRef.current = null; }, []);
+  // Wheel to pan: horizontal-ish delta shifts the window; +delta = forward in time.
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (!delta) return;
+    const b = boundsRef.current;
+    setAnchorMs((a) => Math.min(b.max, Math.max(b.min, (a ?? b.max) - delta * msPerPx)));
+  }, [msPerPx]);
+  const snapLive = useCallback(() => { setAnchorMs(null); }, []);
+
+  // Gap threshold: if consecutive points are farther apart than this, the line is
+  // BROKEN (no segment drawn across the gap) instead of a long diagonal run.
+  const GAP_MS = 4 * 60_000;
+
+  // Per-metric: legend value + the visible points converted to RAW $ (so all four
+  // share one honest vertical scale below).
+  const series = order.map((m) => {
+    const all = flowHistory[m] ?? [];
     const meta = FLOW_META[m];
-    const last = pts.length ? pts[pts.length - 1].value : null;
-    if (pts.length < 2 || !haveData) return { m, meta, last, d: "", zeroY: null as number | null };
-    let lo = Infinity, hi = -Infinity;
-    for (const p of pts) { if (p.value < lo) lo = p.value; if (p.value > hi) hi = p.value; }
-    if (!(hi > lo)) { const pad = Math.abs(hi) || 1; lo = hi - pad; hi = hi + pad; }
-    const yOf = (v: number) => padY + (1 - (v - lo) / ((hi - lo) || 1)) * innerH;
-    const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${xOf(p.ts).toFixed(1)},${yOf(p.value).toFixed(1)}`).join(" ");
-    const zeroY = lo < 0 && hi > 0 ? yOf(0) : null;
-    return { m, meta, last, d, zeroY };
+    const last = all.length ? all[all.length - 1].value : null; // native unit, for legend
+    const byTs = new Map<number, number>();
+    for (const p of all) if (inWin(p.ts)) byTs.set(p.ts, p.value * meta.mult); // → raw $
+    const pts = [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, value]) => ({ ts, value }));
+    return { m, meta, last, pts };
+  });
+
+  // ONE shared $ scale across every visible point of all metrics, always
+  // including 0 so the zero line is meaningful. Symmetric padding (8%).
+  let vLo = Infinity, vHi = -Infinity;
+  for (const s of series) for (const p of s.pts) { if (p.value < vLo) vLo = p.value; if (p.value > vHi) vHi = p.value; }
+  if (!Number.isFinite(vLo) || !Number.isFinite(vHi)) { vLo = -1; vHi = 1; }
+  vLo = Math.min(vLo, 0); vHi = Math.max(vHi, 0);
+  if (vHi === vLo) { vHi = 1; vLo = -1; }
+  const padV = (vHi - vLo) * 0.08;
+  const yLo = vLo - padV, yHi = vHi + padV;
+  const yOf = (v: number) => padY + (1 - (v - yLo) / ((yHi - yLo) || 1)) * innerH;
+  const zeroY = yOf(0); // single shared zero line
+
+  const lines = series.map(({ m, meta, last, pts }) => {
+    if (pts.length < 1 || !haveData) return { m, meta, last, d: "" };
+    // Split into gap-free runs, smooth each, join (M moves lift the pen at gaps).
+    const runs: Array<Array<{ x: number; y: number }>> = [];
+    let cur: Array<{ x: number; y: number }> = [];
+    let prevTs = NaN;
+    for (const p of pts) {
+      if (!Number.isNaN(prevTs) && p.ts - prevTs > GAP_MS) { runs.push(cur); cur = []; }
+      cur.push({ x: xOf(p.ts), y: yOf(p.value) });
+      prevTs = p.ts;
+    }
+    if (cur.length) runs.push(cur);
+    const d = runs.map((r) => smoothPath(r, 0.2)).join(" ");
+    return { m, meta, last, d };
   });
 
   return (
     <div
-      className="pointer-events-none absolute z-10 select-none rounded-lg border"
+      className="absolute z-10 select-none rounded-lg border"
       style={{
         top: 8, left: 8, width,
         background: "rgba(8,12,18,.82)",
@@ -217,27 +338,69 @@ function GreekFlowChart({
       {/* Legend row: metric + current value, colored by metric. */}
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 px-2 pt-1.5 pb-1">
         <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/45">Greek Flow</span>
+        <button
+          onClick={snapLive}
+          className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+          style={{
+            color: followLive ? "#00e676" : "#9fb3c8",
+            border: `1px solid ${followLive ? "rgba(0,230,118,.4)" : "rgba(255,255,255,.18)"}`,
+            background: followLive ? "rgba(0,230,118,.08)" : "transparent",
+          }}
+          title={followLive ? "Following live (last 1h)" : "Scrolled back — click to snap to live"}
+        >
+          {followLive ? "● LIVE" : "⟲ LIVE"}
+        </button>
         {lines.map((l) => (
           <span key={l.m} className="flex items-center gap-1 font-mono text-[9.5px]" title={l.meta.label}>
             <span style={{ display: "inline-block", width: 9, height: 2, background: l.meta.color }} />
             <span style={{ color: l.meta.color }} className="font-bold">{l.m.toUpperCase()}</span>
             <span className="tabular-nums" style={{ color: "rgba(255,255,255,.7)" }}>
-              {l.last == null ? "—" : (l.last > 0 ? "+" : "") + fmtNotional(l.last)}
+              {l.last == null ? "—" : fmtGreek(l.last, l.meta.unit)}
             </span>
           </span>
         ))}
       </div>
-      {/* The four normalized lines. */}
-      <svg width={width} height={chartH} style={{ display: "block" }}>
-        {lines.map((l) => l.zeroY != null ? (
-          <line key={`z${l.m}`} x1={padX} y1={l.zeroY} x2={width - padX} y2={l.zeroY}
-            stroke="rgba(255,255,255,.10)" strokeWidth={1} strokeDasharray="2 3" />
-        ) : null)}
+      {/* The four normalized lines on the movable 1-hour window. */}
+      <svg
+        width={width} height={chartH}
+        style={{ display: "block", cursor: dragRef.current ? "grabbing" : "grab", touchAction: "none" }}
+        onMouseDown={onDown}
+        onMouseMove={onMove}
+        onMouseUp={endDrag}
+        onMouseLeave={endDrag}
+        onWheel={onWheel}
+        onDoubleClick={snapLive}
+      >
+        {/* 15-min gridlines + labels (fits the 1-hour window). */}
+        {haveData ? (() => {
+          const ticks: React.ReactNode[] = [];
+          const STEP = 15 * 60_000;
+          const first = Math.ceil(tMin / STEP) * STEP;
+          for (let t = first; t <= tMax; t += STEP) {
+            const x = xOf(t);
+            const lbl = new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: false });
+            ticks.push(
+              <g key={`h${t}`}>
+                <line x1={x} y1={padY} x2={x} y2={chartH - padY} stroke="rgba(255,255,255,.05)" strokeWidth={1} />
+                <text x={x} y={chartH - 2} textAnchor="middle" fontSize={8} fill="rgba(159,179,200,.45)" fontFamily="monospace">{lbl}</text>
+              </g>
+            );
+          }
+          return ticks;
+        })() : null}
+        {/* Single shared zero line (all metrics on one $ scale). */}
+        {haveData ? (
+          <g>
+            <line x1={padX} y1={zeroY} x2={width - padX} y2={zeroY}
+              stroke="rgba(255,255,255,.28)" strokeWidth={1} strokeDasharray="3 3" />
+            <text x={padX + 2} y={zeroY - 2} fontSize={8} fill="rgba(255,255,255,.4)" fontFamily="monospace">0</text>
+          </g>
+        ) : null}
         {lines.map((l) => l.d ? (
-          <path key={l.m} d={l.d} fill="none" stroke={l.meta.color} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />
+          <path key={l.m} d={l.d} fill="none" stroke={l.meta.color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
         ) : null)}
         {!haveData ? (
-          <text x={width / 2} y={chartH / 2} textAnchor="middle" fontSize={10} fill="rgba(159,179,200,.6)" fontFamily="monospace">
+          <text x={width / 2} y={chartH / 2} textAnchor="middle" fontSize={11} fill="rgba(159,179,200,.6)" fontFamily="monospace">
             waiting for data…
           </text>
         ) : null}
@@ -586,84 +749,50 @@ export default function EsCandlesPage() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Greek-flow data — SAME source/cadence as the /greeks page: live totals from
-  // /api/insights/gex every 30s, seeded once from today's persisted snapshots so
-  // the mini-chart isn't blank on first paint. We store raw $ (multiply the
-  // human-scaled B/M fields back out) keyed per metric. Each poll appends a point
-  // bucketed to 5s (matching /greeks) so rapid polls don't pile up; kept to the
-  // last ~400 points (a full RTH session at 30s ≈ 800, but the box only needs the
-  // recent shape, and the seed already covers earlier today).
+  // Greek-flow data — pure reader of the SAME greeks_ts table the /greeks page
+  // plots, so the two can't disagree. Polls /api/snapshots/greeks for today's
+  // rows every 30s and replaces the series wholesale (the DB IS the source of
+  // truth; /greeks + the cron keep it written). Values are stored already-scaled
+  // (gex/dex in $B, chex/vex in $M) exactly as /greeks holds them — the chart
+  // normalizes per metric, and fmt picks the unit, so scale is consistent.
   useEffect(() => {
     let cancelled = false;
 
-    // Push one snapshot (raw $ per metric) into flowHistory, 5s-bucketed.
-    const push = (ts: number, vals: Record<FlowMetric, number>) => {
-      if (cancelled || !(ts > 0)) return;
-      const bucket = Math.floor(ts / 5000);
-      setFlowHistory((prev) => {
-        const next = { ...prev };
-        for (const k of ["dex", "gex", "chex", "vex"] as FlowMetric[]) {
-          const arr = prev[k].filter((p) => Math.floor(p.ts / 5000) !== bucket);
-          arr.push({ ts, value: vals[k] });
-          arr.sort((a, b) => a.ts - b.ts);
-          next[k] = arr.slice(-400);
-        }
-        return next;
-      });
+    // Coerce a Postgres BIGINT timestamp (arrives as string) to ms. Reject
+    // anything that isn't a sane ms epoch — a 0, a seconds-epoch, or a stray
+    // far-future value is what was blowing out the x-axis (the giant left slab).
+    const toMs = (raw: unknown): number | null => {
+      let t = Number(raw);
+      if (!Number.isFinite(t) || t <= 0) return null;
+      if (t < 1e12) t = t * 1000;          // seconds → ms
+      if (t < 1e12 || t > 4e12) return null; // still implausible → drop
+      return t;
     };
 
-    // One-time seed from persisted greeks_ts (today), so history is there at once.
-    (async () => {
+    const load = async () => {
       try {
         const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
         const res = await fetch(`/api/snapshots/greeks?date=${today}&limit=5000`, { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
         const raw = Array.isArray(json.rows) ? (json.rows as Array<Record<string, unknown>>) : [];
-        const seed: Record<FlowMetric, FlowPoint[]> = { dex: [], gex: [], chex: [], vex: [] };
+        const next: Record<FlowMetric, FlowPoint[]> = { dex: [], gex: [], chex: [], vex: [] };
         for (const r of raw) {
-          const ts = Number(r.timestamp ?? 0);
-          if (!(ts > 0)) continue;
-          seed.dex.push({ ts, value: Number(r.dex ?? 0) * FLOW_META.dex.unit });
-          seed.gex.push({ ts, value: Number(r.gex ?? 0) * FLOW_META.gex.unit });
-          seed.chex.push({ ts, value: Number(r.chex ?? 0) * FLOW_META.chex.unit });
-          seed.vex.push({ ts, value: Number(r.vex ?? 0) * FLOW_META.vex.unit });
+          const ts = toMs(r.timestamp);
+          if (ts == null) continue; // drop bad-timestamp rows (no left slab)
+          next.gex.push({  ts, value: Number(r.gex  ?? 0) });
+          next.dex.push({  ts, value: Number(r.dex  ?? 0) });
+          next.chex.push({ ts, value: Number(r.chex ?? 0) });
+          next.vex.push({  ts, value: Number(r.vex  ?? 0) });
         }
         for (const k of ["dex", "gex", "chex", "vex"] as FlowMetric[]) {
-          seed[k].sort((a, b) => a.ts - b.ts);
-          seed[k] = seed[k].slice(-400);
+          next[k].sort((a, b) => a.ts - b.ts);
         }
-        if (!cancelled && raw.length) setFlowHistory(seed);
-      } catch { /* live polling fills it going forward */ }
-    })();
-
-    // Live poll — mirrors the /greeks page's GEX totals → greek derivation.
-    const poll = async () => {
-      try {
-        const r = await fetch(`/api/insights/gex`, { cache: "no-store" });
-        if (!r.ok) return;
-        const json = await r.json();
-        const payload = (json?.data ?? json) as Record<string, unknown>;
-        const t = (payload?.totals ?? null) as Record<string, number> | null;
-        if (!t) return;
-        const netDEX = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0); // put already negative
-        const vals: Record<FlowMetric, number> = {
-          gex:  Number(t.totalGEX ?? 0),
-          dex:  netDEX,
-          chex: Number(t.totalCHEX ?? 0),
-          vex:  Number(t.totalVEX ?? 0),
-        };
-        // Only accept a non-empty snapshot (avoids wiping the chart on an
-        // unsubscribed/empty proxy response — same guard as /greeks).
-        if (!(vals.gex || vals.dex || vals.chex || vals.vex)) return;
-        let ts = Number(payload?.updatedAt);
-        if (!Number.isFinite(ts) || ts <= 0) ts = Date.now();
-        else if (ts < 1e12) ts = ts * 1000; // seconds → ms
-        push(ts, vals);
+        if (!cancelled && raw.length) setFlowHistory(next);
       } catch { /* keep last */ }
     };
-    void poll();
-    const id = setInterval(poll, 30_000);
+    void load();
+    const id = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 

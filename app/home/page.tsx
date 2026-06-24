@@ -325,6 +325,14 @@ export default function HomePage() {
   const quoteSnapshotsRef = useRef<Record<string, { last: number; prev: number }>>({});
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  // Heavy-frame throttle: gex/GEX_UPDATE/snapshot frames trigger a full recompute
+  // cascade (chain reduce, heatmap, colorMeta, MVC scans). Under a fast feed they
+  // arrive faster than React can render, blocking the main thread for seconds and
+  // freezing clicks/navigation. We coalesce them to the latest frame, applied at
+  // most once per HEAVY_FRAME_MS, so the UI stays responsive without losing data.
+  const pendingGexRef = useRef<Record<string, unknown> | null>(null);
+  const gexFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastGexAppliedRef = useRef(0);
 
   const [now, setNow] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "snapshot" | "signals">("calendar");
@@ -528,6 +536,38 @@ export default function HomePage() {
       }
     };
 
+    // Coalesce heavy frames: remember the latest payload + its readiness, then
+    // apply on a trailing timer no more than once per HEAVY_FRAME_MS. Leading edge
+    // fires immediately so the first frame paints with no delay.
+    const HEAVY_FRAME_MS = 200; // ≤5 recomputes/sec — well under perceptual jitter
+    const flushGex = () => {
+      gexFlushTimerRef.current = null;
+      const data = pendingGexRef.current;
+      pendingGexRef.current = null;
+      if (!data) return;
+      lastGexAppliedRef.current = Date.now();
+      applyGex(data);
+      setStatus("LIVE");
+      const st = (data.__status ?? undefined) as Record<string, unknown> | undefined;
+      if (data.__isSnapshot) {
+        if (st && typeof st.chartReady === "boolean") setChartReady(st.chartReady);
+      } else {
+        setChartReady(true);
+      }
+    };
+    const queueGex = (data: Record<string, unknown>, isSnapshot: boolean, st: unknown) => {
+      // Stash readiness flags on the payload so flushGex applies the latest frame's.
+      data.__isSnapshot = isSnapshot;
+      data.__status = st;
+      pendingGexRef.current = data;
+      const since = Date.now() - lastGexAppliedRef.current;
+      if (since >= HEAVY_FRAME_MS) {
+        flushGex(); // leading edge — no pending timer, apply now
+      } else if (!gexFlushTimerRef.current) {
+        gexFlushTimerRef.current = setTimeout(flushGex, HEAVY_FRAME_MS - since);
+      }
+    };
+
     const handleMessage = (raw: string) => {
       let msg: Record<string, unknown>;
       try { msg = JSON.parse(raw); } catch { return; }
@@ -541,16 +581,9 @@ export default function HomePage() {
         case "snapshot":
         case "gex":
         case "GEX_UPDATE": {
-          applyGex(data);
-          setStatus("LIVE");
-          // A `gex`/`GEX_UPDATE` broadcast only happens once the server is warm,
-          // so it implies ready. A `snapshot` carries readiness in status.
+          // Throttled: queue the latest frame instead of recomputing every tick.
           const st = (data.status ?? msg.status) as Record<string, unknown> | undefined;
-          if (type === "snapshot") {
-            if (st && typeof st.chartReady === "boolean") setChartReady(st.chartReady);
-          } else {
-            setChartReady(true);
-          }
+          queueGex(data, type === "snapshot", st);
           break;
         }
         case "spot": {
@@ -632,6 +665,8 @@ export default function HomePage() {
     return () => {
       unmountedRef.current = true;
       if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      if (gexFlushTimerRef.current) { clearTimeout(gexFlushTimerRef.current); gexFlushTimerRef.current = null; }
+      pendingGexRef.current = null;
       const ws = gexWsRef.current;
       gexWsRef.current = null;
       if (ws) {

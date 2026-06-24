@@ -35,6 +35,13 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next",
+    "server",
+    "server-v2",
+    "scripts",
+    "discord-bot.js",
+    "register-commands.js",
+    "import-mvc.js"
   ]
 }

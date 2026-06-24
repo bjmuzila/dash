@@ -27,6 +27,10 @@ interface DailyInput {
   netGex: number | null; // billions of $
   esOvernightHigh: number | null;
   esOvernightLow: number | null;
+  // Prior-day SPX cash close + the EM band centered on it.
+  spxPrevClose: number | null;
+  emUpper: number | null; // prevClose + expectedMove
+  emLower: number | null; // prevClose - expectedMove
   updatedAt: number;
 }
 
@@ -211,10 +215,14 @@ export async function GET() {
     netGex: null,
     esOvernightHigh: null,
     esOvernightLow: null,
+    spxPrevClose: null,
+    emUpper: null,
+    emLower: null,
     updatedAt: Date.now(),
   };
 
-  // GEX frame: spot / walls / flip / net GEX. Same /proxy/gex the heatmap uses.
+  // GEX frame: spot / walls / flip / net GEX / prior close. Same /proxy/gex the
+  // heatmap uses; prevClose = yesterday's 4pm SPX cash close.
   let spotForEm = 0;
   try {
     const r = await fetch(`${base}/proxy/gex`, { cache: "no-store" });
@@ -223,6 +231,8 @@ export async function GET() {
       const spot = Number(p.spot ?? 0);
       out.spxSpot = spot > 0 ? spot : null;
       spotForEm = spot;
+      const prevClose = Number(p.prevClose ?? 0);
+      out.spxPrevClose = prevClose > 0 ? prevClose : null;
       out.callWall = p.callWall != null ? Number(p.callWall) || null : null;
       out.putWall = p.putWall != null ? Number(p.putWall) || null : null;
       out.gammaFlip = p.gexFlip != null ? Number(p.gexFlip) || null : null;
@@ -243,6 +253,13 @@ export async function GET() {
   out.expectedMoveExpiry = em.expiry;
   out.esOvernightHigh = es.high;
   out.esOvernightLow = es.low;
+
+  // EM band centered on the PRIOR-DAY SPX close (not live spot). Upper/lower are
+  // the expected range off yesterday's close.
+  if (out.spxPrevClose != null && out.expectedMove != null) {
+    out.emUpper = out.spxPrevClose + out.expectedMove;
+    out.emLower = out.spxPrevClose - out.expectedMove;
+  }
 
   return NextResponse.json(
     { data: out },

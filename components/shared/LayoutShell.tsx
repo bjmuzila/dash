@@ -2,11 +2,12 @@
 
 import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
+import GlobalToolbar from "./GlobalToolbar";
 import { HOME_THEME } from "./homeTheme";
 import { MobileNavProvider, useMobileNav } from "./MobileNavContext";
 
 // Routes that render full-bleed without the dashboard sidebar/chrome.
-const BARE_ROUTES = ["/", "/sign-in", "/sign-up"];
+const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/terms", "/risk-disclosure", "/privacy", "/disclaimer"];
 
 function MenuIcon() {
   return (
@@ -118,6 +119,7 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         <DrawerOverlay />
         <Sidebar />
         <main style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, position: "relative", zIndex: 1 }}>
+          <GlobalToolbar />
           {children}
         </main>
       </div>

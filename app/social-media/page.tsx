@@ -1,22 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Social Media (admin) — turns the daily pre-market GEX read into social posts.
+ * Social Media (admin) — turns the daily pre-market GEX read into a shareable
+ * "SPX · Daily Levels" card for X.
  *
  * Left "Daily Input" panel hydrates from live dashboard state via
- * /api/social-media/daily-input (SPX spot / gamma flip / call+put walls /
- * expected move / net GEX / ES overnight H-L) and seeds the Bias field from the
- * Greeks options-flow regime (/api/insights/gex → same evaluateGamma logic).
- * Every field stays editable so it can be overridden on event days.
+ * /api/social-media/daily-input (SPX spot / prior close / gamma flip / call+put
+ * walls / expected move / net GEX / ES overnight H-L) and seeds the Bias field
+ * from the options-flow regime. Every field stays editable for event-day edits.
  *
- * Right column renders three generated cards (X single, X thread, Discord drop)
- * from /api/social-media/generate (Anthropic claude-sonnet-4-6). Copy buttons
- * flash "Copied ✓"; X buttons open the tweet intent and (for the thread) also
- * copy the full sequence for pasting posts 2-6.
+ * Right column renders the share card (auto-filled from the left, EM range
+ * computed off the prior-day close). Two actions: "Copy card" renders the card
+ * to a PNG via html2canvas and writes the IMAGE to the clipboard; "Copy & Open
+ * X" copies the image and opens the X composer to paste it. Both fall back to a
+ * PNG download when the browser blocks clipboard image writes.
  *
  * Themed with the dashboard's tokens. The page aliases the legacy v2 names the
  * design reference used (--bg0/--bg1/--cyan/--text2…) onto the real global
@@ -24,7 +25,13 @@ import { computeRefLevels } from "@/lib/failLevels";
  * new color and the names resolve on this route.
  * ──────────────────────────────────────────────────────────────────────────── */
 
-const X_LIMIT = 280;
+// Dynamic html2canvas import (same pattern as EstimatedMoves) — keeps it out of
+// the initial bundle and off the server.
+async function getHtml2Canvas() {
+  const mod = await import("html2canvas" as never);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (mod as any).default ?? mod;
+}
 
 interface DailyInput {
   spxSpot: number | null;
@@ -36,17 +43,15 @@ interface DailyInput {
   netGex: number | null;
   esOvernightHigh: number | null;
   esOvernightLow: number | null;
-}
-
-interface GeneratedPosts {
-  xPost: string;
-  xThread: string[];
-  discordDrop: string;
+  spxPrevClose: number | null;
+  emUpper: number | null;
+  emLower: number | null;
 }
 
 // Editable form state — strings so partial edits never coerce to NaN mid-type.
 interface FormState {
   spot: string;
+  prevClose: string;
   flip: string;
   call: string;
   put: string;
@@ -58,6 +63,7 @@ interface FormState {
 
 const EMPTY_FORM: FormState = {
   spot: "",
+  prevClose: "",
   flip: "",
   call: "",
   put: "",
@@ -66,6 +72,15 @@ const EMPTY_FORM: FormState = {
   ovn: "",
   bias: "",
 };
+
+// EM band off the prior-day close: [lower, upper] = close ∓ EM. Returns null
+// when either input is missing/non-numeric.
+function emBand(form: FormState): { lower: number; upper: number } | null {
+  const close = toNum(form.prevClose);
+  const em = toNum(form.em);
+  if (!Number.isFinite(close) || !Number.isFinite(em) || close <= 0 || em <= 0) return null;
+  return { lower: close - em, upper: close + em };
+}
 
 function toNum(v: string | number | null | undefined): number {
   if (v == null) return NaN;
@@ -88,82 +103,74 @@ function todayETStr(): string {
 }
 
 // ── Bias from the options-flow regime ────────────────────────────────────────
-// Mirrors the Greeks page's gamma read at a high level: net-GEX sign + spot vs
-// flip decide the dominant regime label and a one-line lean. Kept deliberately
-// small (the Greeks page owns the full signal engine); this is just the seed.
+// Net GEX sign is the source of truth for the regime label (it must always
+// agree with the net GEX value the card shows). Spot-vs-flip is context only.
 function deriveBias(netGex: number, spot: number, flip: number): string {
-  const negative = (Number.isFinite(netGex) && netGex < 0) || (Number.isFinite(spot) && Number.isFinite(flip) && spot < flip);
+  const negative = Number.isFinite(netGex) && netGex < 0;
+  const underFlip = Number.isFinite(spot) && Number.isFinite(flip) && spot < flip;
   if (negative) {
-    return "Negative-gamma regime — dealers amplify moves; downside favored while we hold under the flip.";
+    return "Negative-gamma regime — dealers amplify moves; downside breaks can extend, momentum over mean-reversion.";
   }
-  return "Positive-gamma regime — dealers dampen moves; mean-reversion favored while we hold over the flip.";
+  return underFlip
+    ? "Positive-gamma regime — dealers dampen moves; mean-reversion favored, though spot under the flip keeps a downside tilt until it reclaims."
+    : "Positive-gamma regime — dealers dampen moves; fade extremes, expect mean-reversion while spot holds over the flip.";
 }
 
 // ── Gamma regime (strip) ─────────────────────────────────────────────────────
+// Regime is decided by the SIGN OF NET GEX so the label can never contradict the
+// net GEX value on the card. Spot-vs-flip is shown as a context line (and flags
+// the case where the two disagree) but does not flip the label.
 function regimeOf(form: FormState): { neg: boolean; label: string; sub: string } {
   const spot = toNum(form.spot);
   const flip = toNum(form.flip);
   const gex = toNum(form.gex);
-  const negative = (Number.isFinite(gex) && gex < 0) || (Number.isFinite(spot) && Number.isFinite(flip) && spot < flip);
-  return negative
-    ? {
-        neg: true,
-        label: "NEGATIVE GAMMA",
-        sub: "Spot under the flip · dealers amplify moves — plan for trend, not chop.",
-      }
-    : {
-        neg: false,
-        label: "POSITIVE GAMMA",
-        sub: "Spot over the flip · dealers dampen moves — fade extremes, expect mean-reversion.",
-      };
-}
+  const negative = Number.isFinite(gex) && gex < 0;
+  const haveFlip = Number.isFinite(spot) && Number.isFinite(flip);
+  const underFlip = haveFlip && spot < flip;
 
-// ── Copy helper with execCommand fallback ────────────────────────────────────
-async function copyText(t: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(t);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = t;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand("copy");
-    } finally {
-      document.body.removeChild(ta);
-    }
+  if (negative) {
+    return {
+      neg: true,
+      label: "NEGATIVE GAMMA",
+      sub: underFlip
+        ? "Net GEX negative · spot under the flip — dealers amplify moves, plan for trend not chop."
+        : "Net GEX negative — dealers amplify moves; plan for trend, not chop.",
+    };
   }
+  return {
+    neg: false,
+    label: "POSITIVE GAMMA",
+    sub: underFlip
+      ? "Net GEX positive · spot still under the flip — dampening in play, but watch for a flip reclaim."
+      : "Net GEX positive · spot over the flip — dealers dampen moves, fade extremes.",
+  };
 }
 
-function openXIntent(text: string): void {
-  window.open(
-    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,
-    "_blank",
-    "noopener"
-  );
-}
-
-// ── Small flashing button (Copy → Copied ✓) ──────────────────────────────────
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+// ── EM range readout (off the prior-day close) ───────────────────────────────
+// Shows the expected range as lower / upper centered on the SPX prior close,
+// e.g. "Close 6,012 · ±56 → 5,956 / 6,068". Prompts for a close if missing.
+function EmRangeReadout({ form }: { form: FormState }) {
+  const band = emBand(form);
+  if (!band) {
+    const haveClose = Number.isFinite(toNum(form.prevClose)) && toNum(form.prevClose) > 0;
+    return (
+      <div className="hint">
+        {haveClose
+          ? "enter an expected move to see the range"
+          : "enter SPX prior close to anchor the EM range"}
+      </div>
+    );
+  }
+  const close = toNum(form.prevClose);
+  const em = toNum(form.em);
   return (
-    <button
-      type="button"
-      className={`sm-btn${copied ? " copied" : ""}`}
-      onClick={() => {
-        copyText(text).then(() => {
-          setCopied(true);
-          if (timer.current) clearTimeout(timer.current);
-          timer.current = setTimeout(() => setCopied(false), 1400);
-        });
-      }}
-    >
-      {copied ? "Copied ✓" : label}
-    </button>
+    <div className="sm-emrange">
+      <span className="lo">{fmt(band.lower)}</span>
+      <span className="mid">
+        Close {fmt(close)} · ±{fmt(em)}
+      </span>
+      <span className="hi">{fmt(band.upper)}</span>
+    </div>
   );
 }
 
@@ -204,92 +211,132 @@ function LevelLadder({ form }: { form: FormState }) {
   );
 }
 
-// ── X thread card ────────────────────────────────────────────────────────────
-function ThreadCard({ thread }: { thread: string[] }) {
-  const joined = useMemo(() => thread.join("\n\n———\n\n"), [thread]);
-  return (
-    <div className="sm-card">
-      <div className="sm-card-h">
-        <span className="ti">X · Thread ({thread.length})</span>
-        <span className="ct">{thread.length} posts</span>
-      </div>
-      <div className="sm-card-b">
-        {thread.map((post, i) => {
-          const over = post.length > X_LIMIT;
-          return (
-            <div className="sm-thread-post" key={i}>
-              <div className="n">
-                {i + 1}/{thread.length} · <span className={over ? "over" : undefined}>{post.length}{over ? " ⚠ over" : ""}</span>
-              </div>
-              <pre>{post}</pre>
-            </div>
-          );
-        })}
-      </div>
-      <div className="sm-acts">
-        <CopyButton text={joined} label="Copy thread" />
-        <button
-          type="button"
-          className="sm-btn x"
-          onClick={() => {
-            // Intent opens post 1; full sequence goes to the clipboard so the
-            // user can paste replies 2..n in order.
-            openXIntent(thread[0] ?? "");
-            void copyText(joined);
-          }}
-        >
-          Copy to X →
-        </button>
-      </div>
-    </div>
-  );
+// ── Share card (the shareable image) ─────────────────────────────────────────
+// Mirrors the published-card design: SPX · Daily Levels header, Estimated Move
+// row (Spot box = prior close, EM, Up, Down off the close), regime strip,
+// Upside/Downside levels, Overnight Action, CB Edge footer + disclaimer. Pure
+// presentational; html2canvas captures the forwarded ref.
+function ShareValue({ v, color }: { v: string; color?: string }) {
+  return <div className="sc-val" style={color ? { color } : undefined}>{v || "—"}</div>;
 }
 
-// ── Single-text card (X single / Discord) ────────────────────────────────────
-function TextCard({
-  title,
-  text,
-  showX,
-}: {
-  title: string;
-  text: string;
-  showX: boolean;
-}) {
-  const over = text.length > X_LIMIT;
+const ShareCard = forwardRef<HTMLDivElement, {
+  form: FormState;
+  regime: { neg: boolean; label: string; sub: string };
+  updated: string;
+}>(function ShareCard({ form, regime, updated }, ref) {
+  const band = emBand(form);
+  const close = toNum(form.prevClose);
+  const em = toNum(form.em);
+  const closeStr = Number.isFinite(close) && close > 0 ? fmt(close) : "—";
+  const emStr = Number.isFinite(em) && em > 0 ? fmt(em) : "—";
+  const subLine =
+    Number.isFinite(close) && Number.isFinite(em) && close > 0 && em > 0
+      ? `Close ${fmt(close)} ±${fmt(em)}`
+      : "Close —";
+  const ovnParts = form.ovn.split("/");
+  const ovnHigh = (ovnParts[0] ?? "").trim();
+  const ovnLow = (ovnParts[1] ?? "").trim();
+
   return (
-    <div className="sm-card">
-      <div className="sm-card-h">
-        <span className="ti">{title}</span>
-        {showX ? (
-          <span className={`ct${over ? " over" : ""}`}>
-            {text.length}/{X_LIMIT}
-          </span>
-        ) : (
-          <span className="ct">{text.length} chars</span>
-        )}
+    <div ref={ref} className={`sc-card ${regime.neg ? "neg" : "pos"}`}>
+      {/* header */}
+      <div className="sc-head">
+        <div className="sc-title">
+          <span className="sc-spx">SPX</span> <span className="sc-sub">DAILY LEVELS</span>
+        </div>
+        <div className="sc-updated">{updated ? `Updated ${updated}` : ""}</div>
       </div>
-      <div className="sm-card-b">
-        <pre>{text}</pre>
+
+      {/* Estimated move row */}
+      <div className="sc-section">
+        <div className="sc-section-h">ESTIMATED MOVE</div>
+        <div className="sc-em-grid">
+          <div className="sc-em-box">
+            <div className="sc-em-label">CLOSE</div>
+            <ShareValue v={closeStr} />
+          </div>
+          <div className="sc-em-box">
+            <div className="sc-em-label">EM</div>
+            <ShareValue v={emStr} color="var(--amber)" />
+          </div>
+          <div className="sc-em-box">
+            <div className="sc-em-label">UP</div>
+            <ShareValue v={band ? fmt(band.upper) : "—"} color="var(--sm-green)" />
+          </div>
+          <div className="sc-em-box">
+            <div className="sc-em-label">DOWN</div>
+            <ShareValue v={band ? fmt(band.lower) : "—"} color="var(--sm-red)" />
+          </div>
+        </div>
+        <div className="sc-em-foot">
+          <span>IMPLIED MOVE</span>
+          <span>{subLine}</span>
+          <span>OFF PRIOR CLOSE</span>
+        </div>
       </div>
-      <div className="sm-acts">
-        <CopyButton text={text} />
-        {showX && (
-          <button type="button" className="sm-btn x" onClick={() => openXIntent(text)}>
-            Post to X
-          </button>
-        )}
+
+      {/* regime strip */}
+      <div className={`sc-regime ${regime.neg ? "neg" : "pos"}`}>
+        <div className="sc-regime-label">{regime.label}</div>
+        <div className="sc-regime-sub">{regime.sub}</div>
+        <div className="sc-regime-bias-h">BIAS</div>
+        <div className="sc-regime-bias">{form.bias || "—"}</div>
+      </div>
+
+      {/* levels */}
+      <div className="sc-levels">
+        <div className="sc-levels-col">
+          <div className="sc-levels-h up">UPSIDE / RESISTANCE</div>
+          <div className="sc-level-row">
+            <span className="lab">CALL WALL</span>
+            <span className="val red">{form.call ? fmt(toNum(form.call)) : "—"}</span>
+          </div>
+          <div className="sc-level-row">
+            <span className="lab">GAMMA FLIP</span>
+            <span className="val amber">{form.flip ? fmt(toNum(form.flip)) : "—"}</span>
+          </div>
+        </div>
+        <div className="sc-levels-col">
+          <div className="sc-levels-h down">DOWNSIDE / SUPPORT</div>
+          <div className="sc-level-row">
+            <span className="lab">PUT WALL</span>
+            <span className="val green">{form.put ? fmt(toNum(form.put)) : "—"}</span>
+          </div>
+          <div className="sc-level-row">
+            <span className="lab">NET GEX</span>
+            <span className="val cyan">{form.gex || "—"}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* overnight */}
+      <div className="sc-section">
+        <div className="sc-section-h">OVERNIGHT ACTION</div>
+        <div className="sc-ovn">
+          <span className="lab">ES OVERNIGHT (HIGH / LOW)</span>
+          <span className="val">{ovnHigh || "—"} <span className="sep">/</span> {ovnLow || "—"}</span>
+        </div>
+      </div>
+
+      {/* footer */}
+      <div className="sc-foot">
+        <div className="sc-brand">CB Edge</div>
+        <div className="sc-disc">LEVELS ARE PUBLISHED DAILY AND ARE INFORMATIONAL ONLY — NOT FINANCIAL ADVICE.</div>
       </div>
     </div>
   );
-}
+});
 
 export default function SocialMediaPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [posts, setPosts] = useState<GeneratedPosts | null>(null);
-  const [genState, setGenState] = useState<"idle" | "busy">("idle");
-  const [genError, setGenError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Share-card capture target + transient button status ("" | "copied" | "opened" | "saved" | "error").
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [shareState, setShareState] = useState<"" | "copied" | "opened" | "saved" | "error">("");
+  const shareTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (shareTimer.current) clearTimeout(shareTimer.current); }, []);
   // Once the user edits a field we stop overwriting it on the next hydrate poll.
   const dirtyRef = useRef(false);
 
@@ -325,6 +372,16 @@ export default function SocialMediaPage() {
     () => new Date().toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" }),
     []
   );
+  // "Updated Jun 24, 12:04 PM" stamp on the share card. Recomputed on each
+  // hydrate/refresh so the card reflects when the data was last pulled.
+  const [updatedLabel, setUpdatedLabel] = useState("");
+  const stampUpdated = useCallback(() => {
+    setUpdatedLabel(
+      new Date().toLocaleString("en-US", {
+        month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      })
+    );
+  }, []);
 
   const setField = (key: keyof FormState, value: string) => {
     dirtyRef.current = true;
@@ -355,6 +412,7 @@ export default function SocialMediaPage() {
           : "");
       setForm({
         spot: d.spxSpot != null ? fmt(d.spxSpot) : "",
+        prevClose: d.spxPrevClose != null ? fmt(d.spxPrevClose) : "",
         flip: d.gammaFlip != null ? fmt(d.gammaFlip) : "",
         call: d.callWall != null ? fmt(d.callWall) : "",
         put: d.putWall != null ? fmt(d.putWall) : "",
@@ -366,11 +424,12 @@ export default function SocialMediaPage() {
             ? deriveBias(netGex, spot, flip)
             : "",
       });
+      stampUpdated();
       setHydrated(true);
     } catch {
       setHydrated(true);
     }
-  }, []);
+  }, [stampUpdated]);
 
   useEffect(() => {
     hydrate();
@@ -385,45 +444,77 @@ export default function SocialMediaPage() {
 
   const regime = regimeOf(form);
 
-  const generate = useCallback(async () => {
-    setGenState("busy");
-    setGenError(null);
+  const flashShare = (s: "copied" | "opened" | "saved" | "error") => {
+    setShareState(s);
+    if (shareTimer.current) clearTimeout(shareTimer.current);
+    shareTimer.current = setTimeout(() => setShareState(""), 1600);
+  };
+
+  // Render the share card to a PNG blob via html2canvas (already a dependency,
+  // used by EstimatedMoves). Captured at 2x for a crisp image on X.
+  const renderCardBlob = useCallback(async (): Promise<Blob | null> => {
+    const node = cardRef.current;
+    if (!node) return null;
+    const html2canvas = await getHtml2Canvas();
+    const canvas = await html2canvas(node, {
+      backgroundColor: "#05060a",
+      scale: 2,
+      useCORS: true,
+      logging: false,
+    });
+    return await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b: Blob | null) => resolve(b), "image/png")
+    );
+  }, []);
+
+  // Copy the card image to the clipboard (Chromium/HTTPS). Returns true on
+  // success; callers fall back to a download when the image write isn't allowed.
+  const copyCardImage = useCallback(async (): Promise<boolean> => {
     try {
-      const body = {
-        date: today,
-        spxSpot: toNum(form.spot),
-        gammaFlip: toNum(form.flip),
-        callWall: toNum(form.call),
-        putWall: toNum(form.put),
-        expectedMove: toNum(form.em),
-        netGex: toNum(form.gex),
-        esOvernightHigh: toNum(form.ovn.split("/")[0] ?? ""),
-        esOvernightLow: toNum(form.ovn.split("/")[1] ?? ""),
-        gammaRegime: regime.label,
-        bias: form.bias,
-      };
-      const r = await fetch("/api/social-media/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = await r.json();
-      if (!r.ok) {
-        setGenError(json?.error ? String(json.error) : `Generation failed (${r.status})`);
-        return;
-      }
-      const data = (json?.data ?? json) as GeneratedPosts;
-      setPosts({
-        xPost: data.xPost ?? "",
-        xThread: Array.isArray(data.xThread) ? data.xThread : [],
-        discordDrop: data.discordDrop ?? "",
-      });
-    } catch (err) {
-      setGenError(String((err as Error)?.message || err));
-    } finally {
-      setGenState("idle");
+      const blob = await renderCardBlob();
+      if (!blob) return false;
+      const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+      if (!ClipItem || !navigator.clipboard?.write) return false;
+      await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
+      return true;
+    } catch {
+      return false;
     }
-  }, [form, regime.label, today]);
+  }, [renderCardBlob]);
+
+  // Download fallback — saves the card as a PNG the user can attach manually.
+  const downloadCard = useCallback(async (): Promise<boolean> => {
+    try {
+      const blob = await renderCardBlob();
+      if (!blob) return false;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cb-edge-spx-${todayETStr()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [renderCardBlob]);
+
+  const onCopyCard = useCallback(async () => {
+    const ok = await copyCardImage();
+    if (ok) { flashShare("copied"); return; }
+    const dl = await downloadCard();
+    flashShare(dl ? "saved" : "error");
+  }, [copyCardImage, downloadCard]);
+
+  const onCopyAndOpenX = useCallback(async () => {
+    const ok = await copyCardImage();
+    if (!ok) await downloadCard();
+    // Open the X composer; the user pastes (or attaches) the card, then adds copy.
+    window.open("https://twitter.com/intent/tweet", "_blank", "noopener");
+    flashShare(ok ? "opened" : "saved");
+  }, [copyCardImage, downloadCard]);
 
   // Manual refresh — re-pulls the dashboard stats (and ES candles) and lets the
   // Daily Input repopulate from live state. Clears the dirty flag so an explicit
@@ -454,8 +545,8 @@ export default function SocialMediaPage() {
           --sm-red: var(--red, #ef4444);
           --sm-green: #10b981;
           --text1: var(--text, #ffffff);
-          --text2: #c9d4e3;
-          --sm-muted: var(--muted, #8b94a7);
+          --text2: #ffffff;
+          --sm-muted: #ffffff;
           --sm-border: var(--border, rgba(255,255,255,0.1));
           /* Arial across the whole page: the label tokens that used to map to a
              monospace stack now resolve to Arial, so every element that
@@ -515,36 +606,69 @@ export default function SocialMediaPage() {
         .sm-field input:focus, .sm-field textarea:focus { outline: none; border-color: var(--cyan); }
         .sm-field textarea { resize: vertical; min-height: 56px; line-height: 1.4; }
         .sm-field .hint { font-size: 10px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
+        .sm-emrange { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: 6px; font-family: var(--sm-mono); font-size: 12px; }
+        .sm-emrange .lo { color: var(--sm-green); font-weight: 700; }
+        .sm-emrange .hi { color: var(--sm-red); font-weight: 700; }
+        .sm-emrange .mid { text-align: center; color: var(--sm-muted); font-size: 10px; letter-spacing: 0.04em; }
         .sm-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-        .sm-gen { width: 100%; margin-top: 6px; padding: 11px; font-family: var(--sm-mono); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; background: var(--cyan); color: #05060a; border: none; border-radius: 6px; transition: opacity 0.15s, transform 0.05s; }
-        .sm-gen:hover { opacity: 0.9; }
-        .sm-gen:active { transform: translateY(1px); }
-        .sm-gen:disabled { opacity: 0.45; cursor: not-allowed; }
 
-        .sm-out { display: flex; flex-direction: column; gap: 16px; }
-        .sm-card { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
-        .sm-card-h { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); }
-        .sm-card-h .ti { font-family: var(--sm-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text1); }
-        .sm-card-h .ct { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); margin-left: auto; }
-        .sm-card-h .ct.over { color: var(--sm-red); }
-        .sm-card-b { padding: 14px; }
-        .sm-card-b pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--sm-mono); font-size: 13px; color: var(--text1); line-height: 1.55; }
-        .sm-thread-post { padding: 11px 0; border-bottom: 1px dashed var(--sm-border); }
-        .sm-thread-post:last-child { border-bottom: none; padding-bottom: 0; }
-        .sm-thread-post:first-child { padding-top: 0; }
-        .sm-thread-post .n { font-family: var(--sm-mono); font-size: 10px; color: var(--cyan); margin-bottom: 4px; }
-        .sm-thread-post .n .over { color: var(--sm-red); }
+        .sm-out { display: flex; flex-direction: column; gap: 14px; }
 
-        .sm-acts { display: flex; gap: 8px; padding: 0 14px 14px; }
-        .sm-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 12px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
+        /* ── action buttons under the card ── */
+        .sm-share-acts { display: flex; gap: 10px; }
+        .sm-btn { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
         .sm-btn:hover { background: var(--bg4); }
-        .sm-btn.x { background: var(--text1); color: #000; border-color: var(--text1); }
-        .sm-btn.x:hover { opacity: 0.88; }
-        .sm-btn.copied { background: var(--sm-green); color: #05060a; border-color: var(--sm-green); }
+        .sm-btn.lg { flex: 1; }
+        .sm-btn.x { background: var(--cyan); color: #05060a; border-color: var(--cyan); }
+        .sm-btn.x:hover { opacity: 0.9; }
+        .sm-share-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.4; }
 
-        .sm-empty { border: 1px dashed var(--sm-border); border-radius: 8px; padding: 40px 20px; text-align: center; color: var(--sm-muted); font-family: var(--sm-mono); font-size: 13px; }
-        .sm-empty.err { border-color: rgba(239,68,68,0.4); color: var(--sm-red); }
+        /* ── share card (the exported image) ── */
+        .sc-card { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 14px; padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; }
+        .sc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--sm-border); padding-bottom: 14px; }
+        .sc-title { display: flex; align-items: baseline; gap: 10px; }
+        .sc-title .sc-spx { font-size: 26px; font-weight: 800; color: var(--text1); letter-spacing: 0.02em; }
+        .sc-title .sc-sub { font-size: 12px; font-weight: 700; letter-spacing: 0.18em; color: var(--sm-muted); }
+        .sc-updated { font-size: 12px; color: var(--sm-muted); }
+
+        .sc-section { border: 1px solid var(--sm-border); border-radius: 10px; padding: 14px 16px; }
+        .sc-section-h { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; color: var(--cyan); margin-bottom: 12px; }
+        .sc-em-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .sc-em-box { background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 12px; text-align: center; }
+        .sc-em-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: var(--sm-muted); margin-bottom: 8px; }
+        .sc-em-box .sc-val { font-size: 20px; font-weight: 800; color: var(--text1); letter-spacing: 0.01em; }
+        .sc-em-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: 11px; color: var(--sm-muted); }
+
+        .sc-regime { border: 1px solid var(--sm-border); border-radius: 10px; padding: 14px 16px; }
+        .sc-regime.neg { border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.07); }
+        .sc-regime.pos { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.07); }
+        .sc-regime-label { font-size: 13px; font-weight: 800; letter-spacing: 0.04em; }
+        .sc-regime.neg .sc-regime-label { color: var(--sm-red); }
+        .sc-regime.pos .sc-regime-label { color: var(--sm-green); }
+        .sc-regime-sub { font-size: 12px; color: var(--text1); margin-top: 6px; line-height: 1.45; }
+        .sc-regime-bias-h { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--sm-muted); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sm-border); }
+        .sc-regime-bias { font-size: 12px; font-weight: 700; color: var(--text1); margin-top: 5px; line-height: 1.45; }
+
+        .sc-levels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .sc-levels-col { border: 1px solid var(--sm-border); border-radius: 10px; padding: 14px 16px; }
+        .sc-levels-h { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; margin-bottom: 12px; color: var(--cyan); }
+        .sc-level-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+        .sc-level-row .lab { font-size: 12px; font-weight: 700; color: var(--text1); }
+        .sc-level-row .val { font-size: 16px; font-weight: 800; }
+        .sc-level-row .val.red { color: var(--sm-red); }
+        .sc-level-row .val.green { color: var(--sm-green); }
+        .sc-level-row .val.amber { color: var(--amber); }
+        .sc-level-row .val.cyan { color: var(--cyan); }
+
+        .sc-ovn { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 14px 16px; }
+        .sc-ovn .lab { font-size: 12px; font-weight: 700; color: var(--sm-muted); letter-spacing: 0.04em; }
+        .sc-ovn .val { font-size: 16px; font-weight: 800; color: var(--text1); }
+        .sc-ovn .val .sep { color: var(--sm-muted); margin: 0 6px; }
+
+        .sc-foot { text-align: center; border-top: 1px solid var(--sm-border); padding-top: 16px; }
+        .sc-brand { font-size: 17px; font-weight: 800; color: var(--text1); letter-spacing: 0.03em; }
+        .sc-disc { font-size: 10px; color: var(--sm-muted); letter-spacing: 0.06em; margin-top: 8px; }
       `}</style>
 
       <div className="sm-head">
@@ -581,8 +705,18 @@ export default function SocialMediaPage() {
                 <input value={form.spot} onChange={(e) => setField("spot", e.target.value)} />
               </div>
               <div className="sm-field">
+                <label>SPX Prior Close</label>
+                <input value={form.prevClose} onChange={(e) => setField("prevClose", e.target.value)} />
+              </div>
+            </div>
+            <div className="sm-row2">
+              <div className="sm-field">
                 <label>Gamma Flip</label>
                 <input value={form.flip} onChange={(e) => setField("flip", e.target.value)} />
+              </div>
+              <div className="sm-field">
+                <label>Net GEX</label>
+                <input value={form.gex} onChange={(e) => setField("gex", e.target.value)} />
               </div>
             </div>
             <div className="sm-row2">
@@ -595,15 +729,10 @@ export default function SocialMediaPage() {
                 <input value={form.put} onChange={(e) => setField("put", e.target.value)} />
               </div>
             </div>
-            <div className="sm-row2">
-              <div className="sm-field">
-                <label>Expected Move ±</label>
-                <input value={form.em} onChange={(e) => setField("em", e.target.value)} />
-              </div>
-              <div className="sm-field">
-                <label>Net GEX</label>
-                <input value={form.gex} onChange={(e) => setField("gex", e.target.value)} />
-              </div>
+            <div className="sm-field">
+              <label>Expected Move ±</label>
+              <input value={form.em} onChange={(e) => setField("em", e.target.value)} />
+              <EmRangeReadout form={form} />
             </div>
             <div className="sm-field">
               <label>ES Overnight (H / L)</label>
@@ -615,30 +744,23 @@ export default function SocialMediaPage() {
               <div className="hint">pre-filled from options-flow regime — edit on event days</div>
             </div>
 
-            <button
-              type="button"
-              className="sm-gen"
-              onClick={generate}
-              disabled={genState === "busy"}
-            >
-              {genState === "busy" ? "Generating…" : posts ? "Regenerate" : "Generate posts"}
-            </button>
           </div>
         </div>
 
-        {/* RIGHT: generated output */}
+        {/* RIGHT: share card (auto-filled from the left) + copy/X actions */}
         <div className="sm-out">
-          {genError ? (
-            <div className="sm-empty err">{genError}</div>
-          ) : posts ? (
-            <>
-              <TextCard title="X · Single post" text={posts.xPost} showX />
-              {posts.xThread.length > 0 && <ThreadCard thread={posts.xThread} />}
-              <TextCard title="Discord · Members drop" text={posts.discordDrop} showX={false} />
-            </>
-          ) : (
-            <div className="sm-empty">Fill the block and hit <b>Generate posts</b>.</div>
-          )}
+          <ShareCard ref={cardRef} form={form} regime={regime} updated={updatedLabel} />
+          <div className="sm-share-acts">
+            <button type="button" className="sm-btn lg" onClick={onCopyCard}>
+              {shareState === "copied" ? "Copied ✓" : shareState === "saved" ? "Saved PNG ✓" : shareState === "error" ? "Copy failed" : "Copy card"}
+            </button>
+            <button type="button" className="sm-btn lg x" onClick={onCopyAndOpenX}>
+              {shareState === "opened" ? "Opened X ✓" : "Copy & Open X"}
+            </button>
+          </div>
+          <div className="sm-share-hint">
+            Copies the card image to your clipboard — paste (Ctrl+V) into the X composer. If your browser blocks image copy, it downloads a PNG to attach.
+          </div>
         </div>
       </div>
     </div>

@@ -49,6 +49,8 @@ const CloseIcon = ({ size = 12 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
 );
 const NoteIcon = (p: IconProps) => <Svg {...p}><path d="M4 4h16v12l-4 4H4z" /><path d="M16 20v-4h4" /><line x1="8" y1="9" x2="16" y2="9" /><line x1="8" y1="13" x2="12" y2="13" /></Svg>;
+// Disclaimer / legal — shield
+const ShieldIcon = (p: IconProps) => <Svg {...p}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V5z" /></Svg>;
 const PencilIcon = ({ size = 12 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
 );
@@ -66,6 +68,15 @@ const SOCIALS = [
   { id: "x", label: "X", href: "https://x.com/BzilaTrades", Icon: XIcon, color: "#ffffff" },
   { id: "youtube", label: "YouTube", href: "https://www.youtube.com/@bzilatrades", Icon: YouTubeIcon, color: "#FF0000" },
   { id: "tiktok", label: "TikTok", href: "https://www.tiktok.com/@bzilatrades", Icon: TikTokIcon, color: "#25F4EE" },
+];
+
+// Legal / help links surfaced in the "Disclaimer" popover under the user button.
+const LEGAL_LINKS: { label: string; href: string }[] = [
+  { label: "Disclaimer", href: "/disclaimer" },
+  { label: "Risk Disclosure", href: "/risk-disclosure" },
+  { label: "Terms of Service", href: "/terms" },
+  { label: "Privacy Policy", href: "/privacy" },
+  { label: "Help & Docs", href: "/docs" },
 ];
 
 type NavItem = { label: string; href: string };
@@ -504,6 +515,7 @@ export default function Sidebar() {
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [socialsOpen, setSocialsOpen] = useState(false);
+  const [legalOpen, setLegalOpen] = useState(false);
   const [dragHref, setDragHref] = useState<string | null>(null);
   // Which list the current drag started in: "group" rows can be pinned to the
   // Quick zone; "quick" rows reorder within the zone.
@@ -1253,6 +1265,102 @@ export default function Sidebar() {
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
           <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: { width: 56, height: 56 } } }} />
+        </div>
+
+        {/* ── Disclaimer / legal button (under the Clerk user button) ── */}
+        <div
+          style={{ position: "relative", display: "flex", justifyContent: "center", width: "100%", marginTop: 4 }}
+          onMouseLeave={() => setLegalOpen(false)}
+        >
+          <button
+            aria-label="Legal & disclaimers"
+            aria-haspopup="menu"
+            aria-expanded={legalOpen}
+            onClick={() => setLegalOpen((v) => !v)}
+            onMouseEnter={() => { setLegalOpen(true); setHovered("__legal"); }}
+            onMouseLeave={() => setHovered((h) => (h === "__legal" ? null : h))}
+            title="Disclaimer"
+            style={{
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              width: collapsed ? 44 : "auto",
+              height: collapsed ? 40 : "auto",
+              padding: collapsed ? 0 : "7px 14px",
+              borderRadius: 10,
+              cursor: "pointer",
+              color: legalOpen ? HOME_THEME.cyan : HOME_THEME.muted,
+              background: legalOpen ? "rgba(0,240,255,0.08)" : "transparent",
+              border: `1px solid ${legalOpen ? "rgba(0,240,255,0.28)" : HOME_THEME.border}`,
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              transition: "all 0.15s",
+            }}
+          >
+            <ShieldIcon size={15} />
+            {!collapsed && <span>Disclaimer</span>}
+            {collapsed && <Tooltip label="Disclaimer" show={hovered === "__legal" && !legalOpen} />}
+          </button>
+
+          {legalOpen && (
+            <div
+              role="menu"
+              style={{
+                position: "absolute",
+                bottom: "calc(100% + 8px)",
+                left: collapsed ? "calc(100% + 14px)" : "50%",
+                transform: collapsed ? "none" : "translateX(-50%)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                minWidth: 190,
+                padding: 8,
+                background: "rgba(13,17,25,0.97)",
+                border: `1px solid ${HOME_THEME.border}`,
+                borderRadius: 12,
+                boxShadow: "0 8px 28px rgba(0,0,0,0.6)",
+                backdropFilter: "blur(16px)",
+                zIndex: 10002,
+              }}
+            >
+              <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.12em", textTransform: "uppercase", padding: "2px 8px 4px" }}>
+                Legal &amp; Help
+              </span>
+              {LEGAL_LINKS.map((l) => {
+                const active = pathname === l.href;
+                return (
+                  <Link
+                    key={l.href}
+                    href={l.href}
+                    role="menuitem"
+                    onClick={() => setLegalOpen(false)}
+                    onMouseEnter={() => setHovered(`l-${l.href}`)}
+                    onMouseLeave={() => setHovered((h) => (h === `l-${l.href}` ? null : h))}
+                    style={{
+                      padding: "8px 10px",
+                      fontSize: 13,
+                      fontWeight: active ? 700 : 500,
+                      color: active ? HOME_THEME.cyan : HOME_THEME.text,
+                      textDecoration: "none",
+                      borderRadius: 8,
+                      background: active
+                        ? "rgba(0,240,255,0.12)"
+                        : hovered === `l-${l.href}`
+                        ? "rgba(0,240,255,0.08)"
+                        : "transparent",
+                      transition: "background 0.12s",
+                    }}
+                  >
+                    {l.label}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </nav>

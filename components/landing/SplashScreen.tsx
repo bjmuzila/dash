@@ -6,34 +6,15 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 const APP_NAME = (process.env.NEXT_PUBLIC_APP_NAME || "CB Edge").toUpperCase();
 const LAUNCH_DATE = "7/13/26";
 
-// Bump this key (e.g. "...-v2") to re-show the splash for everyone.
-const SEEN_KEY = "cb-edge-splash-seen-v1";
-
 // Timing (ms)
-const HOLD = 1600; // how long the splash stays fully visible
+const HOLD = 3500; // how long the splash stays fully visible
 const FADE = 650; // fade-out duration
 
 export default function SplashScreen() {
   const [leaving, setLeaving] = useState(false);
-  // Start "gone" until we've checked localStorage, so we never flash it on repeat visits.
-  const [gone, setGone] = useState(true);
+  const [gone, setGone] = useState(false);
 
   useEffect(() => {
-    let seen = false;
-    try {
-      seen = localStorage.getItem(SEEN_KEY) === "1";
-    } catch {
-      seen = false; // private mode / storage blocked — just show it
-    }
-    if (seen) return;
-
-    try {
-      localStorage.setItem(SEEN_KEY, "1");
-    } catch {
-      /* ignore */
-    }
-
-    setGone(false);
     const t1 = setTimeout(() => setLeaving(true), HOLD);
     const t2 = setTimeout(() => setGone(true), HOLD + FADE);
     return () => {
