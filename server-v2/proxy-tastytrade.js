@@ -71,6 +71,14 @@ const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 100);
 // fixed count. These ceilings are just safety caps so a runaway feed can't grow the
 // buffers without bound — set high enough that a full RTH+ETH day fits comfortably.
 const ES_BIG_TRADES_MAX = Number(process.env.ES_BIG_TRADES_MAX || 50_000);
+// Broadcast downsampling: prints within this trailing window are sent RAW (per
+// print) so the live bubble edge is full-resolution. Older prints are collapsed
+// to one aggregate per 1s/side BEFORE broadcast (the client re-bins to 1s anyway,
+// so nothing visible is lost) — this is what stops the WS payload from growing
+// with total print count over the session. The full-fidelity buffer is still kept
+// in-memory + persisted to disk/Postgres for replay; only the wire payload shrinks.
+const ESBIG_RAW_WINDOW_MS = Number(process.env.ESBIG_RAW_WINDOW_MS || 5 * 60_000);
+const ESBIG_COLLAPSE_BUCKET_MS = Number(process.env.ESBIG_COLLAPSE_BUCKET_MS || 1000);
 const ES_DELTA_BUCKET_MS = Number(process.env.ES_DELTA_BUCKET_MS || 60_000);
 const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 1_440);
 // Disk persistence: today's footprint is mirrored here so a server-v2 restart
@@ -2026,6 +2034,53 @@ class TastytradeProxy {
     this.esFootprintSaveDirty = true;
   }
 
+  /**
+   * Downsample the raw print buffer for BROADCAST. Prints within the trailing
+   * ESBIG_RAW_WINDOW_MS are kept raw (full-resolution live edge); everything older
+   * is collapsed to one aggregate per ESBIG_COLLAPSE_BUCKET_MS (1s) per side. Each
+   * collapsed entry keeps the EsBigTrade shape {ts,price,size,side,signed} — a
+   * vol-weighted price and summed size — so the client ingests it unchanged (it
+   * re-bins to 1s and applies the 100-lot floor anyway, so the bubbles are
+   * visually identical). This caps the payload by TIME, not print count, killing
+   * the linear-growth bleed. The in-memory `this.esBigTrades` stays full-fidelity.
+   */
+  _downsampleEsTradesForBroadcast(now = Date.now()) {
+    const src = this.esBigTrades;
+    const n = src.length;
+    if (!n) return src;
+    const cutoff = now - ESBIG_RAW_WINDOW_MS;
+    // src is oldest-first (push/shift), so find the first index inside the window.
+    let split = 0;
+    while (split < n && src[split].ts < cutoff) split++;
+    if (split === 0) return src; // everything is within the raw window → no collapse
+    // Collapse the older head [0, split) into per-1s/side aggregates.
+    const byKey = new Map(); // `${bucketTs}|${side}` -> agg
+    for (let i = 0; i < split; i++) {
+      const t = src[i];
+      const bts = Math.floor(t.ts / ESBIG_COLLAPSE_BUCKET_MS) * ESBIG_COLLAPSE_BUCKET_MS;
+      const key = `${bts}|${t.side}`;
+      let a = byKey.get(key);
+      if (!a) { a = { ts: bts, side: t.side, size: 0, pxVol: 0 }; byKey.set(key, a); }
+      a.size += t.size;
+      a.pxVol += t.price * t.size;
+    }
+    const collapsed = new Array(byKey.size);
+    let j = 0;
+    for (const a of byKey.values()) {
+      const price = a.size > 0 ? a.pxVol / a.size : 0;
+      collapsed[j++] = {
+        ts: a.ts,
+        price,
+        size: a.size,
+        side: a.side,
+        signed: a.side === 'buy' ? a.size : -a.size,
+      };
+    }
+    collapsed.sort((x, y) => x.ts - y.ts);
+    // Older collapsed bubbles first, then the raw recent tail (already sorted).
+    return collapsed.concat(src.slice(split));
+  }
+
   /** Push the current footprint (bubbles + delta buckets) to market-state. */
   _flushEsFootprint() {
     if (!this.esFootprintDirty) return;
@@ -2036,7 +2091,8 @@ class TastytradeProxy {
         symbol: this.esSymbol,
         updatedAt: Date.now(),
         seeded: false,
-        trades: [...this.esBigTrades],
+        // Downsampled for the wire: last 5min raw + older collapsed to 1s/side.
+        trades: this._downsampleEsTradesForBroadcast(),
         delta: buckets.map((x) => ({ ts: x.ts, buy: x.buy, sell: x.sell, net: x.buy - x.sell })),
       },
     });

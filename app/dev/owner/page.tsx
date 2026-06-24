@@ -1278,7 +1278,7 @@ export default function OwnerDashboard() {
               };
               const total = wsBw?.lastMinTotal ?? 0;
               // Frame types we care about, in display order; "other" catches the rest.
-              const KNOWN = ["flow", "gex", "snapshot", "spot", "aux", "status", "esCandles"];
+              const KNOWN = ["flow", "gex", "snapshot", "spot", "aux", "status", "esCandles", "esBigTrades"];
               const lastMin: Record<string, number> = wsBw?.lastMin ?? {};
               const entries = Object.entries(lastMin)
                 .filter(([, b]) => b > 0)
@@ -1286,6 +1286,7 @@ export default function OwnerDashboard() {
               const ACCENT: Record<string, string> = {
                 flow: HOME_THEME.orange, gex: HOME_THEME.cyan, snapshot: HOME_THEME.purple,
                 spot: HOME_THEME.green, aux: "#38bdf8", status: HOME_THEME.muted, esCandles: "#a78bfa",
+                esBigTrades: HOME_THEME.red,
               };
               return (
                 <>
