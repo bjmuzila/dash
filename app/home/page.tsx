@@ -387,6 +387,10 @@ export default function HomePage() {
   const selectedExpiryRef = useRef("");
   const [strikeRows, setStrikeRows] = useState<StrikeRow[]>([]);
   const [spot, setSpot] = useState(0);
+  // Display SPX: live broker quote during RTH, ES-derived off-hours (server's
+  // spotDisplay). Used ONLY for the SPX readout + change %, never for GEX math
+  // (which stays on `spot`/`gexSpot`, the broker quote the strikes are priced on).
+  const [spotDisplay, setSpotDisplay] = useState(0);
   const [esFut, setEsFut] = useState(0);
   const [vix, setVix] = useState(0);
   const [spxChange, setSpxChange] = useState(0);
@@ -490,12 +494,16 @@ export default function HomePage() {
 
     // Apply a GEX payload (server-v2 `data` block OR legacy flat message).
     // Update SPX spot + change vs prior close, plus aux VIX/ESU quotes.
-    const applySpot = (s: number, prevClose: number) => {
-      if (s > 0) {
-        setSpot(s);
+    // `s` is the broker quote (drives math); `disp` is the display SPX (readout +
+    // change). When disp is absent we fall back to s so nothing regresses.
+    const applySpot = (s: number, prevClose: number, disp?: number) => {
+      if (s > 0) setSpot(s);
+      const shown = disp && disp > 0 ? disp : s;
+      if (shown > 0) {
+        setSpotDisplay(shown);
         if (prevClose > 0) {
-          setSpxChange(s - prevClose);
-          setSpxChangePct(((s - prevClose) / prevClose) * 100);
+          setSpxChange(shown - prevClose);
+          setSpxChangePct(((shown - prevClose) / prevClose) * 100);
         }
       }
     };
@@ -504,7 +512,7 @@ export default function HomePage() {
       if (Array.isArray(p.gexRows)) setGexChainRows(p.gexRows as ChainRow[]);
       const s = Number(p.spot ?? 0);
       if (s > 0) setGexSpot(s);
-      applySpot(s, Number(p.prevClose ?? 0));
+      applySpot(s, Number(p.prevClose ?? 0), Number(p.spotDisplay ?? 0));
       if (Number(p.vix ?? 0) > 0) setVix(Number(p.vix));
       if (Number(p.esFut ?? 0) > 0) setEsFut(Number(p.esFut));
       if (Number(p.vixPrevClose ?? 0) > 0) setVixPrevClose(Number(p.vixPrevClose));
@@ -548,7 +556,7 @@ export default function HomePage() {
         case "spot": {
           const s = Number(data.spot ?? 0);
           if (s > 0) setGexSpot(s);
-          applySpot(s, Number(data.prevClose ?? 0));
+          applySpot(s, Number(data.prevClose ?? 0), Number(data.spotDisplay ?? 0));
           break;
         }
         case "aux": {
@@ -556,6 +564,9 @@ export default function HomePage() {
           if (Number(data.esFut ?? 0) > 0) setEsFut(Number(data.esFut));
           if (Number(data.vixPrevClose ?? 0) > 0) setVixPrevClose(Number(data.vixPrevClose));
           if (Number(data.esFutPrevClose ?? 0) > 0) setEsuPrevClose(Number(data.esFutPrevClose));
+          // Display SPX rides on ES off-hours; aux carries its live updates. Use
+          // the last known prevClose (from prior spot/gex frames) for the change.
+          if (Number(data.spotDisplay ?? 0) > 0) setSpotDisplay(Number(data.spotDisplay));
           break;
         }
         case "flow": {
@@ -925,7 +936,7 @@ export default function HomePage() {
                 {/* SPX */}
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
                   <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>{(spotDisplay > 0 ? spotDisplay : spot) > 0 ? (spotDisplay > 0 ? spotDisplay : spot).toFixed(2) : "—"}</span>
                   <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
                 </div>
                 <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>

@@ -168,25 +168,64 @@ export default function BudgetPage() {
 
     lines.sort((a, b) => (a.entry_date < b.entry_date ? -1 : a.entry_date > b.entry_date ? 1 : a.sort_order - b.sort_order));
 
-    const rows: ({ id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; balances: Record<Bank, number>; total: number })[] = [];
+    const rows: ComputedRow[] = [];
     if (anyBeginning) {
+      const bc = (beginningByBank.coastal ?? 0) + (beginningByBank.truist ?? 0) + (beginningByBank.secu ?? 0);
       rows.push({
         id: -1, entry_date: register.find((r) => r.is_beginning)?.entry_date ?? `${month}-01`,
         label: "BEGINNING", bank: "secu", amount: 0, is_beginning: 1, recurring: false,
-        balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu,
+        balance: bc, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu,
       });
     }
 
+    // Single combined running balance carried down the page (matches the sheet's
+    // BALANCE column). Seeded from the sum of the per-bank beginning balances.
+    const beginCombined = (beginningByBank.coastal ?? 0) + (beginningByBank.truist ?? 0) + (beginningByBank.secu ?? 0);
+    let running = beginCombined;
+
     let income = 0;
     let payments = 0;
+    const series: { date: string; balance: number }[] = anyBeginning ? [{ date: `${month}-01`, balance: beginCombined }] : [];
+    const expenseByLabel: Record<string, number> = {};
+
     for (const ln of lines) {
-      bal[ln.bank] += ln.amount; // signed: payment negative, income positive
+      bal[ln.bank] += ln.amount;
+      running += ln.amount;
       if (ln.amount > 0) income += ln.amount;
-      else payments += ln.amount;
-      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
+      else {
+        payments += ln.amount;
+        expenseByLabel[ln.label] = (expenseByLabel[ln.label] || 0) + Math.abs(ln.amount);
+      }
+      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, balance: running, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
+      series.push({ date: ln.entry_date, balance: running });
     }
 
-    return { rows, income, payments, beginningByBank, anyBeginning, totals: { ...bal }, grandTotal: bal.coastal + bal.truist + bal.secu };
+    // Group real (non-beginning) rows by day. The beginning balance is rendered
+    // separately as a header strip, so it never forms an empty day group.
+    const groupMap = new Map<string, { date: string; rows: typeof rows; dailyNet: number; eod: number }>();
+    for (const r of rows) {
+      if (r.is_beginning) continue;
+      const key = r.entry_date;
+      if (!groupMap.has(key)) groupMap.set(key, { date: key, rows: [], dailyNet: 0, eod: beginCombined });
+      const g = groupMap.get(key)!;
+      g.rows.push(r);
+      g.dailyNet += r.amount;
+      g.eod = r.balance; // running balance after this row; last row in group = EOD
+    }
+    const groups = Array.from(groupMap.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    const topExpenses = Object.entries(expenseByLabel)
+      .map(([label, amount]) => ({ label, amount }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 6);
+
+    return {
+      rows, groups, series, topExpenses,
+      income, payments, netCashFlow: income + payments,
+      projectedBalance: running,
+      beginningByBank, anyBeginning, beginningBalance: beginCombined,
+      totals: { ...bal }, grandTotal: bal.coastal + bal.truist + bal.secu,
+    };
   }, [register, recurring, month]);
 
   const amazonComputed = useMemo(() => {
@@ -228,34 +267,49 @@ export default function BudgetPage() {
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "hidden", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
       <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
-        {/* Title banner — mirrors the PAYMENTS / month layout from the sheet */}
-        <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
-          <div style={{ textAlign: "center", padding: "12px 18px 6px" }}>
-            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: "0.16em" }}>PAYMENTS</div>
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted, marginTop: 2 }}>{monthLabel.toUpperCase()}</div>
+        {/* Title banner */}
+        <div style={{ ...card(), padding: 0, overflow: "visible" }}>
+          <div style={{ textAlign: "center", padding: "14px 18px 6px" }}>
+            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
+            <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
           </div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap", padding: "10px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 20, flexWrap: "wrap", padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
             <div>
               <div style={labelCap()}>Month</div>
               <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ ...field(), width: 170 }} />
             </div>
-            <BeginningEditor beginningByBank={computed.beginningByBank} onSave={saveBeginning} currency={currency} />
+            <BeginningEditor beginningByBank={computed.beginningByBank} totals={computed.totals} onSave={saveBeginning} currency={currency} />
           </div>
         </div>
 
-        {/* Current balance per bank + combined total */}
+        {/* Stat cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
           {[
-            { label: "Coastal", value: computed.totals.coastal, color: computed.totals.coastal < 0 ? HOME_THEME.red : HOME_THEME.text },
-            { label: "Truist", value: computed.totals.truist, color: computed.totals.truist < 0 ? HOME_THEME.red : HOME_THEME.text },
-            { label: "SECU", value: computed.totals.secu, color: computed.totals.secu < 0 ? HOME_THEME.red : HOME_THEME.text },
-            { label: "Total (all banks)", value: computed.grandTotal, color: computed.grandTotal < 0 ? HOME_THEME.red : HOME_THEME.cyan },
+            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? HOME_THEME.red : HOME_THEME.cyan, icon: "📊" },
+            { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },
+            { label: "Total Outflows", value: Math.abs(computed.payments), color: HOME_THEME.red, icon: "📉" },
+            { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? HOME_THEME.red : HOME_THEME.green, icon: "💵" },
           ].map((t) => (
             <div key={t.label} style={{ ...card(), padding: 16 }}>
-              <div style={labelCap()}>{t.label}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 14 }}>{t.icon}</span>
+                <span style={labelCap()}>{t.label}</span>
+              </div>
               <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
             </div>
           ))}
+        </div>
+
+        {/* Projection chart + top expenses */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 14 }}>
+          <div style={{ ...card(), padding: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
+            <ProjectionChart series={computed.series} currency={currency} />
+          </div>
+          <div style={{ ...card(), padding: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>TOP EXPENSES</div>
+            <TopExpenses items={computed.topExpenses} currency={currency} />
+          </div>
         </div>
 
         {/* Tabs */}
@@ -264,26 +318,28 @@ export default function BudgetPage() {
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
-            <button onClick={() => setShowHpay((v) => !v)} style={{ ...pill(false), marginLeft: 4 }}>+ Auto H PAY (bi-weekly)</button>
+            <button onClick={() => setShowRecurring((v) => !v)} style={{ ...pill(showRecurring), marginLeft: 4 }}>
+              🔁 Recurring{recurring.length ? ` (${recurring.filter((r) => r.active).length})` : ""}
+            </button>
           )}
           {loading && <span style={{ fontSize: 12, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
 
-        {showHpay && tab === "register" && (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto auto", gap: 10, alignItems: "end" }}>
-            <div><div style={labelCap()}>First pay date</div><input type="date" value={hpayAnchor} onChange={(e) => setHpayAnchor(e.target.value)} style={field()} /></div>
-            <div><div style={labelCap()}>Amount</div><input type="number" value={hpayAmount} onChange={(e) => setHpayAmount(e.target.value)} style={field()} /></div>
-            <div><div style={labelCap()}>Bank</div><select value={hpayBank} onChange={(e) => setHpayBank(e.target.value as Bank)} style={field()}>{BANKS.map((b) => <option key={b} value={b}>{BANK_LABEL[b]}</option>)}</select></div>
-            <button onClick={generateHpay} style={primary()}>Generate</button>
-            <button onClick={() => setShowHpay(false)} style={ghost()}>Cancel</button>
-            <div style={{ gridColumn: "1 / -1", fontSize: 11, color: HOME_THEME.muted }}>Inserts H PAY every 14 days through {monthLabel}. Re-running replaces the prior set.</div>
-          </div>
+        {showRecurring && tab === "register" && (
+          <RecurringManager
+            rules={recurring}
+            currency={currency}
+            onAdd={addRecurring}
+            onUpdate={updateRecurringRule}
+            onDelete={deleteRecurringRule}
+            onClose={() => setShowRecurring(false)}
+          />
         )}
 
         {/* Content */}
         <div style={{ ...card(), flex: 1, minHeight: 0, overflow: "auto", padding: 0 }}>
           {tab === "register" ? (
-            <RegisterTable rows={computed.rows} currency={currency} onEdit={editRow} onDelete={deleteRow} />
+            <GroupedRegister groups={computed.groups} beginningBalance={computed.anyBeginning ? computed.beginningBalance : null} currency={currency} onEdit={editRow} onDelete={deleteRow} />
           ) : (
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
           )}
@@ -315,123 +371,301 @@ export default function BudgetPage() {
   );
 }
 
-function BeginningEditor({ beginningByBank, onSave, currency }: { beginningByBank: Record<Bank, number | null>; onSave: (balances: Record<Bank, number>) => void; currency: string }) {
-  const [open, setOpen] = useState(false);
+function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginningByBank: Record<Bank, number | null>; totals: Record<Bank, number>; onSave: (balances: Record<Bank, number>) => void; currency: string }) {
   const [vals, setVals] = useState<Record<Bank, string>>({ coastal: "", truist: "", secu: "" });
+  const [saved, setSaved] = useState(false);
 
-  const startEdit = () => {
+  // Keep inputs in sync with the latest saved balances (without clobbering a
+  // value the user is actively typing on first load).
+  useEffect(() => {
     setVals({
       coastal: beginningByBank.coastal !== null ? String(beginningByBank.coastal) : "",
       truist: beginningByBank.truist !== null ? String(beginningByBank.truist) : "",
       secu: beginningByBank.secu !== null ? String(beginningByBank.secu) : "",
     });
-    setOpen(true);
-  };
+  }, [beginningByBank.coastal, beginningByBank.truist, beginningByBank.secu]);
+
   const save = () => {
     onSave({ coastal: Number(vals.coastal || 0), truist: Number(vals.truist || 0), secu: Number(vals.secu || 0) });
-    setOpen(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
   };
 
-  const anySet = BANKS.some((b) => beginningByBank[b] !== null);
-
-  if (!open) {
-    return (
-      <div>
-        <div style={labelCap()}>Current balances</div>
-        <button onClick={startEdit} style={ghost()}>
-          {anySet
-            ? BANKS.map((b) => `${BANK_LABEL[b]} ${fmtMoney(beginningByBank[b] ?? 0, currency)}`).join("   ")
-            : "Set starting balances"}
-        </button>
-      </div>
-    );
-  }
   return (
     <div>
-      <div style={labelCap()}>Current balances (each account)</div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ ...labelCap(), color: "#fff", display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
+        <span style={{ fontSize: 14 }}>🏦</span> Account balances
+      </div>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
         {BANKS.map((b) => (
-          <div key={b} style={{ display: "flex", flexDirection: "column" }}>
+          <div key={b} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
-            <input value={vals[b]} onChange={(e) => setVals((p) => ({ ...p, [b]: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="0.00" type="number" style={{ ...field(), width: 110 }} />
+            <span style={{ fontSize: 18, fontWeight: 900, color: totals[b] < 0 ? HOME_THEME.red : "#fff", lineHeight: 1.1 }}>{fmtMoney(totals[b], currency)}</span>
+            <input
+              value={vals[b]}
+              onChange={(e) => setVals((p) => ({ ...p, [b]: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              placeholder="set start…"
+              type="number"
+              title="Set this account's starting balance"
+              style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 12 }}
+            />
           </div>
         ))}
-        <button onClick={save} style={{ ...primary(), alignSelf: "flex-end" }}>Save</button>
+        <button onClick={save} style={{ ...primary(), alignSelf: "flex-end" }}>{saved ? "Saved ✓" : "Save"}</button>
       </div>
     </div>
   );
 }
 
-function RegisterTable({
-  rows,
+type ComputedRow = { id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; balance: number; balances: Record<Bank, number>; total: number };
+
+function RecurringManager({
+  rules,
+  currency,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onClose,
+}: {
+  rules: RecurringRule[];
+  currency: string;
+  onAdd: (rule: { label: string; bank: Bank; amount: number; frequency: Frequency; anchorDate: string }) => void;
+  onUpdate: (id: number, patch: Record<string, unknown>) => void;
+  onDelete: (id: number) => void;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [bank, setBank] = useState<Bank>("secu");
+  const [sign, setSign] = useState<"-" | "+">("-");
+  const [amount, setAmount] = useState("");
+  const [frequency, setFrequency] = useState<Frequency>("monthly");
+  const [anchor, setAnchor] = useState(todayIso());
+
+  const add = () => {
+    if (!label.trim() || amount.trim() === "") return;
+    const signed = (sign === "-" ? -1 : 1) * Math.abs(Number(amount));
+    onAdd({ label: label.trim().toUpperCase(), bank, amount: signed, frequency, anchorDate: anchor });
+    setLabel("");
+    setAmount("");
+  };
+
+  return (
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 900 }}>Recurring entries</div>
+          <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
+        </div>
+        <button onClick={onClose} style={ghost()}>Done</button>
+      </div>
+
+      {/* Existing rules */}
+      {rules.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rules.map((rule) => {
+            const inc = rule.amount > 0;
+            return (
+              <div key={rule.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.9fr 1fr auto auto", gap: 10, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 12px", opacity: rule.active ? 1 : 0.45 }}>
+                <span style={{ fontWeight: 800 }}>{rule.label}</span>
+                <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
+                <span style={{ fontSize: 12, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
+                <span style={{ fontWeight: 800, color: inc ? HOME_THEME.green : HOME_THEME.red }}>{inc ? "+" : ""}{fmtMoney(rule.amount, currency)}</span>
+                <button
+                  onClick={() => onUpdate(rule.id, { active: rule.active ? 0 : 1 })}
+                  title={rule.active ? "Pause (hide from Payments)" : "Resume"}
+                  style={{ ...ghost(), padding: "6px 10px", fontSize: 11 }}
+                >
+                  {rule.active ? "Pause" : "Resume"}
+                </button>
+                <DeleteButton onClick={() => onDelete(rule.id)} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add a new rule */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 0.9fr 1fr 90px", gap: 10, alignItems: "end", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
+        <div><div style={labelCap()}>Item</div><input value={label} onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="RENT, H PAY…" style={field()} /></div>
+        <div><div style={labelCap()}>How often</div><select value={frequency} onChange={(e) => setFrequency(e.target.value as Frequency)} style={field()}>{FREQS.map((f) => <option key={f} value={f}>{FREQ_LABEL[f]}</option>)}</select></div>
+        <div><div style={labelCap()}>Bank</div><select value={bank} onChange={(e) => setBank(e.target.value as Bank)} style={field()}>{BANKS.map((b) => <option key={b} value={b}>{BANK_LABEL[b]}</option>)}</select></div>
+        <div><div style={labelCap()}>Type</div><select value={sign} onChange={(e) => setSign(e.target.value as "-" | "+")} style={field()}><option value="-">− Pay</option><option value="+">+ Income</option></select></div>
+        <div><div style={labelCap()}>{frequency === "monthly" ? "Day (from date)" : "Start date"}</div><input type="date" value={anchor} onChange={(e) => setAnchor(e.target.value)} style={field()} /></div>
+        <div><div style={labelCap()}>Amount</div><input value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="0" type="number" style={field()} /></div>
+        <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={add} style={primary()}>Add recurring</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: number };
+
+// SVG line chart of the running combined balance across the month.
+function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
+  if (series.length < 2) {
+    return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 12 }}>Add entries to see the projection.</div>;
+  }
+  const W = 560, H = 150, padL = 4, padR = 4, padT = 8, padB = 18;
+  const ys = series.map((p) => p.balance);
+  const maxY = Math.max(...ys, 0);
+  const minY = Math.min(...ys, 0);
+  const span = Math.max(maxY - minY, 1);
+  const x = (i: number) => padL + (i / (series.length - 1)) * (W - padL - padR);
+  const y = (v: number) => padT + (1 - (v - minY) / span) * (H - padT - padB);
+  const zeroY = y(0);
+  const path = series.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.balance).toFixed(1)}`).join(" ");
+  // Light date ticks (about 8 across).
+  const ticks = series.filter((_, i) => i % Math.ceil(series.length / 8) === 0);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+      <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
+      <path d={path} fill="none" stroke="#3b82f6" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+      {ticks.map((p, i) => (
+        <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={9} textAnchor="middle">{shortDate(p.date)}</text>
+      ))}
+    </svg>
+  );
+}
+
+// Horizontal red bars, biggest expense first.
+function TopExpenses({ items, currency }: { items: { label: string; amount: number }[]; currency: string }) {
+  if (!items.length) return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 12 }}>No expenses yet.</div>;
+  const max = Math.max(...items.map((i) => i.amount), 1);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {items.map((it) => (
+        <div key={it.label} style={{ display: "grid", gridTemplateColumns: "78px 1fr", gap: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: HOME_THEME.muted, textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={it.label}>{it.label}</span>
+          <div style={{ position: "relative", height: 16, background: "rgba(255,255,255,0.04)", borderRadius: 5 }}>
+            <div style={{ width: `${Math.max(6, (it.amount / max) * 100)}%`, height: "100%", borderRadius: 5, background: "linear-gradient(90deg, rgba(239,68,68,0.55), rgba(239,68,68,0.95))" }} />
+            <span style={{ position: "absolute", right: 6, top: 0, lineHeight: "16px", fontSize: 10, fontWeight: 700, color: "#fff" }}>{fmtMoney(it.amount, currency)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Day-grouped register: collapsible header (date, count, daily net, EOD) over
+// rows of LABEL | COASTAL | TRUIST | SECU | BALANCE (single running balance).
+function GroupedRegister({
+  groups,
+  beginningBalance,
   currency,
   onEdit,
   onDelete,
 }: {
-  rows: (RegisterRow & { balances: Record<Bank, number>; total: number })[];
+  groups: DayGroup[];
+  beginningBalance: number | null;
   currency: string;
   onEdit: (id: number, patch: Record<string, unknown>) => void;
   onDelete: (id: number) => void;
 }) {
-  const cols: Bank[] = ["coastal", "truist", "secu"];
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  if (!groups.length && beginningBalance === null) {
+    return <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>Set your starting balances, then add rows below.</div>;
+  }
+  const longDate = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+  };
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
       <thead>
-        <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panelBgStrong, backdropFilter: "blur(8px)", zIndex: 1 }}>
-          <th style={th("left")}>Date</th>
-          <th style={th("left")}>Item</th>
-          {cols.map((c) => <th key={c} style={th("right")}>{BANK_LABEL[c]}</th>)}
-          <th style={th("right")}>Total</th>
+        <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panelBgStrong, backdropFilter: "blur(8px)", zIndex: 2 }}>
+          <th style={{ ...th("left"), width: 220 }}>Date</th>
+          <th style={th("left")}>Label</th>
+          <th style={th("right")}>Amount</th>
+          <th style={th("right")}>Balance</th>
           <th style={th("center")}></th>
         </tr>
       </thead>
       <tbody>
-        {rows.length === 0 && (
-          <tr><td colSpan={7} style={{ padding: "22px 16px", textAlign: "center", color: HOME_THEME.muted }}>Set starting balances, then add rows below.</td></tr>
+        {beginningBalance !== null && (
+          <tr style={{ background: "linear-gradient(90deg, rgba(0,240,255,0.07), transparent)", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            <td style={{ padding: "11px 16px", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.cyan }}>STARTING BALANCE</span>
+            </td>
+            <td colSpan={2} style={{ padding: "11px 16px", color: HOME_THEME.muted, fontSize: 12 }}>Beginning of month</td>
+            <td style={{ padding: "11px 16px", textAlign: "right", fontWeight: 900, fontSize: 15, color: beginningBalance < 0 ? HOME_THEME.red : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</td>
+            <td />
+          </tr>
         )}
-        {rows.map((r) => {
-          const isIncome = !r.is_beginning && r.amount > 0;
+        {groups.map((g) => {
+          const isCollapsed = collapsed[g.date];
+          const netColor = g.dailyNet > 0 ? HOME_THEME.green : g.dailyNet < 0 ? HOME_THEME.red : HOME_THEME.muted;
           return (
-            <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, background: r.is_beginning ? "rgba(255,255,255,0.05)" : "transparent" }}>
-              <td style={{ padding: "8px 16px", whiteSpace: "nowrap", color: HOME_THEME.muted, fontWeight: 700 }}>
-                {r.is_beginning ? "" : shortDate(r.entry_date)}
-              </td>
-              <td style={{ padding: "8px 16px" }}>
-                {r.is_beginning ? (
-                  <span style={{ fontWeight: 900, letterSpacing: "0.06em" }}>BEGINNING</span>
-                ) : (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 800 }} />
-                    <span
-                      title="Amount applied to this row"
-                      style={{ fontSize: 11, fontWeight: 800, padding: "1px 7px", borderRadius: 6, background: isIncome ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.14)", color: isIncome ? HOME_THEME.green : HOME_THEME.red }}
-                    >
-                      <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />
-                    </span>
-                    <span style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>{BANK_LABEL[r.bank]}</span>
-                  </div>
-                )}
-              </td>
-              {cols.map((c) => {
-                const here = r.bank === c;
-                const v = r.balances[c];
-                return (
-                  <td key={c} style={{ padding: "8px 16px", textAlign: "right", fontWeight: here ? 900 : 600, color: v < 0 ? HOME_THEME.red : here ? HOME_THEME.text : "rgba(255,255,255,0.55)", background: here && !r.is_beginning ? (isIncome ? "rgba(16,185,129,0.10)" : "rgba(255,255,255,0.03)") : "transparent" }}>
-                    {fmtMoney(v, currency)}
-                  </td>
-                );
-              })}
-              <td style={{ padding: "8px 16px", textAlign: "right", fontWeight: 900, color: r.total < 0 ? HOME_THEME.red : HOME_THEME.cyan }}>
-                {fmtMoney(r.total, currency)}
-              </td>
-              <td style={{ padding: "8px 12px", textAlign: "center" }}>
-                {!r.is_beginning && <DeleteButton onClick={() => onDelete(r.id)} />}
-              </td>
-            </tr>
+            <GroupBlock
+              key={g.date}
+              group={g}
+              isCollapsed={!!isCollapsed}
+              onToggle={() => setCollapsed((p) => ({ ...p, [g.date]: !p[g.date] }))}
+              currency={currency}
+              longDate={longDate}
+              netColor={netColor}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
           );
         })}
       </tbody>
     </table>
+  );
+}
+
+function GroupBlock({
+  group: g, isCollapsed, onToggle, currency, longDate, netColor, onEdit, onDelete,
+}: {
+  group: DayGroup; isCollapsed: boolean; onToggle: () => void; currency: string;
+  longDate: (iso: string) => string; netColor: string;
+  onEdit: (id: number, patch: Record<string, unknown>) => void; onDelete: (id: number) => void;
+}) {
+  return (
+    <>
+      <tr onClick={onToggle} style={{ cursor: "pointer", background: "rgba(255,255,255,0.05)", borderTop: `1px solid ${HOME_THEME.border}` }}>
+        <td style={{ padding: "9px 16px", whiteSpace: "nowrap", fontWeight: 800 }}>
+          <span style={{ display: "inline-block", width: 14, color: HOME_THEME.muted }}>{isCollapsed ? "▸" : "▾"}</span>
+          {longDate(g.date)}
+        </td>
+        <td colSpan={2} style={{ padding: "9px 8px" }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, background: "rgba(255,255,255,0.06)", borderRadius: 6, padding: "2px 8px" }}>{g.rows.length} {g.rows.length === 1 ? "item" : "items"}</span>
+        </td>
+        <td colSpan={2} style={{ padding: "9px 16px", textAlign: "right" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: netColor, marginRight: 16 }}>
+            {g.dailyNet === 0 ? "Daily Net: 0.00" : `Daily Net: ${g.dailyNet > 0 ? "+" : ""}${fmtMoney(g.dailyNet, currency)}`}
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: g.eod < 0 ? HOME_THEME.red : HOME_THEME.text }}>
+            EOD Balance: {fmtMoney(g.eod, currency)}
+          </span>
+        </td>
+      </tr>
+      {!isCollapsed && g.rows.map((r) => {
+        const isIncome = r.amount > 0;
+        return (
+          <tr key={r.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
+            <td style={{ padding: "7px 16px", whiteSpace: "nowrap", color: HOME_THEME.muted, fontWeight: 700 }}>{shortDate(r.entry_date)}</td>
+            <td style={{ padding: "7px 8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {r.recurring
+                  ? <span style={{ fontWeight: 700, fontStyle: "italic" }}>{r.label}</span>
+                  : <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />}
+                {r.recurring && <span title="Recurring — manage in the Recurring panel" style={{ fontSize: 8, fontWeight: 800, padding: "1px 5px", borderRadius: 5, border: `1px solid ${HOME_THEME.cyan}`, color: HOME_THEME.cyan }}>AUTO</span>}
+              </div>
+            </td>
+            <td style={{ padding: "7px 16px", textAlign: "right" }}>
+              <span style={{ fontWeight: 800, color: isIncome ? HOME_THEME.green : r.amount < 0 ? HOME_THEME.red : HOME_THEME.text }}>
+                {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
+              </span>
+            </td>
+            <td style={{ padding: "7px 16px", textAlign: "right", fontWeight: 800, color: r.balance < 0 ? HOME_THEME.red : HOME_THEME.text }}>{fmtMoney(r.balance, currency)}</td>
+            <td style={{ padding: "7px 10px", textAlign: "center" }}>{!r.recurring && <DeleteButton onClick={() => onDelete(r.id)} />}</td>
+          </tr>
+        );
+      })}
+    </>
   );
 }
 

@@ -1563,6 +1563,19 @@ export async function listRecurring(profileId: number): Promise<BudgetRecurringR
   );
 }
 
+// One-time: adopt the legacy shared "Default" budget as the named profile, but
+// only if that target doesn't already exist. Idempotent — safe to call on load.
+export async function adoptDefaultBudgetProfile(targetName: string): Promise<void> {
+  if (targetName === "Default") return;
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE budget_profiles SET name = $1, updated_at = CURRENT_TIMESTAMP
+     WHERE name = 'Default'
+       AND NOT EXISTS (SELECT 1 FROM budget_profiles WHERE name = $1)`,
+    [targetName]
+  );
+}
+
 // ── Amazon delivery log ───────────────────────────────────────────────────────
 export interface BudgetAmazonRecord {
   id: number;

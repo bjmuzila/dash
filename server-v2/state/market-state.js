@@ -31,6 +31,10 @@ const state = {
   esFut: 0,
   vixPrevClose: 0,
   esFutPrevClose: 0,
+  // Display SPX: live broker quote during RTH, esFut+cashBasis off-hours. Kept
+  // separate from `spot` (broker quote used for all GEX math) so display can be
+  // kept live without affecting strike/level pricing.
+  spotDisplay: 0,
   // Active expiry 'YYYY-MM-DD'
   expiry: '',
   // All available expiries for the toolbar
@@ -167,6 +171,7 @@ function setAux(patch) {
   if (patch.esFut > 0) next.esFut = patch.esFut;
   if (patch.vixPrevClose > 0) next.vixPrevClose = patch.vixPrevClose;
   if (patch.esFutPrevClose > 0) next.esFutPrevClose = patch.esFutPrevClose;
+  if (patch.spotDisplay > 0) next.spotDisplay = patch.spotDisplay;
   if (Object.keys(next).length) setState(next);
 }
 

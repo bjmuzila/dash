@@ -756,13 +756,9 @@ export default function EsCandlesPage() {
       );
     }
 
-    // MVC — controlled ONLY by the MVC button (independent of Levels), so the
-    // current MVC marker stays on the chart whenever MVC is on.
-    if (showMvcLine) {
-      defs.push(
-        { price: toEs(levels.mvc), color: "#4aa3ff", title: "MVC", style: LineStyle.Dashed, width: 1 },
-      );
-    }
+    // MVC dashed price line + axis label intentionally removed from the chart.
+    // The MVC button now controls only the white step-history line below; the
+    // current-MVC horizontal marker/label is no longer drawn.
 
     // Session levels (prior-day + overnight H/L) — already ES prices, no basis.
     if (showSessions && sessionLevels) {

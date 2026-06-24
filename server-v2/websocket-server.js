@@ -48,6 +48,7 @@ function buildSnapshot(state) {
   return {
     symbol: state.symbol,
     spot: state.spot,
+    spotDisplay: state.spotDisplay,
     prevClose: state.prevClose,
     vix: state.vix,
     esFut: state.esFut,
@@ -207,12 +208,14 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose }, state.symbol));
     }
     if (changed.has('vix') || changed.has('esFut') ||
-        changed.has('vixPrevClose') || changed.has('esFutPrevClose')) {
+        changed.has('vixPrevClose') || changed.has('esFutPrevClose') ||
+        changed.has('spotDisplay')) {
       out.push(msg('aux', {
         vix: state.vix,
         esFut: state.esFut,
         vixPrevClose: state.vixPrevClose,
         esFutPrevClose: state.esFutPrevClose,
+        spotDisplay: state.spotDisplay,
       }, state.symbol));
     }
     if (changed.has('status')) out.push(msg('status', state.status, state.symbol));

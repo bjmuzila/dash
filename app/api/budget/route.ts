@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import {
   getOrCreateBudgetProfile,
+  adoptDefaultBudgetProfile,
   insertBudgetEntry,
   listBudgetCategories,
   listBudgetEntries,
-  listBudgetProfiles,
   upsertBudgetCategory,
   insertRegisterRow,
   updateRegisterRow,
@@ -21,6 +22,21 @@ import {
   type RegisterBank,
   type RecurringFrequency,
 } from "@/lib/db";
+
+// Budget is owner-only. If OWNER_USER_ID is configured, only that Clerk user may
+// read/write; otherwise (not yet set) any signed-in user is allowed so the owner
+// isn't locked out before configuring env. All data lives under one stable
+// profile so it's the owner's single budget regardless of which key is active.
+const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
+const BUDGET_PROFILE_KEY = "owner";
+
+// Returns the profile key if access is allowed, or null to reject.
+async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
+  const { userId } = await auth();
+  if (!userId) return { ok: false, status: 401 };
+  if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
+  return { ok: true };
+}
 
 // month is "YYYY-MM"; returns inclusive [first, last] day strings "YYYY-MM-DD".
 function monthRange(month: string): { from: string; to: string } {
@@ -45,11 +61,14 @@ function normFreq(v: unknown): RecurringFrequency {
 
 export async function GET(req: NextRequest) {
   try {
+    const gate = await ownerGate();
+    if (!gate.ok) return NextResponse.json({ error: "Forbidden" }, { status: gate.status });
+
     const month = req.nextUrl.searchParams.get("month") || currentMonth();
     const { from, to } = monthRange(month);
 
-    const profiles = await listBudgetProfiles();
-    const profile = profiles[0] ?? (await getOrCreateBudgetProfile());
+    await adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
+    const profile = await getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
     const [categories, entries, register, recurring, amazonRows] = await Promise.all([
       listBudgetCategories(profile.id),
       listBudgetEntries(profile.id, 500),
@@ -57,7 +76,7 @@ export async function GET(req: NextRequest) {
       listRecurring(profile.id),
       listAmazonRows(profile.id, from, to),
     ]);
-    return NextResponse.json({ profile, profiles, categories, entries, month, register, recurring, amazonRows });
+    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows });
   } catch (err) {
     return NextResponse.json({ error: "Budget load failed", detail: String(err) }, { status: 500 });
   }
@@ -65,9 +84,14 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const gate = await ownerGate();
+    if (!gate.ok) return NextResponse.json({ error: "Forbidden" }, { status: gate.status });
+
     const body = await req.json();
     const action = String(body?.action ?? "");
-    const profile = await getOrCreateBudgetProfile(String(body?.profileName ?? "Default"));
+    // Always the single owner profile — never trust a client-supplied name.
+    await adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
+    const profile = await getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
 
     if (action === "category") {
       const category = await upsertBudgetCategory({

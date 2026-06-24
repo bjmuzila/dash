@@ -74,6 +74,9 @@ const ES_DELTA_BUCKETS_MAX = Number(process.env.ES_DELTA_BUCKETS_MAX || 1_440);
 const ES_FOOTPRINT_FILE = path.join(__dirname, '.es-footprint.json');
 // Idle mode persisted across restarts/reconnects so a page reload reflects it.
 const IDLE_STATE_FILE = path.join(__dirname, '.idle-state.json');
+// Last RTH cash-basis (broker spot − esFut), persisted so an overnight restart
+// can still derive a display SPX from the live ES future.
+const CASH_BASIS_FILE = path.join(__dirname, '.cash-basis.json');
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
@@ -354,6 +357,16 @@ function etMinutesNow(ts = Date.now()) {
 /** True before the 9:30 ET cash open — REST option volume is stale until then. */
 function isPreOpenEt(ts = Date.now()) {
   return etMinutesNow(ts) < 9 * 60 + 30;
+}
+
+/** True during the RTH cash session 9:30–16:00 ET (Mon–Fri). The broker SPX
+ *  quote is live in this window; outside it the cash-style quote goes stale, so
+ *  the displayed SPX is derived from the live ES future instead. */
+function isRthEt(ts = Date.now()) {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date(ts));
+  if (wd === 'Sat' || wd === 'Sun') return false;
+  const m = etMinutesNow(ts);
+  return m >= 9 * 60 + 30 && m < 16 * 60; // 570 .. 960
 }
 
 /**
@@ -1375,6 +1388,14 @@ class TastytradeProxy {
       catch { return false; }
     })();
     this.spot = 0;
+    // Cash-basis = (broker spot − esFut), captured while the live RTH SPX quote
+    // is fresh. Off-hours the SPX quote goes stale, so we publish a DISPLAY spot
+    // of (esFut + cashBasis) that tracks the live ES future. Persisted across the
+    // session via disk so an overnight restart still has a basis to derive from.
+    this.cashBasis = (() => {
+      try { const v = Number(JSON.parse(fs.readFileSync(CASH_BASIS_FILE, 'utf8')).basis); return Number.isFinite(v) ? v : 0; }
+      catch { return 0; }
+    })();
     this.spotSymbol = null; // resolved dxLink streamer symbol for the underlying
     this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
     this.vixSymbol = null;  // resolved dxLink streamer symbol for VIX
@@ -1790,6 +1811,38 @@ class TastytradeProxy {
       px = ask;
     }
     if (px > 0) marketState.setAux({ esFut: Math.round(px * 4) / 4 });
+    // Display SPX rides on ES off-hours; recompute it whenever ES moves.
+    this._publishSpotDisplay();
+  }
+
+  /**
+   * Publish the DISPLAY SPX (broadcast as `spotDisplay`, separate from this.spot
+   * which stays the broker quote that all GEX math is priced on).
+   *   • During RTH (9:30–16:00 ET): the live broker spot is fresh → publish it,
+   *     and capture cashBasis = spot − esFut for off-hours use.
+   *   • Outside RTH: the SPX quote is stale → publish esFut + cashBasis so the
+   *     number tracks the live ES future instead of freezing.
+   * Same 7500-scale as the walls/MVC — no instrument change, just keeps SPX live.
+   */
+  _publishSpotDisplay() {
+    const esFut = Number(marketState.getState().esFut) || 0;
+    let display = 0;
+    if (isRthEt() && this.spot > 0) {
+      display = this.spot;
+      if (esFut > 0) {
+        const basis = this.spot - esFut;
+        // Only persist on a meaningful change to avoid disk churn every tick.
+        if (Math.abs(basis - this.cashBasis) > 0.01) {
+          this.cashBasis = basis;
+          try { fs.writeFileSync(CASH_BASIS_FILE, JSON.stringify({ basis, at: Date.now() })); } catch {}
+        }
+      }
+    } else if (esFut > 0) {
+      display = esFut + this.cashBasis; // ES-derived overnight
+    } else if (this.spot > 0) {
+      display = this.spot; // last resort: stale broker quote
+    }
+    if (display > 0) marketState.setAux({ spotDisplay: Math.round(display * 100) / 100 });
   }
 
   _flushEsCandles() {
@@ -2074,6 +2127,7 @@ class TastytradeProxy {
         if (mid > 0) {
           this.spot = mid;
           marketState.setSpot(mid);
+          this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
         }
         return;
       }
@@ -2123,6 +2177,7 @@ class TastytradeProxy {
         if (px > 0) {
           this.spot = px;
           marketState.setSpot(px);
+          this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
         }
         return;
       }
