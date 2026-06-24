@@ -987,19 +987,6 @@ export default function OwnerDashboard() {
     } finally { setCtlBusy(null); void refresh(); }
   }, [flashMsg, refresh]);
 
-  const doRedeploy = useCallback(async () => {
-    if (!window.confirm("Trigger a Render redeploy?\n\nThis rebuilds and restarts the whole service — a few minutes of downtime.")) return;
-    if (!window.confirm("Are you sure? The dashboard will go offline during the rebuild.")) return;
-    setCtlBusy("redeploy");
-    try {
-      const r = await fetch("/proxy/redeploy", { method: "POST" });
-      const j = await r.json();
-      flashMsg("redeploy", j?.ok ? "Redeploy triggered — check Render" : `Failed: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("redeploy", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); }
-  }, [flashMsg]);
-
   const fetchRenderWindow = useCallback(async (w: "live" | "weekly" | "monthly") => {
     setRenderWindow(w);
     setRenderLoading(true);
@@ -1549,19 +1536,6 @@ export default function OwnerDashboard() {
                 style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "mvcSnap" ? "Saving…" : "📸 MVC Snapshot now"}
-              </button>
-              <button
-                onClick={doRedeploy}
-                disabled={ctlBusy === "redeploy"}
-                title="Trigger a full Render redeploy via the service deploy hook (rebuilds + restarts; a few minutes of downtime)."
-                style={{
-                  ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11,
-                  marginLeft: "auto",
-                  color: HOME_THEME.orange, borderColor: `${HOME_THEME.orange}55`,
-                  opacity: ctlBusy === "redeploy" ? 0.6 : 1, cursor: ctlBusy === "redeploy" ? "wait" : "pointer",
-                }}
-              >
-                {ctlBusy === "redeploy" ? "Triggering…" : "⟳ Redeploy (Render)"}
               </button>
             </div>
 

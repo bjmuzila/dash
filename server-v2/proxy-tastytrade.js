@@ -1437,6 +1437,13 @@ class TastytradeProxy {
     }
   }
 
+  /** Read the persisted idle flag without constructing a feed. Lets the boot
+   *  path decide whether to start the feed at all when idle was left ON. */
+  static idlePersisted() {
+    try { return !!JSON.parse(fs.readFileSync(IDLE_STATE_FILE, 'utf8')).idle; }
+    catch { return false; }
+  }
+
   async start() {
     await getAccessToken();
 
@@ -1561,10 +1568,12 @@ class TastytradeProxy {
       marketState.setFlow(this.flow.bucket(SYMBOL));
     }, FLOW_AGGREGATE_MS);
 
-    // If idle was persisted ON, re-apply the pause: start() always wires the
-    // loop timers, so force a clean toggle to tear them back down.
-    if (this.idle) { this.idle = false; this.setIdle(true); }
-    else { marketState.setStatus({ idle: false }); }
+    // start() is the resume path for idle-OFF, and also runs on cold boot. Either
+    // way the feed is now live, so the in-memory flag is OFF. (setIdle persists
+    // the flag itself; we don't tear down here — a persisted-idle cold boot is
+    // handled by the caller checking the file before calling start().)
+    this.idle = false;
+    marketState.setStatus({ idle: false });
     return this;
   }
 
@@ -1726,24 +1735,31 @@ class TastytradeProxy {
   setIdle(idle) {
     const next = !!idle;
     if (next === this.idle) return;
+    // Persist + reflect the intent immediately so a page refresh (or a restart
+    // mid-transition) sees the new state even though the bring-up is async.
     this.idle = next;
-    if (next) {
-      if (this.recomputeTimer) { clearInterval(this.recomputeTimer); this.recomputeTimer = null; }
-      if (this.flowTimer) { clearInterval(this.flowTimer); this.flowTimer = null; }
-      if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
-      if (this.candleFlushTimer) { clearInterval(this.candleFlushTimer); this.candleFlushTimer = null; }
-      if (this.sessionRollTimer) { clearTimeout(this.sessionRollTimer); this.sessionRollTimer = null; }
-    } else {
-      if (!this.recomputeTimer) this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
-      if (!this.flowTimer) this.flowTimer = setInterval(() => marketState.setFlow(this.flow.bucket(SYMBOL)), FLOW_AGGREGATE_MS);
-      if (!this.oiTimer) this._scheduleOiRefresh();
-      if (!this.candleFlushTimer && this.esCandleSymbol) this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
-      // Resync the session key on resume (may have rolled while idle), then re-arm the watcher.
-      this.optSessionKey = this._sessionKey();
-      if (!this.sessionRollTimer) this._scheduleSessionRoll();
-    }
     try { fs.writeFileSync(IDLE_STATE_FILE, JSON.stringify({ idle: next }), 'utf8'); } catch {}
     marketState.setStatus({ idle: next });
+
+    // Idle is now a TRUE kill-switch, not a compute pause: ON tears down the
+    // dxLink/TT socket (stops inbound quotes) and all loop timers (stops the
+    // GEX/flow/snapshot broadcasts) — zero bandwidth in and out. OFF re-runs the
+    // full feed bring-up. We reuse stop()/start() (the same pair reconnect()
+    // uses) so there's one battle-tested teardown path. start() is async; guard
+    // against overlapping bring-ups from a double-click.
+    if (next) {
+      try { this.stop(); } catch (e) { console.warn('[IDLE] stop() failed:', e && e.message); }
+      console.log('[IDLE] feed stopped — bandwidth paused');
+    } else {
+      if (this._resuming) return;
+      this._resuming = true;
+      marketState.setStatus({ reconnecting: true });
+      Promise.resolve()
+        .then(() => this.start())
+        .then(() => { console.log('[IDLE] feed resumed'); })
+        .catch((e) => { console.warn('[IDLE] resume start() failed:', e && e.message); })
+        .finally(() => { this._resuming = false; marketState.setStatus({ reconnecting: false }); });
+    }
   }
 
   /**
@@ -2080,6 +2096,9 @@ class TastytradeProxy {
 
   /** Build flat rows, compute greeks locally, write GEX + flow to state. */
   _recompute() {
+    // Idle is a hard kill-switch: even if a reconnect/session-roll re-armed the
+    // timer, do no work (and broadcast nothing) while paused.
+    if (this.idle) return;
     if (!(this.spot > 0)) return;
 
     // Pass 1: gather each contract's price/OI/volume and solve IV where the
@@ -2589,9 +2608,16 @@ class TastytradeProxy {
   async reconnect() {
     marketState.setStatus({ reconnecting: true });
     try { this.stop(); } catch {}
-    // Restore persisted idle (start() re-applies the pause if it was ON).
-    try { this.idle = !!JSON.parse(fs.readFileSync(IDLE_STATE_FILE, 'utf8')).idle; }
-    catch { this.idle = false; }
+    // Honor persisted idle: if the owner left the feed paused, a reconnect must
+    // NOT silently bring it back (that was the old "idle reverts" bug). Stay
+    // down and reflect idle; otherwise do a clean start.
+    if (TastytradeProxy.idlePersisted()) {
+      this.idle = true;
+      marketState.setStatus({ idle: true, reconnecting: false });
+      console.log('[RECONNECT] idle persisted ON — feed left paused');
+      return true;
+    }
+    this.idle = false;
     await this.start();
     marketState.setStatus({ reconnecting: false });
     return true;

@@ -258,27 +258,18 @@ export default function RegimeMatrix({
             cells one Greek-flip away are dimly lit.
           </div>
         </div>
-        {/* Live-sign legend + reset */}
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          {[
+        {/* Live-sign dials + reset */}
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          {([
             ["GEX", gex], ["VEX", vex], ["DEX", dex], ["CEX", chex],
-          ].map(([lbl, v]) => {
-            const s = signOf(v as number | null);
-            const col = (v as number | null) == null ? "#9fb3c8" : s > 0 ? "#00e676" : "#ff5252";
-            return (
-              <span key={lbl as string} style={{
-                fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: col,
-                border: `1px solid ${col}55`, background: `${col}14`, padding: "3px 7px", borderRadius: 5,
-              }}>
-                {lbl as string} {(v as number | null) == null ? "–" : s > 0 ? "↑" : "↓"}
-              </span>
-            );
-          })}
+          ] as [string, number | null][]).map(([lbl, v]) => (
+            <SignDial key={lbl} label={lbl} value={v} />
+          ))}
           {sel && (
             <button onClick={() => setSel(null)} style={{
               fontSize: 10, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
               color: "#67e8f9", border: "1px solid rgba(0,229,255,.35)", background: "rgba(0,229,255,.08)",
-              padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+              padding: "6px 11px", borderRadius: 999, cursor: "pointer",
             }}>Reset to live</button>
           )}
         </div>
@@ -379,15 +370,10 @@ export default function RegimeMatrix({
                 }}>● LIVE</span>
               )}
             </div>
-            {/* sign chips */}
+            {/* sign chips — all four Greeks for this regime, as filled pills */}
             <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
               {([["GEX", detail.gex], ["VEX", detail.vex], ["DEX", detail.dex], ["CEX", detail.cex]] as [string, Sign][]).map(([lbl, s]) => (
-                <span key={lbl} style={{
-                  fontSize: 11, fontWeight: 800, fontFamily: "monospace",
-                  color: s > 0 ? "#00e676" : "#ff5252",
-                  border: `1px solid ${s > 0 ? "rgba(0,230,118,.4)" : "rgba(255,82,82,.4)"}`,
-                  borderRadius: 5, padding: "2px 7px",
-                }}>{lbl} {s > 0 ? "↑" : "↓"}</span>
+                <SignPill key={lbl} lbl={lbl} s={s} dim={false} />
               ))}
             </div>
 
@@ -467,8 +453,8 @@ function RowFragment({
             title={cell.name}
             style={{
               border, background: bg, boxShadow, borderRadius: 8, padding: "8px 7px",
-              minHeight: 64, textAlign: "left", cursor: "pointer", position: "relative",
-              display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 4,
+              minHeight: 70, textAlign: "left", cursor: "pointer", position: "relative",
+              display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 6,
               transition: "transform .08s ease",
             }}
           >
@@ -482,10 +468,10 @@ function RowFragment({
               fontSize: 12.5, fontWeight: 800, lineHeight: 1.2,
               color: isLive ? "#ffffff" : oneFlip ? "#e3edf5" : "#9aa9bb",
             }}>{cell.name}</div>
-            {/* mini sign row */}
-            <div style={{ display: "flex", gap: 5, fontFamily: "monospace", fontSize: 11, fontWeight: 800 }}>
-              <SignDot lbl="D" s={cell.dex} dim={!isLive && !oneFlip} />
-              <SignDot lbl="C" s={cell.cex} dim={!isLive && !oneFlip} />
+            {/* sign pills — DEX + CEX, filled in the bias color, readable arrows */}
+            <div style={{ display: "flex", gap: 5 }}>
+              <SignPill lbl="DEX" s={cell.dex} dim={!isLive && !oneFlip} />
+              <SignPill lbl="CEX" s={cell.cex} dim={!isLive && !oneFlip} />
             </div>
           </button>
         );
@@ -494,11 +480,74 @@ function RowFragment({
   );
 }
 
-function SignDot({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
-  const col = s > 0 ? "#00e676" : "#ff5252";
+// ── Live-sign dial ────────────────────────────────────────────────────────────
+// A circular gauge for one Greek's live sign: glowing ring + arrow in the bias
+// color (green up / red down, grey when no data yet), Greek label beneath.
+function SignDial({ label, value }: { label: string; value: number | null }) {
+  const has = value != null;
+  const up = has && value >= 0;
+  const col = !has ? "#9fb3c8" : up ? "#00e676" : "#ff5252";
+  const SZ = 52;          // circle diameter (px)
+  const R = (SZ - 6) / 2; // ring radius (inside the stroke)
+  const C = 2 * Math.PI * R;
   return (
-    <span style={{ color: dim ? `${col}99` : col, letterSpacing: ".02em" }}>
-      {lbl}{s > 0 ? "↑" : "↓"}
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+      <div style={{ position: "relative", width: SZ, height: SZ }}>
+        <svg width={SZ} height={SZ} viewBox={`0 0 ${SZ} ${SZ}`} style={{ display: "block" }}>
+          <defs>
+            <radialGradient id={`dial-${label}`} cx="50%" cy="38%" r="65%">
+              <stop offset="0%" stopColor={`${col}33`} />
+              <stop offset="100%" stopColor="rgba(0,0,0,0)" />
+            </radialGradient>
+          </defs>
+          {/* inner fill glow */}
+          <circle cx={SZ / 2} cy={SZ / 2} r={R} fill={`url(#dial-${label})`} />
+          {/* track */}
+          <circle cx={SZ / 2} cy={SZ / 2} r={R} fill="none" stroke="rgba(255,255,255,.10)" strokeWidth={3} />
+          {/* colored ring — full when data present, dashed hint when not */}
+          <circle
+            cx={SZ / 2} cy={SZ / 2} r={R} fill="none" stroke={col} strokeWidth={3} strokeLinecap="round"
+            strokeDasharray={has ? undefined : `${C * 0.12} ${C * 0.06}`}
+            transform={`rotate(-90 ${SZ / 2} ${SZ / 2})`}
+            style={{ filter: `drop-shadow(0 0 5px ${col}aa)` }}
+          />
+        </svg>
+        {/* arrow / dash centered */}
+        <div style={{
+          position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 22, fontWeight: 900, lineHeight: 1, color: col,
+          textShadow: `0 0 8px ${col}88`,
+        }}>
+          {!has ? "–" : up ? "↑" : "↓"}
+        </div>
+      </div>
+      <span style={{
+        fontSize: 11, fontWeight: 800, letterSpacing: ".1em", color: col, fontFamily: "monospace",
+      }}>{label}</span>
+    </div>
+  );
+}
+
+// ── Per-cell sign pill ────────────────────────────────────────────────────────
+// A small filled pill (DEX / CEX) showing one Greek's sign: green ▲ up, red ▼
+// down, with dark high-contrast text on the colored fill so it reads clearly even
+// on dark cells. Dimmed for cells that are neither live nor one-flip-away.
+function SignPill({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
+  const up = s > 0;
+  const base = up ? "#00e676" : "#ff5252";
+  // Bright filled pill for active cells; muted outline for the rest.
+  const fill = dim ? `${base}1f` : base;
+  const text = dim ? base : "#06120b";
+  const border = dim ? `${base}55` : base;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 3,
+      fontSize: 10, fontWeight: 900, letterSpacing: ".03em",
+      color: text, background: fill, border: `1px solid ${border}`,
+      padding: "2px 6px", borderRadius: 999, lineHeight: 1,
+      fontFamily: "system-ui, sans-serif",
+    }}>
+      {lbl}<span style={{ fontSize: 9 }}>{up ? "▲" : "▼"}</span>
     </span>
   );
 }

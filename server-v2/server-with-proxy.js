@@ -265,16 +265,6 @@ async function main() {
         });
         return;
       }
-      // Trigger a Render redeploy via the service's deploy hook (set
-      // RENDER_DEPLOY_HOOK_URL in env). POST /proxy/redeploy
-      if (pathname === '/proxy/redeploy' && req.method === 'POST') {
-        const hook = process.env.RENDER_DEPLOY_HOOK_URL || '';
-        if (!hook) { sendJson(res, 400, { ok: false, error: 'RENDER_DEPLOY_HOOK_URL not set' }); return; }
-        fetch(hook, { method: 'POST' })
-          .then((r) => sendJson(res, r.ok ? 200 : 502, { ok: r.ok, status: r.status }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
       // Dev probe: raw feed data for a single built symbol from the live maps
       // (same source as the GEX chart). GET /proxy/probe?symbol=...&feed=Greeks
       if (pathname === '/proxy/probe' && req.method === 'GET') {
@@ -430,10 +420,19 @@ async function main() {
   // Attach WS broadcaster (/ws/gex).
   const { wss } = createGexWsServer(server, { log: console });
 
-  // Start the live feed.
+  // Start the live feed — UNLESS idle was left ON. Idle is now a true bandwidth
+  // kill-switch, so a restart while idle must stay paused (no dxLink, no quotes,
+  // no broadcasts) until the owner toggles it back on from the dashboard.
   try {
-    proxy = await new TastytradeProxy().start();
-    console.log('[SERVER-V2] Tastytrade/dxLink feed started');
+    proxy = new TastytradeProxy();
+    if (TastytradeProxy.idlePersisted()) {
+      proxy.idle = true;
+      marketState.setStatus({ idle: true });
+      console.log('[SERVER-V2] idle persisted ON — feed left paused (toggle off to start)');
+    } else {
+      await proxy.start();
+      console.log('[SERVER-V2] Tastytrade/dxLink feed started');
+    }
   } catch (err) {
     console.error('[SERVER-V2] Feed failed to start:', err.message);
     marketState.setError(`feed: ${err.message}`);
