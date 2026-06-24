@@ -60,9 +60,13 @@ const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
 // depend on dxFeed reliably pushing the reset (it does so only sometimes).
 const SESSION_ROLL_HOUR_ET = Number(process.env.SESSION_ROLL_HOUR_ET || 18);
 const SESSION_ROLL_CHECK_MS = Number(process.env.SESSION_ROLL_CHECK_MS || 60000);
-// ES footprint: a print must be at least this many contracts to count as a "big
-// order" bubble. Delta buckets aggregate signed contracts over BUCKET_MS windows.
-const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 1);
+// ES footprint: a print must be at least this many contracts to be BUFFERED for a
+// bubble. Default 100 — now that TimeAndSale delivers every tick, buffering all
+// 1-lots would balloon esBigTrades (and the per-second full-buffer broadcast) into
+// a multi-GB/hr outbound leak. 100 matches the client bubble floor, so nothing
+// visible is lost. NOTE: delta buckets aggregate EVERY print (before this gate),
+// so the delta/cumulative lane stays accurate regardless of this threshold.
+const ES_BIG_TRADE_MIN = Number(process.env.ES_BIG_TRADE_MIN || 100);
 // Footprint retention is now TIME-based: keep the whole current session day, not a
 // fixed count. These ceilings are just safety caps so a runaway feed can't grow the
 // buffers without bound — set high enough that a full RTH+ETH day fits comfortably.
@@ -1224,6 +1228,11 @@ class DxLinkClient {
               Greeks: ['eventType', 'eventSymbol', 'volatility', 'delta', 'gamma', 'theta', 'vega', 'rho'],
               Summary: ['eventType', 'eventSymbol', 'openInterest', 'dayVolume', 'prevDayClosePrice'],
               Trade: ['eventType', 'eventSymbol', 'price', 'size', 'dayVolume'],
+              // TimeAndSale = true tick-by-tick time & sales (real per-print size +
+              // exchange aggressorSide). Used for the ES footprint bubbles, which
+              // the conflated Trade event under-reported. Verified streaming for ES
+              // on the api-quote token with size + BUY/SELL aggressorSide.
+              TimeAndSale: ['eventType', 'eventSymbol', 'time', 'price', 'size', 'aggressorSide'],
               Candle: ['eventType', 'eventSymbol', 'time', 'open', 'high', 'low', 'close', 'volume'],
             },
           });
@@ -1231,10 +1240,14 @@ class DxLinkClient {
           if (this.pending.length) {
             const queued = this.pending.splice(0);
             const candleSubs = queued.filter((q) => q && q.__candle);
-            const regular = queued.filter((q) => !(q && q.__candle));
+            const tasSubs = queued.filter((q) => q && q.__tas);
+            const regular = queued.filter((q) => !(q && (q.__candle || q.__tas)));
             if (regular.length) this.subscribe(regular);
             for (const c of candleSubs) {
               this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [c.sub] });
+            }
+            for (const t of tasSubs) {
+              this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [t.sub] });
             }
           }
         }
@@ -1288,6 +1301,17 @@ class DxLinkClient {
     for (let i = 0; i < add.length; i += CHUNK) {
       this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: add.slice(i, i + CHUNK) });
     }
+  }
+
+  /** Subscribe ONE symbol to TimeAndSale only (tick-by-tick time & sales). Kept
+   *  separate from subscribe() so TAS rides only the ES future, not every option
+   *  contract (whole-chain TAS is heavy + unstable). */
+  subscribeTimeAndSale(symbol) {
+    const sub = { type: 'TimeAndSale', symbol };
+    // __tas marks it so the pending-flush sends it as-is instead of routing it
+    // through subscribe() (which would re-expand it into Quote/Greeks/etc).
+    if (!this.channelOpen) { this.pending.push({ __tas: true, sub }); return; }
+    this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [sub] });
   }
 
   /**
@@ -1354,6 +1378,7 @@ const COMPACT_FIELDS = {
   Greeks: ['eventType', 'eventSymbol', 'volatility', 'delta', 'gamma', 'theta', 'vega', 'rho'],
   Summary: ['eventType', 'eventSymbol', 'openInterest', 'dayVolume', 'prevDayClosePrice'],
   Trade: ['eventType', 'eventSymbol', 'price', 'size', 'dayVolume'],
+  TimeAndSale: ['eventType', 'eventSymbol', 'time', 'price', 'size', 'aggressorSide'],
   Candle: ['eventType', 'eventSymbol', 'time', 'open', 'high', 'low', 'close', 'volume'],
 };
 
@@ -1724,6 +1749,10 @@ class TastytradeProxy {
     if (this.esSymbol) syms.add(this.esSymbol);
     for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
     this.client.subscribe([...syms]);
+    // TimeAndSale (tick-by-tick) only on the ES future — powers the footprint
+    // bubbles with real per-print size + exchange aggressorSide. Re-issued here so
+    // it survives reconnects alongside the bulk subscribe above.
+    if (this.esSymbol) this.client.subscribeTimeAndSale(this.esSymbol);
     marketState.setStatus({ contractsSubscribed: syms.size });
   }
 
@@ -1943,22 +1972,26 @@ class TastytradeProxy {
   }
 
   /**
-   * Classify one front-ES Trade tick and fold it into the footprint state.
+   * Classify one front-ES print and fold it into the footprint state.
    *
-   * Aggressor side comes from the live ES bid/ask: a print at/above the ask is an
-   * aggressive BUY (lifted offer); at/below the bid an aggressive SELL (hit bid).
-   * Inside the spread we fall back to mid (>= mid -> buy). Each tick's signed size
-   * accrues into a per-minute delta bucket; prints >= ES_BIG_TRADE_MIN contracts
-   * are also kept individually for the bubble row.
+   * Now fed by TimeAndSale, so `sideOverride` carries the exchange-provided
+   * aggressorSide ('buy'|'sell') — authoritative, used directly when present.
+   * When it's absent (Undefined aggressor), we fall back to the live ES bid/ask:
+   * at/above ask = aggressive BUY (lifted offer); at/below bid = aggressive SELL
+   * (hit bid); inside the spread, mid (>= mid -> buy). Each print's signed size
+   * accrues into a per-minute delta bucket; prints >= ES_BIG_TRADE_MIN are also
+   * kept individually for the bubble row.
    */
-  _recordEsPrint(price, size) {
+  _recordEsPrint(price, size, sideOverride = null) {
     if (!(size > 0)) return;
-    const q = this.esQuote;
-    let side;
-    if (q && q.ask > 0 && price >= q.ask) side = 'buy';
-    else if (q && q.bid > 0 && price <= q.bid) side = 'sell';
-    else if (q && q.mid > 0) side = price >= q.mid ? 'buy' : 'sell';
-    else return; // no quote context yet — can't classify
+    let side = sideOverride === 'buy' || sideOverride === 'sell' ? sideOverride : null;
+    if (!side) {
+      const q = this.esQuote;
+      if (q && q.ask > 0 && price >= q.ask) side = 'buy';
+      else if (q && q.bid > 0 && price <= q.bid) side = 'sell';
+      else if (q && q.mid > 0) side = price >= q.mid ? 'buy' : 'sell';
+      else return; // no quote context yet — can't classify
+    }
     const ts = Date.now();
     const signed = side === 'buy' ? size : -size;
 
@@ -2189,25 +2222,13 @@ class TastytradeProxy {
       if (sym === this.esSymbol) {
         const px = Number(ev.price);
         if (px > 0) {
-          // Record the last traded price and re-publish esFut. esFut = last trade
-          // CLAMPED into the live bid/ask: matches TradingView's last-price display
-          // (not the mid, which floats high on a wide spread) while still tracking
-          // the market when the spread moves away from a stale print.
+          // ES Trade is used ONLY for the live price (esFut) now. The footprint
+          // bubbles are fed by TimeAndSale below (real per-print size + exchange
+          // aggressorSide) — the conflated Trade event under-reported block sizes.
+          // esFut = last trade CLAMPED into the live bid/ask: matches TradingView's
+          // last-price display while tracking the market on a wide spread.
           this.esLastTrade = px;
           this._publishEsFut();
-          const sz = Number(ev.size);
-          // DIAGNOSTIC: what sizes does dxFeed's (conflated) Trade event actually
-          // deliver for ES? Log the running max + every print ≥ 50 with all raw
-          // fields, so we can compare against MotiveWave's tick stream (e.g. the 300
-          // print). Remove once the TimeAndSale-vs-Trade question is settled.
-          if (!(this._esMaxSeen >= sz)) {
-            this._esMaxSeen = sz;
-            console.log(`[ES-DIAG] new max trade size=${sz} px=${px} dayVol=${ev.dayVolume} raw=${JSON.stringify(ev)}`);
-          }
-          if (sz >= 50) {
-            console.log(`[ES-DIAG] big trade size=${sz} px=${px} dayVol=${ev.dayVolume}`);
-          }
-          this._recordEsPrint(px, sz);
         }
         return;
       }
@@ -2232,6 +2253,22 @@ class TastytradeProxy {
       });
       return;
     }
+
+    if (ev.eventType === 'TimeAndSale') {
+      // Tick-by-tick time & sales — the footprint bubble source. Only the ES
+      // future is subscribed to TAS. dxFeed aggressorSide is 'Buy'|'Sell'|'Undefined'
+      // (case can vary); use it directly when present, else fall back to the
+      // bid/ask inference inside _recordEsPrint.
+      if (sym !== this.esSymbol) return;
+      const px = Number(ev.price);
+      const sz = Number(ev.size);
+      if (!(px > 0) || !(sz > 0)) return;
+      const ag = String(ev.aggressorSide || '').toLowerCase();
+      const side = ag === 'buy' ? 'buy' : ag === 'sell' ? 'sell' : null;
+      this._recordEsPrint(px, sz, side);
+      return;
+    }
+
     if (ev.eventType === 'Candle') {
       // 5-minute ES bars (historical snapshot on subscribe, then live forming bar).
       // dxFeed Candle `time` is the bar-start epoch ms. NaN volume on a forming

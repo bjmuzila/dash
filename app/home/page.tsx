@@ -715,6 +715,19 @@ export default function HomePage() {
     return { max, top3 };
   }, [heatmapRows]);
 
+  // MVC for the heatmap table — single strike with the highest ABSOLUTE net GEX
+  // across the heatmap rows. Gets the gold star in the heatmap. Distinct from the
+  // chart/top-bar MVC (`mvcStrike`, computed from chartRows below).
+  const mvcStrikeHeatmap = useMemo(() => {
+    let best: number | null = null;
+    let bestAbs = 0;
+    for (const r of heatmapRows) {
+      const a = Math.abs(Number(r.netGexVal ?? 0));
+      if (a > bestAbs) { bestAbs = a; best = r.strikeNum; }
+    }
+    return best;
+  }, [heatmapRows]);
+
   // Poll the 30-min rolling net GEX history for the active expiry.
   useEffect(() => {
     if (!selectedExpiry) return;
@@ -1138,7 +1151,12 @@ export default function HomePage() {
                                   <span style={{ flexShrink: 0, minWidth: 28 }}>
                                     {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
                                   </span>
-                                  <span>{row.netGex}</span>
+                                  <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                                    {row.strikeNum === mvcStrikeHeatmap && (
+                                      <span title="MVC — highest |net GEX|" style={{ color: "#ffd600", fontSize: 12, lineHeight: 1, textShadow: "0 0 3px rgba(0,0,0,.8)" }}>★</span>
+                                    )}
+                                    {row.netGex}
+                                  </span>
                                 </div>
                               )}
                             </td>

@@ -257,6 +257,37 @@ function fmtExpHeader(iso: string): string {
   return `${days[dt.getDay()]} ${mm}-${dd}`;
 }
 
+// True when `iso` (YYYY-MM-DD) falls in the CURRENT trading week (Mon–Fri of the
+// week that contains the upcoming/!this Friday), in ET. The stored weekly EM only
+// applies to current-week expirations, so EM bands render only for those.
+function isCurrentWeekExp(iso: string): boolean {
+  if (!iso) return false;
+  const now = etToday();
+  const dow = now.getDay(); // 0=Sun..6=Sat
+  // Monday of this week (treat Sun as belonging to the week just ended → next Mon).
+  const monday = new Date(now);
+  const toMon = dow === 0 ? 1 : 1 - dow; // Sun→+1 (next Mon), else back to Mon
+  monday.setDate(now.getDate() + toMon);
+  monday.setHours(0, 0, 0, 0);
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  friday.setHours(23, 59, 59, 999);
+  const d = new Date(iso + "T12:00:00");
+  return d >= monday && d <= friday;
+}
+
+// Snap a target price to the nearest value present in `strikes`.
+function nearestStrikeTo(target: number, strikes: number[]): number | null {
+  if (!Number.isFinite(target) || !strikes.length) return null;
+  let best = strikes[0];
+  let bestD = Math.abs(strikes[0] - target);
+  for (const s of strikes) {
+    const dd = Math.abs(s - target);
+    if (dd < bestD) { bestD = dd; best = s; }
+  }
+  return best;
+}
+
 function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]) {
   const n = value || 0;
   const m = maxValue || 0;
@@ -332,6 +363,8 @@ export default function OptionsChainPage() {
   const [greekMode, setGreekMode] = useState<GreekMode>("gex");
   const pageRef = useRef<HTMLDivElement>(null);
   const [chainError, setChainError] = useState<string | null>(null);
+  // Weekly EM (from /api/levels, DB-backed). close ± em = 1× band, ± 2·em = 2×.
+  const [emLevels, setEmLevels] = useState<{ close: number; em: number } | null>(null);
 
   // The 7-expiration matrix. Each entry holds one expiration's strike→greek map.
   const expColumnsRef = useRef<ExpColumn[]>([]);
@@ -624,9 +657,65 @@ export default function OptionsChainPage() {
     });
   }, [columns, visibleStrikes, valueAt]);
 
+  // MVC per column = the visible strike with the highest ABSOLUTE net GEX.
+  // Always keyed on GEX (the MVC definition), independent of the active greek.
+  const mvcByCol = useMemo(() => {
+    return columns.map(col => {
+      let best: number | null = null;
+      let bestAbs = 0;
+      visibleStrikes.forEach(s => {
+        const g = col.cells.get(s)?.gex;
+        if (g == null) return;
+        const a = Math.abs(g);
+        if (a > bestAbs) { bestAbs = a; best = s; }
+      });
+      return best;
+    });
+  }, [columns, visibleStrikes]);
+
+  // Weekly EM for the active ticker (DB-backed via /api/levels). Refetched on
+  // ticker change and on each manual refresh so the bands track intraday EM.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const row = await fetch(`/api/levels?ticker=${encodeURIComponent(activeTicker)}`)
+        .then(r => r.json()).catch(() => null);
+      if (cancelled) return;
+      const em = parseFloat(String(row?.em ?? ""));
+      const close = parseFloat(String(row?.close ?? ""));
+      setEmLevels(Number.isFinite(em) && em > 0 && Number.isFinite(close) && close > 0
+        ? { close, em } : null);
+    })();
+    return () => { cancelled = true; };
+  }, [activeTicker, refreshSeed]);
+
+  // The 4 EM band strikes (snapped to visible strikes): 1× down/up, 2× down/up.
+  // Null when no EM is available.
+  const emStrikes = useMemo(() => {
+    if (!emLevels) return null;
+    const { close, em } = emLevels;
+    return {
+      d1: nearestStrikeTo(close - em, visibleStrikes),
+      u1: nearestStrikeTo(close + em, visibleStrikes),
+      d2: nearestStrikeTo(close - 2 * em, visibleStrikes),
+      u2: nearestStrikeTo(close + 2 * em, visibleStrikes),
+    };
+  }, [emLevels, visibleStrikes]);
+
   // Always render EXP_COLUMNS slots so the grid keeps a stable width even before
   // all 7 expirations resolve (or when a ticker lists fewer than 7).
   const gridCols = Math.max(columns.length, EXP_COLUMNS);
+
+  // EM bands only apply to current-week expirations. Mark which visible columns
+  // qualify so the band draws across only those columns.
+  const colIsCurrentWeek = useMemo(
+    () => Array.from({ length: gridCols }).map((_, i) => {
+      const c = columns[i];
+      return c ? isCurrentWeekExp(c.expiration) : false;
+    }),
+    [columns, gridCols],
+  );
+  const anyCurrentWeek = colIsCurrentWeek.some(Boolean);
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
@@ -812,8 +901,8 @@ export default function OptionsChainPage() {
                 lineHeight: 1.25,
               }}
             >
-              <div>{greekMode.toUpperCase()}</div>
-              <div style={{ fontSize: 8, color: HT.muted, fontWeight: 700, letterSpacing: 0 }}>
+              <div style={{ fontSize: 12 }}>{greekMode.toUpperCase()}</div>
+              <div style={{ fontSize: 10, color: HT.muted, fontWeight: 700, letterSpacing: 0 }}>
                 {col ? fmtExpHeader(col.expiration) : "—"}
               </div>
             </div>
@@ -835,6 +924,14 @@ export default function OptionsChainPage() {
           </div>
         ) : visibleStrikes.map((strike) => {
           const isATM = strike === nearestStrike;
+          // EM band membership (only meaningful when a current-week column shows).
+          const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
+          const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
+          const emBorder = is1x
+            ? { borderTop: "2px solid rgba(255,255,255,.92)" }
+            : is2x
+            ? { borderTop: "2px dashed rgba(255,255,255,.85)" }
+            : null;
           const rowStyle = isATM
             ? { background: "rgba(255,179,0,.07)", outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
@@ -845,9 +942,20 @@ export default function OptionsChainPage() {
               style={{
                 display: "grid",
                 gridTemplateColumns: `100px repeat(${gridCols}, minmax(78px, 1fr))`,
+                position: "relative",
                 ...rowStyle,
+                ...(emBorder ?? {}),
               }}
             >
+              {(is1x || is2x) && (
+                <span style={{
+                  position: "absolute", top: -8, left: 4, zIndex: 3,
+                  fontSize: 8, fontWeight: 800, letterSpacing: "0.05em",
+                  color: "#0b0f1a", background: "rgba(255,255,255,.92)",
+                  padding: "0 4px", borderRadius: 3, pointerEvents: "none",
+                  fontFamily: "sans-serif",
+                }}>{is1x ? "EM" : "2× EM"}</span>
+              )}
               <div
                 style={{
                   padding: "4px 6px",
@@ -867,10 +975,12 @@ export default function OptionsChainPage() {
                 const col = columns[i];
                 const value = col ? valueAt(col, strike) : null;
                 const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
+                const isMvc = greekMode === "gex" && col != null && mvcByCol[i] === strike;
                 return (
                   <div
                     key={col?.expiration ?? `c-${i}`}
                     style={{
+                      position: "relative",
                       padding: "4px 6px",
                       fontSize: 11,
                       fontFamily: "monospace",
@@ -881,6 +991,12 @@ export default function OptionsChainPage() {
                       fontWeight: 700,
                     }}
                   >
+                    {isMvc && (
+                      <span title="MVC — highest |net GEX|" style={{
+                        position: "absolute", top: 1, left: 3, fontSize: 12, lineHeight: 1,
+                        color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
+                      }}>★</span>
+                    )}
                     {value == null ? "·" : fmtMoney(value)}
                   </div>
                 );

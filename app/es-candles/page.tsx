@@ -38,8 +38,6 @@ type Bubble = {
 const BUBBLE_WINDOW_MS = 1000;
 const BUBBLE_MIN_LOTS = 100;
 const bubbleWindowMs = (ts: number) => Math.floor(ts / BUBBLE_WINDOW_MS) * BUBBLE_WINDOW_MS;
-// 5-min net delta bar.
-type DeltaBar = { slotTs: number; net: number };
 
 // Volume-by-price profile + value-area levels, derived from candle OHLCV.
 type ProfileBin = { price: number; volume: number };
@@ -175,9 +173,8 @@ export default function EsCandlesPage() {
 
   // Heatmap overlay state.
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  // Bottom lane canvases (bubbles + delta), x-aligned to the chart time axis.
+  // Bottom lane canvas (big-trade bubbles), x-aligned to the chart time axis.
   const bubbleLaneRef = useRef<HTMLCanvasElement>(null);
-  const deltaLaneRef = useRef<HTMLCanvasElement>(null);
   // Bubble hover tooltip state (the bubble under the cursor + its lane x/y).
   const [bubbleHover, setBubbleHover] = useState<{ x: number; y: number; b: Bubble } | null>(null);
   // Right-axis SPX readouts. liveSpx = badge pinned at the last ES price (y in
@@ -240,14 +237,12 @@ export default function EsCandlesPage() {
     return Math.round((Date.parse(exp + "T00:00:00Z") - Date.parse(todayEt + "T00:00:00Z")) / 86_400_000);
   };
 
-  // Big trades + per-minute delta from the same /ws/gex feed (footprint source).
-  const { trades: rawTrades, delta: rawDelta } = useEsBigTrades();
+  // Big trades from the /ws/gex feed (footprint / bubble source).
+  const { trades: rawTrades } = useEsBigTrades();
   const [showBubbles, setShowBubbles] = useState(true);
-  const [showDelta, setShowDelta] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
-  // Bubble size metric: "total" = all volume in the slot, "net" = |buy − sell|.
 
   // Prior-day H/L and overnight H/L from the candle history (ES prices).
   //
@@ -338,18 +333,8 @@ export default function EsCandlesPage() {
     return out;
   }, [rawTrades]);
 
-  // Bin per-minute delta into 5-min net bars.
-  const deltaBars = useMemo<DeltaBar[]>(() => {
-    const bySlot = new Map<number, number>();
-    for (const d of rawDelta) {
-      const slotTs = slotFloorMs(d.ts);
-      bySlot.set(slotTs, (bySlot.get(slotTs) ?? 0) + Number(d.net || 0));
-    }
-    return [...bySlot.entries()].map(([slotTs, net]) => ({ slotTs, net }));
-  }, [rawDelta]);
-
-  // Repaint the bubble/delta lanes whenever the binned data changes.
-  useEffect(() => { drawLanesRef.current(); }, [bubbles, deltaBars]);
+  // Repaint the bubble lane whenever the binned data changes.
+  useEffect(() => { drawLanesRef.current(); }, [bubbles]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
   // chart plots ES, so we offset by the live basis (esFut - spx) before drawing.
@@ -674,9 +659,9 @@ export default function EsCandlesPage() {
     }
     updateLiveSpxRef.current();
     // Live candle updates shift the time axis without always firing a logical-
-    // range change, which left the bubble/delta lanes (and heatmap) painting a
-    // stale or cleared frame — the "bubbles sometimes disappear" bug. Repaint
-    // both whenever candle data changes.
+    // range change, which left the bubble lane (and heatmap) painting a stale or
+    // cleared frame — the "bubbles sometimes disappear" bug. Repaint whenever
+    // candle data changes.
     drawOverlayRef.current();
     drawLanesRef.current();
   }, [rows]);
@@ -986,13 +971,12 @@ export default function EsCandlesPage() {
     };
   }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
 
-  // ── Bottom lanes: big-trade bubbles + 5m net delta ────────────────────────
+  // ── Bottom lane: big-trade bubbles ────────────────────────────────────────
   // Both are x-aligned to the chart time axis via the chart's timeToCoordinate
   // (lane canvases share the chart's width and left edge), like the reference.
   useEffect(() => {
     const chart = chartApiRef.current;
     if (!chart) return;
-    const SLOT_MS = 300_000;
 
     const sizeCanvas = (cv: HTMLCanvasElement | null) => {
       if (!cv) return null;
@@ -1015,13 +999,6 @@ export default function EsCandlesPage() {
       const barCenter = (slotTs: number): number | null => {
         const x = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
         return x == null ? null : x;
-      };
-      const slotX = (slotTs: number) => {
-        const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
-        const xEnd = ts.timeToCoordinate(((slotTs + SLOT_MS) / 1000) as UTCTimestamp);
-        if (x0 == null) return null;
-        const x1 = xEnd != null ? xEnd : x0 + 8;
-        return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
       };
 
       // Bubbles lane: one bubble per 1-second window PER SIDE (≥100 combined lots).
@@ -1093,71 +1070,7 @@ export default function EsCandlesPage() {
         );
       }
 
-      // Delta lane: one net bar per 5-min slot + a cumulative-delta line (running
-      // sum of net delta) that resets at each RTH open (9:30 ET).
-      const del = sizeCanvas(deltaLaneRef.current);
-      if (del) {
-        const { ctx, w, h } = del;
-        const zeroY = h / 2;
-        ctx.strokeStyle = "rgba(255,255,255,.14)";
-        ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(w, zeroY); ctx.stroke();
-        if (showDelta && deltaBars.length) {
-          const sorted = [...deltaBars].sort((a, b) => a.slotTs - b.slotTs);
-          const maxAbs = Math.max(1, ...sorted.map((d) => Math.abs(d.net)));
-
-          // ── bars ──
-          for (const d of sorted) {
-            const sx = slotX(d.slotTs);
-            if (!sx) continue;
-            const barH = (Math.abs(d.net) / maxAbs) * (h / 2 - 4);
-            const up = d.net >= 0;
-            ctx.fillStyle = up ? "rgba(48,209,88,.55)" : "rgba(255,91,91,.55)";
-            const bx = sx.left + 1, bw = Math.max(1, sx.w - 2);
-            if (up) ctx.fillRect(bx, zeroY - barH, bw, barH);
-            else ctx.fillRect(bx, zeroY, bw, barH);
-          }
-
-          // ── cumulative delta (running sum of net delta), reset at RTH open ──
-          // Build running sums with resets, then scale to the lane.
-          const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
-          // Session id = the ET date of the most recent 9:30 open. Slots before
-          // 9:30 roll into the PRIOR day's session, so CVD runs continuously
-          // through the overnight and only resets when the next 9:30 hits.
-          const sessionId = (ts: number) => {
-            if (etMinutes(ts) >= 570) return dayKey(ts);
-            return dayKey(ts - 86_400_000); // before the open → prior session day
-          };
-          const cvd: Array<{ slotTs: number; sum: number }> = [];
-          let running = 0;
-          let prevSession: string | null = null;
-          for (const d of sorted) {
-            const session = sessionId(d.slotTs);
-            if (session !== prevSession) { running = 0; prevSession = session; }
-            running += d.net;
-            cvd.push({ slotTs: d.slotTs, sum: running });
-          }
-          const cvdMax = Math.max(1, ...cvd.map((c) => Math.abs(c.sum)));
-          const cvdY = (sum: number) => zeroY - (sum / cvdMax) * (h / 2 - 4);
-
-          ctx.save();
-          ctx.strokeStyle = "rgba(255,255,255,.95)";
-          ctx.lineWidth = 1.6;
-          ctx.lineJoin = "round";
-          let started = false;
-          for (const c of cvd) {
-            const cx = barCenter(c.slotTs);
-            if (cx == null) continue;
-            const y = cvdY(c.sum);
-            if (!started) { ctx.beginPath(); ctx.moveTo(cx, y); started = true; }
-            else ctx.lineTo(cx, y);
-          }
-          if (started) ctx.stroke();
-          ctx.restore();
-        }
-        ctx.fillStyle = "rgba(255,255,255,.45)";
-        ctx.font = "10px Inter, system-ui, sans-serif";
-        ctx.fillText("DELTA (5m) · white = Cumulative Delta (RTH reset)", 6, 12);
-      }
+      // (Delta/CVD lane removed.)
     };
 
     drawLanesRef.current = draw;
@@ -1165,7 +1078,6 @@ export default function EsCandlesPage() {
     ts.subscribeVisibleLogicalRangeChange(draw);
     const ro = new ResizeObserver(draw);
     if (bubbleLaneRef.current) ro.observe(bubbleLaneRef.current);
-    if (deltaLaneRef.current) ro.observe(deltaLaneRef.current);
     draw();
 
     // Hover tooltip: pick the bubble whose column center is nearest the cursor.
@@ -1199,7 +1111,7 @@ export default function EsCandlesPage() {
       canvas?.removeEventListener("mouseleave", onLeave);
       drawLanesRef.current = () => {};
     };
-  }, [showBubbles, showDelta, bubbles, deltaBars, rows]);
+  }, [showBubbles, bubbles, rows]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval, so the lanes/overlay never get stranded on
@@ -1289,13 +1201,6 @@ export default function EsCandlesPage() {
             style={{ borderColor: "rgba(255,255,255,.12)", color: showBubbles ? "#30d158" : "#94a3b8" }}
           >
             Bubbles {showBubbles ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowDelta((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showDelta ? "#f5c518" : "#94a3b8" }}
-          >
-            Delta {showDelta ? "ON" : "OFF"}
           </button>
           <button
             onClick={() => setShowProfile((v) => !v)}
@@ -1456,11 +1361,6 @@ export default function EsCandlesPage() {
               </div>
             </div>
           ) : null}
-        </div>
-
-        {/* Delta profile lane (time-aligned to the chart) */}
-        <div className="relative overflow-hidden rounded-xl border" style={{ height: 72, borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)" }}>
-          <canvas ref={deltaLaneRef} className="absolute inset-0 h-full w-full" />
         </div>
       </div>
     </div>

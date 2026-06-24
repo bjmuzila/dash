@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { queryGreeksToday, saveGreeksSnapshot } from "@/lib/snapdb";
 import { usePageLoadStatus } from "@/lib/pageStatus";
+import RegimeMatrix from "@/components/greeks/RegimeMatrix";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Lean Greeks page.
@@ -949,6 +950,9 @@ export default function GreeksPage() {
           <button onClick={trigger} style={btnStyle}>{btnLabel}</button>
         </div>
       </div>
+
+      {/* Regime matrix — live regime highlighted, one-flip neighbors dimly lit */}
+      <RegimeMatrix gex={gexVal} dex={dexVal} chex={chexVal} vex={vexVal} hasData={!!d} />
 
       {/* Cards */}
       <div className="greeks-cards" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>

@@ -32,7 +32,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 
 const next = require('next');
 const marketState = require('./state/market-state');
-const { buildSnapshot, createGexWsServer } = require('./websocket-server');
+const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEsSeed } = require('./es-seed-loader');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
@@ -112,6 +112,9 @@ function handleProxyRest(req, res) {
         heapTotal: mu.heapTotal,
         external: mu.external,
         uptimeSec: Math.round(process.uptime()),
+        // Live /ws/gex outbound bandwidth: bytes/min split by frame type (gex vs
+        // flow vs snapshot…) + cumulative totals. null until the WS server attaches.
+        wsBandwidth: getWsBandwidth(),
         ts: Date.now(),
       });
       return true;

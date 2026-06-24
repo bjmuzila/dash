@@ -55,6 +55,7 @@ interface ComputedResult {
   maxAbs: Record<NetCol, number>;
   top3: Record<NetCol, Record<number, number>>;
   atmStrike: number;
+  mvcStrike: number | null;
 }
 
 interface Expiry {
@@ -77,6 +78,35 @@ function todayETStr(): string {
 
 function daysTo(dateStr: string): number {
   return Math.round((new Date(dateStr).getTime() - new Date(todayETStr()).getTime()) / 86400000);
+}
+
+// True when `iso` (YYYY-MM-DD) is in the CURRENT trading week (Mon–Fri, ET).
+// The DB-stored weekly EM only applies to current-week expirations.
+function isCurrentWeekExp(iso: string): boolean {
+  if (!iso) return false;
+  const now = new Date(todayETStr() + "T12:00:00");
+  const dow = now.getDay(); // 0=Sun..6=Sat
+  const monday = new Date(now);
+  const toMon = dow === 0 ? 1 : 1 - dow;
+  monday.setDate(now.getDate() + toMon);
+  monday.setHours(0, 0, 0, 0);
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  friday.setHours(23, 59, 59, 999);
+  const d = new Date(iso + "T12:00:00");
+  return d >= monday && d <= friday;
+}
+
+// Snap a target price to the nearest value present in `strikes`.
+function nearestStrikeTo(target: number, strikes: number[]): number | null {
+  if (!Number.isFinite(target) || !strikes.length) return null;
+  let best = strikes[0];
+  let bestD = Math.abs(strikes[0] - target);
+  for (const s of strikes) {
+    const dd = Math.abs(s - target);
+    if (dd < bestD) { bestD = dd; best = s; }
+  }
+  return best;
 }
 
 function etTimeNow(): string {
@@ -199,7 +229,15 @@ function computeRows(
       .forEach((row, idx) => { top3[c][row.strike] = idx + 1; });
   });
 
-  return { rows: out, maxAbs, top3, atmStrike };
+  // MVC = strike with the highest ABSOLUTE net GEX. Gets the gold star.
+  let mvcStrike: number | null = null;
+  let mvcAbs = 0;
+  out.forEach(r => {
+    const a = Math.abs(r.gex);
+    if (a > mvcAbs) { mvcAbs = a; mvcStrike = r.strike; }
+  });
+
+  return { rows: out, maxAbs, top3, atmStrike, mvcStrike };
 }
 
 function computeTotals(
@@ -227,7 +265,7 @@ function computeTotals(
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
-  ticker, strikes, liveData, spot, contractMode, intensity,
+  ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -235,12 +273,28 @@ function TickerPanel({
   spot: number;
   contractMode: "oivol" | "vol";
   intensity: number;
+  emLevels: { close: number; em: number } | null;
+  showEm: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
   const computed = strikes.length
     ? computeRows(strikes, liveData, spot, contractMode)
+    : null;
+
+  // EM band strikes (snapped to this panel's strikes). Only when current-week.
+  const emStrikes = (showEm && emLevels && computed)
+    ? (() => {
+        const ss = computed.rows.map(r => r.strike);
+        const { close, em } = emLevels;
+        return {
+          d1: nearestStrikeTo(close - em, ss),
+          u1: nearestStrikeTo(close + em, ss),
+          d2: nearestStrikeTo(close - 2 * em, ss),
+          u2: nearestStrikeTo(close + 2 * em, ss),
+        };
+      })()
     : null;
 
   const totals = strikes.length && spot > 0
@@ -325,12 +379,28 @@ function TickerPanel({
           const atmOutline = r.isATM
             ? { outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
+          const is1x = emStrikes != null && (r.strike === emStrikes.d1 || r.strike === emStrikes.u1);
+          const is2x = emStrikes != null && (r.strike === emStrikes.d2 || r.strike === emStrikes.u2);
+          const emBorder = is1x
+            ? { borderTop: "2px solid rgba(255,255,255,.92)" }
+            : is2x
+            ? { borderTop: "2px dashed rgba(255,255,255,.85)" }
+            : null;
           return (
             <div
               key={r.strike}
               data-strike={r.strike}
-              style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, ...atmOutline }}
+              style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
             >
+              {(is1x || is2x) && (
+                <span style={{
+                  position: "absolute", top: -7, left: 3, zIndex: 3,
+                  fontSize: 7, fontWeight: 800, letterSpacing: "0.04em",
+                  color: "#0b0f1a", background: "rgba(255,255,255,.92)",
+                  padding: "0 3px", borderRadius: 2, pointerEvents: "none",
+                  fontFamily: "sans-serif",
+                }}>{is1x ? "EM" : "2× EM"}</span>
+              )}
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "monospace",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
@@ -362,6 +432,12 @@ function TickerPanel({
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
+                    {c === "gex" && r.strike === computed.mvcStrike && (
+                      <span title="MVC — highest |net GEX|" style={{
+                        position: "absolute", top: 1, right: 2, fontSize: 12, lineHeight: 1,
+                        color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
+                      }}>★</span>
+                    )}
                     <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                   </div>
                 );
@@ -389,10 +465,36 @@ export default function MultGreekPage() {
   // Per-ticker state
   const [strikes, setStrikes]   = useState<Record<Ticker, StrikeRow[]>>({ SPX: [], SPY: [], QQQ: [] });
   const [spots, setSpots]       = useState<Record<Ticker, number>>({ SPX: 0, SPY: 0, QQQ: 0 });
+  // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
+  const [emByTicker, setEmByTicker] = useState<Record<Ticker, { close: number; em: number } | null>>({ SPX: null, SPY: null, QQQ: null });
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
 
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
+
+  // Fetch weekly EM for all three tickers. Refreshes when the active expiry
+  // changes so the bands stay in sync with each (cache-busted) chain reload.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(TICKERS.map(async (tk) => {
+        const row = await fetch(`/api/levels?ticker=${encodeURIComponent(tk)}`)
+          .then(r => r.json()).catch(() => null);
+        const em = parseFloat(String(row?.em ?? ""));
+        const close = parseFloat(String(row?.close ?? ""));
+        const val = Number.isFinite(em) && em > 0 && Number.isFinite(close) && close > 0
+          ? { close, em } : null;
+        return [tk, val] as const;
+      }));
+      if (cancelled) return;
+      setEmByTicker(prev => {
+        const next = { ...prev };
+        entries.forEach(([tk, val]) => { next[tk] = val; });
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [activeExpiry]);
 
 
   // Fetch expirations (from cache or API)
@@ -665,6 +767,8 @@ export default function MultGreekPage() {
             spot={spots[ticker]}
             contractMode={contractMode}
             intensity={intensity}
+            emLevels={emByTicker[ticker]}
+            showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
           />
         ))}
       </div>

@@ -146,14 +146,19 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   box-shadow: none;
   border-color: inherit;
 }
-/* Multi-Greek: disable the auto lift on its SPX/SPY/QQQ panel boxes. */
+/* Multi-Greek: kill ALL hover reactions on its SPX/SPY/QQQ panels and every
+   cell/box inside them — no lift, no glow, no border/background shift. */
+.mg-panels,
+.mg-panels * {
+  transition: none !important;
+}
 .mg-panels:hover,
 .mg-panels *:hover,
 .mg-panels [style*="border-radius: 16px"]:hover,
 .mg-panels [style*="border-radius:16px"]:hover {
   transform: none !important;
   box-shadow: none !important;
-  border-color: inherit !important;
+  border-color: rgba(30, 48, 80, 1) !important;
 }
 
 /* Insights page cards (.greek-card) use 8/12px radius — give them the same lift. */

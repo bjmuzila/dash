@@ -32,6 +32,14 @@ const PROCESS_START_MS = Date.now();
 const SNAPSHOT_TAPE_MAX = Number(process.env.SNAPSHOT_TAPE_MAX || 150);
 const SNAPSHOT_CANDLES_MAX = Number(process.env.SNAPSHOT_CANDLES_MAX || 120);
 
+// Module-level handle to the active broadcaster's bandwidth getter, set when
+// createGexWsServer runs. Exported via getWsBandwidth() so /proxy/self-metrics
+// can read it without holding the wss handle. Null until the server is attached.
+let _bandwidthGetter = null;
+function getWsBandwidth() {
+  return _bandwidthGetter ? _bandwidthGetter() : null;
+}
+
 function trimSnapshotFlow(flow) {
   if (!flow || !Array.isArray(flow.tape)) return flow;
   if (flow.tape.length <= SNAPSHOT_TAPE_MAX) return flow;
@@ -99,6 +107,11 @@ const GEX_BROADCAST_MS = Number(process.env.GEX_BROADCAST_MS || 6000);
 // Slower GEX broadcast cadence outside regular trading hours — SPX options
 // aren't trading, so the chain barely moves and clients don't need 6s freshness.
 const GEX_BROADCAST_MS_OFFHOURS = Number(process.env.GEX_BROADCAST_MS_OFFHOURS || 30000);
+// Off-hours floor between flow-tape sends. The flow content barely changes when
+// SPX options aren't trading, so even if a window-slide nudges the payload we
+// coarsen to this cadence outside RTH. During RTH the floor is 0 (content dedupe
+// alone gates it) so live prints stay instant. Env-tunable.
+const FLOW_BROADCAST_MS_OFFHOURS = Number(process.env.FLOW_BROADCAST_MS_OFFHOURS || 30000);
 
 // Lightweight ET regular-trading-hours check (Mon–Fri 9:30–16:00 ET). Used only
 // to coarsen broadcast cadence off-hours; not a market-holiday calendar (the
@@ -119,6 +132,48 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   let lastGexSentAt = 0;
   let lastGexPayload = null;
   let lastFlowPayload = null;
+  let lastFlowSentAt = 0;
+
+  // ── Outbound bandwidth accounting ───────────────────────────────────────────
+  // Per-type cumulative byte totals since process start + a rolling 60s window
+  // (1s buckets) so the owner page can show a live "MB/min, split by frame type"
+  // readout — turning the Cloudflare bleed from "infer it from host graphs" into
+  // a measured gex-vs-flow split. Cheap: one byteLength per message per tick,
+  // multiplied by the open-client count.
+  const bwTotal = Object.create(null);   // type -> cumulative bytes (all time)
+  const bwBuckets = [];                  // [{ sec, byType: {type:bytes} }], newest last
+  function accountBytes(type, bytes) {
+    bwTotal[type] = (bwTotal[type] || 0) + bytes;
+    const sec = Math.floor(Date.now() / 1000);
+    let b = bwBuckets[bwBuckets.length - 1];
+    if (!b || b.sec !== sec) { b = { sec, byType: Object.create(null) }; bwBuckets.push(b); }
+    b.byType[type] = (b.byType[type] || 0) + bytes;
+    // Drop buckets older than 60s.
+    const cutoff = sec - 60;
+    while (bwBuckets.length && bwBuckets[0].sec < cutoff) bwBuckets.shift();
+  }
+  // Snapshot of the last 60s, in bytes-per-type + total, plus all-time totals.
+  function getBandwidth() {
+    const cutoff = Math.floor(Date.now() / 1000) - 60;
+    const lastMin = Object.create(null);
+    let lastMinTotal = 0;
+    for (const bk of bwBuckets) {
+      if (bk.sec < cutoff) continue;
+      for (const t in bk.byType) {
+        lastMin[t] = (lastMin[t] || 0) + bk.byType[t];
+        lastMinTotal += bk.byType[t];
+      }
+    }
+    return {
+      clients: wss.clients.size,
+      lastMin,                 // bytes sent per type in the trailing 60s
+      lastMinTotal,            // total bytes in the trailing 60s (≈ bytes/min)
+      total: { ...bwTotal },   // cumulative bytes per type since process start
+      ts: Date.now(),
+    };
+  }
+  // Expose to the rest of the process (owner page reads via /proxy/self-metrics).
+  _bandwidthGetter = getBandwidth;
 
   server.on('upgrade', (request, socket, head) => {
     let pathname;
@@ -137,7 +192,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       ws.isAlive = true;
     });
     // Initial full snapshot.
-    safeSend(ws, msg('snapshot', buildSnapshot(marketState.getState()), 'SPX'));
+    const snapStr = msg('snapshot', buildSnapshot(marketState.getState()), 'SPX');
+    accountBytes('snapshot', Buffer.byteLength(snapStr));
+    safeSend(ws, snapStr);
 
     ws.on('message', (raw) => {
       // Optional client commands, e.g. { type:'setExpiry', expiry:'2025-06-20' }.
@@ -187,13 +244,23 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     }
     if (changed.has('flow')) {
       // The flow tape is re-published every 500ms and carries the full per-order
-      // prints array (grows over the session). Overnight / quiet periods it's the
-      // same payload resent twice a second to every client — a multi-GB/night
-      // bleed. Skip when byte-identical to the last flow frame we sent; a genuine
-      // new print changes the payload and goes out immediately.
-      const flowKey = JSON.stringify(state.flow);
-      if (flowKey !== lastFlowPayload) {
+      // tape array (grows over the session). The skip-if-unchanged below was being
+      // DEFEATED by two volatile fields baked into the bucket: `asOf` (a fresh
+      // Date.now() every publish) and `prints` (a rolling window count). Both tick
+      // even when no new order printed, so JSON.stringify(state.flow) was always
+      // different and the whole tape went out 2×/s, 24/7 — the multi-GB bleed.
+      //   Fix, two parts:
+      //   1) Dedupe on CONTENT only — strip asOf/prints from the key (same trick
+      //      the GEX frame uses to exclude updatedAt). Payload still carries them.
+      //   2) Off-hours floor: outside RTH the chain/tape barely moves, so coarsen
+      //      to FLOW_BROADCAST_MS_OFFHOURS even if content nudged (window slide).
+      const { asOf, prints, ...flowContent } = state.flow || {}; // eslint-disable-line no-unused-vars
+      const flowKey = JSON.stringify(flowContent);
+      const now = Date.now();
+      const flowFloor = isRthNow() ? 0 : FLOW_BROADCAST_MS_OFFHOURS;
+      if (flowKey !== lastFlowPayload && now - lastFlowSentAt >= flowFloor) {
         lastFlowPayload = flowKey;
+        lastFlowSentAt = now;
         out.push(msg('flow', state.flow, state.symbol));
       }
     }
@@ -224,6 +291,20 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     }
 
     if (!out.length) return;
+
+    // Count open clients once so we can attribute bytes = size × recipients.
+    let openClients = 0;
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) openClients++;
+    }
+    // Per-message size + type, tallied once (not per client).
+    for (const m of out) {
+      const bytes = Buffer.byteLength(m) * openClients;
+      // Messages are JSON beginning {"type":"<t>",... — pull the type cheaply.
+      const mt = /^\{"type":"([^"]+)"/.exec(m);
+      accountBytes(mt ? mt[1] : 'other', bytes);
+    }
+
     for (const client of wss.clients) {
       if (client.readyState !== WebSocket.OPEN) continue;
       for (const m of out) safeSend(client, m);
@@ -268,4 +349,4 @@ function safeSend(ws, data) {
   }
 }
 
-module.exports = { createGexWsServer, buildSnapshot };
+module.exports = { createGexWsServer, buildSnapshot, getWsBandwidth };

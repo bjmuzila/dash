@@ -48,6 +48,15 @@ interface RenderMetrics {
   fetchedAt: string;
 }
 
+// Live /ws/gex outbound byte tally from /proxy/self-metrics → wsBandwidth.
+interface WsBandwidth {
+  clients: number;
+  lastMin: Record<string, number>;   // bytes per frame type, trailing 60s
+  lastMinTotal: number;              // total bytes, trailing 60s (≈ bytes/min)
+  total: Record<string, number>;     // cumulative bytes per type since boot
+  ts: number;
+}
+
 interface EodGexRow {
   symbol: string;
   total_gex: number;
@@ -568,6 +577,12 @@ export default function OwnerDashboard() {
   const [renderWindow, setRenderWindow] = useState<"live" | "weekly" | "monthly">("live");
   const [renderLoading, setRenderLoading] = useState(false);
 
+  // Live /ws/gex outbound bandwidth, per-frame-type (from /proxy/self-metrics).
+  // This is the in-app measurement that the host-level "Bandwidth" card can't
+  // give: it attributes bytes to gex vs flow vs snapshot, so the dealer can see
+  // which frame is doing the talking.
+  const [wsBw, setWsBw] = useState<WsBandwidth | null>(null);
+
   // Levels section collapsed state
   const [levelsCollapsed, setLevelsCollapsed] = useState(true);
 
@@ -762,6 +777,12 @@ export default function OwnerDashboard() {
       try {
         const rm = await fetch("/api/hetzner-metrics?window=live", { cache: "no-store" });
         if (rm.ok) { setRenderMetrics(await rm.json()); setRenderWindow("live"); }
+      } catch { /* non-fatal */ }
+
+      // Live /ws/gex outbound bandwidth (in-app, per-frame-type).
+      try {
+        const sm = await fetch("/proxy/self-metrics", { cache: "no-store" });
+        if (sm.ok) { const j = await sm.json(); setWsBw((j?.wsBandwidth ?? null) as WsBandwidth | null); }
       } catch { /* non-fatal */ }
 
       // Manual-publish run summary (last run + whether one is in progress).
@@ -1235,6 +1256,84 @@ export default function OwnerDashboard() {
                 Render Dashboard ↗
               </a>
             </div>
+          </div>
+
+          {/* WS outbound — in-app per-frame bandwidth (the gex-vs-flow split the
+              host bandwidth card can't show). Live trailing-60s window. */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                /ws/gex Outbound · Live (last 60s)
+              </div>
+              <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
+                {wsBw ? `${wsBw.clients} client${wsBw.clients === 1 ? "" : "s"}` : "—"}
+              </div>
+            </div>
+            {(() => {
+              const fmtRate = (bytesPerMin: number) => {
+                const gbHr = (bytesPerMin * 60) / 1073741824;
+                if (gbHr >= 1) return `${gbHr.toFixed(2)} GB/hr`;
+                const mbHr = (bytesPerMin * 60) / 1048576;
+                return `${mbHr.toFixed(mbHr >= 100 ? 0 : 1)} MB/hr`;
+              };
+              const total = wsBw?.lastMinTotal ?? 0;
+              // Frame types we care about, in display order; "other" catches the rest.
+              const KNOWN = ["flow", "gex", "snapshot", "spot", "aux", "status", "esCandles"];
+              const lastMin: Record<string, number> = wsBw?.lastMin ?? {};
+              const entries = Object.entries(lastMin)
+                .filter(([, b]) => b > 0)
+                .sort((a, b) => b[1] - a[1]);
+              const ACCENT: Record<string, string> = {
+                flow: HOME_THEME.orange, gex: HOME_THEME.cyan, snapshot: HOME_THEME.purple,
+                spot: HOME_THEME.green, aux: "#38bdf8", status: HOME_THEME.muted, esCandles: "#a78bfa",
+              };
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+                    <StatCard
+                      label="Projected Total"
+                      value={wsBw ? fmtRate(total) : "—"}
+                      accent={total * 60 / 1073741824 >= 1 ? HOME_THEME.red : HOME_THEME.cyan}
+                      mono
+                    />
+                    {["flow", "gex", "snapshot"].map((t) => (
+                      <StatCard
+                        key={t}
+                        label={`${t === "snapshot" ? "Snapshot (connects)" : t.toUpperCase()} · proj`}
+                        value={wsBw ? fmtRate(lastMin[t] ?? 0) : "—"}
+                        accent={ACCENT[t] ?? HOME_THEME.muted}
+                        mono
+                        footer={
+                          <div style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.muted }}>
+                            {wsBw && total > 0 ? `${(((lastMin[t] ?? 0) / total) * 100).toFixed(0)}% of out` : "—"}
+                          </div>
+                        }
+                      />
+                    ))}
+                  </div>
+                  {/* Any extra frame types beyond the headline three. */}
+                  {entries.some(([t]) => !["flow", "gex", "snapshot"].includes(t)) && (
+                    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                      {entries.filter(([t]) => !["flow", "gex", "snapshot"].includes(t)).map(([t, b]) => (
+                        <span key={t} style={{
+                          fontSize: 9.5, fontFamily: "monospace", fontWeight: 700,
+                          color: ACCENT[t] ?? HOME_THEME.muted,
+                          border: `1px solid ${ACCENT[t] ?? HOME_THEME.muted}44`,
+                          background: `${ACCENT[t] ?? HOME_THEME.muted}10`,
+                          padding: "3px 8px", borderRadius: 5,
+                        }}>
+                          {KNOWN.includes(t) ? t : `${t}?`} {fmtRate(b)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 9.5, color: HOME_THEME.muted, marginTop: 8, lineHeight: 1.5 }}>
+                    Projected from the trailing 60s × open clients. If <b style={{ color: HOME_THEME.orange }}>FLOW</b> dominates and the
+                    number is high while the market is closed, the flow-tape dedupe regressed. Cross-check Cloudflare Outbound.
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
 
