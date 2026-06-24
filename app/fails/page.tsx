@@ -356,37 +356,44 @@ function FailTable({
               {showDate && <Th>Date</Th>}
               <Th>Time</Th>
               <Th>Level</Th>
-              <Th>Type</Th>
-              <Th right>Level ({unit})</Th>
-              <Th right>Drawdown</Th>
-              <Th right>Close Back</Th>
-              <Th right>Follow-thru</Th>
+              <Th>Trade</Th>
+              <Th right>Entry ({unit})</Th>
+              <Th right>Risk</Th>
+              <Th right>Reward</Th>
               <Th right>R/R</Th>
+              <Th right>Result</Th>
             </tr>
           </thead>
           <tbody>
             {rows.map((e, i) => {
               const above = e.direction === "above";
-              const tag = above ? "Look Above & Fail" : "Look Below & Fail";
-              const color = above ? HOME_THEME.red : HOME_THEME.green;
+              // A look-above-and-fail is a SHORT the rejection; look-below is a LONG.
+              const trade = above ? "Fade Short" : "Fade Long";
+              const tradeColor = above ? HOME_THEME.red : HOME_THEME.green;
+              // Risk = how far it poked past the level (to the stop above/below the
+              // wick). Reward = follow-through the trade's direction. WIN = R/R ≥ 2.
+              const rr = e.pokePts > 0 ? e.followThruPts / e.pokePts : null;
+              const win = rr != null && rr >= 2;
+              const resultColor = win ? HOME_THEME.green : HOME_THEME.red;
               return (
-                <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+                <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: `1px solid ${HOME_THEME.border}`,
+                  background: win ? rgba(HOME_THEME.green, 0.06) : "transparent" }}>
                   {showDate && <Td color={HOME_THEME.text}>{etDate(e.failTs)}</Td>}
                   <Td color={HOME_THEME.text}>{etClock(e.failTs)}</Td>
                   <Td><span style={{ color: HOME_THEME.text, fontWeight: 700 }}>{e.short}</span></Td>
-                  <Td><span style={{ color }}>{tag}</span></Td>
+                  <Td><span style={{ color: tradeColor, fontWeight: 700 }}>{trade}</span></Td>
                   <Td right mono color={HOME_THEME.text}>{fmt(e.level)}</Td>
                   <Td right mono color={HOME_THEME.orange}>{e.pokePts.toFixed(2)}</Td>
-                  <Td right mono color={HOME_THEME.text}>{fmt(e.closeBack)}</Td>
                   <Td right mono color={e.followThruPts > 0 ? HOME_THEME.green : HOME_THEME.text}>{e.followThruPts.toFixed(2)}</Td>
-                  {(() => {
-                    const rr = e.pokePts > 0 ? e.followThruPts / e.pokePts : null;
-                    return (
-                      <Td right mono color={rr == null ? HOME_THEME.text : rr >= 1 ? HOME_THEME.green : HOME_THEME.red}>
-                        {rr == null ? "—" : `${rr.toFixed(2)}R`}
-                      </Td>
-                    );
-                  })()}
+                  <Td right mono color={rr == null ? HOME_THEME.text : rr >= 2 ? HOME_THEME.green : HOME_THEME.red}>
+                    {rr == null ? "—" : `${rr.toFixed(2)}R`}
+                  </Td>
+                  <Td right>
+                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".05em", padding: "3px 8px", borderRadius: 4,
+                      color: resultColor, background: rgba(resultColor, 0.12), border: `1px solid ${rgba(resultColor, 0.35)}` }}>
+                      {rr == null ? "—" : win ? "WIN" : "LOSS"}
+                    </span>
+                  </Td>
                 </tr>
               );
             })}
