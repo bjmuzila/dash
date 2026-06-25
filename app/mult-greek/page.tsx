@@ -322,6 +322,7 @@ function TickerPanel({
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 16, overflow: "hidden" }}>
+      <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
@@ -416,8 +417,9 @@ function TickerPanel({
                   : "";
                 const formatted = fmtMoney(r[c]);
                 const signColor = r[c] > 0 ? "#22c55e" : r[c] < 0 ? "#ef4444" : "#ffffff";
+                const isGexPeak = c === "gex" && r.strike === computed.mvcStrike;
                 return (
-                  <div key={c} style={{
+                  <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
                     padding: "4px 4px", fontSize: 11, fontFamily: "monospace",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: "#ffffff",
@@ -425,6 +427,7 @@ function TickerPanel({
                     fontWeight: weight,
                     position: "relative",
                     ...(topRank === 1 ? { outline: `1px solid ${r[c] >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
+                    ...(isGexPeak ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
                   }}>
                     {topRank === 1 && (
                       <span style={{

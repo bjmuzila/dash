@@ -72,8 +72,16 @@ function buildSlotAverages(historical: EsCandleRecord[], today: string, nDays: n
   return out;
 }
 
-export function useEsCandles() {
-  const shouldConnect = useWsLifecycle();
+/**
+ * @param enabled  When false, the hook does NOT load from SQLite or open the
+ *   /ws/gex socket — it stays fully idle (no connection, no bandwidth). Flipping
+ *   it true connects on demand; flipping back to false tears the socket down.
+ *   Defaults to true so existing always-on callers are unchanged.
+ */
+export function useEsCandles(enabled: boolean = true) {
+  // Final gate = global bandwidth lifecycle AND the caller's enable flag.
+  const lifecycle = useWsLifecycle();
+  const shouldConnect = lifecycle && enabled;
   const shouldConnectRef = useRef(shouldConnect);
   shouldConnectRef.current = shouldConnect;
   const [todayRows, setTodayRows] = useState<EsCandleRecord[]>([]);
@@ -105,8 +113,8 @@ export function useEsCandles() {
     }
   }, []);
 
-  // Initial SQLite load.
-  useEffect(() => { loadFromDb().catch(() => {}); }, [loadFromDb]);
+  // Initial SQLite load — only when enabled (stays idle until turned on).
+  useEffect(() => { if (enabled) loadFromDb().catch(() => {}); }, [enabled, loadFromDb]);
 
   /**
    * Manual refresh — re-pulls from SQLite ONLY when nothing is loaded yet.

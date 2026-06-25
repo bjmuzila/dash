@@ -39,9 +39,9 @@ interface PillGroupProps {
   onChange: (v: string) => void;
 }
 
-const TOOLBAR_FONT_SIZE = 9;
-const TOOLBAR_BUTTON_PADDING = "3px 7px";
-const TOOLBAR_GROUP_PADDING = 2;
+const TOOLBAR_FONT_SIZE = 12;
+const TOOLBAR_BUTTON_PADDING = "5px 10px";
+const TOOLBAR_GROUP_PADDING = 3;
 
 function PillGroup({ options, active, onChange }: PillGroupProps) {
   return (
@@ -131,9 +131,9 @@ export default function GexToolbar({
               alignItems: "center",
               justifyContent: "center",
               gap: 0,
-              minWidth: 44,
+              minWidth: 50,
               fontSize: TOOLBAR_FONT_SIZE,
-              padding: "3px 8px",
+              padding: "5px 10px",
               border: "none",
               borderRadius: 2,
               background: selectedExpiry === exp ? "#1a2a3a" : "transparent",
@@ -146,8 +146,8 @@ export default function GexToolbar({
               lineHeight: 1.05,
             }}
           >
-            <span style={{ fontSize: 8.5, opacity: 0.9, letterSpacing: "0.05em" }}>{expiryLabel(exp).day}</span>
-            <span style={{ fontSize: 9.5 }}>{expiryLabel(exp).date}</span>
+            <span style={{ fontSize: 11, opacity: 0.9, letterSpacing: "0.05em" }}>{expiryLabel(exp).day}</span>
+            <span style={{ fontSize: 12.5 }}>{expiryLabel(exp).date}</span>
           </button>
         ))}
       </div>

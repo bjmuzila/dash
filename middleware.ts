@@ -21,6 +21,16 @@ const isPublicRoute = createRouteMatcher([
 // Trimmed so a stray space in the env value can't cause a mismatch (lockout).
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
+// Owner-only pages: the dev/admin dashboards and the personal/budget tools.
+// Any signed-in non-owner hitting these is redirected to /home. Page-level
+// data is already owner-gated at the API, but the pages themselves rendered
+// for any signed-in user (e.g. the test account) — this locks the routes too.
+const isOwnerRoute = createRouteMatcher([
+  "/dev(.*)",
+  "/budget(.*)",
+  "/personal(.*)",
+]);
+
 // Origin for the in-process proxy that holds the maintenance flag. Defaults to
 // the same host the request came in on (works on Render and locally).
 function proxyOrigin(req: Request): string {
@@ -95,6 +105,18 @@ export default clerkMiddleware(async (auth, req) => {
   if (!userId) {
     const url = req.nextUrl.clone();
     url.pathname = "/";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  // ── Owner-only route gate ───────────────────────────────────────────────────
+  // If OWNER_USER_ID is configured, only the owner may reach /dev, /budget, and
+  // /personal. Everyone else (signed-in test/customer accounts) is bounced to
+  // /home. If OWNER_USER_ID isn't set yet, allow any signed-in user through so
+  // the owner can't lock themselves out before configuring the env var.
+  if (OWNER_USER_ID && isOwnerRoute(req) && userId.trim() !== OWNER_USER_ID) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/home";
     url.search = "";
     return NextResponse.redirect(url);
   }

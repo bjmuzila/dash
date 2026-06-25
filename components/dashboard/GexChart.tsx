@@ -346,7 +346,25 @@ export default function GexChart({
       // Older → newer so the most recent (5m) sits on top of the older halos.
       for (const age of ghostAges) {
         const tint = GHOST_TINTS[age];
+        // Find ONLY the two biggest movers for this timeframe:
+        //   • largest positive change (live − prior)
+        //   • largest negative change (live − prior)
+        // and highlight just those two strikes.
+        let posIdx = -1, posDelta = 0;
+        let negIdx = -1, negDelta = 0;
         data.forEach((r, i) => {
+          const prior = baselines[r.strike]?.[age];
+          if (prior == null || !Number.isFinite(prior)) return;
+          const delta = getNet(r) - prior;
+          if (delta > posDelta) { posDelta = delta; posIdx = i; }
+          if (delta < negDelta) { negDelta = delta; negIdx = i; }
+        });
+        const winners = new Set<number>();
+        if (posIdx >= 0) winners.add(posIdx);
+        if (negIdx >= 0) winners.add(negIdx);
+
+        data.forEach((r, i) => {
+          if (!winners.has(i)) return;
           const prior = baselines[r.strike]?.[age];
           if (prior == null || !Number.isFinite(prior)) return;
           const live = getNet(r);

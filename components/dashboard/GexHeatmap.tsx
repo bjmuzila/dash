@@ -158,6 +158,10 @@ export default function GexHeatmap({
     [...arr].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX)).slice(0, 5).forEach((r, i) => m.set(r.strike, i + 1));
     return m;
   };
+  // Single strike with the highest |NET GEX| — gets a golden box (NET GEX cell only).
+  const peakNetGexStrike = rows.length
+    ? rows.reduce((best, r) => (Math.abs(r.netGEX) > Math.abs(best.netGEX) ? r : best), rows[0]).strike
+    : null;
   const rankAbove = rankSide(aboveATM);
   const rankBelow = rankSide(belowATM);
   const rankColors: Record<number, string> = { 1: "#ffd700", 2: "#c0c0c0", 3: "#cd7f32", 4: "#4a7a99", 5: "#3a5570" };
@@ -265,6 +269,7 @@ export default function GexHeatmap({
               {COLS.map(c => {
                 const v = vals[c.key];
                 const topRank = topRanksByCol[c.key].get(row.strike) ?? 0;
+                const isGexPeak = c.key === "netGEX" && row.strike === peakNetGexStrike;
                 return (
                   <div key={c.key} style={{
                     padding: "4px 6px",
@@ -274,6 +279,11 @@ export default function GexHeatmap({
                     background: cellBg(c.key, v, topRank),
                     color: "#ffffff",
                     fontWeight: topRank > 0 ? 800 : 400,
+                    outline: isGexPeak ? "2px solid #ffd700" : undefined,
+                    outlineOffset: isGexPeak ? "-2px" : undefined,
+                    boxShadow: isGexPeak ? "0 0 6px rgba(255,215,0,0.6)" : undefined,
+                    position: isGexPeak ? "relative" : undefined,
+                    zIndex: isGexPeak ? 1 : undefined,
                   }}>
                     {fmtG(v)}
                   </div>

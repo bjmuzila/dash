@@ -37,9 +37,9 @@ export function useStrikeGexHistory(
     const load = async () => {
       try {
         const r = await fetch(
-          `/api/snapshots/option-strike-gex-history?expiry=${encodeURIComponent(
+          `/proxy/gex-history?expiry=${encodeURIComponent(
             expiry
-          )}&mode=point&ages=${encodeURIComponent(agesKey)}${
+          )}&ages=${encodeURIComponent(agesKey)}${
             tolerant ? "&tolerant=1" : ""
           }`,
           { cache: "no-store" }

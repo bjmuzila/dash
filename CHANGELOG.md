@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-06-25 (session 71) — MVC peak-GEX golden/white glowing box across heatmaps
+
+Highlighted the single strike with the highest **absolute net GEX** (MVC) with a box on the NET GEX cell across all gradient/heatmap views. Final style: **3px solid white** outline (`outlineOffset -3px`) with a **slow 2.4s pulsing glow** (`mvcGlow` keyframes, `.mvc-peak-cell`). Scoped to the GEX column only; coexists with the existing gold ★ star.
+
+### `components/dashboard/GexHeatmap.tsx`
+- Added `peakNetGexStrike` (max `|netGEX|` across visible rows); NET GEX cell gets the box. (Initial gold `#ffd700` version — component is currently unused/unimported.)
+
+### `app/home/page.tsx`
+- NET GEX `<td>` for `mvcStrikeHeatmap` gets the white glowing box (heatmap view only). Added `mvcGlow` keyframes + `.mvc-peak-cell` in the page `<style>`.
+
+### `app/mult-greek/page.tsx`
+- `isGexPeak` (gex col + `mvcStrike`) gets the white glowing box. Injected `mvcGlow`/`.mvc-peak-cell` `<style>` in the heatmap component return.
+
+### `app/options-chain/page.tsx`
+- `isMvc` cell (gex mode + per-column `mvcByCol`) gets the white glowing box. Added `mvcGlow`/`.mvc-peak-cell` `<style>` at the page root.
+
+- **Caveat:** untypechecked (Linux sandbox unavailable, `HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 70) — Owner page styling reset + admin Owner link
+
+### `app/dev/owner/page.tsx`
+- **Reverted a long styling exploration** (cyberpunk → glass → calm-fintech variants) back to the **shared `homeTheme`**, so the owner page now renders identically to every other page (same glassmorphic panels/blur/shell glow). Removed all scoped `data-owner-*` `<style>` overrides; restored `StatCard`, `StatChip`, `AccordionCard` header, tab buttons, and title to their original styles.
+- **Removed Quick Links** section.
+- **Moved System / Hosting / Database** sections to the **Back-End** tab (`SECTION_TAB`).
+- **Collapsable section headers** no longer get the cyan tint background (transparent open/closed).
+- **Deep-link support:** honors `?tab=overview|frontend|backend` on load (URL param wins over persisted `owner-tab`).
+
+### `app/dev/admin/page.tsx`
+- Added an **OWNER ↗** link in the header top-right (mirrors the owner page's ADMIN ↗ link), navigating to `/dev/owner?tab=overview`.
+
+- **Caveat:** untypechecked (Linux sandbox unavailable, `HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
 ## 2026-06-25 (session 69) — GEX chart MVC label tracks data mode
 
 ### `components/dashboard/GexChart.tsx`

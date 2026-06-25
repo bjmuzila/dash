@@ -31,7 +31,42 @@ interface DailyInput {
   spxPrevClose: number | null;
   emUpper: number | null; // prevClose + expectedMove
   emLower: number | null; // prevClose - expectedMove
+  // Per-strike net GEX around spot for the Explainer ladder (netGEX in $millions,
+  // windowed to ±GEX_LADDER_HALF strikes around the ATM strike, sorted high→low).
+  gexLadder: { strike: number; netGex: number }[];
   updatedAt: number;
+}
+
+// How many strikes above and below the ATM strike to include in the ladder.
+const GEX_LADDER_HALF = 8;
+
+interface GexRow { strike: number; netGEX: number }
+
+// Pull a clean per-strike net-GEX ladder out of the /proxy/gex frame's gexRows.
+// Returns netGEX in $millions, windowed around the strike nearest spot, sorted
+// high→low (matching the dashboard ladder orientation). Empty array on any miss
+// so the client can fall back to its visual taper.
+function buildGexLadder(gexRows: unknown, spot: number): { strike: number; netGex: number }[] {
+  if (!Array.isArray(gexRows) || !(spot > 0)) return [];
+  const rows: GexRow[] = gexRows
+    .map((r) => {
+      const o = (r ?? {}) as Record<string, unknown>;
+      return { strike: Number(o.strike ?? 0), netGEX: Number(o.netGEX ?? o.netGex ?? 0) };
+    })
+    .filter((r) => r.strike > 0 && Number.isFinite(r.netGEX));
+  if (!rows.length) return [];
+  rows.sort((a, b) => a.strike - b.strike);
+  // Index of the strike nearest spot, then window ±GEX_LADDER_HALF around it.
+  let atm = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs(rows[i].strike - spot) < Math.abs(rows[atm].strike - spot)) atm = i;
+  }
+  const start = Math.max(0, atm - GEX_LADDER_HALF);
+  const end = Math.min(rows.length, atm + GEX_LADDER_HALF + 1);
+  return rows
+    .slice(start, end)
+    .sort((a, b) => b.strike - a.strike) // high → low (top of the ladder = highest strike)
+    .map((r) => ({ strike: r.strike, netGex: r.netGEX / 1e6 }));
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -49,6 +84,10 @@ interface Leg {
   last: number;
   iv: number;
   dte: number;
+  gamma: number;
+  oi: number;
+  volume: number;
+  expiration: string;
 }
 
 function legMid(o: Leg): number {
@@ -86,6 +125,10 @@ function flattenChain(json: unknown): { legs: Leg[]; underlying: number } {
           last: Number(leg.last ?? leg["last-price"] ?? 0),
           iv: Number(leg.iv ?? leg["implied-volatility"] ?? leg.volatility ?? 0),
           dte: Number(leg.dte ?? leg.daysToExpiration ?? (expiration ? daysTo(expiration) : 0)),
+          gamma: Math.abs(Number(leg.gamma ?? 0)),
+          oi: Number(leg["open-interest"] ?? leg.openInterest ?? leg.oi ?? 0),
+          volume: Number(leg.volume ?? 0),
+          expiration,
         });
       }
     }
@@ -94,6 +137,122 @@ function flattenChain(json: unknown): { legs: Leg[]; underlying: number } {
     data.underlyingPrice ?? data.underlying_price ?? root.underlyingPrice ?? 0
   );
   return { legs, underlying };
+}
+
+// ── Per-expiry GEX (0DTE / 1DTE) ─────────────────────────────────────────────
+// Compute per-strike net GEX + walls + flip + total for ONE expiration's legs,
+// using the dashboard's exact conventions (server-v2/computation/gex-calculator):
+//   GEX = |gamma| × OI × spot²   (calls +, puts −)
+//   flip = zero-crossing of cumulative net GEX (linear interpolation)
+//   call wall = max +netGEX above spot · put wall = min −netGEX below spot
+interface StrikeGex { strike: number; netGEX: number }
+interface ExpiryGex {
+  ladder: { strike: number; netGex: number }[]; // netGex in $millions, ±N around ATM, high→low
+  callWall: number | null;
+  putWall: number | null;
+  gammaFlip: number | null;
+  netGex: number | null; // billions of $
+}
+
+function computeExpiryGex(legs: Leg[], spot: number): ExpiryGex | null {
+  if (!legs.length || !(spot > 0)) return null;
+  const byStrike = new Map<number, { call?: Leg; put?: Leg }>();
+  for (const l of legs) {
+    if (!(l.strike > 0)) continue;
+    const e = byStrike.get(l.strike) ?? {};
+    if (l.type === "CALL") e.call = l; else e.put = l;
+    byStrike.set(l.strike, e);
+  }
+  const rows: StrikeGex[] = [];
+  for (const [strike, s] of byStrike) {
+    const callGEX = (s.call?.gamma ?? 0) * (s.call?.oi ?? 0) * spot * spot;
+    const putGEX = -((s.put?.gamma ?? 0) * (s.put?.oi ?? 0) * spot * spot);
+    rows.push({ strike, netGEX: callGEX + putGEX });
+  }
+  if (!rows.length) return null;
+  rows.sort((a, b) => a.strike - b.strike);
+
+  // flip — cumulative net-GEX zero crossing
+  let cum = 0, prevCum = 0, prevStrike: number | null = null, flip: number | null = null;
+  for (const r of rows) {
+    prevCum = cum;
+    cum += r.netGEX;
+    if (prevStrike !== null && prevCum < 0 && cum >= 0) {
+      const range = cum - prevCum;
+      flip = Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike;
+      break;
+    }
+    prevStrike = r.strike;
+  }
+
+  const above = rows.filter((r) => r.strike > spot && r.netGEX > 0);
+  const below = rows.filter((r) => r.strike < spot && r.netGEX < 0);
+  const callWall = above.length ? above.reduce((b, r) => (r.netGEX > b.netGEX ? r : b)).strike : null;
+  const putWall = below.length ? below.reduce((b, r) => (r.netGEX < b.netGEX ? r : b)).strike : null;
+  const total = rows.reduce((s, r) => s + r.netGEX, 0);
+
+  // ladder: window ±GEX_LADDER_HALF around the strike nearest spot, high→low, $M
+  let atm = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs(rows[i].strike - spot) < Math.abs(rows[atm].strike - spot)) atm = i;
+  }
+  const ladder = rows
+    .slice(Math.max(0, atm - GEX_LADDER_HALF), Math.min(rows.length, atm + GEX_LADDER_HALF + 1))
+    .sort((a, b) => b.strike - a.strike)
+    .map((r) => ({ strike: r.strike, netGex: r.netGEX / 1e6 }));
+
+  return {
+    ladder,
+    callWall,
+    putWall,
+    gammaFlip: flip,
+    netGex: Number.isFinite(total) && total !== 0 ? total / 1e9 : null,
+  };
+}
+
+// Resolve the SPX expiration for the requested DTE bucket. dte=0 → nearest
+// expiration (front), dte=1 → the NEXT distinct expiration after the front.
+// Returns the expiration date string (YYYY-MM-DD) or "" if unavailable.
+async function resolveExpiry(base: string, dte: 0 | 1): Promise<string> {
+  try {
+    const r = await fetch(`${base}/proxy/api/tt/expirations/SPX`, { cache: "no-store" });
+    if (!r.ok) return "";
+    const json = (await r.json()) as { data?: unknown };
+    // The adapter returns { data: { items: [{ "expiration-date" }] } }; also
+    // tolerate a bare array or { data: [...] } shape defensively.
+    const data = (json?.data ?? json) as Record<string, unknown> | unknown[];
+    const raw: unknown[] = Array.isArray(data)
+      ? data
+      : Array.isArray((data as Record<string, unknown>)?.items)
+        ? ((data as Record<string, unknown>).items as unknown[])
+        : [];
+    const dates = raw
+      .map((d) => {
+        const o = (d ?? {}) as Record<string, unknown>;
+        return String(o["expiration-date"] ?? o.expirationDate ?? o.expiration ?? o.date ?? (typeof d === "string" ? d : "") ?? "");
+      })
+      .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s))
+      .sort();
+    if (!dates.length) return "";
+    return dte === 0 ? dates[0] : (dates[1] ?? dates[0]);
+  } catch {
+    return "";
+  }
+}
+
+// Pull the full SPX chain for one expiration and return its parsed legs + spot.
+async function fetchExpiryChain(base: string, expiration: string): Promise<{ legs: Leg[]; underlying: number }> {
+  try {
+    const q = expiration ? `?expiration=${encodeURIComponent(expiration)}` : "";
+    const r = await fetch(`${base}/proxy/api/tt/chains/SPX${q}`, { cache: "no-store" });
+    if (!r.ok) return { legs: [], underlying: 0 };
+    const { legs, underlying } = flattenChain(await r.json());
+    // The adapter may return all expirations — keep only the requested one.
+    const filtered = expiration ? legs.filter((l) => l.expiration === expiration) : legs;
+    return { legs: filtered.length ? filtered : legs, underlying };
+  } catch {
+    return { legs: [], underlying: 0 };
+  }
 }
 
 // Expected move from the nearest-dated SPX expiration's ATM straddle. Same
@@ -203,8 +362,12 @@ async function computeEsOvernight(
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const base = proxyBase();
+  // DTE bucket: 0 = front/0DTE (default), 1 = next expiration. Drives which
+  // expiration's chain the GEX ladder / walls / flip / net are computed from.
+  const dteParam = new URL(req.url).searchParams.get("dte");
+  const dte: 0 | 1 = dteParam === "1" ? 1 : 0;
   const out: DailyInput = {
     spxSpot: null,
     gammaFlip: null,
@@ -218,6 +381,7 @@ export async function GET() {
     spxPrevClose: null,
     emUpper: null,
     emLower: null,
+    gexLadder: [],
     updatedAt: Date.now(),
   };
 
@@ -239,9 +403,34 @@ export async function GET() {
       const totals = p.totals as Record<string, unknown> | null | undefined;
       const totalGex = totals ? Number(totals.totalGEX ?? 0) : Number(p.totalNetGex ?? 0);
       out.netGex = Number.isFinite(totalGex) && totalGex !== 0 ? totalGex / 1e9 : null;
+      out.gexLadder = buildGexLadder(p.gexRows, spot);
     }
   } catch {
     /* leave nulls */
+  }
+
+  // For 1DTE, override the GEX read (ladder / walls / flip / net) with a chain
+  // computed for the NEXT expiration. 0DTE keeps the live /proxy/gex frame above
+  // (front expiry, already authoritative). Best-effort: on any miss we keep the
+  // 0DTE frame values rather than blanking the card.
+  if (dte === 1) {
+    try {
+      const expiry = await resolveExpiry(base, 1);
+      if (expiry) {
+        const { legs, underlying } = await fetchExpiryChain(base, expiry);
+        const spotForGex = out.spxSpot ?? (underlying > 0 ? underlying : spotForEm);
+        const gx = computeExpiryGex(legs, spotForGex);
+        if (gx) {
+          out.gexLadder = gx.ladder;
+          if (gx.callWall != null) out.callWall = gx.callWall;
+          if (gx.putWall != null) out.putWall = gx.putWall;
+          if (gx.gammaFlip != null) out.gammaFlip = gx.gammaFlip;
+          if (gx.netGex != null) out.netGex = gx.netGex;
+        }
+      }
+    } catch {
+      /* keep front-expiry values */
+    }
   }
 
   // EM + ES overnight in parallel (independent of each other).

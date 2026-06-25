@@ -1148,7 +1148,7 @@ export default function HomePage() {
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
+                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}) }}>
                               {heatmapView === "table" ? (
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (
@@ -1227,6 +1227,13 @@ export default function HomePage() {
         .heatmap-row-atm td {
           border-top: 1px solid rgba(0,240,255,0.35);
           border-bottom: 1px solid rgba(0,240,255,0.35);
+        }
+        @keyframes mvcGlow {
+          0%, 100% { box-shadow: 0 0 3px rgba(255,255,255,0.35); }
+          50%      { box-shadow: 0 0 10px rgba(255,255,255,0.85); }
+        }
+        .mvc-peak-cell {
+          animation: mvcGlow 2.4s ease-in-out infinite;
         }
       `}</style>
     </div>

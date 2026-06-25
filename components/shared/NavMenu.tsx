@@ -67,6 +67,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Estimated Moves Front End", href: "/em" },
       { label: "Analytics", href: "/analytics" },
       { label: "ES Candles", href: "/es-candles" },
+      { label: "ICT", href: "/ict" },
       { label: "Fails", href: "/fails" },
       { label: "Premarket", href: "/premarket" },
       { label: "Economic Calendar", href: "/economic-calendar" },
@@ -141,7 +142,13 @@ function useQuickPages() {
 // hamburger button's bounding rect (so the panel lines up under it).
 export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   const pathname = usePathname();
-  const { isSignedIn } = useUser();
+  const { isSignedIn, user } = useUser();
+  // Owner-only nav groups (Owner/Backend) are hidden from non-owner accounts.
+  // Baked at build via NEXT_PUBLIC_OWNER_USER_ID (same value the WS lifecycle
+  // uses). If unset, fall back to any signed-in user so the owner isn't locked
+  // out before configuring it — middleware still hard-blocks the routes.
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
   const { menuOpen, closeMenu } = useMobileNav();
   const { quick, pin, unpin } = useQuickPages();
 
@@ -153,7 +160,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   useEffect(() => { setMounted(true); }, []);
 
   const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
-  const visibleGroups = NAV_GROUPS.filter((g) => !g.devOnly || isSignedIn);
+  const visibleGroups = NAV_GROUPS.filter((g) => !g.devOnly || isOwner);
   const quickSet = new Set(quick);
 
   // Auto-open the group that contains the active route when the menu opens.
@@ -202,7 +209,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
     borderRadius: 10,
     textDecoration: "none",
     fontSize: 15,
-    fontWeight: active ? 800 : 700,
+    fontWeight: active ? 600 : 400,
     color: active ? "#05060A" : HOME_THEME.text,
     background: active ? HOME_THEME.cyan : "transparent",
     boxShadow: active ? "0 0 14px rgba(0,240,255,0.30)" : "none",
@@ -300,7 +307,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 cursor: "pointer",
                 color: groupActive ? HOME_THEME.cyan : HOME_THEME.text,
                 fontSize: 15,
-                fontWeight: groupActive ? 800 : 700,
+                fontWeight: groupActive ? 600 : 400,
                 ...(groupActive || isOpen ? { background: "rgba(255,255,255,0.04)", border: `1px solid ${HOME_THEME.border}` } : { background: "transparent", border: "1px solid transparent" }),
               }}
             >
@@ -335,7 +342,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                           borderRadius: 9,
                           textDecoration: "none",
                           fontSize: 14.5,
-                          fontWeight: active ? 800 : 700,
+                          fontWeight: active ? 600 : 400,
                           color: active ? "#05060A" : HOME_THEME.text,
                           background: active ? HOME_THEME.cyan : "transparent",
                           boxShadow: active ? "0 0 14px rgba(0,240,255,0.30)" : "none",

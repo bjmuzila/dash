@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 import SnapButton from "./SnapButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 
@@ -14,7 +15,7 @@ const NAV_ITEMS = [
   { label: "Multi Greek",   href: "/mult-greek" },
   { label: "Trading",       href: "/trading" },
   { label: "Logs",          href: "/logs" },
-  { label: "Personal",      href: "/personal" },
+  { label: "Personal",      href: "/personal", ownerOnly: true },
   { label: "Econ Calendar", href: "/economic-calendar" },
 ];
 
@@ -132,6 +133,12 @@ function saveTodayCloses(es: number, spx: number, date?: string) {
 // ─── component ───────────────────────────────────────────────────────────────
 export default function TopBar() {
   const router = useRouter();
+  const { isSignedIn, user } = useUser();
+  // Owner-only nav items (Personal) hidden from non-owner accounts. Routes are
+  // hard-gated in middleware; this just keeps the link out of the picker.
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
+  const navItems = NAV_ITEMS.filter((i) => !i.ownerOnly || isOwner);
   const pathname = usePathname();
   const shouldConnect = useWsLifecycle();
   const shouldConnectRef = useRef(shouldConnect);
@@ -447,7 +454,7 @@ export default function TopBar() {
           onChange={e => router.push(e.target.value)}
           style={{ background: "#07101b", color: "#00e5ff", border: "1px solid #1e3050", borderRadius: 3, fontSize: 11, fontWeight: 700, padding: "0 8px", height: 34, cursor: "pointer", letterSpacing: ".04em", flexShrink: 0 }}
         >
-          {NAV_ITEMS.map(({ label, href }) => (
+          {navItems.map(({ label, href }) => (
             <option key={href} value={href}>{label}</option>
           ))}
         </select>

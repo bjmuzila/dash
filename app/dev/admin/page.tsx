@@ -782,24 +782,40 @@ export default function AdminDashboard() {
           </span>
           <span style={{ fontSize: 10, color: HOME_THEME.muted }}>Sales · Traffic · Growth</span>
         </div>
-        {/* Period selector */}
-        <div style={{ display: "flex", gap: 4 }}>
-          {PERIODS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              style={{
-                ...homeSecondaryButtonStyle,
-                padding: "5px 12px",
-                fontSize: 10,
-                color: period === p ? HOME_THEME.cyan : HOME_THEME.muted,
-                borderColor: period === p ? `${HOME_THEME.cyan}44` : HOME_THEME.border,
-                background: period === p ? `${HOME_THEME.cyan}10` : "rgba(255,255,255,0.04)",
-              }}
-            >
-              {PERIOD_LABELS[p]}
-            </button>
-          ))}
+        {/* Right: period selector + Owner link */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            {PERIODS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                style={{
+                  ...homeSecondaryButtonStyle,
+                  padding: "5px 12px",
+                  fontSize: 10,
+                  color: period === p ? HOME_THEME.cyan : HOME_THEME.muted,
+                  borderColor: period === p ? `${HOME_THEME.cyan}44` : HOME_THEME.border,
+                  background: period === p ? `${HOME_THEME.cyan}10` : "rgba(255,255,255,0.04)",
+                }}
+              >
+                {PERIOD_LABELS[p]}
+              </button>
+            ))}
+          </div>
+          {/* Owner — navigates to the separate /dev/owner page. */}
+          <a
+            href="/dev/owner?tab=overview"
+            style={{
+              padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
+              textTransform: "uppercase", letterSpacing: "0.1em",
+              cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6,
+              background: "transparent",
+              color: HOME_THEME.purple,
+              border: `1px solid ${HOME_THEME.purple}66`,
+            }}
+          >
+            Owner <span style={{ fontSize: 12 }}>↗</span>
+          </a>
         </div>
       </div>
 

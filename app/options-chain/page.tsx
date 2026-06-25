@@ -728,6 +728,7 @@ export default function OptionsChainPage() {
         overflow: "hidden",
       }}
     >
+      <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
       {loadProgress > 0 && (
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "#05080d", zIndex: 10 }}>
           <div style={{ height: "100%", width: `${loadProgress}%`, background: "#00e5ff", transition: "width 0.3s ease" }} />
@@ -979,6 +980,7 @@ export default function OptionsChainPage() {
                 return (
                   <div
                     key={col?.expiration ?? `c-${i}`}
+                    className={isMvc ? "mvc-peak-cell" : undefined}
                     style={{
                       position: "relative",
                       padding: "4px 6px",
@@ -989,6 +991,7 @@ export default function OptionsChainPage() {
                       background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
                       borderLeft: "1px solid rgba(255,255,255,.04)",
                       fontWeight: 700,
+                      ...(isMvc ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
                     }}
                   >
                     {isMvc && (

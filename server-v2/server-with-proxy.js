@@ -119,9 +119,97 @@ function handleProxyRest(req, res) {
       return true;
     }
     default:
-      sendJson(res, 404, { error: 'unknown proxy route', path: pathname });
-      return true;
+      // Async routes are handled below (return false so they fall through).
+      break;
   }
+
+  // /proxy/gex-history?expiry=YYYY-MM-DD&ages=5,15,30
+  // Returns per-strike net GEX baselines as of N minutes ago, shaped for
+  // useStrikeGexHistory: { mode:"point", ages:[...], baselines:{ strike:{ "5":x,... } } }.
+  if (pathname === '/proxy/gex-history') {
+    handleGexHistory(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'gex-history failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
+  sendJson(res, 404, { error: 'unknown proxy route', path: pathname });
+  return true;
+}
+
+// ── /proxy/gex-history ─────────────────────────────────────────────────────
+let _histPool = null;
+let _histPoolDown = false;
+function getHistPool() {
+  if (_histPoolDown) return null;
+  if (_histPool) return _histPool;
+  if (!process.env.DATABASE_URL) { _histPoolDown = true; return null; }
+  try {
+    const { Pool } = require('pg');
+    _histPool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? undefined : { rejectUnauthorized: false },
+      max: 2,
+      keepAlive: true,
+    });
+    _histPool.on('error', (e) => {
+      console.warn('[gex-history-read] pool error (will reconnect):', e.message);
+      try { _histPool?.end().catch(() => {}); } catch {}
+      _histPool = null;
+    });
+    return _histPool;
+  } catch (e) {
+    console.error('[gex-history-read] pg unavailable:', e.message);
+    _histPoolDown = true;
+    return null;
+  }
+}
+
+function todayYmdET() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+}
+
+async function handleGexHistory(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const expiry = searchParams.get('expiry') || '';
+  const ages = (searchParams.get('ages') || '5,15,30')
+    .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+
+  if (!expiry || !ages.length) {
+    return sendJson(res, 200, { mode: 'point', ages, baselines: {} });
+  }
+  const pool = getHistPool();
+  if (!pool) {
+    return sendJson(res, 200, { mode: 'point', ages, baselines: {} });
+  }
+
+  const date = todayYmdET();
+  const now = Date.now();
+  const baselines = {};
+
+  // For each age, pick — per strike — the row whose timestamp is closest to
+  // (now − age minutes). DISTINCT ON keeps one row per strike, ordered by
+  // proximity to the target time.
+  for (const age of ages) {
+    const target = now - age * 60_000;
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (strike) strike, net_gex
+         FROM option_strike_gex_history
+        WHERE date = $1 AND expiry = $2 AND timestamp <= $3
+        ORDER BY strike, ABS(timestamp - $4) ASC`,
+      [date, expiry, target, target]
+    );
+    for (const r of rows) {
+      const strike = Number(r.strike);
+      const v = Number(r.net_gex);
+      if (!Number.isFinite(strike) || !Number.isFinite(v)) continue;
+      (baselines[strike] ||= {})[String(age)] = v;
+    }
+  }
+
+  sendJson(res, 200, { mode: 'point', ages, baselines });
 }
 
 // ---------------------------------------------------------------------------
