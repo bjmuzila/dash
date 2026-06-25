@@ -18,7 +18,7 @@ import NquQuotePill from "@/components/dashboard/NquQuotePill";
 const ES_FEED_SYMBOLS = ["/ESU26", "/ESU6"];
 const NQ_FEED_SYMBOLS = ["/NQU26", "/NQ:XCME"];
 
-const UP = "#10B981";
+const UP = "#1FD98A";
 const DOWN = "#EF4444";
 const MUTED = "#5a7a99";
 
@@ -63,14 +63,14 @@ function Pill({
   const c = chg(price, prev);
   return (
     <span style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0, whiteSpace: "nowrap" }}>
-      <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+      <span style={{ fontSize: 15, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
         {label}
       </span>
-      <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color }}>
+      <span style={{ fontFamily: "monospace", fontSize: 23, fontWeight: 800, color }}>
         {price > 0 ? (quarter ? fmtEsQuarter(price) : fmt(price)) : "—"}
       </span>
       {c && (
-        <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 10.5, fontWeight: 500, color: c.up ? UP : DOWN }}>
+        <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: c.up ? UP : DOWN }}>
           {c.text}
         </span>
       )}
@@ -96,8 +96,9 @@ export default function ToolbarTicker() {
       const wrap = wrapRef.current, row = rowRef.current;
       if (!wrap || !row) return;
       const avail = wrap.clientWidth;
-      const natural = row.scrollWidth / (scaleRef.current || 1);
-      const next = natural > 0 ? Math.min(1, avail / natural) : 1;
+      // Undo the current transform to recover the row's true natural width.
+      const natural = row.getBoundingClientRect().width / (scaleRef.current || 1);
+      const next = natural > 0 ? Math.max(0.85, Math.min(1, avail / natural)) : 1;
       if (Math.abs(next - scaleRef.current) > 0.005) {
         scaleRef.current = next;
         setScale(next);
@@ -105,11 +106,12 @@ export default function ToolbarTicker() {
     };
     const ro = new ResizeObserver(fit);
     if (wrapRef.current) ro.observe(wrapRef.current);
-    if (rowRef.current) ro.observe(rowRef.current);
     fit();
+    // Re-fit shortly after mount once fonts/prices have laid out.
+    const t = setTimeout(fit, 100);
     window.addEventListener("resize", fit);
-    return () => { ro.disconnect(); window.removeEventListener("resize", fit); };
-  }, []);
+    return () => { ro.disconnect(); clearTimeout(t); window.removeEventListener("resize", fit); };
+  });
 
   const shouldConnect = useWsLifecycle();
   const shouldConnectRef = useRef(shouldConnect);
@@ -233,7 +235,7 @@ export default function ToolbarTicker() {
   }, [shouldConnect]);
 
   return (
-    <div ref={wrapRef} style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "visible" }}>
+    <div ref={wrapRef} style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
       <div
         ref={rowRef}
         style={{
@@ -242,6 +244,7 @@ export default function ToolbarTicker() {
           gap: 10,
           whiteSpace: "nowrap",
           flexShrink: 0,
+          width: "max-content",
           transform: `scale(${scale})`,
           transformOrigin: "center center",
         }}

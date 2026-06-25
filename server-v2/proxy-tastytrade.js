@@ -777,13 +777,15 @@ async function fetchUnderlyingQuotes(symbols) {
     else equities.push(up);
   }
 
-  // TEMP manual prev-close overrides — the holiday (no CME settle) corrupts the
-  // futures baseline, so the day-change %/+- is wrong. Keyed by product root
-  // (matches /ESU26, /ESU6, /ES:XCME, etc). Remove once a clean settle prints.
-  // TODO: clear after the next normal session settle.
+  // Manual prev-close overrides for futures — keyed by product root (matches
+  // /ESU26, /ESU6, /ES:XCME, etc). Use ONLY to patch a holiday session with no
+  // CME settle; clear once a clean settle prints, or it freezes the baseline at
+  // a stale value and the day-change %/+- goes wildly wrong (e.g. NQ stuck at the
+  // pre-Juneteenth 30719.75 → bogus "down ~1050"). Empty in normal operation:
+  // TT REST prev-close (the official prior 4pm daily settle) drives the baseline.
   const FUT_PREVCLOSE_OVERRIDE = {
-    NQ: 30719.75,
-    // ES: 0000.00,  // fill in if ESU is also off
+    // NQ: 0000.00,  // last-resort manual patch; normally derived from RTH 4pm close
+    // ES: 0000.00,
   };
   const futRoot = (sym) => {
     const m = String(sym || '').toUpperCase().match(/^\/([A-Z]+)/);
@@ -846,7 +848,20 @@ async function fetchUnderlyingQuotes(symbols) {
       if (!ttSymbol) { console.warn(`[WATCH-QUOTES] no front contract for ${product}`); continue; }
       const json = await ttGet(`/market-data/by-type?future[]=${encodeURIComponent(ttSymbol)}`);
       const it = json?.data?.items?.[0];
-      if (it) assign(orig, it);
+      if (it) {
+        const override = FUT_PREVCLOSE_OVERRIDE[futRoot(orig)];
+        if (override != null && override > 0) {
+          assign(orig, { ...it, 'prev-close': override, close: override });
+        } else {
+          assign(orig, it);
+        }
+        // DIAGNOSTIC: dump every settle-ish field TT returns for the NQ front
+        // contract so we can pin which one is the 4pm RTH close (29747.25) vs the
+        // globex print. Remove once the right field is wired in.
+        if (futRoot(orig) === 'NQ') {
+          console.log(`[WATCH-QUOTES] ${orig} ttSym=${ttSymbol} last=${it.last} mark=${it.mark} close=${it.close} prev-close=${it['prev-close']} prev-close-date=${it['prev-close-date']} settlement=${it['settlement-price'] ?? it.settlement ?? 'n/a'} day-open=${it.open}`);
+        }
+      }
     } catch (err) {
       console.warn(`[WATCH-QUOTES] future ${fut} failed:`, String(err.message).slice(0, 120));
     }
@@ -1138,6 +1153,87 @@ async function fetchDailyHistory(rawSymbol) {
   const payload = { data: { items } };
   _historyCache.set(yahoo, { ts: Date.now(), payload });
   return payload;
+}
+
+// ---------------------------------------------------------------------------
+// Prior-RTH-session 4pm close for futures (self-correcting day-change baseline).
+//
+// TT REST prev-close for /NQ (and /ES) returns the GLOBEX/extended print, not the
+// 16:00 ET RTH settle TradingView anchors to — e.g. NQ showed a globex value
+// while the real 2026-06-24 4pm close was 29747.25. To get the right baseline we
+// pull Yahoo 5-minute bars, pick the most recent PRIOR ET session's 16:00 bar
+// close (the 4pm RTH settle), skip non-settle dates, and cache it for the day.
+// Keyed by Yahoo future symbol (NQ=F, ES=F, ...). Returns null on any failure so
+// the caller can fall back to TT prev-close.
+const _futRthCloseCache = new Map(); // yahooSym -> { ymd, close, fetchedAt }
+const FUT_RTH_CLOSE_TTL_MS = 5 * 60 * 1000;
+
+function etYmdHm(ms) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(ms));
+  const g = (t) => parts.find((p) => p.type === t)?.value || '';
+  let hh = g('hour'); if (hh === '24') hh = '00';
+  return { ymd: `${g('year')}-${g('month')}-${g('day')}`, hm: `${hh}:${g('minute')}` };
+}
+
+/**
+ * Most recent prior-session 16:00 ET (4pm RTH) close for a future, from Yahoo 5m
+ * bars. Returns a number, or null on failure. `nonSettle` is a Set of YYYY-MM-DD
+ * ET dates to skip (holidays/weekends with no official settle).
+ */
+async function fetchFutRthPrevClose(rawSymbol, nonSettle = ES_NON_SETTLE_DATES) {
+  const yahoo = historyYahooSymbol(rawSymbol);
+  if (!yahoo) return null;
+
+  const today = todayYmd().ymd;
+  const hit = _futRthCloseCache.get(yahoo);
+  if (hit && hit.ymd === today && Date.now() - hit.fetchedAt < FUT_RTH_CLOSE_TTL_MS) return hit.close;
+
+  try {
+    // includePrePost=false → regular-session bars only, so the single 15:55 bar
+    // per date is the RTH close (not an overnight/globex 15:55 bar from the 24h
+    // futures feed, which was poisoning the baseline ~29514 vs the real 29747.25).
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahoo)}`
+      + `?range=7d&interval=5m&includePrePost=false`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } });
+    if (!r.ok) throw new Error(`Yahoo ${yahoo} 5m -> ${r.status}`);
+    const data = await r.json();
+    const result = data?.chart?.result?.[0];
+    const stamps = result?.timestamp || [];
+    const closes = result?.indicators?.quote?.[0]?.close || [];
+
+    // Collect each ET session's RTH-close bar (the 4pm settle), excluding today
+    // and non-settle dates, then take the most recent. Yahoo stamps 5m bars at
+    // their OPEN, so the bar covering 15:55–16:00 is labeled 15:55 — that bar's
+    // close is the 16:00 print. Accept 15:55 (preferred) and fall back to a 16:00
+    // stamp if a feed ever uses close-stamped bars.
+    const closeByDate = new Map();   // 15:55 close
+    const closeByDate1600 = new Map(); // 16:00 close (fallback)
+    for (let i = 0; i < stamps.length; i += 1) {
+      const c = Number(closes[i]);
+      if (!Number.isFinite(c) || c <= 0) continue;
+      const { ymd, hm } = etYmdHm(stamps[i] * 1000);
+      if (ymd === today || nonSettle.has(ymd)) continue;
+      if (hm === '15:55') closeByDate.set(ymd, c);
+      else if (hm === '16:00') closeByDate1600.set(ymd, c);
+    }
+    if (!closeByDate.size && closeByDate1600.size) {
+      for (const [k, v] of closeByDate1600) closeByDate.set(k, v);
+    }
+    const dates = [...closeByDate.keys()].sort();
+    const prevDate = dates[dates.length - 1];
+    const close = prevDate ? closeByDate.get(prevDate) : null;
+    if (close && close > 0) {
+      console.log(`[FUT-RTH-CLOSE] ${yahoo} prevSettleDate=${prevDate} close=${close} (sessions: ${dates.join(',')})`);
+      _futRthCloseCache.set(yahoo, { ymd: today, close, fetchedAt: Date.now() });
+      return close;
+    }
+  } catch (err) {
+    console.warn(`[FUT-RTH-CLOSE] ${rawSymbol}:`, String(err.message).slice(0, 140));
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

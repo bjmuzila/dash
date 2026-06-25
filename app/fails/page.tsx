@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { LiveIb } from "@/components/insights/IbLogic";
+import { NqIbLive } from "@/components/insights/NqIbLive";
 import {
   HOME_THEME,
   homeButtonStyle,
@@ -85,6 +86,7 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
 }
 
 export default function FailsPage() {
+  const [tab, setTab] = useState<"ESU" | "NQU">("ESU");
   const { candles: liveCandles, historical, connected, refresh } = useEsCandles();
 
   // useEsCandles returns ONLY today's bars in `candles`; `historical` holds the
@@ -141,23 +143,45 @@ export default function FailsPage() {
       {/* header */}
       <div style={homeHeaderStyle}>
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>ESU Fails</span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: HOME_THEME.text, opacity: 0.85 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%",
-              background: connected ? HOME_THEME.green : HOME_THEME.muted,
-              boxShadow: connected ? `0 0 8px ${rgba(HOME_THEME.green, 0.8)}` : "none" }} />
-            {connected ? "LIVE" : "OFFLINE"}
-          </span>
-          <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
-            {lastClose != null ? `${unit} ${fmt(lastClose)}` : "—"}
-          </span>
+          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>Fails</span>
+          <div style={{ display: "inline-flex", gap: 4, padding: 3, borderRadius: 8, background: "rgba(255,255,255,0.04)", border: `1px solid ${HOME_THEME.border}` }}>
+            {(["ESU", "NQU"] as const).map((t) => {
+              const on = tab === t;
+              return (
+                <button key={t} onClick={() => setTab(t)} style={{
+                  fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase",
+                  padding: "4px 12px", borderRadius: 6, cursor: "pointer",
+                  color: on ? "#04121a" : HOME_THEME.text,
+                  background: on ? HOME_THEME.cyan : "transparent",
+                  border: "none",
+                }}>{t}</button>
+              );
+            })}
+          </div>
+          {tab === "ESU" && (
+            <>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: HOME_THEME.text, opacity: 0.85 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%",
+                  background: connected ? HOME_THEME.green : HOME_THEME.muted,
+                  boxShadow: connected ? `0 0 8px ${rgba(HOME_THEME.green, 0.8)}` : "none" }} />
+                {connected ? "LIVE" : "OFFLINE"}
+              </span>
+              <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
+                {lastClose != null ? `${unit} ${fmt(lastClose)}` : "—"}
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => void refresh()} style={homeButtonStyle}>Refresh</button>
         </div>
       </div>
 
-      <div style={{ ...homeContentStyle, overflow: "auto" }}>
+      <div style={{ ...homeContentStyle, overflow: "auto", display: tab === "NQU" ? "block" : undefined }}>
+        {tab === "NQU" ? (
+          <NqIbLive />
+        ) : (
+        <>
         {/* AMT day-type + bias banner */}
         {(() => {
           const dtCol = dayTypeColor(amt.dayType);
@@ -336,6 +360,8 @@ export default function FailsPage() {
             <FailTable rows={log.slice(0, 60)} fmt={fmt} unit={unit} showDate />
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
   );

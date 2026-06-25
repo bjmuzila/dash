@@ -558,20 +558,21 @@ export default function GexChart({
     // MVC = source of truth: largest |netGEX| over the FULL raw chain, matching
     // SnapButton.getHighestRow / TopBar so the chart label always agrees with the
     // top-bar / snapshot value. Hidden when the peak strike is outside the window.
+    const peakVal = (r: ChainRow) => isVol ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
     const peak = chain.reduce<ChainRow | null>((b, r) => {
-      const rv = Math.abs(r.netGEX ?? 0);
-      const bv = b ? Math.abs(b.netGEX ?? 0) : -1;
+      const rv = Math.abs(peakVal(r));
+      const bv = b ? Math.abs(peakVal(b)) : -1;
       return rv > bv ? r : b;
     }, null);
     const peakIdx = peak ? data.findIndex(r => r.strike === peak.strike) : -1;
     if (peak && peakIdx >= 0) {
       const pi  = peakIdx;
-      const pv  = peak.netGEX ?? 0;
+      const pv  = peakVal(peak);
       const py  = clamp(yFor(pv), PAD_T + 2, PAD_T + cH - 2);
       const col = pv >= 0 ? "#29b6f6" : "#ffb300";
       ctx.save();
       ctx.font = "bold 10px Arial";
-      const lbl = `MVC ${peak.strike.toLocaleString()}`;
+      const lbl = `${isVol ? "MVC·Vol" : "MVC"} ${peak.strike.toLocaleString()}`;
       const tw  = ctx.measureText(lbl).width;
       const bw  = tw + 10, bh = 15;
       const bx  = clamp(xAt(pi) - bw / 2, 2, W - bw - 2);

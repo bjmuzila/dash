@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import RadialNav from "./RadialNav";
+import RadialData from "./RadialData";
 
 declare global {
   interface Window {
@@ -10,7 +12,7 @@ declare global {
 
 // ─── Nav hierarchy (mirror of NAV_GROUPS) ───────────────────────────────────────
 const NAV_GRAPH = `
-flowchart LR
+flowchart TB
   HOME(["Home"])
 
   HOME --> GEX["GEX"]
@@ -21,30 +23,31 @@ flowchart LR
 
   GEX --> g1["Home"]
   GEX --> g3["Multi Greek"]
-  GEX --> g4["Options Chain"]
   GEX --> g5["Greeks"]
-  GEX --> g6["Confidence"]
   GEX --> g7["EM Front End"]
+  g1 --> g2["Home2"]
+  g3 --> g4["Options Chain"]
+  g5 --> g6["Confidence"]
 
   FUT --> f1["ES Candles"]
-  FUT --> f2["Fails"]
+  f1 --> f2["Fails"]
 
   STK --> s1["Premarket"]
   STK --> s2["Econ Calendar"]
 
   PER --> p1["Journal"]
-  PER --> p2["Budget"]
-  PER --> p3["To-Do"]
+  p1 --> p2["Budget"]
+  p2 --> p3["To-Do"]
 
   ADM --> a1["Owner"]
-  ADM --> a2["Admin"]
   ADM --> a3["Tree"]
-  ADM --> a4["Database"]
   ADM --> a5["Dev"]
-  ADM --> a6["EM BE"]
   ADM --> a7["Social"]
-  ADM --> a8["Logs"]
   ADM --> a9["Changelog"]
+  a1 --> a2["Admin"]
+  a3 --> a4["Database"]
+  a5 --> a6["EM BE"]
+  a7 --> a8["Logs"]
 
   classDef root fill:#6366f1,stroke:#a855f7,color:#fff,font-weight:bold;
   classDef grp fill:#0e2a33,stroke:#22d3ee,color:#7fe9f5,font-weight:bold;
@@ -142,10 +145,11 @@ export default function FlowDiagram() {
     document.body.appendChild(s);
   }, []);
 
-  // (re)render on mode change
+  // (re)render on mode change — only Data Flow uses mermaid; nav uses RadialNav
   useEffect(() => {
+    if (mode === "nav") return;
     if (!ready || !ref.current || !window.mermaid) return;
-    const src = mode === "nav" ? NAV_GRAPH : DATA_GRAPH;
+    const src = DATA_GRAPH;
     ref.current.innerHTML = "";
     const id = "tree-mmd-" + Date.now();
     window.mermaid
@@ -208,7 +212,7 @@ export default function FlowDiagram() {
       <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
         {btn("nav", "Navigation Flow")}
         {btn("data", "Data Flow")}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+        <div style={{ display: "none", alignItems: "center", gap: 8, marginLeft: "auto" }}>
           <button onClick={() => setFit(true)}
             style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
               border: `1px solid ${fit ? "#22d3ee" : "rgba(255,255,255,0.12)"}`,
@@ -229,12 +233,14 @@ export default function FlowDiagram() {
           border: "1px solid rgba(255,255,255,0.10)",
           borderRadius: 14,
           padding: 18,
-          height: "78vh",
-          overflow: "auto",
+          height: "82vh",
+          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
-        {!ready && <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 13 }}>Loading diagram…</div>}
-        <div ref={ref} />
+        {mode === "nav" ? <RadialNav /> : <RadialData />}
       </div>
     </div>
   );

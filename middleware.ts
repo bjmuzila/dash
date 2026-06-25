@@ -9,6 +9,7 @@ const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/waitlist(.*)",
+  "/api/stripe/webhook",
   "/maintenance",
   "/terms",
   "/risk-disclosure",
@@ -66,6 +67,7 @@ export default clerkMiddleware(async (auth, req) => {
     path.startsWith("/sign-in") ||
     path.startsWith("/sign-up") ||
     path.startsWith("/api/waitlist") ||
+    path === "/api/stripe/webhook" ||
     path === "/terms" ||
     path === "/risk-disclosure" ||
     path === "/privacy" ||

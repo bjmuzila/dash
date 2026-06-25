@@ -27,7 +27,7 @@ const QUOTE_SYMBOLS: Array<{ sym: string; label: string; name: string }> = [
 // Symbol shown in the toolbar pill itself (not rotating — fixed to NQU).
 const PILL_SYMBOL = "/NQU26";
 
-const UP = "#10B981";
+const UP = "#1FD98A";
 const DOWN = "#EF4444";
 const MUTED = "#5a7a99";
 
@@ -269,13 +269,13 @@ export default function NquQuotePill() {
       >
         {/* Text on the left — same inline style as SPX/ESU/VIX */}
         <span style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          <span style={{ fontSize: 15, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
             {pill?.label ?? "NQU"}
           </span>
-          <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 23, fontWeight: 800, color: "#fff" }}>
             {fmtPrice(pill?.last ?? null)}
           </span>
-          <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: pillColor }}>
+          <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: pillColor }}>
             {pillChg && <span style={{ marginRight: 4 }}>{pillChg}</span>}({fmtPct(pill?.pct ?? null)})
           </span>
         </span>
@@ -347,10 +347,10 @@ export default function NquQuotePill() {
                 {/* Left: line 1 = label + price; line 2 = +/- change and +/-% */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>{r.label}</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 14.5, fontWeight: 800, color: "#fff" }}>{fmtPrice(r.last)}</span>
+                    <span style={{ fontSize: 15, color: "#fff", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>{r.label}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 17.5, fontWeight: 900, color: "#fff" }}>{fmtPrice(r.last)}</span>
                   </div>
-                  <div style={{ fontFamily: "monospace", fontSize: 11.5, fontWeight: 600, color }}>
+                  <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color }}>
                     {chg && <span style={{ marginRight: 5 }}>{chg}</span>}({fmtPct(r.pct)})
                   </div>
                 </div>

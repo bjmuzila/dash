@@ -23,7 +23,7 @@ import NavMenu from "./NavMenu";
  */
 
 // ── icons ─────────────────────────────────────────────────────────────────────
-function MenuIcon({ size = 20 }: { size?: number }) {
+function MenuIcon({ size = 24 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="3" y1="6" x2="21" y2="6" />
@@ -32,7 +32,7 @@ function MenuIcon({ size = 20 }: { size?: number }) {
     </svg>
   );
 }
-function SearchIcon({ size = 15 }: { size?: number }) {
+function SearchIcon({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="11" cy="11" r="7" />
@@ -40,7 +40,7 @@ function SearchIcon({ size = 15 }: { size?: number }) {
     </svg>
   );
 }
-function ChevronDown({ size = 13 }: { size?: number }) {
+function ChevronDown({ size = 15 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="6 9 12 15 18 9" />
@@ -72,8 +72,8 @@ export default function GlobalToolbar() {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        height: 48,
+        gap: 12,
+        height: 64,
         flexShrink: 0,
         padding: "0 12px",
         // Notch-safe on mobile; insets are 0 on desktop so this is a no-op there.
@@ -103,10 +103,10 @@ export default function GlobalToolbar() {
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          width: 34,
-          height: 34,
+          width: 42,
+          height: 42,
           flexShrink: 0,
-          borderRadius: 9,
+          borderRadius: 10,
           border: `1px solid ${hoverMenu || menuOpen ? "rgba(0,240,255,0.30)" : HOME_THEME.border}`,
           background: hoverMenu || menuOpen ? "rgba(0,240,255,0.08)" : "rgba(255,255,255,0.04)",
           color: hoverMenu || menuOpen ? HOME_THEME.cyan : HOME_THEME.text,
@@ -123,7 +123,7 @@ export default function GlobalToolbar() {
       <img
         src="/cb-edge-logo.png"
         alt="CB Edge"
-        style={{ height: 30, width: "auto", display: "block", flexShrink: 0 }}
+        style={{ height: 40, width: "auto", display: "block", flexShrink: 0 }}
       />
 
       {/* ── Clerk user button ── */}
@@ -131,7 +131,7 @@ export default function GlobalToolbar() {
         <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
           <UserButton
             afterSignOutUrl="/"
-            appearance={{ elements: { avatarBox: { width: 30, height: 30 } } }}
+            appearance={{ elements: { avatarBox: { width: 40, height: 40 } } }}
           />
         </div>
       )}
@@ -144,10 +144,10 @@ export default function GlobalToolbar() {
           alignItems: "center",
           gap: 8,
           flexShrink: 0,
-          width: 200,
-          height: 34,
-          padding: "0 12px",
-          borderRadius: 9,
+          width: 230,
+          height: 42,
+          padding: "0 14px",
+          borderRadius: 10,
           border: `1px solid ${HOME_THEME.border}`,
           background: "rgba(0,0,0,0.35)",
         }}
@@ -166,7 +166,7 @@ export default function GlobalToolbar() {
             outline: "none",
             background: "transparent",
             color: HOME_THEME.text,
-            fontSize: 13,
+            fontSize: 15,
             fontFamily: "inherit",
           }}
         />
@@ -181,13 +181,13 @@ export default function GlobalToolbar() {
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
-            height: 34,
-            padding: "0 12px",
-            borderRadius: 9,
+            height: 42,
+            padding: "0 14px",
+            borderRadius: 10,
             border: `1px solid ${HOME_THEME.border}`,
             background: "rgba(0,0,0,0.35)",
             color: HOME_THEME.text,
-            fontSize: 12,
+            fontSize: 14,
             fontWeight: 600,
             cursor: "pointer",
             whiteSpace: "nowrap",
@@ -218,8 +218,8 @@ export default function GlobalToolbar() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          width: "46%",
-          overflow: "visible",
+          width: "60%",
+          overflow: "hidden",
           pointerEvents: "none",
         }}
       >
@@ -237,16 +237,16 @@ export default function GlobalToolbar() {
             display: "inline-flex",
             alignItems: "center",
             gap: 7,
-            height: 34,
+            height: 42,
             flexShrink: 0,
-            padding: "0 12px",
-            borderRadius: 9,
+            padding: "0 14px",
+            borderRadius: 10,
             border: `1px solid ${open ? "rgba(0,240,255,0.35)" : HOME_THEME.border}`,
             background: open
               ? "linear-gradient(180deg, rgba(0,240,255,0.12), rgba(0,240,255,0.04))"
               : "rgba(255,255,255,0.04)",
             color: open ? HOME_THEME.cyan : HOME_THEME.text,
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: 700,
             letterSpacing: "0.10em",
             textTransform: "uppercase",
@@ -254,10 +254,10 @@ export default function GlobalToolbar() {
             transition: "background 0.15s, border-color 0.15s, color 0.15s",
           }}
         >
-          <span style={{ fontSize: 14, lineHeight: 1 }} aria-hidden>🖍️</span>
+          <span style={{ fontSize: 17, lineHeight: 1 }} aria-hidden>🖍️</span>
           <span>Notes</span>
           {notes.length > 0 && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: open ? HOME_THEME.cyan : HOME_THEME.muted }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: open ? HOME_THEME.cyan : HOME_THEME.muted }}>
               {notes.length}
             </span>
           )}

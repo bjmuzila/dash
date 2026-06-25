@@ -401,10 +401,10 @@ function StatCard({
       borderLeft: `3px solid ${accent}55`,
       background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
     }}>
-      <div style={{ fontSize: "clamp(7px, 7cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(9px, 8cqw, 13px)", fontWeight: 800, color: `${accent}cc`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: "clamp(12px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(15px, 16cqw, 26px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -423,14 +423,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 // Which page tab each section lives on. Edit the values here to move sections
 // between the Front-end and Back-end tabs — no other change needed.
 const SECTION_TAB: Record<string, "frontend" | "backend"> = {
-  system:    "frontend",
-  hosting:   "frontend",
-  database:  "frontend",
+  system:    "backend",
+  hosting:   "backend",
+  database:  "backend",
   controls:  "backend",
   eodgex:    "backend",
   auth:      "frontend",
   activity:  "frontend",
-  quicklinks:"frontend",
 };
 
 /**
@@ -680,9 +679,9 @@ function StatChip({ icon, label, value, accent }: { icon: string; label: string;
     <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
       <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, background: `${accent}1a`, border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{icon}</div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
       </div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: "#fff", fontFamily: "monospace", flexShrink: 0 }}>{value}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: "#fff", fontFamily: "monospace", flexShrink: 0 }}>{value}</div>
     </div>
   );
 }
@@ -1585,12 +1584,117 @@ export default function OwnerDashboard() {
   })();
 
   return (
-    <div style={homeShellStyle}>
+    <div data-owner-cyber style={{ ...homeShellStyle, background: "#04060d", backgroundImage: "none" }}>
+      {/* ─────────────────────────────────────────────────────────────────────
+          OWNER PAGE THEME — "Neon Cyberpunk × Glassmorphic Fintech × Sci-Fi Terminal"
+          Scoped under [data-owner-cyber] so the shared homeTheme (other pages) is
+          untouched. Panels are matched by their inline glass bg rgba(13,17,25,0.45);
+          the header/tab bar opts out via [data-owner-toolbar]. Accent palette stays
+          cyan/teal/aqua + magenta highlight — NO purple/chocolate.
+         ───────────────────────────────────────────────────────────────────── */}
+      <style>{`
+        @keyframes ownerScan { 0% { background-position: 0 0; } 100% { background-position: 0 100vh; } }
+        @keyframes ownerGridDrift { 0% { background-position: 0 0, 0 0; } 100% { background-position: 40px 40px, 40px 40px; } }
+        @keyframes ownerFlicker { 0%,100% { opacity: 1; } 92% { opacity: 1; } 94% { opacity: .82; } 96% { opacity: 1; } }
+        @keyframes ownerPulse { 0%,100% { box-shadow: 0 0 14px rgba(0,240,255,.18), inset 0 0 18px rgba(0,240,255,.04); } 50% { box-shadow: 0 0 22px rgba(0,240,255,.30), inset 0 0 22px rgba(0,240,255,.07); } }
+
+        /* Animated neon grid + scanline backdrop on the shell. */
+        [data-owner-cyber] {
+          position: relative;
+          font-family: 'Inter','Helvetica Neue',Arial,sans-serif;
+        }
+        [data-owner-cyber]::before {
+          content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+          background-image:
+            linear-gradient(rgba(0,240,255,0.045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,240,255,0.045) 1px, transparent 1px);
+          background-size: 40px 40px, 40px 40px;
+          animation: ownerGridDrift 14s linear infinite;
+          mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 95%);
+        }
+        [data-owner-cyber]::after {
+          content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+          background:
+            radial-gradient(900px 500px at 12% -5%, rgba(0,240,255,0.10), transparent 60%),
+            radial-gradient(800px 500px at 92% 8%, rgba(255,0,170,0.07), transparent 60%),
+            repeating-linear-gradient(0deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.18) 3px, rgba(0,0,0,0) 4px);
+        }
+        /* Keep real content above the backdrop layers. */
+        [data-owner-cyber] > * { position: relative; z-index: 1; }
+
+        /* ── Glass panels: frosted fill + neon edge + outer glow ── */
+        [data-owner-cyber] [style*="rgba(13,17,25,0.45)"]:not([data-owner-toolbar]),
+        [data-owner-cyber] [style*="rgba(13, 17, 25, 0.45)"]:not([data-owner-toolbar]) {
+          background:
+            linear-gradient(160deg, rgba(10,18,30,0.66) 0%, rgba(6,10,18,0.72) 100%) !important;
+          backdrop-filter: blur(14px) saturate(140%) !important;
+          -webkit-backdrop-filter: blur(14px) saturate(140%) !important;
+          border: 1px solid rgba(0,240,255,0.28) !important;
+          border-radius: 14px !important;
+          position: relative !important;
+          box-shadow:
+            0 0 0 1px rgba(0,240,255,0.05),
+            0 0 18px rgba(0,240,255,0.14),
+            inset 0 1px 0 rgba(255,255,255,0.06),
+            inset 0 0 22px rgba(0,240,255,0.03) !important;
+          transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease !important;
+        }
+        /* Corner-bracket HUD accents on every panel. */
+        [data-owner-cyber] [style*="rgba(13,17,25,0.45)"]:not([data-owner-toolbar])::before,
+        [data-owner-cyber] [style*="rgba(13, 17, 25, 0.45)"]:not([data-owner-toolbar])::before {
+          content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+          border-top: 2px solid rgba(0,240,255,0.85); border-left: 2px solid rgba(0,240,255,0.85);
+          border-top-left-radius: 10px; pointer-events: none; z-index: 2;
+        }
+        [data-owner-cyber] [style*="rgba(13,17,25,0.45)"]:not([data-owner-toolbar])::after,
+        [data-owner-cyber] [style*="rgba(13, 17, 25, 0.45)"]:not([data-owner-toolbar])::after {
+          content: ""; position: absolute; bottom: 3px; right: 3px; width: 14px; height: 14px;
+          border-bottom: 2px solid rgba(255,0,170,0.70); border-right: 2px solid rgba(255,0,170,0.70);
+          border-bottom-right-radius: 10px; pointer-events: none; z-index: 2;
+        }
+        [data-owner-cyber] [style*="rgba(13,17,25,0.45)"]:not([data-owner-toolbar]):hover,
+        [data-owner-cyber] [style*="rgba(13, 17, 25, 0.45)"]:not([data-owner-toolbar]):hover {
+          border-color: rgba(0,240,255,0.6) !important;
+          transform: translateY(-1px);
+          box-shadow:
+            0 0 0 1px rgba(0,240,255,0.18),
+            0 0 30px rgba(0,240,255,0.28),
+            0 0 60px rgba(255,0,170,0.10),
+            inset 0 1px 0 rgba(255,255,255,0.10) !important;
+        }
+
+        /* ── Header / tab bar: terminal command-bar look ── */
+        [data-owner-cyber] [data-owner-toolbar] {
+          background: linear-gradient(180deg, rgba(8,14,24,0.92), rgba(5,9,16,0.92)) !important;
+          backdrop-filter: blur(18px) !important;
+          border-bottom: 1px solid rgba(0,240,255,0.30) !important;
+          box-shadow: 0 1px 0 rgba(0,240,255,0.12), 0 6px 24px rgba(0,0,0,0.5) !important;
+        }
+
+        /* ── Typography: terminal-mono numbers, brighter labels (no grey) ── */
+        [data-owner-cyber] [style*="font-family: monospace"],
+        [data-owner-cyber] [style*="monospace"] {
+          font-family: 'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace !important;
+        }
+        /* All muted grey text → bright cyan-white (was #8B94A7). */
+        [data-owner-cyber] [style*="color: rgb(139, 148, 167)"],
+        [data-owner-cyber] [style*="#8B94A7"] {
+          color: #cfe9ff !important;
+          text-shadow: 0 0 6px rgba(0,240,255,0.15);
+        }
+        /* Section title bars glow + flicker subtly like a CRT. */
+        [data-owner-cyber] [style*="letter-spacing: 0.16em"],
+        [data-owner-cyber] [style*="letter-spacing: 0.14em"] {
+          text-shadow: 0 0 8px rgba(0,240,255,0.35);
+        }
+        /* Status dots / badges get a stronger bloom. */
+        [data-owner-cyber] [style*="border-radius: 20px"] { animation: ownerFlicker 6s infinite; }
+      `}</style>
       {/* Header */}
-      <div style={homeHeaderStyle}>
+      <div data-owner-toolbar style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.cyan }}>
-            Owner Dashboard
+          <span style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.22em", textTransform: "uppercase", color: HOME_THEME.cyan, fontFamily: "'JetBrains Mono','SF Mono',ui-monospace,monospace", textShadow: "0 0 10px rgba(0,240,255,0.6), 0 0 22px rgba(0,240,255,0.25)" }}>
+            <span style={{ color: "#ff00aa", textShadow: "0 0 10px rgba(255,0,170,0.6)" }}>▸</span> OWNER<span style={{ opacity: 0.55 }}>::</span>DASHBOARD
           </span>
           <StatusBadge ok={isServerUp} label={isServerUp ? "Server Live" : "Idle"} />
           <StatusBadge ok={wsConnected} label={wsConnected ? "Proxy WS" : "Proxy WS Offline"} />
@@ -1623,12 +1727,17 @@ export default function OwnerDashboard() {
               key={t.id}
               onClick={() => selectTab(t.id)}
               style={{
-                padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
-                textTransform: "uppercase", letterSpacing: "0.1em",
+                padding: "8px 20px", fontSize: 12, fontWeight: 800, borderRadius: 8,
+                textTransform: "uppercase", letterSpacing: "0.14em",
                 cursor: "pointer",
-                background: active ? "rgba(0,229,255,0.15)" : "transparent",
-                color: active ? HOME_THEME.cyan : HOME_THEME.muted,
-                border: `1px solid ${active ? HOME_THEME.cyan + "66" : HOME_THEME.border}`,
+                fontFamily: "'JetBrains Mono','SF Mono',ui-monospace,monospace",
+                background: active
+                  ? "linear-gradient(180deg, rgba(0,240,255,0.22), rgba(0,240,255,0.06))"
+                  : "rgba(255,255,255,0.02)",
+                color: active ? HOME_THEME.cyan : "#cfe9ff",
+                border: `1px solid ${active ? "rgba(0,240,255,0.7)" : "rgba(0,240,255,0.18)"}`,
+                boxShadow: active ? "0 0 16px rgba(0,240,255,0.30), inset 0 0 12px rgba(0,240,255,0.08)" : "none",
+                textShadow: active ? "0 0 8px rgba(0,240,255,0.6)" : "none",
               }}
             >
               {t.label}
@@ -2649,32 +2758,6 @@ export default function OwnerDashboard() {
           );
         })()}
 
-        {/* ── Quick links ── */}
-        {SECTION_TAB.quicklinks === ownerTab && (
-        <AccordionCard
-          id="quicklinks"
-          title="Quick Links"
-          subtitle="database · logs · dev · changelog …"
-          open={openSet.has("quicklinks")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {[
-              { label: "Admin", href: "/dev/admin" },
-              { label: "Database", href: "/database" },
-              { label: "Logs", href: "/logs" },
-              { label: "Dev Probe", href: "/dev" },
-              { label: "Changelog", href: "/changelog" },
-              { label: "Confidence", href: "/confidence-score" },
-              { label: "ES Candles", href: "/es-candles" },
-            ].map(({ label, href }) => (
-              <a key={href} href={href} style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, textDecoration: "none", fontSize: 11 }}>
-                {label}
-              </a>
-            ))}
-          </div>
-        </AccordionCard>
-        )}
       </div>
     </div>
   );

@@ -378,7 +378,110 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_es_gap_date ON es_gap(date);
+
+    -- Stripe subscription state. One row per Clerk user (clerk_user_id is the PK
+    -- and the only identity we trust — never a client-supplied value). Mirrors
+    -- the live state of the user's Stripe subscription, written exclusively by
+    -- the Stripe webhook. status follows Stripe's subscription.status enum
+    -- ('active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete' | ...).
+    -- Gating treats 'active' and 'trialing' as paid. current_period_end is the
+    -- epoch-seconds end of the paid period (for grace handling / display).
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      clerk_user_id          TEXT PRIMARY KEY,
+      stripe_customer_id     TEXT,
+      stripe_subscription_id TEXT,
+      status                 TEXT,
+      price_id               TEXT,
+      current_period_end     BIGINT,
+      cancel_at_period_end   INTEGER NOT NULL DEFAULT 0,
+      created_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_sub ON subscriptions(stripe_subscription_id);
   `);
+}
+
+// ── Stripe subscriptions ────────────────────────────────────────────────────
+
+export interface SubscriptionRecord {
+  clerk_user_id: string;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  status: string | null;
+  price_id: string | null;
+  current_period_end: number | null;
+  cancel_at_period_end: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Statuses that grant access to the paid product. */
+export const PAID_STATUSES = new Set(["active", "trialing"]);
+
+/** Look up a user's subscription row (or undefined if they've never checked out). */
+export async function getSubscription(clerkUserId: string): Promise<SubscriptionRecord | undefined> {
+  return queryOne<SubscriptionRecord>(
+    "SELECT * FROM subscriptions WHERE clerk_user_id = ?",
+    [clerkUserId]
+  );
+}
+
+/** Find the user row that owns a given Stripe customer (webhook reverse-lookup). */
+export async function getSubscriptionByCustomer(customerId: string): Promise<SubscriptionRecord | undefined> {
+  return queryOne<SubscriptionRecord>(
+    "SELECT * FROM subscriptions WHERE stripe_customer_id = ?",
+    [customerId]
+  );
+}
+
+/** Record (or update) the Stripe customer id for a user at checkout time, before
+ *  any subscription exists. NULL fields never clobber existing non-null values. */
+export async function linkStripeCustomer(clerkUserId: string, customerId: string): Promise<void> {
+  await pgQuery(
+    `INSERT INTO subscriptions (clerk_user_id, stripe_customer_id)
+     VALUES ($1, $2)
+     ON CONFLICT (clerk_user_id) DO UPDATE SET
+       stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, subscriptions.stripe_customer_id),
+       updated_at = CURRENT_TIMESTAMP`,
+    [clerkUserId, customerId]
+  );
+}
+
+/** Upsert the full subscription state from a Stripe webhook event, keyed on the
+ *  Clerk user id. The webhook is the single writer of status/period fields. */
+export async function upsertSubscription(r: {
+  clerk_user_id: string;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  status?: string | null;
+  price_id?: string | null;
+  current_period_end?: number | null;
+  cancel_at_period_end?: boolean | null;
+}): Promise<void> {
+  await pgQuery(
+    `INSERT INTO subscriptions
+       (clerk_user_id, stripe_customer_id, stripe_subscription_id, status,
+        price_id, current_period_end, cancel_at_period_end)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (clerk_user_id) DO UPDATE SET
+       stripe_customer_id     = COALESCE(EXCLUDED.stripe_customer_id,     subscriptions.stripe_customer_id),
+       stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, subscriptions.stripe_subscription_id),
+       status                 = COALESCE(EXCLUDED.status,                 subscriptions.status),
+       price_id               = COALESCE(EXCLUDED.price_id,               subscriptions.price_id),
+       current_period_end     = COALESCE(EXCLUDED.current_period_end,     subscriptions.current_period_end),
+       cancel_at_period_end   = EXCLUDED.cancel_at_period_end,
+       updated_at             = CURRENT_TIMESTAMP`,
+    [
+      r.clerk_user_id,
+      r.stripe_customer_id ?? null,
+      r.stripe_subscription_id ?? null,
+      r.status ?? null,
+      r.price_id ?? null,
+      r.current_period_end ?? null,
+      r.cancel_at_period_end ? 1 : 0,
+    ]
+  );
 }
 
 // ── EM Tracker (per-ticker weekly Estimated Move hit/miss record) ───────────

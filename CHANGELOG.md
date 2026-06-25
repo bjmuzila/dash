@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-06-25 (session 69) — GEX chart MVC label tracks data mode
+
+### `components/dashboard/GexChart.tsx`
+- **MVC peak now mode-aware.** Previously the peak-strike label always reduced over OI-based `netGEX`. Added `peakVal(r)` selector: in **Vol Only** mode it reduces over `netVolGEX` (volume-based) so the MVC reflects the volume peak; **OI+Vol** mode unchanged (`netGEX`). `pv` (label color/position) now uses the same selector.
+- Label text switches with mode: `MVC·Vol <strike>` in Vol Only, `MVC <strike>` in OI+Vol.
+- **Caveat:** untypechecked (Linux sandbox unavailable, `HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 68) — Fails page: NQU tab + quote-sampled NQ Initial Balance
+
+### `app/fails/page.tsx`
+- Added an **ESU / NQU tab switcher** to the header (segmented control). ESU tab is unchanged (all existing fail/AMT/IB/log sections); the LIVE/OFFLINE dot + price readout now show only on the ESU tab. NQU tab renders the new `NqIbLive` component only (Initial Balance, per request).
+
+### `components/insights/NqIbLive.tsx` (new)
+- **Quote-sampled NQ Initial Balance tracker.** The backend feeds true 5m OHLCV only for ES, so NQ is approximated: polls `/api/tt-quotes` for `/NQU26` every 20s and buckets samples into client-side 5m OHLC bars, then computes the 9:30–10:30 ET IB high/low/mid/range, formed-first, live break state, and NQ-specific probability rules. Flagged "≈ Quote-sampled" — bars are approximate (snapshots, no volume) and the in-memory set resets on reload (no DB lock).
+- **Today-only manual IB seed:** live sampling missed today's 9:30–10:30 window, so `SEED_DATE = 2026-06-25` / `SEED_IB = { high: 30193, low: 29295.75, lowFirst: false }` (high formed first) is hardcoded. On the seed date `computeIb` uses the manual high/low and still tracks live `last` + break state against them; `done` is forced true. From the next session on, `seed` is null and the IB builds live from quote samples automatically. The seed block is inert after the date and can be deleted.
+- **Caveat:** untypechecked this session — the Linux sandbox failed to start (`HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 67) — ES Candles: heatmap-to-right-edge, jitter fix, live SPX basis
+
+### `app/es-candles/page.tsx`
+- **Heatmap fills to the right axis:** the latest 5-min GEX column is now stretched to the plot's right edge (canvas width − price-axis gutter) so the band reaches the last print instead of stopping a bar short. The gutter width is cached in `hmScaleWRef` and only updated on ≥1px change, so the band edge doesn't shimmer with sub-pixel price-label wobble.
+- **Jitter fix:** overlay repaint triggers (both time-scale range subscriptions + the overlay `ResizeObserver`) are now coalesced through a single rAF (`schedule`), stopping the synchronous ping-pong that made the chart jitter back and forth on live ticks.
+- **Chart-resize guard:** the main chart `ResizeObserver` only re-applies width/height when the *rounded* container size actually changes (was re-applying on sub-pixel layout churn and nudging the time scale).
+- **SPX badge basis fix:** `effectiveBasis()` now prefers the LIVE basis (`esFut − spot` from the current /ws/gex frame) and only falls back to the frozen prior-day basis when no live frame exists. The frozen prior-day basis had gone stale intraday (badge read SPX ~90pt under ES when the true basis had drifted to ~70 — e.g. ES 7393.50 showed "SPX 7300.97" when real SPX was 7323). Caveat: if broker `spot` ever mis-scales (negative/implausible basis), the badge could be wrong again — no clamp added yet.
+
+## 2026-06-25 (session 66) — Fails page: RTH-only prev-day/week levels by true ET date
+
+### `lib/failLevels.ts`
+- Added `etSessionDate(c)` — derives a bar's ET session date from its timestamp instead of trusting the upstream `c.date`/slotKey tag, which can mis-date globex bars across the UTC-midnight boundary and leak overnight prints into the prev-day RTH set (pulling Prev Day Low below the true RTH low, e.g. ES 7404.25).
+- Added `rthBarsForDate(candles, date)` helper (isRthBar + etSessionDate match).
+- Prev Day H/L, Prev Week H/L, and `computeStats` per-day bars now use RTH-only bars grouped by true ET date. Overnight (ON-H/ON-L) levels left as-is (globex by design).
+
 ## 2026-06-25 (session 65) — Removed /home2 page
 
 ### Deleted (`app/home2/`)

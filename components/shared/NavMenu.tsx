@@ -18,9 +18,6 @@ const Svg = ({ size = 20, children }: IconProps & { children: React.ReactNode })
 );
 const HomeIcon = (p: IconProps) => <Svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Svg>;
 const GridIcon = (p: IconProps) => <Svg {...p}><path d="M3 4h18l-6 7v7l-6 3v-10z" /><line x1="3" y1="7.5" x2="21" y2="7.5" /><line x1="6.5" y1="11" x2="17.5" y2="11" /></Svg>;
-const FootIcon = (p: IconProps) => <Svg {...p}><path d="M4 3h7M4 21h7M5 3c0 4 5 5 5 9s-5 5-5 9M10 3c0 4-5 5-5 9s5 5 5 9" /><path d="M14 5h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /><line x1="15.5" y1="9" x2="18.5" y2="9" /><line x1="15.5" y1="12" x2="18.5" y2="12" /></Svg>;
-const ChartIcon = (p: IconProps) => <Svg {...p}><path d="M5 7c0-1.5 1-2 2-1.5M5 7l-1.5-1M5 7v2.5M5 9.5l1.5 1.5" /><path d="M19 7c0-1.5-1-2-2-1.5M19 7l1.5-1M19 7v2.5M19 9.5l-1.5 1.5" /><path d="M12 4v8" /><path d="M12 13l-7 3v3l7 2 7-2v-3z" /></Svg>;
-const UserIcon = (p: IconProps) => <Svg {...p}><path d="M3 10l8-6 8 6" /><path d="M5 9.5V20h11V9.5" /><circle cx="10" cy="14.5" r="2.3" /><line x1="10" y1="14.5" x2="11.4" y2="13.1" /><circle cx="19" cy="17" r="2.2" /><path d="M15.5 21.5c0-1.6 1.5-2.5 3.5-2.5s3.5.9 3.5 2.5" /></Svg>;
 const WrenchIcon = (p: IconProps) => <Svg {...p}><circle cx="7.5" cy="7.5" r="2.4" /><path d="M7.5 3.6v1.5M7.5 9.9v1.5M3.6 7.5h1.5M9.9 7.5h1.5M4.7 4.7l1.1 1.1M10.3 10.3l-1.1-1.1M10.3 4.7l-1.1 1.1M4.7 10.3l1.1-1.1" /><circle cx="14" cy="15" r="2.2" /><path d="M15.7 16.7l4 4M18 19l1.3-1.3M19.3 20.3l1.3-1.3" /></Svg>;
 const ChevronIcon = ({ open }: { open: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.18s" }}>
@@ -68,51 +65,39 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Greeks", href: "/greeks" },
       { label: "Confidence", href: "/confidence-score" },
       { label: "Estimated Moves Front End", href: "/em" },
-    ],
-  },
-  {
-    id: "futures",
-    label: "Futures",
-    Icon: FootIcon,
-    items: [
+      { label: "Analytics", href: "/analytics" },
       { label: "ES Candles", href: "/es-candles" },
       { label: "Fails", href: "/fails" },
-    ],
-  },
-  {
-    id: "stock-market",
-    label: "Stock Market",
-    Icon: ChartIcon,
-    items: [
       { label: "Premarket", href: "/premarket" },
       { label: "Economic Calendar", href: "/economic-calendar" },
-    ],
-  },
-  {
-    id: "personal",
-    label: "Personal",
-    Icon: UserIcon,
-    items: [
       { label: "Journal", href: "/trading" },
-      { label: "Budget", href: "/budget" },
-      { label: "To-Do", href: "/personal/todo" },
     ],
   },
   {
-    id: "admin",
-    label: "Admin",
-    Icon: WrenchIcon,
+    id: "owner",
+    label: "Owner",
+    Icon: ShieldIcon,
     devOnly: true,
     items: [
       { label: "Owner", href: "/dev/owner" },
       { label: "Admin", href: "/dev/admin" },
       { label: "Tree", href: "/dev/tree" },
+      { label: "Social Media", href: "/social-media" },
+      { label: "Changelog", href: "/changelog" },
+    ],
+  },
+  {
+    id: "backend",
+    label: "Backend",
+    Icon: WrenchIcon,
+    devOnly: true,
+    items: [
       { label: "Database", href: "/database" },
       { label: "Dev", href: "/dev" },
       { label: "Estimated Moves BE", href: "/estimated-move" },
-      { label: "Social Media", href: "/social-media" },
+      { label: "Budget", href: "/budget" },
+      { label: "To-Do", href: "/personal/todo" },
       { label: "Logs", href: "/logs" },
-      { label: "Changelog", href: "/changelog" },
     ],
   },
 ];
@@ -216,8 +201,8 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
     padding: "9px 12px",
     borderRadius: 10,
     textDecoration: "none",
-    fontSize: 13.5,
-    fontWeight: active ? 700 : 500,
+    fontSize: 15,
+    fontWeight: active ? 800 : 700,
     color: active ? "#05060A" : HOME_THEME.text,
     background: active ? HOME_THEME.cyan : "transparent",
     boxShadow: active ? "0 0 14px rgba(0,240,255,0.30)" : "none",
@@ -246,8 +231,13 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
         scrollbarWidth: "thin",
       }}
     >
+      <style>{`
+        .nav-row:not(.nav-active):hover{
+          background:rgba(255,255,255,0.07) !important;
+        }
+      `}</style>
       {/* Home */}
-      <Link href="/home" style={rowLink({ label: "Home", href: "/home" }, isActive("/home"))} onClick={closeMenu}>
+      <Link href="/home" className={`nav-row${isActive("/home") ? " nav-active" : ""}`} style={rowLink({ label: "Home", href: "/home" }, isActive("/home"))} onClick={closeMenu}>
         <HomeIcon size={18} />
         <span>Home</span>
       </Link>
@@ -267,7 +257,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
             const active = isActive(item.href);
             return (
               <div key={href} style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                <Link href={item.href} onClick={closeMenu} style={{ ...rowLink(item, active), flex: 1, paddingRight: 30 }}>
+                <Link href={item.href} onClick={closeMenu} className={`nav-row${active ? " nav-active" : ""}`} style={{ ...rowLink(item, active), flex: 1, paddingRight: 30 }}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
                 </Link>
                 <button
@@ -299,6 +289,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
           <div key={group.id} style={{ marginBottom: 2 }}>
             <button
               onClick={() => setOpenGroup((v) => (v === group.id ? null : group.id))}
+              className={`nav-row${groupActive || isOpen ? " nav-active" : ""}`}
               style={{
                 width: "100%",
                 display: "flex",
@@ -308,8 +299,8 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 borderRadius: 10,
                 cursor: "pointer",
                 color: groupActive ? HOME_THEME.cyan : HOME_THEME.text,
-                fontSize: 13.5,
-                fontWeight: groupActive ? 700 : 500,
+                fontSize: 15,
+                fontWeight: groupActive ? 800 : 700,
                 ...(groupActive || isOpen ? { background: "rgba(255,255,255,0.04)", border: `1px solid ${HOME_THEME.border}` } : { background: "transparent", border: "1px solid transparent" }),
               }}
             >
@@ -334,6 +325,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                       <Link
                         href={item.href}
                         onClick={closeMenu}
+                        className={`nav-row${active ? " nav-active" : ""}`}
                         style={{
                           flex: 1,
                           display: "flex",
@@ -342,8 +334,8 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                           paddingRight: 30,
                           borderRadius: 9,
                           textDecoration: "none",
-                          fontSize: 13,
-                          fontWeight: active ? 700 : 500,
+                          fontSize: 14.5,
+                          fontWeight: active ? 800 : 700,
                           color: active ? "#05060A" : HOME_THEME.text,
                           background: active ? HOME_THEME.cyan : "transparent",
                           boxShadow: active ? "0 0 14px rgba(0,240,255,0.30)" : "none",
