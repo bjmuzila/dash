@@ -1652,17 +1652,6 @@ export default function OwnerDashboard() {
           border-bottom: 2px solid rgba(255,0,170,0.70); border-right: 2px solid rgba(255,0,170,0.70);
           border-bottom-right-radius: 10px; pointer-events: none; z-index: 2;
         }
-        [data-owner-cyber] [style*="rgba(13,17,25,0.45)"]:not([data-owner-toolbar]):hover,
-        [data-owner-cyber] [style*="rgba(13, 17, 25, 0.45)"]:not([data-owner-toolbar]):hover {
-          border-color: rgba(0,240,255,0.6) !important;
-          transform: translateY(-1px);
-          box-shadow:
-            0 0 0 1px rgba(0,240,255,0.18),
-            0 0 30px rgba(0,240,255,0.28),
-            0 0 60px rgba(255,0,170,0.10),
-            inset 0 1px 0 rgba(255,255,255,0.10) !important;
-        }
-
         /* ── Header / tab bar: terminal command-bar look ── */
         [data-owner-cyber] [data-owner-toolbar] {
           background: linear-gradient(180deg, rgba(8,14,24,0.92), rgba(5,9,16,0.92)) !important;

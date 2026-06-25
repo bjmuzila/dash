@@ -200,30 +200,21 @@ export default function GlobalToolbar() {
         </button>
       </div>
 
-      {/* Flexible spacer — keeps the left controls and Notes apart while the
-          ticker is absolutely centered over the whole toolbar (below). */}
-      <div style={{ flex: 1, minWidth: 0 }} />
-
-      {/* ── Live ticker (VIX / ESU / SPX / NQU + dropdown) — centered on the
-          full toolbar via absolute positioning so it isn't pushed off-center by
-          the asymmetric left/right controls. pointerEvents re-enabled on the
-          ticker itself so the NQU dropdown stays clickable. ── */}
+      {/* ── Live ticker (VIX / ESU / SPX / NQU + dropdown) — flows inline as a
+          flex child so it can never overlap the search box. It takes the
+          remaining space, centers its content, and clips on narrow screens
+          instead of spilling over the left controls. ── */}
       <div
         style={{
-          position: "absolute",
-          left: "50%",
-          top: 0,
-          bottom: 0,
-          transform: "translateX(-50%)",
+          flex: 1,
+          minWidth: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          width: "60%",
           overflow: "hidden",
-          pointerEvents: "none",
         }}
       >
-        <div style={{ pointerEvents: "auto", width: "100%", minWidth: 0, display: "flex", justifyContent: "center" }}>
+        <div style={{ minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden" }}>
           <ToolbarTicker />
         </div>
       </div>
