@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CB Edge - Home (Full Control style mockup)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  :root{
+    --ink:#EDEBF7; --muted:#9A93B8; --faint:#675F86;
+    --vio:#7C5CFF; --vio2:#9b7bff; --blue:#4f8bff; --green:#3FE0A5; --red:#FF6B7A; --amber:#f0b429;
+    --panel:rgba(26,20,46,.78); --panel-brd:rgba(255,255,255,.10);
+    --field:rgba(10,7,22,.6); --field-brd:rgba(255,255,255,.12);
+  }
+  html,body{background:#07040f;}
+  body{font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; font-size:13px;}
+  .poster{
+    position:relative; width:735px; min-height:980px; margin:0 auto;
+    background:
+      radial-gradient(680px 360px at 50% 9%, rgba(124,92,255,.30), transparent 62%),
+      radial-gradient(520px 420px at 88% 64%, rgba(79,139,255,.10), transparent 60%),
+      radial-gradient(520px 420px at 10% 70%, rgba(124,92,255,.10), transparent 60%),
+      linear-gradient(180deg,#0c0718 0%, #090511 60%, #060309 100%);
+    overflow:hidden; padding:42px 26px 40px;
+  }
+  .headline{ text-align:center; position:relative; z-index:5; }
+  .headline h1{ font-size:78px; line-height:.96; font-weight:800; letter-spacing:-2px; }
+  .headline h1 .g{
+    background:linear-gradient(95deg,#9b7bff 0%, #6c8bff 55%, #4f8bff 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .headline .sub{ margin-top:8px; font-size:25px; font-weight:300; color:#C9C3E6; letter-spacing:.3px; }
+  .headline .rule{
+    margin:16px auto 0; width:190px; height:3px; border-radius:3px;
+    background:linear-gradient(90deg,transparent,#7C5CFF 35%, #9b7bff 50%, #7C5CFF 65%,transparent);
+    box-shadow:0 0 22px rgba(124,92,255,.8);
+  }
+  .stage{ position:relative; height:660px; margin-top:14px; z-index:3; }
+
+  /* ghost real-app behind */
+  .bgapp{
+    position:absolute; left:16px; right:16px; top:14px; bottom:6px;
+    background:linear-gradient(160deg,#16112b,#0d0a1c);
+    border:1px solid rgba(255,255,255,.06); border-radius:18px; opacity:.55; overflow:hidden; display:flex;
+  }
+  .bgapp .gside{ width:120px; border-right:1px solid rgba(255,255,255,.05); padding:12px 10px; }
+  .bgapp .gside .gl{ font-size:13px; font-weight:800; color:rgba(255,255,255,.28); }
+  .bgapp .gside .gn{ height:22px; border-radius:6px; background:rgba(255,255,255,.04); margin-top:8px; }
+  .bgapp .gside .gn.on{ background:rgba(124,92,255,.18); }
+  .bgapp .gmain{ flex:1; padding:14px; position:relative; }
+  .bgapp .gstrip{ display:flex; gap:18px; }
+  .bgapp .gstrip div{ height:26px; width:84px; border-radius:6px; background:rgba(255,255,255,.04); }
+  .bgapp .gchart{ position:absolute; left:14px; top:60px; right:200px; height:180px; border:1px solid rgba(255,255,255,.05); border-radius:12px; background:rgba(255,255,255,.02); }
+  .bgapp .gheat{ position:absolute; right:14px; top:60px; width:178px; bottom:14px; border:1px solid rgba(255,255,255,.05); border-radius:12px; background:rgba(255,255,255,.02); }
+  .bgapp .gecon{ position:absolute; left:14px; top:260px; right:200px; bottom:14px; border:1px solid rgba(255,255,255,.05); border-radius:12px; background:rgba(255,255,255,.02); }
+
+  .panel{
+    position:absolute; z-index:4; background:var(--panel); border:1px solid var(--panel-brd);
+    border-radius:18px; backdrop-filter:blur(18px);
+    box-shadow:0 30px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+    padding:16px 18px;
+  }
+  .phead{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .phead .pic{ width:26px;height:26px;border-radius:8px; display:flex;align-items:center;justify-content:center; font-size:13px;
+    background:linear-gradient(135deg,rgba(124,92,255,.5),rgba(124,92,255,.15)); color:#cdbcff; }
+  .phead .pt{ font-size:14px; font-weight:600; }
+  .phead .grip{ margin-left:auto; color:var(--faint); letter-spacing:2px; font-size:13px; }
+  .green{color:var(--green);} .red{color:var(--red);} .amber{color:var(--amber);} .blue{color:#9bb6ff;} .vio{color:var(--vio2);}
+
+  /* NET GEX panel (top-left) */
+  #gex{ left:36px; top:30px; width:382px; }
+  .gtools{ display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; }
+  .tb{ background:var(--field); border:1px solid var(--field-brd); border-radius:6px; font-size:8px; color:var(--muted); padding:4px 6px; text-align:center; line-height:1.2; }
+  .tb.on{ background:rgba(124,92,255,.30); border-color:rgba(124,92,255,.5); color:#fff; }
+  .legend{ font-size:8px; display:flex; gap:12px; margin-bottom:4px; }
+
+  /* Levels panel (mid-left) */
+  #levels{ left:120px; top:308px; width:248px; }
+  .wall{ margin-bottom:11px; }
+  .wall .top{ display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-bottom:5px; }
+  .wall .bar{ height:7px; border-radius:6px; background:rgba(255,255,255,.08); overflow:hidden; }
+  .wall .fill{ height:100%; border-radius:6px; }
+
+  /* Heatmap panel (right) */
+  #heat{ right:30px; top:96px; width:236px; }
+  table.ht{ width:100%; border-collapse:collapse; font-size:9px; }
+  .ht th{ text-align:left; color:var(--faint); font-weight:600; font-size:8px; padding:4px 3px; border-bottom:1px solid rgba(255,255,255,.10); }
+  .ht td{ padding:3px 3px; }
+  .ht .strike{ color:#d8d0f5; }
+  .badge{ display:inline-block; width:15px; text-align:center; font-size:6.5px; color:#fff; border-radius:3px; padding:1px 0; margin-right:3px; }
+  .b-call{ background:#c2410c; } .b-put{ background:#1f6f43; }
+  .cell-blue{ background:rgba(124,92,255,.45); color:#e3dcff; border-radius:3px; padding:1px 4px; }
+  .row-amber{ background:rgba(240,180,41,.13); }
+
+  .features{ position:relative; z-index:5; display:flex; justify-content:center; gap:46px; margin-top:6px; }
+  .feat{ text-align:center; width:120px; }
+  .feat .ico{ width:50px;height:50px;border-radius:14px; margin:0 auto 10px; display:flex;align-items:center;justify-content:center; font-size:20px; color:#fff; box-shadow:0 10px 24px rgba(0,0,0,.45); }
+  .feat .t{ font-size:13.5px; font-weight:600; }
+  .feat .s{ font-size:11.5px; color:var(--faint); margin-top:2px; }
+  .i-vio{ background:linear-gradient(135deg,#7C5CFF,#5b3fd6);}
+  .i-blue{ background:linear-gradient(135deg,#3f7bff,#2b5fd6);}
+  .i-green{ background:linear-gradient(135deg,#2fbd84,#1d9e6f);}
+  .i-amber{ background:linear-gradient(135deg,#d98a2b,#bd6f17);}
+  .badge-mock{ position:absolute; top:14px; right:14px; z-index:30; font-size:10px; letter-spacing:1px; text-transform:uppercase; font-weight:700; color:#0a0612; background:#F4D35E; padding:5px 11px; border-radius:999px; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <div class="badge-mock">Mockup - not live</div>
+
+  <div class="headline">
+    <h1>Your <span class="g">Edge</span></h1>
+    <div class="sub">Before the Open</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="stage">
+    <!-- ghost real home page behind -->
+    <div class="bgapp">
+      <div class="gside">
+        <div class="gl">CB Edge</div>
+        <div class="gn on"></div><div class="gn"></div><div class="gn"></div><div class="gn"></div><div class="gn"></div>
+      </div>
+      <div class="gmain">
+        <div class="gstrip"><div></div><div></div><div></div><div></div></div>
+        <div class="gchart"></div>
+        <div class="gheat"></div>
+        <div class="gecon"></div>
+      </div>
+    </div>
+
+    <!-- NET GEX panel -->
+    <div class="panel" id="gex">
+      <div class="phead">
+        <div class="pic">&#128202;</div>
+        <div class="pt">Net GEX</div>
+        <div class="grip">::</div>
+      </div>
+      <div class="gtools">
+        <div class="tb">Wed 6/24</div><div class="tb on">Thu 6/25</div>
+        <div class="tb on">Net GEX</div><div class="tb">Call/Put</div><div class="tb on">Vol Only</div>
+        <div class="tb">+ DEX</div><div class="tb">+ Flip</div><div class="tb on">&#8635; Now</div>
+      </div>
+      <div class="legend"><span style="color:var(--vio2);">&#9632; + GEX</span><span style="color:var(--amber);">&#9632; - GEX</span><span style="margin-left:auto;color:var(--faint);">SPX 7409.95</span></div>
+      <svg width="100%" height="138" viewBox="0 0 344 138" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="ba" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f0b429"/><stop offset="100%" stop-color="#b97e0a"/></linearGradient>
+          <linearGradient id="bb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9b7bff"/><stop offset="100%" stop-color="#5b3fd6"/></linearGradient>
+        </defs>
+        <line x1="0" y1="78" x2="344" y2="78" stroke="#ffffff" stroke-opacity=".10" stroke-dasharray="3 4"/>
+        <line x1="188" y1="0" x2="188" y2="138" stroke="#ffffff" stroke-opacity=".10" stroke-dasharray="3 4"/>
+        <g>
+          <rect x="8" y="78" width="6" height="30" fill="url(#ba)"/><rect x="17" y="78" width="6" height="40" fill="url(#ba)"/>
+          <rect x="26" y="78" width="6" height="34" fill="url(#ba)"/><rect x="35" y="78" width="6" height="48" fill="url(#ba)"/>
+          <rect x="44" y="78" width="6" height="56" fill="url(#ba)"/><rect x="53" y="78" width="6" height="40" fill="url(#ba)"/>
+          <rect x="62" y="78" width="6" height="46" fill="url(#ba)"/><rect x="71" y="78" width="6" height="36" fill="url(#ba)"/>
+          <rect x="80" y="78" width="6" height="26" fill="url(#ba)"/><rect x="89" y="78" width="6" height="30" fill="url(#ba)"/>
+          <rect x="98" y="78" width="6" height="22" fill="url(#ba)"/><rect x="107" y="78" width="6" height="16" fill="url(#ba)"/>
+          <rect x="116" y="78" width="6" height="12" fill="url(#ba)"/><rect x="125" y="78" width="6" height="8" fill="url(#ba)"/>
+          <rect x="138" y="52" width="6" height="26" fill="url(#bb)"/><rect x="147" y="42" width="6" height="36" fill="url(#bb)"/>
+          <rect x="156" y="30" width="6" height="48" fill="url(#bb)"/><rect x="165" y="40" width="6" height="38" fill="url(#bb)"/>
+          <rect x="174" y="48" width="6" height="30" fill="url(#bb)"/><rect x="183" y="38" width="6" height="40" fill="url(#bb)"/>
+          <rect x="196" y="46" width="6" height="32" fill="url(#bb)"/><rect x="205" y="54" width="6" height="24" fill="url(#bb)"/>
+          <rect x="214" y="44" width="6" height="34" fill="url(#bb)"/><rect x="223" y="58" width="6" height="20" fill="url(#bb)"/>
+          <rect x="232" y="52" width="6" height="26" fill="url(#bb)"/><rect x="241" y="60" width="6" height="18" fill="url(#bb)"/>
+          <rect x="250" y="62" width="6" height="16" fill="url(#bb)"/><rect x="259" y="66" width="6" height="12" fill="url(#bb)"/>
+          <rect x="272" y="50" width="6" height="28" fill="url(#bb)"/><rect x="281" y="64" width="6" height="14" fill="url(#bb)"/>
+          <rect x="290" y="66" width="6" height="12" fill="url(#bb)"/><rect x="299" y="68" width="6" height="10" fill="url(#bb)"/>
+          <rect x="312" y="66" width="6" height="12" fill="url(#bb)"/><rect x="321" y="70" width="6" height="8" fill="url(#bb)"/>
+        </g>
+        <rect x="20" y="116" width="52" height="12" rx="3" fill="#3a2f08"/><text x="46" y="125" text-anchor="middle" font-size="7.5" fill="#f0b429">MVC 7,320</text>
+      </svg>
+    </div>
+
+    <!-- Levels panel -->
+    <div class="panel" id="levels">
+      <div class="phead">
+        <div class="pic">&#9650;</div>
+        <div class="pt">Key Levels</div>
+        <div class="grip">::</div>
+      </div>
+      <div class="wall">
+        <div class="top"><span>Call wall · 7,425</span><span class="green">$1.45B</span></div>
+        <div class="bar"><div class="fill" style="width:82%;background:linear-gradient(90deg,#54E6AC,#2bd39a);"></div></div>
+      </div>
+      <div class="wall">
+        <div class="top"><span>Put wall · 7,320</span><span class="red">$1.36B</span></div>
+        <div class="bar"><div class="fill" style="width:74%;background:linear-gradient(90deg,#FF6B7A,#d8485a);"></div></div>
+      </div>
+      <div class="wall">
+        <div class="top"><span>Flip · 7,422</span><span class="amber">pivot</span></div>
+        <div class="bar"><div class="fill" style="width:55%;background:linear-gradient(90deg,#f0b429,#b97e0a);"></div></div>
+      </div>
+      <div class="wall" style="margin-bottom:0;">
+        <div class="top"><span>MVC · 7,320</span><span class="vio">magnet</span></div>
+        <div class="bar"><div class="fill" style="width:48%;background:linear-gradient(90deg,#9b7bff,#6C5CE7);"></div></div>
+      </div>
+    </div>
+
+    <!-- Heatmap panel -->
+    <div class="panel" id="heat">
+      <div class="phead">
+        <div class="pic">&#9707;</div>
+        <div class="pt">Live Heatmap</div>
+        <div class="grip">::</div>
+      </div>
+      <table class="ht">
+        <tr><th>STRIKE</th><th>NET GEX</th><th>VOL GEX</th></tr>
+        <tr><td class="strike"><span class="badge b-call">#4</span>7,500</td><td class="green">+$34.1M</td><td><span class="cell-blue">+$862M</span></td></tr>
+        <tr><td class="strike"><span class="badge b-call">#3</span>7,485</td><td class="green">+$37.9M</td><td class="green">+$347M</td></tr>
+        <tr><td class="strike"><span class="badge b-put">#2</span>7,460</td><td class="green">+$50.3M</td><td class="green">+$792M</td></tr>
+        <tr><td class="strike"><span class="badge b-call">#3</span>7,450</td><td class="red">-$321M</td><td><span class="cell-blue">+$2.16B</span></td></tr>
+        <tr><td class="strike"><span class="badge b-put">#1</span>7,425</td><td class="green">+$56.8M</td><td><span class="cell-blue">+$1.45B</span></td></tr>
+        <tr class="row-amber"><td class="strike amber">7,410</td><td class="red">-$27.3M</td><td><span class="cell-blue">+$640M</span></td></tr>
+        <tr><td class="strike">7,400</td><td class="red">-$41.5M</td><td class="green">+$1.06B</td></tr>
+        <tr><td class="strike"><span class="badge b-put">#5</span>7,385</td><td class="green">+$31.7M</td><td class="green">+$51.5M</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="features">
+    <div class="feat">
+      <div class="ico i-vio">&#9672;</div>
+      <div class="t">Live GEX</div>
+      <div class="s">Real-time walls</div>
+    </div>
+    <div class="feat">
+      <div class="ico i-blue">&#9636;</div>
+      <div class="t">Heatmap</div>
+      <div class="s">Per-strike</div>
+    </div>
+    <div class="feat">
+      <div class="ico i-green">&#9678;</div>
+      <div class="t">Confidence</div>
+      <div class="s">Scored 0-100</div>
+    </div>
+    <div class="feat">
+      <div class="ico i-amber">&#10148;</div>
+      <div class="t">Signals</div>
+      <div class="s">Live econ feed</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

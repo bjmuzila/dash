@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CB Edge — GEX Social Cards</title>
+<style>
+  :root{
+    --bg:#05060a; --surface:#0d1119; --surface2:#161b22; --surface3:#21262d;
+    --border:rgba(255,255,255,0.10); --border2:rgba(255,255,255,0.18);
+    --accent:#00f0ff; --amber:#f97316; --red:#ef4444; --green:#10b981;
+    --text:#ffffff; --muted:#9aa4b2;
+    --font:Arial,"Helvetica Neue",sans-serif;
+  }
+  *{box-sizing:border-box;font-family:var(--font);}
+  html,body{margin:0;background:#0a0c12;color:var(--text);}
+  .app{max-width:1720px;margin:0 auto;padding:28px 24px 80px;}
+
+  /* ── toolbar ─────────────────────────────────────────────── */
+  .bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;
+       border:1px solid var(--border);background:var(--surface);
+       border-radius:10px;padding:14px 16px;margin-bottom:24px;}
+  .bar h1{font-size:16px;margin:0;letter-spacing:.02em;font-weight:800;}
+  .bar .spacer{flex:1;}
+  .bar label{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-right:6px;}
+  .bar input{background:var(--bg);color:var(--text);border:1px solid var(--border);
+       border-radius:6px;padding:7px 9px;font-size:13px;min-width:120px;}
+  .bar button{font-size:12px;font-weight:700;letter-spacing:.03em;cursor:pointer;
+       padding:9px 14px;border-radius:6px;border:1px solid var(--border);
+       background:var(--surface3);color:var(--text);transition:.12s;}
+  .bar button:hover{border-color:var(--accent);}
+  .bar button.primary{background:var(--accent);color:#05060a;border-color:var(--accent);}
+  .hint{font-size:12px;color:var(--muted);margin:0 0 22px;line-height:1.5;}
+  .hint b{color:var(--text);}
+
+  /* ── the cards (1600x900 capture targets) ───────────────── */
+  .stage{display:flex;flex-direction:column;gap:34px;align-items:center;}
+  .cardwrap{display:flex;flex-direction:column;gap:10px;align-items:center;}
+  .cardwrap .caplabel{font-size:12px;color:var(--muted);letter-spacing:.04em;}
+  .cardwrap .cardbtns{display:flex;gap:8px;}
+  .cardwrap .cardbtns button{font-size:11px;font-weight:700;cursor:pointer;padding:7px 12px;
+       border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--text);}
+  .cardwrap .cardbtns button:hover{border-color:var(--accent);}
+
+  /* fixed export dimensions — DO NOT make responsive (capture relies on it) */
+  .card{
+    width:1600px;height:900px;background:var(--bg);
+    border:1px solid var(--border);border-radius:18px;overflow:hidden;
+    display:flex;flex-direction:column;position:relative;
+    box-shadow:0 0 0 1px rgba(0,240,255,.04), 0 30px 80px rgba(0,0,0,.6);
+  }
+  /* subtle top accent glow */
+  .card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,var(--accent),rgba(0,240,255,0) 60%);opacity:.8;}
+
+  .c-head{display:flex;align-items:center;gap:18px;padding:30px 40px 22px;}
+  .c-logo{width:42px;height:42px;border-radius:9px;border:1px solid var(--border2);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+    background:linear-gradient(135deg,rgba(0,240,255,.18),rgba(0,240,255,0));}
+  .c-logo svg{width:24px;height:24px;}
+  .c-titles{display:flex;flex-direction:column;gap:3px;}
+  .c-ticker{font-size:30px;font-weight:800;letter-spacing:.02em;line-height:1;}
+  .c-ticker .accent{color:var(--accent);}
+  .c-sub{font-size:13px;letter-spacing:.22em;color:var(--muted);font-weight:700;text-transform:uppercase;}
+  .c-headright{margin-left:auto;text-align:right;display:flex;flex-direction:column;gap:4px;}
+  .c-date{font-size:18px;font-weight:700;}
+  .c-time{font-size:13px;color:var(--muted);letter-spacing:.04em;}
+
+  /* image slot */
+  .c-imgwrap{flex:1;margin:0 40px;border:1px solid var(--border);border-radius:12px;
+    background:#080a10;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;}
+  .c-imgwrap img{width:100%;height:100%;object-fit:contain;display:block;}
+  .c-drop{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;color:var(--muted);font-size:16px;text-align:center;cursor:pointer;border:2px dashed var(--border2);
+    border-radius:12px;margin:10px;transition:.15s;}
+  .c-drop:hover{border-color:var(--accent);color:var(--text);background:rgba(0,240,255,.03);}
+  .c-drop .big{font-size:20px;font-weight:700;color:var(--text);}
+  .c-drop.hide{display:none;}
+  .c-ocr{position:absolute;left:14px;bottom:14px;z-index:5;font-size:12px;font-weight:700;
+    letter-spacing:.03em;padding:6px 11px;border-radius:6px;border:1px solid var(--border2);
+    background:rgba(5,6,10,.82);color:var(--muted);display:none;align-items:center;gap:7px;}
+  .c-ocr.show{display:inline-flex;}
+  .c-ocr.busy{color:var(--accent);border-color:rgba(0,240,255,.4);}
+  .c-ocr.ok{color:var(--green);border-color:rgba(16,185,129,.4);}
+  .c-ocr.warn{color:var(--amber);border-color:rgba(249,115,22,.4);}
+  .c-ocr .spin{width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;
+    border-radius:50%;animation:ocrspin .7s linear infinite;}
+  @keyframes ocrspin{to{transform:rotate(360deg);}}
+  .c-ocr button{font:inherit;font-size:11px;cursor:pointer;background:transparent;color:var(--accent);
+    border:none;text-decoration:underline;padding:0;margin-left:4px;}
+
+  /* levels callout strip */
+  .c-strip{display:flex;align-items:stretch;gap:0;padding:18px 40px 26px;}
+  .c-pill{flex:1;padding:0 22px;display:flex;flex-direction:column;gap:6px;justify-content:center;
+    border-right:1px solid var(--border);}
+  .c-pill:first-child{padding-left:0;}
+  .c-pill:last-child{border-right:none;padding-right:0;}
+  .c-pill .k{font-size:12px;letter-spacing:.10em;text-transform:uppercase;color:var(--muted);font-weight:700;}
+  .c-pill .v{font-size:26px;font-weight:800;letter-spacing:.01em;line-height:1;}
+  .c-pill .v.red{color:var(--red);} .c-pill .v.green{color:var(--green);}
+  .c-pill .v.amber{color:var(--amber);} .c-pill .v.cyan{color:var(--accent);}
+  .c-pill .v small{font-size:14px;font-weight:700;color:var(--muted);margin-left:4px;}
+
+  /* regime badge sits in head-right area when negative/positive */
+  .c-regime{display:inline-flex;align-items:center;gap:7px;align-self:flex-end;
+    font-size:12px;font-weight:800;letter-spacing:.05em;padding:6px 11px;border-radius:6px;border:1px solid;}
+  .c-regime.neg{color:var(--red);border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.08);}
+  .c-regime.pos{color:var(--green);border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.08);}
+  .c-regime i{width:8px;height:8px;border-radius:50%;background:currentColor;}
+
+  .c-foot{position:absolute;bottom:18px;left:40px;right:40px;display:flex;align-items:center;
+    justify-content:space-between;font-size:11px;color:var(--muted);letter-spacing:.05em;}
+  .c-foot .brand{font-weight:800;color:var(--text);font-size:13px;letter-spacing:.04em;}
+
+  @media (max-width:1680px){
+    /* scale the whole card down to fit the viewport, but capture still uses true px */
+    .card{transform:scale(var(--fit,1));transform-origin:top center;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <h1>CB Edge · GEX Social Cards</h1>
+    <div class="spacer"></div>
+    <label>Date</label><input id="f-date" value="Jun 24, 2026" />
+    <label>Time</label><input id="f-time" value="15:33 ET" style="min-width:90px" />
+    <button id="btn-png-all" class="primary">Download both PNGs</button>
+  </div>
+
+  <p class="hint">
+    Drop your screenshot into each card's image area (or click it to pick a file) — the capture you pasted in chat.
+    Card 1 wants the <b>NET GEX</b> bar chart, Card 2 wants the <b>LIVE GEX HEATMAP</b>.
+    On drop, the page <b>auto-reads the levels from the image</b> (OCR) and fills the callout strip — spot/MVC from the chart, ATM strike + largest negative GEX from the heatmap.
+    <b>OCR can misread dense text, so verify each value</b>; every field is click-to-edit and there's a Re-run link on the badge.
+    Then <b>Download both PNGs</b> for clean 1600×900 images. (First OCR run downloads the engine — a few seconds.)
+  </p>
+
+  <div class="stage" id="stage">
+
+    <!-- ───────── CARD 1 · NET GEX CHART ───────── -->
+    <div class="cardwrap">
+      <div class="caplabel">Card 1 — NET GEX chart · 1600 × 900</div>
+      <div class="card" id="card1">
+        <div class="c-head">
+          <div class="c-logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#00f0ff" stroke-width="2.2" stroke-linecap="round">
+              <path d="M3 3v18h18"/><rect x="6" y="11" width="3" height="7" fill="#00f0ff" stroke="none"/>
+              <rect x="11" y="7" width="3" height="11" fill="#f97316" stroke="none"/>
+              <rect x="16" y="13" width="3" height="5" fill="#00f0ff" stroke="none"/>
+            </svg>
+          </div>
+          <div class="c-titles">
+            <div class="c-ticker"><span class="accent">SPX</span> · NET GEX</div>
+            <div class="c-sub">Gamma Exposure by Strike</div>
+          </div>
+          <div class="c-headright">
+            <div class="c-date" data-bind="date">Jun 24, 2026</div>
+            <div class="c-time" data-bind="time">15:33 ET</div>
+            <span class="c-regime neg" contenteditable="true"><i></i>NEGATIVE GAMMA</span>
+          </div>
+        </div>
+
+        <div class="c-imgwrap" data-slot="1">
+          <div class="c-drop" data-for="1">
+            <div class="big">Drop NET GEX chart here</div>
+            <div>or click to choose a file</div>
+          </div>
+          <div class="c-ocr" data-ocr="1"></div>
+        </div>
+
+        <div class="c-strip">
+          <div class="c-pill"><span class="k">SPX Spot</span><span class="v cyan" contenteditable="true" data-fld="c1-spot">7,346.55</span></div>
+          <div class="c-pill"><span class="k">MVC</span><span class="v amber" contenteditable="true" data-fld="c1-mvc">7,330</span></div>
+          <div class="c-pill"><span class="k">Net GEX</span><span class="v red" contenteditable="true" data-fld="c1-gex">−$1.0B<small>peak</small></span></div>
+          <div class="c-pill"><span class="k">Range</span><span class="v" contenteditable="true" data-fld="c1-range">7,250–7,450</span></div>
+        </div>
+
+        <div class="c-foot">
+          <span class="brand">CB Edge</span>
+          <span>Informational only — not financial advice.</span>
+        </div>
+      </div>
+      <div class="cardbtns"><button data-png="card1">Download this card (PNG)</button></div>
+    </div>
+
+    <!-- ───────── CARD 2 · GEX HEATMAP ───────── -->
+    <div class="cardwrap">
+      <div class="caplabel">Card 2 — LIVE GEX heatmap · 1600 × 900</div>
+      <div class="card" id="card2">
+        <div class="c-head">
+          <div class="c-logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#00f0ff" stroke-width="2.2">
+              <rect x="3" y="3" width="7" height="7" rx="1" fill="#ef4444" stroke="none"/>
+              <rect x="14" y="3" width="7" height="7" rx="1" fill="#7f1d1d" stroke="none"/>
+              <rect x="3" y="14" width="7" height="7" rx="1" fill="#0e7490" stroke="none"/>
+              <rect x="14" y="14" width="7" height="7" rx="1" fill="#00f0ff" stroke="none"/>
+            </svg>
+          </div>
+          <div class="c-titles">
+            <div class="c-ticker"><span class="accent">SPX</span> · GEX HEATMAP</div>
+            <div class="c-sub">Net GEX · Vol GEX · DEX · Net VEX</div>
+          </div>
+          <div class="c-headright">
+            <div class="c-date" data-bind="date">Jun 24, 2026</div>
+            <div class="c-time" data-bind="time">15:33 ET</div>
+            <span class="c-regime neg" contenteditable="true"><i></i>0DTE · NEG GAMMA</span>
+          </div>
+        </div>
+
+        <div class="c-imgwrap" data-slot="2">
+          <div class="c-drop" data-for="2">
+            <div class="big">Drop GEX heatmap here</div>
+            <div>or click to choose a file</div>
+          </div>
+          <div class="c-ocr" data-ocr="2"></div>
+        </div>
+
+        <div class="c-strip">
+          <div class="c-pill"><span class="k">ATM Strike</span><span class="v cyan" contenteditable="true" data-fld="c2-atm">7,345</span></div>
+          <div class="c-pill"><span class="k">Largest Neg GEX</span><span class="v red" contenteditable="true" data-fld="c2-gex">−$1.26B<small>7,330</small></span></div>
+          <div class="c-pill"><span class="k">Net VEX Flip</span><span class="v green" contenteditable="true" data-fld="c2-vex">+ below 7,330</span></div>
+          <div class="c-pill"><span class="k">DEX</span><span class="v amber" contenteditable="true" data-fld="c2-dex">Neg thru body</span></div>
+        </div>
+
+        <div class="c-foot">
+          <span class="brand">CB Edge</span>
+          <span>Informational only — not financial advice.</span>
+        </div>
+      </div>
+      <div class="cardbtns"><button data-png="card2">Download this card (PNG)</button></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- html2canvas for PNG export · Tesseract.js for screenshot OCR -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js"></script>
+<script>
+(function(){
+  // ── fit cards into the viewport without breaking true-pixel export ──
+  function fit(){
+    var avail = Math.min(window.innerWidth - 60, 1600);
+    var s = Math.min(1, avail/1600);
+    document.querySelectorAll('.card').forEach(function(c){ c.style.setProperty('--fit', s); });
+  }
+  window.addEventListener('resize', fit); fit();
+
+  // ── bound header fields (date/time) ──
+  function bind(){
+    var d = document.getElementById('f-date').value;
+    var t = document.getElementById('f-time').value;
+    document.querySelectorAll('[data-bind="date"]').forEach(function(e){ e.textContent = d; });
+    document.querySelectorAll('[data-bind="time"]').forEach(function(e){ e.textContent = t; });
+  }
+  document.getElementById('f-date').addEventListener('input', bind);
+  document.getElementById('f-time').addEventListener('input', bind);
+  bind();
+
+  // ── image slots: drag-drop + click-to-pick ──
+  function loadInto(slot, file){
+    if(!file || !file.type.startsWith('image/')) return;
+    var rd = new FileReader();
+    rd.onload = function(e){
+      var wrap = document.querySelector('.c-imgwrap[data-slot="'+slot+'"]');
+      wrap.querySelectorAll('img').forEach(function(n){n.remove();});
+      var img = new Image(); img.src = e.target.result; wrap.appendChild(img);
+      var drop = wrap.querySelector('.c-drop'); if(drop) drop.classList.add('hide');
+      runOCR(slot, e.target.result);   // auto-read levels from this capture
+    };
+    rd.readAsDataURL(file);
+  }
+  document.querySelectorAll('.c-imgwrap').forEach(function(wrap){
+    var slot = wrap.getAttribute('data-slot');
+    wrap.addEventListener('dragover', function(ev){ ev.preventDefault(); });
+    wrap.addEventListener('drop', function(ev){
+      ev.preventDefault();
+      if(ev.dataTransfer.files && ev.dataTransfer.files[0]) loadInto(slot, ev.dataTransfer.files[0]);
+    });
+    wrap.addEventListener('click', function(){
+      var inp = document.createElement('input'); inp.type='file'; inp.accept='image/*';
+      inp.onchange = function(){ if(inp.files[0]) loadInto(slot, inp.files[0]); };
+      inp.click();
+    });
+  });
+
+  // paste support: paste an image while hovering nothing -> fills first empty slot
+  window.addEventListener('paste', function(ev){
+    var items = ev.clipboardData && ev.clipboardData.items; if(!items) return;
+    for(var i=0;i<items.length;i++){
+      if(items[i].type.indexOf('image')===0){
+        var f = items[i].getAsFile();
+        var empty = document.querySelector('.c-imgwrap:not(:has(img))');
+        var slot = empty ? empty.getAttribute('data-slot') : '1';
+        loadInto(slot, f); break;
+      }
+    }
+  });
+
+  // ── PNG export ──
+  async function exportCard(id){
+    var node = document.getElementById(id);
+    var prev = node.style.transform; node.style.transform='none'; // capture at true 1600x900
+    var canvas = await html2canvas(node, {backgroundColor:'#05060a', scale:2, useCORS:true, logging:false, width:1600, height:900});
+    node.style.transform = prev;
+    return new Promise(function(res){ canvas.toBlob(function(b){ res(b); }, 'image/png'); });
+  }
+  function save(blob, name){
+    var url = URL.createObjectURL(blob); var a=document.createElement('a');
+    a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);}, 2000);
+  }
+  document.querySelectorAll('[data-png]').forEach(function(btn){
+    btn.addEventListener('click', async function(){
+      var id = btn.getAttribute('data-png');
+      btn.textContent='Rendering…';
+      var blob = await exportCard(id);
+      save(blob, 'cb-edge-'+(id==='card1'?'netgex':'heatmap')+'-2026-06-24.png');
+      btn.textContent='Saved ✓'; setTimeout(function(){btn.textContent='Download this card (PNG)';},1500);
+    });
+  });
+  document.getElementById('btn-png-all').addEventListener('click', async function(){
+    var b1 = await exportCard('card1'); save(b1,'cb-edge-netgex-2026-06-24.png');
+    await new Promise(r=>setTimeout(r,400));
+    var b2 = await exportCard('card2'); save(b2,'cb-edge-heatmap-2026-06-24.png');
+  });
+
+  /* ───────────────────────── OCR auto-fill ─────────────────────────
+     On image drop we OCR the capture (Tesseract.js) and fill the levels
+     strip for that card. Chart card → SPX spot + MVC. Heatmap card → ATM
+     strike + largest negative Net GEX (and its strike). Misreads are easy
+     to correct: every field stays click-to-edit, and there's a re-run link. */
+  var lastDataUrl = {1:null, 2:null};
+
+  function setField(key, val){
+    var el = document.querySelector('[data-fld="'+key+'"]');
+    if(el && val != null && val !== '') el.textContent = val;
+  }
+  function ocrStatus(slot, cls, html){
+    var box = document.querySelector('[data-ocr="'+slot+'"]');
+    if(!box) return;
+    box.className = 'c-ocr show ' + cls;
+    box.innerHTML = html;
+    var btn = box.querySelector('button');
+    if(btn) btn.addEventListener('click', function(){ if(lastDataUrl[slot]) runOCR(slot, lastDataUrl[slot]); });
+  }
+
+  // Upscale the capture before OCR — small dashboard text reads far better at 2x.
+  function upscale(dataUrl){
+    return new Promise(function(res){
+      var im = new Image();
+      im.onload = function(){
+        var s = im.naturalWidth < 1400 ? 2 : 1;
+        var cv = document.createElement('canvas');
+        cv.width = im.naturalWidth*s; cv.height = im.naturalHeight*s;
+        var cx = cv.getContext('2d'); cx.imageSmoothingEnabled = true;
+        cx.drawImage(im, 0, 0, cv.width, cv.height);
+        res(cv);
+      };
+      im.onerror = function(){ res(null); };
+      im.src = dataUrl;
+    });
+  }
+
+  // money magnitudes like -1.26B / -$812.57M (keep the decimal)
+  function magNum(s){ return parseFloat(String(s).replace(/[^0-9.\-]/g,'')); }
+  function fmtStrike(n){ return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : null; }
+
+  // Strike token → integer. The dashboard renders strikes with a dot-thousands
+  // separator ("7.330"), so a naive parseFloat would give 7.33 — normalize all
+  // of "7.330" / "7,330" / "7345" / "7,344.05" to 7330 / 7345 / 7344.
+  function strikeNum(tok){
+    var t = String(tok).trim();
+    var m  = t.match(/^([0-9]{1,2})[.,]([0-9]{3})$/);                       if(m)  return parseInt(m[1]+m[2],10);
+    var m2 = t.match(/^([0-9]{1,2})[.,]([0-9]{3})[.,]([0-9]{1,2})$/);       if(m2) return parseInt(m2[1]+m2[2],10);
+    var m3 = t.match(/^([0-9]{4,5})$/);                                     if(m3) return parseInt(m3[1],10);
+    var d = t.replace(/[^0-9]/g,''); return d ? parseInt(d.slice(0,5),10) : NaN;
+  }
+
+  // ── Chart parser: pull "SPX 7344.05" (keep 2dp) and "MVC 7330" ──
+  function parseChart(text){
+    var out = {};
+    var mSpx = text.match(/SPX[^0-9]{0,4}([0-9][0-9.,]{3,})/i);
+    if(mSpx){ var n = parseFloat(mSpx[1].replace(/,/g,'')); if(n>1000 && n<100000) out.spot = n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}); }
+    var mMvc = text.match(/MVC[^0-9]{0,4}([0-9][0-9.,]{2,})/i);
+    if(mMvc){ var s = strikeNum(mMvc[1]); if(s>1000 && s<100000) out.mvc = fmtStrike(s); }
+    return out;
+  }
+
+  // ── Heatmap parser: rows are "STRIKE  NET-GEX  VOL-GEX  DEX  NET-VEX".
+  // ATM = the row tagged ATM. Largest negative = most-negative value in the
+  // FIRST money column after the strike (Net GEX) — not any negative on the
+  // row (DEX is often the biggest negative and would otherwise win). ──
+  function parseHeatmap(text){
+    var out = {};
+    var lines = text.split(/\n+/);
+    for(var i=0;i<lines.length;i++){
+      var a = lines[i].match(/([0-9][.,]?[0-9]{3})\s*ATM|ATM\s*([0-9][.,]?[0-9]{3})/i);
+      if(a){ var sa = strikeNum(a[1]||a[2]); if(sa>1000 && sa<100000){ out.atm = fmtStrike(sa); break; } }
+    }
+    var worst = {gex:Infinity, strike:null, label:null};
+    for(var j=0;j<lines.length;j++){
+      var ln = lines[j].trim();
+      var ms = ln.match(/^([0-9]{1,2}[.,][0-9]{3}|[0-9]{4,5})\b/);   // leading strike only
+      if(!ms) continue;
+      var strike = strikeNum(ms[1]); if(!(strike>1000 && strike<100000)) continue;
+      var rest = ln.slice(ms[0].length);                            // text after the strike
+      var mg = rest.match(/([+\-]?\s*\$?\s*[0-9][0-9.,]*\s*[BMK])/i); // FIRST money token = Net GEX
+      if(!mg) continue;
+      var raw = mg[1].toUpperCase().replace(/\s+/g,'');
+      var val = magNum(raw); if(/M/.test(raw)) val/=1000; else if(/K/.test(raw)) val/=1e6;  // → billions
+      if(/^-/.test(raw) && val < worst.gex){ worst = {gex:val, strike:strike, label:raw.replace('$','')}; }
+    }
+    if(worst.strike){
+      out.gex = /B$/.test(worst.label) ? worst.label.replace('-','−') : (worst.gex.toFixed(2).replace('-','−')+'B');
+      out.gexStrike = fmtStrike(worst.strike);
+    }
+    return out;
+  }
+
+  async function runOCR(slot, dataUrl){
+    lastDataUrl[slot] = dataUrl;
+    if(typeof Tesseract === 'undefined'){
+      ocrStatus(slot,'warn','OCR engine offline — type levels manually');
+      return;
+    }
+    ocrStatus(slot,'busy','<span class="spin"></span>Reading levels…');
+    try{
+      var cv = await upscale(dataUrl);
+      var src = cv || dataUrl;
+      var res = await Tesseract.recognize(src, 'eng', {
+        tessedit_char_whitelist: '0123456789.,+-$%BMKkATMSPXVODECNXGstrike '
+      });
+      var text = (res && res.data && res.data.text) ? res.data.text : '';
+      var got = 0;
+      if(String(slot)==='1'){
+        var c = parseChart(text);
+        if(c.spot){ setField('c1-spot', c.spot); got++; }
+        if(c.mvc){ setField('c1-mvc', c.mvc); got++; }
+      } else {
+        var h = parseHeatmap(text);
+        if(h.atm){ setField('c2-atm', h.atm); got++; }
+        if(h.gex){
+          var el = document.querySelector('[data-fld="c2-gex"]');
+          if(el){ el.innerHTML = h.gex + (h.gexStrike?('<small>'+h.gexStrike+'</small>'):''); got++; }
+          if(h.gexStrike){ setField('c2-vex', '+ below '+h.gexStrike); }
+        }
+      }
+      if(got){ ocrStatus(slot,'ok','✓ Read '+got+' value'+(got>1?'s':'')+' — verify & edit. <button>Re-run</button>'); }
+      else   { ocrStatus(slot,'warn','Couldn’t read levels — type them. <button>Re-run</button>'); }
+    }catch(err){
+      ocrStatus(slot,'warn','OCR failed — type levels manually. <button>Re-run</button>');
+    }
+  }
+})();
+</script>
+</body>
+</html>

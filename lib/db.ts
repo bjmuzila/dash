@@ -176,9 +176,25 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       is_loaded BOOLEAN NOT NULL DEFAULT FALSE,
       last_loaded_at TIMESTAMPTZ,
       last_unloaded_at TIMESTAMPTZ,
+      total_loads INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    -- Backfill the visit counter on DBs created before total_loads existed.
+    ALTER TABLE page_load_status ADD COLUMN IF NOT EXISTS total_loads INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS idx_page_load_status_loaded ON page_load_status(is_loaded);
+
+    -- One row per page load: full visit history with client IP + (optional) user.
+    -- Owner-only data (IP is PII). Pruned to the newest rows on insert.
+    CREATE TABLE IF NOT EXISTS page_visits (
+      id SERIAL PRIMARY KEY,
+      page_key TEXT,
+      page_label TEXT,
+      path TEXT,
+      user_id TEXT,
+      ip TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
 
     CREATE TABLE IF NOT EXISTS budget_profiles (
@@ -997,20 +1013,26 @@ export interface PageLoadStatusRecord {
   is_loaded: boolean;
   last_loaded_at?: string | null;
   last_unloaded_at?: string | null;
+  total_loads?: number | null;
   updated_at?: string | null;
 }
 
 export async function upsertPageLoadStatus(r: Omit<PageLoadStatusRecord, "id" | "updated_at">): Promise<void> {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO page_load_status (page_key, page_label, path, is_loaded, last_loaded_at, last_unloaded_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    // total_loads counts real page loads only: the seed row starts at 1 when
+    // is_loaded, and each subsequent load (is_loaded = true) bumps it by 1. The
+    // unload beacon (is_loaded = false) leaves the counter untouched so a single
+    // visit isn't double-counted.
+    `INSERT INTO page_load_status (page_key, page_label, path, is_loaded, last_loaded_at, last_unloaded_at, total_loads)
+     VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $4 THEN 1 ELSE 0 END)
      ON CONFLICT (page_key) DO UPDATE
        SET page_label = EXCLUDED.page_label,
            path = EXCLUDED.path,
            is_loaded = EXCLUDED.is_loaded,
            last_loaded_at = COALESCE(EXCLUDED.last_loaded_at, page_load_status.last_loaded_at),
            last_unloaded_at = COALESCE(EXCLUDED.last_unloaded_at, page_load_status.last_unloaded_at),
+           total_loads = page_load_status.total_loads + (CASE WHEN EXCLUDED.is_loaded THEN 1 ELSE 0 END),
            updated_at = CURRENT_TIMESTAMP`,
     [
       r.page_key,
@@ -1026,6 +1048,49 @@ export async function upsertPageLoadStatus(r: Omit<PageLoadStatusRecord, "id" | 
 export async function getPageLoadStatus(limit = 200): Promise<PageLoadStatusRecord[]> {
   return queryAll<PageLoadStatusRecord>(
     "SELECT * FROM page_load_status ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT ?",
+    [limit]
+  );
+}
+
+// ── Page visits (full history w/ IP) ─────────────────────────────────────────
+
+export interface PageVisitRecord {
+  id?: number;
+  page_key?: string | null;
+  page_label?: string | null;
+  path?: string | null;
+  user_id?: string | null;
+  ip?: string | null;
+  created_at?: string | null;
+}
+
+// Keep the visit log bounded so it can't grow without limit.
+const PAGE_VISITS_KEEP = 5000;
+
+export async function insertPageVisit(
+  r: Pick<PageVisitRecord, "page_key" | "page_label" | "path" | "user_id" | "ip">
+): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null]
+  );
+  // Opportunistic prune: drop anything older than the newest PAGE_VISITS_KEEP rows.
+  await pool.query(
+    `DELETE FROM page_visits
+     WHERE id < (
+       SELECT MIN(id) FROM (
+         SELECT id FROM page_visits ORDER BY id DESC LIMIT $1
+       ) keep
+     )`,
+    [PAGE_VISITS_KEEP]
+  );
+}
+
+export async function getRecentPageVisits(limit = 100): Promise<PageVisitRecord[]> {
+  return queryAll<PageVisitRecord>(
+    "SELECT * FROM page_visits ORDER BY id DESC LIMIT ?",
     [limit]
   );
 }

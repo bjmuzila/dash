@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
@@ -410,7 +409,6 @@ function GreekFlowChart({
 }
 
 export default function EsCandlesPage() {
-  usePageLoadStatus({ pageKey: "es-candles", pageLabel: "ES Candles", path: "/es-candles" });
   const esShouldConnect = useWsLifecycle();
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
@@ -506,6 +504,41 @@ export default function EsCandlesPage() {
   // /api/snapshots/greeks, kept live from /api/insights/gex (same as /greeks).
   const [showFlow, setShowFlow] = useState(false);
   const [flowHistory, setFlowHistory] = useState<Record<FlowMetric, FlowPoint[]>>({ dex: [], gex: [], chex: [], vex: [] });
+
+  // ── Embedded-card control channel ──────────────────────────────────────────
+  // When this page is iframed as a HOME2 card (?embed=1), the parent can toggle
+  // the chart overlays via postMessage, and we echo current state back so the
+  // card's dropdown stays in sync. Same-origin only (parent is the same app).
+  const OVERLAY_SETTERS: Record<string, (v: boolean) => void> = useMemo(() => ({
+    heatmap: setShowHeatmap,
+    profile: setShowProfile,
+    mvc: setShowMvcLine,
+    levels: setShowLevels,
+    pdhon: setShowSessions,
+    flow: setShowFlow,
+  }), []);
+  const overlayState = useMemo(() => ({
+    heatmap: showHeatmap, profile: showProfile, mvc: showMvcLine,
+    levels: showLevels, pdhon: showSessions, flow: showFlow,
+  }), [showHeatmap, showProfile, showMvcLine, showLevels, showSessions, showFlow]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const d = e.data as { type?: string; overlay?: string; value?: boolean };
+      if (!d || d.type !== "es-overlay") return;
+      if (d.overlay === "__sync__") { broadcast(); return; } // parent asked for current state
+      const setter = d.overlay ? OVERLAY_SETTERS[d.overlay] : undefined;
+      if (setter) setter(!!d.value);
+    };
+    const broadcast = () => {
+      try { window.parent.postMessage({ type: "es-overlay-state", state: overlayState }, window.location.origin); } catch {}
+    };
+    window.addEventListener("message", onMsg);
+    broadcast(); // announce initial state on mount
+    return () => window.removeEventListener("message", onMsg);
+  }, [OVERLAY_SETTERS, overlayState]);
 
   // Prior-day H/L and overnight H/L from the candle history (ES prices).
   //

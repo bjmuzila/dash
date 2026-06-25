@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { queryGreeksToday, saveGreeksSnapshot } from "@/lib/snapdb";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import RegimeMatrix from "@/components/greeks/RegimeMatrix";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -796,8 +795,6 @@ function evaluateGamma(history: GreekPoint[], vol?: VolData | null): GammaSignal
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function GreeksPage() {
-  usePageLoadStatus({ pageKey: "greeks", pageLabel: "Greeks", path: "/greeks" });
-
   const [history, setHistory] = useState<GreekPoint[]>([]);
   const [latest, setLatest] = useState<GreekPoint | null>(null);
   const [lastRefresh, setLastRefresh] = useState("--");

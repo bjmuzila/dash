@@ -33,6 +33,27 @@ async function getHtml2Canvas() {
   return (mod as any).default ?? mod;
 }
 
+// Tesseract.js loaded from CDN on first use (keeps it out of the bundle). Used by
+// the GEX Image Cards tab to OCR a dropped chart/heatmap capture and auto-fill levels.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _tessPromise: Promise<any> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getTesseract(): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  if (w.Tesseract) return Promise.resolve(w.Tesseract);
+  if (_tessPromise) return _tessPromise;
+  _tessPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
+    s.async = true;
+    s.onload = () => resolve(w.Tesseract);
+    s.onerror = () => reject(new Error("tesseract load failed"));
+    document.head.appendChild(s);
+  });
+  return _tessPromise;
+}
+
 interface DailyInput {
   spxSpot: number | null;
   gammaFlip: number | null;
@@ -328,7 +349,355 @@ const ShareCard = forwardRef<HTMLDivElement, {
   );
 });
 
+/* Heavy/hype card styling for the GEX Image Cards tab. Scoped under .gx-wrap so
+   it can't leak into the rest of the page. Cards are true 1600×900 for export. */
+const GX_CSS = `
+  .gx-wrap { max-width: 1720px; margin: 0 auto; }
+  .gx-help { font-size: 12px; color: #9aa4b2; line-height: 1.55; max-width: 1100px; margin: 0 auto 22px; }
+  .gx-help b { color: #fff; }
+  .gx-stage { display: flex; flex-direction: column; gap: 36px; align-items: center; }
+  .gx-cardwrap { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .gx-caplabel { font-size: 12px; color: #9aa4b2; letter-spacing: 0.04em; align-self: flex-start; margin-left: 4px; }
+  .gx-dl { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 16px; border-radius: 7px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all .12s; box-shadow: 0 0 16px rgba(0,240,255,.3); }
+  .gx-dl:hover { opacity: .92; } .gx-dl:disabled { opacity: .5; cursor: default; }
+
+  /* fit into viewport but keep true pixels for capture */
+  .gx-card { width: 1600px; height: 900px; flex: 0 0 auto; position: relative; overflow: hidden;
+    background:
+      radial-gradient(900px 380px at 18% -8%, rgba(0,240,255,.10), transparent 60%),
+      radial-gradient(820px 420px at 92% 112%, rgba(249,115,22,.10), transparent 60%),
+      linear-gradient(180deg, #0a0e16 0%, #05060a 60%, #04050a 100%);
+    border: 1px solid var(--sm-border); border-radius: 22px;
+    box-shadow: 0 0 0 1px rgba(0,240,255,.05), 0 40px 120px rgba(0,0,0,.65);
+    display: flex; flex-direction: column; transform-origin: top center; }
+  .gx-card.neg { box-shadow: 0 0 0 1px rgba(239,68,68,.10), 0 40px 120px rgba(0,0,0,.65); }
+  .gx-card::before { content:""; position:absolute; top:0; left:0; right:0; height:4px;
+    background: linear-gradient(90deg, var(--cyan), rgba(0,240,255,0) 38%, rgba(249,115,22,0) 62%, var(--amber)); opacity:.9; }
+  .gx-glow { position:absolute; width:420px; height:420px; border-radius:50%; filter: blur(90px); pointer-events:none; z-index:0; }
+  .gx-glow.tl { top:-160px; left:-120px; background: rgba(0,240,255,.18); }
+  .gx-glow.br { bottom:-180px; right:-140px; background: rgba(249,115,22,.16); }
+  .gx-card.neg .gx-glow.br { background: rgba(239,68,68,.16); }
+
+  .gx-head { position:relative; z-index:2; display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; padding: 26px 40px 6px; }
+  .gx-head-side { display:flex; flex-direction:column; gap:3px; }
+  .gx-head-side.left { align-items:flex-start; }
+  .gx-head-side.right { align-items:flex-end; }
+  .gx-date { font-size:20px; font-weight:800; color:#fff; letter-spacing:.01em; }
+  .gx-time { font-size:13px; color:#9aa4b2; letter-spacing:.04em; }
+  .gx-logo { display:flex; align-items:center; justify-content:center; }
+  .gx-logo img { height:74px; width:auto; object-fit:contain; filter: drop-shadow(0 4px 18px rgba(0,240,255,.25)); }
+  .gx-regime { display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:800; letter-spacing:.06em; padding:8px 13px; border-radius:8px; border:1px solid; }
+  .gx-regime.neg { color:#ef4444; border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.10); box-shadow: 0 0 18px rgba(239,68,68,.25) inset; }
+  .gx-regime.pos { color:#10b981; border-color: rgba(16,185,129,.5); background: rgba(16,185,129,.10); box-shadow: 0 0 18px rgba(16,185,129,.25) inset; }
+  .gx-regime i { width:9px; height:9px; border-radius:50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+
+  .gx-title { position:relative; z-index:2; display:flex; align-items:baseline; gap:12px; padding: 8px 40px 14px; }
+  .gx-title .tk { font-size:34px; font-weight:900; letter-spacing:.02em;
+    background: linear-gradient(180deg, #7df9ff, #00f0ff); -webkit-background-clip:text; background-clip:text; color: transparent;
+    text-shadow: 0 0 26px rgba(0,240,255,.35); }
+  .gx-title .dot { font-size:30px; color:#3a4456; }
+  .gx-title .nm { font-size:30px; font-weight:900; color:#fff; letter-spacing:.03em; }
+  .gx-title .sub { margin-left:auto; font-size:13px; letter-spacing:.22em; text-transform:uppercase; color:#9aa4b2; font-weight:700; }
+
+  .gx-imgwrap { position:relative; z-index:2; flex:1; margin: 0 40px; border:1px solid var(--sm-border); border-radius:14px;
+    background:#06080e; overflow:hidden; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .gx-imgwrap > img { width:100%; height:100%; object-fit:contain; display:block; }
+  .gx-drop { position:absolute; inset:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+    border:2px dashed rgba(255,255,255,.18); border-radius:12px; color:#9aa4b2; font-size:16px; text-align:center; transition:.15s; }
+  .gx-imgwrap:hover .gx-drop { border-color: var(--cyan); color:#fff; background: rgba(0,240,255,.03); }
+  .gx-drop .big { font-size:20px; font-weight:800; color:#fff; }
+  .gx-ocr { position:absolute; left:14px; bottom:14px; z-index:3; display:inline-flex; align-items:center; gap:8px;
+    font-size:12px; font-weight:700; letter-spacing:.03em; padding:7px 12px; border-radius:7px; border:1px solid rgba(255,255,255,.18);
+    background: rgba(5,6,10,.85); color:#9aa4b2; }
+  .gx-ocr.busy { color: var(--cyan); border-color: rgba(0,240,255,.4); }
+  .gx-ocr.ok { color:#10b981; border-color: rgba(16,185,129,.4); }
+  .gx-ocr.warn { color: var(--amber); border-color: rgba(249,115,22,.4); }
+  .gx-ocr button { font:inherit; font-size:11px; cursor:pointer; background:transparent; color: var(--cyan); border:none; text-decoration:underline; padding:0; margin-left:6px; }
+  .gx-spin { width:11px; height:11px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation: gxspin .7s linear infinite; }
+  @keyframes gxspin { to { transform: rotate(360deg); } }
+
+  .gx-strip { position:relative; z-index:2; display:flex; align-items:stretch; gap:14px; padding: 18px 40px 12px; }
+  .gx-pill { flex:1; display:flex; flex-direction:column; gap:8px; justify-content:center; padding:14px 18px;
+    border:1px solid var(--sm-border); border-radius:12px;
+    background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0)); }
+  .gx-pill .k { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:#9aa4b2; font-weight:800; }
+  .gx-pill .v { display:flex; align-items:baseline; gap:6px; font-size:30px; font-weight:900; letter-spacing:.01em; line-height:1; }
+  .gx-pill .v b { font-weight:900; outline:none; }
+  .gx-pill .v small { font-size:14px; font-weight:800; color:#9aa4b2; }
+  .gx-pill .v b.cyan { color:#00f0ff; text-shadow:0 0 18px rgba(0,240,255,.35); }
+  .gx-pill .v b.amber { color:#f97316; text-shadow:0 0 16px rgba(249,115,22,.30); }
+  .gx-pill .v b.red { color:#ef4444; text-shadow:0 0 16px rgba(239,68,68,.30); }
+  .gx-pill .v b.green { color:#10b981; text-shadow:0 0 16px rgba(16,185,129,.30); }
+
+  .gx-foot { position:relative; z-index:2; display:flex; align-items:center; gap:14px; padding: 10px 40px 22px; }
+  .gx-foot .brand { font-size:16px; font-weight:900; letter-spacing:.06em;
+    background: linear-gradient(180deg,#e8eef5,#9aa6b5); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .gx-foot .tag { font-size:12px; font-style:italic; color:#9aa4b2; }
+  .gx-foot .disc { margin-left:auto; font-size:11px; color:#6b7686; letter-spacing:.04em; }
+`;
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * GEX Image Cards — branded 1600×900 social cards built around a screenshot of
+ * the live NET GEX chart and the GEX heatmap. Drop a capture into a card → it
+ * OCRs the image (Tesseract) and auto-fills the levels strip; every field stays
+ * click-to-edit. Heavy/hype styling, real CB Edge chrome logo centered up top,
+ * fixed footer (no overlap). Exports each card to PNG via html2canvas at 2×.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+// money magnitudes like -1.26B / -$812.57M (keep the decimal)
+function magNum(s: string): number { return parseFloat(String(s).replace(/[^0-9.\-]/g, "")); }
+function fmtStrikeN(n: number): string | null { return Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : null; }
+
+// Strike token → integer. The dashboard renders strikes dot-thousands ("7.330"),
+// so normalize "7.330"/"7,330"/"7345"/"7,344.05" → 7330/7345/7344.
+function strikeNum(tok: string): number {
+  const t = String(tok).trim();
+  let m = t.match(/^([0-9]{1,2})[.,]([0-9]{3})$/); if (m) return parseInt(m[1] + m[2], 10);
+  m = t.match(/^([0-9]{1,2})[.,]([0-9]{3})[.,]([0-9]{1,2})$/); if (m) return parseInt(m[1] + m[2], 10);
+  m = t.match(/^([0-9]{4,5})$/); if (m) return parseInt(m[1], 10);
+  const d = t.replace(/[^0-9]/g, ""); return d ? parseInt(d.slice(0, 5), 10) : NaN;
+}
+
+interface ChartRead { spot?: string; mvc?: string; }
+function parseChartText(text: string): ChartRead {
+  const out: ChartRead = {};
+  const mSpx = text.match(/SPX[^0-9]{0,4}([0-9][0-9.,]{3,})/i);
+  if (mSpx) { const n = parseFloat(mSpx[1].replace(/,/g, "")); if (n > 1000 && n < 100000) out.spot = n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+  const mMvc = text.match(/MVC[^0-9]{0,4}([0-9][0-9.,]{2,})/i);
+  if (mMvc) { const s = strikeNum(mMvc[1]); if (s > 1000 && s < 100000) out.mvc = fmtStrikeN(s) ?? undefined; }
+  return out;
+}
+
+interface HeatRead { atm?: string; gex?: string; gexStrike?: string; }
+// ATM = row tagged ATM. Largest negative = most-negative value in the FIRST money
+// column after the strike (Net GEX) — not any negative on the row (DEX is usually
+// the biggest negative and would otherwise win).
+function parseHeatmapText(text: string): HeatRead {
+  const out: HeatRead = {};
+  const lines = text.split(/\n+/);
+  for (let i = 0; i < lines.length; i++) {
+    const a = lines[i].match(/([0-9][.,]?[0-9]{3})\s*ATM|ATM\s*([0-9][.,]?[0-9]{3})/i);
+    if (a) { const sa = strikeNum(a[1] || a[2]); if (sa > 1000 && sa < 100000) { out.atm = fmtStrikeN(sa) ?? undefined; break; } }
+  }
+  let worst: { gex: number; strike: number | null; label: string | null } = { gex: Infinity, strike: null, label: null };
+  for (let j = 0; j < lines.length; j++) {
+    const ln = lines[j].trim();
+    const ms = ln.match(/^([0-9]{1,2}[.,][0-9]{3}|[0-9]{4,5})\b/);
+    if (!ms) continue;
+    const strike = strikeNum(ms[1]); if (!(strike > 1000 && strike < 100000)) continue;
+    const rest = ln.slice(ms[0].length);
+    const mg = rest.match(/([+\-]?\s*\$?\s*[0-9][0-9.,]*\s*[BMK])/i);
+    if (!mg) continue;
+    const raw = mg[1].toUpperCase().replace(/\s+/g, "");
+    let val = magNum(raw); if (/M/.test(raw)) val /= 1000; else if (/K/.test(raw)) val /= 1e6;
+    if (/^-/.test(raw) && val < worst.gex) worst = { gex: val, strike, label: raw.replace("$", "") };
+  }
+  if (worst.strike != null && worst.label) {
+    out.gex = /B$/.test(worst.label) ? worst.label.replace("-", "−") : worst.gex.toFixed(2).replace("-", "−") + "B";
+    out.gexStrike = fmtStrikeN(worst.strike) ?? undefined;
+  }
+  return out;
+}
+
+// Upscale a capture before OCR — small dashboard text reads far better at 2×.
+function upscaleForOcr(dataUrl: string): Promise<HTMLCanvasElement | string> {
+  return new Promise((res) => {
+    const im = new Image();
+    im.onload = () => {
+      const s = im.naturalWidth < 1400 ? 2 : 1;
+      const cv = document.createElement("canvas");
+      cv.width = im.naturalWidth * s; cv.height = im.naturalHeight * s;
+      const cx = cv.getContext("2d"); if (cx) { cx.imageSmoothingEnabled = true; cx.drawImage(im, 0, 0, cv.width, cv.height); }
+      res(cv);
+    };
+    im.onerror = () => res(dataUrl);
+    im.src = dataUrl;
+  });
+}
+
+type CardKind = "chart" | "heat";
+interface CardFields { a: string; b: string; bSmall: string; c: string; cSmall: string; d: string; }
+
+const CHART_DEFAULTS: CardFields = { a: "7,346.55", b: "7,330", bSmall: "", c: "−$1.0B", cSmall: "peak", d: "7,250–7,450" };
+const HEAT_DEFAULTS: CardFields = { a: "7,345", b: "−$1.26B", bSmall: "7,330", c: "+ below 7,330", cSmall: "", d: "Neg thru body" };
+
+const CHART_LABELS = { a: "SPX SPOT", b: "MVC", c: "NET GEX", d: "RANGE" };
+const HEAT_LABELS = { a: "ATM STRIKE", b: "LARGEST NEG GEX", c: "NET VEX FLIP", d: "DEX" };
+
+function GexCard({
+  kind, updated, today, regimeNeg,
+}: { kind: CardKind; updated: string; today: string; regimeNeg: boolean }) {
+  const [img, setImg] = useState<string | null>(null);
+  const [fields, setFields] = useState<CardFields>(kind === "chart" ? CHART_DEFAULTS : HEAT_DEFAULTS);
+  const [ocr, setOcr] = useState<{ cls: string; msg: string } | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState(false);
+  const labels = kind === "chart" ? CHART_LABELS : HEAT_LABELS;
+
+  const setField = (k: keyof CardFields, v: string) => setFields((f) => ({ ...f, [k]: v }));
+
+  const runOcr = useCallback(async (dataUrl: string) => {
+    setOcr({ cls: "busy", msg: "Reading levels…" });
+    try {
+      const Tesseract = await getTesseract();
+      const src = await upscaleForOcr(dataUrl);
+      const res = await Tesseract.recognize(src, "eng");
+      const text: string = res?.data?.text ?? "";
+      // Compute `got` synchronously from the parse result (not inside the state
+      // updater, which runs async) so the status message is always correct.
+      let got = 0;
+      if (kind === "chart") {
+        const c = parseChartText(text);
+        if (c.spot) got++;
+        if (c.mvc) got++;
+        setFields((f) => ({ ...f, ...(c.spot ? { a: c.spot } : {}), ...(c.mvc ? { b: c.mvc } : {}) }));
+      } else {
+        const h = parseHeatmapText(text);
+        if (h.atm) got++;
+        if (h.gex) got++;
+        setFields((f) => ({
+          ...f,
+          ...(h.atm ? { a: h.atm } : {}),
+          ...(h.gex ? { b: h.gex, bSmall: h.gexStrike ?? "" } : {}),
+          ...(h.gex && h.gexStrike ? { c: `+ below ${h.gexStrike}` } : {}),
+        }));
+      }
+      setOcr(got ? { cls: "ok", msg: `✓ Read ${got} value${got > 1 ? "s" : ""} — verify & edit` } : { cls: "warn", msg: "Couldn’t read levels — type them" });
+    } catch {
+      setOcr({ cls: "warn", msg: "OCR failed — type levels manually" });
+    }
+  }, [kind]);
+
+  const loadFile = useCallback((file: File) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const rd = new FileReader();
+    rd.onload = (e) => { const url = String(e.target?.result || ""); setImg(url); runOcr(url); };
+    rd.readAsDataURL(file);
+  }, [runOcr]);
+
+  const onExport = useCallback(async () => {
+    const node = cardRef.current; if (!node) return;
+    setBusy(true);
+    try {
+      const prev = node.style.transform; node.style.transform = "none";
+      const html2canvas = await getHtml2Canvas();
+      const canvas = await html2canvas(node, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false, width: 1600, height: 900 });
+      node.style.transform = prev;
+      const blob: Blob | null = await new Promise((r) => canvas.toBlob((b: Blob | null) => r(b), "image/png"));
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `cb-edge-${kind === "chart" ? "netgex" : "heatmap"}-${todayETStr()}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    } finally { setBusy(false); }
+  }, [kind]);
+
+  const onPick = () => {
+    const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*";
+    inp.onchange = () => { if (inp.files?.[0]) loadFile(inp.files[0]); };
+    inp.click();
+  };
+
+  return (
+    <div className="gx-cardwrap">
+      <div className="gx-caplabel">{kind === "chart" ? "NET GEX chart" : "GEX heatmap"} · 1600 × 900</div>
+      <div ref={cardRef} className={`gx-card ${regimeNeg ? "neg" : "pos"}`}>
+        {/* hype glow corners */}
+        <span className="gx-glow tl" /><span className="gx-glow br" />
+
+        {/* header: date left · centered chrome logo · regime right */}
+        <div className="gx-head">
+          <div className="gx-head-side left">
+            <div className="gx-date">{today}</div>
+            <div className="gx-time">{updated || "15:33 ET"}</div>
+          </div>
+          <div className="gx-logo">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/cb-edge-logo.png" alt="CB Edge" crossOrigin="anonymous" />
+          </div>
+          <div className="gx-head-side right">
+            <span className={`gx-regime ${regimeNeg ? "neg" : "pos"}`}><i />{regimeNeg ? "NEGATIVE GAMMA" : "POSITIVE GAMMA"}</span>
+          </div>
+        </div>
+
+        {/* title band */}
+        <div className="gx-title">
+          <span className="tk">SPX</span>
+          <span className="dot">·</span>
+          <span className="nm">{kind === "chart" ? "NET GEX" : "GEX HEATMAP"}</span>
+          <span className="sub">{kind === "chart" ? "Gamma Exposure by Strike" : "Net GEX · Vol GEX · DEX · Net VEX"}</span>
+        </div>
+
+        {/* image slot */}
+        <div className="gx-imgwrap" onClick={img ? undefined : onPick}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.[0]) loadFile(e.dataTransfer.files[0]); }}>
+          {img
+            ? <img src={img} alt="capture" crossOrigin="anonymous" />
+            : <div className="gx-drop"><div className="big">Drop {kind === "chart" ? "NET GEX chart" : "GEX heatmap"} here</div><div>or click to choose a file</div></div>}
+          {ocr && <div className={`gx-ocr ${ocr.cls}`}>{ocr.cls === "busy" && <span className="gx-spin" />}{ocr.msg}{ocr.cls !== "busy" && img && <button type="button" onClick={(e) => { e.stopPropagation(); if (img) runOcr(img); }}>Re-run</button>}</div>}
+        </div>
+
+        {/* levels strip — main value is editable; the small sub-label is a
+            separate non-editable span so editing can't absorb/duplicate it. */}
+        <div className="gx-strip">
+          <div className="gx-pill"><span className="k">{labels.a}</span><span className="v"><b className="cyan" contentEditable suppressContentEditableWarning onBlur={(e) => setField("a", e.currentTarget.textContent || "")}>{fields.a}</b></span></div>
+          <div className="gx-pill"><span className="k">{labels.b}</span><span className="v"><b className="amber" contentEditable suppressContentEditableWarning onBlur={(e) => setField("b", e.currentTarget.textContent || "")}>{fields.b}</b>{fields.bSmall && <small>{fields.bSmall}</small>}</span></div>
+          <div className="gx-pill"><span className="k">{labels.c}</span><span className="v"><b className="red" contentEditable suppressContentEditableWarning onBlur={(e) => setField("c", e.currentTarget.textContent || "")}>{fields.c}</b>{fields.cSmall && <small>{fields.cSmall}</small>}</span></div>
+          <div className="gx-pill"><span className="k">{labels.d}</span><span className="v"><b className="green" contentEditable suppressContentEditableWarning onBlur={(e) => setField("d", e.currentTarget.textContent || "")}>{fields.d}</b></span></div>
+        </div>
+
+        {/* footer (in-flow — cannot overlap the strip) */}
+        <div className="gx-foot">
+          <span className="brand">CB EDGE</span>
+          <span className="tag">“Real Edge — Real Orderflow”</span>
+          <span className="disc">Informational only — not financial advice.</span>
+        </div>
+      </div>
+      <button type="button" className="gx-dl" onClick={onExport} disabled={busy}>{busy ? "Rendering…" : "Download this card (PNG)"}</button>
+    </div>
+  );
+}
+
+function GexImageCards({ updated, today, form }: { updated: string; today: string; form: FormState }) {
+  const neg = regimeOf(form).neg;
+  const stageRef = useRef<HTMLDivElement>(null);
+  // Scale cards down to fit the column on screen; export resets transform to none
+  // so PNGs are always captured at true 1600×900.
+  useEffect(() => {
+    const fit = () => {
+      const stage = stageRef.current; if (!stage) return;
+      const avail = Math.min(stage.clientWidth, 1600);
+      const s = Math.min(1, avail / 1600);
+      stage.querySelectorAll<HTMLDivElement>(".gx-card").forEach((c) => {
+        c.style.transform = s < 1 ? `scale(${s})` : "none";
+        c.style.marginBottom = s < 1 ? `${-900 * (1 - s)}px` : "0";
+      });
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
+  return (
+    <div className="gx-wrap">
+      <style>{GX_CSS}</style>
+      <p className="gx-help">
+        Drop your screenshot into each card (or click it). On drop the page <b>auto-reads the levels</b> from the image (OCR) and fills the strip —
+        spot/MVC from the chart, ATM strike &amp; largest negative GEX from the heatmap. <b>OCR can misread, so verify each value</b> — every field is click-to-edit, with a Re-run link.
+        Then <b>Download</b> for a clean 1600×900 image. First OCR run loads the engine (a few seconds).
+      </p>
+      <div className="gx-stage" ref={stageRef}>
+        <GexCard kind="chart" updated={updated} today={today} regimeNeg={neg} />
+        <GexCard kind="heat" updated={updated} today={today} regimeNeg={neg} />
+      </div>
+    </div>
+  );
+}
+
 export default function SocialMediaPage() {
+  const [tab, setTab] = useState<"levels" | "cards">("levels");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [hydrated, setHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -566,6 +935,10 @@ export default function SocialMediaPage() {
         .sm-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--sm-border); padding-bottom: 14px; margin-bottom: 22px; max-width: 1100px; margin-left: auto; margin-right: auto; }
         .sm-head h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; margin: 0; color: var(--text1); }
         .sm-tag { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); border: 1px solid var(--amber); border-radius: 3px; padding: 2px 6px; opacity: 0.85; }
+        .sm-tabs { display: inline-flex; gap: 4px; padding: 3px; background: var(--bg2); border: 1px solid var(--sm-border); border-radius: 8px; }
+        .sm-tabs button { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 6px 12px; border-radius: 5px; border: 1px solid transparent; background: transparent; color: var(--sm-muted); transition: all 0.12s; }
+        .sm-tabs button:hover { color: var(--text1); }
+        .sm-tabs button.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,240,255,0.35); }
         .sm-date { margin-left: auto; font-family: var(--sm-mono); font-size: 13px; color: var(--sm-muted); }
         .sm-refresh { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 12px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
         .sm-refresh:hover { background: var(--bg4); border-color: var(--cyan); }
@@ -674,6 +1047,10 @@ export default function SocialMediaPage() {
       <div className="sm-head">
         <h1>Social Media</h1>
         <span className="sm-tag">Admin</span>
+        <span className="sm-tabs">
+          <button type="button" className={tab === "levels" ? "on" : ""} onClick={() => setTab("levels")}>Daily Levels</button>
+          <button type="button" className={tab === "cards" ? "on" : ""} onClick={() => setTab("cards")}>GEX Image Cards</button>
+        </span>
         <span className="sm-live"><i />{hydrated ? "Live state" : "Hydrating…"}</span>
         <span className="sm-date">{today}</span>
         <button
@@ -687,7 +1064,9 @@ export default function SocialMediaPage() {
         </button>
       </div>
 
-      <div className="sm-grid">
+      {tab === "cards" && <GexImageCards updated={updatedLabel} today={today} form={form} />}
+
+      <div className="sm-grid" style={tab === "cards" ? { display: "none" } : undefined}>
         {/* LEFT: dashboard-derived input */}
         <div className="sm-panel">
           <div className="sm-panel-h">Daily Input · from dashboard state</div>

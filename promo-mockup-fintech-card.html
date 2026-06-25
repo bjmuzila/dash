@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CB Edge - Home (Fintech card mockup)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  :root{ --ink:#EAEFF5; --muted:#9fb0c0; --faint:#6f7d8c; --green:#3FE0A5; --red:#FF6B7A; --amber:#ffce6a; --teal:#2ee6c8; }
+  html,body{background:#050607;}
+  body{font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; font-size:13px;}
+  .poster{
+    position:relative; width:735px; min-height:935px; margin:0 auto; overflow:hidden;
+    background:linear-gradient(135deg,#0e1014,#070809); padding:20px;
+  }
+  .bk{ position:absolute; border-radius:50%; filter:blur(4px); }
+  .panel{ background:linear-gradient(180deg,#1b1e24,#15171c); border:1px solid rgba(255,255,255,.07); border-radius:12px; }
+  .teal{background:linear-gradient(90deg,#2ee6c8,#1fb8d6);}
+  .pink{background:linear-gradient(90deg,#7c5cff,#ff5ea8);}
+  .mix{background:linear-gradient(90deg,#2ee6c8,#7c5cff 55%,#ff5ea8);}
+  .green{color:var(--green);} .red{color:var(--red);} .amber{color:var(--amber);}
+  .row{display:flex;}
+
+  /* top bar */
+  .topbar{ height:42px; display:flex; align-items:center; gap:14px; padding:0 14px; }
+  .brand{ display:flex; align-items:center; gap:9px; font-size:15px; font-weight:700; }
+  .brand .o{ width:16px;height:16px;border-radius:50%; border:2.5px solid #2ee6c8; }
+  .brand b span{ color:#2ee6c8; }
+  .ic{ width:26px;height:26px;border-radius:50%; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); display:flex;align-items:center;justify-content:center; font-size:11px; color:var(--muted); position:relative; }
+  .ic .dot{ position:absolute; top:2px; right:3px; width:6px;height:6px;border-radius:50%; background:#ff5ea8; }
+  .search{ width:200px; height:26px; border-radius:8px; background:#0f1116; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; padding:0 12px; font-size:11px; color:var(--faint); }
+  .seg{ height:26px; border-radius:8px; background:#0f1116; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--faint); }
+  .seg .on{ background:#2a2e36; color:var(--ink); padding:3px 8px; border-radius:6px; }
+  .nm{ height:26px; border-radius:8px; background:#0f1116; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; padding:0 12px; font-size:10.5px; color:#cfe0f0; }
+
+  /* session card */
+  .cardwrap{ display:flex; justify-content:center; margin-top:18px; position:relative; }
+  .vcard{ position:relative; width:300px; height:152px; border-radius:16px; background:linear-gradient(135deg,#0f2620,#15171d 55%,#1a1320); border:1px solid rgba(255,255,255,.10); box-shadow:0 0 0 2px rgba(46,230,200,.30), 0 24px 60px rgba(0,0,0,.6); padding:16px 18px; }
+  .vcard .ready{ position:absolute; right:14px; top:14px; background:rgba(14,16,20,.7); border-radius:10px; padding:4px 10px; font-size:9px; color:#cfe0f0; display:flex;align-items:center;gap:6px; }
+  .vcard .ready i{ width:8px;height:8px;border-radius:50%; background:#2ee6a0; }
+  .vcard .lab{ font-size:10px; color:var(--muted); letter-spacing:1px; }
+  .vcard .px{ font-size:34px; font-weight:700; letter-spacing:-1px; margin-top:6px; }
+  .vcard .chg{ font-size:12px; margin-top:2px; }
+  .vcard .lv{ position:absolute; left:18px; bottom:16px; display:flex; gap:16px; font-size:10px; color:var(--muted); }
+  .vcard .lv b{ display:block; font-size:13px; margin-top:2px; }
+  .vcard .open{ position:absolute; right:16px; bottom:14px; background:#f4f6f8; color:#15171c; font-size:10px; font-weight:600; padding:7px 12px; border-radius:8px; }
+
+  /* tiles */
+  .tiles{ display:flex; gap:9px; margin-top:18px; }
+  .tile{ flex:1; padding:14px; }
+  .tile .k{ font-size:10px; color:#8295a8; display:flex; justify-content:space-between; }
+  .tile .v{ font-size:19px; font-weight:700; margin-top:8px; }
+  .tile .bar{ height:4px; border-radius:2px; background:#2a2e36; margin-top:12px; position:relative; overflow:hidden; }
+  .tile .bar i{ position:absolute; left:0;top:0; height:4px; border-radius:2px; }
+
+  .mid{ display:flex; gap:9px; margin-top:14px; }
+  .chart{ flex:1; padding:16px; }
+  .chart .h{ display:flex; align-items:center; }
+  .chart .h .t{ font-size:13px; font-weight:600; }
+  .chart .h .btns{ margin-left:auto; display:flex; gap:8px; }
+  .chip2{ height:20px; border-radius:7px; background:#0f1116; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; padding:0 8px; font-size:9px; color:var(--muted); }
+  .legend{ font-size:8.5px; display:flex; gap:12px; margin-top:8px; }
+  .feed{ width:212px; padding:16px; }
+  .feed .t{ font-size:13px; font-weight:600; margin-bottom:12px; }
+  .feed .quote{ font-size:9px; font-style:italic; color:#9fb0c0; margin-bottom:12px; line-height:1.4; }
+  .fi{ display:flex; gap:10px; margin-bottom:12px; }
+  .fi i{ width:4px; border-radius:2px; background:#7c5cff; flex:0 0 4px; }
+  .fi .tag{ font-size:8px; font-weight:700; color:#bca0ff; } .fi .tag span{ color:var(--faint); }
+  .fi .x{ font-size:9.5px; color:#cfe0f0; margin-top:2px; line-height:1.35; } .fi .s{ font-size:8.5px; color:var(--faint); margin-top:2px; }
+
+  .lower{ display:flex; gap:9px; margin-top:14px; align-items:flex-start; }
+  .table{ flex:1; padding:16px; }
+  .table .h{ display:flex; align-items:center; margin-bottom:10px; }
+  .table .h .t{ font-size:13px; font-weight:600; }
+  .table .h .btns{ margin-left:auto; display:flex; gap:8px; }
+  .thead, .trow{ display:grid; grid-template-columns:1fr .9fr 1fr .9fr .9fr; align-items:center; }
+  .thead{ font-size:9px; color:#7d8a99; padding:7px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+  .trow{ font-size:10px; color:#cfd8e2; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.04); }
+  .badge{ display:inline-block; width:15px; text-align:center; font-size:6.5px; color:#fff; border-radius:3px; padding:1px 0; margin-right:4px; }
+  .b-call{ background:#c2410c; } .b-put{ background:#1f6f43; }
+  .cell-blue{ background:linear-gradient(90deg,rgba(46,230,200,.35),rgba(124,92,255,.4)); color:#e3f4ff; border-radius:3px; padding:1px 4px; }
+  .row-amber{ background:rgba(255,206,106,.12); }
+
+  .rcol{ width:212px; display:flex; flex-direction:column; gap:14px; }
+  .actions{ padding:16px; }
+  .actions .t{ font-size:13px; font-weight:600; margin-bottom:12px; }
+  .togrow{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; font-size:10.5px; color:var(--muted); }
+  .tg{ width:46px;height:22px;border-radius:11px; position:relative; }
+  .tg.on{ background:linear-gradient(90deg,#2ee6c8,#1fb8d6);} .tg i{ position:absolute; top:3px; right:3px; width:16px;height:16px;border-radius:50%; background:#fff; }
+  .abtn{ height:34px; border-radius:8px; display:flex;align-items:center;justify-content:center; font-size:10.5px; margin-bottom:8px; }
+  .abtn.pri{ background:#0f1116; border:1px solid rgba(46,230,200,.6); color:var(--ink); }
+  .abtn.sec{ background:#16191f; border:1px solid rgba(255,255,255,.07); color:#cfd8e2; }
+  .abtn.dis{ background:#101216; color:#4a5462; }
+  .upgrade{ padding:16px; position:relative; overflow:hidden; background:#13151a; }
+  .upgrade h2{ font-size:14px; font-weight:700; }
+  .upgrade p{ font-size:9.5px; color:var(--muted); margin-top:6px; line-height:1.5; }
+  .upgrade .g{ position:absolute; right:-20px; top:-20px; width:90px;height:90px;border-radius:50%; background:radial-gradient(circle,#2ee6c880,transparent 70%); }
+
+  .bottombar{ display:flex; gap:9px; margin-top:14px; }
+  .density{ flex:1.4; padding:0 14px; height:40px; display:flex;align-items:center; gap:12px; font-size:10.5px; color:#cfd8e2; }
+  .density .sw{ width:22px;height:12px;border-radius:3px; background:#2a2e36; }
+  .approved{ flex:1; padding:0 14px; height:40px; display:flex;align-items:center; gap:10px; font-size:10px; color:#cfd8e2; }
+  .approved i{ width:16px;height:16px;border-radius:50%; background:#1d3a2e; position:relative; }
+  .approved i::after{ content:""; position:absolute; left:5.5px;top:5.5px; width:5px;height:5px;border-radius:50%; background:#2ee6a0; }
+
+  .badge-mock{ position:absolute; left:50%; transform:translateX(-50%); top:6px; z-index:40; font-size:10px; letter-spacing:1px; text-transform:uppercase; font-weight:700; color:#0a0612; background:#F4D35E; padding:5px 11px; border-radius:999px; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <div class="badge-mock">Mockup - not live</div>
+  <div class="bk" style="left:140px;top:150px;width:160px;height:160px;background:radial-gradient(circle,#2ee6c870,transparent 70%);"></div>
+  <div class="bk" style="left:480px;top:170px;width:150px;height:150px;background:radial-gradient(circle,#ff5ea870,transparent 70%);"></div>
+
+  <!-- top bar -->
+  <div class="panel topbar">
+    <div class="brand"><div class="o"></div><b>CB <span>Edge</span></b></div>
+    <div class="ic">&#128276;<span class="dot"></span></div>
+    <div class="ic">&#9636;</div>
+    <div class="search">&#128269;&nbsp;&nbsp; Search tickers...</div>
+    <div style="margin-left:auto;display:flex;gap:10px;">
+      <div class="seg"><span class="on">1DTE</span><span>0DTE</span><span>Wkly</span></div>
+      <div class="nm">Thu 6/25 &nbsp;&#9662;</div>
+    </div>
+  </div>
+
+  <!-- session card -->
+  <div class="cardwrap">
+    <div class="vcard">
+      <div class="ready"><i></i> Live chain ready</div>
+      <div class="lab">SPX · SESSION</div>
+      <div class="px">7,401.35</div>
+      <div class="chg green">&#9650; +36.14 &nbsp;(+0.49%)</div>
+      <div class="lv">
+        <span>VIX<b class="red">18.63</b></span>
+        <span>ESU<b class="green">7,472.75</b></span>
+        <span>NET GEX<b class="green">+$5.11B</b></span>
+      </div>
+      <div class="open">Open chain</div>
+    </div>
+  </div>
+
+  <!-- tiles -->
+  <div class="tiles">
+    <div class="panel tile"><div class="k">CALL WALL</div><div class="v green">7,425</div><div class="bar"><i class="teal" style="width:82%"></i></div></div>
+    <div class="panel tile"><div class="k">PUT WALL</div><div class="v red">7,320</div><div class="bar"><i class="pink" style="width:74%"></i></div></div>
+    <div class="panel tile"><div class="k">FLIP</div><div class="v amber">7,422</div><div class="bar"><i class="mix" style="width:55%"></i></div></div>
+    <div class="panel tile"><div class="k">MVC <span style="color:#ff5ea8">&#9873;</span></div><div class="v">7,320</div><div class="bar"><i class="pink" style="width:48%"></i></div></div>
+    <div class="panel tile"><div class="k">ATM</div><div class="v">7,410</div><div class="bar"><i class="teal" style="width:60%"></i></div></div>
+  </div>
+
+  <!-- mid -->
+  <div class="mid">
+    <div class="panel chart">
+      <div class="h"><span class="t">Net GEX &middot; <span style="color:var(--faint);font-weight:400;">19:49:46</span></span><div class="btns"><span class="chip2">Vol Only</span><span class="chip2">&#9636; OI Overlay</span><span class="chip2">&#8635; Now</span></div></div>
+      <div class="legend"><span style="color:#7c5cff;">&#9632; + GEX</span><span style="color:#f0b429;">&#9632; - GEX</span><span style="margin-left:auto;color:var(--faint);">SPX 7409.95</span></div>
+      <svg width="100%" height="138" viewBox="0 0 440 138" preserveAspectRatio="none" style="margin-top:8px;">
+        <defs>
+          <linearGradient id="ba" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f0b429"/><stop offset="100%" stop-color="#b97e0a"/></linearGradient>
+          <linearGradient id="bb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7c5cff"/><stop offset="100%" stop-color="#4a2fd0"/></linearGradient>
+        </defs>
+        <g stroke="#ffffff" stroke-opacity=".05"><line x1="0" y1="78" x2="440" y2="78"/></g>
+        <line x1="240" y1="0" x2="240" y2="138" stroke="#ffffff" stroke-opacity=".10" stroke-dasharray="3 4"/>
+        <g>
+          <rect x="10" y="78" width="7" height="30" fill="url(#ba)"/><rect x="21" y="78" width="7" height="40" fill="url(#ba)"/>
+          <rect x="32" y="78" width="7" height="34" fill="url(#ba)"/><rect x="43" y="78" width="7" height="48" fill="url(#ba)"/>
+          <rect x="54" y="78" width="7" height="56" fill="url(#ba)"/><rect x="65" y="78" width="7" height="42" fill="url(#ba)"/>
+          <rect x="76" y="78" width="7" height="48" fill="url(#ba)"/><rect x="87" y="78" width="7" height="36" fill="url(#ba)"/>
+          <rect x="98" y="78" width="7" height="26" fill="url(#ba)"/><rect x="109" y="78" width="7" height="30" fill="url(#ba)"/>
+          <rect x="120" y="78" width="7" height="22" fill="url(#ba)"/><rect x="131" y="78" width="7" height="16" fill="url(#ba)"/>
+          <rect x="142" y="78" width="7" height="12" fill="url(#ba)"/><rect x="153" y="78" width="7" height="8" fill="url(#ba)"/>
+          <rect x="170" y="50" width="7" height="28" fill="url(#bb)"/><rect x="181" y="40" width="7" height="38" fill="url(#bb)"/>
+          <rect x="192" y="28" width="7" height="50" fill="url(#bb)"/><rect x="203" y="38" width="7" height="40" fill="url(#bb)"/>
+          <rect x="214" y="48" width="7" height="30" fill="url(#bb)"/><rect x="225" y="36" width="7" height="42" fill="url(#bb)"/>
+          <rect x="236" y="46" width="7" height="32" fill="url(#bb)"/><rect x="247" y="54" width="7" height="24" fill="url(#bb)"/>
+          <rect x="258" y="44" width="7" height="34" fill="url(#bb)"/><rect x="269" y="58" width="7" height="20" fill="url(#bb)"/>
+          <rect x="280" y="52" width="7" height="26" fill="url(#bb)"/><rect x="291" y="60" width="7" height="18" fill="url(#bb)"/>
+          <rect x="302" y="62" width="7" height="16" fill="url(#bb)"/><rect x="313" y="66" width="7" height="12" fill="url(#bb)"/>
+          <rect x="330" y="50" width="7" height="28" fill="url(#bb)"/><rect x="341" y="64" width="7" height="14" fill="url(#bb)"/>
+          <rect x="352" y="66" width="7" height="12" fill="url(#bb)"/><rect x="363" y="68" width="7" height="10" fill="url(#bb)"/>
+          <rect x="380" y="66" width="7" height="12" fill="url(#bb)"/><rect x="391" y="70" width="7" height="8" fill="url(#bb)"/>
+          <rect x="408" y="71" width="7" height="7" fill="url(#bb)"/><rect x="419" y="72" width="7" height="6" fill="url(#bb)"/>
+        </g>
+        <rect x="22" y="116" width="54" height="12" rx="3" fill="#3a2f08"/><text x="49" y="125" text-anchor="middle" font-size="7.5" fill="#f0b429">MVC 7,320</text>
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:8px;color:#5f6d7c;margin-top:4px;"><span>7,200</span><span>7,300</span><span>7,400</span><span>7,500</span><span>7,600</span></div>
+    </div>
+    <div class="panel feed">
+      <div class="t">Economic calendar</div>
+      <div class="quote">"The four most dangerous words in investing are: this time it's different." — John Templeton</div>
+      <div class="fi"><i></i><div><div class="tag">PRESIDENT <span>USD · 11:22 AM</span></div><div class="x">White House Press Office: Lunch lid until 12:20 PM</div></div></div>
+      <div class="fi"><i></i><div><div class="tag">PRESIDENT <span>USD · 12:00 PM</span></div><div class="x">CANCELLED: President signs 21st Century ROAD to Housing Act</div></div></div>
+      <div class="fi" style="margin-bottom:0;"><i></i><div><div class="tag">PRESIDENT <span>USD · 1:00 PM</span></div><div class="x">President attends Senate Steering Committee Lunch</div></div></div>
+    </div>
+  </div>
+
+  <!-- lower -->
+  <div class="lower">
+    <div class="panel table">
+      <div class="h"><span class="t">Live GEX heatmap</span><div class="btns"><span class="chip2">1DTE 06-25</span><span class="chip2">Intensity 1.75x</span><span class="chip2">Heatmap &#8645;</span></div></div>
+      <div class="thead"><span>Strike</span><span>Net GEX</span><span>Vol Only GEX</span><span>DEX</span><span>Net VEX</span></div>
+      <div class="trow"><span><span class="badge b-call">#4</span>7,500</span><span class="green">+$34.1M</span><span><span class="cell-blue">+$862.07M</span></span><span class="red">-$541.5M</span><span class="green">+$63.06M</span></div>
+      <div class="trow"><span><span class="badge b-call">#3</span>7,485</span><span class="green">+$37.9M</span><span class="green">+$347.49M</span><span class="red">-$151.6M</span><span class="green">+$23.04M</span></div>
+      <div class="trow"><span><span class="badge b-put">#2</span>7,460</span><span class="green">+$50.3M</span><span class="green">+$791.60M</span><span class="green">+$298.4M</span><span class="green">+$34.52M</span></div>
+      <div class="trow"><span><span class="badge b-call">#3</span>7,450</span><span class="red">-$321.7M</span><span><span class="cell-blue">+$2.16B</span></span><span class="green">+$592.5M</span><span class="green">+$60.05M</span></div>
+      <div class="trow"><span><span class="badge b-put">#1</span>7,425</span><span class="green">+$56.8M</span><span><span class="cell-blue">+$1.45B</span></span><span class="green">+$1.29B</span><span class="green">+$17.55M</span></div>
+      <div class="trow row-amber"><span style="color:#ffce6a;">7,410 ATM</span><span class="red">-$27.3M</span><span><span class="cell-blue">+$640.18M</span></span><span class="green">+$704.3M</span><span class="red">-$201.7K</span></div>
+      <div class="trow"><span>7,400</span><span class="red">-$41.5M</span><span class="green">+$1.06B</span><span><span class="cell-blue">+$1.68B</span></span><span class="red">-$8.03M</span></div>
+      <div class="trow" style="border:none;"><span><span class="badge b-put">#5</span>7,385</span><span class="green">+$31.7M</span><span class="green">+$51.48M</span><span class="green">+$531.5M</span><span class="red">-$1.53M</span></div>
+    </div>
+
+    <div class="rcol">
+      <div class="panel actions">
+        <div class="t">Quick links</div>
+        <div class="abtn sec">ES Candles</div>
+        <div class="abtn sec">Fails</div>
+        <div class="abtn sec">Heatmap</div>
+        <div class="abtn sec">Multigreek</div>
+      </div>
+      <div class="panel upgrade">
+        <div class="g"></div>
+        <h2>Confidence score</h2>
+        <p>Live MVC scored 0–100 · Hit / Pivot / Chop</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- bottom -->
+  <div class="bottombar">
+    <div class="panel density"><div class="sw"></div> Compact / Comfortable density</div>
+    <div class="panel approved"><i></i> Levels published &nbsp; 09:42 ET</div>
+  </div>
+</div>
+</body>
+</html>

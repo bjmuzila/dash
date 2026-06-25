@@ -9,7 +9,6 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import {
   HOME_THEME,
   homeButtonStyle,
@@ -183,8 +182,6 @@ function TrendChart() {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function TodoPage() {
-  usePageLoadStatus({ pageKey: "todo", pageLabel: "To-Do", path: "/personal/todo" });
-
   const [hydrated, setHydrated] = useState(false);
   const [checklists, setChecklists] = useState<Checklists>(DEFAULT_CHECKLISTS);
   const [titles, setTitles] = useState<PillarTitles>(DEFAULT_TITLES);

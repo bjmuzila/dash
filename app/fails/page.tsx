@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo } from "react";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { LiveIb } from "@/components/insights/IbLogic";
 import {
@@ -86,8 +85,6 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
 }
 
 export default function FailsPage() {
-  usePageLoadStatus({ pageKey: "fails", pageLabel: "Fails", path: "/fails" });
-
   const { candles: liveCandles, historical, connected, refresh } = useEsCandles();
 
   // useEsCandles returns ONLY today's bars in `candles`; `historical` holds the

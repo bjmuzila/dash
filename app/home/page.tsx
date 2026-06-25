@@ -5,7 +5,6 @@ import SnapshotPanel from "@/components/dashboard/SnapshotPanel";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
-import NquQuotePill from "@/components/dashboard/NquQuotePill";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -423,10 +422,8 @@ export default function HomePage() {
   // doesn't supply them — keeps VIX/ESU day-change % populated and sane.
   const [vixPrevFallback, setVixPrevFallback] = useState(0);
   const [esuPrevFallback, setEsuPrevFallback] = useState(0);
-  const vixPrevEff = vixPrevClose > 0 ? vixPrevClose : vixPrevFallback;
-  const esuPrevEff = esuPrevClose > 0 ? esuPrevClose : esuPrevFallback;
-  const vixPct = vix > 0 && vixPrevEff > 0 ? ((vix - vixPrevEff) / vixPrevEff) * 100 : null;
-  const esuPct = esFut > 0 && esuPrevEff > 0 ? ((esFut - esuPrevEff) / esuPrevEff) * 100 : null;
+  // (VIX/ESU day-change % derivations moved to the toolbar ticker, which sources
+  // its own quotes; the prev-close state above still feeds other readouts.)
   // SPX flow tape (per-order) pushed from the server `flow` WS message.
   const [flowOrders, setFlowOrders] = useState<FlowOrder[]>([]);
   // Full server flow bucket (vols/premium) for the Snapshot panel.
@@ -857,7 +854,7 @@ export default function HomePage() {
   };
 
   return (
-    <div style={{ height: "100%", width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, minHeight: 0, width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
@@ -965,34 +962,7 @@ export default function HomePage() {
           <div className="home-col home-col-right" style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
             <div ref={tickerCqRef} className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative", overflow: "hidden" }}>
              <div ref={tickerBoxRef} style={{ display: "block", width: "100%", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
-              <div className="ticker-row" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "nowrap", minWidth: 0, width: "100%", justifyContent: "space-between" }}>
-                {/* Clock removed — now lives only in the NET GEX chart header */}
-                {/* VIX — label+price never shrink; change% hidden via className */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>VIX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 700, color: "#fff" }}>{vix > 0 ? vix.toFixed(2) : "—"}</span>
-                  {vixPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: vixPct >= 0 ? C.green : C.red }}>{vixPct >= 0 ? "+" : ""}{(vix - vixPrevEff).toFixed(2)} ({vixPct >= 0 ? "+" : ""}{vixPct.toFixed(2)}%)</span>}
-                </div>
-                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
-                {/* ESU */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>ESU</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>{esFut > 0 ? esFut.toFixed(2) : "—"}</span>
-                  {esuPct != null && <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: esuPct >= 0 ? C.green : C.red }}>{esuPct >= 0 ? "+" : ""}{(esFut - esuPrevEff).toFixed(2)} ({esuPct >= 0 ? "+" : ""}{esuPct.toFixed(2)}%)</span>}
-                </div>
-                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
-                {/* SPX */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>SPX</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 19, fontWeight: 800, color: "#fff" }}>{(spotDisplay > 0 ? spotDisplay : spot) > 0 ? (spotDisplay > 0 ? spotDisplay : spot).toFixed(2) : "—"}</span>
-                  <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 500, color: spxChange >= 0 ? C.green : C.red }}>{spxChange >= 0 ? "+" : ""}{spxChange.toFixed(2)} ({spxChangePct >= 0 ? "+" : ""}{spxChangePct.toFixed(2)}%)</span>
-                </div>
-                <span className="ticker-div" style={{ color: "rgba(255,255,255,0.18)", fontSize: 12, flexShrink: 0 }}>│</span>
-                {/* NQU quote — inline next to SPX; click price to open all quotes (top gainers first) */}
-                <div style={{ flexShrink: 0 }}>
-                  <NquQuotePill />
-                </div>
-              </div>
+              {/* VIX / ESU / SPX / NQU quotes moved to the global top toolbar (ToolbarTicker). */}
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", width: "100%", minWidth: 0, paddingLeft: 13 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>

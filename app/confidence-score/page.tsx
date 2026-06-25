@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import {
   HOME_THEME,
   homeButtonStyle,
@@ -770,7 +769,6 @@ function CalibrationPanel() {
 }
 
 export default function ConfidenceScorePage() {
-  usePageLoadStatus({ pageKey: "confidence-score", pageLabel: "Confidence", path: "/confidence-score" });
   const [date, setDate] = useState(todayET());
   const [opex, setOpex] = useState(false);
   const [data, setData] = useState<ApiResp | null>(null);

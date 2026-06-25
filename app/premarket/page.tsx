@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import { HOME_THEME as HT, homeShellStyle, homePanelStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 // ── Symbol definitions ───────────────────────────────────────────────────────
@@ -313,7 +312,6 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function PremarketPage() {
-  usePageLoadStatus({ pageKey: "premarket", pageLabel: "Premarket", path: "/premarket" });
   const [quotes, setQuotes] = useState<QuoteMap>({});
   const [yahooQuotes, setYahooQuotes] = useState<QuoteMap>({});
   const [yahooTs, setYahooTs] = useState("");

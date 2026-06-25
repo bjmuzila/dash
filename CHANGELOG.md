@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026-06-24 (session 64) — Public legal pages + sidebar Disclaimer menu
+
+### Legal pages (`app/terms`, `app/risk-disclosure`, `app/privacy`, `app/disclaimer`)
+- Added four public legal pages tailored to a paid SPX GEX / options-flow tool: **Terms of Service**, **Risk Disclosure & Trading Disclaimer**, **Privacy Policy**, and a standalone **Disclaimer** (no-liability catch-all). Content covers "not financial advice," no-warranty, limitation of liability, 0DTE/options risk, Confidence Score / estimated-move hypothetical-results disclaimers, and a Privacy Policy matching the real stack (Clerk auth, waitlist, usage data, localStorage prefs).
+- New shared `components/legal/LegalShell.tsx`: full-bleed scrollable wrapper (CB Edge logo, back-to-site link, last-updated stamp, cross-links to the other 3 pages, © footer) so the pages don't duplicate chrome. Styled on HOME_THEME (dark + cyan glass).
+
+### Routing (`middleware.ts`, `components/shared/LayoutShell.tsx`)
+- Added the 4 routes to `isPublicRoute` (reachable pre-auth) and to the maintenance-mode exemption list (readable during downtime).
+- Added them to `BARE_ROUTES` so they render full-bleed without the dashboard sidebar/chrome — same treatment as `/`, `/sign-in`, `/sign-up`.
+
+### Landing footer (`components/landing/LandingClient.tsx`)
+- Added a bottom-pinned legal footer (Terms · Risk Disclosure · Privacy · Disclaimer) visible pre-auth; bumped the card scroll container's bottom padding so the footer never overlaps on short viewports.
+
+### Sidebar Disclaimer menu (`components/shared/Sidebar.tsx`)
+- Added a **Disclaimer** button directly under the Clerk `UserButton`. Click/hover opens an upward popover (sideways when collapsed) listing all 4 legal pages **plus Help & Docs** (`/docs`, from the GEX group). New `ShieldIcon`, `legalOpen` state, `LEGAL_LINKS` constant; matches the existing Tooltip/hover/glass patterns. Works in expanded + collapsed modes; closes on navigation.
+- NOTE: coexists with session 61's Notes-dock removal in the same file — verified on disk that both merged cleanly (no dangling `NoteIcon`/`NotesPanel`/`PencilIcon`/`user` refs; `CloseIcon` retained for Quick Pages).
+
+### Placeholders to fill before relying on these
+- Terms §14 governing-law/venue: `[STATE]` and `[COUNTY/STATE]`.
+- Contact email `support@cbedge.net` used throughout — change if not correct.
+- Not legal advice — have an attorney review before launch.
+
+## 2026-06-24 (session 63) — Social Media admin page: GEX read → shareable "SPX · Daily Levels" card
+
+### New route + page (`app/social-media/page.tsx`)
+- Built the Social Media admin page (App Router, sidebar Admin group entry already wired). v2 conventions: `'use client'`, `id="page-social-media"`, Arial, inline `<style>`. Token names from the design ref (`--bg0/--cyan/--text2…`) aliased onto the real global tokens (`--bg/--accent/--text…`) so nothing hardcodes a new color — the QuotesPanel vars the task referenced don't actually exist in globals.css and that route is a dead redirect.
+- **Left "Daily Input" panel** hydrates live from `/api/social-media/daily-input`: SPX spot, prior close, gamma flip, call/put walls, expected move, net GEX, ES overnight H/L. All fields editable (dirty-flag freezes auto-fill once edited; manual Refresh re-pulls). ES overnight is sourced via the Fails-page candle logic (`useEsCandles` + `computeRefLevels`).
+- **Gamma regime strip**: label is driven by the **sign of net GEX** (so it can never contradict the net-GEX value shown). Spot-vs-flip is context only, not a tiebreak — fixed the original OR bug where positive net GEX + spot-under-flip wrongly read "NEGATIVE GAMMA".
+- **Expected-move levels centered on the prior-day SPX close** (not live spot): UP = close + EM, DOWN = close − EM. `EmRangeReadout` shows `lower · Close X ±EM · upper`.
+
+### Output evolved to a shareable image card
+- Right column is now a single **SPX · Daily Levels** card (replaced the earlier AI X-post/thread/Discord cards). Auto-fills from the left; no model call. Sections: Estimated Move (CLOSE/EM/UP/DOWN), regime strip + bias, Upside/Downside levels, Overnight Action, CB Edge footer + disclaimer.
+- **Two actions**: "Copy card" renders the card to PNG via `html2canvas` (already a repo dep) and writes the **image** to the clipboard (`ClipboardItem`); "Copy & Open X" copies then opens the X composer to paste. Both fall back to a **PNG download** when the browser blocks clipboard image writes. Buttons flash status.
+
+### API routes
+- `app/api/social-media/daily-input/route.ts` — composes existing live sources only (no proxy-file edits): `/proxy/gex` (spot/walls/flip/net GEX/prevClose), EM from the SPX ATM straddle via `fetchChainFull` (same `0.84·IV·spot·√(dte/365)` math as EstimatedMoves), ES overnight H/L from `/api/snapshots/candles`. Exposes `spxPrevClose` + `emUpper`/`emLower` (close-anchored).
+- `app/api/social-media/generate/route.ts` — Anthropic `claude-sonnet-4-6`, CB Edge voice, strict JSON `{xPost, xThread[], discordDrop}`, brace-walking fence-stripper. **Left in place but unused** now that the page renders a card client-side (keep for future AI-post mode). Requires `ANTHROPIC_API_KEY` only if re-enabled.
+
+### Deploy notes (recurring — candidates for memory)
+- Linux sandbox down all session (`HYPERVISOR_VIRT_DISABLED`); verified by hand, not `tsc`/build.
+- Local build kept tripping `Cannot find module for page: /_document` (and `/disclaimer`, `/api/*`) — **stale `.next` cache**, fixed by `Remove-Item -Recurse -Force .next` + one build. Caused by running `npm run build` then `push.ps1` (a 2nd build) against the same dirty cache. Consider adding the `.next` clear to `push.ps1`.
+- VPS multi-line deploy must be pasted as a **single line** or the `\` continuations break (`NEXT_PUBLIC: command not found`). This deploy did NOT need `ANTHROPIC_API_KEY` forwarded (card is client-side). Shipped: image built, container started, live.
+- ⚠️ Verify on the card that **Call Wall < Gamma Flip** is real data, not swapped fields — it publishes as-is.
+
+## 2026-06-24 (session 62) — /fails: prev-day/week levels not tracking (string-timestamp bug) + fail log reframed as fade trades
+
+### Symptom
+- `/fails` Live Status showed only Overnight High/Low (ON-H/ON-L). Prev-Day (PDH/PDL) and Prev-Week (PWH/PWL) cards were absent, even though ES had taken out both prior-day extremes intraday.
+
+### Diagnosis (everything checked out except one thing)
+- DB had yesterday's 78 RTH bars (PDH 7491.00 / PDL 7415.25). Browser received them, the `historical` hook held all 1442 bars incl. 06-23, the deployed bundle had the full PD/PW logic, and `computeRefLevels` run standalone on that data returned all 6 levels. Yet the live component returned only 2.
+- **Root cause:** historical ES candles deserialize from Postgres with `timestamp` as a **STRING** (BIGINT → JSON). `isRthBar` did `new Date('1782187200000')` → **Invalid Date** → `etParts` NaN-guard → every prior-day bar's RTH check returned false → `pdBars.length === 0` → PDH/PDL/PWH/PWL silently dropped. Today's ON bars came from the live WS feed with **numeric** timestamps, so only those survived — which is why ON rendered and the rest didn't.
+- Why manual console tests passed: they coerced `+x.timestamp`; the component used the raw string. Caught by adding a temp `[computeRefLevels PD]` log that showed `pdBarCount: 0, ts: '1782187200000'` (quoted string).
+
+### Fix (two layers)
+- `lib/snapdb.ts` — added `normalizeCandle()` coercing `timestamp`/`open`/`high`/`low`/`close`/`volume` to `Number()` for both `queryEsCandlesToday` and `queryEsCandlesHistorical`.
+- `lib/failLevels.ts` — `etParts` now does `new Date(Number(ts))` as a backstop so no string timestamp can break RTH detection again.
+
+### Fail log reframed as fade trades (`app/fails/page.tsx` FailTable)
+- Per Brandon: "look above & fail" is the pattern, but he wants to see WINS / good R/R. Relabeled the table to a trade lens: **Trade** (Fade Short for above-fails / Fade Long for below-fails), **Entry**, **Risk** (poke past level = stop distance), **Reward** (follow-through), **R/R**, and a **Result** badge — **WIN when R/R ≥ 2**, else LOSS. Winning rows get a faint green wash. R/R shown is theoretical max (follow-through ÷ poke), not a guaranteed fill.
+
+### Also noted
+- `failLevels.ts` symbol filter on the page (`includes("ESU")`) is a no-op: stored symbol is `/ES`/`/ES:XCME`, so `esu` is always empty and it falls back to all candles. Harmless, left as-is.
+- Multiple `--no-cache` rebuilds with the same chunk hash (`7e092a33`) were a red herring — the chunk was unchanged because the source genuinely hadn't changed; the bug was runtime data typing, not a stale build.
+
+## 2026-06-24 (session 61) — Move Notes from sidebar to a right-side push dock (🖍️ NOTES)
+
+### What changed
+- Moved the per-user quick-jot Notes out of the **left sidebar** and into a new **🖍️ NOTES button in `GlobalToolbar`** that opens a **right-side companion panel**.
+- Final behavior (after two iterations): the panel is a **flex sibling of `<main>`** (Sidebar | main | NotesDock) that **pushes** page content like the left sidebar — no floating overlay, nothing blurred over content. Open = 320px, closed = `width: 0` (fully gone), opened only by the NOTES button (or its own ✕). Open/closed is persisted (`notes-dock-open-v1`) so it **stays out** across navigation/reloads.
+
+### Why the rewrite
+- First pass used a `position: fixed` slide-out *inside* the toolbar. The toolbar has `backdrop-filter: blur(16px)`, and a filter/backdrop-filter ancestor becomes the **containing block for `position: fixed` descendants** — so the panel was sized/placed against the 44px toolbar, not the viewport, producing the "slides too far and comes back" glitch. Brandon also wanted a push panel (no blur), so the fixed/portal approach was dropped entirely.
+
+### Files
+- **New `components/shared/notes.tsx`** — shared `Note` type, `useNotes` hook, `formatNoteTime`, `NoteIcon`, and reusable `NotesBody` (add box + list). Single source of truth so the dock and any future caller agree. Storage key unchanged (`sidebar-notes-v1:<userId>`) → existing notes carry over. Removed `autoFocus` from the input (would steal focus on every page load now that the body is always mounted).
+- **New `components/shared/NotesPanelContext.tsx`** — `open/openPanel/closePanel/togglePanel`, persisted to localStorage. Mirrors `MobileNavContext`.
+- **New `components/shared/NotesDock.tsx`** — the right-side push panel; animates `width` 0↔320 (`flexShrink:0`, `overflow:hidden`, fixed-width inner so content doesn't reflow while animating). Signed-in only.
+- **`components/shared/GlobalToolbar.tsx`** — right-slot 🖍️ NOTES button with live count; toggles the context. Portal/backdrop overlay removed.
+- **`components/shared/LayoutShell.tsx`** — wrapped `ShellInner` in `NotesPanelProvider`; rendered `<NotesDock />` as a sibling after `<main>`.
+- **`components/shared/Sidebar.tsx`** — stripped the old `NotesPanel`, local `useNotes`/`Note`/`formatNoteTime`/`NoteIcon`/`PencilIcon`, the `NOTES_STORAGE_PREFIX`, the `useNotes` call, and the sidebar mount block. Dropped now-unused `user` from `useUser()`.
+
+### Notes / caveats
+- ⚠️ Linux sandbox was down all session again (`HYPERVISOR_VIRT_DISABLED`); changes verified by hand, **not** by `tsc`/build. Run `npm run build` before pushing (push.ps1 now gates on it).
+- Open question (not done): whether the dock should *overlay* instead of *push* on narrow/mobile widths. Currently it pushes everywhere (capped at `92vw`).
+
 ## 2026-06-23 (session 60) — Fix deploy pipeline: showHpay build break + push.ps1 staging bug
 
 ### Root cause

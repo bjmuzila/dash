@@ -1,0 +1,464 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { UserButton, useUser } from "@clerk/nextjs";
+
+import { HOME_THEME } from "./homeTheme";
+import { useMobileNav } from "./MobileNavContext";
+
+// ─── icons (20px, stroke = currentColor) ─────────────────────────────────────
+type IconProps = { size?: number };
+const Svg = ({ size = 20, children }: IconProps & { children: React.ReactNode }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+const HomeIcon = (p: IconProps) => <Svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Svg>;
+const GridIcon = (p: IconProps) => <Svg {...p}><path d="M3 4h18l-6 7v7l-6 3v-10z" /><line x1="3" y1="7.5" x2="21" y2="7.5" /><line x1="6.5" y1="11" x2="17.5" y2="11" /></Svg>;
+const FootIcon = (p: IconProps) => <Svg {...p}><path d="M4 3h7M4 21h7M5 3c0 4 5 5 5 9s-5 5-5 9M10 3c0 4-5 5-5 9s5 5 5 9" /><path d="M14 5h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /><line x1="15.5" y1="9" x2="18.5" y2="9" /><line x1="15.5" y1="12" x2="18.5" y2="12" /></Svg>;
+const ChartIcon = (p: IconProps) => <Svg {...p}><path d="M5 7c0-1.5 1-2 2-1.5M5 7l-1.5-1M5 7v2.5M5 9.5l1.5 1.5" /><path d="M19 7c0-1.5-1-2-2-1.5M19 7l1.5-1M19 7v2.5M19 9.5l-1.5 1.5" /><path d="M12 4v8" /><path d="M12 13l-7 3v3l7 2 7-2v-3z" /></Svg>;
+const UserIcon = (p: IconProps) => <Svg {...p}><path d="M3 10l8-6 8 6" /><path d="M5 9.5V20h11V9.5" /><circle cx="10" cy="14.5" r="2.3" /><line x1="10" y1="14.5" x2="11.4" y2="13.1" /><circle cx="19" cy="17" r="2.2" /><path d="M15.5 21.5c0-1.6 1.5-2.5 3.5-2.5s3.5.9 3.5 2.5" /></Svg>;
+const WrenchIcon = (p: IconProps) => <Svg {...p}><circle cx="7.5" cy="7.5" r="2.4" /><path d="M7.5 3.6v1.5M7.5 9.9v1.5M3.6 7.5h1.5M9.9 7.5h1.5M4.7 4.7l1.1 1.1M10.3 10.3l-1.1-1.1M10.3 4.7l-1.1 1.1M4.7 10.3l1.1-1.1" /><circle cx="14" cy="15" r="2.2" /><path d="M15.7 16.7l4 4M18 19l1.3-1.3M19.3 20.3l1.3-1.3" /></Svg>;
+const ChevronIcon = ({ open }: { open: boolean }) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.18s" }}>
+    <polyline points="9 6 15 12 9 18" />
+  </svg>
+);
+const StarIcon = (p: IconProps) => <Svg {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></Svg>;
+const CloseIcon = ({ size = 12 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+);
+const ShieldIcon = (p: IconProps) => <Svg {...p}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V5z" /></Svg>;
+
+// ─── social icons ─────────────────────────────────────────────────────────────
+const XIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644z" /></svg>;
+const YouTubeIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.5a3 3 0 0 0-2.1-2.1C19 4.9 12 4.9 12 4.9s-7 0-8.9.5A3 3 0 0 0 1 7.5 31 31 0 0 0 .5 12 31 31 0 0 0 1 16.5a3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 23.5 12 31 31 0 0 0 23 7.5zM9.75 15.5v-7l6 3.5z" /></svg>;
+const TikTokIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82a4.28 4.28 0 0 1-1.06-2.82h-3.2v12.93a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .76-5.06v-3.3a5.86 5.86 0 0 0-.76-.05 5.89 5.89 0 1 0 5.89 5.89V9.01a7.5 7.5 0 0 0 4.37 1.4V7.2a4.28 4.28 0 0 1-3.41-1.38z" /></svg>;
+
+const SOCIALS = [
+  { id: "x", label: "X", href: "https://x.com/BzilaTrades", Icon: XIcon, color: "#ffffff" },
+  { id: "youtube", label: "YouTube", href: "https://www.youtube.com/@bzilatrades", Icon: YouTubeIcon, color: "#FF0000" },
+  { id: "tiktok", label: "TikTok", href: "https://www.tiktok.com/@bzilatrades", Icon: TikTokIcon, color: "#25F4EE" },
+];
+
+const LEGAL_LINKS: { label: string; href: string }[] = [
+  { label: "Disclaimer", href: "/disclaimer" },
+  { label: "Risk Disclosure", href: "/risk-disclosure" },
+  { label: "Terms of Service", href: "/terms" },
+  { label: "Privacy Policy", href: "/privacy" },
+  { label: "Help & Docs", href: "/docs" },
+];
+
+type NavItem = { label: string; href: string };
+type IconCmp = (p: IconProps) => React.ReactElement;
+type NavGroup = { id: string; label: string; Icon: IconCmp; devOnly?: boolean; items: NavItem[] };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "gex",
+    label: "GEX",
+    Icon: GridIcon,
+    items: [
+      { label: "Home", href: "/home" },
+      { label: "Home2", href: "/home2" },
+      { label: "Multi Greek", href: "/mult-greek" },
+      { label: "Options Chain", href: "/options-chain" },
+      { label: "Greeks", href: "/greeks" },
+      { label: "Confidence", href: "/confidence-score" },
+      { label: "Estimated Moves Front End", href: "/em" },
+    ],
+  },
+  {
+    id: "futures",
+    label: "Futures",
+    Icon: FootIcon,
+    items: [
+      { label: "ES Candles", href: "/es-candles" },
+      { label: "Fails", href: "/fails" },
+    ],
+  },
+  {
+    id: "stock-market",
+    label: "Stock Market",
+    Icon: ChartIcon,
+    items: [
+      { label: "Premarket", href: "/premarket" },
+      { label: "Economic Calendar", href: "/economic-calendar" },
+    ],
+  },
+  {
+    id: "personal",
+    label: "Personal",
+    Icon: UserIcon,
+    items: [
+      { label: "Journal", href: "/trading" },
+      { label: "Budget", href: "/budget" },
+      { label: "To-Do", href: "/personal/todo" },
+    ],
+  },
+  {
+    id: "admin",
+    label: "Admin",
+    Icon: WrenchIcon,
+    devOnly: true,
+    items: [
+      { label: "Owner", href: "/dev/owner" },
+      { label: "Admin", href: "/dev/admin" },
+      { label: "Database", href: "/database" },
+      { label: "Dev", href: "/dev" },
+      { label: "Estimated Moves BE", href: "/estimated-move" },
+      { label: "Social Media", href: "/social-media" },
+      { label: "Logs", href: "/logs" },
+      { label: "Changelog", href: "/changelog" },
+    ],
+  },
+];
+
+const NAV_ITEM_BY_HREF = new Map<string, NavItem>(
+  NAV_GROUPS.flatMap((g) => g.items).map((i) => [i.href, i]),
+);
+
+// ─── Quick Pages (pinned shortcuts, persisted) ───────────────────────────────
+const QUICK_STORAGE_KEY = "sidebar-quick-pages-v1";
+const QUICK_MAX = 4;
+
+function useQuickPages() {
+  const [quick, setQuick] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(QUICK_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setQuick(parsed.filter((h) => typeof h === "string" && NAV_ITEM_BY_HREF.has(h)).slice(0, QUICK_MAX));
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const persist = (next: string[]) => {
+    try { localStorage.setItem(QUICK_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    return next;
+  };
+  const pin = (href: string) => {
+    if (!NAV_ITEM_BY_HREF.has(href)) return;
+    setQuick((prev) => (prev.includes(href) || prev.length >= QUICK_MAX ? prev : persist([...prev, href])));
+  };
+  const unpin = (href: string) => setQuick((prev) => persist(prev.filter((h) => h !== href)));
+  return { quick, pin, unpin };
+}
+
+// ─── menu ────────────────────────────────────────────────────────────────────
+// Anchored dropdown rendered under the toolbar hamburger. `anchor` is the
+// hamburger button's bounding rect (so the panel lines up under it).
+export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
+  const pathname = usePathname();
+  const { isSignedIn } = useUser();
+  const { menuOpen, closeMenu } = useMobileNav();
+  const { quick, pin, unpin } = useQuickPages();
+
+  const [mounted, setMounted] = useState(false);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [legalOpen, setLegalOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  const isActive = (href: string) => pathname === href || (href === "/home" && pathname === "/");
+  const visibleGroups = NAV_GROUPS.filter((g) => !g.devOnly || isSignedIn);
+  const quickSet = new Set(quick);
+
+  // Auto-open the group that contains the active route when the menu opens.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const match = visibleGroups.find((g) => g.items.some((i) => isActive(i.href) && !quickSet.has(i.href)));
+    setOpenGroup(match ? match.id : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuOpen, pathname, isSignedIn]);
+
+  // Close on outside click / Escape (route-change close handled by context).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (panelRef.current?.contains(t)) return;
+      // Ignore clicks on the hamburger itself (it manages its own toggle).
+      if ((e.target as HTMLElement)?.closest?.("[data-nav-hamburger]")) return;
+      closeMenu();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeMenu(); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen, closeMenu]);
+
+  if (!mounted || !menuOpen) return null;
+
+  const left = anchor ? Math.max(8, anchor.left) : 12;
+  const top = anchor ? anchor.bottom + 8 : 60;
+
+  const cyanFill = {
+    background: "rgba(0,240,255,0.12)",
+    border: "1px solid rgba(0,240,255,0.30)",
+    boxShadow: "0 0 12px rgba(0,240,255,0.18)",
+  };
+
+  const rowLink = (item: NavItem, active: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "9px 12px",
+    borderRadius: 10,
+    textDecoration: "none",
+    fontSize: 13.5,
+    fontWeight: active ? 700 : 500,
+    color: active ? "#05060A" : HOME_THEME.text,
+    background: active ? HOME_THEME.cyan : "transparent",
+    boxShadow: active ? "0 0 14px rgba(0,240,255,0.30)" : "none",
+  });
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      role="menu"
+      style={{
+        position: "fixed",
+        top,
+        left,
+        width: 280,
+        maxHeight: "calc(100vh - 80px)",
+        overflowY: "auto",
+        display: "flex",
+        flexDirection: "column",
+        background: "rgba(10,13,20,0.98)",
+        border: `1px solid ${HOME_THEME.border}`,
+        borderRadius: 14,
+        boxShadow: "0 16px 48px rgba(0,0,0,0.7)",
+        backdropFilter: "blur(20px)",
+        zIndex: 100000,
+        padding: 8,
+        scrollbarWidth: "thin",
+      }}
+    >
+      {/* Home */}
+      <Link href="/home" style={rowLink({ label: "Home", href: "/home" }, isActive("/home"))} onClick={closeMenu}>
+        <HomeIcon size={18} />
+        <span>Home</span>
+      </Link>
+
+      {/* Home 2 */}
+      <Link href="/home2" style={rowLink({ label: "Home 2", href: "/home2" }, isActive("/home2"))} onClick={closeMenu}>
+        <HomeIcon size={18} />
+        <span>Home 2</span>
+      </Link>
+
+      <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
+
+      {/* Quick Pages */}
+      {quick.length > 0 && (
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px 4px", color: HOME_THEME.muted }}>
+            <StarIcon size={12} />
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quick Pages</span>
+          </div>
+          {quick.map((href) => {
+            const item = NAV_ITEM_BY_HREF.get(href);
+            if (!item) return null;
+            const active = isActive(item.href);
+            return (
+              <div key={href} style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                <Link href={item.href} onClick={closeMenu} style={{ ...rowLink(item, active), flex: 1, paddingRight: 30 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                </Link>
+                <button
+                  aria-label={`Unpin ${item.label}`}
+                  onClick={(e) => { e.preventDefault(); unpin(item.href); }}
+                  style={{
+                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 18, height: 18, borderRadius: 6, background: "transparent",
+                    border: "none", padding: 0, cursor: "pointer",
+                    color: active ? "#05060A" : HOME_THEME.muted,
+                  }}
+                >
+                  <CloseIcon size={12} />
+                </button>
+              </div>
+            );
+          })}
+          <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
+        </div>
+      )}
+
+      {/* Groups (expandable accordion) */}
+      {visibleGroups.map((group) => {
+        const Icon = group.Icon;
+        const groupActive = group.items.some((i) => isActive(i.href) && !quickSet.has(i.href));
+        const isOpen = openGroup === group.id;
+        return (
+          <div key={group.id} style={{ marginBottom: 2 }}>
+            <button
+              onClick={() => setOpenGroup((v) => (v === group.id ? null : group.id))}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "9px 12px",
+                borderRadius: 10,
+                cursor: "pointer",
+                color: groupActive ? HOME_THEME.cyan : HOME_THEME.text,
+                fontSize: 13.5,
+                fontWeight: groupActive ? 700 : 500,
+                ...(groupActive || isOpen ? { background: "rgba(255,255,255,0.04)", border: `1px solid ${HOME_THEME.border}` } : { background: "transparent", border: "1px solid transparent" }),
+              }}
+            >
+              <Icon size={18} />
+              <span style={{ flex: 1, textAlign: "left" }}>{group.label}</span>
+              <ChevronIcon open={isOpen} />
+            </button>
+            <div
+              style={{
+                overflow: "hidden",
+                maxHeight: isOpen ? group.items.length * 42 + 10 : 0,
+                opacity: isOpen ? 1 : 0,
+                transition: "max-height 0.22s ease, opacity 0.18s ease",
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "4px 0 6px 16px", marginLeft: 9, borderLeft: `1px solid ${HOME_THEME.border}` }}>
+                {group.items.map((item) => {
+                  const active = isActive(item.href);
+                  const pinned = quickSet.has(item.href);
+                  return (
+                    <div key={item.href} style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                      <Link
+                        href={item.href}
+                        onClick={closeMenu}
+                        style={{
+                          flex: 1,
+                          display: "flex",
+                          alignItems: "center",
+                          padding: "8px 12px",
+                          paddingRight: 30,
+                          borderRadius: 9,
+                          textDecoration: "none",
+                          fontSize: 13,
+                          fontWeight: active ? 700 : 500,
+                          color: active ? "#05060A" : HOME_THEME.text,
+                          background: active ? HOME_THEME.cyan : "transparent",
+                          boxShadow: active ? "0 0 14px rgba(0,240,255,0.30)" : "none",
+                        }}
+                      >
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                      </Link>
+                      {/* pin / unpin toggle */}
+                      <button
+                        aria-label={pinned ? `Unpin ${item.label}` : `Pin ${item.label}`}
+                        title={pinned ? "Unpin from Quick Pages" : "Pin to Quick Pages"}
+                        onClick={(e) => { e.preventDefault(); if (pinned) unpin(item.href); else pin(item.href); }}
+                        style={{
+                          position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          width: 20, height: 20, borderRadius: 6, background: "transparent",
+                          border: "none", padding: 0, cursor: "pointer",
+                          color: active ? "#05060A" : pinned ? HOME_THEME.cyan : HOME_THEME.muted,
+                          opacity: pinned ? 1 : 0.55,
+                        }}
+                      >
+                        <StarIcon size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* footer: socials + legal + user */}
+      <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 6px" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {SOCIALS.map(({ id, label, href, Icon, color }) => (
+            <a
+              key={id}
+              href={href}
+              title={label}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 32, height: 32, borderRadius: 9, textDecoration: "none",
+                color: "#fff", background: `${color}1a`, border: `1px solid #ffffff44`,
+              }}
+            >
+              <Icon />
+            </a>
+          ))}
+        </div>
+        {isSignedIn && (
+          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }} />
+        )}
+      </div>
+
+      {/* legal popover trigger */}
+      <div style={{ position: "relative", padding: "2px 6px 4px" }}>
+        <button
+          onClick={() => setLegalOpen((v) => !v)}
+          style={{
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 10px",
+            borderRadius: 9,
+            cursor: "pointer",
+            color: legalOpen ? HOME_THEME.cyan : HOME_THEME.muted,
+            background: legalOpen ? "rgba(0,240,255,0.08)" : "transparent",
+            border: `1px solid ${legalOpen ? "rgba(0,240,255,0.28)" : HOME_THEME.border}`,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+        >
+          <ShieldIcon size={15} />
+          <span>Disclaimer &amp; Legal</span>
+        </button>
+        {legalOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 2px 2px" }}>
+            {LEGAL_LINKS.map((l) => {
+              const active = pathname === l.href;
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  onClick={closeMenu}
+                  style={{
+                    padding: "7px 10px",
+                    fontSize: 12.5,
+                    fontWeight: active ? 700 : 500,
+                    color: active ? HOME_THEME.cyan : HOME_THEME.text,
+                    textDecoration: "none",
+                    borderRadius: 8,
+                    background: active ? "rgba(0,240,255,0.12)" : "transparent",
+                  }}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}

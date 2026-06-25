@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CB Edge - Fintech card (home-page style)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  :root{ --ink:#e8eef5; --muted:#9fb0c0; --faint:#6f7d8c; --cyan:#22d3ee; --green:#3FE0A5; --red:#FF6B7A; --amber:#f0b429; --blue:#3fa9ff; }
+  html,body{background:#04060a;}
+  body{font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased;}
+  .poster{ position:relative; width:735px; min-height:905px; margin:0 auto; overflow:hidden;
+    background:linear-gradient(135deg,#0b0f16,#06080d); padding:20px; }
+  .bk{ position:absolute; border-radius:50%; filter:blur(6px); }
+  .panel{ background:linear-gradient(180deg,#10151e,#0c1018); border:1px solid rgba(255,255,255,.07); border-radius:12px; }
+  .cyanbar{background:linear-gradient(90deg,#22d3ee,#0ea5c4);}
+  .bluebar{background:linear-gradient(90deg,#3fa9ff,#1d6fd0);}
+  .goldbar{background:linear-gradient(90deg,#f0b429,#b97e0a);}
+  .row{display:flex;}
+
+  .topbar{ height:40px; display:flex; align-items:center; gap:14px; padding:0 14px; }
+  .brand{ font-size:16px; font-weight:800; letter-spacing:.5px; }
+  .brand b{ color:var(--cyan); }
+  .ic{ width:26px;height:26px;border-radius:50%; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); display:flex;align-items:center;justify-content:center; font-size:11px; color:var(--muted); position:relative; }
+  .ic.act{ background:#0d1620; border-color:rgba(34,211,238,.4); color:var(--cyan); }
+  .ic .dot{ position:absolute; top:2px; right:3px; width:6px;height:6px;border-radius:50%; background:var(--red); }
+  .search{ width:225px; height:26px; border-radius:8px; background:#0c1018; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; padding:0 12px; font-size:11px; color:var(--faint); }
+  .seg{ height:26px; border-radius:8px; background:#0c1018; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--faint); }
+  .seg .on{ background:#0d2a2e; color:var(--cyan); padding:3px 8px; border-radius:6px; }
+  .nm{ height:26px; border-radius:8px; background:#0c1018; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; padding:0 12px; font-size:10.5px; color:#cfe0f0; }
+
+  .cardwrap{ display:flex; justify-content:center; margin-top:20px; }
+  .vcard{ position:relative; width:280px; height:158px; border-radius:16px; background:linear-gradient(135deg,#16202e,#0f1620 60%,#0c1622); border:1px solid rgba(255,255,255,.10); box-shadow:0 0 0 2px rgba(34,211,238,.4), 0 24px 60px rgba(0,0,0,.6); padding:14px 16px; }
+  .vcard .ready{ position:absolute; right:14px; top:14px; background:#0d2a2e; border-radius:10px; padding:4px 10px; font-size:9px; color:#9be8f5; display:flex;align-items:center;gap:6px; }
+  .vcard .ready i{ width:8px;height:8px;border-radius:50%; background:var(--cyan); }
+  .chip{ width:34px;height:26px;border-radius:5px; background:#c9cdd6; margin-top:30px; }
+  .vcard .num{ font-size:20px; font-weight:600; letter-spacing:2px; margin-top:36px; }
+  .vcard .add{ position:absolute; right:16px; bottom:14px; background:linear-gradient(90deg,#22d3ee,#0ea5c4); color:#04222a; font-size:10px; font-weight:600; padding:7px 12px; border-radius:8px; }
+
+  .tiles{ display:flex; gap:9px; margin-top:20px; }
+  .tile{ flex:1; padding:14px; }
+  .tile .k{ font-size:10px; color:#8295a8; }
+  .tile .v{ font-size:20px; font-weight:700; margin-top:8px; }
+  .tile .bar{ height:4px; border-radius:2px; background:#1a2330; margin-top:12px; overflow:hidden; position:relative; }
+  .tile .bar i{ position:absolute; left:0;top:0; height:4px; border-radius:2px; }
+  .green{color:var(--green);} .amber{color:var(--amber);}
+
+  .mid{ display:flex; gap:9px; margin-top:14px; }
+  .chart{ flex:1; padding:16px; }
+  .chart .h{ display:flex; align-items:center; }
+  .chart .h .t{ font-size:13px; font-weight:600; }
+  .chart .h .btns{ margin-left:auto; display:flex; gap:8px; }
+  .chip2{ height:20px; border-radius:7px; background:#0c1018; border:1px solid rgba(255,255,255,.08); display:flex;align-items:center; padding:0 8px; font-size:9px; color:var(--muted); }
+  .chip2.on{ background:#0d2a2e; border-color:rgba(34,211,238,.4); color:var(--cyan); }
+  .feed{ width:212px; padding:16px; }
+  .feed .t{ font-size:13px; font-weight:600; margin-bottom:12px; }
+  .fi{ display:flex; gap:10px; margin-bottom:14px; }
+  .fi i{ width:8px;height:8px;border-radius:50%; margin-top:4px; flex:0 0 8px; }
+  .fi .x{ font-size:10.5px; color:#cfe0f0; } .fi .s{ font-size:9px; color:var(--faint); }
+
+  .lower{ display:flex; gap:9px; margin-top:14px; align-items:flex-start; }
+  .table{ flex:1; padding:16px; }
+  .table .h{ display:flex; align-items:center; margin-bottom:12px; }
+  .table .h .t{ font-size:13px; font-weight:600; }
+  .table .h .btns{ margin-left:auto; }
+  .thead, .trow{ display:grid; grid-template-columns:1.4fr .7fr .9fr .9fr 24px; align-items:center; }
+  .thead{ font-size:9px; color:#7d8a99; padding:8px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+  .trow{ font-size:10.5px; color:#cfd8e2; padding:9px 0; border-bottom:1px solid rgba(255,255,255,.04); }
+  .cb{ width:12px;height:12px;border-radius:3px; border:1px solid #3a4654; margin-right:8px; display:inline-block; vertical-align:-2px; }
+  .pill{ font-size:8.5px; padding:3px 8px; border-radius:7px; display:inline-flex; align-items:center; gap:5px; }
+  .pill .d{ width:5px;height:5px;border-radius:50%; }
+  .win{ background:#0d2a22; color:#5fe0d0; } .win .d{ background:var(--cyan); }
+  .open{ background:#3a3219; color:#ffce6a; } .open .d{ background:var(--amber); }
+  .copy{ font-size:8.5px; color:var(--muted); padding:3px 8px; border-radius:6px; background:#0c1018; border:1px solid rgba(255,255,255,.08); }
+
+  .rcol{ width:212px; display:flex; flex-direction:column; gap:14px; }
+  .actions{ padding:16px; }
+  .actions .t{ font-size:13px; font-weight:600; margin-bottom:12px; }
+  .togrow{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; font-size:10.5px; color:var(--muted); }
+  .tg{ width:46px;height:22px;border-radius:11px; position:relative; background:linear-gradient(90deg,#22d3ee,#0ea5c4); } .tg i{ position:absolute; top:3px; right:3px; width:16px;height:16px;border-radius:50%; background:#fff; }
+  .abtn{ height:36px; border-radius:8px; display:flex;align-items:center;justify-content:center; font-size:10.5px; margin-bottom:8px; }
+  .abtn.pri{ background:#0c1018; border:1px solid rgba(34,211,238,.6); color:var(--ink); }
+  .abtn.sec{ background:#11161f; border:1px solid rgba(255,255,255,.07); color:#cfd8e2; }
+  .abtn.dis{ background:#0c0f14; color:#46505e; }
+  .upgrade{ padding:16px; position:relative; overflow:hidden; background:#0c1620; }
+  .upgrade h2{ font-size:14px; font-weight:700; }
+  .upgrade p{ font-size:9.5px; color:var(--muted); margin-top:6px; line-height:1.5; }
+  .upgrade .g{ position:absolute; right:-20px; top:-20px; width:90px;height:90px;border-radius:50%; background:radial-gradient(circle,#22d3ee66,transparent 70%); }
+
+  .bottombar{ display:flex; gap:9px; margin-top:14px; }
+  .density{ flex:1.4; padding:0 14px; height:40px; display:flex;align-items:center; gap:12px; font-size:10.5px; color:#cfd8e2; }
+  .density .sw{ width:22px;height:12px;border-radius:3px; background:#1a2330; }
+  .approved{ flex:1; padding:0 14px; height:40px; display:flex;align-items:center; gap:10px; font-size:10px; color:#cfd8e2; }
+  .approved i{ width:16px;height:16px;border-radius:50%; background:#0d2a22; position:relative; }
+  .approved i::after{ content:""; position:absolute; left:5.5px;top:5.5px; width:5px;height:5px;border-radius:50%; background:var(--cyan); }
+
+  .badge-mock{ position:absolute; left:50%; transform:translateX(-50%); top:6px; z-index:40; font-size:10px; letter-spacing:1px; text-transform:uppercase; font-weight:700; color:#0a0612; background:#F4D35E; padding:5px 11px; border-radius:999px; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <div class="badge-mock">Restyled mockup</div>
+  <div class="bk" style="left:140px;top:150px;width:160px;height:160px;background:radial-gradient(circle,#22d3ee55,transparent 70%);"></div>
+  <div class="bk" style="left:480px;top:170px;width:150px;height:150px;background:radial-gradient(circle,#3fa9ff50,transparent 70%);"></div>
+
+  <div class="panel topbar">
+    <div class="brand">CB <b>Edge</b></div>
+    <div class="ic act">&#128276;<span class="dot"></span></div>
+    <div class="ic">&#9636;</div>
+    <div class="search">&#128269;&nbsp;&nbsp; Search tickers...</div>
+    <div style="margin-left:auto;display:flex;gap:10px;">
+      <div class="seg"><span class="on">7d</span><span>30d</span><span>90d</span></div>
+      <div class="nm">Night mode &nbsp;&#9662;</div>
+    </div>
+  </div>
+
+  <div class="cardwrap">
+    <div class="vcard">
+      <div class="ready"><i></i> Live chain ready</div>
+      <div class="chip"></div>
+      <div class="num">**** 9910</div>
+      <div class="add">Add to Watchlist</div>
+    </div>
+  </div>
+
+  <div class="tiles">
+    <div class="panel tile"><div class="k">SPX</div><div class="v">7,403.85</div><div class="bar"><i class="cyanbar" style="width:72%"></i></div></div>
+    <div class="panel tile"><div class="k">Net GEX</div><div class="v green">+$5.11B</div><div class="bar"><i class="cyanbar" style="width:84%"></i></div></div>
+    <div class="panel tile"><div class="k">VIX</div><div class="v">18.63</div><div class="bar"><i class="bluebar" style="width:33%"></i></div></div>
+    <div class="panel tile"><div class="k">Flip</div><div class="v amber">7,422</div><div class="bar"><i class="goldbar" style="width:55%"></i></div></div>
+    <div class="panel tile"><div class="k">Alerts</div><div class="v">1</div><div class="bar"><i class="bluebar" style="width:38%"></i></div></div>
+  </div>
+
+  <div class="mid">
+    <div class="panel chart">
+      <div class="h"><span class="t">&#9202; NET GEX</span><div class="btns"><span class="chip2">Vol Only</span><span class="chip2 on">&#8635; Now</span></div></div>
+      <div style="display:flex;gap:14px;font-size:8px;margin-top:6px;"><span style="color:#3fa9ff;">&#9632; + GEX</span><span style="color:#f0b429;">&#9632; &minus; GEX</span></div>
+      <svg width="100%" height="170" viewBox="0 0 440 170" preserveAspectRatio="none" style="margin-top:4px;">
+        <defs>
+          <linearGradient id="ba" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f0b429"/><stop offset="100%" stop-color="#b97e0a"/></linearGradient>
+          <linearGradient id="bb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3fa9ff"/><stop offset="100%" stop-color="#1d6fd0"/></linearGradient>
+        </defs>
+        <line x1="0" y1="95" x2="440" y2="95" stroke="#ffffff" stroke-opacity=".10" stroke-dasharray="3 4"/>
+        <line x1="240" y1="0" x2="240" y2="170" stroke="#ffffff" stroke-opacity=".08" stroke-dasharray="3 4"/>
+        <text x="244" y="14" font-size="8" fill="#8295a8">SPX 7409.95</text>
+        <g fill="url(#ba)">
+          <rect x="20" y="95" width="8" height="14"/><rect x="32" y="95" width="8" height="18"/><rect x="44" y="95" width="8" height="22"/>
+          <rect x="56" y="95" width="8" height="20"/><rect x="68" y="95" width="8" height="28"/><rect x="80" y="95" width="8" height="24"/>
+          <rect x="92" y="95" width="8" height="34"/><rect x="104" y="95" width="8" height="40"/><rect x="116" y="95" width="8" height="30"/>
+          <rect x="128" y="95" width="8" height="22"/><rect x="140" y="95" width="8" height="18"/><rect x="152" y="95" width="8" height="14"/>
+        </g>
+        <g fill="url(#bb)">
+          <rect x="240" y="65" width="8" height="30"/><rect x="252" y="51" width="8" height="44"/><rect x="264" y="43" width="8" height="52"/>
+          <rect x="276" y="57" width="8" height="38"/><rect x="288" y="47" width="8" height="48"/><rect x="300" y="65" width="8" height="30"/>
+          <rect x="312" y="59" width="8" height="36"/><rect x="324" y="73" width="8" height="22"/><rect x="336" y="67" width="8" height="28"/>
+          <rect x="348" y="79" width="8" height="16"/><rect x="360" y="73" width="8" height="22"/><rect x="372" y="83" width="8" height="12"/>
+          <rect x="384" y="71" width="8" height="24"/><rect x="396" y="85" width="8" height="10"/><rect x="408" y="87" width="8" height="8"/>
+        </g>
+        <rect x="98" y="135" width="50" height="13" rx="3" fill="#1a1305"/><text x="123" y="145" text-anchor="middle" font-size="8" fill="#f0b429">MVC 7,320</text>
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:8px;color:#6f7d8c;margin-top:2px;padding:0 20px;"><span>7,300</span><span>7,400</span><span>7,450</span><span>7,550</span></div>
+    </div>
+    <div class="panel feed">
+      <div class="t">Activity feed</div>
+      <div class="fi"><i style="background:#22d3ee;"></i><div><div class="x">Idle pause off</div><div class="s">10:30 AM</div></div></div>
+      <div class="fi"><i style="background:#3fa9ff;"></i><div><div class="x">Levels published</div><div class="s">Yesterday</div></div></div>
+      <div class="fi"><i style="background:#f0b429;"></i><div><div class="x">EM week frozen</div><div class="s">2 days ago</div></div></div>
+    </div>
+  </div>
+
+  <div class="lower">
+    <div class="panel table">
+      <div class="h"><span class="t">Fade-trade log</span><div class="btns"><span class="chip2">&#10515; Export CSV</span></div></div>
+      <div class="thead"><span>Level &#8593;</span><span>R/R</span><span>Result</span><span>Copy</span><span></span></div>
+      <div class="trow"><span><span class="cb"></span>7,425 put</span><span>2.4</span><span><span class="pill win"><span class="d"></span>Win</span></span><span><span class="copy">&#10697; Copy</span></span><span style="color:#5f6d7c;">&#8964;</span></div>
+      <div class="trow"><span><span class="cb"></span>7,320 put</span><span>3.0</span><span><span class="pill win"><span class="d"></span>Win</span></span><span><span class="copy">&#10697; Copy</span></span><span style="color:#5f6d7c;">&#8964;</span></div>
+      <div class="trow"><span><span class="cb"></span>7,422 flip</span><span>1.8</span><span><span class="pill open"><span class="d"></span>Open</span></span><span><span class="copy">&#10697; Copy</span></span><span style="color:#5f6d7c;">&#8964;</span></div>
+      <div class="trow"><span><span class="cb"></span>7,500 call</span><span>2.1</span><span><span class="pill win"><span class="d"></span>Win</span></span><span><span class="copy">&#10697; Copy</span></span><span style="color:#5f6d7c;">&#8964;</span></div>
+      <div class="trow"><span><span class="cb"></span>7,385 put</span><span>2.7</span><span><span class="pill win"><span class="d"></span>Win</span></span><span><span class="copy">&#10697; Copy</span></span><span style="color:#5f6d7c;">&#8964;</span></div>
+      <div class="trow" style="border:none;"><span><span class="cb"></span>7,450 call</span><span>1.5</span><span><span class="pill open"><span class="d"></span>Open</span></span><span><span class="copy">&#10697; Copy</span></span><span style="color:#5f6d7c;">&#8964;</span></div>
+    </div>
+
+    <div class="rcol">
+      <div class="panel actions">
+        <div class="t">Owner actions</div>
+        <div class="togrow">Maintenance <div class="tg"><i></i></div></div>
+        <div class="abtn pri">Set limits</div>
+        <div class="abtn sec">Run EOD snapshot</div>
+        <div class="abtn sec">Reconnect feeds</div>
+        <div class="abtn dis">Redeploy</div>
+      </div>
+      <div class="panel upgrade">
+        <div class="g"></div>
+        <h2>Upgrade to Pro</h2>
+        <p>Unlock alerts &amp; a shimmering glass rim light effect</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottombar">
+    <div class="panel density"><div class="sw"></div> Compact / Comfortable density</div>
+    <div class="panel approved"><i></i> Published by Ops &nbsp; 09:42</div>
+  </div>
+</div>
+</body>
+</html>

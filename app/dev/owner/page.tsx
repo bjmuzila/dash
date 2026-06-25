@@ -39,6 +39,7 @@ interface PageStatus {
   pageLabel: string;
   lastSeen?: string;
   status?: string;
+  totalLoads?: number;
 }
 
 interface RenderMetrics {
@@ -129,15 +130,46 @@ interface EodGexRow {
   computed_at: string;
 }
 
-interface LogLine {
-  ts: number;
-  msg: string;
-  level: "info" | "warn" | "err" | "ok";
+// Masked Clerk key status (from /api/clerk-status). Never carries the secret value.
+interface ClerkStatus {
+  ok?: boolean;
+  configured: boolean;
+  environment: "test" | "live" | "unknown";
+  mismatch?: boolean;
+  publishable: { present: boolean; masked: string };
+  secret: { present: boolean };
+  // Read-only Backend-API stats (null when unavailable).
+  stats?: {
+    userCount: number | null;
+    activeSessions: number | null;
+    recent: Array<{ id: string; email: string | null; name: string | null; createdAt: number | null }>;
+    error: string | null;
+  };
+  // Read-only Clerk role sets (empty when Organizations aren't enabled).
+  roleSets?: Array<{
+    id: string;
+    name: string;
+    key: string;
+    type: string | null;
+    defaultRoleKey: string | null;
+    creatorRoleKey: string | null;
+    roles: Array<{ id: string; name: string; key: string; membersCount: number | null }>;
+  }>;
+  roleSetsError?: string | null;
+}
+
+// One logged page load (from /api/page-visits). Owner-only; includes client IP.
+interface PageVisit {
+  id?: number;
+  pageKey: string | null;
+  pageLabel: string | null;
+  path: string | null;
+  userId: string | null;
+  ip: string | null;
+  createdAt: string | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const MAX_LOGS = 200;
 
 const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: string; href: string }[] }[] = [
   {
@@ -215,11 +247,6 @@ function fmtNum(v: number | undefined): string {
   return v.toLocaleString();
 }
 
-function fmtTs(ts: number): string {
-  return new Date(ts).toLocaleTimeString("en-US", { hour12: false }) +
-    "." + String(ts % 1000).padStart(3, "0");
-}
-
 function fmtGex(v: number): string {
   const abs = Math.abs(v);
   const sign = v >= 0 ? "+" : "-";
@@ -242,6 +269,20 @@ function fmtLastRun(iso: string | null): string {
     timeZone: "America/New_York",
   });
   return `${stamp} ET (${ago})`;
+}
+
+/** Short "12s / 4m / 2h / 3d ago" relative stamp for the activity feed. */
+function fmtAgo(iso: string | undefined): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "—";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 /** Stale if the newest levels row is older than ~8 days (a weekly cadence missed a run). */
@@ -268,214 +309,6 @@ function emIsStale(updatedAt: string | null, emUpdatedAt: string | null): boolea
   const up = updatedAt ? new Date(updatedAt).getTime() : NaN;
   if (!isNaN(up) && up - em > 10 * 60 * 1000) return true;
   return false;
-}
-
-/** Classify a raw WS message string as tasty or dxlink */
-function classifyWsMsg(raw: string): "tasty" | "dxlink" | null {
-  try {
-    const j = JSON.parse(raw);
-    const t = j?.type ?? j?.channel ?? "";
-    // dxLink protocol messages
-    if (
-      t === "SETUP" || t === "AUTH_STATE" || t === "CHANNEL_OPENED" ||
-      t === "FEED_CONFIG" || t === "FEED_DATA" || t === "KEEPALIVE" ||
-      t === "CHANNEL_CLOSED" || t === "ERROR" ||
-      String(t).startsWith("FEED") || String(t).startsWith("AUTH")
-    ) return "dxlink";
-    // Our server broadcast types that originate from TT REST
-    if (
-      t === "snapshot" || t === "gex" || t === "flow" ||
-      t === "esCandles" || t === "esCandle" || t === "ttAuth" ||
-      t === "tasty" || t === "chain"
-    ) return "tasty";
-    // Heuristic: if it has dxlink-style fields
-    if (j?.channel !== undefined || j?.keepaliveTimeout !== undefined) return "dxlink";
-    return "tasty"; // default unknown → tasty bucket
-  } catch {
-    return null; // non-JSON, skip
-  }
-}
-
-/** Extract a human-readable summary from a WS message. Returns null to suppress. */
-function summarizeWsMsg(raw: string): string | null {
-  try {
-    const j = JSON.parse(raw);
-    const t = j?.type ?? j?.channel ?? "unknown";
-    if (t === "FEED_DATA") {
-      const events = j?.data;
-      if (Array.isArray(events) && events.length > 0) {
-        return `FEED_DATA [${events.length} events] sym=${events[0]?.eventSymbol ?? events[1] ?? "?"}`;
-      }
-      return "FEED_DATA";
-    }
-    if (t === "snapshot") {
-      const snap = j?.data ?? j;
-      const status = snap?.status ?? {};
-      return `snapshot · spot=${snap?.spot ?? "?"} dxlink=${status.dxlinkConnected ?? "?"} contracts=${status.contractsSubscribed ?? "?"}`;
-    }
-    if (t === "esCandles") {
-      const arr = j?.candles ?? j?.data ?? [];
-      return `esCandles [${Array.isArray(arr) ? arr.length : "?"}]`;
-    }
-    if (t === "flow") {
-      const arr = j?.orders ?? j?.data ?? j?.flow ?? j?.items ?? [];
-      const count = Array.isArray(arr) ? arr.length : (typeof j?.count === "number" ? j.count : null);
-      if (!count) return null;
-      return `flow [${count} orders]`;
-    }
-    if (t === "AUTH_STATE") return `AUTH_STATE state=${j?.state ?? "?"}`;
-    if (t === "CHANNEL_OPENED") return `CHANNEL_OPENED ch=${j?.channel ?? "?"}`;
-    if (t === "KEEPALIVE") return "KEEPALIVE";
-    if (t === "snapshot") return `snapshot · gexFlip=${j?.gexFlip ?? "?"} spot=${j?.spot ?? "?"}`;
-    // Only show known types — return null to suppress unknown/noisy messages
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// ─── Log Box ─────────────────────────────────────────────────────────────────
-
-function LogBox({
-  title,
-  accent,
-  lines,
-  connected,
-  onClear,
-}: {
-  title: string;
-  accent: string;
-  lines: LogLine[];
-  connected: boolean;
-  onClear: () => void;
-}) {
-  const streamRef = useRef<HTMLDivElement | null>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-
-  // Scroll the log container itself — NOT scrollIntoView, which scrolls the whole
-  // page so each new line yanks the viewport down to the log box.
-  useEffect(() => {
-    if (autoScroll && streamRef.current) {
-      streamRef.current.scrollTop = streamRef.current.scrollHeight;
-    }
-  }, [lines, autoScroll]);
-
-  return (
-    <div
-      style={{
-        ...homePanelStyle,
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 0,
-        overflow: "hidden",
-        flex: 1,
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 14px",
-          borderBottom: `1px solid ${HOME_THEME.border}`,
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: connected ? accent : HOME_THEME.muted,
-              boxShadow: connected ? `0 0 7px ${accent}` : "none",
-              flexShrink: 0,
-            }}
-          />
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 800,
-              color: accent,
-              textTransform: "uppercase",
-              letterSpacing: "0.14em",
-            }}
-          >
-            {title}
-          </span>
-          <span
-            style={{
-              fontSize: 9,
-              fontFamily: "monospace",
-              padding: "2px 6px",
-              borderRadius: 4,
-              background: `${accent}18`,
-              border: `1px solid ${accent}33`,
-              color: accent,
-            }}
-          >
-            {lines.length}
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button
-            onClick={() => setAutoScroll((v) => !v)}
-            style={{
-              ...homeSecondaryButtonStyle,
-              fontSize: 9,
-              padding: "2px 8px",
-              color: autoScroll ? accent : HOME_THEME.muted,
-              borderColor: autoScroll ? `${accent}44` : HOME_THEME.border,
-            }}
-          >
-            {autoScroll ? "▼ Auto" : "⏸ Paused"}
-          </button>
-          <button
-            onClick={onClear}
-            style={{ ...homeSecondaryButtonStyle, fontSize: 9, padding: "2px 8px" }}
-          >
-            Clear
-          </button>
-        </div>
-      </div>
-
-      {/* Log stream */}
-      <div
-        ref={streamRef}
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          fontFamily: "monospace",
-          fontSize: 11,
-          lineHeight: 1.55,
-          padding: "6px 10px",
-          scrollbarWidth: "thin",
-        }}
-      >
-        {lines.length === 0 && (
-          <div style={{ color: "#fff", padding: "8px 0" }}>
-            {connected ? "Waiting for messages…" : "Connecting…"}
-          </div>
-        )}
-        {lines.map((l, i) => {
-          const color =
-            l.level === "err" ? HOME_THEME.red
-            : l.level === "warn" ? HOME_THEME.orange
-            : l.level === "ok" ? HOME_THEME.green
-            : "#c8d8e8";
-          return (
-            <div key={i} style={{ display: "flex", gap: 8, padding: "1px 0" }}>
-              <span style={{ color: "#fff", flexShrink: 0, fontSize: 10 }}>
-                {fmtTs(l.ts)}
-              </span>
-              <span style={{ color, wordBreak: "break-all" }}>{l.msg}</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
@@ -636,6 +469,26 @@ export default function OwnerDashboard() {
   // EOD GEX save status (today's rows from eod_gex table)
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
 
+  // Masked Clerk key status (auth provider). Null until first fetch.
+  const [clerk, setClerk] = useState<ClerkStatus | null>(null);
+
+  // Visit log (page loads w/ IP). Collapsed state persisted in localStorage.
+  const [visits, setVisits] = useState<PageVisit[]>([]);
+  const [visitLogCollapsed, setVisitLogCollapsed] = useState(true);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("owner-visit-log-collapsed");
+      if (v != null) setVisitLogCollapsed(v === "1");
+    } catch { /* ignore */ }
+  }, []);
+  const toggleVisitLog = useCallback(() => {
+    setVisitLogCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem("owner-visit-log-collapsed", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
   // Render hosting metrics
   const [renderMetrics, setRenderMetrics] = useState<RenderMetrics | null>(null);
   const [renderWindow, setRenderWindow] = useState<"live" | "weekly" | "monthly">("live");
@@ -651,6 +504,22 @@ export default function OwnerDashboard() {
 
   // Levels section collapsed state
   const [levelsCollapsed, setLevelsCollapsed] = useState(true);
+
+  // Page Activity section collapsed state (persisted across reloads).
+  const [pageActCollapsed, setPageActCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("owner-page-activity-collapsed");
+      if (v != null) setPageActCollapsed(v === "1");
+    } catch { /* ignore */ }
+  }, []);
+  const togglePageAct = useCallback(() => {
+    setPageActCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem("owner-page-activity-collapsed", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   // Per-ticker "Copy Pine" feedback: holds the ticker just copied (clears after 1.5s).
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null);
@@ -720,9 +589,7 @@ export default function OwnerDashboard() {
     setTimeout(() => setCtlMsg((m) => (m?.key === key ? null : m)), 4000);
   }, []);
 
-  // Log state — two buckets
-  const [tastyLogs, setTastyLogs] = useState<LogLine[]>([]);
-  const [dxLogs, setDxLogs] = useState<LogLine[]>([]);
+  // /ws/gex status socket (drives the "Proxy WS" badge + snapshot-derived KPIs).
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -788,6 +655,7 @@ export default function OwnerDashboard() {
           pageLabel: String(r.page_label ?? r.pageLabel ?? r.page_key ?? ""),
           lastSeen: String(r.last_loaded_at ?? r.lastLoadedAt ?? r.updated_at ?? ""),
           status: r.is_loaded ? "active" : "inactive",
+          totalLoads: Number(r.total_loads ?? r.totalLoads ?? 0),
         })));
       }
 
@@ -837,6 +705,12 @@ export default function OwnerDashboard() {
       try {
         const wl = await fetch("/api/waitlist/count", { cache: "no-store" });
         if (wl.ok) { const j = await wl.json(); setWaitlistCount(j?.count ?? 0); }
+      } catch { /* non-fatal */ }
+
+      // Clerk key status (masked — never includes the secret value).
+      try {
+        const ck = await fetch("/api/clerk-status", { cache: "no-store" });
+        if (ck.ok) { setClerk((await ck.json()) as ClerkStatus); }
       } catch { /* non-fatal */ }
 
       // Hetzner hosting metrics (live window on general refresh). Merge so a
@@ -1077,15 +951,11 @@ export default function OwnerDashboard() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  // ── WebSocket log tap ─────────────────────────────────────────────────────
-
-  const pushLog = useCallback((bucket: "tasty" | "dxlink", line: LogLine) => {
-    if (bucket === "tasty") {
-      setTastyLogs((prev) => [...prev, line].slice(-MAX_LOGS));
-    } else {
-      setDxLogs((prev) => [...prev, line].slice(-MAX_LOGS));
-    }
-  }, []);
+  // ── WebSocket status tap ──────────────────────────────────────────────────
+  // Keeps a /ws/gex socket open purely to (a) drive the header "Proxy WS" badge
+  // via wsConnected and (b) parse `snapshot` frames into server status (uptime,
+  // dxLink/TT state, contracts, spot) for the System KPI cards. The live log
+  // cards were removed, so no per-message logging happens here anymore.
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -1100,9 +970,6 @@ export default function OwnerDashboard() {
 
       ws.onopen = () => {
         setWsConnected(true);
-        const ts = Date.now();
-        pushLog("tasty", { ts, msg: "✔ WS /ws/gex connected", level: "ok" });
-        pushLog("dxlink", { ts, msg: "✔ WS /ws/gex connected (dxLink relay)", level: "ok" });
       };
 
       ws.onmessage = (e) => {
@@ -1135,32 +1002,14 @@ export default function OwnerDashboard() {
             }
           }
         } catch { /* non-JSON fine */ }
-
-        const bucket = classifyWsMsg(raw);
-        if (!bucket) return;
-        const summary = summarizeWsMsg(raw);
-        if (!summary) return;
-        if (bucket === "dxlink" && summary === "KEEPALIVE") return;
-        const level: LogLine["level"] =
-          summary.toLowerCase().includes("error") || summary.toLowerCase().includes("err") ? "err"
-          : summary.toLowerCase().includes("warn") ? "warn"
-          : bucket === "tasty" && (summary.startsWith("snapshot") || summary.startsWith("flow")) ? "ok"
-          : "info";
-        pushLog(bucket, { ts: Date.now(), msg: summary, level });
       };
 
       ws.onerror = () => {
-        const ts = Date.now();
-        pushLog("tasty", { ts, msg: "✖ WS error", level: "err" });
-        pushLog("dxlink", { ts, msg: "✖ WS error", level: "err" });
         try { ws.close(); } catch { /* */ }
       };
 
       ws.onclose = () => {
         setWsConnected(false);
-        const ts = Date.now();
-        pushLog("tasty", { ts, msg: "⏸ WS disconnected — reconnecting…", level: "warn" });
-        pushLog("dxlink", { ts, msg: "⏸ WS disconnected — reconnecting…", level: "warn" });
         schedule();
       };
     };
@@ -1180,7 +1029,7 @@ export default function OwnerDashboard() {
       wsRef.current = null;
       if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch { /* */ } }
     };
-  }, [pushLog]);
+  }, []);
 
   const isServerUp = !server.idleMode;
   const dxOk = server.dxLinkState === "CONNECTED";
@@ -1800,31 +1649,299 @@ export default function OwnerDashboard() {
           </div>}
         </div>
 
-        {/* ── Live log boxes ── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <SectionLabel>Live Logs · /ws/gex tap</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, height: 320 }}>
-            <LogBox
-              title="TastyTrade · REST + Broadcast"
-              accent={HOME_THEME.cyan}
-              lines={tastyLogs}
-              connected={wsConnected}
-              onClear={() => setTastyLogs([])}
-            />
-            <LogBox
-              title="dxLink · Feed Events"
-              accent={HOME_THEME.purple}
-              lines={dxLogs}
-              connected={wsConnected}
-              onClear={() => setDxLogs([])}
-            />
+        {/* ── Auth / Clerk keys ── */}
+        <div>
+          <SectionLabel>Auth · Clerk</SectionLabel>
+          <div style={{ ...homePanelStyle, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+            {clerk == null ? (
+              <span style={{ fontSize: 11, color: "#fff", fontFamily: "monospace" }}>Loading…</span>
+            ) : (
+              <>
+              {/* Key status row */}
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
+                <StatusBadge ok={clerk.configured} label={clerk.configured ? "Configured" : "Not configured"} />
+                {/* Environment badge: live = amber (be careful), test = cyan. */}
+                <span style={{
+                  fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
+                  padding: "3px 9px", borderRadius: 20,
+                  color: clerk.environment === "live" ? HOME_THEME.orange : clerk.environment === "test" ? HOME_THEME.cyan : HOME_THEME.muted,
+                  background: clerk.environment === "live" ? `${HOME_THEME.orange}1a` : clerk.environment === "test" ? `${HOME_THEME.cyan}1a` : "transparent",
+                  border: `1px solid ${clerk.environment === "live" ? HOME_THEME.orange : clerk.environment === "test" ? HOME_THEME.cyan : HOME_THEME.border}44`,
+                }}>
+                  {clerk.environment === "unknown" ? "env ?" : clerk.environment}
+                </span>
+
+                {/* Publishable key — masked (this key is public by design). */}
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Publishable</span>
+                  <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.publishable.present ? "#c8d8e8" : HOME_THEME.red }}>
+                    {clerk.publishable.present ? clerk.publishable.masked : "missing"}
+                  </span>
+                </div>
+
+                {/* Secret key — presence only, value never leaves the server. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Secret</span>
+                  <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.secret.present ? HOME_THEME.green : HOME_THEME.red }}>
+                    {clerk.secret.present ? "set ✓ (hidden)" : "missing"}
+                  </span>
+                </div>
+
+                {clerk.mismatch && (
+                  <span style={{ fontSize: 10, color: HOME_THEME.red, fontWeight: 700 }}>
+                    ⚠ pk/sk environment mismatch
+                  </span>
+                )}
+              </div>
+
+              {/* Backend-API stats (read-only). Hidden if nothing came back. */}
+              {(() => {
+                const s = clerk.stats;
+                const hasStats = !!s && (s.userCount != null || s.activeSessions != null || s.recent.length > 0);
+                if (!hasStats) {
+                  // Only show an error hint if the secret is set but the API didn't answer.
+                  if (s?.error && clerk.secret.present) {
+                    return (
+                      <div style={{ fontSize: 10, color: HOME_THEME.orange, fontFamily: "monospace" }}>
+                        Backend API unavailable: {s.error}
+                      </div>
+                    );
+                  }
+                  return null;
+                }
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
+                    {/* Stat chips */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Users</span>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.cyan, fontFamily: "monospace" }}>
+                          {s!.userCount != null ? s!.userCount.toLocaleString() : "—"}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.green}14`, border: `1px solid ${HOME_THEME.green}33` }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Active sessions</span>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.green, fontFamily: "monospace" }}>
+                          {s!.activeSessions != null ? s!.activeSessions.toLocaleString() : "—"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Recent signups */}
+                    {s!.recent.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6 }}>
+                          Recent signups
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column" }}>
+                          {s!.recent.map((u, i) => (
+                            <div
+                              key={u.id || i}
+                              style={{
+                                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                                padding: "5px 0",
+                                borderBottom: i < s!.recent.length - 1 ? `1px solid ${HOME_THEME.border}` : "none",
+                              }}
+                            >
+                              <span style={{ fontSize: 11, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
+                                {u.name ? <b style={{ fontWeight: 700 }}>{u.name}</b> : null}
+                                {u.name && u.email ? "  " : null}
+                                {u.email ? <span style={{ fontFamily: "monospace", color: "#c8d8e8" }}>{u.email}</span> : (!u.name ? <span style={{ color: HOME_THEME.muted }}>(no email)</span> : null)}
+                              </span>
+                              <span style={{ fontSize: 9, color: "#fff", fontFamily: "monospace", flexShrink: 0 }}>
+                                {u.createdAt ? fmtAgo(new Date(u.createdAt).toISOString()) : "—"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Role sets (read-only). Shows what roles exist in the instance. */}
+              {(() => {
+                const sets = clerk.roleSets ?? [];
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                        Role Sets
+                      </span>
+                      <span style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.muted }}>
+                        {sets.length} configured
+                      </span>
+                    </div>
+
+                    {sets.length === 0 ? (
+                      <span style={{ fontSize: 10, color: HOME_THEME.muted }}>
+                        No role sets configured{clerk.roleSetsError ? ` (${clerk.roleSetsError})` : ""} — Clerk Organizations may be disabled.
+                      </span>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {sets.map((rs) => (
+                          <div key={rs.id || rs.key} style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{rs.name || rs.key}</span>
+                              <span style={{ fontSize: 9, fontFamily: "monospace", color: "#c8d8e8" }}>{rs.key}</span>
+                              {rs.type && (
+                                <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", padding: "1px 6px", borderRadius: 10, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
+                                  {rs.type}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {rs.roles.map((role) => {
+                                const isDefault = role.key === rs.defaultRoleKey;
+                                const isCreator = role.key === rs.creatorRoleKey;
+                                const accent = isCreator ? HOME_THEME.orange : isDefault ? HOME_THEME.green : HOME_THEME.muted;
+                                return (
+                                  <span
+                                    key={role.id || role.key}
+                                    title={`${role.key}${role.membersCount != null ? ` · ${role.membersCount} members` : ""}`}
+                                    style={{
+                                      fontSize: 10, fontWeight: 600, color: "#fff",
+                                      padding: "2px 8px", borderRadius: 6,
+                                      background: `${accent}14`, border: `1px solid ${accent}44`,
+                                      display: "inline-flex", alignItems: "center", gap: 5,
+                                    }}
+                                  >
+                                    {role.name || role.key}
+                                    {role.membersCount != null && (
+                                      <span style={{ fontFamily: "monospace", color: "#c8d8e8" }}>{role.membersCount}</span>
+                                    )}
+                                    {isDefault && <span style={{ fontSize: 8, color: HOME_THEME.green, fontWeight: 800 }}>DEFAULT</span>}
+                                    {isCreator && <span style={{ fontSize: 8, color: HOME_THEME.orange, fontWeight: 800 }}>CREATOR</span>}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              </>
+            )}
           </div>
         </div>
 
         {/* ── Page activity by nav group ── */}
-        <div>
-          <SectionLabel>Page Activity</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+        {(() => {
+          // Friendly label lookup for any page_key the feed surfaces, even pages
+          // that aren't in NAV_GROUPS (so the feed can show their real name).
+          const labelFor = (key: string): string => {
+            const hit = NAV_GROUPS.flatMap((g) => g.items).find(
+              (it) => it.href.replace(/^\//, "") === key || it.href === key
+            );
+            return hit?.label ?? key;
+          };
+          // Recent-activity feed: every tracked page that has a last-seen stamp,
+          // newest first. This is the live "who's been hit" log the dealer wants.
+          const feed = pageStatuses
+            .filter((p) => p.lastSeen && !isNaN(new Date(p.lastSeen).getTime()))
+            .sort((a, b) => new Date(b.lastSeen!).getTime() - new Date(a.lastSeen!).getTime())
+            .slice(0, 14);
+          const totalVisits = pageStatuses.reduce((sum, p) => sum + (p.totalLoads ?? 0), 0);
+          const activeCount = pageStatuses.filter((p) => p.status === "active").length;
+
+          return (
+        <div style={{ ...homePanelStyle }}>
+          {/* Collapsible header (mirrors the Levels section) */}
+          <div
+            onClick={togglePageAct}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", cursor: "pointer", borderBottom: pageActCollapsed ? "none" : `1px solid ${HOME_THEME.border}` }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <SectionLabel>Page Activity</SectionLabel>
+              <span style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.muted }}>
+                {totalVisits.toLocaleString()} visits · {activeCount} active now
+              </span>
+            </div>
+            <span style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.08em" }}>
+              {pageActCollapsed ? "▶ EXPAND" : "▼ COLLAPSE"}
+            </span>
+          </div>
+
+          {!pageActCollapsed && (
+          <div style={{ padding: "14px", display: "flex", flexDirection: "column", gap: 14 }}>
+            {/* Legend — what the three states mean + counter caveat */}
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 10, color: HOME_THEME.muted }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: HOME_THEME.green, boxShadow: `0 0 6px ${HOME_THEME.green}` }} />
+                <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Open now</b> — a tab has it open
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: HOME_THEME.muted }} />
+                <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Seen before</b> — visited, none open
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: "rgba(255,255,255,0.15)" }} />
+                <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Never visited</b> — no load recorded yet
+              </span>
+              <span style={{ marginLeft: "auto", fontStyle: "italic" }}>
+                Counts start from this deploy — not backfilled.
+              </span>
+            </div>
+
+            {/* Recent activity feed */}
+            <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 14px",
+                borderBottom: `1px solid ${HOME_THEME.border}`,
+                background: "rgba(13,17,25,0.60)",
+              }}>
+                <span style={{ fontSize: 13 }}>🛰️</span>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                  Recent Activity
+                </span>
+                <span style={{ fontSize: 9, color: HOME_THEME.muted, marginLeft: "auto", fontFamily: "monospace" }}>
+                  newest first
+                </span>
+              </div>
+              <div style={{ maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin" }}>
+                {feed.length === 0 ? (
+                  <div style={{ padding: "12px 14px", fontSize: 11, color: HOME_THEME.muted }}>
+                    No page loads recorded yet.
+                  </div>
+                ) : feed.map((p) => {
+                  const active = p.status === "active";
+                  return (
+                    <div
+                      key={p.pageKey}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "6px 14px",
+                        borderBottom: `1px solid ${HOME_THEME.border}`,
+                        fontFamily: "monospace", fontSize: 11,
+                      }}
+                    >
+                      <span style={{
+                        width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                        background: active ? HOME_THEME.green : HOME_THEME.muted,
+                        boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : "none",
+                      }} />
+                      <span style={{ color: "#fff", fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                        {labelFor(p.pageKey)}
+                      </span>
+                      <span style={{ color: HOME_THEME.muted, flexShrink: 0 }}>
+                        {(p.totalLoads ?? 0).toLocaleString()}×
+                      </span>
+                      <span style={{ color: active ? HOME_THEME.green : "#fff", flexShrink: 0, minWidth: 64, textAlign: "right" }}>
+                        {fmtAgo(p.lastSeen)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Per-group grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
             {NAV_GROUPS.map((group) => {
               return (
                 <div key={group.id} style={{ ...homePanelStyle, overflow: "hidden" }}>
@@ -1842,12 +1959,13 @@ export default function OwnerDashboard() {
                   </div>
                   {/* Items */}
                   <div style={{ display: "flex", flexDirection: "column" }}>
-                    {group.items.map((item, i) => {
+                    {group.items.map((item) => {
                       const status = pageStatuses.find(
                         (p) => p.pageKey === item.href.replace(/^\//, "") || p.pageKey === item.href
                       );
                       const active = status?.status === "active";
                       const seen = status?.lastSeen;
+                      const loads = status?.totalLoads ?? 0;
                       return (
                         <div
                           key={item.href}
@@ -1860,7 +1978,7 @@ export default function OwnerDashboard() {
                             borderBottom: `1px solid ${HOME_THEME.border}`,
                           }}
                         >
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                             <span
                               style={{
                                 width: 6,
@@ -1871,18 +1989,33 @@ export default function OwnerDashboard() {
                                 boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : "none",
                               }}
                             />
-                            <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{item.label}</span>
-                            <span style={{ fontSize: 10, color: "#fff", fontFamily: "monospace" }}>{item.href}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", whiteSpace: "nowrap" }}>{item.label}</span>
                           </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                            {/* Visit count pill */}
+                            <span
+                              title={`${loads.toLocaleString()} total loads`}
+                              style={{
+                                fontSize: 9,
+                                fontFamily: "monospace",
+                                fontWeight: 700,
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                color: loads > 0 ? HOME_THEME.cyan : HOME_THEME.muted,
+                                background: loads > 0 ? `${HOME_THEME.cyan}14` : "transparent",
+                                border: `1px solid ${loads > 0 ? `${HOME_THEME.cyan}33` : HOME_THEME.border}`,
+                              }}
+                            >
+                              {loads.toLocaleString()}×
+                            </span>
                             {status ? (
-                              <StatusBadge ok={active} label={active ? "Active" : "Inactive"} />
+                              <StatusBadge ok={active} label={active ? "Open now" : "Seen before"} />
                             ) : (
-                              <span style={{ fontSize: 10, color: "#fff" }}>no data</span>
+                              <span style={{ fontSize: 10, color: HOME_THEME.muted }}>never visited</span>
                             )}
                             {seen && (
                               <span style={{ fontSize: 9, color: "#fff", fontFamily: "monospace" }}>
-                                {new Date(seen).toLocaleTimeString("en-US", { hour12: false })}
+                                {fmtAgo(seen)}
                               </span>
                             )}
                           </div>
@@ -1893,8 +2026,12 @@ export default function OwnerDashboard() {
                 </div>
               );
             })}
+            </div>
           </div>
+          )}
         </div>
+          );
+        })()}
 
         {/* ── Quick links ── */}
         <div>

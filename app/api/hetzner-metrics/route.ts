@@ -100,11 +100,14 @@ function downsample(vals: number[], max = 40): number[] {
 export async function GET(req: NextRequest) {
   const win = (req.nextUrl.searchParams.get("window") ?? "live") as Window;
 
-  // App memory from the in-process /proxy/self-metrics (same origin).
+  // App memory from the in-process /proxy/self-metrics. Must hit the loopback
+  // port directly — deriving origin from req.url yields the EXTERNAL host
+  // (cbedge.net via the CF tunnel), which isn't reachable outbound from inside
+  // the container, so the fetch threw and the memory card showed "—".
   let memBytes: number | null = null;
   try {
-    const origin = new URL(req.url).origin;
-    const mr = await fetch(`${origin}/proxy/self-metrics`, { cache: "no-store" });
+    const port = process.env.PORT || "3001";
+    const mr = await fetch(`http://127.0.0.1:${port}/proxy/self-metrics`, { cache: "no-store" });
     if (mr.ok) memBytes = Number((await mr.json())?.rss ?? 0) || null;
   } catch { /* leave null */ }
 

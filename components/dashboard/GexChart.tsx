@@ -28,6 +28,8 @@ interface GexChartProps {
   showGhost30?:   boolean;
   /** Fired when a bar/strike is clicked. Carries the row + click position. */
   onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
+  /** When true, skip the opaque chart background so the panel shows through. */
+  transparentBg?: boolean;
 }
 
 // Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
@@ -142,6 +144,7 @@ export default function GexChart({
   showGhost15 = false,
   showGhost30 = false,
   onStrikeClick,
+  transparentBg = false,
 }: GexChartProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -176,9 +179,13 @@ export default function GexChart({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // ── Pure black background — fills everything ──
-    ctx.fillStyle = "#05080d";
-    ctx.fillRect(0, 0, W, H);
+    // ── Background fill — skipped in transparent mode so the panel shows through ──
+    if (!transparentBg) {
+      ctx.fillStyle = "#05080d";
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.clearRect(0, 0, W, H);
+    }
 
     const { rows: allRows, step: detectedStep } = densify(chain, spotPrice);
     if (!allRows.length) {
@@ -636,7 +643,7 @@ export default function GexChart({
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
     ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike]);
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
@@ -791,7 +798,7 @@ export default function GexChart({
   return (
     <div
       ref={containerRef}
-      style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", cursor: "crosshair", background: "var(--overview-bg, #05080d)", touchAction: "none" }}
+      style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", cursor: "crosshair", background: transparentBg ? "transparent" : "var(--overview-bg, #05080d)", touchAction: "none" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

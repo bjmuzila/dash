@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CB Edge - Home (Futuristic Glass mockup)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  :root{ --ink:#F4F1FF; --muted:rgba(255,255,255,.55); --green:#3FE0A5; --red:#FF6B7A; --amber:#ffce6a; --blue:#5cc8ff; --vio:#b06cff; }
+  html,body{background:#050309;}
+  body{font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; font-size:13px;}
+  .poster{
+    position:relative; width:735px; height:1040px; margin:0 auto; overflow:hidden;
+    background:radial-gradient(70% 70% at 50% 42%, #241a3f 0%, #120c22 55%, #050309 100%);
+  }
+  .streaks,.bokeh{ position:absolute; inset:0; }
+  .streak{ position:absolute; height:2px; border-radius:3px; filter:blur(.3px); }
+  .s1{ top:140px; left:-40px; width:840px; transform:rotate(-6deg); background:linear-gradient(90deg,transparent,#ff5e9a,#7b5cff,transparent); opacity:.8; }
+  .s2{ top:200px; left:-40px; width:860px; transform:rotate(-5deg); background:linear-gradient(90deg,transparent,#5cc8ff,#9b5cff,transparent); opacity:.6; }
+  .s3{ top:880px; left:-60px; width:880px; transform:rotate(7deg); height:3px; background:linear-gradient(90deg,transparent,#ff7a59,#ff5e9a,transparent); opacity:.8; }
+  .s4{ top:940px; left:-60px; width:880px; transform:rotate(6deg); background:linear-gradient(90deg,transparent,#ff5e9a,#7b5cff,transparent); opacity:.55; }
+  .s5{ top:300px; right:-120px; width:520px; transform:rotate(78deg); background:linear-gradient(90deg,transparent,#5cc8ff,#9b5cff,transparent); opacity:.6; }
+  .bk{ position:absolute; border-radius:50%; }
+  .glow-a{ background:radial-gradient(circle,#ffd6a0cc,transparent 70%); }
+  .glow-b{ background:radial-gradient(circle,#9bc8ffcc,transparent 70%); }
+
+  .panel{
+    position:absolute; left:60px; top:60px; width:615px; height:918px; border-radius:30px;
+    background:linear-gradient(150deg,rgba(58,47,99,.55),rgba(28,22,51,.45),rgba(36,20,51,.55));
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 0 0 2px rgba(176,108,255,.30), 0 30px 90px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.12);
+    backdrop-filter:blur(22px);
+    padding:24px 28px;
+    display:flex; flex-direction:column;
+  }
+  .phead{ display:flex; align-items:center; }
+  .phead .b{ font-size:24px; font-weight:700; letter-spacing:.5px; } .phead .b span{ color:var(--vio); }
+  .phead .sub{ font-size:7px; letter-spacing:1.6px; color:rgba(255,255,255,.4); margin-top:2px; }
+  .icons{ margin-left:auto; display:flex; gap:12px; }
+  .ic{ width:30px;height:30px;border-radius:50%; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.18); display:flex;align-items:center;justify-content:center; font-size:13px; color:#cdbcff; }
+
+  /* stat strip */
+  .strip{ margin-top:18px; }
+  .r1{ display:flex; }
+  .stat{ flex:1; padding:0 4px; border-right:1px solid rgba(255,255,255,.10); }
+  .stat:last-child{ border:none; }
+  .stat .k{ font-size:10.5px; color:var(--muted); }
+  .stat .v{ font-size:20px; font-weight:700; margin-top:3px; }
+  .stat .d{ font-size:9px; margin-top:2px; }
+  .r2{ display:flex; margin-top:14px; gap:8px; }
+  .chip{ flex:1; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); border-radius:12px; padding:8px 6px; text-align:center; }
+  .chip .k{ font-size:8.5px; color:var(--muted); } .chip .v{ font-size:14px; font-weight:700; margin-top:3px; }
+  .green{color:var(--green);} .red{color:var(--red);} .amber{color:var(--amber);} .blue{color:var(--blue);} .vio{color:#c89bff;}
+
+  /* gex card */
+  .card{ background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.03)); border:1px solid rgba(255,255,255,.12); border-radius:20px; padding:18px; margin-top:16px; }
+  .ghead{ display:flex; align-items:center; }
+  .ghead .t{ font-size:15px; font-weight:600; }
+  .ghead .time{ margin-left:auto; font-size:10px; color:var(--muted); margin-right:10px; }
+  .snap{ font-size:8.5px; color:#cdbcff; background:rgba(176,108,255,.2); border:1px solid rgba(176,108,255,.4); padding:4px 9px; border-radius:8px; }
+  .legend{ font-size:8.5px; display:flex; gap:14px; margin-top:10px; }
+
+  /* heatmap mini */
+  .hm{ margin-top:16px; }
+  .hm .h{ display:flex; align-items:center; }
+  .hm .h .t{ font-size:13px; font-weight:600; color:var(--blue); }
+  .hm .h .r{ margin-left:auto; font-size:8.5px; color:var(--muted); display:flex; gap:7px; align-items:center; }
+  .pillb{ background:linear-gradient(90deg,#3fa9ff,#9b5cff); color:#fff; font-size:8px; padding:3px 8px; border-radius:7px; }
+  .pillg{ background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.10); color:var(--muted); font-size:8px; padding:3px 7px; border-radius:7px; }
+  table.ht{ width:100%; border-collapse:collapse; margin-top:10px; font-size:9.5px; }
+  .ht th{ text-align:left; color:rgba(255,255,255,.4); font-weight:600; font-size:8.5px; padding:5px 4px; border-bottom:1px solid rgba(255,255,255,.10); }
+  .ht td{ padding:3px 4px; }
+  .ht .strike{ color:#e3dcff; }
+  .badge{ display:inline-block; width:16px; text-align:center; font-size:7px; color:#fff; border-radius:3px; padding:1px 0; margin-right:4px; }
+  .b-call{ background:#c2410c; } .b-put{ background:#1f6f43; }
+  .cell-blue{ background:linear-gradient(90deg,rgba(63,169,255,.45),rgba(176,108,255,.4)); color:#e3eeff; border-radius:3px; padding:1px 4px; }
+  .row-blue{ background:rgba(63,169,255,.13); } .row-amber{ background:rgba(255,206,106,.13); }
+
+  .pills{ display:flex; gap:10px; margin-top:auto; padding-top:18px; }
+  .pill{ height:48px; border-radius:24px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; background:rgba(255,255,255,.05); }
+  .pill.lv{ flex:0 0 150px; border:1.5px solid; border-image:linear-gradient(90deg,#ff8a5c,#ff5e9a) 1; border-image-slice:1; border-radius:24px; }
+  .pill.set{ flex:0 0 120px; border:1px solid rgba(255,255,255,.18); }
+  .pill.up{ flex:1; border:2px solid; border-image:linear-gradient(90deg,#3fa9ff,#9b5cff) 1; border-image-slice:1; border-radius:24px; color:#cfe4ff; }
+
+  .nav{ margin-top:16px; height:66px; border-radius:22px; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); display:flex; align-items:center; gap:8px; padding:0 14px; }
+  .nb{ flex:1; height:48px;border-radius:16px; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.10); display:flex;flex-direction:column;align-items:center;justify-content:center; gap:3px; font-size:18px; }
+  .nb .lab{ font-size:7.5px; color:var(--muted); letter-spacing:.5px; }
+  .nb.on{ border-color:rgba(176,108,255,.6); color:#c89bff; }
+  .nb.on .lab{ color:#c89bff; }
+
+  .badge-mock{ position:absolute; left:50%; transform:translateX(-50%); top:18px; z-index:30; font-size:10px; letter-spacing:1px; text-transform:uppercase; font-weight:700; color:#0a0612; background:#F4D35E; padding:5px 11px; border-radius:999px; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <div class="streaks">
+    <div class="streak s1"></div><div class="streak s2"></div>
+    <div class="streak s3"></div><div class="streak s4"></div><div class="streak s5"></div>
+  </div>
+  <div class="bokeh">
+    <div class="bk glow-a" style="left:44px;top:90px;width:52px;height:52px;"></div>
+    <div class="bk glow-b" style="left:642px;top:140px;width:36px;height:36px;"></div>
+    <div class="bk glow-a" style="left:30px;top:930px;width:60px;height:60px;"></div>
+    <div class="bk glow-b" style="left:660px;top:840px;width:44px;height:44px;"></div>
+  </div>
+
+  <div class="badge-mock">Mockup - not live</div>
+
+  <div class="panel">
+    <div class="phead">
+      <div><div class="b">CB <span>Edge</span></div><div class="sub">REAL EDGE · REAL ORDERFLOW</div></div>
+      <div class="icons"><div class="ic">&#128269;</div><div class="ic">&#128276;</div><div class="ic">&#9881;</div></div>
+    </div>
+
+    <!-- stat strip -->
+    <div class="strip">
+      <div class="r1">
+        <div class="stat"><div class="k">VIX</div><div class="v">18.63</div><div class="d red">-4.41%</div></div>
+        <div class="stat"><div class="k">ESU</div><div class="v">7,472.75</div><div class="d green">+0.60%</div></div>
+        <div class="stat"><div class="k">SPX</div><div class="v">7,401.35</div><div class="d green">+0.49%</div></div>
+        <div class="stat"><div class="k">NQU</div><div class="v">30,105</div><div class="d red">-614.0</div></div>
+      </div>
+      <div class="r2">
+        <div class="chip"><div class="k">NET GEX</div><div class="v green">+$5.11B</div></div>
+        <div class="chip"><div class="k">CALL WALL</div><div class="v green">7,425</div></div>
+        <div class="chip"><div class="k">PUT WALL</div><div class="v red">7,320</div></div>
+        <div class="chip"><div class="k">FLIP</div><div class="v amber">7,422</div></div>
+        <div class="chip"><div class="k">MVC</div><div class="v vio">7,320</div></div>
+      </div>
+    </div>
+
+    <!-- net gex card -->
+    <div class="card">
+      <div class="ghead"><span class="t">&#128202; Net GEX</span><span class="time">19:49:46</span><span class="snap">&#128247; SNAPSHOT</span></div>
+      <div class="legend"><span style="color:#5cc8ff;">&#9632; + GEX</span><span style="color:#f0b429;">&#9632; - GEX</span><span style="margin-left:auto;color:var(--muted);">SPX 7409.95 &middot; 1DTE 06-25</span></div>
+      <svg width="100%" height="150" viewBox="0 0 540 150" preserveAspectRatio="none" style="margin-top:10px;">
+        <defs>
+          <linearGradient id="ba" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f0b429"/><stop offset="100%" stop-color="#b97e0a"/></linearGradient>
+          <linearGradient id="bb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#5cc8ff"/><stop offset="100%" stop-color="#b06cff"/></linearGradient>
+        </defs>
+        <line x1="0" y1="86" x2="540" y2="86" stroke="#ffffff" stroke-opacity=".10" stroke-dasharray="3 4"/>
+        <line x1="296" y1="0" x2="296" y2="150" stroke="#ffffff" stroke-opacity=".10" stroke-dasharray="3 4"/>
+        <g>
+          <rect x="12" y="86" width="9" height="34" fill="url(#ba)"/><rect x="25" y="86" width="9" height="44" fill="url(#ba)"/>
+          <rect x="38" y="86" width="9" height="38" fill="url(#ba)"/><rect x="51" y="86" width="9" height="52" fill="url(#ba)"/>
+          <rect x="64" y="86" width="9" height="60" fill="url(#ba)"/><rect x="77" y="86" width="9" height="42" fill="url(#ba)"/>
+          <rect x="90" y="86" width="9" height="48" fill="url(#ba)"/><rect x="103" y="86" width="9" height="38" fill="url(#ba)"/>
+          <rect x="116" y="86" width="9" height="28" fill="url(#ba)"/><rect x="129" y="86" width="9" height="32" fill="url(#ba)"/>
+          <rect x="142" y="86" width="9" height="24" fill="url(#ba)"/><rect x="155" y="86" width="9" height="18" fill="url(#ba)"/>
+          <rect x="168" y="86" width="9" height="14" fill="url(#ba)"/><rect x="181" y="86" width="9" height="9" fill="url(#ba)"/>
+          <rect x="198" y="58" width="9" height="28" fill="url(#bb)"/><rect x="211" y="46" width="9" height="40" fill="url(#bb)"/>
+          <rect x="224" y="32" width="9" height="54" fill="url(#bb)"/><rect x="237" y="42" width="9" height="44" fill="url(#bb)"/>
+          <rect x="250" y="52" width="9" height="34" fill="url(#bb)"/><rect x="263" y="40" width="9" height="46" fill="url(#bb)"/>
+          <rect x="276" y="50" width="9" height="36" fill="url(#bb)"/><rect x="289" y="58" width="9" height="28" fill="url(#bb)"/>
+          <rect x="302" y="46" width="9" height="40" fill="url(#bb)"/><rect x="315" y="62" width="9" height="24" fill="url(#bb)"/>
+          <rect x="328" y="56" width="9" height="30" fill="url(#bb)"/><rect x="341" y="64" width="9" height="22" fill="url(#bb)"/>
+          <rect x="354" y="68" width="9" height="18" fill="url(#bb)"/><rect x="367" y="72" width="9" height="14" fill="url(#bb)"/>
+          <rect x="384" y="52" width="9" height="34" fill="url(#bb)"/><rect x="397" y="72" width="9" height="14" fill="url(#bb)"/>
+          <rect x="410" y="74" width="9" height="12" fill="url(#bb)"/><rect x="423" y="76" width="9" height="10" fill="url(#bb)"/>
+          <rect x="446" y="72" width="9" height="14" fill="url(#bb)"/><rect x="459" y="78" width="9" height="8" fill="url(#bb)"/>
+          <rect x="482" y="79" width="9" height="7" fill="url(#bb)"/><rect x="500" y="80" width="9" height="6" fill="url(#bb)"/>
+          <rect x="518" y="80" width="9" height="6" fill="url(#bb)"/>
+        </g>
+        <rect x="28" y="130" width="56" height="13" rx="3" fill="#3a2f08"/><text x="56" y="140" text-anchor="middle" font-size="8" fill="#f0b429">MVC 7,320</text>
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:8.5px;color:var(--muted);margin-top:2px;padding:0 12px;"><span>7,200</span><span>7,300</span><span>7,400</span><span>7,500</span><span>7,600</span></div>
+    </div>
+
+    <!-- heatmap mini -->
+    <div class="hm">
+      <div class="h">
+        <span class="t">&#9707; Live GEX Heatmap</span>
+        <div class="r"><span>INTENSITY 1.75X</span><span class="pillb">HEATMAP</span><span class="pillg">TABLE</span></div>
+      </div>
+      <table class="ht">
+        <tr><th>STRIKE</th><th>NET GEX</th><th>VOL ONLY GEX</th><th>DEX</th><th>NET VEX</th></tr>
+        <tr class="row-blue"><td class="strike"><span class="badge b-call">#4</span>7,500</td><td class="green">+$34.13M</td><td><span class="cell-blue">+$862.07M</span></td><td class="red">-$541.53M</td><td><span class="cell-blue">+$63.06M</span></td></tr>
+        <tr><td class="strike"><span class="badge b-call">#3</span>7,485</td><td class="green">+$37.91M</td><td class="green">+$347.49M</td><td class="red">-$151.61M</td><td class="green">+$23.04M</td></tr>
+        <tr><td class="strike"><span class="badge b-put">#2</span>7,460</td><td class="green">+$50.31M</td><td class="green">+$791.60M</td><td class="green">+$298.36M</td><td class="green">+$34.52M</td></tr>
+        <tr><td class="strike"><span class="badge b-call">#3</span>7,450</td><td class="red">-$321.68M</td><td><span class="cell-blue">+$2.16B</span></td><td class="green">+$592.51M</td><td class="green">+$60.05M</td></tr>
+        <tr><td class="strike"><span class="badge b-put">#1</span>7,425</td><td class="green">+$56.84M</td><td><span class="cell-blue">+$1.45B</span></td><td class="green">+$1.29B</td><td class="green">+$17.55M</td></tr>
+        <tr class="row-amber"><td class="strike amber">7,410 ATM</td><td class="red">-$27.28M</td><td><span class="cell-blue">+$640.18M</span></td><td class="green">+$704.28M</td><td class="red">-$201.7K</td></tr>
+        <tr><td class="strike">7,400</td><td class="red">-$41.46M</td><td class="green">+$1.06B</td><td><span class="cell-blue">+$1.68B</span></td><td class="red">-$8.03M</td></tr>
+        <tr><td class="strike"><span class="badge b-put">#5</span>7,385</td><td class="green">+$31.68M</td><td class="green">+$51.48M</td><td class="green">+$531.50M</td><td class="red">-$1.53M</td></tr>
+      </table>
+    </div>
+
+    <div class="pills">
+      <div class="pill lv">Levels</div>
+      <div class="pill set">Settings</div>
+      <div class="pill up">Open Chain</div>
+    </div>
+
+    <div class="nav">
+      <div class="nb on">&#8962;<span class="lab">HOME</span></div>
+      <div class="nb">&#9678;<span class="lab">GEX</span></div>
+      <div class="nb">&#9636;<span class="lab">FLOW</span></div>
+      <div class="nb">&#9707;<span class="lab">LEVELS</span></div>
+      <div class="nb">&#128269;<span class="lab">SCORE</span></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { usePageLoadStatus } from "@/lib/pageStatus";
 import {
   HOME_THEME,
   homeButtonStyle,
@@ -101,7 +100,6 @@ function todayET() {
 }
 
 export default function DatabasePage() {
-  usePageLoadStatus({ pageKey: "database", pageLabel: "Database", path: "/database" });
   const [tab, setTab] = useState<TableId>("eod_gex");
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [cols, setCols] = useState<string[]>([]);
