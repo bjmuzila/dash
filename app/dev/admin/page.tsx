@@ -13,7 +13,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Period = "current_week" | "current_month" | "last_week" | "last_month";
+type Period = "current_week" | "current_month" | "last_week" | "last_month" | "current_year";
 
 interface KpiData {
   totalSales: number;
@@ -208,7 +208,37 @@ const PERIOD_LABELS: Record<Period, string> = {
   current_month: "This Month",
   last_week: "Last Week",
   last_month: "Last Month",
+  current_year: "This Year",
 };
+
+// Build x-axis buckets (labels) for the bar chart based on period & real dates
+function periodBuckets(period: Period): string[] {
+  const now = new Date();
+  if (period === "current_year") {
+    return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  }
+  if (period === "current_month" || period === "last_month") {
+    const ref = new Date(now);
+    if (period === "last_month") ref.setMonth(ref.getMonth() - 1);
+    const y = ref.getFullYear(), m = ref.getMonth();
+    const days = new Date(y, m + 1, 0).getDate();
+    const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m];
+    // weekly buckets within the month
+    return [1, 8, 15, 22, days].slice(0, 5).map((d) => `${mon} ${d}`);
+  }
+  // weeks: Mon–Sun dates
+  const ref = new Date(now);
+  if (period === "last_week") ref.setDate(ref.getDate() - 7);
+  const dow = (ref.getDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(ref);
+  monday.setDate(ref.getDate() - dow);
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return `${mon[d.getMonth()]} ${d.getDate()}`;
+  });
+}
 
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
@@ -520,6 +550,174 @@ function TrafficSparkline({ data }: { data: number[] }) {
   );
 }
 
+// ─── Financial Analytics (Monex-style) ─────────────────────────────────────────
+
+const FA_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function FinancialAnalytics({ period }: { period: Period }) {
+  // Deterministic mock data, varies per period
+  const periodSeed: Record<Period, number> = {
+    current_week: 424242, current_month: 717171, last_week: 131313, last_month: 909090, current_year: 555555,
+  };
+  // per-bucket multiplier (a week bucket is ~1 day, month bucket ~1 week, year bucket ~1 month)
+  const scale: Record<Period, number> = {
+    current_week: 0.14, current_month: 1, last_week: 0.13, last_month: 0.95, current_year: 4.1,
+  };
+  const k = scale[period];
+  const rng = seedRand(periodSeed[period]);
+  const labels = periodBuckets(period);
+  const months = labels.map((m) => {
+    const income = Math.round((rng() * 12000 + 26000) * k);
+    const expenses = Math.round((rng() * 9000 + 22000) * k);
+    return { m, income, expenses };
+  });
+  const totalIncome = months.reduce((a, b) => a + b.income, 0);
+  const totalExpenses = months.reduce((a, b) => a + b.expenses, 0);
+  const netIncome = totalIncome - totalExpenses;
+
+  const maxBar = Math.max(...months.flatMap((d) => [d.income, d.expenses]));
+
+  const sources = [
+    { name: "Salary", value: Math.round(142000 * k), pct: 37, color: HOME_THEME.cyan },
+    { name: "Business", value: Math.round(168000 * k), pct: 44, color: HOME_THEME.green },
+    { name: "Investment", value: Math.round(74500 * k), pct: 19, color: HOME_THEME.purple },
+  ];
+  const incomeOverviewTotal = sources.reduce((a, b) => a + b.value, 0);
+
+  const expenseCats = [
+    { name: "Housing", pct: 40, color: HOME_THEME.cyan },
+    { name: "Transportation", pct: 25, color: HOME_THEME.purple },
+    { name: "Entertainment", pct: 20, color: HOME_THEME.green },
+    { name: "Food", pct: 10, color: "#f5a623" },
+    { name: "Other", pct: 5, color: HOME_THEME.muted },
+  ];
+
+  // Donut math
+  let acc = 0;
+  const R = 52, C = 2 * Math.PI * R;
+  const segs = expenseCats.map((c) => {
+    const len = (c.pct / 100) * C;
+    const seg = { ...c, dash: `${len} ${C - len}`, offset: -acc };
+    acc += len;
+    return seg;
+  });
+
+  // Forecast sparkline (income vs expenses 6 pts)
+  const fc = months.slice(0, 7);
+  const fcMax = Math.max(...fc.flatMap((d) => [d.income, d.expenses]));
+  const poly = (key: "income" | "expenses") =>
+    fc.map((d, i) => `${(i / (fc.length - 1)) * 100},${40 - (d[key] / fcMax) * 36}`).join(" ");
+
+  return (
+    <div>
+      <SectionLabel>Financial Analytics · {PERIOD_LABELS[period]}</SectionLabel>
+
+      {/* Top: bar chart + totals */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+        <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", marginBottom: 2 }}>Income vs Expenses</div>
+          <div style={{ fontSize: 11, color: HOME_THEME.muted, marginBottom: 16 }}>{PERIOD_LABELS[period]} · 2026</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 230 }}>
+            {months.map((d) => (
+              <div key={d.m} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 200, width: "100%", justifyContent: "center" }}>
+                  <div title={`Income ${fmtMoney(d.income)}`} style={{ width: 18, height: `${(d.income / maxBar) * 100}%`, background: HOME_THEME.cyan, borderRadius: 4 }} />
+                  <div title={`Expenses ${fmtMoney(d.expenses)}`} style={{ width: 18, height: `${(d.expenses / maxBar) * 100}%`, background: HOME_THEME.purple, borderRadius: 4 }} />
+                </div>
+                <div style={{ fontSize: 11, color: HOME_THEME.muted, whiteSpace: "nowrap" }}>{d.m}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 18, marginTop: 12, fontSize: 12, color: HOME_THEME.muted }}>
+            <span><span style={{ color: HOME_THEME.cyan }}>■</span> Income</span>
+            <span><span style={{ color: HOME_THEME.purple }}>■</span> Expenses</span>
+          </div>
+        </div>
+
+        <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", justifyContent: "space-around" }}>
+          {[
+            { label: "Total Income", value: totalIncome, delta: 8.7, up: true },
+            { label: "Total Expenses", value: totalExpenses, delta: -6.3, up: false },
+            { label: "Total Net Income", value: netIncome, delta: 21.4, up: true },
+          ].map((row) => (
+            <div key={row.label}>
+              <div style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>{row.label}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>{fmtMoney(row.value)}</div>
+                <span style={{ fontSize: 10, fontWeight: 700, color: row.up ? HOME_THEME.green : HOME_THEME.red }}>
+                  {row.up ? "▲" : "▼"} {Math.abs(row.delta)}%
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Bottom: income overview / expense donut / forecast */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 12 }}>
+        {/* Income Overview */}
+        <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 10 }}>Income Overview</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", marginBottom: 10 }}>{fmtMoney(incomeOverviewTotal)}</div>
+          <div style={{ display: "flex", height: 6, borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
+            {sources.map((s) => (<div key={s.name} style={{ width: `${s.pct}%`, background: s.color }} />))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            {sources.map((s) => (
+              <div key={s.name}>
+                <div style={{ fontSize: 10, color: HOME_THEME.muted }}><span style={{ color: s.color }}>●</span> {s.name}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{fmtMoney(s.value)}</div>
+                <div style={{ fontSize: 10, color: HOME_THEME.muted }}>{s.pct}%</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Expense Analysis donut */}
+        <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 10 }}>Expense Analysis</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <svg width="120" height="120" viewBox="0 0 120 120">
+              <g transform="rotate(-90 60 60)">
+                {segs.map((s) => (
+                  <circle key={s.name} cx="60" cy="60" r={R} fill="none" stroke={s.color} strokeWidth="14"
+                    strokeDasharray={s.dash} strokeDashoffset={s.offset} />
+                ))}
+              </g>
+              <text x="60" y="58" textAnchor="middle" fontSize="20" fontWeight="800" fill="#fff">130</text>
+              <text x="60" y="74" textAnchor="middle" fontSize="9" fill={HOME_THEME.muted}>Total</text>
+            </svg>
+            <div style={{ flex: 1 }}>
+              {expenseCats.map((c) => (
+                <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 4 }}>
+                  <span style={{ color: HOME_THEME.muted }}><span style={{ color: c.color }}>●</span> {c.name}</span>
+                  <span style={{ color: "#fff", fontWeight: 700 }}>{c.pct}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Financial Forecast */}
+        <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 10 }}>Financial Forecast</div>
+          <svg width="100%" height="90" viewBox="0 0 100 44" preserveAspectRatio="none">
+            <polyline points={poly("income")} fill="none" stroke={HOME_THEME.cyan} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            <polyline points={poly("expenses")} fill="none" stroke={HOME_THEME.purple} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <div style={{ display: "flex", gap: 14, fontSize: 10, color: HOME_THEME.muted, margin: "8px 0" }}>
+            <span><span style={{ color: HOME_THEME.cyan }}>■</span> Income</span>
+            <span><span style={{ color: HOME_THEME.purple }}>■</span> Expenses</span>
+          </div>
+          <div style={{ fontSize: 10, color: HOME_THEME.muted, lineHeight: 1.5, background: "rgba(255,255,255,0.03)", padding: "8px 10px", borderRadius: 8 }}>
+            ☀️ Expecting a <span style={{ color: HOME_THEME.red, fontWeight: 700 }}>deficit in May</span>. Consider saving more in April or optimizing leisure expenses.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -568,7 +766,7 @@ export default function AdminDashboard() {
     return Math.round(r() * 1200 + 200);
   });
 
-  const PERIODS: Period[] = ["current_week", "current_month", "last_week", "last_month"];
+  const PERIODS: Period[] = ["current_week", "current_month", "last_week", "last_month", "current_year"];
 
   return (
     <div style={homeShellStyle}>
@@ -607,6 +805,9 @@ export default function AdminDashboard() {
 
       {/* Body */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 20 }}>
+
+        {/* ── Financial Analytics (top) ── */}
+        <FinancialAnalytics period={period} />
 
         {/* ── KPI row ── */}
         <div>

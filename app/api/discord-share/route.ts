@@ -10,10 +10,26 @@ export async function POST(request: Request) {
       );
     }
 
-    const form = await request.formData();
+    // Accept either multipart form-data (file uploads) or a JSON { content } body.
+    const ct = request.headers.get("content-type") || "";
+    let body: BodyInit;
+    const headers: Record<string, string> = {};
+    if (ct.includes("application/json")) {
+      const json = await request.json().catch(() => ({}));
+      const content = typeof json?.content === "string" ? json.content : "";
+      if (!content.trim()) {
+        return NextResponse.json({ ok: false, error: "Empty content" }, { status: 400 });
+      }
+      body = JSON.stringify({ content: content.slice(0, 1990) });
+      headers["content-type"] = "application/json";
+    } else {
+      body = await request.formData();
+    }
+
     const res = await fetch(webhookUrl, {
       method: "POST",
-      body: form,
+      headers,
+      body,
       signal: AbortSignal.timeout(15000),
     });
 

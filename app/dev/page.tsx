@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 
 
-const C = { cyan: "#00F0FF", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#8da8c2" };
+const C = { cyan: "#00F0FF", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8" };
+const NA = "#9fb3c8"; // n/a / muted — lightened from old #5d7388
 
 type ProbeResult = {
   feeds?: Record<string, Record<string, unknown>>;
@@ -31,8 +32,8 @@ function combineExposures(call?: Record<string, unknown>, put?: Record<string, u
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em" }}>{label}</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}55`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.14em" }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: "#fff", fontFamily: "monospace" }}>{children}</div>
     </div>
   );
@@ -69,10 +70,10 @@ const EXPOSURE_ROWS: { key: string; label: string }[] = [
 ];
 
 // 5th panel: net-greek exposures for the single contract.
-function ExposurePanel({ data }: { data: Record<string, unknown> | undefined }) {
+function ExposurePanel({ data, accent = "#ffb300" }: { data: Record<string, unknown> | undefined; accent?: string }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: "#ffb300", textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Net Greeks</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Greeks</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -82,7 +83,7 @@ function ExposurePanel({ data }: { data: Record<string, unknown> | undefined }) 
             return (
               <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
                 <span style={{ color: C.label }}>{label}</span>
-                <span style={{ color: na ? "#5d7388" : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
+                <span style={{ color: na ? NA : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
               </div>
             );
           })}
@@ -117,10 +118,60 @@ const NET_ROWS: { key: string; label: string }[] = [
   { key: "oi", label: "Σ OI (call + put)" },
   { key: "volume", label: "Σ Volume (call + put)" },
 ];
-function NetExposurePanel({ data }: { data: Record<string, unknown> | undefined }) {
+// Build a Discord/clipboard-friendly summary block for the net (call+put) card.
+function buildNetShareText(data: Record<string, unknown> | undefined, ticker: string, strike: string): string {
+  const lines = [`**Net Greeks · Call + Put** — ${ticker || "?"} ${strike || "?"}`];
+  if (!data) { lines.push("—"); return lines.join("\n"); }
+  for (const { key, label } of NET_ROWS) {
+    const v = data[key];
+    const isCount = key === "oi" || key === "volume";
+    lines.push(`${label}: ${v == null ? "n/a" : isCount ? fmt(v) : fmtExp(v)}`);
+  }
+  lines.push(`spot: ${fmt(data.spot)}`);
+  return lines.join("\n");
+}
+
+function ShareActions({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<null | "ok" | "err">(null);
+
+  async function copy() {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+  }
+  async function share() {
+    setSending(true); setSent(null);
+    try {
+      const r = await fetch("/api/discord-share", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "```\n" + text + "\n```" }),
+      });
+      setSent(r.ok ? "ok" : "err");
+    } catch { setSent("err"); }
+    finally { setSending(false); setTimeout(() => setSent(null), 2500); }
+  }
+  const btn: React.CSSProperties = { fontSize: 11, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };
   return (
-    <div style={{ background: C.card, border: `1px solid #a78bfa55`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Net Greeks · Call + Put</div>
+    <div style={{ display: "flex", gap: 8 }}>
+      <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? "#22e08a" : "#cfe" }}>{copied ? "✓ Copied" : "⧉ Copy"}</button>
+      <button onClick={share} disabled={sending} style={{ ...btn, background: "#5865F2", color: "#fff", borderColor: "#5865F2", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
+        {sending ? "Sending…" : sent === "ok" ? "✓ Sent" : sent === "err" ? "✗ Failed" : "↗ Discord"}
+      </button>
+    </div>
+  );
+}
+
+function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unknown> | undefined; ticker: string; strike: string }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid #a78bfa55`, borderTop: "3px solid #a78bfa", borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <span style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.14em" }}>Net Greeks · Call + Put</span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", fontFamily: "monospace", padding: "2px 8px", borderRadius: 6, background: "#a78bfa22", border: "1px solid #a78bfa55" }}>{ticker || "?"} · {strike || "?"}</span>
+        </div>
+        <ShareActions text={buildNetShareText(data, ticker, strike)} />
+      </div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -131,7 +182,7 @@ function NetExposurePanel({ data }: { data: Record<string, unknown> | undefined 
             return (
               <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
                 <span style={{ color: C.label }}>{label}</span>
-                <span style={{ color: na ? "#5d7388" : isCount ? "#cfe" : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>
+                <span style={{ color: na ? NA : isCount ? "#cfe" : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>
                   {na ? "n/a" : isCount ? fmt(v) : fmtExp(v)}
                 </span>
               </div>
@@ -148,7 +199,7 @@ function NetExposurePanel({ data }: { data: Record<string, unknown> | undefined 
 
 // OI cross-check panel: our (TastyTrade) open interest vs Yahoo's for the same
 // contract — the A/B test for our persistent OI discrepancies.
-function OiComparePanel({ data }: { data: Record<string, unknown> | undefined }) {
+function OiComparePanel({ data, accent = "#a78bfa" }: { data: Record<string, unknown> | undefined; accent?: string }) {
   const ok = data?.ok === true;
   const matched = ok && data?.match === true;
   const ours = data?.ours as number | null | undefined;
@@ -157,10 +208,10 @@ function OiComparePanel({ data }: { data: Record<string, unknown> | undefined })
   const pct = data?.pctDiff as number | null | undefined;
   // Highlight: green if within 2%, amber if 2–10%, red if >10% off.
   const aPct = typeof pct === "number" ? Math.abs(pct) : null;
-  const diffColor = aPct == null ? "#5d7388" : aPct <= 2 ? "#22e08a" : aPct <= 10 ? "#ffb300" : "#ff6b6b";
+  const diffColor = aPct == null ? NA : aPct <= 2 ? "#22e08a" : aPct <= 10 ? "#ffb300" : "#ff6b6b";
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && !ok && (
         <div style={{ color: "#ff6b6b", fontFamily: "monospace", fontSize: 13 }}>CBOE error: {fmt(data.status)}</div>
@@ -192,17 +243,17 @@ function OiComparePanel({ data }: { data: Record<string, unknown> | undefined })
 }
 
 // One feed-type panel: a titled card listing its key/value rows.
-function FeedPanel({ name, data }: { name: string; data: Record<string, unknown> | undefined }) {
+function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record<string, unknown> | undefined; accent?: string }) {
   const entries = data ? Object.entries(data) : [];
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>{name}</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>{name}</div>
       {entries.length === 0 && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {entries.map(([k, v]) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
             <span style={{ color: C.label }}>{k}</span>
-            <span style={{ color: v == null || v === "" ? "#5d7388" : "#cfe", fontWeight: 700 }}>{fmt(v)}</span>
+            <span style={{ color: v == null || v === "" ? NA : "#cfe", fontWeight: 700 }}>{fmt(v)}</span>
           </div>
         ))}
       </div>
@@ -430,23 +481,23 @@ export default function DevPage() {
       {/* Row 1 — CALL cards */}
       <RowLabel text="Calls" color="#22e08a" />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} />)}
-        <ExposurePanel data={callResult?.exposures} />
-        <OiComparePanel data={callResult?.oiCompare} />
+        {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} accent="#22e08a" />)}
+        <ExposurePanel data={callResult?.exposures} accent="#22e08a" />
+        <OiComparePanel data={callResult?.oiCompare} accent="#22e08a" />
       </div>
 
       {/* Row 2 — PUT cards */}
       <RowLabel text="Puts" color="#ff6b6b" />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} />)}
-        <ExposurePanel data={putResult?.exposures} />
-        <OiComparePanel data={putResult?.oiCompare} />
+        {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} accent="#ff6b6b" />)}
+        <ExposurePanel data={putResult?.exposures} accent="#ff6b6b" />
+        <OiComparePanel data={putResult?.oiCompare} accent="#ff6b6b" />
       </div>
 
       {/* Row 3 — NET (call + put) Greeks */}
       <RowLabel text="Net · Calls + Puts" color="#a78bfa" />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        <NetExposurePanel data={combineExposures(callResult?.exposures, putResult?.exposures)} />
+        <NetExposurePanel data={combineExposures(callResult?.exposures, putResult?.exposures)} ticker={tkr} strike={strike} />
       </div>
 
       {/* Raw market-data items — every field, nothing dropped */}
@@ -466,7 +517,7 @@ export default function DevPage() {
         <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "monospace", fontSize: 12.5, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
           {!logs.length && <span style={{ color: C.label }}>—</span>}
           {logs.map((l, i) => {
-            const color = l.level === "ok" ? "#22e08a" : l.level === "warn" ? "#ffb300" : l.level === "err" ? "#ef4444" : "#9fc4e0";
+            const color = l.level === "ok" ? "#22e08a" : l.level === "warn" ? "#ffb300" : l.level === "err" ? "#ef4444" : "#dbe7f3";
             const ts = new Date(l.t).toLocaleTimeString("en-US", { hour12: false }) + "." + String(l.t % 1000).padStart(3, "0");
             return (
               <div key={i} style={{ color, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>

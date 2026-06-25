@@ -141,7 +141,15 @@ function deriveBias(netGex: number, spot: number, flip: number): string {
 // Regime is decided by the SIGN OF NET GEX so the label can never contradict the
 // net GEX value on the card. Spot-vs-flip is shown as a context line (and flags
 // the case where the two disagree) but does not flip the label.
-function regimeOf(form: FormState): { neg: boolean; label: string; sub: string } {
+interface Regime {
+  neg: boolean;
+  label: string;
+  sub: string;
+  coreBehavior: string;
+  priceAction: string;
+  tradingImplications: string;
+}
+function regimeOf(form: FormState): Regime {
   const spot = toNum(form.spot);
   const flip = toNum(form.flip);
   const gex = toNum(form.gex);
@@ -156,6 +164,12 @@ function regimeOf(form: FormState): { neg: boolean; label: string; sub: string }
       sub: underFlip
         ? "Net GEX negative · spot under the flip — dealers amplify moves, plan for trend not chop."
         : "Net GEX negative — dealers amplify moves; plan for trend, not chop.",
+      coreBehavior:
+        "Dealers are short gamma — they hedge with the move, selling weakness and buying strength, which adds fuel rather than absorbing it.",
+      priceAction:
+        "Expect trend over chop: wider ranges, faster impulse legs, and breaks of key levels that extend rather than mean-revert.",
+      tradingImplications:
+        "Favor momentum and breakout continuation; trade with the trend, give stops room, and fade extremes only at the call/put walls.",
     };
   }
   return {
@@ -164,6 +178,14 @@ function regimeOf(form: FormState): { neg: boolean; label: string; sub: string }
     sub: underFlip
       ? "Net GEX positive · spot still under the flip — dampening in play, but watch for a flip reclaim."
       : "Net GEX positive · spot over the flip — dealers dampen moves, fade extremes.",
+    coreBehavior:
+      "Dealers are long gamma — they hedge against the move, buying dips and selling rips, which absorbs volatility and pins price.",
+    priceAction:
+      "Expect mean-reversion and compression: tighter ranges, fading impulses, and price gravitating back toward the gamma flip / high-OI strikes.",
+    tradingImplications:
+      underFlip
+        ? "Fade extremes back toward the flip, but stay nimble — a reclaim of the flip removes the dampening and can release a trend."
+        : "Fade extremes and sell premium into the walls; expect rotational, range-bound trade until the flip breaks.",
   };
 }
 
@@ -243,7 +265,7 @@ function ShareValue({ v, color }: { v: string; color?: string }) {
 
 const ShareCard = forwardRef<HTMLDivElement, {
   form: FormState;
-  regime: { neg: boolean; label: string; sub: string };
+  regime: Regime;
   updated: string;
 }>(function ShareCard({ form, regime, updated }, ref) {
   const band = emBand(form);
@@ -251,10 +273,6 @@ const ShareCard = forwardRef<HTMLDivElement, {
   const em = toNum(form.em);
   const closeStr = Number.isFinite(close) && close > 0 ? fmt(close) : "—";
   const emStr = Number.isFinite(em) && em > 0 ? fmt(em) : "—";
-  const subLine =
-    Number.isFinite(close) && Number.isFinite(em) && close > 0 && em > 0
-      ? `Close ${fmt(close)} ±${fmt(em)}`
-      : "Close —";
   const ovnParts = form.ovn.split("/");
   const ovnHigh = (ovnParts[0] ?? "").trim();
   const ovnLow = (ovnParts[1] ?? "").trim();
@@ -290,11 +308,6 @@ const ShareCard = forwardRef<HTMLDivElement, {
             <ShareValue v={band ? fmt(band.lower) : "—"} color="var(--sm-red)" />
           </div>
         </div>
-        <div className="sc-em-foot">
-          <span>IMPLIED MOVE</span>
-          <span>{subLine}</span>
-          <span>OFF PRIOR CLOSE</span>
-        </div>
       </div>
 
       {/* regime strip */}
@@ -303,6 +316,20 @@ const ShareCard = forwardRef<HTMLDivElement, {
         <div className="sc-regime-sub">{regime.sub}</div>
         <div className="sc-regime-bias-h">BIAS</div>
         <div className="sc-regime-bias">{form.bias || "—"}</div>
+        <div className="sc-regime-detail">
+          <div className="sc-regime-item">
+            <div className="sc-regime-item-h">CORE BEHAVIOR</div>
+            <div className="sc-regime-item-v">{regime.coreBehavior}</div>
+          </div>
+          <div className="sc-regime-item">
+            <div className="sc-regime-item-h">PRICE ACTION EXPECTED</div>
+            <div className="sc-regime-item-v">{regime.priceAction}</div>
+          </div>
+          <div className="sc-regime-item">
+            <div className="sc-regime-item-h">TRADING IMPLICATIONS</div>
+            <div className="sc-regime-item-v">{regime.tradingImplications}</div>
+          </div>
+        </div>
       </div>
 
       {/* levels */}
@@ -704,8 +731,13 @@ export default function SocialMediaPage() {
   // Share-card capture target + transient button status ("" | "copied" | "opened" | "saved" | "error").
   const cardRef = useRef<HTMLDivElement>(null);
   const [shareState, setShareState] = useState<"" | "copied" | "opened" | "saved" | "error">("");
+  const [discordState, setDiscordState] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const shareTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (shareTimer.current) clearTimeout(shareTimer.current); }, []);
+  const discordTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (shareTimer.current) clearTimeout(shareTimer.current);
+    if (discordTimer.current) clearTimeout(discordTimer.current);
+  }, []);
   // Once the user edits a field we stop overwriting it on the next hydrate poll.
   const dirtyRef = useRef(false);
 
@@ -880,10 +912,39 @@ export default function SocialMediaPage() {
   const onCopyAndOpenX = useCallback(async () => {
     const ok = await copyCardImage();
     if (!ok) await downloadCard();
-    // Open the X composer; the user pastes (or attaches) the card, then adds copy.
-    window.open("https://twitter.com/intent/tweet", "_blank", "noopener");
+    // Open the X composer with a prefilled caption (text only — X's intent API
+    // cannot pre-attach the image, so the user still pastes the copied card).
+    const text = `Todays $SPX Levels\nprovided by https://www.cbedge.net/`;
+    window.open(
+      `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,
+      "_blank",
+      "noopener",
+    );
     flashShare(ok ? "opened" : "saved");
   }, [copyCardImage, downloadCard]);
+
+  // Share the rendered card PNG (image only) to Discord via the server-side
+  // webhook proxy (/api/discord-share → DISCORD_WEBHOOK_URL).
+  const onShareDiscord = useCallback(async () => {
+    if (discordState === "busy") return;
+    setDiscordState("busy");
+    try {
+      const blob = await renderCardBlob();
+      if (!blob) throw new Error("render failed");
+      const fd = new FormData();
+      fd.append("payload_json", JSON.stringify({}));
+      fd.append("files[0]", blob, `cb-edge-spx-${todayETStr()}.png`);
+      const res = await fetch("/api/discord-share", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(`discord ${res.status}`);
+      setDiscordState("ok");
+    } catch (e) {
+      console.error("[social-media discord]", e);
+      setDiscordState("err");
+    } finally {
+      if (discordTimer.current) clearTimeout(discordTimer.current);
+      discordTimer.current = setTimeout(() => setDiscordState("idle"), 1800);
+    }
+  }, [discordState, renderCardBlob]);
 
   // Manual refresh — re-pulls the dashboard stats (and ES candles) and lets the
   // Daily Input repopulate from live state. Clears the dirty flag so an explicit
@@ -995,6 +1056,9 @@ export default function SocialMediaPage() {
         .sm-btn.lg { flex: 1; }
         .sm-btn.x { background: var(--cyan); color: #05060a; border-color: var(--cyan); }
         .sm-btn.x:hover { opacity: 0.9; }
+        .sm-btn.discord { background: #5865f2; color: #fff; border-color: #5865f2; }
+        .sm-btn.discord:hover { opacity: 0.9; }
+        .sm-btn.discord:disabled { opacity: 0.6; cursor: default; }
         .sm-share-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.4; }
 
         /* ── share card (the exported image) ── */
@@ -1020,8 +1084,11 @@ export default function SocialMediaPage() {
         .sc-regime.neg .sc-regime-label { color: var(--sm-red); }
         .sc-regime.pos .sc-regime-label { color: var(--sm-green); }
         .sc-regime-sub { font-size: 12px; color: var(--text1); margin-top: 6px; line-height: 1.45; }
-        .sc-regime-bias-h { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--sm-muted); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sm-border); }
+        .sc-regime-bias-h { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--cyan); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sm-border); }
         .sc-regime-bias { font-size: 12px; font-weight: 700; color: var(--text1); margin-top: 5px; line-height: 1.45; }
+        .sc-regime-detail { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sm-border); }
+        .sc-regime-item-h { font-size: 10px; font-weight: 700; letter-spacing: 0.10em; color: var(--cyan); }
+        .sc-regime-item-v { font-size: 11px; font-weight: 500; color: var(--text1); margin-top: 4px; line-height: 1.4; }
 
         .sc-levels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         .sc-levels-col { border: 1px solid var(--sm-border); border-radius: 10px; padding: 14px 16px; }
@@ -1135,6 +1202,9 @@ export default function SocialMediaPage() {
             </button>
             <button type="button" className="sm-btn lg x" onClick={onCopyAndOpenX}>
               {shareState === "opened" ? "Opened X ✓" : "Copy & Open X"}
+            </button>
+            <button type="button" className="sm-btn lg discord" onClick={onShareDiscord} disabled={discordState === "busy"}>
+              {discordState === "busy" ? "Posting…" : discordState === "ok" ? "Posted ✓" : discordState === "err" ? "Failed" : "Share to Discord"}
             </button>
           </div>
           <div className="sm-share-hint">

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EmTrackerAdmin from "@/components/dashboard/EmTrackerAdmin";
+import LevelsPublish from "@/components/dashboard/LevelsPublish";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 async function getHtml2Canvas() {
@@ -1344,7 +1345,8 @@ export default function EstimatedMoves() {
       </div>
 
       {activeView === "tracker" ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 18 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 18, display: "flex", flexDirection: "column", gap: 18 }}>
+          <LevelsPublish />
           <EmTrackerAdmin />
         </div>
       ) : (

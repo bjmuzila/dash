@@ -9,8 +9,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
 import GexChart from "@/components/dashboard/GexChart";
+import GexToolbar from "@/components/dashboard/GexToolbar";
+import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
+import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import { type ChainRow, computeGEXProfile, findGEXFlip } from "@/lib/calculations/calculations";
 import DashGrid, { type GridItem } from "@/components/shared/DashGrid";
 import { loadLayout, saveLayout, clearLayout } from "@/lib/layoutStore";
@@ -21,7 +26,8 @@ type HeatmapRow = {
   netGexVal: number;   netGex: string;
   volOnlyVal: number;  volOnly: string;
   dexVal: number;      dex: string;
-  gexVexVal: number;   gexVex: string;
+  gexVexVal: number;   gexVex: string;   // Net VEX (vanna)
+  rollingVal: number | null; rolling: string;  // 30-min rolling net GEX (DB)
   type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
   rank?: number;
   rankColor?: string;
@@ -30,6 +36,24 @@ type HeatmapRow = {
 type ExpiryOption = { value: string; label: string };
 type GexMode = "net" | "call-put";
 type DataMode = "oi-vol" | "vol-only";
+type HeatmapView = "heatmap" | "table";
+
+// Intensity-scaled cell background. Ported from /home metricBg logic:
+// rank-based floors for the top 3 magnitudes, power curve for the rest.
+function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]): string {
+  const n = value || 0;
+  const m = maxValue || 0;
+  if (m === 0 || !n) return "transparent";
+  const pos = n >= 0;
+  const rank = topValues.indexOf(Math.abs(n)) + 1;
+  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+  if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
+  if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+  const ratio = Math.min(Math.abs(n) / m, 1);
+  const eased = Math.pow(ratio * (intensity || 0.1), 1.4);
+  const alpha = Math.min(0.18, 0.02 + eased * 0.16);
+  return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
+}
 
 function fmtMoney(v: number) {
   if (!isFinite(v)) return "--";
@@ -46,6 +70,9 @@ function fmtMoneyB(vB: number) {
 }
 function formatStrikeValue(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
+}
+function fmtExpiryLabel(dateStr: string, label: string) {
+  return label || dateStr;
 }
 function buildExpiryOptions(dates: string[]): ExpiryOption[] {
   return dates.slice(0, 8).map((value, index) => ({ value, label: `${index}DTE ${value.slice(5)}` }));
@@ -64,7 +91,7 @@ function buildEmbedSrc(src: string, origin: string): string {
   }
 }
 
-function pickCenterRows(rows: ChainRow[], spot: number, sideCount = 12): ChainRow[] {
+function pickCenterRows(rows: ChainRow[], spot: number, sideCount = 20): ChainRow[] {
   if (!rows.length) return [];
   const sorted = [...rows].sort((a, b) => b.strike - a.strike);
   let atmIndex = 0;
@@ -78,7 +105,7 @@ function pickCenterRows(rows: ChainRow[], spot: number, sideCount = 12): ChainRo
   return sorted.slice(start, end);
 }
 
-function toHeatmapRows(rows: ChainRow[], spot: number, sideCount = 12): HeatmapRow[] {
+function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<number, number>, sideCount = 20): HeatmapRow[] {
   const windowRows = pickCenterRows(rows, spot, sideCount);
   const byAbsPos = [...windowRows].filter((r) => (r.netGEX ?? 0) > 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
   const byAbsNeg = [...windowRows].filter((r) => (r.netGEX ?? 0) < 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
@@ -91,7 +118,8 @@ function toHeatmapRows(rows: ChainRow[], spot: number, sideCount = 12): HeatmapR
     const net = row.netGEX ?? 0;
     const volOnly = row.netVolGEX ?? 0;
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
-    const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);
+    const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);  // Net VEX (vanna)
+    const rolling = rollingByStrike?.get(row.strike); // 30-min rolling net GEX
     const isAtm = row.strike === atmStrike;
     let type: HeatmapRow["type"] = "neutral";
     if (isAtm) type = "atm";
@@ -106,6 +134,8 @@ function toHeatmapRows(rows: ChainRow[], spot: number, sideCount = 12): HeatmapR
       volOnlyVal: volOnly, volOnly: fmtMoney(volOnly),
       dexVal: dex, dex: fmtMoney(dex),
       gexVexVal: vex, gexVex: fmtMoney(vex),
+      rollingVal: rolling ?? null,
+      rolling: rolling == null ? "—" : fmtMoney(rolling),
       type, rank: rankMap.get(row.strike)?.rank, rankColor: rankMap.get(row.strike)?.rankColor, atm: isAtm,
     };
   });
@@ -272,8 +302,37 @@ export default function Home2Page() {
   }, [userKey]);
 
   const [now, setNow] = useState<Date | null>(null);
-  const [gexMode] = useState<GexMode>("net");
-  const [dataMode] = useState<DataMode>("oi-vol");
+  const [gexMode, setGexMode] = useState<GexMode>("net");
+  const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  const [showOI, setShowOI] = useState(false);
+  const [showDex, setShowDex] = useState(false);
+  const [showFlipCurve, setShowFlipCurve] = useState(false);
+  // Prior-state ghost overlays (5/15/30 min ago) drawn behind live GEX bars.
+  const [showGhost5, setShowGhost5]   = useState(false);
+  const [showGhost15, setShowGhost15] = useState(false);
+  const [showGhost30, setShowGhost30] = useState(false);
+  // Strike-detail popup: selected strike + click anchor (card style).
+  const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
+  const popupStyle: PopupStyle = "card";
+  // Refs for snap/discord screenshot capture of the chart + heatmap cards.
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const heatmapContainerRef = useRef<HTMLDivElement>(null);
+  // Snapshot-to-DB button state for the chart header.
+  const [snapDbState, setSnapDbState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const recordSnapshot = useCallback(async () => {
+    if (snapDbState === "busy") return;
+    setSnapDbState("busy");
+    try { await saveManualMvcSnapshot(); setSnapDbState("ok"); }
+    catch { setSnapDbState("err"); }
+    finally { setTimeout(() => setSnapDbState("idle"), 1800); }
+  }, [snapDbState]);
+  // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
+  const [intensity, setIntensity] = useState(1.75);
+  // Heatmap panel view: "heatmap" = colored cell backgrounds; "table" = divergent bars.
+  const [heatmapView, setHeatmapView] = useState<HeatmapView>("heatmap");
+  // 30-min rolling net GEX per strike, pulled from the history DB.
+  const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
+
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [spot, setSpot] = useState(0);
@@ -290,6 +349,24 @@ export default function Home2Page() {
   const [putWall, setPutWall] = useState<number | null>(null);
 
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
+
+  // When user picks a different expiry, tell the server to switch + show loader.
+  const handleExpiry = useCallback((expiry: string) => {
+    setSelectedExpiry(expiry);
+    setChartReady(false);
+    if (gexWsRef.current?.readyState === WebSocket.OPEN) {
+      gexWsRef.current.send(JSON.stringify({ type: "SET_EXPIRY", expiry }));
+    }
+  }, []);
+
+  // Heatmap refresh: re-assert the active expiry to the server (re-warms chart).
+  const handleRefresh = useCallback(async () => {
+    const exp = selectedExpiryRef.current;
+    if (exp && gexWsRef.current?.readyState === WebSocket.OPEN) {
+      setChartReady(false);
+      gexWsRef.current.send(JSON.stringify({ type: "SET_EXPIRY", expiry: exp }));
+    }
+  }, []);
 
   useEffect(() => {
     setNow(new Date());
@@ -442,8 +519,65 @@ export default function Home2Page() {
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
     if (!(useSpot > 0) || !chartRows.length) return [] as HeatmapRow[];
-    return toHeatmapRows(chartRows, useSpot, 12);
-  }, [chartRows, chartSpot, spot]);
+    return toHeatmapRows(chartRows, useSpot, rollingByStrike, 20);
+  }, [chartRows, chartSpot, spot, rollingByStrike]);
+
+  // Column maxes + top-3 magnitudes for intensity coloring (per visible column).
+  const heatmapColorMeta = useMemo(() => {
+    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal"] as const;
+    const max: Record<string, number> = {};
+    const top3: Record<string, number[]> = {};
+    for (const c of cols) {
+      const absVals = heatmapRows.map((r) => Math.abs(Number(r[c] ?? 0))).filter((v) => v > 0);
+      max[c] = absVals.length ? Math.max(...absVals) : 1;
+      top3[c] = [...absVals].sort((a, b) => b - a).slice(0, 3);
+    }
+    return { max, top3 };
+  }, [heatmapRows]);
+
+  // MVC for the heatmap table — strike with the highest ABSOLUTE net GEX across
+  // the heatmap rows. Gets the gold star in the heatmap.
+  const mvcStrikeHeatmap = useMemo(() => {
+    let best: number | null = null; let bestAbs = 0;
+    for (const r of heatmapRows) { const a = Math.abs(Number(r.netGexVal ?? 0)); if (a > bestAbs) { bestAbs = a; best = r.strikeNum; } }
+    return best;
+  }, [heatmapRows]);
+
+  // Poll the 30-min rolling net GEX history for the active expiry.
+  useEffect(() => {
+    if (!selectedExpiry) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(
+          `/api/snapshots/option-strike-gex-history?expiry=${encodeURIComponent(selectedExpiry)}&minutes=30`,
+          { cache: "no-store" }
+        );
+        if (!r.ok) return;
+        const json = await r.json();
+        const rows: Array<{ strike: number; rolling_net_gex: number }> = json?.rows ?? [];
+        if (cancelled) return;
+        setRollingByStrike(new Map(rows.map((x) => [Number(x.strike), Number(x.rolling_net_gex)])));
+      } catch { /* ignore */ }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [selectedExpiry]);
+
+  // Point-in-time net GEX baselines for the popup's rolling-difference boxes.
+  // Only polls while a strike is selected.
+  const strikeBaselines = useStrikeGexHistory(selectedStrike ? selectedExpiry : "", [5, 15, 30]);
+  // Chart ghost-bar baselines — poll the full chain whenever any prior-state
+  // overlay (5/15/30 min) is enabled.
+  const anyGhost = showGhost5 || showGhost15 || showGhost30;
+  const chartBaselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", [5, 15, 30], 30_000, true);
+
+  // Strike → full ChainRow lookup so heatmap rows can open the same popup.
+  const chartRowByStrike = useMemo(
+    () => new Map(chartRows.map((r) => [r.strike, r])),
+    [chartRows]
+  );
 
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot, dataMode), [chartRows, chartSpot, dataMode]);
@@ -495,24 +629,6 @@ export default function Home2Page() {
   };
   // Session-card / chart-toolbar tint — translucent so it blends with the page.
   const cardBg = "linear-gradient(135deg,rgba(15,38,32,.34),rgba(21,23,29,.22) 55%,rgba(26,19,32,.34))";
-
-  // Heatmap cell coloring (mockup-style: green/purple wash by magnitude).
-  const colMax = useMemo(() => {
-    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal"] as const;
-    const m: Record<string, number> = {};
-    for (const c of cols) {
-      const v = heatmapRows.map((r) => Math.abs(Number(r[c] ?? 0))).filter((x) => x > 0);
-      m[c] = v.length ? Math.max(...v) : 1;
-    }
-    return m;
-  }, [heatmapRows]);
-  const cellBg = (value: number, colKey: string) => {
-    const max = colMax[colKey] ?? 1;
-    if (!value || !max) return "transparent";
-    const ratio = Math.min(Math.abs(value) / max, 1);
-    const a = Math.min(0.4, 0.04 + Math.pow(ratio, 1.4) * 0.36);
-    return value >= 0 ? `rgba(46,230,200,${a.toFixed(2)})` : `rgba(255,86,110,${a.toFixed(2)})`;
-  };
 
   const tile = (label: React.ReactNode, value: string, color: string, barColor: string, pct: number) => (
     <div style={{ ...panel, flex: 1, padding: "clamp(8px, 6cqw, 14px) clamp(6px, 3cqw, 14px)", minWidth: 0, containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", overflow: "hidden" }}>
@@ -629,11 +745,40 @@ export default function Home2Page() {
           {/* Net GEX chart */}
           <div key={PANELS.chart} data-grid-id={PANELS.chart} style={{ height: "100%" }}>
             {panelShell("Net GEX", (
-              <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+              <div ref={chartContainerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
               <div style={{ display: "flex", alignItems: "center", flexShrink: 0, gap: 8, background: cardBg, margin: "-16px -16px 0", padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
                 <span style={{ fontSize: "clamp(11px, 2.2cqw, 14px)", fontWeight: 600, whiteSpace: "nowrap" }}>Net GEX <span suppressHydrationWarning style={{ color: T.faint, fontWeight: 400 }}>· {etTime}</span></span>
                 <span style={{ marginLeft: "auto", fontSize: "clamp(8px, 1.6cqw, 10px)", color: T.faint, whiteSpace: "nowrap" }}>SPX {spxShown > 0 ? spxShown.toFixed(2) : "—"}</span>
+                <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
+                  style={{ background: "rgba(46,230,200,0.10)", border: "1px solid rgba(46,230,200,0.30)", color: snapDbState === "ok" ? "#3FE0A5" : snapDbState === "err" ? T.red : T.teal, fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 6, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                  {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
+                </button>
               </div>
+              {/* Full-featured toolbar — same controls as /home */}
+              <GexToolbar
+                gexMode={gexMode}
+                dataMode={dataMode}
+                showOI={showOI}
+                showDex={showDex}
+                showFlipCurve={showFlipCurve}
+                expirations={expiryOptions.map((o) => o.value)}
+                selectedExpiry={selectedExpiry}
+                onExpiry={handleExpiry}
+                onGexMode={setGexMode}
+                onDataMode={setDataMode}
+                showGhost5={showGhost5}
+                showGhost15={showGhost15}
+                showGhost30={showGhost30}
+                onToggleOI={() => setShowOI((v) => !v)}
+                onToggleDex={() => setShowDex((v) => !v)}
+                onToggleFlip={() => setShowFlipCurve((v) => !v)}
+                onToggleGhost5={() => { setShowGhost5((v) => !v); setShowGhost15(false); setShowGhost30(false); }}
+                onToggleGhost15={() => { setShowGhost15((v) => !v); setShowGhost5(false); setShowGhost30(false); }}
+                onToggleGhost30={() => { setShowGhost30((v) => !v); setShowGhost5(false); setShowGhost15(false); }}
+                onRefresh={handleRefresh}
+                containerRef={chartContainerRef}
+                discordMessage={`NET GEX • ${selectedExpiry}`}
+              />
               <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
                 {chartReady && chartRows.length > 0 ? (
                   <GexChart
@@ -643,7 +788,15 @@ export default function Home2Page() {
                     gexProfile={gexProfile}
                     mode={gexMode}
                     dataMode={dataMode}
+                    showOI={showOI}
+                    showDex={showDex}
+                    showFlipCurve={showFlipCurve}
+                    baselines={chartBaselines}
+                    showGhost5={showGhost5}
+                    showGhost15={showGhost15}
+                    showGhost30={showGhost30}
                     expiry={selectedExpiry}
+                    onStrikeClick={(row, pos) => setSelectedStrike({ row, pos })}
                   />
                 ) : (
                   <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
@@ -672,42 +825,100 @@ export default function Home2Page() {
           {/* live heatmap */}
           <div key={PANELS.heatmap} data-grid-id={PANELS.heatmap} style={{ height: "100%" }}>
             {panelShell("Live GEX heatmap", (
-              <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", marginBottom: 10, flexShrink: 0, gap: 8 }}>
+              <div ref={heatmapContainerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 10, flexShrink: 0, gap: 8, flexWrap: "wrap" }}>
                 <span style={{ fontSize: "clamp(11px, 2.4cqw, 14px)", fontWeight: 600, whiteSpace: "nowrap" }}>Live GEX heatmap</span>
-                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                  <span style={{ height: 20, borderRadius: 7, background: "#0f1116", border: "1px solid rgba(255,255,255,.08)", display: "flex", alignItems: "center", padding: "0 8px", fontSize: "clamp(8px, 1.6cqw, 9px)", color: T.muted, whiteSpace: "nowrap" }}>{dteLabel || "—"}</span>
+                {/* Intensity slider — controls heatmap cell opacity */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
+                  <input type="range" min={0.5} max={3} step={0.01} value={intensity}
+                    onChange={(e) => setIntensity(Number(e.target.value))}
+                    style={{ width: 70, height: 3, accentColor: T.teal }} />
+                  <span style={{ fontSize: 10, color: T.teal, fontWeight: 700, minWidth: 34, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
+                </div>
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                  {/* heatmap / table view toggle */}
+                  <div style={{ display: "flex", gap: 2, border: "1px solid rgba(46,230,200,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                    {(["heatmap", "table"] as const).map((v) => (
+                      <button key={v} onClick={() => setHeatmapView(v)}
+                        style={{ padding: "2px 9px", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", border: "none", fontFamily: "inherit", background: heatmapView === v ? "rgba(46,230,200,0.14)" : "transparent", color: heatmapView === v ? T.teal : "#5a7a98" }}>
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                  <span style={{ height: 20, borderRadius: 7, background: "#0f1116", border: "1px solid rgba(255,255,255,.08)", display: "flex", alignItems: "center", padding: "0 8px", fontSize: "clamp(8px, 1.6cqw, 9px)", color: T.muted, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, dteLabel) || "—"}</span>
+                  <button onClick={handleRefresh} title="Refresh heatmap"
+                    style={{ background: "rgba(46,230,200,0.06)", border: "1px solid rgba(46,230,200,0.25)", color: T.teal, borderRadius: 4, padding: "1px 7px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
+                  <BoxSnapBtn targetRef={heatmapContainerRef} label="GEX Heatmap" />
+                  <BoxDiscordBtn targetRef={heatmapContainerRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} />
                 </div>
               </div>
               <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: "clamp(8px, 1.5cqw, 11px)" }}>
-                  <colgroup><col style={{ width: "20%" }} /><col style={{ width: "20%" }} /><col style={{ width: "22%" }} /><col style={{ width: "19%" }} /><col style={{ width: "19%" }} /></colgroup>
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: "clamp(8px, 1.5cqw, 11px)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                  <colgroup><col style={{ width: "16%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "16%" }} /><col style={{ width: "16%" }} /><col style={{ width: "16%" }} /></colgroup>
                   <thead>
                     <tr style={{ fontSize: "0.85em", color: "#7d8a99" }}>
-                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX"].map((h, i) => (
-                        <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "0.6em 0.5em", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,.06)", position: "sticky", top: 0, background: "#15171c", whiteSpace: "nowrap" }}>{h}</th>
+                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX", "30m Roll"].map((h, i) => (
+                        <th key={h} style={{ textAlign: i === 0 || heatmapView === "table" ? "left" : "right", padding: "0.6em 0.5em", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,.06)", position: "sticky", top: 0, background: "#15171c", whiteSpace: "nowrap" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {heatmapRows.length === 0 && (
-                      <tr><td colSpan={5} style={{ padding: "18px 6px", textAlign: "center", color: T.faint }}>{live ? "No strikes in range" : "Loading live chain…"}</td></tr>
+                      <tr><td colSpan={6} style={{ padding: "18px 6px", textAlign: "center", color: T.faint }}>{live ? "No strikes in range" : "Loading live chain…"}</td></tr>
                     )}
                     {heatmapRows.map((row, i) => {
                       const isAtm = row.type === "atm";
-                      const cell = (text: string, value: number, key: string) => (
-                        <td style={{ textAlign: "right", padding: "0.45em 0.5em", borderBottom: "1px solid rgba(255,255,255,.04)", background: cellBg(value, key), color: value >= 0 ? "#dceee9" : "#ffd6db", whiteSpace: "nowrap" }}>{text}</td>
-                      );
+                      const isTable = heatmapView === "table";
+
+                      // Left-anchored gradient bar (table view), scaled to the column max.
+                      const barEl = (value: number | null, colKey: string) => {
+                        if (value == null || !Number.isFinite(value)) return null;
+                        const max = heatmapColorMeta.max[colKey] ?? 1;
+                        const ratio = Math.min(Math.abs(value) / (max || 1), 1);
+                        const pct = ratio * 90;
+                        if (!pct) return null;
+                        const pos = value >= 0;
+                        const a = 0.5 + ratio * 0.5;
+                        const light = pos ? `rgba(74,255,150,${a.toFixed(2)})` : `rgba(255,86,110,${a.toFixed(2)})`;
+                        const dark = pos ? `rgba(0,140,70,${a.toFixed(2)})` : `rgba(190,20,40,${a.toFixed(2)})`;
+                        return (
+                          <div style={{ position: "absolute", top: 3, bottom: 3, left: 0, width: `${pct}%`, background: `linear-gradient(90deg, ${dark} 0%, ${light} 100%)`, borderRadius: 2, pointerEvents: "none" }} />
+                        );
+                      };
+
+                      // Numeric cell: heatmap view paints a metricBg background; table draws a bar.
+                      const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
+                        const base: React.CSSProperties = { position: "relative", padding: "0.45em 0.5em", textAlign: isTable ? "left" : "right", borderBottom: "1px solid rgba(255,255,255,.04)", overflow: "hidden", whiteSpace: "nowrap" };
+                        const bg = isTable || value == null
+                          ? "transparent"
+                          : metricBg(value, heatmapColorMeta.max[colKey] ?? 1, intensity, heatmapColorMeta.top3[colKey] ?? []);
+                        return (
+                          <td key={colIdx} style={{ ...base, background: bg, fontWeight: isAtm ? 700 : 400, color: value != null && value >= 0 ? "#dceee9" : "#ffd6db" }}>
+                            {isTable ? barEl(value, colKey) : <span style={{ position: "relative", zIndex: 1 }}>{text}</span>}
+                          </td>
+                        );
+                      };
+
                       return (
-                        <tr key={`${row.strike}-${i}`} style={{ background: isAtm ? "rgba(255,206,106,.12)" : "transparent" }}>
+                        <tr key={`${row.strike}-${i}`} style={{ background: isAtm ? "rgba(255,206,106,.12)" : "transparent", cursor: "pointer" }}
+                          onClick={(e) => {
+                            const full = chartRowByStrike.get(Number(row.strikeNum));
+                            if (full) setSelectedStrike({ row: full, pos: { x: e.clientX, y: e.clientY } });
+                          }}>
                           <td style={{ textAlign: "left", padding: "0.45em 0.5em", fontWeight: isAtm ? 700 : 400, color: isAtm ? T.amber : "#cfd8e2", borderBottom: "1px solid rgba(255,255,255,.04)", whiteSpace: "nowrap" }}>
                             {row.rank ? <span style={{ display: "inline-block", minWidth: 16, textAlign: "center", fontSize: "0.62em", color: "#fff", borderRadius: 3, padding: "1px 3px", marginRight: 4, background: row.netGexVal >= 0 ? "#c2410c" : "#1f6f43" }}>#{row.rank}</span> : null}
+                            {row.strikeNum === mvcStrikeHeatmap && (
+                              <span title="MVC — highest |net GEX|" style={{ color: "#ffd600", fontSize: "1.05em", marginRight: 3, textShadow: "0 0 3px rgba(0,0,0,.8)" }}>★</span>
+                            )}
                             {row.strike}{isAtm ? " ATM" : ""}
                           </td>
-                          {cell(row.netGex, row.netGexVal, "netGexVal")}
-                          {cell(row.volOnly, row.volOnlyVal, "volOnlyVal")}
-                          {cell(row.dex, row.dexVal, "dexVal")}
-                          {cell(row.gexVex, row.gexVexVal, "gexVexVal")}
+                          {dataCell(row.netGex, row.netGexVal, "netGexVal", 1)}
+                          {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
+                          {dataCell(row.dex, row.dexVal, "dexVal", 3)}
+                          {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
+                          {/* 30-min rolling net GEX — text only (no intensity wash) */}
+                          <td style={{ textAlign: "right", padding: "0.45em 0.5em", borderBottom: "1px solid rgba(255,255,255,.04)", color: row.rollingVal == null ? T.faint : row.rollingVal >= 0 ? "#dceee9" : "#ffd6db", whiteSpace: "nowrap" }}>{row.rolling}</td>
                         </tr>
                       );
                     })}
@@ -800,6 +1011,19 @@ export default function Home2Page() {
         )}
 
       </div>
+
+      {/* Strike detail popup — opened by clicking a chart bar or heatmap row. */}
+      {selectedStrike && (
+        <StrikeDetailPopup
+          row={selectedStrike.row}
+          spotPrice={chartSpot}
+          baselines={strikeBaselines}
+          popupStyle={popupStyle}
+          anchor={selectedStrike.pos}
+          onClose={() => setSelectedStrike(null)}
+        />
+      )}
+
       <style>{`
         .h2-econ > div:first-child { background: transparent !important; }
       `}</style>

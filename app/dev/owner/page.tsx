@@ -420,9 +420,500 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Which page tab each section lives on. Edit the values here to move sections
+// between the Front-end and Back-end tabs — no other change needed.
+const SECTION_TAB: Record<string, "frontend" | "backend"> = {
+  system:    "frontend",
+  hosting:   "frontend",
+  database:  "frontend",
+  controls:  "backend",
+  eodgex:    "backend",
+  auth:      "frontend",
+  activity:  "frontend",
+  quicklinks:"frontend",
+};
+
+/**
+ * Collapsible section card for the owner dashboard accordion. The whole header is
+ * the click target; expanding one card collapses the others (handled by the
+ * parent's single `openSection` state). `subtitle` shows an at-a-glance summary
+ * on the collapsed header so the card is useful without opening it.
+ */
+function AccordionCard({
+  id, title, subtitle, open, onToggle, children,
+}: {
+  id: string;
+  title: string;
+  subtitle?: React.ReactNode;
+  open: boolean;
+  onToggle: (id: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+      <div
+        onClick={() => onToggle(id)}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          padding: "12px 16px", cursor: "pointer",
+          borderBottom: open ? `1px solid ${HOME_THEME.border}` : "none",
+          background: open ? "rgba(0,229,255,0.05)" : "transparent",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <span style={{
+            fontSize: 11, color: HOME_THEME.cyan, flexShrink: 0,
+            transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s",
+          }}>▶</span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap" }}>
+            {title}
+          </span>
+          {subtitle != null && (
+            <span style={{ fontSize: 9.5, fontFamily: "monospace", color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {subtitle}
+            </span>
+          )}
+        </div>
+        <span style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.08em", flexShrink: 0 }}>
+          {open ? "▼ COLLAPSE" : "▶ EXPAND"}
+        </span>
+      </div>
+      {open && <div style={{ padding: "16px 18px" }}>{children}</div>}
+    </div>
+  );
+}
+
+// ─── Overview dashboard (placeholder layout) ───────────────────────────────────
+// A stats-dashboard layout in the site's glass style: top charts, big-number
+// metric cards, small stat chips, and a right-side agenda column. Data here is
+// placeholder — wire to real sources in a follow-up pass.
+
+// Smooth area+line chart (Daily Time Log style). Two series, auto-scaled.
+function LineChartCard({
+  title, subtitle, seriesA, seriesB, labels,
+}: {
+  title: string; subtitle: string;
+  seriesA: number[]; seriesB: number[]; labels: string[];
+}) {
+  const W = 520, H = 180, padX = 8, padY = 14;
+  const hasB = seriesB.length >= 2;
+  const all = [...seriesA, ...seriesB];
+  const min = all.length ? Math.min(...all) : 0;
+  const max = all.length ? Math.max(...all) : 1;
+  const range = max - min || 1;
+  const toPath = (s: number[]) => {
+    if (s.length < 2) return "";
+    const stepX = (W - padX * 2) / (s.length - 1);
+    const pts = s.map((v, i) => [padX + i * stepX, H - padY - ((v - min) / range) * (H - padY * 2)] as const);
+    // Catmull-Rom → cubic bezier for a smooth curve.
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i === 0 ? 0 : i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2 >= pts.length ? pts.length - 1 : i + 2];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ` C${c1x},${c1y} ${c2x},${c2y} ${p2[0]},${p2[1]}`;
+    }
+    return d;
+  };
+  const lineA = toPath(seriesA), lineB = toPath(seriesB);
+  const areaA = `${lineA} L${W - padX},${H} L${padX},${H} Z`;
+
+  // Point coords for seriesA (used for hover dots + tooltip anchoring).
+  const stepX = seriesA.length > 1 ? (W - padX * 2) / (seriesA.length - 1) : 0;
+  const ptsA = seriesA.map((v, i) => ({
+    x: padX + i * stepX,
+    y: H - padY - ((v - min) / range) * (H - padY * 2),
+    v,
+  }));
+
+  // Hovered point index (null = none). vbH is the full viewBox height so we can
+  // map SVG coords → container % (preserveAspectRatio="none" makes this linear).
+  const [hover, setHover] = useState<number | null>(null);
+  const vbH = H + 18;
+
+  return (
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
+      </div>
+      <div style={{ position: "relative", width: "100%" }}>
+      <svg viewBox={`0 0 ${W} ${vbH}`} preserveAspectRatio="none" style={{ width: "100%", height: 190, display: "block" }}>
+        <defs>
+          <linearGradient id="ov-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={HOME_THEME.purple} stopOpacity="0.30" />
+            <stop offset="100%" stopColor={HOME_THEME.purple} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0, 0.25, 0.5, 0.75, 1].map((g) => (
+          <line key={g} x1={padX} x2={W - padX} y1={padY + g * (H - padY * 2)} y2={padY + g * (H - padY * 2)} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+        ))}
+        <path d={areaA} fill="url(#ov-area)" />
+        {hasB && <path d={lineB} fill="none" stroke={HOME_THEME.cyan} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.85" />}
+        <path d={lineA} fill="none" stroke={HOME_THEME.purple} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        {/* Hover guide line + dot for the active point */}
+        {hover != null && ptsA[hover] && (
+          <>
+            <line x1={ptsA[hover].x} x2={ptsA[hover].x} y1={padY} y2={H} stroke={`${HOME_THEME.purple}66`} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <circle cx={ptsA[hover].x} cy={ptsA[hover].y} r="4" fill={HOME_THEME.purple} stroke="#0d1119" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+          </>
+        )}
+        {labels.map((lb, i) => (
+          <text key={lb + i} x={padX + (i * (W - padX * 2)) / (labels.length - 1)} y={H + 12} fill={HOME_THEME.muted} fontSize="9" textAnchor="middle" fontFamily="monospace">{lb}</text>
+        ))}
+        {/* Invisible per-point hover hit-areas (full-height columns). */}
+        {ptsA.map((p, i) => {
+          const colW = ptsA.length > 1 ? (W - padX * 2) / (ptsA.length - 1) : W;
+          return (
+            <rect
+              key={i}
+              x={p.x - colW / 2}
+              y={0}
+              width={colW}
+              height={H}
+              fill="transparent"
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => setHover(i)}
+              onMouseLeave={() => setHover((h) => (h === i ? null : h))}
+            />
+          );
+        })}
+      </svg>
+      {/* HTML tooltip — positioned by % over the chart (linear under aspect=none). */}
+      {hover != null && ptsA[hover] && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${(ptsA[hover].x / W) * 100}%`,
+            top: `${(ptsA[hover].y / vbH) * 100}%`,
+            transform: "translate(-50%, calc(-100% - 8px))",
+            pointerEvents: "none",
+            background: "#0d1119",
+            border: `1px solid ${HOME_THEME.purple}66`,
+            borderRadius: 7,
+            padding: "5px 9px",
+            whiteSpace: "nowrap",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
+            zIndex: 2,
+          }}
+        >
+          <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, fontFamily: "monospace" }}>{labels[hover]}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#fff", fontFamily: "monospace" }}>
+            {ptsA[hover].v.toLocaleString()} <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted }}>visits</span>
+          </div>
+        </div>
+      )}
+      </div>
+      <div style={{ display: "flex", gap: 16, fontSize: 10, color: HOME_THEME.muted, fontWeight: 700 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 3, borderRadius: 2, background: HOME_THEME.purple }} /> Page loads</span>
+        {hasB && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 3, borderRadius: 2, background: HOME_THEME.cyan }} /> Previous</span>}
+      </div>
+    </div>
+  );
+}
+
+// Vertical bar chart (Weekly Invoices style) with alternating accent bars.
+function BarChartCard({
+  title, subtitle, bars, labels, footerMin, footerMax,
+}: {
+  title: string; subtitle: string;
+  bars: number[]; labels: string[]; footerMin: string; footerMax: string;
+}) {
+  const max = Math.max(...bars) || 1;
+  return (
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 150, paddingTop: 6 }}>
+        {bars.map((v, i) => (
+          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <div style={{
+              width: "100%", borderRadius: 5, height: `${(v / max) * 100}%`, minHeight: 4,
+              background: i % 2 === 0
+                ? `linear-gradient(180deg, ${HOME_THEME.purple} 0%, ${HOME_THEME.purple}99 100%)`
+                : `linear-gradient(180deg, ${HOME_THEME.cyan} 0%, ${HOME_THEME.cyan}88 100%)`,
+            }} />
+            <span style={{ fontSize: 8, color: HOME_THEME.muted, fontFamily: "monospace" }}>{labels[i]}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
+          <div style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Minimum</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", fontFamily: "monospace" }}>{footerMin}</div>
+        </div>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
+          <div style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Maximum</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", fontFamily: "monospace" }}>{footerMax}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Big-number metric card with delta and a small accent icon dot.
+function BigMetricCard({ label, value, delta, accent }: { label: string; value: string; delta: string; accent: string }) {
+  const up = !delta.startsWith("-");
+  return (
+    <div style={{
+      ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10,
+      borderTop: `3px solid ${accent}`, minWidth: 0,
+      background: `linear-gradient(135deg, ${accent}14 0%, transparent 60%)`,
+    }}>
+      <div style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}22`, border: `1px solid ${accent}55`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: accent, boxShadow: `0 0 8px ${accent}` }} />
+      </div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontSize: 30, fontWeight: 800, color: "#fff", lineHeight: 1 }}>{value}</span>
+        {delta ? <span style={{ fontSize: 11, fontWeight: 800, color: up ? HOME_THEME.green : HOME_THEME.red }}>{delta}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+// Small stat chip (Likes / Attachments / Team Members style).
+function StatChip({ icon, label, value, accent }: { icon: string; label: string; value: string; accent: string }) {
+  return (
+    <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+      <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, background: `${accent}1a`, border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{icon}</div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: "#fff", fontFamily: "monospace", flexShrink: 0 }}>{value}</div>
+    </div>
+  );
+}
+
+// One agenda item in the right-side timeline column.
+function AgendaItem({ time, title, who, accent, status }: { time: string; title: string; who: string; accent: string; status?: string }) {
+  return (
+    <div style={{ ...homePanelStyle, padding: "10px 12px", display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
+      <div style={{ width: 30, height: 30, borderRadius: "50%", flexShrink: 0, background: `${accent}1f`, border: `1px solid ${accent}55`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ fontSize: 13, color: accent }}>◷</span>
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
+        <div style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
+      </div>
+      {status && (
+        <span style={{ fontSize: 8.5, fontWeight: 800, color: HOME_THEME.green, background: "rgba(16,185,129,0.14)", border: `1px solid ${HOME_THEME.green}44`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
+      )}
+    </div>
+  );
+}
+
+// ── Real-data bucketing for the Overview tab ────────────────────────────────
+
+const ET_TZ = "America/New_York";
+
+/** YYYY-MM-DD in ET for a Date (so day buckets line up with the trading day). */
+function etDayKey(d: Date): string {
+  return d.toLocaleDateString("en-CA", { timeZone: ET_TZ }); // en-CA → ISO-ish YYYY-MM-DD
+}
+
+/** "Mon 23" style short label for a day-bucket axis tick. */
+function etDayLabel(d: Date): string {
+  return d.toLocaleDateString("en-US", { timeZone: ET_TZ, weekday: "short", day: "numeric" });
+}
+
+/**
+ * Bucket page-visit timestamps into the last `days` calendar days (ET), oldest
+ * → newest. Returns parallel { counts, labels } arrays so the line chart can plot
+ * real traffic instead of placeholder noise.
+ */
+function dailyVisitSeries(visits: PageVisit[], days = 12): { counts: number[]; labels: string[] } {
+  const byDay = new Map<string, number>();
+  for (const v of visits) {
+    if (!v.createdAt) continue;
+    const t = new Date(v.createdAt);
+    if (isNaN(t.getTime())) continue;
+    const k = etDayKey(t);
+    byDay.set(k, (byDay.get(k) ?? 0) + 1);
+  }
+  const counts: number[] = [];
+  const labels: string[] = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 86400000);
+    counts.push(byDay.get(etDayKey(d)) ?? 0);
+    labels.push(etDayLabel(d));
+  }
+  return { counts, labels };
+}
+
+/**
+ * Bucket signups (Clerk recent users, by createdAt ms) into the last `weeks`
+ * ISO-ish weeks, oldest → newest. Falls back to an all-zero series the chart can
+ * still render. Returns { counts, labels } with "DD Mon" week-start labels.
+ */
+function weeklySignupSeries(
+  signups: Array<{ createdAt: number | null }>,
+  weeks = 7,
+): { counts: number[]; labels: string[] } {
+  const now = new Date();
+  // Start of the current week bucket (Monday 00:00 local is fine for grouping).
+  const dayMs = 86400000;
+  const weekMs = 7 * dayMs;
+  const monday = new Date(now);
+  const dow = (monday.getDay() + 6) % 7; // 0 = Monday
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - dow);
+  const counts: number[] = new Array(weeks).fill(0);
+  const labels: string[] = [];
+  const starts: number[] = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const start = monday.getTime() - i * weekMs;
+    starts.push(start);
+    labels.push(new Date(start).toLocaleDateString("en-US", { day: "numeric", month: "short" }));
+  }
+  for (const s of signups) {
+    if (s.createdAt == null) continue;
+    const t = s.createdAt;
+    for (let b = 0; b < starts.length; b++) {
+      if (t >= starts[b] && t < starts[b] + weekMs) { counts[b]++; break; }
+    }
+  }
+  return { counts, labels };
+}
+
+function OverviewSection({ metrics }: {
+  metrics: {
+    daily: { counts: number[]; labels: string[] };
+    weekly: { counts: number[]; labels: string[] };
+    totalVisits: number;
+    activePages: number;
+    users: number | null;
+    waitlist: number | null;
+    activeSessions: number | null;
+    uptime: string;
+    feed: Array<{ label: string; loads: number; ago: string; active: boolean }>;
+  };
+}) {
+  const { daily, weekly, totalVisits, activePages, users, waitlist, activeSessions, uptime, feed } = metrics;
+
+  // Daily Activity = real site visits, last 12 days (ET). seriesB left empty (no
+  // "previous" comparison series for raw daily traffic).
+  const seriesNow = daily.counts;
+  const months = daily.labels;
+  const seriesPrev: number[] = [];
+
+  // Weekly Signups (was "Weekly Invoices") — real new users per week.
+  const invoiceLabels = weekly.labels;
+  const invoiceBars = weekly.counts;
+  const wkMin = invoiceBars.length ? Math.min(...invoiceBars) : 0;
+  const wkMax = invoiceBars.length ? Math.max(...invoiceBars) : 0;
+
+  // Project Progress mini-card → reuse the daily traffic shape as a real sparkline.
+  const progress = daily.counts.length ? daily.counts : [0];
+  const pMin = Math.min(...progress), pMax = Math.max(...progress), pRange = pMax - pMin || 1;
+  const progPath = progress.map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, progress.length - 1)) * 100},${28 - ((v - pMin) / pRange) * 24}`).join(" ");
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) clamp(260px, 26%, 340px)", gap: 12, alignItems: "start" }}>
+      {/* ── Left: main stats column ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        {/* Top charts row */}
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr)", gap: 12 }}>
+          <LineChartCard title="Daily Activity" subtitle="Site visits · last 12 days" seriesA={seriesNow} seriesB={seriesPrev} labels={months} />
+          <BarChartCard title="Weekly Signups" subtitle="New users · last 7 weeks" bars={invoiceBars} labels={invoiceLabels} footerMin={String(wkMin)} footerMax={String(wkMax)} />
+        </div>
+
+        {/* Big-number metric cards — real owner metrics */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+          <BigMetricCard label="Total Users" value={users != null ? users.toLocaleString() : "—"} delta="" accent={HOME_THEME.purple} />
+          <BigMetricCard label="Waitlist Signups" value={waitlist != null ? waitlist.toLocaleString() : "—"} delta="" accent={HOME_THEME.green} />
+          <BigMetricCard label="Active Sessions" value={activeSessions != null ? activeSessions.toLocaleString() : "—"} delta="" accent={HOME_THEME.cyan} />
+          <BigMetricCard label="Visits (window)" value={totalVisits.toLocaleString()} delta="" accent={HOME_THEME.orange} />
+        </div>
+
+        {/* Small stat chips + progress mini-card */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr)) minmax(0, 1.2fr)", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <StatChip icon="🟢" label="Pages Open Now" value={activePages.toLocaleString()} accent={HOME_THEME.green} />
+            <StatChip icon="👥" label="Total Users" value={users != null ? users.toLocaleString() : "—"} accent={HOME_THEME.cyan} />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <StatChip icon="📈" label="Visits (window)" value={totalVisits.toLocaleString()} accent={HOME_THEME.purple} />
+            <StatChip icon="⏱" label="Uptime" value={uptime} accent={HOME_THEME.orange} />
+          </div>
+          <div style={{ ...homePanelStyle, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "#fff" }}>Traffic Trend</span>
+              <span style={{ fontSize: 8.5, fontWeight: 800, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}22`, border: `1px solid ${HOME_THEME.cyan}44`, borderRadius: 12, padding: "2px 8px", letterSpacing: "0.06em" }}>12 DAYS</span>
+            </div>
+            <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ width: "100%", height: 56, display: "block" }}>
+              <path d={progPath} fill="none" stroke={HOME_THEME.purple} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Right: real recent-activity feed ── */}
+      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Recent Activity</span>
+          <span style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace" }}>newest first</span>
+        </div>
+        {feed.length === 0 ? (
+          <div style={{ fontSize: 11, color: HOME_THEME.muted, padding: "8px 2px" }}>No page loads recorded yet.</div>
+        ) : feed.map((f, i) => {
+          const accents = [HOME_THEME.purple, HOME_THEME.cyan, HOME_THEME.green, HOME_THEME.orange];
+          return (
+            <AgendaItem
+              key={f.label + i}
+              time={`${f.loads.toLocaleString()}×`}
+              title={f.label}
+              who={f.ago}
+              accent={accents[i % accents.length]}
+              status={f.active ? "OPEN" : undefined}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// FE / BE tab + accordion (one section open at a time). The `tab` of each
+// section decides which page it shows on; sort sections later by editing TAB.
+type OwnerTab = "overview" | "frontend" | "backend";
+
 export default function OwnerDashboard() {
+  // Active page tab (persisted). Sections are assigned to a tab via SECTION_TAB.
+  const [ownerTab, setOwnerTab] = useState<OwnerTab>("overview");
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("owner-tab");
+      if (v === "overview" || v === "frontend" || v === "backend") setOwnerTab(v);
+    } catch { /* ignore */ }
+  }, []);
+  const selectTab = useCallback((t: OwnerTab) => {
+    setOwnerTab(t);
+    try { localStorage.setItem("owner-tab", t); } catch { /* ignore */ }
+  }, []);
+
+  // Accordion: which section card is expanded (null = all collapsed). Opening one
+  // collapses the others. Persisted so a reload keeps the same card open.
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("owner-open-section");
+      if (v) setOpenSection(v);
+    } catch { /* ignore */ }
+  }, []);
+  const toggleSection = useCallback((id: string) => {
+    setOpenSection((cur) => {
+      const next = cur === id ? null : id;
+      try { localStorage.setItem("owner-open-section", next ?? ""); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
   const [server, setServer] = useState<ServerStatus>({});
   const [waitlistCount, setWaitlistCount] = useState<number | null>(null);
   // Wall-clock time (ms) when server.uptime was last received, so we can tick the
@@ -705,6 +1196,13 @@ export default function OwnerDashboard() {
       try {
         const wl = await fetch("/api/waitlist/count", { cache: "no-store" });
         if (wl.ok) { const j = await wl.json(); setWaitlistCount(j?.count ?? 0); }
+      } catch { /* non-fatal */ }
+
+      // Page-visit log (per-load rows w/ timestamps) — powers the Overview tab's
+      // Daily Activity (last 12 days) + recent-activity agenda from real data.
+      try {
+        const pv = await fetch("/api/page-visits?limit=500", { cache: "no-store" });
+        if (pv.ok) { const j = await pv.json(); setVisits((j?.visits ?? []) as PageVisit[]); }
       } catch { /* non-fatal */ }
 
       // Clerk key status (masked — never includes the secret value).
@@ -1050,6 +1548,40 @@ export default function OwnerDashboard() {
   const cpuPct = (renderMetrics?.cpu.value ?? 0) * 100;
   const cpuAccent = cpuPct > 80 ? HOME_THEME.red : cpuPct > 40 ? HOME_THEME.orange : HOME_THEME.green;
 
+  // ── Overview tab metrics (all from real front-end data) ─────────────────────
+  const overviewMetrics = (() => {
+    const labelFor = (key: string): string => {
+      const hit = NAV_GROUPS.flatMap((g) => g.items).find(
+        (it) => it.href.replace(/^\//, "") === key || it.href === key
+      );
+      return hit?.label ?? key;
+    };
+    const totalVisits = pageStatuses.reduce((sum, p) => sum + (p.totalLoads ?? 0), 0);
+    const activePages = pageStatuses.filter((p) => p.status === "active").length;
+    const feed = pageStatuses
+      .filter((p) => p.lastSeen && !isNaN(new Date(p.lastSeen).getTime()))
+      .sort((a, b) => new Date(b.lastSeen!).getTime() - new Date(a.lastSeen!).getTime())
+      .slice(0, 7)
+      .map((p) => ({
+        label: labelFor(p.pageKey),
+        loads: p.totalLoads ?? 0,
+        ago: fmtAgo(p.lastSeen),
+        active: p.status === "active",
+      }));
+    const signups = (clerk?.stats?.recent ?? []).map((u) => ({ createdAt: u.createdAt }));
+    return {
+      daily: dailyVisitSeries(visits, 12),
+      weekly: weeklySignupSeries(signups, 7),
+      totalVisits,
+      activePages,
+      users: clerk?.stats?.userCount ?? null,
+      waitlist: waitlistCount,
+      activeSessions: clerk?.stats?.activeSessions ?? null,
+      uptime: displayUptime != null ? fmtUptime(displayUptime) : "—",
+      feed,
+    };
+  })();
+
   return (
     <div style={homeShellStyle}>
       {/* Header */}
@@ -1076,6 +1608,48 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
+      {/* FE / BE tab toggle */}
+      <div style={{ display: "flex", gap: 6, padding: "10px clamp(14px,2vw,24px) 0" }}>
+        {([
+          { id: "overview" as const, label: "Overview" },
+          { id: "frontend" as const, label: "Front-End" },
+          { id: "backend" as const, label: "Back-End" },
+        ]).map((t) => {
+          const active = ownerTab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => selectTab(t.id)}
+              style={{
+                padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
+                textTransform: "uppercase", letterSpacing: "0.1em",
+                cursor: "pointer",
+                background: active ? "rgba(0,229,255,0.15)" : "transparent",
+                color: active ? HOME_THEME.cyan : HOME_THEME.muted,
+                border: `1px solid ${active ? HOME_THEME.cyan + "66" : HOME_THEME.border}`,
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+        {/* Admin — navigates to the separate /dev/admin page (not a tab). */}
+        <a
+          href="/dev/admin"
+          style={{
+            padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
+            textTransform: "uppercase", letterSpacing: "0.1em",
+            cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6,
+            marginLeft: "auto",
+            background: "transparent",
+            color: HOME_THEME.purple,
+            border: `1px solid ${HOME_THEME.purple}66`,
+          }}
+        >
+          Admin <span style={{ fontSize: 12 }}>↗</span>
+        </a>
+      </div>
+
       {/* Scrollable body */}
       <div
         style={{
@@ -1085,12 +1659,21 @@ export default function OwnerDashboard() {
           padding: "clamp(14px,2vw,24px)",
           display: "flex",
           flexDirection: "column",
-          gap: 24,
+          gap: 12,
         }}
       >
-        {/* ── KPI cards ── */}
-        <div>
-          <SectionLabel>System</SectionLabel>
+        {/* ── Overview dashboard (real front-end data) ── */}
+        {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} />}
+
+        {/* ── System KPIs ── */}
+        {SECTION_TAB.system === ownerTab && (
+        <AccordionCard
+          id="system"
+          title="System"
+          subtitle={`uptime ${displayUptime != null ? fmtUptime(displayUptime) : "—"} · ${dbHealth?.ok ? "pg OK" : "pg —"} · spot ${server.spot != null ? server.spot.toFixed(0) : "—"}`}
+          open={openSection === "system"}
+          onToggle={toggleSection}
+        >
           <div style={{ display: "grid", gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gap: 10 }}>
             <StatCard label="Server Uptime" value={displayUptime != null ? fmtUptime(displayUptime) : "—"} accent={HOME_THEME.green} mono />
             <StatCard
@@ -1108,12 +1691,20 @@ export default function OwnerDashboard() {
             <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Version" value={process.env.NEXT_PUBLIC_APP_VERSION || "—"} accent={HOME_THEME.purple} mono />
           </div>
-        </div>
+        </AccordionCard>
+        )}
 
         {/* ── Hetzner hosting + Cloudflare edge metrics ── */}
-        <div>
+        {SECTION_TAB.hosting === ownerTab && (
+        <AccordionCard
+          id="hosting"
+          title="Hosting · Hetzner + Cloudflare"
+          subtitle={renderMetrics?.unconfigured ? "setup needed" : `cpu ${renderMetrics?.cpu.value != null ? (renderMetrics.cpu.value * 100).toFixed(0) + "%" : "—"} · mem ${renderMetrics?.memory.value != null ? (renderMetrics.memory.value / 1024 / 1024).toFixed(0) + "MB" : "—"}`}
+          open={openSection === "hosting"}
+          onToggle={toggleSection}
+        >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <SectionLabel>Hosting · Hetzner + Cloudflare</SectionLabel>
+            <div style={{ fontSize: 10, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>Window</div>
             <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
               {(["live", "weekly", "monthly"] as const).map(w => (
                 <button
@@ -1278,11 +1869,18 @@ export default function OwnerDashboard() {
               );
             })()}
           </div>
-        </div>
+        </AccordionCard>
+        )}
 
         {/* ── DB row counts ── */}
-        <div>
-          <SectionLabel>Database · Today</SectionLabel>
+        {SECTION_TAB.database === ownerTab && (
+        <AccordionCard
+          id="database"
+          title="Database · Today"
+          subtitle={`${TABLES.length} tables tracked`}
+          open={openSection === "database"}
+          onToggle={toggleSection}
+        >
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
             {TABLES.map(({ id, label }, idx) => {
               const count = (dbStats as Record<string, number>)[id];
@@ -1308,12 +1906,19 @@ export default function OwnerDashboard() {
               );
             })}
           </div>
-        </div>
+        </AccordionCard>
+        )}
 
         {/* ── Controls ── */}
-        <div>
-          <SectionLabel>Controls</SectionLabel>
-          <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+        {SECTION_TAB.controls === ownerTab && (
+        <AccordionCard
+          id="controls"
+          title="Controls"
+          subtitle={`idle ${isIdle == null ? "—" : isIdle ? "ON" : "OFF"} · mvc ${mvcAuto == null ? "—" : mvcAuto ? "ON" : "OFF"} · maint ${maint == null ? "—" : maint ? "ON" : "OFF"}`}
+          open={openSection === "controls"}
+          onToggle={toggleSection}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {/* Toggles */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
               {/* Idle */}
@@ -1415,12 +2020,19 @@ export default function OwnerDashboard() {
               </div>
             )}
           </div>
-        </div>
+        </AccordionCard>
+        )}
 
         {/* ── EOD GEX save status ── */}
-        <div>
-          <SectionLabel>EOD GEX · Today</SectionLabel>
-          <div style={{ ...homePanelStyle, padding: "14px 18px" }}>
+        {SECTION_TAB.eodgex === ownerTab && (
+        <AccordionCard
+          id="eodgex"
+          title="EOD GEX · Today"
+          subtitle={eodGex.length === 0 ? "not yet recorded" : `${eodGex.length} symbol(s) saved`}
+          open={openSection === "eodgex"}
+          onToggle={toggleSection}
+        >
+          <div>
             {eodGex.length === 0 ? (
               <div style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "monospace" }}>
                 Not yet recorded today — fires 3:55–4:05 PM ET
@@ -1482,19 +2094,13 @@ export default function OwnerDashboard() {
               </div>
             )}
           </div>
-        </div>
+        </AccordionCard>
+        )}
 
-        {/* ── Levels auto-publish (/em customer feed) ── */}
+        {/* ── Levels auto-publish moved to Estimated Moves → EM Tracker tab ── */}
+        {/* Section relocated to /estimated-move (EM Tracker tab) — see components/dashboard/LevelsPublish.tsx */}
+        {false && (
         <div style={{ ...homePanelStyle }}>
-          <div
-            onClick={() => setLevelsCollapsed((v) => !v)}
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", cursor: "pointer", borderBottom: levelsCollapsed ? "none" : `1px solid ${HOME_THEME.border}` }}
-          >
-            <SectionLabel>Levels Publish · /em feed</SectionLabel>
-            <span style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.08em" }}>
-              {levelsCollapsed ? "▶ EXPAND" : "▼ COLLAPSE"}
-            </span>
-          </div>
           {!levelsCollapsed && <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
               <StatusBadge
@@ -1648,11 +2254,18 @@ export default function OwnerDashboard() {
             )}
           </div>}
         </div>
+        )}
 
         {/* ── Auth / Clerk keys ── */}
-        <div>
-          <SectionLabel>Auth · Clerk</SectionLabel>
-          <div style={{ ...homePanelStyle, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+        {SECTION_TAB.auth === ownerTab && (
+        <AccordionCard
+          id="auth"
+          title="Auth · Clerk"
+          subtitle={clerk == null ? "loading…" : `${clerk.configured ? "configured" : "not configured"} · env ${clerk.environment}${clerk.stats?.userCount != null ? ` · ${clerk.stats.userCount} users` : ""}`}
+          open={openSection === "auth"}
+          onToggle={toggleSection}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {clerk == null ? (
               <span style={{ fontSize: 11, color: "#fff", fontFamily: "monospace" }}>Loading…</span>
             ) : (
@@ -1827,10 +2440,11 @@ export default function OwnerDashboard() {
               </>
             )}
           </div>
-        </div>
+        </AccordionCard>
+        )}
 
         {/* ── Page activity by nav group ── */}
-        {(() => {
+        {SECTION_TAB.activity === ownerTab && (() => {
           // Friendly label lookup for any page_key the feed surfaces, even pages
           // that aren't in NAV_GROUPS (so the feed can show their real name).
           const labelFor = (key: string): string => {
@@ -2034,10 +2648,17 @@ export default function OwnerDashboard() {
         })()}
 
         {/* ── Quick links ── */}
-        <div>
-          <SectionLabel>Quick Links</SectionLabel>
+        {SECTION_TAB.quicklinks === ownerTab && (
+        <AccordionCard
+          id="quicklinks"
+          title="Quick Links"
+          subtitle="database · logs · dev · changelog …"
+          open={openSection === "quicklinks"}
+          onToggle={toggleSection}
+        >
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {[
+              { label: "Admin", href: "/dev/admin" },
               { label: "Database", href: "/database" },
               { label: "Logs", href: "/logs" },
               { label: "Dev Probe", href: "/dev" },
@@ -2050,7 +2671,8 @@ export default function OwnerDashboard() {
               </a>
             ))}
           </div>
-        </div>
+        </AccordionCard>
+        )}
       </div>
     </div>
   );
