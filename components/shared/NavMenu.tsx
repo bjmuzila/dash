@@ -63,7 +63,6 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: GridIcon,
     items: [
       { label: "Home", href: "/home" },
-      { label: "Home2", href: "/home2" },
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Greeks", href: "/greeks" },
@@ -107,6 +106,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Owner", href: "/dev/owner" },
       { label: "Admin", href: "/dev/admin" },
+      { label: "Tree", href: "/dev/tree" },
       { label: "Database", href: "/database" },
       { label: "Dev", href: "/dev" },
       { label: "Estimated Moves BE", href: "/estimated-move" },
@@ -250,12 +250,6 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
       <Link href="/home" style={rowLink({ label: "Home", href: "/home" }, isActive("/home"))} onClick={closeMenu}>
         <HomeIcon size={18} />
         <span>Home</span>
-      </Link>
-
-      {/* Home 2 */}
-      <Link href="/home2" style={rowLink({ label: "Home 2", href: "/home2" }, isActive("/home2"))} onClick={closeMenu}>
-        <HomeIcon size={18} />
-        <span>Home 2</span>
       </Link>
 
       <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />

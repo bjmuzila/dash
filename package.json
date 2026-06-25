@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "2026.6.25-v8",
+    "version":  "2026.6.25-v10",
     "private":  true,
     "workspaces":  [
 
@@ -19,6 +19,11 @@
     "dependencies":  {
                          "@clerk/nextjs":  "^6.33.4",
                          "@clerk/themes":  "^2.4.43",
+                         "@types/node":  "^20",
+                         "@types/pg":  "^8.20.0",
+                         "@types/react":  "^19",
+                         "@types/react-dom":  "^19",
+                         "autoprefixer":  "^10.4.19",
                          "clsx":  "^2.1.1",
                          "discord.js":  "^14.16.3",
                          "dotenv":  "^17.4.2",
@@ -27,21 +32,17 @@
                          "lightweight-charts":  "^5.0.0",
                          "next":  "^15.3.3",
                          "pg":  "^8.21.0",
+                         "postcss":  "^8.4.38",
                          "puppeteer":  "^24.0.0",
                          "react":  "^19",
                          "react-dom":  "^19",
+                         "stripe":  "^22.3.0",
                          "tailwind-merge":  "^2.3.0",
-                         "tesseract.js":  "^5.1.1",
-                         "ws":  "^8.18.0",
-                         "xlsx":  "^0.18.5",
-                         "autoprefixer":  "^10.4.19",
-                         "postcss":  "^8.4.38",
                          "tailwindcss":  "^3.4.3",
+                         "tesseract.js":  "^5.1.1",
                          "typescript":  "^5",
-                         "@types/node":  "^20",
-                         "@types/pg":  "^8.20.0",
-                         "@types/react":  "^19",
-                         "@types/react-dom":  "^19"
+                         "ws":  "^8.18.0",
+                         "xlsx":  "^0.18.5"
                      },
     "devDependencies":  {
                             "tsx":  "^4.22.4"

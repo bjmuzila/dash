@@ -85,6 +85,32 @@ const Divider = () => (
 );
 
 export default function ToolbarTicker() {
+  // Scale the whole ticker row as one unit so it shrinks/grows together
+  // instead of individual pills squishing/clipping.
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+  const scaleRef = useRef(1);
+  useEffect(() => {
+    const fit = () => {
+      const wrap = wrapRef.current, row = rowRef.current;
+      if (!wrap || !row) return;
+      const avail = wrap.clientWidth;
+      const natural = row.scrollWidth / (scaleRef.current || 1);
+      const next = natural > 0 ? Math.min(1, avail / natural) : 1;
+      if (Math.abs(next - scaleRef.current) > 0.005) {
+        scaleRef.current = next;
+        setScale(next);
+      }
+    };
+    const ro = new ResizeObserver(fit);
+    if (wrapRef.current) ro.observe(wrapRef.current);
+    if (rowRef.current) ro.observe(rowRef.current);
+    fit();
+    window.addEventListener("resize", fit);
+    return () => { ro.disconnect(); window.removeEventListener("resize", fit); };
+  }, []);
+
   const shouldConnect = useWsLifecycle();
   const shouldConnectRef = useRef(shouldConnect);
   shouldConnectRef.current = shouldConnect;
@@ -207,15 +233,28 @@ export default function ToolbarTicker() {
   }, [shouldConnect]);
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, overflow: "hidden" }}>
-      <Pill label="VIX" price={vix.price} prev={vix.prev} color="#e8c060" />
-      <Divider />
-      <Pill label="ESU" price={es.price} prev={es.prev} quarter />
-      <Divider />
-      <Pill label="SPX" price={spx.price} prev={spx.prev} />
-      <Divider />
-      {/* NQU pill + 16-symbol "all quotes" dropdown */}
-      <NquQuotePill />
+    <div ref={wrapRef} style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "visible" }}>
+      <div
+        ref={rowRef}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          whiteSpace: "nowrap",
+          flexShrink: 0,
+          transform: `scale(${scale})`,
+          transformOrigin: "center center",
+        }}
+      >
+        <Pill label="VIX" price={vix.price} prev={vix.prev} color="#e8c060" />
+        <Divider />
+        <Pill label="ESU" price={es.price} prev={es.prev} quarter />
+        <Divider />
+        <Pill label="SPX" price={spx.price} prev={spx.prev} />
+        <Divider />
+        {/* NQU pill + 16-symbol "all quotes" dropdown */}
+        <NquQuotePill />
+      </div>
     </div>
   );
 }

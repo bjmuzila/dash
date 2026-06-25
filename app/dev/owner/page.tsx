@@ -434,10 +434,10 @@ const SECTION_TAB: Record<string, "frontend" | "backend"> = {
 };
 
 /**
- * Collapsible section card for the owner dashboard accordion. The whole header is
- * the click target; expanding one card collapses the others (handled by the
- * parent's single `openSection` state). `subtitle` shows an at-a-glance summary
- * on the collapsed header so the card is useful without opening it.
+ * Collapsible section card for the owner dashboard. The whole header is the
+ * click target; each card toggles independently (multi-open via the parent's
+ * `openSet`), and all cards start expanded on load. `subtitle` shows an
+ * at-a-glance summary on the collapsed header so the card is useful when closed.
  */
 function AccordionCard({
   id, title, subtitle, open, onToggle, children,
@@ -897,19 +897,21 @@ export default function OwnerDashboard() {
     try { localStorage.setItem("owner-tab", t); } catch { /* ignore */ }
   }, []);
 
-  // Accordion: which section card is expanded (null = all collapsed). Opening one
-  // collapses the others. Persisted so a reload keeps the same card open.
-  const [openSection, setOpenSection] = useState<string | null>(null);
+  // Section cards: multi-open. ALL sections start expanded on page load. Each
+  // card toggles independently (no longer an accordion). Persisted so a reload
+  // keeps the user's open/closed choices; first-ever load defaults to all open.
+  const [openSet, setOpenSet] = useState<Set<string>>(() => new Set(Object.keys(SECTION_TAB)));
   useEffect(() => {
     try {
-      const v = localStorage.getItem("owner-open-section");
-      if (v) setOpenSection(v);
+      const v = localStorage.getItem("owner-open-sections");
+      if (v != null) setOpenSet(new Set(JSON.parse(v) as string[]));
     } catch { /* ignore */ }
   }, []);
   const toggleSection = useCallback((id: string) => {
-    setOpenSection((cur) => {
-      const next = cur === id ? null : id;
-      try { localStorage.setItem("owner-open-section", next ?? ""); } catch { /* ignore */ }
+    setOpenSet((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      try { localStorage.setItem("owner-open-sections", JSON.stringify([...next])); } catch { /* ignore */ }
       return next;
     });
   }, []);
@@ -1671,7 +1673,7 @@ export default function OwnerDashboard() {
           id="system"
           title="System"
           subtitle={`uptime ${displayUptime != null ? fmtUptime(displayUptime) : "—"} · ${dbHealth?.ok ? "pg OK" : "pg —"} · spot ${server.spot != null ? server.spot.toFixed(0) : "—"}`}
-          open={openSection === "system"}
+          open={openSet.has("system")}
           onToggle={toggleSection}
         >
           <div style={{ display: "grid", gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gap: 10 }}>
@@ -1700,7 +1702,7 @@ export default function OwnerDashboard() {
           id="hosting"
           title="Hosting · Hetzner + Cloudflare"
           subtitle={renderMetrics?.unconfigured ? "setup needed" : `cpu ${renderMetrics?.cpu.value != null ? (renderMetrics.cpu.value * 100).toFixed(0) + "%" : "—"} · mem ${renderMetrics?.memory.value != null ? (renderMetrics.memory.value / 1024 / 1024).toFixed(0) + "MB" : "—"}`}
-          open={openSection === "hosting"}
+          open={openSet.has("hosting")}
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
@@ -1878,7 +1880,7 @@ export default function OwnerDashboard() {
           id="database"
           title="Database · Today"
           subtitle={`${TABLES.length} tables tracked`}
-          open={openSection === "database"}
+          open={openSet.has("database")}
           onToggle={toggleSection}
         >
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
@@ -1915,7 +1917,7 @@ export default function OwnerDashboard() {
           id="controls"
           title="Controls"
           subtitle={`idle ${isIdle == null ? "—" : isIdle ? "ON" : "OFF"} · mvc ${mvcAuto == null ? "—" : mvcAuto ? "ON" : "OFF"} · maint ${maint == null ? "—" : maint ? "ON" : "OFF"}`}
-          open={openSection === "controls"}
+          open={openSet.has("controls")}
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -2029,7 +2031,7 @@ export default function OwnerDashboard() {
           id="eodgex"
           title="EOD GEX · Today"
           subtitle={eodGex.length === 0 ? "not yet recorded" : `${eodGex.length} symbol(s) saved`}
-          open={openSection === "eodgex"}
+          open={openSet.has("eodgex")}
           onToggle={toggleSection}
         >
           <div>
@@ -2262,7 +2264,7 @@ export default function OwnerDashboard() {
           id="auth"
           title="Auth · Clerk"
           subtitle={clerk == null ? "loading…" : `${clerk.configured ? "configured" : "not configured"} · env ${clerk.environment}${clerk.stats?.userCount != null ? ` · ${clerk.stats.userCount} users` : ""}`}
-          open={openSection === "auth"}
+          open={openSet.has("auth")}
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -2653,7 +2655,7 @@ export default function OwnerDashboard() {
           id="quicklinks"
           title="Quick Links"
           subtitle="database · logs · dev · changelog …"
-          open={openSection === "quicklinks"}
+          open={openSet.has("quicklinks")}
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>

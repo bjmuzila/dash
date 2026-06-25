@@ -460,6 +460,9 @@ export default function EsCandlesPage() {
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
   const drawOverlayRef = useRef<() => void>(() => {});
+  // Cached right price-axis gutter width (px). Updated only on >=1px change so
+  // the heatmap's right edge doesn't shimmer with sub-pixel label wobble.
+  const hmScaleWRef = useRef(0);
   // Basis (esFut - spx) kept in a ref so the overlay draw reads it without
   // re-subscribing. Updated by the WS listener.
   const basisRef = useRef(0);
@@ -835,8 +838,12 @@ export default function EsCandlesPage() {
   // (ES 16:00 − SPX 16:00) give the correct positive basis, so we PREFER the
   // frozen prior-day basis and only fall back to the live basis if it's missing.
   const effectiveBasis = useCallback(() => {
-    if (prevBasisRef.current) return prevBasisRef.current;
-    return basisRef.current; // fallback: live basis (until DB closes load)
+    // Live basis (esFut − spot) from the current /ws/gex frame. The frozen
+    // prior-day basis went stale intraday — it quoted SPX ~90pt under ES when
+    // the true basis had drifted to ~70 — so prefer the live value and only
+    // fall back to the frozen prior-day basis when no live frame exists yet.
+    if (basisRef.current) return basisRef.current;
+    return prevBasisRef.current;
   }, []);
 
   useEffect(() => {
@@ -901,11 +908,22 @@ export default function EsCandlesPage() {
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
 
+      // Only re-apply when the integer size actually changes. Sub-pixel layout
+      // churn (scrollbar/flex reflow) was firing the observer with effectively
+      // identical sizes, and each applyOptions nudged the time scale → the
+      // chart jittered back and forth. Guarding on rounded dims stops the loop.
+      let lastW = 0, lastH = 0;
       const ro = new ResizeObserver(() => {
-        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+        const w = Math.round(container.clientWidth);
+        const h = Math.round(container.clientHeight);
+        if (w <= 0 || h <= 0 || (w === lastW && h === lastH)) return;
+        lastW = w; lastH = h;
+        chart.applyOptions({ width: w, height: h });
       });
       ro.observe(container);
-      chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+      lastW = Math.round(container.clientWidth);
+      lastH = Math.round(container.clientHeight);
+      chart.applyOptions({ width: lastW, height: lastH });
 
       // Double-click anywhere on the chart → recenter: fit all candles in the
       // time axis and snap both price scales back to autoscale (right axis right).
@@ -1136,6 +1154,19 @@ export default function EsCandlesPage() {
       // adjacent strike/time cells melt into smooth bands instead of hard tiles.
       if (showHeatmap) {
         const cols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+        // Stretch the latest column all the way to the right axis so the band
+        // fills the gap to the last print. The plot's right edge = canvas width
+        // minus the price-axis gutter. We READ that gutter width but CACHE it in
+        // a ref and only accept changes of >=1px: the live price label can wobble
+        // the measured width sub-pixel each tick, and reacting to that per-frame
+        // made the band edge shimmer. The cached, snapped value is stable.
+        let measuredScaleW = 0;
+        try { measuredScaleW = chart.priceScale("right").width(); } catch {}
+        if (Math.abs(measuredScaleW - hmScaleWRef.current) >= 1) {
+          hmScaleWRef.current = measuredScaleW;
+        }
+        const hmPlotRight = Math.max(0, w - hmScaleWRef.current - 1);
+        const lastSlotTs = cols.length ? cols[cols.length - 1].slotTs : -1;
 
         // Offscreen buffer at the same CSS size (the main ctx is already DPR-
         // scaled, so we draw in CSS px here too).
@@ -1150,6 +1181,11 @@ export default function EsCandlesPage() {
           for (const col of cols) {
             const sx = slotX(col.slotTs);
             if (!sx) continue;
+            // Stretch the latest column to the right axis so the band renders
+            // all the way to the last print instead of stopping a bar short.
+            if (col.slotTs === lastSlotTs && hmPlotRight > sx.left) {
+              sx.w = hmPlotRight - sx.left;
+            }
             // Per-column max + top-3 magnitudes for THIS metric (drives color/rank).
             const absVals = col.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
             const colMax = absVals.length ? Math.max(...absVals) : 1;
@@ -1272,14 +1308,28 @@ export default function EsCandlesPage() {
 
     drawOverlayRef.current = draw;
 
+    // Coalesce every repaint trigger through ONE rAF. The overlay reads the
+    // live right-axis width (to stretch the last heatmap column to the edge);
+    // during a tick the axis label width changes → plot width shifts → the time
+    // scale fires a range-change → repaint → axis re-measures… The two range
+    // subscriptions + the ResizeObserver were ping-ponging synchronously each
+    // frame, which is the back-and-forth jitter. Draining them into a single
+    // rAF lets the layout settle to a fixed point before we paint once.
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; draw(); });
+    };
+
     const ts = chart.timeScale();
-    ts.subscribeVisibleLogicalRangeChange(draw);
-    const ro = new ResizeObserver(draw);
+    ts.subscribeVisibleLogicalRangeChange(schedule);
+    const ro = new ResizeObserver(schedule);
     if (canvas.parentElement) ro.observe(canvas.parentElement);
     draw();
 
     return () => {
-      ts.unsubscribeVisibleLogicalRangeChange(draw);
+      cancelAnimationFrame(raf);
+      ts.unsubscribeVisibleLogicalRangeChange(schedule);
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-25 (session 65) — Removed /home2 page
+
+### Deleted (`app/home2/`)
+- Removed the entire `/home2` fintech-card dashboard page (`app/home2/page.tsx`) and its folder. The page mirrored `/home`'s live GEX feeds in a draggable card layout; no longer wanted.
+
+### Nav (`components/shared/NavMenu.tsx`)
+- Removed the "Home2" entry from the menu items array and the sidebar `<Link>` block (plus its divider comment).
+
+### Dev flow diagram (`app/dev/tree/FlowDiagram.tsx`)
+- Removed the `HOME2` node, its `HOME2 --> WS` edge, the `g2["Home2"]` GEX-tree node, and dropped `HOME2` from the `pg` class list.
+
+### Notes
+- `lib/layoutStore.ts` (IndexedDB store `CBEdge_Home2`) is now orphaned but left in place; a comment in `app/es-candles/page.tsx` still references the old HOME2 embed card. Both harmless — clean up later if desired.
+
 ## 2026-06-24 (session 64) — Public legal pages + sidebar Disclaimer menu
 
 ### Legal pages (`app/terms`, `app/risk-disclosure`, `app/privacy`, `app/disclaimer`)

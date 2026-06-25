@@ -217,12 +217,13 @@ export default function GlobalToolbar() {
           transform: "translateX(-50%)",
           display: "flex",
           alignItems: "center",
-          maxWidth: "46%",
-          overflow: "hidden",
+          justifyContent: "center",
+          width: "46%",
+          overflow: "visible",
           pointerEvents: "none",
         }}
       >
-        <div style={{ pointerEvents: "auto", minWidth: 0, overflow: "hidden" }}>
+        <div style={{ pointerEvents: "auto", width: "100%", minWidth: 0, display: "flex", justifyContent: "center" }}>
           <ToolbarTicker />
         </div>
       </div>

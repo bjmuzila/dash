@@ -39,7 +39,7 @@ export default function EsCandlesCard() {
       },
       rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
       leftPriceScale: { visible: false },
-      timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false },
+      timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false, rightOffset: 0, fixRightEdge: true },
       localization: {
         priceFormatter: (p: number) => p.toFixed(2),
         timeFormatter: (time: unknown) =>

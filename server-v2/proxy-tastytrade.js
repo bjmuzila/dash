@@ -844,7 +844,7 @@ async function fetchUnderlyingQuotes(symbols) {
     try {
       const ttSymbol = await resolveFrontFutureTtSymbol(product);
       if (!ttSymbol) { console.warn(`[WATCH-QUOTES] no front contract for ${product}`); continue; }
-      const json = await ttGet(`/market-data/by-type?future=${encodeURIComponent(ttSymbol)}`);
+      const json = await ttGet(`/market-data/by-type?future[]=${encodeURIComponent(ttSymbol)}`);
       const it = json?.data?.items?.[0];
       if (it) assign(orig, it);
     } catch (err) {

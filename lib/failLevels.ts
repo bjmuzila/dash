@@ -86,6 +86,18 @@ function isRthBar(ts: number): boolean {
   return minutes >= RTH_OPEN && minutes < RTH_CLOSE;
 }
 
+// True ET session date of a bar, derived from its timestamp rather than the
+// upstream `c.date`/slotKey tag (which can mis-date globex bars across the UTC
+// midnight boundary and pollute prev-day RTH H/L). Use for RTH grouping.
+function etSessionDate(c: EsCandle): string {
+  return etParts(c.timestamp).date || c.date;
+}
+
+// RTH-only bars for a given ET session date, grouped by true ET date.
+function rthBarsForDate(candles: EsCandle[], date: string): EsCandle[] {
+  return candles.filter((c) => isRthBar(c.timestamp) && etSessionDate(c) === date);
+}
+
 // Distinct sorted trading dates present in the candle set.
 function tradingDates(candles: EsCandle[]): string[] {
   return [...new Set(candles.map((c) => c.date).filter(Boolean))].sort();
@@ -146,7 +158,7 @@ export function computeRefLevels(candles: EsCandle[], todayDate: string): RefLev
 
   // Previous day RTH H/L.
   if (prevDate) {
-    const pdBars = candles.filter((c) => c.date === prevDate && isRthBar(c.timestamp));
+    const pdBars = rthBarsForDate(candles, prevDate);
     const pd = hiLo(pdBars);
     if (pd) {
       out.push({ kind: "pdHigh", label: "Prev Day High", short: "PDH", price: pd.high, side: "above" });
@@ -159,7 +171,7 @@ export function computeRefLevels(candles: EsCandle[], todayDate: string): RefLev
   const priorWeeks = [...new Set(dates.map(weekKey))].filter((w) => w < thisWeek).sort();
   const lastWeek = priorWeeks.pop();
   if (lastWeek) {
-    const pwBars = candles.filter((c) => weekKey(c.date) === lastWeek && isRthBar(c.timestamp));
+    const pwBars = candles.filter((c) => isRthBar(c.timestamp) && weekKey(etSessionDate(c)) === lastWeek);
     const pw = hiLo(pwBars);
     if (pw) {
       out.push({ kind: "pwHigh", label: "Prev Week High", short: "PWH", price: pw.high, side: "above" });
@@ -312,8 +324,7 @@ export function computeStats(candles: EsCandle[], maxDays = 20): { stats: FailSt
   for (let d = 1; d < recent.length; d++) {
     const day = recent[d];
     const levels = computeRefLevels(candles, day);
-    const dayBars = candles
-      .filter((c) => c.date === day && isRthBar(c.timestamp))
+    const dayBars = rthBarsForDate(candles, day)
       .sort((a, b) => a.timestamp - b.timestamp);
     if (!dayBars.length) continue;
 
