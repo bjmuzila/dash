@@ -676,11 +676,14 @@ const XP_CSS = `
   .xp-titlebar { display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:16px; }
   .xp-title { font-size:30px; font-weight:900; letter-spacing:.01em; color:#fff; text-transform:uppercase; }
   .xp-title .cy { color:var(--cyan); }
-  .xp-chip { display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 16px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(255,255,255,.02); }
+  .xp-chip { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:8px 16px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(255,255,255,.02); }
   .xp-chip .lbl { font-size:10px; font-weight:700; letter-spacing:.08em; color:#cfd6df; }
   .xp-chip .val { font-size:18px; font-weight:900; color:#fff; }
   .xp-chip.amber { border-color:rgba(249,158,11,.6); } .xp-chip.amber .val { color:var(--amber); }
   .xp-chip.cyan { border-color:rgba(0,240,255,.5); } .xp-chip.cyan .val { color:var(--cyan); }
+  /* single-line chip (UPDATE): html2canvas ignores flex justify-content, so
+     center the lone line with line-height instead of relying on flex. */
+  .xp-chip.solo { display:block; text-align:center; line-height:32px; font-size:13px; font-weight:700; color:#cfd6df; }
 
   /* 3-column grid. Columns stretch to the SAME height (the matrix sets it), so
      loading the Behavior block scrolls inside the rail instead of growing the
@@ -1261,7 +1264,7 @@ function ExplainerMockup({
         {/* ── title bar ── */}
         <div className="xp-titlebar">
           <div className="xp-title">CB EDGE <span className="cy">GEX PLAN</span></div>
-          <div className="xp-chip">UPDATE: {updated || snapDate}</div>
+          <div className="xp-chip solo">UPDATE: {updated || snapDate}</div>
           <div className="xp-chip amber">
             <span className="lbl">CONTROL NODE</span>
             <span className="val">{controlNode ? controlNode.k : "—"}</span>
