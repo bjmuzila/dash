@@ -12,7 +12,7 @@ import SignalsPanel from "@/components/dashboard/SignalsPanel";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
-import { type ChainRow, computeGEXProfile, findGEXFlip } from "@/lib/calculations/calculations";
+import { type ChainRow, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
 
 type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
 type OptionSide = "call" | "put";
@@ -153,11 +153,16 @@ function buildChainRows(strikes: StrikeRow[], liveData: Record<string, LiveEntry
     const putGamma = Math.abs(put.gamma ?? 0);
     const callDelta = call.delta ?? 0;
     const putDelta = Math.abs(put.delta ?? 0);
-    const callGEX = callGamma * callOI * spot * spot;
-    const putGEX = -putGamma * putOI * spot * spot;
+    // Net GEX column = OI+Vol basis (open interest + volume), matching the header
+    // total, the heatmap cells, and the OI+Vol/Vol-Only toggle. netVolGEX is the
+    // Vol-Only column (volume alone). callGamma/putGamma are already abs'd above.
+    const callPos = callOI + callVolume;
+    const putPos = putOI + putVolume;
+    const callGEX = callGamma * callPos * spot * spot;
+    const putGEX = -putGamma * putPos * spot * spot;
     const netGEX = callGEX + putGEX;
     const netVolGEX = callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot;
-    const netDEX = callDelta * callOI * spot * 100 - putDelta * putOI * spot * 100;
+    const netDEX = callDelta * callPos * spot * 100 - putDelta * putPos * spot * 100;
     const volNetDEX = callDelta * callVolume * spot * 100 - putDelta * putVolume * spot * 100;
     const netVanna = ((call.vega ?? 0) * callOI - (put.vega ?? 0) * putOI) * 100;
     const netVolVanna = ((call.vega ?? 0) * callVolume - (put.vega ?? 0) * putVolume) * 100;
@@ -212,8 +217,10 @@ function pickCenterRows(rows: ChainRow[], spot: number, sideCount = 20): ChainRo
 
 function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<number, number>): HeatmapRow[] {
   const windowRows = pickCenterRows(rows, spot, 20);
-  const byAbsPos = [...windowRows].filter((row) => (row.netGEX ?? 0) > 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
-  const byAbsNeg = [...windowRows].filter((row) => (row.netGEX ?? 0) < 0).sort((a, b) => Math.abs(b.netGEX ?? 0) - Math.abs(a.netGEX ?? 0)).slice(0, 5);
+  // Rank by OI+Vol net (netGEX OI-only + netVolGEX vol-only), matching the column.
+  const oiVol = (r: ChainRow) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
+  const byAbsPos = [...windowRows].filter((row) => oiVol(row) > 0).sort((a, b) => Math.abs(oiVol(b)) - Math.abs(oiVol(a))).slice(0, 5);
+  const byAbsNeg = [...windowRows].filter((row) => oiVol(row) < 0).sort((a, b) => Math.abs(oiVol(b)) - Math.abs(oiVol(a))).slice(0, 5);
   const rankMap = new Map<number, { rank: number; rankColor: string }>();
   byAbsPos.forEach((row, index) => rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#F97316" : "#8B94A7" }));
   byAbsNeg.forEach((row, index) => {
@@ -225,7 +232,10 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
   ), windowRows[0]?.strike ?? 0);
 
   return windowRows.map((row) => {
-    const net = row.netGEX ?? 0;
+    // NET GEX column = OI+Vol basis. Server rows carry netGEX (OI-only) and
+    // netVolGEX (vol-only); their sum is the true OI+Vol net (gamma·(OI+vol)·S²,
+    // calls +, puts −). The chart bars use the same basis, so they now agree.
+    const net = (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
     const volOnly = row.netVolGEX ?? 0;
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
     const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);  // Net VEX (vanna)
@@ -536,7 +546,7 @@ export default function HomePage() {
     // Coalesce heavy frames: remember the latest payload + its readiness, then
     // apply on a trailing timer no more than once per HEAVY_FRAME_MS. Leading edge
     // fires immediately so the first frame paints with no delay.
-    const HEAVY_FRAME_MS = 200; // ≤5 recomputes/sec — well under perceptual jitter
+    const HEAVY_FRAME_MS = 1500; // ~0.67 recomputes/sec; full memo cascade is ~900ms, so 200ms overlapped and pinned the thread
     const flushGex = () => {
       gexFlushTimerRef.current = null;
       const data = pendingGexRef.current;
@@ -790,12 +800,11 @@ export default function HomePage() {
   const netGexLive = useMemo(() => {
     const s = chartSpot;
     if (!(s > 0)) return 0;
-    const total = chartRows.reduce((sum, row) => {
-      const callContracts = (row.callOI ?? 0) + (row.callVolume ?? 0);
-      const putContracts  = (row.putOI ?? 0) + (row.putVolume ?? 0);
-      const g = ((row.callGamma ?? 0) * callContracts) - ((row.putGamma ?? 0) * putContracts);
-      return sum + g * s * s * 0.01 * 100;
-    }, 0);
+    // Shared per-strike GEX (OI+Vol basis), then header units: $B per 1% move.
+    const total = chartRows.reduce(
+      (sum, row) => sum + netGEXOf(row, "net", s) * 0.01 * 100,
+      0,
+    );
     return total / 1e9;
   }, [chartRows, chartSpot]);
   // Throttle the displayed value so the header doesn't jitter on every WS tick.
@@ -822,14 +831,15 @@ export default function HomePage() {
   );
 
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
-  // MVC = strike carrying the peak |netGEX| (most valuable concentration).
-  // Single source of truth: largest |netGEX| only — matches the GexChart MVC label
-  // and SnapButton.getHighestRow so chart, top-bar, and snapshot always agree.
+  // MVC = strike carrying the peak |OI+Vol net GEX| (most valuable concentration).
+  // OI+Vol = netGEX (OI-only) + netVolGEX (vol-only) — matches the GexChart MVC
+  // label, the heatmap NET GEX column, and the OI+Vol toggle default so chart,
+  // top-bar, and heatmap always agree.
   const mvcStrike = useMemo(() => {
     let best: number | null = null;
     let bestAbs = 0;
     for (const r of chartRows) {
-      const v = Math.abs(r.netGEX ?? 0);
+      const v = Math.abs((r.netGEX ?? 0) + (r.netVolGEX ?? 0));
       if (v > bestAbs) { bestAbs = v; best = r.strike; }
     }
     return best;

@@ -111,20 +111,30 @@ async function collectOnce(base, opts = {}) {
   const chain = data.chain ?? [];
   if (!chain.length) { console.log('[auto-mvc] empty chain — skip'); return manual ? { ok: false, error: 'empty chain' } : undefined; }
 
+  // "OI+Vol" basis = open interest + volume combined. The chain carries netGEX
+  // (OI-only) and netVolGEX (vol-only); their sum is the true OI+Vol GEX used by
+  // the heatmap / greeks / mult-greek. Attach it so highestRow + the reducers
+  // below can key on one field. (Previously the OI+Vol track used netGEX alone,
+  // i.e. OI-only — a mislabel that fed confidence-score the wrong basis.)
+  for (const r of chain) {
+    r.netGexOiVol = Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
+  }
+
   const spot = Number(data.spotPrice) || 0;
   const expiry = data.expiration ?? '—';
   const flipPt = data.gexFlip ?? null;
   const nearestStrike = spot > 0 ? Math.round(spot / 5) * 5 : null;
 
-  const mvcOIRow = highestRow(chain, 'netGEX');
+  const mvcOIRow = highestRow(chain, 'netGexOiVol');
   const mvcVolRow = highestRow(chain, 'netVolGEX');
   const dexRow = highestRow(chain, 'netDEX');
 
-  const totalNetGEX = chain.reduce((s, r) => s + Number(r.netGEX ?? 0), 0);
+  // OI+Vol total + dominance denominator now use the combined basis.
+  const totalNetGEX = chain.reduce((s, r) => s + Number(r.netGexOiVol ?? 0), 0);
   // Gross sum of |GEX| across strikes — the correct dominance denominator.
   // (Previously totalAbsNetGEX stored Math.abs(totalNetGEX), which made GEX
   // dominance pin at ~100 and inflated the confidence Hit score.)
-  const totalAbsGexSum = chain.reduce((s, r) => s + Math.abs(Number(r.netGEX ?? 0)), 0);
+  const totalAbsGexSum = chain.reduce((s, r) => s + Math.abs(Number(r.netGexOiVol ?? 0)), 0);
   const totalNetGEX_Vol = chain.reduce((s, r) => s + Number(r.netVolGEX ?? 0), 0);
   const totalNetDEX_OI = chain.reduce((s, r) => s + Number(r.netDEX ?? 0), 0);
   const totalNetDEX_Vol = chain.reduce((s, r) => s + Number(r.volNetDEX ?? 0), 0);
@@ -132,7 +142,7 @@ async function collectOnce(base, opts = {}) {
   const now = new Date();
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const pctOI_Vol = totalNetGEX !== 0
-    ? parseFloat((Math.abs(Number(mvcOIRow?.netGEX ?? 0)) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
+    ? parseFloat((Math.abs(Number(mvcOIRow?.netGexOiVol ?? 0)) / Math.abs(totalNetGEX) * 100).toFixed(2)) : null;
   const pctVol_Only = totalNetGEX_Vol !== 0
     ? parseFloat((Math.abs(Number(mvcVolRow?.netVolGEX ?? 0)) / Math.abs(totalNetGEX_Vol) * 100).toFixed(2)) : null;
   const gexFlipRaw = Number(flipPt);
@@ -145,7 +155,7 @@ async function collectOnce(base, opts = {}) {
     day: days[now.getDay()],
     time: now.toTimeString().split(' ')[0],
     strikeOIVol: mvcOIRow?.strike ?? nearestStrike ?? null,
-    mvcValueOIVol: Number(mvcOIRow?.netGEX ?? 0),
+    mvcValueOIVol: Number(mvcOIRow?.netGexOiVol ?? 0),
     pctOI_Vol,
     volumeOIVol: Number(mvcOIRow?.callVolume ?? 0) + Number(mvcOIRow?.putVolume ?? 0),
     totalNetGEX_OI: Math.abs(totalNetGEX),

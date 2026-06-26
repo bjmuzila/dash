@@ -93,7 +93,7 @@ function PopupBody({ row, spotPrice, baselines }: Pick<Props, "row" | "spotPrice
           positive composite means volume-GEX outweighs OI-GEX. Show both. */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "6px 9px" }}>
-          <div style={{ fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>OI GEX (= BAR)</div>
+          <div style={{ fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>OI GEX</div>
           <div style={{ fontSize: 13, fontWeight: 800, color: (row.netGEX ?? 0) >= 0 ? C.pos : C.neg }}>{fmtGex(row.netGEX)}</div>
         </div>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "6px 9px" }}>

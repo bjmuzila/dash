@@ -1451,8 +1451,9 @@ export default function SocialMediaPage() {
   const [gexLadder, setGexLadder] = useState<GexLadderRow[]>([]);
   // DTE bucket for the Explainer GEX read: 0 = front/0DTE, 1 = next expiration.
   const [dte, setDte] = useState<0 | 1>(0);
-  // GEX weighting basis for the Explainer read: "oivol" = open-interest GEX,
-  // "vol" = volume-weighted GEX. Re-pulls the daily-input frame on change.
+  // GEX weighting basis for the Explainer read: "oivol" = open interest + volume
+  // combined (default, matches the heatmap / greeks), "vol" = volume-only GEX.
+  // Re-pulls the daily-input frame on change.
   const [gexBasis, setGexBasis] = useState<"oivol" | "vol">("oivol");
   const [hydrated, setHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

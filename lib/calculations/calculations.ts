@@ -78,17 +78,41 @@ function posOf(oi: number, vol: number, mode: CalcMode): number {
   return mode === "vol" ? vol : oi + vol;
 }
 
-export function calculateNetGEX(row: ChainRow, mode: CalcMode = "net"): number {
-  const spot = Number(row.spotPrice ?? row.spot ?? 0);
-  const callPos = posOf(row.callOI ?? 0, row.callVolume ?? 0, mode);
-  const putPos = posOf(row.putOI ?? 0, row.putVolume ?? 0, mode);
+// Position (contracts) for each side under the active basis. Exported so callers
+// that need the raw contract count (not GEX) share the same OI+Vol / Vol-only rule.
+export function callPosOf(row: ChainRow, mode: CalcMode = "net"): number {
+  return posOf(row.callOI ?? 0, row.callVolume ?? 0, mode);
+}
+export function putPosOf(row: ChainRow, mode: CalcMode = "net"): number {
+  return posOf(row.putOI ?? 0, row.putVolume ?? 0, mode);
+}
 
-  // Force sign by side (calls +, puts −) regardless of the incoming gamma sign,
-  // matching the server calculator (gex-calculator.js): a stray negative gamma
-  // must not flip a put's contribution positive.
-  const callGEX = Math.abs(row.callGamma ?? 0) * callPos * spot * spot;
-  const putGEX = -(Math.abs(row.putGamma ?? 0) * putPos * spot * spot);
-  return callGEX + putGEX;
+// Resolve the spot a row's GEX should be priced on. Callers that know the chart's
+// live spot pass it explicitly; otherwise fall back to the row's own spot fields.
+// (Chart chain rows often lack spotPrice, which previously zeroed inlined math.)
+function spotForRow(row: ChainRow, spot?: number): number {
+  return spot && spot > 0 ? spot : Number(row.spotPrice ?? row.spot ?? 0);
+}
+
+// ── Single source of truth for per-strike GEX ────────────────────────────────
+// calls +, puts −, abs(gamma) — matches the server calculator (gex-calculator.js).
+// A stray negative gamma must never flip a side's sign. Every consumer (chart bars,
+// chart tooltip, heatmap, header total, mobile) MUST go through these so the basis
+// (OI+Vol default / Vol-only) is defined in exactly one place.
+export function callGEXOf(row: ChainRow, mode: CalcMode = "net", spot?: number): number {
+  const s = spotForRow(row, spot);
+  return Math.abs(row.callGamma ?? 0) * callPosOf(row, mode) * s * s;
+}
+export function putGEXOf(row: ChainRow, mode: CalcMode = "net", spot?: number): number {
+  const s = spotForRow(row, spot);
+  return -(Math.abs(row.putGamma ?? 0) * putPosOf(row, mode) * s * s);
+}
+export function netGEXOf(row: ChainRow, mode: CalcMode = "net", spot?: number): number {
+  return callGEXOf(row, mode, spot) + putGEXOf(row, mode, spot);
+}
+
+export function calculateNetGEX(row: ChainRow, mode: CalcMode = "net"): number {
+  return netGEXOf(row, mode);
 }
 
 export function calculateNetDEX(

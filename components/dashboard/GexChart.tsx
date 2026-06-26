@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type ChainRow, type CalcMode, calculateNetGEX } from "@/lib/calculations/calculations";
+import { type ChainRow, type CalcMode, callGEXOf, putGEXOf, netGEXOf } from "@/lib/calculations/calculations";
 import { type GexBaselines } from "@/hooks/useStrikeGexHistory";
 
 export type GexMode   = "net" | "call-put";
@@ -216,12 +216,11 @@ export default function GexChart({
     // shared library so all bases (OI+Vol / OI / Vol) are consistent everywhere
     // and don't depend on how a given page precomputed netGEX/callGEX/putGEX.
     const calcMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
-    const posC = (r: ChainRow) => calcMode === "vol" ? (r.callVolume ?? 0) : (r.callOI ?? 0) + (r.callVolume ?? 0);
-    const posP = (r: ChainRow) => calcMode === "vol" ? (r.putVolume ?? 0) : (r.putOI ?? 0) + (r.putVolume ?? 0);
-
-    const getNet  = (r: ChainRow) => calculateNetGEX(r, calcMode);
-    const getCall = (r: ChainRow) => Math.abs(r.callGamma ?? 0) * posC(r) * spotPrice * spotPrice;
-    const getPut  = (r: ChainRow) => -Math.abs((r.putGamma ?? 0) * posP(r) * spotPrice * spotPrice);
+    // Single source of truth: shared GEX helpers, with the chart's known spotPrice
+    // passed explicitly (chart chain rows often lack spotPrice). calls +, puts −, abs γ.
+    const getCall = (r: ChainRow) => callGEXOf(r, calcMode, spotPrice);
+    const getPut  = (r: ChainRow) => putGEXOf(r, calcMode, spotPrice);
+    const getNet  = (r: ChainRow) => netGEXOf(r, calcMode, spotPrice);
 
     // ── Chart area (no axis border space) ──
     const cW    = W - PAD_L - PAD_R;
@@ -578,16 +577,18 @@ export default function GexChart({
     // MVC = source of truth: largest |netGEX| over the FULL raw chain, matching
     // SnapButton.getHighestRow / TopBar so the chart label always agrees with the
     // top-bar / snapshot value. Hidden when the peak strike is outside the window.
-    const peakVal = (r: ChainRow) => isVol ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
+    // MVC peak must use the SAME basis as the bars (getNet: OI+Vol or vol-only),
+    // not the precomputed r.netGEX (which is OI-only on server rows and made the
+    // chart's MVC disagree with the heatmap's OI+Vol MVC).
     const peak = chain.reduce<ChainRow | null>((b, r) => {
-      const rv = Math.abs(peakVal(r));
-      const bv = b ? Math.abs(peakVal(b)) : -1;
+      const rv = Math.abs(getNet(r));
+      const bv = b ? Math.abs(getNet(b)) : -1;
       return rv > bv ? r : b;
     }, null);
     const peakIdx = peak ? data.findIndex(r => r.strike === peak.strike) : -1;
     if (peak && peakIdx >= 0) {
       const pi  = peakIdx;
-      const pv  = peakVal(peak);
+      const pv  = getNet(peak);
       const py  = clamp(yFor(pv), PAD_T + 2, PAD_T + cH - 2);
       const col = pv >= 0 ? "#29b6f6" : "#ffb300";
       ctx.save();
@@ -832,7 +833,9 @@ export default function GexChart({
       {/* Tooltip */}
       {tooltip && (() => {
         const r    = tooltip.row;
-        const tooltipGex = calculateNetGEX(r, dataMode === "vol-only" ? "vol" : "net");
+        // Shared helper (uses the chart's spotPrice, not the row's) — mirrors the bars.
+        const tMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
+        const tooltipGex = netGEXOf(r, tMode, spotPrice);
         return (
           <div style={{
             position: "absolute", zIndex: 100, pointerEvents: "none",

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import GexChart, { type GexMode, type DataMode } from "@/components/dashboard/GexChart";
 import GexHeatmap from "@/components/dashboard/GexHeatmap";
 import { computeGexSummary } from "@/lib/calculations/gex";
-import type { ChainRow } from "@/lib/calculations/calculations";
+import { callGEXOf, putGEXOf, netGEXOf, type ChainRow } from "@/lib/calculations/calculations";
 
 interface LiveEntry {
   bid?: number; ask?: number; last?: number;
@@ -35,12 +35,12 @@ function buildChain(structs: StrikeStruct[], live: Record<string, LiveEntry>, sp
     const callVolume = c.vol ?? 0;
     const putVolume = p.vol ?? 0;
     const sp = spot || s.strike;
-    const callPos = callOI + callVolume;
-    const putPos = putOI + putVolume;
-    const callGEX = callGamma * callPos * sp * sp;
-    const putGEX = -putGamma * putPos * sp * sp;
-    const netGEX = callGEX + putGEX;
-    const netVolGEX = (callGamma * callVolume - putGamma * putVolume) * sp * sp;
+    // Shared GEX helpers (calls +, puts −, abs gamma) — same basis as chart/heatmap/header.
+    const gexRow: ChainRow = { strike: s.strike, spotPrice: sp, callOI, putOI, callVolume, putVolume, callGamma, putGamma };
+    const callGEX = callGEXOf(gexRow, "net", sp);
+    const putGEX = putGEXOf(gexRow, "net", sp);
+    const netGEX = netGEXOf(gexRow, "net", sp);
+    const netVolGEX = netGEXOf(gexRow, "vol", sp);
     const netDEX = (callDelta * callOI - Math.abs(putDelta) * putOI) * sp * 100;
     const volNetDEX = (callDelta * callVolume - Math.abs(putDelta) * putVolume) * sp * 100;
     return {

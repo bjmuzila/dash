@@ -407,9 +407,9 @@ function StatCard({
   return (
     <div style={{
       ...homePanelStyle,
-      containerType: "size",
+      containerType: "inline-size",
       minHeight: 0,
-      padding: "clamp(6px, 9cqmin, 14px) clamp(8px, 11cqmin, 18px)",
+      padding: "clamp(6px, 9cqw, 14px) clamp(8px, 11cqw, 18px)",
       display: "flex",
       flexDirection: "column",
       gap: 5,
@@ -417,10 +417,10 @@ function StatCard({
       borderLeft: `3px solid ${accent}55`,
       background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
     }}>
-      <div style={{ fontSize: "clamp(6px, 7cqmin, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(6px, 7cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: "clamp(11px, 14cqmin, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(11px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -1910,20 +1910,20 @@ export default function OwnerDashboard() {
               return (
                 <div key={id} style={{
                   ...homePanelStyle,
-                  containerType: "size",
+                  containerType: "inline-size",
                   minHeight: 0,
-                  padding: "clamp(5px, 8cqmin, 12px) clamp(7px, 10cqmin, 16px)",
+                  padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
                   overflow: "hidden",
                   borderLeft: `3px solid ${accent}55`,
                   background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
                 }}>
-                  <div style={{ fontSize: "clamp(6px, 7.5cqmin, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: "clamp(10px, 13cqmin, 20px)", fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
-                  <div style={{ fontSize: "clamp(6px, 6.5cqmin, 9px)", color: `${accent}66`, whiteSpace: "nowrap" }}>rows today</div>
+                  <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: `${accent}66`, whiteSpace: "nowrap" }}>rows today</div>
                 </div>
               );
             })}

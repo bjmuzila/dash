@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { densifyChainRows, type ChainRow } from "@/lib/calculations/calculations";
+import { densifyChainRows, netGEXOf, type ChainRow, type CalcMode } from "@/lib/calculations/calculations";
 
 interface HeatmapRow {
   strike: number;
@@ -90,19 +90,18 @@ export default function GexHeatmap({
   const rows: HeatmapRow[] = denseChain
     .filter(r => visibleStrikes.has(r.strike))
     .map(r => {
+      const mode: CalcMode = useVol ? "vol" : "net";
       const callPos = useVol ? (r.callVolume ?? 0) : (r.callOI ?? 0) + (r.callVolume ?? 0);
       const putPos = useVol ? (r.putVolume ?? 0) : (r.putOI ?? 0) + (r.putVolume ?? 0);
       const spot = spotPrice || Number(r.spotPrice ?? r.spot ?? 0);
-      const spotSq = spot * spot;
-      const callGamma = r.callGamma ?? 0;
-      const putGamma = r.putGamma ?? 0;
       const callDelta = r.callDelta ?? 0;
       const putDelta = r.putDelta ?? 0;
-      const netVolGEX = r.netVolGEX ?? ((Math.abs(callGamma) * (r.callVolume ?? 0) - Math.abs(putGamma) * (r.putVolume ?? 0)) * spotSq);
+      // netVolGEX = net under vol-only basis; prefer the server value when present.
+      const netVolGEX = r.netVolGEX ?? netGEXOf(r, "vol", spot);
       const vannaValue = useVol ? (r.netVolVanna ?? r.netVanna ?? 0) : (r.netVanna ?? r.netVolVanna ?? 0);
-      // Always compute from the active basis (calls +, puts −, abs gamma) — do not
-      // fall back to a precomputed r.netGEX, which may be a different basis.
-      const netGEX = Math.abs(callGamma) * callPos * spotSq - Math.abs(putGamma) * putPos * spotSq;
+      // Single source of truth: shared helper (calls +, puts −, abs gamma) under the
+      // active basis. Do NOT fall back to a precomputed r.netGEX (may be a different basis).
+      const netGEX = netGEXOf(r, mode, spot);
 
       return {
         strike: r.strike,
