@@ -327,7 +327,7 @@ export function LiveIb() {
 
   const stat = (label: string, value: string, color = "#eef7ff") => (
     <div style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, padding: "18px 20px", background: "rgba(255,255,255,.02)" }}>
-      <div style={{ fontSize: 11, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 14, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
       <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace", marginTop: 8 }}>{value}</div>
     </div>
   );
@@ -340,8 +340,8 @@ export function LiveIb() {
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#00e5ff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
-          <div style={{ fontSize: 20, color: "#eef7ff", fontWeight: 800 }}>Initial Balance (9:30–10:30 ET)</div>
+          <div style={{ fontSize: 14, color: "#00e5ff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
+          <div style={{ fontSize: 22, color: "#eef7ff", fontWeight: 800 }}>Initial Balance (9:30–10:30 ET)</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {flashing && (
@@ -387,7 +387,7 @@ export function LiveIb() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
+            <span style={{ fontSize: 18, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
               Rules In Play ({rules.length})
             </span>
             {!ib.done && (
@@ -416,8 +416,8 @@ export function LiveIb() {
                   padding: "10px 12px",
                   background: "rgba(255,255,255,.02)",
                 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: r.color }}>{r.title}</div>
-                  <div style={{ fontSize: 12, color: "#ffffff", lineHeight: 1.5, marginTop: 4 }}>{highlightPct(r.detail)}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: r.color }}>{r.title}</div>
+                  <div style={{ fontSize: 14, color: "#ffffff", lineHeight: 1.5, marginTop: 4 }}>{highlightPct(r.detail)}</div>
                 </div>
               ))}
             </div>

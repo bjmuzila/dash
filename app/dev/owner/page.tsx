@@ -448,22 +448,18 @@ function AccordionCard({
   onToggle: (id: string) => void;
   children: React.ReactNode;
 }) {
+  void open; void onToggle; void id;
   return (
     <div style={{ ...homePanelStyle, overflow: "hidden" }}>
       <div
-        onClick={() => onToggle(id)}
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-          padding: "12px 16px", cursor: "pointer",
-          borderBottom: open ? `1px solid ${HOME_THEME.border}` : "none",
+          padding: "12px 16px",
+          borderBottom: `1px solid ${HOME_THEME.border}`,
           background: "transparent",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-          <span style={{
-            fontSize: 11, color: HOME_THEME.cyan, flexShrink: 0,
-            transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s",
-          }}>▶</span>
           <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap" }}>
             {title}
           </span>
@@ -473,11 +469,8 @@ function AccordionCard({
             </span>
           )}
         </div>
-        <span style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.08em", flexShrink: 0 }}>
-          {open ? "▼ COLLAPSE" : "▶ EXPAND"}
-        </span>
       </div>
-      {open && <div style={{ padding: "16px 18px" }}>{children}</div>}
+      <div style={{ padding: "16px 18px" }}>{children}</div>
     </div>
   );
 }
@@ -1020,6 +1013,7 @@ export default function OwnerDashboard() {
       return next;
     });
   }, []);
+  void togglePageAct; void toggleVisitLog; void visitLogCollapsed;
 
   // Per-ticker "Copy Pine" feedback: holds the ticker just copied (clears after 1.5s).
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null);
@@ -2473,10 +2467,8 @@ export default function OwnerDashboard() {
 
           return (
         <div style={{ ...homePanelStyle }}>
-          {/* Collapsible header (mirrors the Levels section) */}
           <div
-            onClick={togglePageAct}
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", cursor: "pointer", borderBottom: pageActCollapsed ? "none" : `1px solid ${HOME_THEME.border}` }}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${HOME_THEME.border}` }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <SectionLabel>Page Activity</SectionLabel>
@@ -2484,12 +2476,9 @@ export default function OwnerDashboard() {
                 {totalVisits.toLocaleString()} visits · {activeCount} active now
               </span>
             </div>
-            <span style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.08em" }}>
-              {pageActCollapsed ? "▶ EXPAND" : "▼ COLLAPSE"}
-            </span>
           </div>
 
-          {!pageActCollapsed && (
+          {(
           <div style={{ padding: "14px", display: "flex", flexDirection: "column", gap: 14 }}>
             {/* Legend — what the three states mean + counter caveat */}
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 10, color: HOME_THEME.muted }}>

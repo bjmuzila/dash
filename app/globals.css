@@ -171,6 +171,15 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   border-color: rgba(0, 240, 255, .35);
 }
 
+/* Global toolbar: progressively drop non-essential chrome so the bar
+   shrinks as a unit before the live ticker has to scale down. */
+@media (max-width: 1100px) {
+  .toolbar-datechip { display: none !important; }
+}
+@media (max-width: 950px) {
+  .toolbar-notes-label { display: none !important; }
+}
+
 /* Mobile responsive — breakpoint matches the drawer sidebar (900px). */
 @media (max-width: 899px) {
   /* Hide GEX Row 2 on small screens */

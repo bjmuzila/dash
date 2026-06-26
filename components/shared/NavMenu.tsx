@@ -60,6 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: GridIcon,
     items: [
       { label: "Home", href: "/home" },
+      { label: "Traders Dashboard", href: "/traders-dashboard" },
       { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Greeks", href: "/greeks" },

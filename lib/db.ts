@@ -399,7 +399,95 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sub ON subscriptions(stripe_subscription_id);
+
+    -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
+    -- tasks are JSON arrays the page owns; zip drives the weather card.
+    CREATE TABLE IF NOT EXISTS td_user_prefs (
+      clerk_user_id TEXT PRIMARY KEY,
+      zip           TEXT,
+      schedule      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      tasks         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Traders Dashboard overnight AI overview. One row per ET date, written once
+    -- by the 7am cron (overview-generator.js). summary is the narrative; drivers
+    -- is a JSON array of {when,title,body} econ/news items.
+    CREATE TABLE IF NOT EXISTS td_overview (
+      date       TEXT PRIMARY KEY,
+      summary    TEXT NOT NULL,
+      drivers    JSONB NOT NULL DEFAULT '[]'::jsonb,
+      generated_at BIGINT NOT NULL
+    );
   `);
+}
+
+// ── Traders Dashboard: per-user prefs ───────────────────────────────────────
+
+export interface TdPrefs {
+  clerk_user_id: string;
+  zip: string | null;
+  schedule: unknown[];
+  tasks: unknown[];
+  updated_at?: string;
+}
+
+export async function getTdPrefs(clerkUserId: string): Promise<TdPrefs | undefined> {
+  await getDb();
+  return queryOne<TdPrefs>(`SELECT * FROM td_user_prefs WHERE clerk_user_id = ?`, [clerkUserId]);
+}
+
+export async function upsertTdPrefs(
+  clerkUserId: string,
+  fields: { zip?: string | null; schedule?: unknown[]; tasks?: unknown[] }
+): Promise<void> {
+  await getDb();
+  const existing = await getTdPrefs(clerkUserId);
+  const zip = fields.zip !== undefined ? fields.zip : existing?.zip ?? null;
+  const schedule = fields.schedule !== undefined ? fields.schedule : existing?.schedule ?? [];
+  const tasks = fields.tasks !== undefined ? fields.tasks : existing?.tasks ?? [];
+  await queryAll(
+    `INSERT INTO td_user_prefs (clerk_user_id, zip, schedule, tasks, updated_at)
+     VALUES (?, ?, ?::jsonb, ?::jsonb, CURRENT_TIMESTAMP)
+     ON CONFLICT (clerk_user_id) DO UPDATE SET
+       zip = EXCLUDED.zip, schedule = EXCLUDED.schedule, tasks = EXCLUDED.tasks,
+       updated_at = CURRENT_TIMESTAMP`,
+    [clerkUserId, zip, JSON.stringify(schedule), JSON.stringify(tasks)]
+  );
+}
+
+// ── Traders Dashboard: overnight overview ───────────────────────────────────
+
+export interface TdOverview {
+  date: string;
+  summary: string;
+  drivers: unknown[];
+  generated_at: number;
+}
+
+export async function getTdOverview(date: string): Promise<TdOverview | undefined> {
+  await getDb();
+  return queryOne<TdOverview>(`SELECT * FROM td_overview WHERE date = ?`, [date]);
+}
+
+export async function getLatestTdOverview(): Promise<TdOverview | undefined> {
+  await getDb();
+  return queryOne<TdOverview>(`SELECT * FROM td_overview ORDER BY date DESC LIMIT 1`);
+}
+
+export async function upsertTdOverview(
+  date: string,
+  summary: string,
+  drivers: unknown[]
+): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO td_overview (date, summary, drivers, generated_at)
+     VALUES (?, ?, ?::jsonb, ?)
+     ON CONFLICT (date) DO UPDATE SET
+       summary = EXCLUDED.summary, drivers = EXCLUDED.drivers, generated_at = EXCLUDED.generated_at`,
+    [date, summary, JSON.stringify(drivers), Date.now()]
+  );
 }
 
 // ── Stripe subscriptions ────────────────────────────────────────────────────

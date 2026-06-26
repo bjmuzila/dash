@@ -72,10 +72,10 @@ export default function GlobalToolbar() {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
+        gap: "clamp(4px, 1.2vw, 12px)",
         height: 64,
         flexShrink: 0,
-        padding: "0 12px",
+        padding: "0 clamp(6px, 1vw, 12px)",
         // Notch-safe on mobile; insets are 0 on desktop so this is a no-op there.
         paddingTop: "env(safe-area-inset-top, 0px)",
         paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
@@ -143,8 +143,10 @@ export default function GlobalToolbar() {
           display: "flex",
           alignItems: "center",
           gap: 8,
-          flexShrink: 0,
-          width: 230,
+          flexShrink: 1000,
+          flexBasis: 230,
+          width: "auto",
+          minWidth: 44,
           height: 42,
           padding: "0 14px",
           borderRadius: 10,
@@ -173,7 +175,7 @@ export default function GlobalToolbar() {
       </form>
 
       {/* ── Expiration date picker (presentational) — sits next to the search box ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      <div className="toolbar-datechip" style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         {/* date chip */}
         <button
           title="Pick expiration date"
@@ -206,7 +208,9 @@ export default function GlobalToolbar() {
           instead of spilling over the left controls. ── */}
       <div
         style={{
-          flex: 1,
+          flexGrow: 1,
+          flexShrink: 1,
+          flexBasis: "auto",
           minWidth: 0,
           display: "flex",
           alignItems: "center",
@@ -246,7 +250,7 @@ export default function GlobalToolbar() {
           }}
         >
           <span style={{ fontSize: 17, lineHeight: 1 }} aria-hidden>🖍️</span>
-          <span>Notes</span>
+          <span className="toolbar-notes-label">Notes</span>
           {notes.length > 0 && (
             <span style={{ fontSize: 12, fontWeight: 700, color: open ? HOME_THEME.cyan : HOME_THEME.muted }}>
               {notes.length}

@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-25 (session 72) — Owner-only route gating (test account saw owner pages)
+
+Test/customer accounts were signed in and could reach the owner pages (`/dev/*`, `/budget`, `/personal`) — middleware only checked signed-in vs signed-out, and the nav only checked `isSignedIn`. Added two independent layers gated on the owner's Clerk ID.
+
+### `middleware.ts`
+- Added `isOwnerRoute` matcher (`/dev`, `/budget`, `/personal`); signed-in non-owners are redirected to `/home`. Real server-side gate. Fails open (any signed-in user) only if `OWNER_USER_ID` is unset, to avoid owner lockout.
+
+### `components/shared/ownerGuard.tsx` (new)
+- Server component: re-checks `auth()` vs `OWNER_USER_ID` at request time, `notFound()` (404) for non-owners. Defense-in-depth — pages refuse to render even if middleware were bypassed. Trims the env value.
+
+### `app/dev/layout.tsx`, `app/budget/layout.tsx`, `app/personal/layout.tsx` (new)
+- Wrap each owner subtree in `<OwnerGuard>`; `export const dynamic = "force-dynamic"` (auth needs request context).
+
+### `components/shared/NavMenu.tsx`
+- `devOnly` groups (Owner/Backend) now filter on `isOwner` (via `NEXT_PUBLIC_OWNER_USER_ID`) instead of `isSignedIn`.
+
+### `components/shared/TopBar.tsx`
+- Personal nav item marked `ownerOnly`; filtered out of the page picker for non-owners (added `useUser`).
+
+### `.env.local`
+- Removed stray leading space in `OWNER_USER_ID=` value (line 47). Both vars use `user_3FM2m53hCocxxIJMO2lQQsVJOsE`. NOTE: fix the same space on the VPS `/opt/dashboard/.env.local` (gitignored, not pushed).
+
+Deploy: `OWNER_USER_ID` is runtime (recreate is enough for middleware + guard); `NEXT_PUBLIC_OWNER_USER_ID` is build-time (nav needs a rebuild).
+
 ## 2026-06-25 (session 71) — MVC peak-GEX golden/white glowing box across heatmaps
 
 Highlighted the single strike with the highest **absolute net GEX** (MVC) with a box on the NET GEX cell across all gradient/heatmap views. Final style: **3px solid white** outline (`outlineOffset -3px`) with a **slow 2.4s pulsing glow** (`mvcGlow` keyframes, `.mvc-peak-cell`). Scoped to the GEX column only; coexists with the existing gold ★ star.

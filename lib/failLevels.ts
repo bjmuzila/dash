@@ -35,6 +35,18 @@ export interface FailEvent {
   pokePts: number;           // |extreme - level|
   closeBack: number;         // close of the failing bar (ES)
   followThruPts: number;     // how far price ran the *other* way after the fail (ES)
+  // ── upgraded LAF/LBF fields ──
+  riskPts: number;           // stop distance = probe extreme → reclaim (ES); the trade's 1R
+  oppositeLevel: number | null;   // opposite reference price (PDH↔PDL / ONH↔ONL)
+  // ── scaled targets (entry → opposite reference) ──
+  t1: number | null;         // 50% of the way to the opposite level
+  t2: number | null;         // the full opposite reference level
+  t3: number | null;         // 2× the entry→opposite distance (measured-move extension)
+  tiersHit: 0 | 1 | 2 | 3;   // furthest scaled target reached by the actual move
+  maxFavPts: number;         // max favorable excursion from entry before stop-out (ES)
+  maxR: number | null;       // maxFavPts / riskPts
+  wickPct: number;           // rejection-wick size on the probe side, as % of the reclaim bar range
+  lowVolProbe: boolean;      // probe bar volume below its recent baseline (lack of conviction)
 }
 
 export interface LevelStatus {
@@ -184,54 +196,156 @@ export function computeRefLevels(candles: EsCandle[], todayDate: string): RefLev
 
 // ── Fail detection ───────────────────────────────────────────────────────────
 
+// Per-level cap on how many *interactions* (pierces) we evaluate per session.
+// PWH/PWL only fade on the first 2 attempts; the rest of the day is ignored.
+function attemptCap(kind: LevelKind): number {
+  return kind === "pwHigh" || kind === "pwLow" ? 2 : Infinity;
+}
+
+// ── LAF/LBF fail criteria (ES points) ──
+const PROBE_MIN_PTS = 0.5;    // below this = noise, not a real sweep
+const PROBE_MAX_PTS = 12;     // beyond this the excursion is acceptance, not a sweep
+const WICK_MIN_PCT = 0.5;     // reclaim bar must reject ≥50% of its range on the probe side
+const ACCEPT_CLOSES = 2;      // 2 consecutive closes beyond the level = acceptance (no fail)
+
+// Opposite-reference lookup so a fail can target the mirror level for R:R.
+const OPPOSITE_KIND: Record<LevelKind, LevelKind> = {
+  onHigh: "onLow", onLow: "onHigh",
+  pdHigh: "pdLow", pdLow: "pdHigh",
+  pwHigh: "pwLow", pwLow: "pwHigh",
+};
+
+function barRange(b: EsCandle): number {
+  return Math.max(1e-9, b.high - b.low);
+}
+
+// Price of the opposite reference (PDH↔PDL / ONH↔ONL / PWH↔PWL) from a level set.
+function oppositePriceFor(levels: RefLevel[], lv: RefLevel): number | null {
+  const opp = levels.find((l) => l.kind === OPPOSITE_KIND[lv.kind]);
+  return opp ? opp.price : null;
+}
+
 /**
- * Scan a chronological bar series against one level for look-above / look-below
- * fails. A fail = price pierces the level intrabar (high>level for an "above"
- * level, or low<level for a "below" level) but a subsequent bar closes back
- * through it within `confirmBars`.
+ * Look-Above-and-Fail / Look-Below-and-Fail detection (PDH/PDL/ONH/ONL focus).
  *
- * `bufferPts` ignores trivial pokes (noise) — default 0.5 ES pts.
+ * A fail requires ALL of:
+ *   1. Probe  — the level is pierced by PROBE_MIN..PROBE_MAX pts (a liquidity
+ *      sweep, not noise and not a runaway acceptance move).
+ *   2. No acceptance — price does NOT post ACCEPT_CLOSES consecutive bar closes
+ *      beyond the level during the look-ahead window.
+ *   3. Reclaim bar — a bar closes back *inside* the level AND, on the probe side,
+ *      shows a rejection wick ≥ WICK_MIN_PCT of its range, AND forms a lower-high
+ *      (LAF) / higher-low (LBF) versus the probe bar.
+ *
+ * Risk = probe extreme → reclaim close (the 1R stop sits just beyond the sweep).
+ * Target = opposite reference level (PDH↔PDL, ONH↔ONL) when available.
+ *
+ * `oppositePrice` supplies the mirror level for the R:R target (may be null).
  */
 function scanLevel(
   bars: EsCandle[],
   level: RefLevel,
   bufferPts: number,
   confirmBars: number,
+  oppositePrice?: number | null,
 ): FailEvent[] {
   const events: FailEvent[] = [];
   const { price, side } = level;
+  const above = side === "above";
+  const maxAttempts = attemptCap(level.kind);
+
+  // Overnight levels (ONH/ONL) are only tradable during the RTH session — an
+  // overnight sweep of its own level isn't a fade. Restrict ON scans to RTH bars.
+  const onlyRth = level.kind === "onHigh" || level.kind === "onLow";
+  const scanBars = onlyRth ? bars.filter((b) => isRthBar(b.timestamp)) : bars;
+  bars = scanBars;
+
+  let attempts = 0;
   let i = 0;
 
   while (i < bars.length) {
+    if (attempts >= maxAttempts) break;
     const b = bars[i];
-    const pierced = side === "above"
-      ? b.high > price + bufferPts
-      : b.low < price - bufferPts;
-
+    const pierced = above ? b.high > price + bufferPts : b.low < price - bufferPts;
     if (!pierced) { i++; continue; }
+    attempts++;
 
-    // Track the extreme poke, then look ahead for a close back through.
-    let extreme = side === "above" ? b.high : b.low;
-    let j = i;
-    let failed = false;
+    let extreme = above ? b.high : b.low;
+    let consecBeyond = 0;       // running count of closes beyond → detects acceptance
+    let accepted = false;
     let failBar: EsCandle | null = null;
+    let j = i;
 
-    const lookEnd = Math.min(bars.length - 1, i + confirmBars);
+    const lookEnd = Math.min(bars.length - 1, i + confirmBars + ACCEPT_CLOSES);
     for (j = i; j <= lookEnd; j++) {
       const bj = bars[j];
-      extreme = side === "above" ? Math.max(extreme, bj.high) : Math.min(extreme, bj.low);
-      const closedBack = side === "above" ? bj.close < price : bj.close > price;
-      if (closedBack) { failed = true; failBar = bj; break; }
+      extreme = above ? Math.max(extreme, bj.high) : Math.min(extreme, bj.low);
+
+      const closedBeyond = above ? bj.close > price : bj.close < price;
+      if (closedBeyond) {
+        consecBeyond++;
+        if (consecBeyond >= ACCEPT_CLOSES) { accepted = true; break; } // acceptance → no fade
+        continue;
+      }
+      consecBeyond = 0;
+
+      // Candidate reclaim bar: closed back inside. Validate wick + lower-high/higher-low.
+      const closedBack = above ? bj.close < price : bj.close > price;
+      if (!closedBack) continue;
+      const wick = above ? (bj.high - bj.close) : (bj.close - bj.low);
+      const wickPct = wick / barRange(bj);
+      const structureOk = above ? bj.high < extreme : bj.low > extreme; // lower-high / higher-low vs probe extreme
+      if (wickPct >= WICK_MIN_PCT && structureOk) { failBar = bj; break; }
     }
 
-    if (failed && failBar) {
-      // Follow-through = how far it ran the opposite way over the next few bars.
-      const ftEnd = Math.min(bars.length - 1, j + confirmBars);
+    const probePts = Math.abs(extreme - price);
+    const validProbe = probePts >= PROBE_MIN_PTS && probePts <= PROBE_MAX_PTS;
+
+    if (!accepted && failBar && validProbe) {
+      const entry = failBar.close;
+      const riskPts = Math.abs(extreme - entry) || PROBE_MIN_PTS; // stop beyond the sweep
+
+      // Reward = max favorable excursion from ENTRY over the rest of the session,
+      // measured until the trade would have stopped out (price back through the
+      // probe extreme). A real runner gets full credit; a quick reversal gets cut.
+      // For a fade-long (below level) favorable = price rising above entry.
+      const stopPrice = extreme;                 // beyond the sweep wick
       let ft = 0;
-      for (let k = j; k <= ftEnd; k++) {
-        const move = side === "above" ? price - bars[k].low : bars[k].high - price;
-        if (move > ft) ft = move;
+      for (let k = j + 1; k < bars.length; k++) {
+        const bk = bars[k];
+        // stopped out?
+        const stopped = above ? bk.high >= stopPrice : bk.low <= stopPrice;
+        const fav = above ? entry - bk.low : bk.high - entry; // favorable move from entry
+        if (fav > ft) ft = fav;
+        if (stopped) break;
       }
+      const oppositeLevel = oppositePrice ?? null;
+
+      // ── Scaled targets, in the trade's favorable direction ──
+      // Fade-long (below level): targets are ABOVE entry. Fade-short: BELOW.
+      // dir = +1 for long, -1 for short.
+      const dir = above ? -1 : 1;
+      let t1: number | null = null, t2: number | null = null, t3: number | null = null;
+      let tiersHit: 0 | 1 | 2 | 3 = 0;
+      if (oppositeLevel != null) {
+        const oppDist = Math.abs(entry - oppositeLevel);
+        t1 = entry + dir * oppDist * 0.5;   // 50% of the way to opposite
+        t2 = entry + dir * oppDist;          // full opposite reference
+        t3 = entry + dir * oppDist * 2;      // 2× measured move
+        // Furthest target the actual peak (entry + dir*maxFav) reached.
+        const peak = entry + dir * ft;
+        const reached = (tp: number) => dir > 0 ? peak >= tp : peak <= tp;
+        if (reached(t3)) tiersHit = 3;
+        else if (reached(t2)) tiersHit = 2;
+        else if (reached(t1)) tiersHit = 1;
+      }
+      const maxR = riskPts > 0 ? ft / riskPts : null;
+      const wick = above ? (failBar.high - failBar.close) : (failBar.close - failBar.low);
+
+      const baseVol = (b as EsCandle).avg5 ?? (b as EsCandle).avg14 ?? null;
+      const probeVol = Number((b as EsCandle).volume ?? 0);
+      const lowVolProbe = baseVol != null && probeVol > 0 ? probeVol < baseVol : false;
+
       events.push({
         kind: level.kind,
         label: level.label,
@@ -241,14 +355,22 @@ function scanLevel(
         pierceTs: b.timestamp,
         failTs: failBar.timestamp,
         extreme,
-        pokePts: Math.abs(extreme - price),
-        closeBack: failBar.close,
+        pokePts: probePts,
+        closeBack: entry,
         followThruPts: ft,
+        riskPts,
+        oppositeLevel,
+        t1, t2, t3,
+        tiersHit,
+        maxFavPts: ft,
+        maxR,
+        wickPct: wick / barRange(failBar),
+        lowVolProbe,
       });
-      i = j + 1;   // resume after the fail
+      i = j + 1;
     } else {
-      // Clean break (held) — skip past this interaction so we don't double-count.
-      i = lookEnd + 1;
+      // Acceptance, runaway probe, or no valid reclaim — advance past the interaction.
+      i = (accepted ? j : lookEnd) + 1;
     }
   }
   return events;
@@ -278,13 +400,17 @@ export function scanToday(
   const statuses: LevelStatus[] = [];
 
   for (const lv of levels) {
-    const evs = scanLevel(bars, lv, bufferPts, confirmBars);
+    const evs = scanLevel(bars, lv, bufferPts, confirmBars, oppositePriceFor(levels, lv));
     events.push(...evs);
 
     let state: LevelStatus["state"] = "idle";
     let distancePts: number | null = null;
-    if (last) {
-      distancePts = last.close - lv.price;
+    // ON levels only go live (testing/break/fail) during RTH; outside RTH they
+    // stay idle even if price is poking them overnight.
+    const onLevel = lv.kind === "onHigh" || lv.kind === "onLow";
+    const liveOk = last ? (!onLevel || isRthBar(last.timestamp)) : false;
+    if (last) distancePts = last.close - lv.price; // distance always shown
+    if (last && liveOk) {
       const pokeNow = lv.side === "above"
         ? last.high > lv.price + bufferPts
         : last.low < lv.price - bufferPts;
@@ -329,9 +455,9 @@ export function computeStats(candles: EsCandle[], maxDays = 20): { stats: FailSt
     if (!dayBars.length) continue;
 
     for (const lv of levels) {
-      const evs = scanLevel(dayBars, lv, 0.5, 2);
-      // Count interactions: a "test" is any pierce; pierces that became events
-      // are fails, the rest were clean breaks.
+      const evs = scanLevel(dayBars, lv, 0.5, 2, oppositePriceFor(levels, lv));
+      // Count interactions: a "test" is any valid probe (sweep within bounds);
+      // probes that became events are fails, the rest were breaks/acceptance.
       const pierces = countPierces(dayBars, lv, 0.5, 2);
       const e = agg.get(lv.kind) ?? { label: lv.label, tests: 0, fails: 0 };
       e.tests += pierces;
@@ -361,19 +487,27 @@ export function computeStats(candles: EsCandle[], maxDays = 20): { stats: FailSt
 function countPierces(bars: EsCandle[], level: RefLevel, bufferPts: number, confirmBars: number): number {
   let i = 0, n = 0;
   const { price, side } = level;
+  const maxAttempts = attemptCap(level.kind);
+  // ON levels: RTH bars only (mirror scanLevel).
+  if (level.kind === "onHigh" || level.kind === "onLow") {
+    bars = bars.filter((b) => isRthBar(b.timestamp));
+  }
   while (i < bars.length) {
+    if (n >= maxAttempts) break;
     const b = bars[i];
     const pierced = side === "above" ? b.high > price + bufferPts : b.low < price - bufferPts;
     if (!pierced) { i++; continue; }
     n++;
     let j = i;
-    const lookEnd = Math.min(bars.length - 1, i + confirmBars);
-    let failedAt = -1;
+    // Mirror scanLevel's window (confirm + acceptance lookahead) and advance to the
+    // first close back inside, or past the whole window on acceptance/break.
+    const lookEnd = Math.min(bars.length - 1, i + confirmBars + ACCEPT_CLOSES);
+    let closedBackAt = -1;
     for (j = i; j <= lookEnd; j++) {
       const closedBack = side === "above" ? bars[j].close < price : bars[j].close > price;
-      if (closedBack) { failedAt = j; break; }
+      if (closedBack) { closedBackAt = j; break; }
     }
-    i = failedAt >= 0 ? failedAt + 1 : lookEnd + 1;
+    i = closedBackAt >= 0 ? closedBackAt + 1 : lookEnd + 1;
   }
   return n;
 }

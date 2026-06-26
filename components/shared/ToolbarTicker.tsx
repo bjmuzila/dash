@@ -98,7 +98,7 @@ export default function ToolbarTicker() {
       const avail = wrap.clientWidth;
       // Undo the current transform to recover the row's true natural width.
       const natural = row.getBoundingClientRect().width / (scaleRef.current || 1);
-      const next = natural > 0 ? Math.max(0.85, Math.min(1, avail / natural)) : 1;
+      const next = natural > 0 ? Math.max(0.55, Math.min(1, avail / natural)) : 1;
       if (Math.abs(next - scaleRef.current) > 0.005) {
         scaleRef.current = next;
         setScale(next);

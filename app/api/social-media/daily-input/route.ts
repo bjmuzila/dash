@@ -38,9 +38,42 @@ interface DailyInput {
 }
 
 // How many strikes above and below the ATM strike to include in the ladder.
-const GEX_LADDER_HALF = 8;
+const GEX_LADDER_HALF = 20;
 
 interface GexRow { strike: number; netGEX: number }
+
+// Gamma flip from per-strike net GEX, matching the OVERVIEW/home page exactly
+// (lib/calculations findGEXFlip): the strike where adjacent net-GEX values change
+// sign (linear-interpolated), closest to spot. NOT the cumulative-sum crossing —
+// that gives a different number than the dashboard shows.
+function flipFromGexRows(gexRows: unknown, spot: number): number | null {
+  if (!Array.isArray(gexRows)) return null;
+  const sorted = gexRows
+    .map((r) => {
+      const o = (r ?? {}) as Record<string, unknown>;
+      return { strike: Number(o.strike ?? 0), netGEX: Number(o.netGEX ?? o.netGex ?? 0) };
+    })
+    .filter((r) => r.strike > 0 && Number.isFinite(r.netGEX))
+    .sort((a, b) => a.strike - b.strike);
+  if (!sorted.length) return null;
+
+  const crossings: number[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i].netGEX, b = sorted[i + 1].netGEX;
+    if (a === 0) { crossings.push(sorted[i].strike); continue; }
+    if (b === 0) { crossings.push(sorted[i + 1].strike); continue; }
+    if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+      const sA = sorted[i].strike, sB = sorted[i + 1].strike;
+      const zero = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+      if (Number.isFinite(zero)) crossings.push(Math.round(zero * 10) / 10);
+    }
+  }
+  if (!crossings.length) return null;
+  const best = spot > 0
+    ? crossings.reduce((bst, c) => (Math.abs(c - spot) < Math.abs(bst - spot) ? c : bst))
+    : crossings[0];
+  return Number.isFinite(best) && best > 0 ? best : null;
+}
 
 // Pull a clean per-strike net-GEX ladder out of the /proxy/gex frame's gexRows.
 // Returns netGEX in $millions, windowed around the strike nearest spot, sorted
@@ -399,7 +432,12 @@ export async function GET(req: Request) {
       out.spxPrevClose = prevClose > 0 ? prevClose : null;
       out.callWall = p.callWall != null ? Number(p.callWall) || null : null;
       out.putWall = p.putWall != null ? Number(p.putWall) || null : null;
-      out.gammaFlip = p.gexFlip != null ? Number(p.gexFlip) || null : null;
+      // Flip: compute from gexRows the way the overview/home page does (the REST
+      // frame's gexFlip is usually empty). Fall back to p.gexFlip only if rows
+      // didn't produce a crossing.
+      out.gammaFlip =
+        flipFromGexRows(p.gexRows, spot) ??
+        (p.gexFlip != null ? Number(p.gexFlip) || null : null);
       const totals = p.totals as Record<string, unknown> | null | undefined;
       const totalGex = totals ? Number(totals.totalGEX ?? 0) : Number(p.totalNetGex ?? 0);
       out.netGex = Number.isFinite(totalGex) && totalGex !== 0 ? totalGex / 1e9 : null;

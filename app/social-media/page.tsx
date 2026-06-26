@@ -667,75 +667,78 @@ const XP_CSS = `
   .xp-btn.x { background: var(--cyan); color:#05060a; border-color: var(--cyan); }
   .xp-btn:disabled { opacity:.5; cursor:default; }
 
-  .xp-card { background:
-      radial-gradient(700px 320px at 14% -6%, rgba(0,240,255,.07), transparent 60%),
-      radial-gradient(640px 340px at 94% 110%, rgba(249,115,22,.06), transparent 60%),
-      var(--bg1);
-    border:1px solid var(--sm-border); border-radius:16px; padding:26px 28px; }
-  .xp-head { display:flex; align-items:baseline; gap:14px; border-bottom:1px solid var(--sm-border); padding-bottom:16px; margin-bottom:18px; }
-  .xp-head .ttl { font-size:24px; font-weight:800; color:var(--text1); letter-spacing:.01em; }
-  .xp-head .sub { font-size:12px; font-weight:700; letter-spacing:.18em; color:var(--sm-muted); }
-  .xp-head .upd { margin-left:auto; font-size:12px; color:var(--sm-muted); }
-  .xp-watch { font-size:13px; color:var(--text1); line-height:1.5; margin-bottom:18px; max-width:760px; }
-  .xp-watch b { color:var(--cyan); }
+  /* ════ 3-PANEL "GEX READ + TRADE PLAN" DESIGN ════ */
+  .xp-card { background: linear-gradient(180deg,#0a0d12 0%,#070a0e 100%);
+    border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:18px 20px; }
 
-  /* top metric strip */
-  .xp-strip { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px; }
-  .xp-stat { background:var(--bg0); border:1px solid var(--sm-border); border-radius:10px; padding:12px 14px; text-align:center; }
-  .xp-stat .k { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--sm-muted); margin-bottom:7px; }
-  .xp-stat .v { font-size:21px; font-weight:800; color:var(--text1); line-height:1; }
-  .xp-stat .v.cyan { color:var(--cyan); } .xp-stat .v.amber { color:var(--amber); }
+  /* title bar */
+  .xp-titlebar { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+  .xp-title { font-size:30px; font-weight:900; letter-spacing:.01em; color:#fff; text-transform:uppercase; }
+  .xp-title .cy { color:var(--cyan); }
+  .xp-chip { margin-left:0; display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 16px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(255,255,255,.02); }
+  .xp-chip:first-of-type { margin-left:auto; }
+  .xp-chip .lbl { font-size:10px; font-weight:700; letter-spacing:.08em; color:#cfd6df; }
+  .xp-chip .val { font-size:18px; font-weight:900; color:#fff; }
+  .xp-chip.amber { border-color:rgba(249,158,11,.6); } .xp-chip.amber .val { color:var(--amber); }
+  .xp-chip.cyan { border-color:rgba(0,240,255,.5); } .xp-chip.cyan .val { color:var(--cyan); }
 
-  .xp-main { display:grid; grid-template-columns:200px 1fr 250px; gap:20px; align-items:stretch; }
-  @media (max-width: 900px){ .xp-main { grid-template-columns:1fr; } }
+  /* 3-column grid */
+  .xp-grid3 { display:grid; grid-template-columns:1.15fr .85fr 1fr; gap:16px; align-items:start; }
+  @media (max-width: 1000px){ .xp-grid3 { grid-template-columns:1fr; } }
+  .xp-panel { background:rgba(255,255,255,.015); border:1px solid rgba(255,255,255,.10); border-radius:12px; padding:12px 14px; }
+  .xp-panel-h { display:flex; align-items:center; font-size:13px; font-weight:800; letter-spacing:.08em; color:#fff; text-align:center; justify-content:center; margin-bottom:10px; }
 
-  /* GEX ladder */
-  .xp-ladder-h { font-size:11px; font-weight:700; letter-spacing:.1em; color:var(--sm-muted); margin-bottom:10px; }
-  .xp-ladder-row { display:grid; grid-template-columns:42px 1fr 56px; align-items:center; gap:8px; height:18px; font-family:var(--sm-mono); font-size:11px; }
-  .xp-ladder-row .strk { color:var(--text1); }
-  .xp-ladder-row.spot { background:rgba(0,240,255,.12); border-radius:4px; }
-  .xp-ladder-row.peak .bar i { box-shadow:0 0 8px var(--amber); }
-  .xp-ladder-row .bar { height:9px; position:relative; }
-  .xp-ladder-row .bar i { position:absolute; top:0; height:9px; border-radius:2px; display:block; }
-  .xp-ladder-row .bar i.pos { background:var(--sm-green); left:50%; }
-  .xp-ladder-row .bar i.neg { background:var(--sm-red); right:50%; }
-  .xp-ladder-row .gx { text-align:right; }
-  .xp-ladder-row .gx.pos { color:var(--sm-green); } .xp-ladder-row .gx.neg { color:var(--sm-red); }
-  .xp-ladder-mid { border-top:1px dashed var(--sm-border); margin:5px 0; }
+  /* PANEL 1 — GEX matrix */
+  .xp-mx-head { display:flex; justify-content:space-between; font-size:9px; font-weight:700; letter-spacing:.06em; color:#9aa4b2; padding:0 4px 4px; }
+  .xp-mx-row { position:relative; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:2px 8px; height:18px; border-radius:3px; margin-bottom:1px; font-family:var(--sm-mono); }
+  .xp-mx-row .k { font-size:10px; font-weight:700; color:#dfe7f0; }
+  .xp-mx-row .v { font-size:10px; font-weight:800; color:#fff; }
+  .xp-mx-row.node .k, .xp-mx-row.node .v { color:#1a1205; }
+  .xp-mx-row .b { position:absolute; left:46px; font-size:8px; font-weight:900; padding:0 4px; border-radius:3px; }
+  .xp-mx-row .b.g { color:#0a0d12; background:var(--sm-green); }
+  .xp-mx-row .b.r { color:#0a0d12; background:var(--sm-red); }
+  .xp-matrix-foot { margin-top:8px; text-align:center; font-size:11px; font-weight:800; letter-spacing:.04em; color:var(--cyan); }
 
-  /* level chart — fixed height so it always fits its box; content clipped to the
-     rounded border. */
-  .xp-chart { position:relative; box-sizing:border-box; border:1px solid var(--sm-border); border-radius:12px; background:var(--bg0); height:380px; padding:22px 0; overflow:hidden; }
-  .xp-candles { position:absolute; inset:0; width:100%; height:100%; z-index:0; opacity:.7; border-radius:12px; }
-  .xp-candles .up .wick, .xp-candles .up .body { fill:var(--sm-green); }
-  .xp-candles .dn .wick, .xp-candles .dn .body { fill:var(--sm-red); }
-  .xp-candles rect { stroke:none; }
-  /* level lines / band / spot sit ABOVE the candle underlay */
-  .xp-chart .xp-line, .xp-chart .xp-band, .xp-chart .xp-spot { z-index:2; }
-  .xp-line { position:absolute; left:0; right:0; height:0; display:flex; align-items:center; }
-  .xp-line .rule { flex:1; height:0; border-top:2px solid; }
-  .xp-line.flip .rule { border-top-style:dotted; }
-  .xp-line .tag { position:absolute; right:12px; top:-9px; font-size:11px; font-weight:800; letter-spacing:.02em; background:var(--bg0); padding:0 6px; }
-  .xp-line .px { position:absolute; left:10px; top:-9px; font-family:var(--sm-mono); font-size:11px; font-weight:700; background:var(--bg0); padding:0 4px; }
-  .xp-band { position:absolute; left:0; right:0; background:rgba(124,124,255,.10); border-top:1px dashed rgba(124,124,255,.4); border-bottom:1px dashed rgba(124,124,255,.4); }
-  .xp-spot { position:absolute; right:46px; width:11px; height:11px; border-radius:50%; background:var(--cyan); box-shadow:0 0 0 4px rgba(0,240,255,.2),0 0 12px var(--cyan); transform:translateY(-50%); }
-  .c-red { color:var(--sm-red); border-color:var(--sm-red)!important; }
-  .c-green { color:var(--sm-green); border-color:var(--sm-green)!important; }
-  .c-amber { color:var(--amber); border-color:var(--amber)!important; }
+  /* PANEL 2 — GEX profile bars */
+  .xp-pf-row { display:grid; grid-template-columns:34px 1fr; align-items:center; gap:6px; height:18px; }
+  .xp-pf-row .k { font-family:var(--sm-mono); font-size:10px; font-weight:700; color:#dfe7f0; background:rgba(255,255,255,.05); border-radius:3px; text-align:center; padding:1px 0; }
+  .xp-pf-row .track { position:relative; height:11px; }
+  .xp-pf-row .track i { position:absolute; left:0; top:0; height:11px; border-radius:2px; display:block; }
+  .xp-pf-row .track i.pos { background:#00b4d8; }
+  .xp-pf-row .track i.neg { background:var(--sm-red); }
+  .xp-pf-row .track i.node { background:var(--amber); box-shadow:0 0 8px rgba(249,158,11,.6); }
 
-  /* trigger map */
-  .xp-trig-h { font-size:11px; font-weight:700; letter-spacing:.1em; color:var(--sm-muted); margin-bottom:10px; }
-  .xp-case { border:1px solid var(--sm-border); border-radius:10px; padding:12px 13px; margin-bottom:10px; }
-  .xp-case .top { display:flex; align-items:center; gap:7px; margin-bottom:7px; }
-  .xp-case .nm { font-size:12px; font-weight:800; letter-spacing:.06em; }
-  .xp-case .pct { margin-left:auto; font-size:14px; font-weight:800; color:var(--text1); }
-  .xp-case .desc { font-size:11px; color:var(--text1); line-height:1.45; }
-  .xp-case.bull { border-color:rgba(16,185,129,.4);} .xp-case.bull .nm { color:var(--sm-green);}
-  .xp-case.base .nm { color:var(--sm-muted);}
-  .xp-case.bear { border-color:rgba(239,68,68,.4);} .xp-case.bear .nm { color:var(--sm-red);}
-  .xp-foot { display:flex; align-items:center; gap:12px; border-top:1px solid var(--sm-border); margin-top:20px; padding-top:14px; }
-  .xp-foot .brand { font-size:16px; font-weight:800; color:var(--text1); letter-spacing:.03em; }
-  .xp-foot .disc { margin-left:auto; font-size:10px; color:var(--sm-muted); letter-spacing:.05em; }
+  /* PANEL 3 — right rail */
+  .xp-rail { display:flex; flex-direction:column; gap:16px; }
+  .xp-kl { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1.5px solid; border-radius:8px; padding:9px 13px; margin-bottom:9px; }
+  .xp-kl .lbl { font-size:11px; font-weight:800; letter-spacing:.04em; }
+  .xp-kl .v { font-size:18px; font-weight:900; color:#fff; }
+  .xp-kl.green { border-color:rgba(16,185,129,.55);} .xp-kl.green .lbl { color:var(--sm-green);}
+  .xp-kl.amber { border-color:rgba(249,158,11,.6);} .xp-kl.amber .lbl { color:var(--amber);}
+  .xp-kl.cyan { border-color:rgba(0,240,255,.5);} .xp-kl.cyan .lbl { color:var(--cyan);}
+  .xp-kl.red { border-color:rgba(239,68,68,.55);} .xp-kl.red .lbl { color:var(--sm-red);}
+
+  .xp-tradeplan .xp-panel-h { justify-content:space-between; }
+  .xp-tp { border:1.5px solid; border-radius:8px; padding:10px 13px; margin-bottom:9px; }
+  .xp-tp .tp-h { font-size:12px; font-weight:900; letter-spacing:.04em; margin-bottom:5px; }
+  .xp-tp .tp-b { font-size:11px; line-height:1.45; color:#e6ebf2; }
+  .xp-tp.green { border-color:rgba(16,185,129,.5);} .xp-tp.green .tp-h { color:var(--sm-green);}
+  .xp-tp.red { border-color:rgba(239,68,68,.5);} .xp-tp.red .tp-h { color:var(--sm-red);}
+  .xp-tp.amber { border-color:rgba(249,158,11,.55);} .xp-tp.amber .tp-h { color:var(--amber);}
+
+  /* pro insight footer */
+  .xp-insight { display:flex; align-items:center; gap:14px; margin-top:16px; border-top:1px solid rgba(255,255,255,.08); padding-top:14px; }
+  .xp-insight .tag { font-size:13px; font-weight:900; letter-spacing:.06em; color:var(--amber); white-space:nowrap; }
+  .xp-insight .txt { font-size:12px; color:#dfe7f0; line-height:1.45; }
+  .xp-insight .txt b { color:var(--amber); }
+  .xp-insight .brand { margin-left:auto; font-size:11px; font-weight:700; color:#9aa4b2; white-space:nowrap; }
+
+  .xp-gen-btn { font-family:var(--sm-mono); font-size:10px; font-weight:700; letter-spacing:.03em; cursor:pointer; padding:4px 9px; border-radius:5px; border:1px solid var(--cyan); background:transparent; color:var(--cyan); transition:.12s; }
+  .xp-gen-btn:hover { background:var(--cyan); color:#05060a; }
+  .xp-gen-btn:disabled { opacity:.5; cursor:default; }
+
+  /* candle canvas styles retained (overlay logic still present though hidden) */
+  .xp-candles { position:absolute; top:0; z-index:0; opacity:.7; }
 `;
 
 interface SpxCandle { t: number; o: number; h: number; l: number; c: number }
@@ -754,6 +757,44 @@ function ExplainerMockup({
   const [busy, setBusy] = useState(false);
   const [share, setShare] = useState<"" | "copied" | "saved" | "err">("");
   const [shot, setShot] = useState<"" | "copied" | "saved" | "err">("");
+
+  // AI-generated trigger map (Anthropic). Null = use the hardcoded fallback copy.
+  type AiCase = { odds: number; desc: string };
+  type AiMap = { bull: AiCase; base: AiCase; bear: AiCase };
+  const [aiMap, setAiMap] = useState<AiMap | null>(null);
+  const [aiState, setAiState] = useState<"idle" | "busy" | "err">("idle");
+  const genTriggerMap = useCallback(async () => {
+    setAiState("busy");
+    try {
+      const body = {
+        spxSpot: toNum(form.spot), gammaFlip: toNum(form.flip),
+        callWall: toNum(form.call), putWall: toNum(form.put),
+        expectedMove: toNum(form.em),
+        emUpper: emBand(form)?.upper ?? null, emLower: emBand(form)?.lower ?? null,
+        netGex: form.gex, gammaRegime: regime.label, bias: form.bias,
+        date: new Date().toLocaleDateString("en-US"),
+      };
+      const r = await fetch("/api/social-media/trigger-map", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(`trigger-map ${r.status}`);
+      const json = await r.json();
+      const data = (json?.data ?? json) as AiMap;
+      if (data?.bull && data?.base && data?.bear) { setAiMap(data); setAiState("idle"); }
+      else throw new Error("bad shape");
+    } catch {
+      setAiState("err");
+      setTimeout(() => setAiState("idle"), 2000);
+    }
+  }, [form, regime.label]);
+
+  // Horizontal pan of the candle overlay (px). 0 = newest bars flush right.
+  // Negative pans toward older bars. Drag the chart left/right to scrub.
+  const [panX, setPanX] = useState(0);
+  const dragRef = useRef<{ x: number; pan: number } | null>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const candleCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const spot = toNum(form.spot);
   const flip = toNum(form.flip);
@@ -777,26 +818,102 @@ function ExplainerMockup({
   const yPct = (v: number) => ((top - v) / (top - bot)) * 100; // 0..100, numeric
   const yOf = (v: number) => `${yPct(v).toFixed(2)}%`;
 
-  // Candle geometry in a 0..100 × 0..100 viewBox (SVG scales to the chart box).
-  // x spreads evenly across the session; a green/red body + high-low wick each.
+  // Chart box size (px) — measured so candles get a fixed per-bar width and a real
+  // pixel height. Pixel coords (not %/viewBox) are required for html2canvas to
+  // render the SVG when exporting to PNG. Re-measured on resize.
+  const [chartW, setChartW] = useState(640);
+  const [chartH, setChartH] = useState(460);
+  useEffect(() => {
+    const measure = () => {
+      if (chartRef.current) {
+        setChartW(chartRef.current.clientWidth || 640);
+        setChartH(chartRef.current.clientHeight || 460);
+      }
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [candlesOn]);
+  const yPx = (v: number) => (yPct(v) / 100) * chartH; // price → px within the chart box
+
+  // Fixed per-candle slot width (px). The full strip width = n * SLOT_PX; when it
+  // exceeds the box, the extra scrolls via panX. y stays % (price axis), x is px.
+  const SLOT_PX = 9;
+  // Gap (px) kept between the newest candle and the chart's right edge, plus a
+  // little extra slack so the newest bars can be scrolled slightly off the end.
+  const RIGHT_GAP_PX = 28;
+  const stripW = candles.length * SLOT_PX;
+  const maxPan = Math.max(0, stripW - chartW); // how far we can pan toward history
+  // Pan range: lower bound shows the oldest bars (left edge); upper bound lets the
+  // newest bars sit inset by RIGHT_GAP_PX (and scroll a touch past the right edge).
+  const minPan = -maxPan;
+  const maxPanRight = RIGHT_GAP_PX;
+  const clampedPan = Math.min(maxPanRight, Math.max(minPan, panX));
+
   const candleGeo = useMemo(() => {
     if (!candlesOn || !candles.length) return [];
-    const n = candles.length;
-    const slot = 100 / n;
-    const bodyW = Math.max(0.6, Math.min(slot * 0.7, 3.2));
+    const bodyPx = SLOT_PX * 0.66;
     return candles.map((c, i) => {
-      const cx = slot * (i + 0.5);
+      const cx = i * SLOT_PX + SLOT_PX / 2; // px from strip left
       const up = c.c >= c.o;
-      const yHigh = yPct(c.h);
-      const yLow = yPct(c.l);
-      const yOpen = yPct(c.o);
-      const yClose = yPct(c.c);
+      const yHigh = yPx(c.h);
+      const yLow = yPx(c.l);
+      const yOpen = yPx(c.o);
+      const yClose = yPx(c.c);
       const bodyTop = Math.min(yOpen, yClose);
       const bodyBot = Math.max(yOpen, yClose);
-      const wickW = Math.max(0.18, bodyW * 0.16);
-      return { cx, bodyW, wickW, yHigh, yLow, bodyTop, bodyH: Math.max(0.4, bodyBot - bodyTop), up };
+      const wickW = Math.max(1, bodyPx * 0.16);
+      return { cx, bodyW: bodyPx, wickW, yHigh, yLow, bodyTop, bodyH: Math.max(1, bodyBot - bodyTop), up };
     });
-  }, [candlesOn, candles, top, bot]);
+  }, [candlesOn, candles, top, bot, chartH]);
+
+  // Draw the candles onto the <canvas>. A canvas is captured reliably by
+  // html2canvas (unlike inline SVG), so the candles show up in Copy/Download.
+  useEffect(() => {
+    const cv = candleCanvasRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!candlesOn || !candleGeo.length) return;
+    for (const g of candleGeo) {
+      ctx.fillStyle = g.up ? "#10b981" : "#ef4444";
+      // wick
+      ctx.fillRect(g.cx - g.wickW / 2, g.yHigh, g.wickW, Math.max(1, g.yLow - g.yHigh));
+      // body
+      ctx.fillRect(g.cx - g.bodyW / 2, g.bodyTop, g.bodyW, g.bodyH);
+    }
+  }, [candleGeo, candlesOn, stripW, chartH]);
+
+  // Default to newest bars flush-right, but ONLY before the user has dragged —
+  // otherwise a width re-measure would snap the chart back mid-scrub and make pan
+  // feel one-directional. Resets again when candles toggle off→on.
+  const pannedRef = useRef(false);
+  useEffect(() => {
+    if (!candlesOn) { pannedRef.current = false; return; }
+    if (pannedRef.current) return;
+    // Newest bars at the right, inset by the gap (a little off the end).
+    setPanX(-Math.max(0, stripW - chartW) + RIGHT_GAP_PX);
+  }, [candlesOn, stripW, chartW]);
+
+  // Drag-to-pan handlers (pointer events cover mouse + touch). We base each drag
+  // on the CLAMPED position so it can move both directions from either edge, and
+  // write the clamped result back so panX never drifts outside the valid range.
+  const onPanDown = useCallback((e: React.PointerEvent) => {
+    if (!candlesOn || maxPan <= 0) return;
+    pannedRef.current = true;
+    dragRef.current = { x: e.clientX, pan: clampedPan };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, [candlesOn, maxPan, clampedPan]);
+  const onPanMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    const next = dragRef.current.pan + (e.clientX - dragRef.current.x);
+    setPanX(Math.min(maxPanRight, Math.max(minPan, next))); // clamp live; both ends reachable
+  }, [maxPanRight, minPan]);
+  const onPanUp = useCallback((e: React.PointerEvent) => {
+    dragRef.current = null;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+  }, []);
 
   // GEX ladder rows. Prefer the LIVE per-strike ladder from the dashboard
   // (netGex in $millions, already windowed ±8 around ATM, high→low). Fall back to
@@ -824,10 +941,20 @@ function ExplainerMockup({
     return ladderRows.reduce((best, r) => (Math.abs(r.k - spot) < Math.abs(best - spot) ? r.k : best), ladderRows[0].k);
   }, [ladderRows, spot]);
 
+  // Ladder strike nearest a given price level (for the CW/PW/FLIP row badges).
+  const centerKOf = useCallback((v: number) => {
+    if (!Number.isFinite(v) || !ladderRows.length) return null;
+    return ladderRows.reduce((best, r) => (Math.abs(r.k - v) < Math.abs(best - v) ? r.k : best), ladderRows[0].k);
+  }, [ladderRows]);
+
   const renderBlob = useCallback(async (): Promise<Blob | null> => {
     const node = cardRef.current; if (!node) return null;
     const html2canvas = await getHtml2Canvas();
-    const canvas = await html2canvas(node, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false });
+    const canvas = await html2canvas(node, {
+      backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
+      // Skip UI-only controls (e.g. the AI Generate button) in the export.
+      ignoreElements: (el: Element) => el.classList?.contains("xp-noexport"),
+    });
     return await new Promise((r) => canvas.toBlob((b: Blob | null) => r(b), "image/png"));
   }, []);
   const onDownload = useCallback(async () => {
@@ -872,7 +999,10 @@ function ExplainerMockup({
     if (actions) actions.style.display = "none";
     try {
       const html2canvas = await getHtml2Canvas();
-      const canvas = await html2canvas(node, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false });
+      const canvas = await html2canvas(node, {
+        backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
+        ignoreElements: (el: Element) => el.classList?.contains("xp-noexport"),
+      });
       const blob: Blob | null = await new Promise((r) => canvas.toBlob((b: Blob | null) => r(b), "image/png"));
       if (!blob) { setShot("err"); return; }
       try {
@@ -899,6 +1029,28 @@ function ExplainerMockup({
 
   const f = (v: number) => (Number.isFinite(v) ? fmt(v) : "—");
 
+  // ── Derived values for the GEX Matrix / Profile panels ──────────────────────
+  // Net GEX per strike is in $millions (gx). Format as $K like the reference.
+  const gexK = (mm: number) => {
+    const k = mm * 1000; // $millions → $thousands
+    const s = k < 0 ? "-" : "";
+    return `${s}$${Math.abs(Math.round(k)).toLocaleString("en-US")}K`;
+  };
+  // Control node = the strike carrying the peak |net GEX| (largest magnet).
+  const controlNode = useMemo(() => {
+    if (!ladderRows.length) return null;
+    return ladderRows.reduce((b, r) => (Math.abs(r.gx) > Math.abs(b.gx) ? r : b), ladderRows[0]);
+  }, [ladderRows]);
+  // Total net GEX across the visible ladder, in $K.
+  const totalNetK = useMemo(
+    () => ladderRows.reduce((s, r) => s + r.gx, 0) * 1000,
+    [ladderRows],
+  );
+  const totalNetStr = `${totalNetK >= 0 ? "+" : "-"}$${Math.abs(Math.round(totalNetK)).toLocaleString("en-US")}K`;
+  // Row tint intensity 0..1 by |gex| relative to the peak, for the matrix shading.
+  const tintOf = (gx: number) => (maxMag > 0 ? Math.min(1, Math.abs(gx) / maxMag) : 0);
+  const snapDate = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
+
   return (
     <div className="xp-wrap" ref={wrapRef}>
       <style>{XP_CSS}</style>
@@ -907,15 +1059,6 @@ function ExplainerMockup({
           <button type="button" className={dte === 0 ? "on" : ""} onClick={() => onDteChange(0)}>0DTE</button>
           <button type="button" className={dte === 1 ? "on" : ""} onClick={() => onDteChange(1)}>1DTE</button>
         </span>
-        <button
-          type="button"
-          className={`xp-candle-btn${candlesOn ? " on" : ""}`}
-          onClick={onToggleCandles}
-          title="Connect the ES feed and overlay today's candles converted to SPX prices"
-        >
-          <i className={candlesOn ? (candlesConnected ? "live" : "wait") : "off"} />
-          {candlesOn ? (candlesConnected ? "Candles · live" : "Candles · connecting…") : "Candles · off"}
-        </button>
         <span className="xp-actions-sp" />
         <button type="button" className="xp-btn" onClick={onCopyScreenshot} disabled={busy}>
           {shot === "copied" ? "✓ Copied" : shot === "saved" ? "✓ Saved" : shot === "err" ? "Failed" : "Copy screenshot"}
@@ -927,100 +1070,118 @@ function ExplainerMockup({
       </div>
 
       <div ref={cardRef} className="xp-card">
-        <div className="xp-head">
-          <span className="ttl">Environment: {regime.neg ? "trend regime" : "decision point"}</span>
-          <span className="sub">SPX · {dte === 1 ? "1DTE" : "0DTE"} GEX READ</span>
-          <span className="upd">{updated ? `Updated ${updated}` : ""}</span>
-        </div>
-        <div className="xp-watch">
-          <b>Watch:</b> {regime.neg ? "momentum and breakout continuation — trade with the trend." : "acceptance before the regime resolves — let price confirm a break before pressing."} {regime.sub}
-        </div>
-
-        {/* metric strip */}
-        <div className="xp-strip">
-          <div className="xp-stat"><div className="k">spot</div><div className="v cyan">{f(spot)}</div></div>
-          <div className="xp-stat"><div className="k">gamma flip</div><div className="v">{f(flip)}</div></div>
-          <div className="xp-stat"><div className="k">net gex</div><div className="v amber">{form.gex || "—"}</div></div>
-          <div className="xp-stat"><div className="k">call wall</div><div className="v">{f(call)}</div></div>
-          <div className="xp-stat"><div className="k">put wall</div><div className="v">{f(put)}</div></div>
-        </div>
-
-        <div className="xp-main">
-          {/* GEX ladder */}
-          <div>
-            <div className="xp-ladder-h">{dte === 1 ? "1DTE" : "0DTE"} NET GEX{isLiveLadder ? "" : " · est"}</div>
-            {ladderRows.map((r) => {
-              const w = (Math.abs(r.gx) / maxMag) * 46;
-              const isSpot = r.k === centerK;
-              const isPeak = Math.abs(r.gx) === maxMag;
-              const mag = Math.abs(r.gx);
-              const magStr = mag >= 100 ? mag.toFixed(0) : mag >= 10 ? mag.toFixed(0) : mag.toFixed(1);
-              return (
-                <div key={r.k} className={`xp-ladder-row${isSpot ? " spot" : ""}${isPeak ? " peak" : ""}`}>
-                  <span className="strk">{r.k}</span>
-                  <span className="bar"><i className={r.gx >= 0 ? "pos" : "neg"} style={{ width: `${w}%` }} /></span>
-                  <span className={`gx ${r.gx >= 0 ? "pos" : "neg"}`}>{r.gx >= 0 ? "+" : "−"}{magStr}M</span>
-                </div>
-              );
-            })}
+        {/* ── title bar ── */}
+        <div className="xp-titlebar">
+          <div className="xp-title">SPX <span className="cy">GEX READ</span> + TRADE PLAN</div>
+          <div className="xp-chip">GEX SNAPSHOT: {snapDate}</div>
+          <div className="xp-chip amber">
+            <span className="lbl">CONTROL NODE</span>
+            <span className="val">{controlNode ? controlNode.k : "—"}</span>
           </div>
-
-          {/* level chart */}
-          <div className="xp-chart">
-            {/* ES→SPX candle underlay (on-demand). Drawn behind the level lines/
-                band so the GEX levels stay readable on top. */}
-            {candlesOn && candleGeo.length > 0 && (
-              <svg className="xp-candles" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                {candleGeo.map((g, i) => (
-                  <g key={i} className={g.up ? "up" : "dn"}>
-                    <rect x={g.cx - g.wickW / 2} y={g.yHigh} width={g.wickW} height={Math.max(0.2, g.yLow - g.yHigh)} className="wick" />
-                    <rect x={g.cx - g.bodyW / 2} y={g.bodyTop} width={g.bodyW} height={g.bodyH} className="body" />
-                  </g>
-                ))}
-              </svg>
-            )}
-            {band && (
-              <div className="xp-band" style={{ top: yOf(band.upper), height: `calc(${yOf(band.lower)} - ${yOf(band.upper)})` }} />
-            )}
-            {Number.isFinite(call) && (
-              <div className="xp-line" style={{ top: yOf(call) }}>
-                <span className="rule c-red" /><span className="px c-red">{f(call)}</span><span className="tag c-red">CALL WALL · resistance</span>
-              </div>
-            )}
-            {Number.isFinite(flip) && (
-              <div className="xp-line flip" style={{ top: yOf(flip) }}>
-                <span className="rule c-amber" /><span className="px c-amber">{f(flip)}</span><span className="tag c-amber">GAMMA FLIP · {regime.neg ? "below = unstable" : "structure shifts"}</span>
-              </div>
-            )}
-            {Number.isFinite(put) && (
-              <div className="xp-line" style={{ top: yOf(put) }}>
-                <span className="rule c-green" /><span className="px c-green">{f(put)}</span><span className="tag c-green">PUT WALL · support</span>
-              </div>
-            )}
-            {Number.isFinite(spot) && <div className="xp-spot" style={{ top: yOf(spot) }} />}
-          </div>
-
-          {/* trigger map */}
-          <div>
-            <div className="xp-trig-h">TRIGGER MAP · how to trade it</div>
-            <div className="xp-case bull">
-              <div className="top"><span className="nm">▲ BULL CASE</span><span className="pct">{regime.neg ? "35%" : "30%"}</span></div>
-              <div className="desc">Spot accepts above {f(Number.isFinite(flip) ? flip : call)} on volume and holds through first retest → long toward {f(call)}.</div>
-            </div>
-            <div className="xp-case base">
-              <div className="top"><span className="nm">→ BASE CASE</span><span className="pct">{regime.neg ? "30%" : "40%"}</span></div>
-              <div className="desc">{regime.neg ? "Two-sided trend day — wait for a clean break of the flip before committing size." : `Range between ${f(put)} and ${f(call)} persists into midday with no decisive break — stay patient.`}</div>
-            </div>
-            <div className="xp-case bear">
-              <div className="top"><span className="nm">▼ BEAR CASE</span><span className="pct">{regime.neg ? "35%" : "30%"}</span></div>
-              <div className="desc">Loses {f(Number.isFinite(flip) ? flip : put)} and holds below on two consecutive 5-min closes → short toward {f(put)}.</div>
-            </div>
+          <div className="xp-chip cyan">
+            <span className="lbl">TOTAL NET GEX</span>
+            <span className="val">{totalNetStr}</span>
           </div>
         </div>
 
-        <div className="xp-foot">
-          <span className="brand">CB Edge</span>
-          <span className="disc">SETUP IS A REGIME MATCH, NOT PROBABILITY OR ADVICE — INFORMATIONAL ONLY.</span>
+        <div className="xp-grid3">
+          {/* ── PANEL 1: GEX Matrix (strike + net GEX, color-graded) ── */}
+          <div className="xp-panel">
+            <div className="xp-panel-h">GEX MATRIX (STRIKE)</div>
+            <div className="xp-matrix">
+              <div className="xp-mx-head"><span>STRIKE</span><span>NET GEX</span></div>
+              {ladderRows.map((r) => {
+                const pos = r.gx >= 0;
+                const t = tintOf(r.gx);
+                const isNode = controlNode && r.k === controlNode.k;
+                const bg = isNode
+                  ? "rgba(249,158,11,.92)"
+                  : pos
+                    ? `rgba(0,150,210,${0.10 + t * 0.42})`
+                    : `rgba(220,60,60,${0.10 + t * 0.45})`;
+                const badge =
+                  Number.isFinite(call) && r.k === centerKOf(call) ? "CW"
+                  : Number.isFinite(put) && r.k === centerKOf(put) ? "PW"
+                  : Number.isFinite(flip) && r.k === centerKOf(flip) ? "FLIP" : null;
+                return (
+                  <div key={r.k} className={`xp-mx-row${isNode ? " node" : ""}`} style={{ background: bg }}>
+                    <span className="k">{r.k}</span>
+                    {badge && <span className={`b ${pos ? "g" : "r"}`}>{badge}</span>}
+                    <span className="v">{gexK(r.gx)}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="xp-matrix-foot">TOTAL NET GEX: {totalNetStr}</div>
+          </div>
+
+          {/* ── PANEL 2: GEX Profile (horizontal net-GEX bars) ── */}
+          <div className="xp-panel">
+            <div className="xp-panel-h">GEX PROFILE</div>
+            <div className="xp-profile">
+              {ladderRows.map((r) => {
+                const pos = r.gx >= 0;
+                const w = (Math.abs(r.gx) / maxMag) * 100;
+                const isNode = controlNode && r.k === controlNode.k;
+                return (
+                  <div key={r.k} className="xp-pf-row">
+                    <span className="k">{r.k}</span>
+                    <span className="track">
+                      <i className={isNode ? "node" : pos ? "pos" : "neg"} style={{ width: `${Math.max(2, w)}%` }} />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── PANEL 3: right rail — key levels + trade plan ── */}
+          <div className="xp-rail">
+            <div className="xp-panel xp-keylevels">
+              <div className="xp-panel-h">KEY LEVELS</div>
+              <div className="xp-kl green"><span className="lbl">RESISTANCE</span><span className="v">{f(call)}</span></div>
+              <div className="xp-kl amber"><span className="lbl">CONTROL NODE (MAGNET)</span><span className="v">{controlNode ? controlNode.k : "—"}</span></div>
+              <div className="xp-kl cyan"><span className="lbl">GAMMA FLIP / PIVOT</span><span className="v">{f(flip)}</span></div>
+              <div className="xp-kl red"><span className="lbl">SUPPORT</span><span className="v">{f(put)}</span></div>
+            </div>
+
+            <div className="xp-panel xp-tradeplan">
+              <div className="xp-panel-h">
+                TRADE PLAN
+                <button
+                  type="button"
+                  className="xp-gen-btn xp-noexport"
+                  onClick={genTriggerMap}
+                  disabled={aiState === "busy"}
+                  title="Generate the trade plan with AI from the current levels"
+                >
+                  {aiState === "busy" ? "Generating…" : aiState === "err" ? "Failed — retry" : aiMap ? "↻ Regenerate" : "✨ Generate"}
+                </button>
+              </div>
+              <div className="xp-tp green">
+                <div className="tp-h">▲ BULL CASE {aiMap ? `· ${aiMap.bull.odds}%` : ""}</div>
+                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {f(Number.isFinite(flip) ? flip : put)} → grind toward {f(call)}; buy dips near the control node.</>}</div>
+              </div>
+              <div className="xp-tp red">
+                <div className="tp-h">▼ BEAR CASE {aiMap ? `· ${aiMap.bear.odds}%` : ""}</div>
+                <div className="tp-b">{aiMap ? aiMap.bear.desc : <>Loses {f(Number.isFinite(flip) ? flip : put)} → dealers flip short gamma, momentum unlocks toward {f(put)}.</>}</div>
+              </div>
+              <div className="xp-tp amber">
+                <div className="tp-h">→ CHOP ZONE {aiMap ? `· ${aiMap.base.odds}%` : ""}</div>
+                <div className="tp-b">{aiMap ? aiMap.base.desc : (regime.neg ? "Two-sided trend day — wait for a clean break before committing size." : <>Range {f(put)}–{f(call)}: two-way action, fake breakouts, scalp the edges.</>)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── pro insight footer ── */}
+        <div className="xp-insight">
+          <span className="tag">PRO INSIGHT</span>
+          <span className="txt">
+            The <b>{controlNode ? controlNode.k : "control"}</b> node is dominant control — price gravitates there unless a catalyst breaks it.
+            {Number.isFinite(flip) ? <> The bigger move only comes if <b>{f(flip)}</b> fails.</> : null}
+          </span>
+          <span className="brand">CB Edge · not financial advice</span>
         </div>
       </div>
     </div>
