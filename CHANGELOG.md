@@ -1,5 +1,104 @@
 # Changelog
 
+## 2026-06-25 (session 76) — ICT page (live detection + glossary)
+
+New `/ict` GEX page — an Inner Circle Trader command center that runs live ICT detection on the existing 5-min ES feed alongside a color-matched concept glossary. Added to the GEX nav group after ES Candles.
+
+### `lib/calculations/ictConcepts.ts` (new)
+- Pure, framework-agnostic ICT detectors over `IctCandle[]` (the ES session feed).
+- Core primitives: Fair Value Gaps (3-candle imbalance, mitigation + **endTs** so a box ENDS on the 2nd pass-through, **IFVG inversion** when a break sweeps liquidity), Displacement, **Order Blocks** refined to the textbook rule (requires a **liquidity sweep + following imbalance** → `valid` flag), swing pivots, market structure (BOS/CHOCH/MSS), liquidity pools (BSL/SSL + EQH/EQL clustering + `liquiditySweepTimes`), premium/discount + OTE dealing range, kill zones / Silver Bullet / macros (ET windows; **NY AM corrected to 7:00–10:00**), daily bias.
+- 10 model detectors added: Inducement, Turtle Soup, Judas Swing, Breaker, CISD, 2022 Model, Power of 3 (AMD), IRL/ERL, Candle Range Theory; MMXM via components. SMT intentionally left glossary-only (needs a 2nd NQ feed).
+- `analyzeICT()` aggregates everything in one call.
+
+### `app/ict/page.tsx` (new)
+- lightweight-charts ES candles with a canvas overlay drawing every concept in **one color per concept** (FVG blue, IFVG pink, OB green, Liquidity orange, Structure purple); direction shown via ↑/↓ labels. Valid OBs solid, weak OBs faint/dashed.
+- Toggle row doubles as a color legend; **Copyshot** button captures chart + panels to clipboard (html2canvas).
+- Right-side compact 2-col signal panels: Daily Bias, Active Windows (with ET time ranges pinned at the bottom), Open FVGs, Liquidity, Dealing Range, Models & Signals, Power of 3, CRT. (Market Structure panel removed.)
+- Glossary cards (4-wide) with per-concept **SVG thumbnail diagrams**, keyword highlighting colored to match the chart, and a dynamic **live/idle** badge that only reads "live" when a setup is actionable at the current time/price.
+
+### `components/shared/NavMenu.tsx`
+- Added "ICT" link to the GEX group after ES Candles.
+
+### Notes
+- Detectors are practical heuristics, not textbook-perfect; backtest before trusting. Sandbox was unavailable this session, so `tsc` was not run — typecheck locally before `/push`.
+
+## 2026-06-25 (session 75) — Traders Dashboard page
+
+New `/traders-dashboard` page — a morning command-center modeled on a provided mockup (countdown to open, schedule, overnight overview, pre-market tasks, weather). Wires live data, per-user persistence, and a 7am AI overview cron.
+
+### `app/traders-dashboard/page.tsx` (new)
+- Header with live countdown to 9:30 AM ET and a weather card (ZIP input → temp/conditions).
+- Editable Morning Schedule and Pre-Market Tasks (add/rename/delete, checkboxes + progress bar). Persisted per Clerk user via `/api/traders-dashboard`.
+- Overnight Market Overview reads the cached AI row from `/api/traders-dashboard/overview` (sentiment line + "Generated … ET" stamp).
+- Overnight Futures: live ES/NQ/YM via existing `/api/yahoo-quotes` (60s poll). Pre-Market Movers is a "live Monday" placeholder.
+- Key Drivers: AI job's drivers if present, else top high-impact USD events from `/api/calendar`.
+- Styled with `HOME_THEME`.
+
+### `components/shared/NavMenu.tsx`
+- Added "Traders Dashboard" link to the GEX group under Home.
+
+### `lib/db.ts`
+- New tables `td_user_prefs` (per-user zip/schedule/tasks JSONB) and `td_overview` (per-ET-date summary + drivers JSONB). Helpers: `getTdPrefs`/`upsertTdPrefs`, `getTdOverview`/`getLatestTdOverview`/`upsertTdOverview`.
+
+### `app/api/traders-dashboard/route.ts` (new)
+- GET/POST per-user prefs, Clerk-gated on `userId`.
+
+### `app/api/traders-dashboard/overview/route.ts` (new)
+- GET latest/by-date overview; POST writer gated by `INTERNAL_API_TOKEN` (middleware already passes the token through), mirroring `/api/es-gap`.
+
+### `app/api/weather/route.ts` (new)
+- Keyless: ZIP → lat/lon via Zippopotam, then current temp/condition via Open-Meteo (WMO code map). No secrets. (Host must allow `api.zippopotam.us` + `*.open-meteo.com`.)
+
+### `server-v2/overview-generator.js` (new)
+- Daily ~07:00 ET (weekdays) job: calls Anthropic (`claude-sonnet-4-6`) with the `web_search_20250305` tool to research overnight action, parses a JSON `{summary, drivers}`, and POSTs to `/api/traders-dashboard/overview`. Skips if already written for the ET date; startup catch-up probe.
+
+### `server-v2/server-with-proxy.js`
+- Starts `startOverviewGenerator(PORT)` after `server.listen()`, alongside the other cron jobs.
+
+### Deploy notes
+- Reuses the existing `ANTHROPIC_API_KEY` (already on the VPS, shared with social-media) — confirmed present.
+- Commit/push from Windows; VPS pulls + builds. Not yet built/verified (sandbox unavailable this session).
+
+## 2026-06-25 (session 74) — Fails page: LAF/LBF logic rewrite, scaled targets, perf + UI
+
+Reworked the `/fails` page fail definition, scoring, performance, and typography.
+
+### `lib/failLevels.ts` — fail detection rewrite
+- **PWH/PWL first-2-attempts cap** (`attemptCap`): prev-week levels only fade on the first 2 pierces per session; applied in `scanLevel` and `countPierces`.
+- **ONH/ONL RTH-only**: overnight levels now scan/activate only during RTH (9:30–16:00 ET) in `scanLevel`, `countPierces`, and live status (distance still shown overnight, state gated).
+- **Upgraded LAF/LBF "fail" criteria**: a fail now requires (1) a probe of 0.5–12 ES pts past the level (sweep, not noise/runaway), (2) no acceptance (never 2 consecutive closes beyond), (3) a reclaim bar that closes back inside with a ≥50% rejection wick on the probe side AND forms a lower-high/higher-low vs the probe extreme.
+- **Reward = max favorable excursion from entry** over the rest of session until stop-out (probe extreme), replacing the old 2-bar follow-through measured from the level (which starved every winner → all-losses bug).
+- **Scaled targets** added to `FailEvent`: T1 = 50% to opposite ref, T2 = full opposite ref (PDH↔PDL / ONH↔ONL / PWH↔PWL), T3 = 2× entry→opposite (measured move). `tiersHit` = furthest tier the MFE reached; `maxR` = MFE/risk. Removed `targetPts`/`rrToTarget`.
+
+### `app/fails/page.tsx`
+- **Perf**: deferred the 20-day `computeStats` build into a `requestIdleCallback` keyed on a history-only signal (`historyKey`), and added coarse `candlesKey`/`historyKey` memo keys so heavy scans don't re-run on every WS tick (fixed slow load/scroll).
+- **Today's Fails summary box**: Wins (reached ≥T1) / Losses / Win Rate / Net R (summed maxR) + per-level fail counts.
+- **Fail table**: columns now Entry / Risk / Targets (T1/T2/T3 badges) / Max R / Result (`WIN T{n}` or LOSS).
+- **Fail Rate**: 6 cards across in one row; enlarged ~20-session total.
+- **Typography**: section titles via `SectionTitle big` (18px), bumped then toned down IB/live-status/table fonts; brighter outlined+shaded cards.
+- **Spacing**: `marginBottom: 16` between Day Type · AMT banner and Live IB panel.
+
+### `components/insights/IbLogic.tsx`
+- Enlarged then toned-down IB header, stat cards, rule cards, and "Rules In Play" title to match the page.
+
+---
+
+## 2026-06-25 (session 73) — Global toolbar responsive shrink + centered quotes
+
+Made the global toolbar (`GlobalToolbar`) shrink as a unit on narrow widths and fixed the live-quote alignment.
+
+### `components/shared/GlobalToolbar.tsx`
+- Live ticker (VIX/ESU/SPX/NQU) kept in-flow (`flexGrow:1`) and centered; briefly tried absolute-centering but it overlapped the search box, reverted.
+- Bar `gap` and horizontal `padding` now use `clamp()` so spacing compresses with viewport.
+- Search box: `flexShrink:1000` + `flexBasis:230` + `minWidth:44` so it collapses to an icon-only box **before** the ticker scales — search yields space first.
+- Date chip (`.toolbar-datechip`) and Notes label (`.toolbar-notes-label`) classed for responsive hiding.
+
+### `components/shared/ToolbarTicker.tsx`
+- Lowered fit-scale floor `0.85 → 0.55` so quotes shrink further instead of clipping/overlapping.
+
+### `app/globals.css`
+- `@media (max-width:1100px)` hides `.toolbar-datechip`; `@media (max-width:950px)` hides `.toolbar-notes-label`.
+
 ## 2026-06-25 (session 72) — Owner-only route gating (test account saw owner pages)
 
 Test/customer accounts were signed in and could reach the owner pages (`/dev/*`, `/budget`, `/personal`) — middleware only checked signed-in vs signed-out, and the nav only checked `isSignedIn`. Added two independent layers gated on the owner's Clerk ID.

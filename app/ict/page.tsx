@@ -91,6 +91,8 @@ const CONCEPTS: Concept[] = [
     body: "The overarching framework: set higher-timeframe directional bias, then target the liquidity pool price is drawn toward (PDH/PDL, session H/L, EQH/EQL) using lower-timeframe FVG/OTE/MSS confluence. Often called ~80% of the edge." },
 ];
 
+const CONCEPT_BY_ID: Record<string, Concept> = Object.fromEntries(CONCEPTS.map((c) => [c.id, c]));
+
 // One color per ICT concept (RGB triplets; alpha applied at draw time).
 const C = {
   fvg:    "41,182,246",   // FVG       → blue
@@ -119,6 +121,13 @@ export default function IctPage() {
   const drawOverlayRef = useRef<() => void>(() => {});
   const [clockTick, setClockTick] = useState(0);
 
+  // Hover hit-testing: every overlay primitive registers a rectangular region +
+  // the glossary concept id it maps to. mousemove finds the topmost hit and
+  // pops an info box (sourced from CONCEPTS) anchored to the cursor.
+  type HitRegion = { x: number; y: number; w: number; h: number; conceptId: string; title: string; detail?: string };
+  const hitsRef = useRef<HitRegion[]>([]);
+  const [hover, setHover] = useState<{ x: number; y: number; concept: Concept; detail?: string } | null>(null);
+
   // Overlay toggles.
   const [showFvg, setShowFvg] = useState(true);
   const [showOb, setShowOb] = useState(true);
@@ -126,6 +135,10 @@ export default function IctPage() {
   const [showStruct, setShowStruct] = useState(true);
   const [showKz, setShowKz] = useState(true);
   const [showPd, setShowPd] = useState(true);
+
+  // Which glossary cards are expanded (collapsed by default → icon + title only).
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleCard = (id: string) => setExpanded((m) => ({ ...m, [id]: !m[id] }));
 
   // Tick every 30s so kill-zone "active" state + bias re-evaluate.
   useEffect(() => { const id = setInterval(() => setClockTick((n) => n + 1), 30_000); return () => clearInterval(id); }, []);
@@ -158,7 +171,19 @@ export default function IctPage() {
       grid: { vertLines: { color: "rgba(255,255,255,.05)" }, horzLines: { color: "rgba(255,255,255,.05)" } },
       rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
       leftPriceScale: { visible: false },
-      timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false,
+        // Axis tick labels in Eastern Time. tickMarkType 2/3 = day/month boundary
+        // → show the ET date; otherwise show ET HH:MM.
+        tickMarkFormatter: (t: unknown, tickMarkType: number) => {
+          if (typeof t !== "number") return "";
+          const d = new Date(t * 1000);
+          if (tickMarkType === 2 || tickMarkType === 3) {
+            return d.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+          }
+          return d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
+        },
+      },
       crosshair: { mode: CrosshairMode.Normal },
       localization: {
         priceFormatter: (p: number) => p.toFixed(2),
@@ -246,6 +271,15 @@ export default function IctPage() {
     const yOf = (p: number) => series.priceToCoordinate(p);
     const rightEdge = W - 2;
 
+    // Reset hover hit-regions for this frame. Lines get a small vertical pad so
+    // they're hoverable.
+    const hits: HitRegion[] = [];
+    hitsRef.current = hits;
+    const addRect = (x: number, y: number, w: number, h: number, conceptId: string, title: string, detail?: string) =>
+      hits.push({ x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h), conceptId, title, detail });
+    const addLine = (x: number, y: number, w: number, conceptId: string, title: string, detail?: string) =>
+      addRect(x, y - 4, w, 8, conceptId, title, detail);
+
     // Kill-zone / Silver Bullet / macro vertical bands.
     if (t.showKz && candles.length) {
       // Draw a band for every ICT window that intersects each visible ET day.
@@ -265,6 +299,8 @@ export default function IctPage() {
           if (x1 == null || x2 == null) continue;
           ctx.fillStyle = WIN_COLOR[w.kind];
           ctx.fillRect(Math.min(x1, x2), 0, Math.abs(x2 - x1), H);
+          const wcId = w.kind === "silver" ? "silver" : w.kind === "macro" ? "macros" : "killzones";
+          addRect(Math.min(x1, x2), 0, Math.abs(x2 - x1), H, wcId, w.label, `${fmtMin(w.startMin)}–${fmtMin(w.endMin)} ET`);
         }
       }
     }
@@ -276,20 +312,24 @@ export default function IctPage() {
         // premium shading (eq → high)
         ctx.fillStyle = "rgba(255,71,87,0.05)";
         ctx.fillRect(0, Math.min(yHi, yEq), W, Math.abs(yEq - yHi));
+        addRect(0, Math.min(yHi, yEq), W, Math.abs(yEq - yHi), "pd", "Premium zone", `${a.range.eq.toFixed(2)}–${a.range.high.toFixed(2)} (sellers')`);
         // discount shading (eq → low)
         ctx.fillStyle = "rgba(48,209,88,0.05)";
         ctx.fillRect(0, Math.min(yEq, yLo), W, Math.abs(yLo - yEq));
+        addRect(0, Math.min(yEq, yLo), W, Math.abs(yLo - yEq), "pd", "Discount zone", `${a.range.low.toFixed(2)}–${a.range.eq.toFixed(2)} (buyers')`);
         // equilibrium line
         ctx.strokeStyle = "rgba(255,255,255,0.30)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
         ctx.beginPath(); ctx.moveTo(0, yEq); ctx.lineTo(W, yEq); ctx.stroke();
         ctx.setLineDash([]);
         label(ctx, 6, yEq - 4, "EQ 0.5", "rgba(255,255,255,0.55)");
+        addLine(0, yEq, W, "pd", "Equilibrium (0.5)", a.range.eq.toFixed(2));
         // OTE band
         const yo1 = yOf(a.range.ote.from), yo2 = yOf(a.range.ote.to);
         if (yo1 != null && yo2 != null) {
           ctx.fillStyle = "rgba(167,139,250,0.16)";
           ctx.fillRect(0, Math.min(yo1, yo2), W, Math.abs(yo2 - yo1));
           label(ctx, 6, Math.min(yo1, yo2) + 11, "OTE 62–79%", "rgba(167,139,250,0.9)");
+          addRect(0, Math.min(yo1, yo2), W, Math.abs(yo2 - yo1), "ote", "Optimal Trade Entry", `${a.range.ote.to.toFixed(2)}–${a.range.ote.from.toFixed(2)}`);
         }
       }
     }
@@ -321,6 +361,7 @@ export default function IctPage() {
           ctx.strokeRect(x, y, w, h);
           ctx.setLineDash([]);
           label(ctx, x + 3, y + 11, "IFVG" + arrow, `rgba(${C.ifvg},1)`);
+          addRect(x, y, w, h, "ifvg", `Inverse FVG ${bull ? "↑ bullish" : "↓ bearish"}`, `${f.bottom.toFixed(2)}–${f.top.toFixed(2)}`);
         } else {
           const done = f.endTs != null; // ended box reads fainter than a live one
           ctx.fillStyle = `rgba(${C.fvg},${done ? 0.08 : 0.16})`;
@@ -329,23 +370,29 @@ export default function IctPage() {
           ctx.lineWidth = 1;
           ctx.strokeRect(x, y, w, h);
           label(ctx, x + 3, y + 11, "FVG" + arrow, `rgba(${C.fvg},0.95)`);
+          addRect(x, y, w, h, "fvg", `Fair Value Gap ${bull ? "↑ bullish" : "↓ bearish"}${done ? " (mitigated)" : ""}`, `${f.bottom.toFixed(2)}–${f.top.toFixed(2)}`);
         }
       }
     }
 
-    // Order blocks = GREEN.
+    // Order blocks = GREEN. VALID blocks (swept liquidity + left an imbalance)
+    // draw solid; weak/unconfirmed blocks draw faint + dashed.
     if (t.showOb) {
       for (const o of a.orderBlocks) {
         const x = xOf(o.ts), yT = yOf(o.top), yB = yOf(o.bottom);
         if (x == null || yT == null || yB == null) continue;
-        ctx.strokeStyle = `rgba(${C.ob},0.9)`;
-        ctx.lineWidth = 1.5;
-        ctx.globalAlpha = o.mitigated ? 0.4 : 1;
-        ctx.fillStyle = `rgba(${C.ob},0.10)`;
-        ctx.fillRect(x, Math.min(yT, yB), Math.max(2, rightEdge - x), Math.abs(yB - yT));
-        ctx.strokeRect(x, Math.min(yT, yB), Math.max(2, rightEdge - x), Math.abs(yB - yT));
+        const yy = Math.min(yT, yB), hh = Math.abs(yB - yT), ww = Math.max(2, rightEdge - x);
+        ctx.globalAlpha = o.mitigated ? 0.35 : 1;
+        ctx.fillStyle = `rgba(${C.ob},${o.valid ? 0.12 : 0.05})`;
+        ctx.fillRect(x, yy, ww, hh);
+        ctx.strokeStyle = `rgba(${C.ob},${o.valid ? 0.9 : 0.45})`;
+        ctx.lineWidth = o.valid ? 1.5 : 1;
+        ctx.setLineDash(o.valid ? [] : [3, 3]);
+        ctx.strokeRect(x, yy, ww, hh);
+        ctx.setLineDash([]);
         ctx.globalAlpha = 1;
-        label(ctx, x + 3, Math.min(yT, yB) + 11, o.dir === "bull" ? "OB ↑" : "OB ↓", `rgba(${C.ob},0.95)`);
+        label(ctx, x + 3, yy + 11, `${o.dir === "bull" ? "OB ↑" : "OB ↓"}${o.valid ? "" : "?"}`, `rgba(${C.ob},0.95)`);
+        addRect(x, yy, ww, hh, "ob", `Order Block ${o.dir === "bull" ? "↑ bullish" : "↓ bearish"}${o.valid ? "" : " (unconfirmed)"}${o.mitigated ? " · mitigated" : ""}`, `${o.bottom.toFixed(2)}–${o.top.toFixed(2)}`);
       }
     }
 
@@ -358,6 +405,9 @@ export default function IctPage() {
         ctx.lineWidth = 1; ctx.setLineDash(p.swept ? [2, 4] : []);
         ctx.beginPath(); ctx.moveTo(x ?? 0, y); ctx.lineTo(W, y); ctx.stroke();
         ctx.setLineDash([]);
+        addLine(x ?? 0, y, W - (x ?? 0), p.count >= 2 ? "eqhl" : "liquidity",
+          `${p.side === "BSL" ? "Buy-side liquidity" : "Sell-side liquidity"}${p.count > 1 ? ` ×${p.count} (equal levels)` : ""}${p.swept ? " · swept" : ""}`,
+          p.price.toFixed(2));
         label(ctx, (x ?? 0) + 4, y - 3, `${p.side}${p.count > 1 ? `×${p.count}` : ""}${p.swept ? " swept" : ""}`,
           p.swept ? "rgba(255,255,255,0.45)" : `rgba(${C.liq},0.95)`);
       }
@@ -371,6 +421,8 @@ export default function IctPage() {
         ctx.strokeStyle = `rgba(${C.struct},0.95)`; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
         ctx.beginPath(); ctx.moveTo(Math.max(0, x - 36), y); ctx.lineTo(x, y); ctx.stroke();
         ctx.setLineDash([]);
+        const stId = s.kind === "MSS" ? "mss" : s.kind === "CHOCH" ? "choch" : "bos";
+        addLine(Math.max(0, x - 36), y, Math.min(x, 36) + 20, stId, `${s.kind} ${s.dir === "bull" ? "↑ bullish" : "↓ bearish"}`, s.price.toFixed(2));
         label(ctx, x + 2, y + (s.dir === "bull" ? -3 : 11), `${s.kind} ${s.dir === "bull" ? "↑" : "↓"}`, `rgba(${C.struct},0.95)`);
       }
     }
@@ -390,7 +442,6 @@ export default function IctPage() {
   // A box that ended (2nd pass-through or break) drops off the panel.
   const liveFvg = ict.fvgs.filter((f) => f.inverted || f.endTs == null);
   const unsweptLiq = ict.liquidity.filter((l) => !l.swept);
-  const lastStruct = ict.structure.slice(-5).reverse();
 
   // Merge the new model detectors into one recent-events feed (newest first).
   const SIG_LABEL: Record<string, string> = {
@@ -420,6 +471,17 @@ export default function IctPage() {
     const now = Date.now();
     const px = candles.length ? candles[candles.length - 1].close : null;
     const fresh = (ts: number) => now - ts <= RECENT_MS;
+    // "Breaking candle + the next one": the timestamp of the 2nd-to-last 5m bar.
+    // An event whose ts is >= this fired on one of the last two bars.
+    const last2Cut = candles.length >= 2 ? candles[candles.length - 2].timestamp : (candles[0]?.timestamp ?? 0);
+    const onLast2 = (ts: number) => ts >= last2Cut;
+    const TOL = 1; // pts, level-pierce tolerance for the sweep check
+    // True if the pool was first pierced (swept) on one of the last two bars.
+    const sweptOnLast2 = (l: { side: "BSL" | "SSL"; price: number; ts: number }) => {
+      const breakBar = candles.find((c) => c.timestamp > l.ts &&
+        (l.side === "BSL" ? c.high > l.price + TOL : c.low < l.price - TOL));
+      return !!breakBar && onLast2(breakBar.timestamp);
+    };
     const inZone = (top: number, bottom: number) =>
       px != null && px >= bottom - NEAR && px <= top + NEAR;
 
@@ -432,18 +494,23 @@ export default function IctPage() {
       // zone concepts
       fvg:    ict.fvgs.some((f) => !f.inverted && f.endTs == null && inZone(f.top, f.bottom)),
       ifvg:   ict.fvgs.some((f) => f.inverted && inZone(f.top, f.bottom)),
-      ob:     ict.orderBlocks.some((o) => !o.mitigated && inZone(o.top, o.bottom)),
+      // Live whenever the latest price is sitting inside ANY order-block zone.
+      // (Don't gate on `mitigated`: an OB flips to mitigated the instant price
+      //  re-enters it, which would suppress the very "price in zone" state we
+      //  want to flag.)
+      ob:     ict.orderBlocks.some((o) => inZone(o.top, o.bottom)),
       breaker: ict.breakers.some((s) => fresh(s.ts)),
       irlerl: ict.rangeLiquidity.internal.some((z) => inZone(z.top, z.bottom)),
-      liquidity: ict.liquidity.some((l) => !l.swept && px != null && Math.abs(l.price - px) <= NEAR),
-      eqhl:   ict.liquidity.some((l) => !l.swept && l.count >= 2 && px != null && Math.abs(l.price - px) <= NEAR),
+      // Flash only on the candle that BREAKS (sweeps) the level and the next one.
+      liquidity: ict.liquidity.some((l) => sweptOnLast2(l)),
+      eqhl:   ict.liquidity.some((l) => l.count >= 2 && sweptOnLast2(l)),
       pd:     !!ict.range && px != null && px >= ict.range.low && px <= ict.range.high,
       ote:    !!ict.range && px != null && px >= Math.min(ict.range.ote.from, ict.range.ote.to) - NEAR
                                         && px <= Math.max(ict.range.ote.from, ict.range.ote.to) + NEAR,
       // event concepts (fired recently)
       displacement: ict.displacement.some((d) => fresh(d.endTs)),
       mss:    ict.structure.some((s) => s.kind === "MSS" && fresh(s.ts)),
-      bos:    ict.structure.some((s) => s.kind === "BOS" && fresh(s.ts)),
+      bos:    ict.structure.some((s) => s.kind === "BOS" && onLast2(s.ts)),
       choch:  ict.structure.some((s) => s.kind === "CHOCH" && fresh(s.ts)),
       idm:    ict.inducement.some((s) => fresh(s.ts)),
       turtle: ict.turtleSoup.some((s) => fresh(s.ts)),
@@ -455,11 +522,11 @@ export default function IctPage() {
       killzones: hasKZ,
       macros:    hasMacro,
       silver:    hasSilver,
-      po3:       !!po3Today && po3Today.manipExtreme != null,
       crt:       !!ict.crt && ict.crt.sweep != null,
-      // bias is a standing read, live whenever it has a direction
-      bias:   ict.bias.dir !== "neutral",
-      htfbias: ict.bias.dir !== "neutral",
+      // Standing reads (always-on context) — never flash "live".
+      po3:    false,
+      bias:   false,
+      htfbias: false,
     };
     return a;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -467,6 +534,19 @@ export default function IctPage() {
 
   return (
     <div className="flex-1 overflow-y-auto text-white" style={{ minHeight: 0 }}>
+    <style>{`
+      @keyframes ictLivePulse {
+        0%, 100% {
+          opacity: 1;
+          box-shadow: 0 0 10px 3px rgba(255,236,120,0.9), 0 0 22px 8px rgba(255,255,255,0.55);
+        }
+        50% {
+          opacity: 0.3;
+          box-shadow: 0 0 0 0 rgba(255,236,120,0);
+        }
+      }
+      .ict-live-badge { animation: ictLivePulse 1.1s ease-in-out infinite; }
+    `}</style>
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4">
       {/* Header */}
       <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -485,7 +565,7 @@ export default function IctPage() {
       {/* captureRef wraps the chart AND the live panels so a copyshot grabs both */}
       <div ref={captureRef} className="grid grid-cols-1 gap-4 rounded-xl bg-[#080b10] p-1 lg:grid-cols-[1fr_520px]">
         {/* Chart + overlays */}
-        <div className="rounded-xl border border-white/10 bg-[#0b0f15] p-2">
+        <div className="self-start rounded-xl border border-white/10 bg-[#0b0f15] p-2">
           {/* Overlay toggles */}
           <div className="mb-2 flex flex-wrap items-center gap-1.5 px-1">
             {([
@@ -500,17 +580,58 @@ export default function IctPage() {
               </button>
             ))}
           </div>
-          <div className="relative" style={{ height: 560 }}>
+          <div
+            className="relative"
+            style={{ height: 560 }}
+            onMouseMove={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+              let best: HitRegion | null = null, bestArea = Infinity;
+              for (const h of hitsRef.current) {
+                if (mx >= h.x && mx <= h.x + h.w && my >= h.y && my <= h.y + h.h) {
+                  const area = h.w * h.h;
+                  if (area < bestArea) { bestArea = area; best = h; }
+                }
+              }
+              if (best) {
+                const concept = CONCEPT_BY_ID[best.conceptId];
+                if (concept) {
+                  setHover({ x: mx, y: my, concept, detail: best.detail ? `${best.title} · ${best.detail}` : best.title });
+                  return;
+                }
+              }
+              setHover(null);
+            }}
+            onMouseLeave={() => setHover(null)}
+          >
             <div ref={chartRef} className="absolute inset-0" />
             <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
+            {hover && (
+              <div
+                className="pointer-events-none absolute z-20 w-[260px] rounded-lg border border-cyan-400/40 bg-[#0b0f15]/95 p-2.5 shadow-xl backdrop-blur"
+                style={{
+                  left: Math.min(hover.x + 14, 600 - 270),
+                  top: Math.min(hover.y + 14, 560 - 140),
+                }}
+              >
+                <div className="mb-1 flex items-center gap-2">
+                  <ConceptIcon id={hover.concept.id} />
+                  <span className="text-[13px] font-bold text-cyan-300">{hover.concept.name}</span>
+                </div>
+                {hover.detail && (
+                  <div className="mb-1 font-mono text-[10px] text-white/70">{hover.detail}</div>
+                )}
+                <p className="text-[11px] leading-snug text-white/90">{hover.concept.body}</p>
+              </div>
+            )}
             {!candles.length && (
               <div className="absolute inset-0 grid place-items-center text-sm text-white">waiting for ES candles…</div>
             )}
           </div>
         </div>
 
-        {/* Live signal panel */}
-        <div className="grid grid-cols-1 gap-3 self-start sm:grid-cols-2">
+        {/* Live signal panel — compact 2-col grid sized to roughly the chart height */}
+        <div className="grid grid-cols-1 gap-2 self-start sm:grid-cols-2">
           <Panel title="Daily Bias">
             <div className="flex items-baseline gap-2">
               <span className="text-xl font-bold" style={{ color: ict.bias.dir === "bull" ? "#30d158" : ict.bias.dir === "bear" ? "#ff5b5b" : "#9fb3c8" }}>
@@ -545,19 +666,6 @@ export default function IctPage() {
                 </div>
               </div>
             ) : <p className="text-[11px] text-white">No ICT killzone / macro active right now (ET).</p>}
-          </Panel>
-
-          <Panel title="Market Structure">
-            {lastStruct.length ? (
-              <ul className="space-y-1">
-                {lastStruct.map((s, i) => (
-                  <li key={i} className="flex items-center justify-between font-mono text-[11px]">
-                    <span style={{ color: "#a78bfa" }}>{s.kind} {s.dir === "bull" ? "↑" : "↓"}</span>
-                    <span className="text-white">{s.price.toFixed(2)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="text-[11px] text-white">No structure breaks yet.</p>}
           </Panel>
 
           <Panel title="Open FVGs (5m)">
@@ -649,17 +757,43 @@ export default function IctPage() {
       <div className="mt-6">
         <h2 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-white">ICT Concepts</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {CONCEPTS.map((c) => (
-            <div key={c.id} className="rounded-xl border border-white/10 bg-[#0b0f15] p-3">
-              <div className="mb-1 flex items-center gap-2">
-                <a href={c.href} target="_blank" rel="noopener noreferrer" className="text-[15px] font-bold text-cyan-300 hover:text-cyan-200">{c.name}</a>
-                {c.live && (active[c.id]
-                  ? <span className="rounded bg-emerald-500/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-emerald-300">live</span>
-                  : <span className="rounded bg-white/5 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-white/35">idle</span>)}
+          {CONCEPTS.map((c) => {
+            const isOpen = !!expanded[c.id];
+            const liveBadge = c.live && (active[c.id]
+              ? <span className="ict-live-badge rounded bg-emerald-500/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-emerald-300">live</span>
+              : <span className="rounded bg-white/5 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-white/35">idle</span>);
+            return (
+              <div
+                key={c.id}
+                onClick={() => toggleCard(c.id)}
+                className="cursor-pointer rounded-xl border border-white/10 bg-[#0b0f15] p-3 transition hover:border-white/25"
+              >
+                {isOpen ? (
+                  <>
+                    <div className="mb-1.5 flex items-start gap-2.5">
+                      <ConceptIcon id={c.id} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[15px] font-bold text-cyan-300">{c.name}</span>
+                          {liveBadge}
+                          <span className="ml-auto text-[12px] text-white/40">▾</span>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[14px] leading-relaxed text-white">{highlightTerms(c.body)}</p>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 py-1 text-center">
+                    <ConceptIcon id={c.id} size={2.1} />
+                    <div className="flex items-center gap-2">
+                      <span className="text-[15px] font-bold text-cyan-300">{c.name}</span>
+                      {liveBadge}
+                    </div>
+                  </div>
+                )}
               </div>
-              <p className="text-[14px] leading-relaxed text-white">{highlightTerms(c.body)}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <p className="mt-3 text-[11px] text-white">
           Concept definitions adapted from{" "}
@@ -737,10 +871,65 @@ function highlightTerms(body: string): React.ReactNode[] {
   });
 }
 
+// ── Concept thumbnail diagrams ───────────────────────────────────────────────
+// Tiny schematic SVGs (48×40) illustrating each pattern, colored to match the
+// chart overlays. Reusable candle + zone primitives keep them compact.
+const GREEN = "#30d158", RED = "#ff5b5b", BLUE = "#29b6f6", ORANGE = "#ff9f43",
+      PURPLE = "#a78bfa", PINK = "#ec4899";
+function Candle({ x, o, c, hi, lo, up }: { x: number; o: number; c: number; hi: number; lo: number; up: boolean }) {
+  const col = up ? GREEN : RED;
+  const top = Math.min(o, c), h = Math.max(2, Math.abs(o - c));
+  return (
+    <g>
+      <line x1={x + 3} y1={hi} x2={x + 3} y2={lo} stroke={col} strokeWidth={1} />
+      <rect x={x} y={top} width={6} height={h} fill={col} />
+    </g>
+  );
+}
+function IconFrame({ children, size = 1 }: { children: React.ReactNode; size?: number }) {
+  return (
+    <svg width={48 * size} height={40 * size} viewBox="0 0 48 40" className="shrink-0 rounded-md" style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)" }}>
+      {children}
+    </svg>
+  );
+}
+function ConceptIcon({ id, size = 1 }: { id: string; size?: number }) {
+  // Map each concept to the closest schematic; several share a diagram.
+  switch (id) {
+    case "fvg": case "irlerl": // 3-candle gap, middle void highlighted
+      return <IconFrame size={size}><rect x={6} y={16} width={36} height={9} fill={`${BLUE}33`} /><Candle x={6} o={28} c={20} hi={32} lo={18} up />
+        <Candle x={20} o={18} c={10} hi={20} lo={8} up /><Candle x={34} o={14} c={22} hi={26} lo={12} up={false} /></IconFrame>;
+    case "ifvg": // gap broken & flipped
+      return <IconFrame size={size}><rect x={6} y={14} width={36} height={9} fill={`${PINK}33`} /><Candle x={6} o={14} c={22} hi={26} lo={12} up={false} />
+        <Candle x={20} o={24} c={32} hi={34} lo={22} up={false} /><Candle x={34} o={30} c={20} hi={32} lo={18} up /></IconFrame>;
+    case "ob": case "breaker": // down candle then strong up impulse, OB zone boxed
+      return <IconFrame size={size}><rect x={6} y={22} width={8} height={10} fill={`${GREEN}40`} stroke={GREEN} /><Candle x={6} o={24} c={30} hi={32} lo={22} up={false} />
+        <Candle x={20} o={28} c={14} hi={30} lo={12} up /><Candle x={34} o={14} c={6} hi={8} lo={12} up /></IconFrame>;
+    case "liquidity": case "eqhl": // equal highs with a sweep line above
+      return <IconFrame size={size}><line x1={4} y1={12} x2={44} y2={12} stroke={ORANGE} strokeDasharray="3 2" /><Candle x={8} o={20} c={16} hi={12} lo={24} up />
+        <Candle x={22} o={18} c={14} hi={12} lo={22} up /><Candle x={34} o={14} c={20} hi={8} lo={24} up={false} /></IconFrame>;
+    case "mss": case "bos": case "choch": case "cisd": case "displacement": case "mmxm": case "model2022": // structure break line
+      return <IconFrame size={size}><line x1={4} y1={16} x2={44} y2={16} stroke={PURPLE} strokeDasharray="3 2" /><Candle x={6} o={26} c={20} hi={30} lo={18} up />
+        <Candle x={20} o={22} c={26} hi={30} lo={20} up={false} /><Candle x={34} o={22} c={8} hi={24} lo={6} up /></IconFrame>;
+    case "pd": case "ote": case "bias": case "htfbias": // premium/discount split at EQ
+      return <IconFrame size={size}><rect x={4} y={6} width={40} height={14} fill={`${RED}22`} /><rect x={4} y={20} width={40} height={14} fill={`${GREEN}22`} />
+        <line x1={4} y1={20} x2={44} y2={20} stroke="#fff" strokeOpacity={0.4} strokeDasharray="3 2" /><circle cx={24} cy={28} r={2.5} fill={GREEN} /></IconFrame>;
+    case "killzones": case "macros": case "silver": case "judas": case "po3": // time window band
+      return <IconFrame size={size}><rect x={16} y={4} width={16} height={32} fill={`${BLUE}1f`} /><Candle x={6} o={22} c={18} hi={26} lo={16} up />
+        <Candle x={20} o={20} c={10} hi={22} lo={8} up /><Candle x={34} o={12} c={18} hi={24} lo={10} up={false} /></IconFrame>;
+    case "idm": case "turtle": case "crt": // sweep then reversal
+      return <IconFrame size={size}><line x1={4} y1={10} x2={44} y2={10} stroke={ORANGE} strokeDasharray="3 2" /><Candle x={10} o={24} c={18} hi={28} lo={16} up />
+        <Candle x={24} o={16} c={22} hi={6} lo={26} up={false} /><Candle x={36} o={22} c={28} hi={30} lo={20} up={false} /></IconFrame>;
+    default:
+      return <IconFrame size={size}><Candle x={8} o={24} c={16} hi={28} lo={14} up /><Candle x={22} o={18} c={24} hi={28} lo={16} up={false} />
+        <Candle x={36} o={20} c={12} hi={24} lo={10} up /></IconFrame>;
+  }
+}
+
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-[#0b0f15] p-3">
-      <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300">{title}</div>
+    <div className="rounded-lg border border-white/10 bg-[#0b0f15] px-2.5 py-2">
+      <div className="mb-1 text-[9px] font-bold uppercase tracking-[0.14em] text-cyan-300">{title}</div>
       {children}
     </div>
   );

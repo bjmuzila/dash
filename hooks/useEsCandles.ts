@@ -123,7 +123,8 @@ export function useEsCandles(enabled: boolean = true) {
    */
   const refresh = useCallback(async () => {
     if (liveMapRef.current.size > 0) return;
-    await loadFromDb();
+    // Swallow fetch/db errors (e.g. backend down) so callers never see a reject.
+    await loadFromDb().catch(() => {});
   }, [loadFromDb]);
 
   // Live WS merge.

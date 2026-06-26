@@ -38,6 +38,7 @@ interface TriggerInput {
   gammaFlip?: number | null;
   callWall?: number | null;
   putWall?: number | null;
+  controlNode?: number | null;
   expectedMove?: number | null;
   emUpper?: number | null;
   emLower?: number | null;
@@ -61,8 +62,9 @@ function formatUserMessage(d: TriggerInput): string {
     ``,
     `SPX spot: ${num(d.spxSpot)}`,
     `Gamma flip: ${num(d.gammaFlip)}`,
-    `Call wall: ${num(d.callWall)}`,
-    `Put wall: ${num(d.putWall)}`,
+    `Call wall (resistance): ${num(d.callWall)}`,
+    `Put wall (support): ${num(d.putWall)}`,
+    `Control node (peak gamma magnet): ${num(d.controlNode)}`,
     `Expected move: ±${num(d.expectedMove)}`,
     `Expected-move range: ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper)`,
     `Net GEX: ${d.netGex == null ? "n/a" : `${d.netGex >= 0 ? "+" : ""}${num(d.netGex, 2)}B`}`,

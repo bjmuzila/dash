@@ -194,13 +194,19 @@ export interface OrderBlock {
   bottom: number;
   ts: number;        // timestamp of the OB candle
   mitigated: boolean;
+  swept: boolean;        // OB candle took liquidity (broke prior candle's extreme)
+  hasImbalance: boolean; // an FVG/imbalance followed the OB (validates it)
+  valid: boolean;        // swept AND hasImbalance — a textbook ICT order block
 }
 
 /**
- * Order block = the last opposing candle immediately before a displacement leg.
- * Bullish OB (demand) = last bearish candle before a bullish impulse; bearish
- * OB (supply) = last bullish candle before a bearish impulse. Range = that
- * candle's high/low. Marked mitigated once price returns into it.
+ * Order block = the last opposing candle before a displacement leg, refined to
+ * the ICT definition (per LiteFinance/ICT): a true OB also (1) SWEEPS LIQUIDITY
+ * — the bearish OB candle breaks below the previous low (bullish OB) / the
+ * bullish OB candle breaks above the previous high (bearish OB) — and (2) is
+ * followed by an IMBALANCE (an FVG in the impulse away from it). We still emit
+ * the raw block but flag `swept`, `hasImbalance` and `valid` so the page can
+ * draw validated blocks solidly and weak ones faintly.
  */
 export function detectOrderBlocks(candles: IctCandle[], disp: Displacement[]): OrderBlock[] {
   const byTs = new Map<number, number>();
@@ -218,6 +224,14 @@ export function detectOrderBlocks(candles: IctCandle[], disp: Displacement[]): O
     }
     if (obIdx < 0) continue;
     const ob = candles[obIdx];
+    const prev = candles[obIdx - 1];
+    // Liquidity sweep: bullish OB (a down candle) should dip below the prior low;
+    // bearish OB (an up candle) should poke above the prior high.
+    const swept = !prev ? false :
+      d.dir === "bull" ? ob.low < prev.low : ob.high > prev.high;
+    // Imbalance after the OB: a 3-candle FVG straddling the impulse out of it.
+    const a = candles[obIdx + 1], c3 = candles[obIdx + 3];
+    const hasImbalance = !!a && !!c3 && (d.dir === "bull" ? c3.low > a.high : c3.high < a.low);
     out.push({
       dir: d.dir,
       top: ob.high,
@@ -225,6 +239,9 @@ export function detectOrderBlocks(candles: IctCandle[], disp: Displacement[]): O
       ts: ob.timestamp,
       mitigated: candles.slice(obIdx + 2).some((c) =>
         d.dir === "bull" ? c.low <= ob.high && c.low >= ob.low : c.high >= ob.low && c.high <= ob.high),
+      swept,
+      hasImbalance,
+      valid: swept && hasImbalance,
     });
   }
   // De-dup by ts.
@@ -413,7 +430,7 @@ export interface TimeWindow {
 export const ICT_WINDOWS: TimeWindow[] = [
   { id: "asia",     label: "Asian Killzone",     startMin: 20 * 60,        endMin: 24 * 60,        kind: "killzone" },
   { id: "london",   label: "London Killzone",    startMin: 2 * 60,         endMin: 5 * 60,         kind: "killzone" },
-  { id: "nyam",     label: "NY AM Killzone",     startMin: 7 * 60,         endMin: 9 * 60,         kind: "killzone" },
+  { id: "nyam",     label: "NY AM Killzone",     startMin: 7 * 60,         endMin: 10 * 60,        kind: "killzone" },
   { id: "nypm",     label: "NY PM Killzone",     startMin: 13 * 60 + 30,   endMin: 16 * 60,        kind: "killzone" },
   { id: "silver1",  label: "Silver Bullet (AM)", startMin: 10 * 60,        endMin: 11 * 60,        kind: "silver" },
   { id: "silver2",  label: "Silver Bullet (PM)", startMin: 14 * 60,        endMin: 15 * 60,        kind: "silver" },

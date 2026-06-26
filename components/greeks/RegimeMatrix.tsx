@@ -601,3 +601,71 @@ function PriceSketch({ curve, color }: { curve: number[]; color: string }) {
     </svg>
   );
 }
+
+/* ── Standalone "Behavior Demonstration" block ────────────────────────────────
+ * Just the price-action sketch + regime detail card (no matrix grid). Reuses the
+ * same GRID/helpers as RegimeMatrix so it always matches the /greeks read.
+ * Used on the social-media Explainer card (on demand). */
+export function BehaviorDemo({
+  gex, dex, chex, vex, hasData,
+}: {
+  gex: number | null; dex: number | null; chex: number | null; vex: number | null; hasData: boolean;
+}) {
+  const liveRow = ROW_DEFS.findIndex(r => r.gex === signOf(gex) && r.vex === signOf(vex));
+  const liveCol = COL_DEFS.findIndex(c => c.dex === signOf(dex) && c.cex === signOf(chex));
+  const r = liveRow >= 0 ? liveRow : 0;
+  const c = liveCol >= 0 ? liveCol : 0;
+  const detail = GRID[r][c];
+  const detailColor = TONE_COLOR[detail.tone];
+
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{
+        fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+        textTransform: "uppercase", marginBottom: 8,
+      }}>Behavior Demonstration</div>
+
+      <div style={{
+        border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: 10, marginBottom: 10,
+        background: "linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92))",
+      }}>
+        <PriceSketch curve={detail.curve} color={detailColor} />
+        <div style={{ fontSize: 8.5, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
+          SIMULATED PRICE ACTION
+        </div>
+      </div>
+
+      <div style={{
+        border: `1px solid ${detailColor}55`, borderRadius: 10, padding: 14,
+        background: `linear-gradient(180deg,${detailColor}12,rgba(0,0,0,.3))`,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
+          {hasData && (
+            <span style={{
+              fontSize: 9, fontWeight: 800, letterSpacing: ".08em", color: "#00e676",
+              border: "1px solid rgba(0,230,118,.5)", background: "rgba(0,230,118,.12)",
+              padding: "2px 7px", borderRadius: 5,
+            }}>● LIVE</span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+          {([["GEX", detail.gex], ["VEX", detail.vex], ["DEX", detail.dex], ["CEX", detail.cex]] as [string, Sign][]).map(([lbl, s]) => (
+            <SignPill key={lbl} lbl={lbl} s={s} dim={false} />
+          ))}
+        </div>
+        <DetailRow label="Core Behavior" body={detail.behavior} />
+        <DetailRow label="Price Action Expected" body={detail.price} />
+        <div style={{
+          marginTop: 10, border: "1px solid rgba(0,229,255,.25)", borderRadius: 8,
+          background: "rgba(0,229,255,.06)", padding: "9px 11px",
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
+            ◆ Trading Implications (0DTE / SPX)
+          </div>
+          <div style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
+        </div>
+      </div>
+    </div>
+  );
+}

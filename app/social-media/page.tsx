@@ -3,6 +3,7 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
+import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Social Media (admin) — turns the daily pre-market GEX read into a shareable
@@ -672,25 +673,38 @@ const XP_CSS = `
     border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:18px 20px; }
 
   /* title bar */
-  .xp-titlebar { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+  .xp-titlebar { display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:16px; }
   .xp-title { font-size:30px; font-weight:900; letter-spacing:.01em; color:#fff; text-transform:uppercase; }
   .xp-title .cy { color:var(--cyan); }
-  .xp-chip { margin-left:0; display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 16px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(255,255,255,.02); }
-  .xp-chip:first-of-type { margin-left:auto; }
+  .xp-chip { display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 16px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(255,255,255,.02); }
   .xp-chip .lbl { font-size:10px; font-weight:700; letter-spacing:.08em; color:#cfd6df; }
   .xp-chip .val { font-size:18px; font-weight:900; color:#fff; }
   .xp-chip.amber { border-color:rgba(249,158,11,.6); } .xp-chip.amber .val { color:var(--amber); }
   .xp-chip.cyan { border-color:rgba(0,240,255,.5); } .xp-chip.cyan .val { color:var(--cyan); }
 
-  /* 3-column grid */
-  .xp-grid3 { display:grid; grid-template-columns:1.15fr .85fr 1fr; gap:16px; align-items:start; }
-  @media (max-width: 1000px){ .xp-grid3 { grid-template-columns:1fr; } }
+  /* 3-column grid. Columns stretch to the SAME height (the matrix sets it), so
+     loading the Behavior block scrolls inside the rail instead of growing the
+     row and pushing the CB Edge footer down. */
+  .xp-grid3 { display:grid; grid-template-columns:1.1fr .85fr 1fr; gap:16px; align-items:stretch; }
+  @media (max-width: 1000px){ .xp-grid3 { grid-template-columns:1fr; } .xp-rail { overflow:visible; } }
+  .xp-rail { display:flex; flex-direction:column; gap:16px; min-height:0; overflow-y:auto; }
+
+  /* zone cards — boxed annotations styled like the Key Levels boxes, evenly
+     spaced down the middle column. */
+  .xp-zonecards { display:flex; flex-direction:column; justify-content:space-around; gap:14px; height:100%; padding-top:34px; }
+  .xp-zonecard { border:1.5px solid; border-radius:8px; padding:11px 13px; text-align:center; }
+  .xp-zonecard .zlabel { font-size:12px; font-weight:900; letter-spacing:.04em; color:currentColor; line-height:1.2; }
+  .xp-zonecard .zrange { font-size:18px; font-weight:900; color:#fff; margin:5px 0 4px; }
+  .xp-zonecard .zdesc { font-size:10px; font-weight:600; color:#c7ced8; line-height:1.35; }
+  .xp-zonecard.c-green { border-color:rgba(16,185,129,.55); color:var(--sm-green); }
+  .xp-zonecard.c-amber { border-color:rgba(249,158,11,.6); color:var(--amber); }
+  .xp-zonecard.c-red { border-color:rgba(239,68,68,.55); color:var(--sm-red); }
   .xp-panel { background:rgba(255,255,255,.015); border:1px solid rgba(255,255,255,.10); border-radius:12px; padding:12px 14px; }
   .xp-panel-h { display:flex; align-items:center; font-size:13px; font-weight:800; letter-spacing:.08em; color:#fff; text-align:center; justify-content:center; margin-bottom:10px; }
 
   /* PANEL 1 — GEX matrix */
-  .xp-mx-head { display:flex; justify-content:space-between; font-size:9px; font-weight:700; letter-spacing:.06em; color:#9aa4b2; padding:0 4px 4px; }
-  .xp-mx-row { position:relative; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:2px 8px; height:18px; border-radius:3px; margin-bottom:1px; font-family:var(--sm-mono); }
+  .xp-mx-head { box-sizing:border-box; display:flex; justify-content:space-between; align-items:flex-end; font-size:9px; font-weight:700; letter-spacing:.06em; color:#9aa4b2; height:18px; padding:0 4px 4px; }
+  .xp-mx-row { box-sizing:border-box; position:relative; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:0 8px; height:22px; border-radius:3px; margin-bottom:1px; font-family:var(--sm-mono); }
   .xp-mx-row .k { font-size:10px; font-weight:700; color:#dfe7f0; }
   .xp-mx-row .v { font-size:10px; font-weight:800; color:#fff; }
   .xp-mx-row.node .k, .xp-mx-row.node .v { color:#1a1205; }
@@ -700,16 +714,17 @@ const XP_CSS = `
   .xp-matrix-foot { margin-top:8px; text-align:center; font-size:11px; font-weight:800; letter-spacing:.04em; color:var(--cyan); }
 
   /* PANEL 2 — GEX profile bars */
-  .xp-pf-row { display:grid; grid-template-columns:34px 1fr; align-items:center; gap:6px; height:18px; }
+  .xp-pf-row { box-sizing:border-box; display:grid; grid-template-columns:34px 1fr; align-items:center; gap:6px; height:22px; margin-bottom:1px; }
   .xp-pf-row .k { font-family:var(--sm-mono); font-size:10px; font-weight:700; color:#dfe7f0; background:rgba(255,255,255,.05); border-radius:3px; text-align:center; padding:1px 0; }
   .xp-pf-row .track { position:relative; height:11px; }
-  .xp-pf-row .track i { position:absolute; left:0; top:0; height:11px; border-radius:2px; display:block; }
-  .xp-pf-row .track i.pos { background:#00b4d8; }
-  .xp-pf-row .track i.neg { background:var(--sm-red); }
+  .xp-pf-row .track i { position:absolute; left:0; top:0; height:11px; border-radius:0 6px 6px 0; display:block; }
+  .xp-pf-row .track i.pos { background:rgb(41,182,246); }
+  .xp-pf-row .track i.neg { background:rgb(255,71,87); }
   .xp-pf-row .track i.node { background:var(--amber); box-shadow:0 0 8px rgba(249,158,11,.6); }
+  .xp-pf-row .pf-tag { position:absolute; right:4px; top:50%; transform:translateY(-50%); font-size:8px; font-weight:900; letter-spacing:.02em; white-space:nowrap; }
+  .pf-tag.c-green { color:var(--sm-green); } .pf-tag.c-red { color:var(--sm-red); } .pf-tag.c-amber { color:var(--amber); }
 
   /* PANEL 3 — right rail */
-  .xp-rail { display:flex; flex-direction:column; gap:16px; }
   .xp-kl { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1.5px solid; border-radius:8px; padding:9px 13px; margin-bottom:9px; }
   .xp-kl .lbl { font-size:11px; font-weight:800; letter-spacing:.04em; }
   .xp-kl .v { font-size:18px; font-weight:900; color:#fff; }
@@ -719,6 +734,9 @@ const XP_CSS = `
   .xp-kl.red { border-color:rgba(239,68,68,.55);} .xp-kl.red .lbl { color:var(--sm-red);}
 
   .xp-tradeplan .xp-panel-h { justify-content:space-between; }
+  .xp-behavior { display:flex; flex-direction:column; }
+  .xp-behavior .xp-panel-h { justify-content:space-between; }
+  .xp-beh-empty { flex:1; display:flex; align-items:center; justify-content:center; font-size:11px; color:#9aa4b2; text-align:center; padding:18px 8px; line-height:1.5; }
   .xp-tp { border:1.5px solid; border-radius:8px; padding:10px 13px; margin-bottom:9px; }
   .xp-tp .tp-h { font-size:12px; font-weight:900; letter-spacing:.04em; margin-bottom:5px; }
   .xp-tp .tp-b { font-size:11px; line-height:1.45; color:#e6ebf2; }
@@ -727,11 +745,12 @@ const XP_CSS = `
   .xp-tp.amber { border-color:rgba(249,158,11,.55);} .xp-tp.amber .tp-h { color:var(--amber);}
 
   /* pro insight footer */
-  .xp-insight { display:flex; align-items:center; gap:14px; margin-top:16px; border-top:1px solid rgba(255,255,255,.08); padding-top:14px; }
-  .xp-insight .tag { font-size:13px; font-weight:900; letter-spacing:.06em; color:var(--amber); white-space:nowrap; }
-  .xp-insight .txt { font-size:12px; color:#dfe7f0; line-height:1.45; }
+  .xp-insight { display:flex; align-items:center; gap:20px; margin-top:18px; min-height:120px; border-top:1px solid rgba(255,255,255,.08); padding:26px 4px; }
+  .xp-insight .tag { font-size:22px; font-weight:900; letter-spacing:.04em; color:var(--amber); white-space:nowrap; }
+  .xp-insight .txt { font-size:19px; color:#dfe7f0; line-height:1.5; }
   .xp-insight .txt b { color:var(--amber); }
-  .xp-insight .brand { margin-left:auto; font-size:11px; font-weight:700; color:#9aa4b2; white-space:nowrap; }
+  .xp-insight .txt .disc { display:block; margin-top:8px; font-size:13px; color:#9aa4b2; letter-spacing:.04em; }
+  .xp-insight .xp-logo { margin-left:auto; height:54px; width:auto; object-fit:contain; flex:0 0 auto; filter:drop-shadow(0 4px 16px rgba(0,240,255,.25)); }
 
   .xp-gen-btn { font-family:var(--sm-mono); font-size:10px; font-weight:700; letter-spacing:.03em; cursor:pointer; padding:4px 9px; border-radius:5px; border:1px solid var(--cyan); background:transparent; color:var(--cyan); transition:.12s; }
   .xp-gen-btn:hover { background:var(--cyan); color:#05060a; }
@@ -761,14 +780,59 @@ function ExplainerMockup({
   // AI-generated trigger map (Anthropic). Null = use the hardcoded fallback copy.
   type AiCase = { odds: number; desc: string };
   type AiMap = { bull: AiCase; base: AiCase; bear: AiCase };
-  const [aiMap, setAiMap] = useState<AiMap | null>(null);
+  // Persisted to localStorage so a generated plan survives reloads/sessions and
+  // stays until the next time it's generated.
+  const AI_MAP_KEY = "cb-edge-trade-plan-v1";
+  const [aiMap, setAiMap] = useState<AiMap | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(AI_MAP_KEY);
+      const v = raw ? (JSON.parse(raw) as AiMap) : null;
+      return v?.bull && v?.base && v?.bear ? v : null;
+    } catch { return null; }
+  });
   const [aiState, setAiState] = useState<"idle" | "busy" | "err">("idle");
+
+  // On-demand "Behavior Demonstration" (from /greeks). Fetched only when the user
+  // clicks Generate — never on load. Holds the four aggregate greeks; BehaviorDemo
+  // only uses their signs.
+  type Greeks = { gex: number; dex: number; chex: number; vex: number };
+  const [greeks, setGreeks] = useState<Greeks | null>(null);
+  const [behState, setBehState] = useState<"idle" | "busy" | "err">("idle");
+  const genBehavior = useCallback(async () => {
+    setBehState("busy");
+    try {
+      const r = await fetch("/api/insights/gex", { cache: "no-store" });
+      if (!r.ok) throw new Error(`insights ${r.status}`);
+      const json = await r.json();
+      const t = (json?.data?.totals ?? json?.totals) as Record<string, number> | null;
+      if (!t) throw new Error("no totals");
+      const g: Greeks = {
+        gex: Number(t.totalGEX ?? 0) / 1e9,
+        dex: (Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0)) / 1e9,
+        chex: Number(t.totalCHEX ?? 0) / 1e6,
+        vex: Number(t.totalVEX ?? 0) / 1e6,
+      };
+      setGreeks(g);
+      setBehState("idle");
+    } catch {
+      setBehState("err");
+      setTimeout(() => setBehState("idle"), 2000);
+    }
+  }, []);
+  // Ladder-derived levels, mirrored into a ref so genTriggerMap (declared above
+  // the levelStrikes useMemo) can send the SAME numbers the panels display.
+  const levelsRef = useRef<{ resistance: number | null; support: number | null; pivot: number | null; node: number | null }>({
+    resistance: null, support: null, pivot: null, node: null,
+  });
   const genTriggerMap = useCallback(async () => {
     setAiState("busy");
     try {
+      const lv = levelsRef.current;
       const body = {
-        spxSpot: toNum(form.spot), gammaFlip: toNum(form.flip),
-        callWall: toNum(form.call), putWall: toNum(form.put),
+        spxSpot: toNum(form.spot), gammaFlip: lv.pivot ?? toNum(form.flip),
+        callWall: lv.resistance ?? toNum(form.call), putWall: lv.support ?? toNum(form.put),
+        controlNode: lv.node,
         expectedMove: toNum(form.em),
         emUpper: emBand(form)?.upper ?? null, emLower: emBand(form)?.lower ?? null,
         netGex: form.gex, gammaRegime: regime.label, bias: form.bias,
@@ -781,7 +845,11 @@ function ExplainerMockup({
       if (!r.ok) throw new Error(`trigger-map ${r.status}`);
       const json = await r.json();
       const data = (json?.data ?? json) as AiMap;
-      if (data?.bull && data?.base && data?.bear) { setAiMap(data); setAiState("idle"); }
+      if (data?.bull && data?.base && data?.bear) {
+        setAiMap(data);
+        try { window.localStorage.setItem(AI_MAP_KEY, JSON.stringify(data)); } catch { /* storage full/blocked */ }
+        setAiState("idle");
+      }
       else throw new Error("bad shape");
     } catch {
       setAiState("err");
@@ -933,7 +1001,17 @@ function ExplainerMockup({
     return rows;
   }, [ladder, spot]);
   const isLiveLadder = !!(ladder && ladder.length);
+  // True peak |gex| — used to pick the control node / peak strike (matches home's
+  // MVC = largest |netGEX|).
   const maxMag = Math.max(...ladderRows.map((r) => Math.abs(r.gx)), 1);
+  // Color/length scaling uses the heatmap's robustMax (95th-percentile of |gex|)
+  // so one giant strike doesn't wash out the rest — identical to the home heatmap.
+  const scaleMax = useMemo(() => {
+    const abs = ladderRows.map((r) => Math.abs(r.gx)).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
+    if (!abs.length) return 1;
+    const idx = Math.min(abs.length - 1, Math.floor(abs.length * 0.95));
+    return Math.max(1, abs[idx]);
+  }, [ladderRows]);
   // The "spot row" to highlight = the ladder strike nearest live spot.
   const centerK = useMemo(() => {
     if (!ladderRows.length) return Math.round(Number.isFinite(spot) ? spot : 740);
@@ -942,9 +1020,14 @@ function ExplainerMockup({
   }, [ladderRows, spot]);
 
   // Ladder strike nearest a given price level (for the CW/PW/FLIP row badges).
+  // Returns null if the level lies OUTSIDE the ladder window — so a far-away wall
+  // never gets snapped onto (and mislabels) an edge row. The strike spacing sets
+  // the "within range" tolerance.
   const centerKOf = useCallback((v: number) => {
     if (!Number.isFinite(v) || !ladderRows.length) return null;
-    return ladderRows.reduce((best, r) => (Math.abs(r.k - v) < Math.abs(best - v) ? r.k : best), ladderRows[0].k);
+    const step = ladderRows.length > 1 ? Math.abs(ladderRows[0].k - ladderRows[1].k) || 5 : 5;
+    const nearest = ladderRows.reduce((best, r) => (Math.abs(r.k - v) < Math.abs(best - v) ? r.k : best), ladderRows[0].k);
+    return Math.abs(nearest - v) <= step / 2 + 0.01 ? nearest : null;
   }, [ladderRows]);
 
   const renderBlob = useCallback(async (): Promise<Blob | null> => {
@@ -1041,6 +1124,84 @@ function ExplainerMockup({
     if (!ladderRows.length) return null;
     return ladderRows.reduce((b, r) => (Math.abs(r.gx) > Math.abs(b.gx) ? r : b), ladderRows[0]);
   }, [ladderRows]);
+
+  // ── Levels derived FROM THE LADDER so they always have a matrix/profile row ──
+  // On this page the Key Levels, matrix badges, and profile tags all read these,
+  // not the feed's separate callWall/putWall — guaranteeing they line up exactly.
+  //   resistance = strongest +GEX strike  ·  support = strongest −GEX strike
+  //   pivot = the gamma-flip strike nearest the control node (sign change)
+  const levelStrikes = useMemo(() => {
+    if (!ladderRows.length) return { resistance: null as number | null, support: null as number | null, pivot: null as number | null };
+    let resistance: number | null = null, resMag = 0;
+    let support: number | null = null, supMag = 0;
+    for (const r of ladderRows) {
+      if (r.gx > resMag) { resMag = r.gx; resistance = r.k; }
+      if (r.gx < supMag) { supMag = r.gx; support = r.k; }
+    }
+    // Pivot: strike just above the sign change closest to the control node.
+    const sorted = [...ladderRows].sort((a, b) => a.k - b.k);
+    let pivot: number | null = null;
+    const anchor = controlNode?.k ?? sorted[Math.floor(sorted.length / 2)].k;
+    let bestDist = Infinity;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i].gx, b = sorted[i + 1].gx;
+      if ((a < 0 && b >= 0) || (a > 0 && b <= 0)) {
+        const cross = Math.abs(a) + Math.abs(b) > 0
+          ? sorted[i].k + (sorted[i + 1].k - sorted[i].k) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)))
+          : sorted[i + 1].k;
+        const d = Math.abs(cross - anchor);
+        if (d < bestDist) { bestDist = d; pivot = Math.round(cross); }
+      }
+    }
+    return { resistance, support, pivot };
+  }, [ladderRows, controlNode]);
+  // Mirror the ladder-derived levels into the ref genTriggerMap reads.
+  levelsRef.current = {
+    resistance: levelStrikes.resistance,
+    support: levelStrikes.support,
+    pivot: levelStrikes.pivot,
+    node: controlNode?.k ?? null,
+  };
+
+  // ── Zone annotations (bracket rail between matrix & profile) ────────────────
+  // Three auto-derived zones spanning ladder rows (ladderRows is high→low, so
+  // index 0 = highest strike). Upside resistance = rows above the control node;
+  // Control node = the node row ±1; Downside risk = rows below the node where
+  // net GEX is negative. Each carries the row span (for bracket height) + label.
+  const zones = useMemo(() => {
+    if (!ladderRows.length || !controlNode) return [];
+    const idxOf = (k: number | null) => (k == null ? -1 : ladderRows.findIndex((r) => r.k === k));
+    const nodeI = idxOf(controlNode.k);
+    if (nodeI < 0) return [];
+    const resI = idxOf(levelStrikes.resistance);
+    const supI = idxOf(levelStrikes.support);
+    const n = ladderRows.length;
+    const out: { key: string; label: string; range: string; desc: string; c: string; from: number; to: number }[] = [];
+    // Upside: top of ladder → just above the control node.
+    const upFrom = resI >= 0 ? Math.min(resI, nodeI - 1) : 0;
+    const upTo = Math.max(0, nodeI - 1);
+    if (upTo >= upFrom && upTo >= 0) {
+      const hi = ladderRows[upFrom].k, lo = ladderRows[upTo].k;
+      out.push({ key: "up", label: "UPSIDE\nRESISTANCE", range: hi === lo ? `${hi}` : `${lo} – ${hi}`,
+        desc: "Heavy call positioning", c: "c-green", from: upFrom, to: upTo });
+    }
+    // Control node: the node row (±0).
+    out.push({ key: "node", label: "CONTROL NODE", range: `${controlNode.k}`,
+      desc: "Largest GEX cluster / magnet level", c: "c-amber", from: nodeI, to: nodeI });
+    // Downside: just below the node → bottom (or down to the put-wall row).
+    const dnFrom = Math.min(n - 1, nodeI + 1);
+    const dnTo = supI >= 0 ? Math.max(supI, dnFrom) : n - 1;
+    if (dnTo >= dnFrom) {
+      const hi = ladderRows[dnFrom].k, lo = ladderRows[dnTo].k;
+      out.push({ key: "dn", label: "DOWNSIDE\nRISK", range: hi === lo ? `${hi}` : `${lo} – ${hi}`,
+        desc: "Negative GEX below = acceleration", c: "c-red", from: dnFrom, to: dnTo });
+    }
+    return out;
+  }, [ladderRows, controlNode, levelStrikes]);
+  // Row geometry must match the matrix CSS exactly: border-box 22px row + 1px
+  // margin = 23px pitch, after an 18px header (both box-sizing:border-box).
+  const ROW_H = 23;
+  const HEAD_H = 18;
   // Total net GEX across the visible ladder, in $K.
   const totalNetK = useMemo(
     () => ladderRows.reduce((s, r) => s + r.gx, 0) * 1000,
@@ -1048,7 +1209,29 @@ function ExplainerMockup({
   );
   const totalNetStr = `${totalNetK >= 0 ? "+" : "-"}$${Math.abs(Math.round(totalNetK)).toLocaleString("en-US")}K`;
   // Row tint intensity 0..1 by |gex| relative to the peak, for the matrix shading.
-  const tintOf = (gx: number) => (maxMag > 0 ? Math.min(1, Math.abs(gx) / maxMag) : 0);
+  const tintOf = (gx: number) => Math.min(1, Math.abs(gx) / scaleMax);
+  // Top-3 strikes by |gex| → rank map, matching the home heatmap's rank tiers.
+  const rankByStrike = useMemo(() => {
+    const m = new Map<number, number>();
+    [...ladderRows].sort((a, b) => Math.abs(b.gx) - Math.abs(a.gx)).slice(0, 3).forEach((r, i) => m.set(r.k, i + 1));
+    return m;
+  }, [ladderRows]);
+  // EXACT home-heatmap cell color (components/dashboard/GexHeatmap cellBg):
+  //   pos = rgba(41,182,246), neg = rgba(255,71,87); rank1/2/3 → .90/.45/.25;
+  //   else alpha = min(.18, .02 + ((|n|/robustMax)*intensity)^1.4 * .16), intensity 1.4.
+  const HEAT_INTENSITY = 1.4;
+  const heatBg = (gx: number, k: number): string => {
+    if (!gx) return "transparent";
+    const pos = gx >= 0;
+    const rank = rankByStrike.get(k) ?? 0;
+    if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+    if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
+    if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+    const ratio = Math.min(Math.abs(gx) / scaleMax, 1);
+    const eased = Math.pow(ratio * HEAT_INTENSITY, 1.4);
+    const alpha = Math.min(0.18, 0.02 + eased * 0.16);
+    return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
+  };
   const snapDate = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
 
   return (
@@ -1072,8 +1255,8 @@ function ExplainerMockup({
       <div ref={cardRef} className="xp-card">
         {/* ── title bar ── */}
         <div className="xp-titlebar">
-          <div className="xp-title">SPX <span className="cy">GEX READ</span> + TRADE PLAN</div>
-          <div className="xp-chip">GEX SNAPSHOT: {snapDate}</div>
+          <div className="xp-title">CB EDGE <span className="cy">GEX PLAN</span></div>
+          <div className="xp-chip">UPDATE: {updated || snapDate}</div>
           <div className="xp-chip amber">
             <span className="lbl">CONTROL NODE</span>
             <span className="val">{controlNode ? controlNode.k : "—"}</span>
@@ -1092,17 +1275,13 @@ function ExplainerMockup({
               <div className="xp-mx-head"><span>STRIKE</span><span>NET GEX</span></div>
               {ladderRows.map((r) => {
                 const pos = r.gx >= 0;
-                const t = tintOf(r.gx);
                 const isNode = controlNode && r.k === controlNode.k;
-                const bg = isNode
-                  ? "rgba(249,158,11,.92)"
-                  : pos
-                    ? `rgba(0,150,210,${0.10 + t * 0.42})`
-                    : `rgba(220,60,60,${0.10 + t * 0.45})`;
+                // Exact home-heatmap gradient; control node keeps the amber magnet tint.
+                const bg = isNode ? "rgba(249,158,11,.92)" : heatBg(r.gx, r.k);
                 const badge =
-                  Number.isFinite(call) && r.k === centerKOf(call) ? "CW"
-                  : Number.isFinite(put) && r.k === centerKOf(put) ? "PW"
-                  : Number.isFinite(flip) && r.k === centerKOf(flip) ? "FLIP" : null;
+                  r.k === levelStrikes.resistance ? "CW"
+                  : r.k === levelStrikes.support ? "PW"
+                  : r.k === levelStrikes.pivot ? "FLIP" : null;
                 return (
                   <div key={r.k} className={`xp-mx-row${isNode ? " node" : ""}`} style={{ background: bg }}>
                     <span className="k">{r.k}</span>
@@ -1119,15 +1298,23 @@ function ExplainerMockup({
           <div className="xp-panel">
             <div className="xp-panel-h">GEX PROFILE</div>
             <div className="xp-profile">
+              {/* spacer matching the matrix's STRIKE/NET GEX header so rows align */}
+              <div className="xp-mx-head" aria-hidden="true"><span>&nbsp;</span></div>
               {ladderRows.map((r) => {
                 const pos = r.gx >= 0;
-                const w = (Math.abs(r.gx) / maxMag) * 100;
+                const w = Math.min(100, (Math.abs(r.gx) / scaleMax) * 100);
                 const isNode = controlNode && r.k === controlNode.k;
+                const badge =
+                  r.k === levelStrikes.resistance ? { t: "CW", c: "c-green" }
+                  : r.k === levelStrikes.support ? { t: "PW", c: "c-red" }
+                  : r.k === levelStrikes.pivot ? { t: "FLIP", c: "c-amber" }
+                  : null;
                 return (
                   <div key={r.k} className="xp-pf-row">
                     <span className="k">{r.k}</span>
                     <span className="track">
                       <i className={isNode ? "node" : pos ? "pos" : "neg"} style={{ width: `${Math.max(2, w)}%` }} />
+                      {badge && <span className={`pf-tag ${badge.c}`}>{badge.t}</span>}
                     </span>
                   </div>
                 );
@@ -1139,10 +1326,10 @@ function ExplainerMockup({
           <div className="xp-rail">
             <div className="xp-panel xp-keylevels">
               <div className="xp-panel-h">KEY LEVELS</div>
-              <div className="xp-kl green"><span className="lbl">RESISTANCE</span><span className="v">{f(call)}</span></div>
+              <div className="xp-kl green"><span className="lbl">RESISTANCE</span><span className="v">{levelStrikes.resistance ?? "—"}</span></div>
               <div className="xp-kl amber"><span className="lbl">CONTROL NODE (MAGNET)</span><span className="v">{controlNode ? controlNode.k : "—"}</span></div>
-              <div className="xp-kl cyan"><span className="lbl">GAMMA FLIP / PIVOT</span><span className="v">{f(flip)}</span></div>
-              <div className="xp-kl red"><span className="lbl">SUPPORT</span><span className="v">{f(put)}</span></div>
+              <div className="xp-kl cyan"><span className="lbl">GAMMA FLIP / PIVOT</span><span className="v">{levelStrikes.pivot ?? "—"}</span></div>
+              <div className="xp-kl red"><span className="lbl">SUPPORT</span><span className="v">{levelStrikes.support ?? "—"}</span></div>
             </div>
 
             <div className="xp-panel xp-tradeplan">
@@ -1160,28 +1347,49 @@ function ExplainerMockup({
               </div>
               <div className="xp-tp green">
                 <div className="tp-h">▲ BULL CASE {aiMap ? `· ${aiMap.bull.odds}%` : ""}</div>
-                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {f(Number.isFinite(flip) ? flip : put)} → grind toward {f(call)}; buy dips near the control node.</>}</div>
+                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {levelStrikes.pivot ?? controlNode?.k ?? "—"} → grind toward {levelStrikes.resistance ?? "—"}; buy dips near the control node.</>}</div>
               </div>
               <div className="xp-tp red">
                 <div className="tp-h">▼ BEAR CASE {aiMap ? `· ${aiMap.bear.odds}%` : ""}</div>
-                <div className="tp-b">{aiMap ? aiMap.bear.desc : <>Loses {f(Number.isFinite(flip) ? flip : put)} → dealers flip short gamma, momentum unlocks toward {f(put)}.</>}</div>
+                <div className="tp-b">{aiMap ? aiMap.bear.desc : <>Loses {levelStrikes.pivot ?? controlNode?.k ?? "—"} → dealers flip short gamma, momentum unlocks toward {levelStrikes.support ?? "—"}.</>}</div>
               </div>
               <div className="xp-tp amber">
                 <div className="tp-h">→ CHOP ZONE {aiMap ? `· ${aiMap.base.odds}%` : ""}</div>
-                <div className="tp-b">{aiMap ? aiMap.base.desc : (regime.neg ? "Two-sided trend day — wait for a clean break before committing size." : <>Range {f(put)}–{f(call)}: two-way action, fake breakouts, scalp the edges.</>)}</div>
+                <div className="tp-b">{aiMap ? aiMap.base.desc : (regime.neg ? "Two-sided trend day — wait for a clean break before committing size." : <>Range {levelStrikes.support ?? "—"}–{levelStrikes.resistance ?? "—"}: two-way action, fake breakouts, scalp the edges.</>)}</div>
               </div>
+            </div>
+
+            {/* ── Behavior Demonstration (from /greeks) — on demand only ── */}
+            <div className="xp-panel xp-behavior">
+              <div className="xp-panel-h">
+                BEHAVIOR
+                <button
+                  type="button"
+                  className="xp-gen-btn xp-noexport"
+                  onClick={genBehavior}
+                  disabled={behState === "busy"}
+                  title="Pull live aggregate greeks and show the regime behavior demo"
+                >
+                  {behState === "busy" ? "Loading…" : behState === "err" ? "Failed — retry" : greeks ? "↻ Regenerate" : "✨ Generate"}
+                </button>
+              </div>
+              {greeks
+                ? <BehaviorDemo gex={greeks.gex} dex={greeks.dex} chex={greeks.chex} vex={greeks.vex} hasData />
+                : <div className="xp-beh-empty">Generate to load the live greeks regime + simulated price action.</div>}
             </div>
           </div>
         </div>
 
         {/* ── pro insight footer ── */}
         <div className="xp-insight">
-          <span className="tag">PRO INSIGHT</span>
+          <span className="tag">CB Edge :</span>
           <span className="txt">
             The <b>{controlNode ? controlNode.k : "control"}</b> node is dominant control — price gravitates there unless a catalyst breaks it.
             {Number.isFinite(flip) ? <> The bigger move only comes if <b>{f(flip)}</b> fails.</> : null}
+            <span className="disc">Not financial advice · educational only.</span>
           </span>
-          <span className="brand">CB Edge · not financial advice</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="xp-logo" src="/cb-edge-logo.png" alt="CB Edge" crossOrigin="anonymous" />
         </div>
       </div>
     </div>
@@ -1367,8 +1575,12 @@ export default function SocialMediaPage() {
     }
   }, [stampUpdated, dte]);
 
+  // ON-DEMAND ONLY: nothing fetches on mount. The page loads its data only when
+  // the user clicks "Load" / "Refresh". After the first load, changing the DTE
+  // toggle re-fetches (a user action); before that, the effect is a no-op.
+  const loadedOnceRef = useRef(false);
   useEffect(() => {
-    hydrate();
+    if (loadedOnceRef.current) hydrate();
   }, [hydrate]);
 
   // Keep the ES Overnight field tracking the live candle feed (Fails-page logic).
@@ -1487,12 +1699,31 @@ export default function SocialMediaPage() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     dirtyRef.current = false;
+    loadedOnceRef.current = true; // arm the on-demand DTE-change refetch
     try {
-      await Promise.all([hydrate(), Promise.resolve(refreshCandles?.())]);
+      // Each leg is independently caught so a dead backend (ECONNREFUSED) can't
+      // surface as an uncaught promise rejection.
+      await Promise.allSettled([
+        Promise.resolve().then(() => hydrate()),
+        Promise.resolve().then(() => refreshCandles?.()),
+      ]);
     } finally {
       setRefreshing(false);
     }
   }, [hydrate, refreshCandles]);
+
+  // Stop all data / disconnect — single switch that returns the page to the cold,
+  // fully on-demand state: drops the ES candle socket, forgets loaded data, and
+  // re-locks the on-mount no-fetch guard so nothing reconnects on its own.
+  const handleStopAll = useCallback(() => {
+    setCandlesOn(false);          // tears down the /ws/gex candle socket
+    setRefreshing(false);
+    setHydrated(false);
+    loadedOnceRef.current = false; // re-arm "nothing fetches until Load"
+    dirtyRef.current = false;
+    setGexLadder([]);
+    setForm(EMPTY_FORM);
+  }, []);
 
   return (
     <div id="page-social-media" className="sm-page">
@@ -1521,7 +1752,13 @@ export default function SocialMediaPage() {
           flex: 1;
           min-height: 0;
           overflow-y: auto;
-          background: var(--bg0);
+          /* Match the site-wide background flair (globals.css body): subtle cyan +
+             violet radials over the base bg, a touch stronger for this page. */
+          background-color: var(--bg0);
+          background-image:
+            radial-gradient(circle at 15% 50%, rgba(0, 240, 255, 0.04) 0%, transparent 50%),
+            radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.05) 0%, transparent 50%);
+          background-attachment: fixed;
           color: var(--text2);
           font-family: Arial, "Helvetica Neue", sans-serif;
           padding: 24px;
@@ -1540,6 +1777,10 @@ export default function SocialMediaPage() {
         .sm-refresh:hover { background: var(--bg4); border-color: var(--cyan); }
         .sm-refresh:active { transform: translateY(1px); }
         .sm-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
+        .sm-stop { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 12px; border-radius: 5px; border: 1px solid rgba(239,68,68,.5); background: rgba(239,68,68,.10); color: var(--sm-red); transition: all 0.12s; margin-left: 6px; }
+        .sm-stop:hover { background: rgba(239,68,68,.2); border-color: var(--sm-red); }
+        .sm-stop:active { transform: translateY(1px); }
+        .sm-stop:disabled { opacity: 0.4; cursor: not-allowed; }
         .sm-live { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cyan); display: flex; align-items: center; gap: 5px; }
         .sm-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); display: inline-block; }
 
@@ -1654,16 +1895,25 @@ export default function SocialMediaPage() {
           <button type="button" className={tab === "cards" ? "on" : ""} onClick={() => setTab("cards")}>GEX Image Cards</button>
           <button type="button" className={tab === "explainer" ? "on" : ""} onClick={() => setTab("explainer")}>Explainer Mockup</button>
         </span>
-        <span className="sm-live"><i />{hydrated ? "Live state" : "Hydrating…"}</span>
+        <span className="sm-live"><i />{refreshing ? "Loading…" : hydrated ? "Loaded" : "Not loaded · on demand"}</span>
         <span className="sm-date">{today}</span>
         <button
           type="button"
           className="sm-refresh"
           onClick={handleRefresh}
           disabled={refreshing}
-          title="Re-pull live dashboard stats & ES overnight"
+          title="Pull dashboard stats & ES overnight on demand"
         >
-          {refreshing ? "Refreshing…" : "↻ Refresh"}
+          {refreshing ? "Loading…" : hydrated ? "↻ Refresh" : "⤓ Load data"}
+        </button>
+        <button
+          type="button"
+          className="sm-stop"
+          onClick={handleStopAll}
+          disabled={!hydrated && !candlesOn && !refreshing}
+          title="Stop all data and disconnect — returns the page to on-demand idle"
+        >
+          ◼ Stop data
         </button>
       </div>
 
