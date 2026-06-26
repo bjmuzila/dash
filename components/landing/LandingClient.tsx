@@ -9,10 +9,10 @@ import SplashScreen from "@/components/landing/SplashScreen";
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
 const FEATURES = [
-  { t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
-  { t: "Confidence Score", d: "Each key level scored 0–100 for Hit, Pivot or Chop — live positioning blended with historical analogs." },
-  { t: "Greeks & exposure", d: "DEX, VEX and charm intraday — the dealer-positioning picture in one view." },
-  { t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
+  { slug: "gex", t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
+  { slug: "confidence-score", t: "Confidence Score", d: "Each key level scored 0–100 for Hit, Pivot or Chop — live positioning blended with historical analogs." },
+  { slug: "greeks", t: "Greeks & exposure", d: "DEX, VEX and charm intraday — the dealer-positioning picture in one view." },
+  { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 
 export default function LandingClient() {
@@ -60,6 +60,21 @@ export default function LandingClient() {
       <SplashScreen />
       {/* Mobile: shrink the card so it fits an iPhone viewport without scrolling */}
       <style>{`
+        .launch-badge { position: relative; overflow: visible; }
+        .fireworks { position: absolute; inset: 0; pointer-events: none; }
+        .fw { position: absolute; width: 3px; height: 3px; border-radius: 50%; opacity: 0; }
+        .fw1 { top: 50%; left: 12px; box-shadow: 0 0 0 #E0162B, 9px -9px 0 #FFFFFF, -9px -9px 0 #3C6FE0, 11px 0 0 #3C6FE0, -11px 0 0 #E0162B, 9px 9px 0 #FFFFFF, -9px 9px 0 #E0162B; animation: fwBurst 1.8s ease-out infinite; }
+        .fw2 { top: 28%; left: 24px; box-shadow: 0 0 0 #3C6FE0, 8px -8px 0 #E0162B, -8px -8px 0 #FFFFFF, 10px 0 0 #FFFFFF, -10px 0 0 #E0162B, 8px 8px 0 #3C6FE0; animation: fwBurst 1.8s ease-out infinite; animation-delay: .9s; }
+        .fw3 { top: 74%; left: 21px; box-shadow: 0 -10px 0 #FFFFFF, 8px -5px 0 #3C6FE0, -8px -5px 0 #E0162B; animation: fwBurst 1.8s ease-out infinite; animation-delay: 1.4s; }
+        @keyframes fwBurst {
+          0% { opacity: 0; transform: translateY(-50%) scale(0.2); }
+          15% { opacity: 1; }
+          60% { opacity: 1; transform: translateY(-50%) scale(1.1); }
+          100% { opacity: 0; transform: translateY(-50%) scale(1.3); }
+        }
+        @media (prefers-reduced-motion: reduce) { .fw { animation: none !important; opacity: 1; } }
+        .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; cursor: pointer; }
+        .landing-feature:hover { border-color: rgba(0,240,255,0.45) !important; box-shadow: 0 0 18px rgba(0,240,255,0.25); transform: translateY(-2px); }
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
           .landing-card .landing-intro { font-size: 13.5px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
@@ -117,7 +132,17 @@ export default function LandingClient() {
           {/* Accent glow bleeding through the glass */}
           <div style={cardGlow} aria-hidden />
 
-          <div style={badge}>Launching soon</div>
+          <div style={badge} className="launch-badge">
+            Launching{" "}
+            <span style={{ color: "#E0162B", fontWeight: 800 }}>July</span>{" "}
+            <span style={{ color: "#FFFFFF", fontWeight: 800 }}>4th</span>{" "}
+            <span style={{ color: "#3C6FE0", fontWeight: 800 }}>Weekend</span>
+            <span className="fireworks" aria-hidden>
+              <span className="fw fw1" />
+              <span className="fw fw2" />
+              <span className="fw fw3" />
+            </span>
+          </div>
 
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
@@ -129,10 +154,18 @@ export default function LandingClient() {
 
           <div style={featureGrid} className="landing-features">
             {FEATURES.map((f) => (
-              <div key={f.t} style={featureCell} className="landing-feature">
+              <Link
+                key={f.t}
+                href={`/explore/${f.slug}`}
+                style={{ ...featureCell, display: "block", textDecoration: "none", color: "inherit" }}
+                className="landing-feature"
+              >
                 <div className="landing-feature-t" style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{f.t}</div>
                 <div className="landing-feature-d" style={{ color: T.muted, fontSize: 12.5, lineHeight: 1.45 }}>{f.d}</div>
-              </div>
+                <div style={{ marginTop: 8, fontSize: 11.5, fontWeight: 700, color: T.cyan, letterSpacing: "0.04em" }}>
+                  Explore →
+                </div>
+              </Link>
             ))}
           </div>
 
@@ -187,7 +220,7 @@ export default function LandingClient() {
                 : {}),
             }}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
               <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
             </svg>
           </a>
@@ -202,9 +235,9 @@ export default function LandingClient() {
             <SignInButton forceRedirectUrl="/home">
               <button style={primaryBtn}>Sign in to dashboard</button>
             </SignInButton>
-            <button style={comingSoonBtn} disabled aria-disabled>
-              Sign up — coming soon
-            </button>
+            <Link href="/pricing?from=landing" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
+              Join now
+            </Link>
           </div>
         </div>
       </div>
@@ -301,7 +334,7 @@ const badge: React.CSSProperties = {
   color: T.cyan,
   border: "1px solid rgba(0,240,255,0.3)",
   background: "rgba(0,240,255,0.08)",
-  padding: "5px 12px",
+  padding: "5px 12px 5px 40px",
   borderRadius: 999,
 };
 
@@ -364,20 +397,6 @@ const primaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const comingSoonBtn: React.CSSProperties = {
-  flex: 1,
-  minWidth: 140,
-  padding: "12px 18px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(255,255,255,0.03)",
-  color: T.muted,
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "not-allowed",
-  opacity: 0.7,
-};
-
 const xFollow: React.CSSProperties = {
   position: "absolute",
   top: "clamp(24px, 4vw, 40px)",
@@ -386,9 +405,9 @@ const xFollow: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 30,
-  height: 30,
-  borderRadius: 10,
+  width: 44,
+  height: 44,
+  borderRadius: 12,
   border: `1px solid ${T.border}`,
   background: "rgba(13,17,25,0.7)",
   backdropFilter: "blur(10px)",

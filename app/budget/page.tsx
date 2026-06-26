@@ -283,7 +283,7 @@ export default function BudgetPage() {
         </div>
 
         {/* Stat cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
           {[
             { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? HOME_THEME.red : HOME_THEME.cyan, icon: "📊" },
             { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },

@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-06-26 — ICT setup recorder, owner Results page, glossary card manager
+
+Three-part session: auto-record every ICT setup to Postgres with auto-graded outcomes, surface the performance on a new owner-only Results page, and let each user show/hide glossary cards (persisted server-side). All detection reuses the existing client `analyzeICT` — no detection logic duplicated.
+
+### ICT setup recorder
+- **`lib/db.ts`** — new `ict_setups` table (UNIQUE `setup_key = <kind>:<dir>:<trigger_ts>:<round(price)>` so re-scans never double-log); cols kind/label/dir/trigger_ts/price/note/target/invalidation/outcome(pending|win|loss|chop)/mfe/mae/r_multiple/resolved_*. Fns: `insertIctSetup` (ON CONFLICT DO NOTHING), `updateIctSetupGrade`, `getIctSetups`, `getPendingIctSetups`, `getIctSetupSummary`.
+- **`app/api/ict-setups/route.ts`** (new) — POST `action:"scan"` runs `analyzeICT` over `/api/snapshots/candles`, flattens every point-in-time setup (BOS/CHOCH/MSS, displacement, liquidity/EQH-EQL sweeps, FVG/IFVG, valid OBs, OTE entry, model signals), records new + grades pending by follow-through (win = reaches target before invalidation; loss = invalidation first; chop = neither within ~12 bars / session close). GET returns `{setups, summary}`; token-gated writes.
+- **`server-v2/ict-setup-tracker.js`** (new) — 5-min RTH loop (holiday-aware, self-rescheduling) pokes the scan; wired into `server-with-proxy.js` after the es-gap tracker.
+
+### Owner Results page
+- **`app/dev/results/page.tsx`** (new) — owner-only (inherits `app/dev/layout.tsx` OwnerGuard). One card per setup kind: win-rate, W/L/chop split bar, wins/losses/chop/live counts, avg R, avg MFE; Today / Last 7d / All-time toggle + overall roll-up.
+- **`lib/db.ts`** — `getIctSetupSummary` extended to `{date?|sinceDate?}` and now returns `pending`, `avg_r`, `avg_mfe`.
+- **`app/api/ict-setups/route.ts`** — GET accepts `?since=N` (days) + `?all=1`.
+- **`components/shared/NavMenu.tsx`** — "Results" link added to the owner group (after Owner).
+
+### Glossary card manager (per-user show/hide)
+- **`lib/db.ts`** — new `ict_card_prefs` table (`clerk_user_id` PK, `hidden_cards` JSONB); fns `getIctCardPrefs` / `upsertIctCardPrefs`.
+- **`app/api/ict-prefs/route.ts`** (new) — Clerk `auth()`-gated GET/POST (mirrors traders-dashboard).
+- **`app/ict/page.tsx`** — "⚙ Manage cards" panel toggles each of the ~30 ICT concept cards on/off (Show all / Hide all), debounced save (500ms) to `/api/ict-prefs`; glossary grid filters out hidden ids. Persists per-user across devices (no localStorage).
+
+### Cleanup
+- **`app/ict/page.tsx`** — `SetupRecap` table + helpers removed; setup results now live ONLY on `/dev/results` (per request, no results reference on the ICT page).
+
+> Not built/typechecked this session — the Linux sandbox couldn't boot (HYPERVISOR_VIRT_DISABLED). Run the build on Windows before deploy. New tables auto-create via `ensureAllTables` on first DB touch.
+
+## 2026-06-26 (session 77) — Public marketing funnel + landing July 4th launch theme
+
+Built a no-flow marketing funnel so visitors can explore each feature and convert through a single pricing hub, and themed the launch messaging for the July 4th weekend launch.
+
+### `components/explore/exploreContent.ts` (new)
+- Shared config driving the 4 public feature pages (GEX, Confidence Score, Greeks & exposure, Estimated moves): title, tagline, body copy, highlight bullets, and a frozen static teaser stat block per feature. `EXPLORE_SLUGS` exported for params + cross-links.
+
+### `app/explore/[slug]/page.tsx` (new)
+- Public, statically-generated (`force-static` + `generateStaticParams`) marketing page per feature. Sell copy + highlights + clearly-labeled static teaser ("Preview · sample data") → **Join now** CTA to `/pricing?from=<slug>`. Cross-links the other 3 features. Unknown slug → `notFound()`. Matches the dark/cyan home theme.
+
+### `app/pricing/page.tsx` (rewritten)
+- Now the single conversion hub. Reads `?from=<slug>` ("Continuing from · X"). Platform recap + plan card. Branches on auth: signed-out → Clerk `SignUpButton` (+ sign-in fallback); signed-in without sub → Stripe checkout via existing `PricingActions`; subscribed → go-to-dashboard. Themed to match the rest of the app.
+
+### `components/landing/LandingClient.tsx`
+- 4 feature cards are now clickable `Link`s to `/explore/<slug>` with hover lift + "Explore →" affordance; added `slug` to the FEATURES config.
+- Replaced the dead "Sign up — coming soon" disabled button with a live **Join now** link → `/pricing?from=landing`; removed now-unused `comingSoonBtn` style.
+- "Launching soon" badge → "Launching **July** (red) **4th** (white) **Weekend** (blue)" with looping red/white/blue CSS fireworks.
+- Enlarged the X (Twitter) follow icon: button 30→44px, glyph 18→26px, radius 10→12px.
+
+### `components/landing/SplashScreen.tsx` (intro)
+- Launch line restyled into a bordered "bubble": "LAUNCHING **JULY** (red) **4TH** (white) **WEEKEND** (blue)" with red/white/blue fireworks bursting inside the outline (reduced-motion fallback). Removed the now-unused `LAUNCH_DATE` const.
+
+### `middleware.ts`
+- Added `/explore(.*)` and `/pricing` to `isPublicRoute` so signed-out visitors can browse the funnel. Left out of the maintenance-exempt list (maintenance mode still gates them).
+
+### Notes
+- Teaser stats are placeholders by design (swap in real figures/screenshots later).
+- Build not run this session (Linux sandbox failed to boot); verified by inspection. Run `npm run build` locally to confirm.
+
+## 2026-06-26 — ES Candles SPX heatmap: persist Vol-only GEX history
+
+Vol-only mode on the ES Candles SPX GEX heatmap showed no historical columns — only `net_gex` (OI+vol) was persisted, never the volume-only split. Added a `net_vol_gex` column end-to-end so Vol-only mode backfills on load.
+
+### `lib/db.ts`
+- `option_strike_gex_history`: added `net_vol_gex REAL` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration.
+- `insertOptionStrikeGexRows` + `OptionStrikeGexRecord`: write/carry `net_vol_gex` (NULL when absent).
+- `getOptionStrikeGexSlots`: selects + returns `net_vol_gex`.
+
+### `server-v2/state/gex-history-writer.js`
+- Persists `row.netVolGEX` alongside `net_gex` (NULL when feed omits it).
+- Added `ensureVolColumn()` — server-v2 connects to PG directly and never runs `lib/db.ts` `ensureAllTables`, so the writer self-adds the column on first write (fixes "write failed" errors from the unknown column).
+
+### `app/api/snapshots/option-strike-gex-history/route.ts`
+- Heatmap columns now return per-cell `netVol`; POST normalizer accepts `net_vol_gex`.
+
+### `app/es-candles/page.tsx`
+- Historical heatmap cells map real `netVol` instead of forcing `0`.
+
+Note: legacy rows (pre-column) stay `0` in Vol-only. Restart server-v2 to run the `ALTER` + new INSERT. The 6pm→next-day expiry rollover needs no change — writer date + reader date stay aligned in the 6pm–midnight window.
+
+## 2026-06-26 — NET GEX toolbar height fix
+
+Fixed the NET GEX toolbar growing taller when **OI + Vol** is selected vs **Vol Only**.
+
+### `components/dashboard/GexToolbar.tsx`
+- Root cause: in OI+Vol mode the extra ghost-overlay toggles (`5m` / `15m` / `30m`, gated by `ghostEnabled = net + oi-vol`) widen the row past the container, triggering the horizontal scrollbar — the added scrollbar track is what made the bar taller, not a row wrap.
+- Hid the scrollbar so the bar keeps the same single-row height as Vol Only: added `overflowY: "hidden"`, `scrollbarWidth: "none"`, `msOverflowStyle: "none"`, a `gex-toolbar-noscroll` class, and an inline `::-webkit-scrollbar{display:none}` rule. Content still scrolls horizontally.
+
+## 2026-06-26 — Owner page: short-window card clipping fix
+
+`/dev/owner` data-box cards (Backend tab: System KPIs, Hosting/Render metrics, DB row counts) clipped their label/value text when the window got short — fonts only reacted to card *width*, not height.
+
+### `app/dev/owner/page.tsx`
+- `StatCard` component: `containerType: "inline-size"` → `"size"` (+ `minHeight: 0`); all font/padding `clamp()` units switched from `cqw` → `cqmin` so text shrinks on whichever axis is smaller. Covers System + Hosting KPI cards.
+- Inline DB table-count cards: same `size` / `cqmin` treatment.
+- Frontend tab (Auth, Page Activity) needed no change — those use scrolling lists + pixel fonts, not shrink-to-fit data boxes.
+
 ## 2026-06-25 (session 76) — ICT page (live detection + glossary)
 
 New `/ict` GEX page — an Inner Circle Trader command center that runs live ICT detection on the existing 5-min ES feed alongside a color-matched concept glossary. Added to the GEX nav group after ES Candles.

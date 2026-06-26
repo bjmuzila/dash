@@ -140,6 +140,45 @@ export default function IctPage() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggleCard = (id: string) => setExpanded((m) => ({ ...m, [id]: !m[id] }));
 
+  // Per-user glossary card visibility (Postgres, /api/ict-prefs). hiddenCards =
+  // concept ids toggled OFF. Loaded once; saved (debounced) on every change.
+  const [hiddenCards, setHiddenCards] = useState<Set<string>>(new Set());
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/ict-prefs", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { hiddenCards: [] }))
+      .then((j) => { if (alive) setHiddenCards(new Set(Array.isArray(j.hiddenCards) ? j.hiddenCards : [])); })
+      .catch(() => {})
+      .finally(() => { if (alive) setPrefsLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+
+  // Persist (debounced) whenever the hidden set changes — but not on first load.
+  const persistHidden = useCallback((next: Set<string>) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      fetch("/api/ict-prefs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiddenCards: [...next] }),
+      }).catch(() => {});
+    }, 500);
+  }, []);
+
+  const toggleCardVisible = (id: string) => {
+    setHiddenCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      persistHidden(next);
+      return next;
+    });
+  };
+  const showAllCards = () => { setHiddenCards(() => { const n = new Set<string>(); persistHidden(n); return n; }); };
+  const hideAllCards = () => { setHiddenCards(() => { const n = new Set(CONCEPTS.map((c) => c.id)); persistHidden(n); return n; }); };
+
   // Tick every 30s so kill-zone "active" state + bias re-evaluate.
   useEffect(() => { const id = setInterval(() => setClockTick((n) => n + 1), 30_000); return () => clearInterval(id); }, []);
 
@@ -755,9 +794,61 @@ export default function IctPage() {
 
       {/* Glossary */}
       <div className="mt-6">
-        <h2 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-white">ICT Concepts</h2>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <h2 className="text-sm font-bold uppercase tracking-[0.16em] text-white">ICT Concepts</h2>
+          <span className="text-[11px] text-white/40">
+            {CONCEPTS.length - hiddenCards.size} of {CONCEPTS.length} shown
+          </span>
+          <button
+            onClick={() => setManageOpen((v) => !v)}
+            className="ml-auto rounded px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider transition"
+            style={{ color: manageOpen ? "#7fd4ff" : "#fff",
+              background: manageOpen ? "rgba(41,182,246,.16)" : "transparent",
+              border: `1px solid ${manageOpen ? "rgba(41,182,246,.7)" : "rgba(255,255,255,.3)"}` }}>
+            {manageOpen ? "Done" : "⚙ Manage cards"}
+          </button>
+        </div>
+
+        {/* Card manager — show/hide each concept; persists per-user */}
+        {manageOpen && (
+          <div className="mb-4 rounded-xl border border-cyan-400/30 bg-[#0b0f15] p-3">
+            <div className="mb-2 flex items-center gap-3">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-300">Manage cards</span>
+              <span className="text-[10px] text-white/40">
+                {prefsLoaded ? "synced to your account" : "loading…"}
+              </span>
+              <div className="ml-auto flex gap-2">
+                <button onClick={showAllCards} className="rounded border border-white/20 px-2 py-0.5 text-[10px] font-semibold text-white/80 hover:border-white/40">Show all</button>
+                <button onClick={hideAllCards} className="rounded border border-white/20 px-2 py-0.5 text-[10px] font-semibold text-white/80 hover:border-white/40">Hide all</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
+              {CONCEPTS.map((c) => {
+                const shown = !hiddenCards.has(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => toggleCardVisible(c.id)}
+                    className="flex items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-[11px] transition"
+                    style={{
+                      borderColor: shown ? "rgba(41,182,246,.5)" : "rgba(255,255,255,.12)",
+                      background: shown ? "rgba(41,182,246,.08)" : "transparent",
+                      opacity: shown ? 1 : 0.55,
+                    }}>
+                    <span className="grid h-4 w-4 shrink-0 place-items-center rounded-sm text-[10px] font-bold"
+                      style={{ background: shown ? "#29b6f6" : "transparent", border: `1px solid ${shown ? "#29b6f6" : "rgba(255,255,255,.3)"}`, color: "#041016" }}>
+                      {shown ? "✓" : ""}
+                    </span>
+                    <span className="truncate font-semibold text-white/90">{c.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {CONCEPTS.map((c) => {
+          {CONCEPTS.filter((c) => !hiddenCards.has(c.id)).map((c) => {
             const isOpen = !!expanded[c.id];
             const liveBadge = c.live && (active[c.id]
               ? <span className="ict-live-badge rounded bg-emerald-500/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-emerald-300">live</span>
@@ -795,6 +886,11 @@ export default function IctPage() {
             );
           })}
         </div>
+        {CONCEPTS.length - hiddenCards.size === 0 && (
+          <div className="rounded-xl border border-white/10 bg-[#0b0f15] p-5 text-center text-[12px] text-white/50">
+            All concept cards are hidden. Use <span className="text-cyan-300">⚙ Manage cards</span> to bring them back.
+          </div>
+        )}
         <p className="mt-3 text-[11px] text-white">
           Concept definitions adapted from{" "}
           <a href="https://innercircletrader.net/tutorials/most-important-ict-concepts-to-conquer-market-complete-list/" target="_blank" rel="noopener noreferrer" className="underline hover:text-cyan-300">

@@ -553,6 +553,10 @@ async function main() {
     // Overnight ES gap tracker: posts the 9:30 gap (vs prior 16:00 print) once the
     // 09:30 candle lands, then updates fill % every 5m during RTH → /api/es-gap.
     require('./es-gap-tracker').startEsGapTracker(PORT);
+    // In-process ICT setup recorder: every 5m during RTH detects every live ICT
+    // setup (same analyzeICT the /ict page renders), records new ones, and grades
+    // pending ones by follow-through → /api/ict-setups.
+    require('./ict-setup-tracker').startIctSetupTracker(PORT);
 
     // Traders Dashboard overnight overview: at ~07:00 ET (weekdays) Claude
     // web-searches what moved markets overnight and writes td_overview.

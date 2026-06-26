@@ -18,6 +18,22 @@ const PG_WRITE_INTERVAL_MS = Number(process.env.GEX_PG_WRITE_INTERVAL_MS || 30_0
 let pool = null;
 let pgUnavailable = false;
 let lastWriteAt = 0;
+let columnEnsured = false;
+
+/**
+ * Ensure net_vol_gex exists. server-v2 connects to Postgres directly and does
+ * NOT run lib/db.ts's ensureAllTables, so the column add can't rely on the
+ * Next.js init path. Idempotent; runs once per process.
+ */
+async function ensureVolColumn(p) {
+  if (columnEnsured) return;
+  try {
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL');
+    columnEnsured = true;
+  } catch (e) {
+    console.warn('[gex-history] ensure net_vol_gex column failed:', e.message);
+  }
+}
 
 /** Lazily create a shared pg Pool. Returns null if DB isn't configured/available. */
 function getPool() {
@@ -78,6 +94,8 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
   const now = Date.now();
   if (now - lastWriteAt < PG_WRITE_INTERVAL_MS) return;
 
+  await ensureVolColumn(p);
+
   const date = todayYmdET();
   try {
     // Single multi-row insert (faster + atomic) instead of N round-trips.
@@ -91,12 +109,17 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
       // Postgres `real` cannot store subnormal floats (|x| < ~1.2e-38). Such
       // values are negligible GEX anyway, so snap them to 0.
       if (Math.abs(netGex) < 1e-30) netGex = 0;
-      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
-      params.push(now, date, expiry, spot, strike, netGex);
+      // Volume-only GEX (gamma×vol) — persisted alongside OI+vol so the heatmap's
+      // Vol-only mode has history. NULL when the feed didn't supply it.
+      let netVolGex = Number(row.netVolGEX);
+      if (!Number.isFinite(netVolGex)) netVolGex = null;
+      else if (Math.abs(netVolGex) < 1e-30) netVolGex = 0;
+      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
+      params.push(now, date, expiry, spot, strike, netGex, netVolGex);
     }
     if (!values.length) return;
     await p.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex)
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex)
        VALUES ${values.join(', ')}`,
       params
     );

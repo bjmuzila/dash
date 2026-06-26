@@ -116,8 +116,11 @@ export default function GexToolbar({
       display: "flex", alignItems: "center", gap: 6,
       padding: "4px 8px", background: "var(--overview-control-bg, #0a0f16)",
       borderBottom: "1px solid var(--overview-border, #1a2a3a)",
-      flexShrink: 0, flexWrap: "nowrap", overflowX: "auto",
-    }}>
+      flexShrink: 0, flexWrap: "nowrap", overflowX: "auto", overflowY: "hidden",
+      scrollbarWidth: "none", msOverflowStyle: "none" as const,
+    }}
+    className="gex-toolbar-noscroll">
+      <style>{`.gex-toolbar-noscroll::-webkit-scrollbar{display:none;height:0}`}</style>
 
       {/* DTE / Expiry picker — 0DTE and 1DTE only */}
       <div style={{ display: "flex", gap: 2, background: "var(--overview-header-bg, #070c14)", borderRadius: 2, padding: TOOLBAR_GROUP_PADDING, flexShrink: 0 }}>

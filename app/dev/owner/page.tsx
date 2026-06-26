@@ -10,6 +10,21 @@ import {
   homeSecondaryButtonStyle,
 } from "@/components/shared/homeTheme";
 
+// ─── Responsive ───────────────────────────────────────────────────────────────
+// Mobile detection so the fixed-column grids below can collapse instead of
+// overflowing the viewport (the shell clips overflow, so wide grids = cut-off cards).
+function useIsMobile(breakpoint = 768): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ServerStatus {
@@ -392,8 +407,9 @@ function StatCard({
   return (
     <div style={{
       ...homePanelStyle,
-      containerType: "inline-size",
-      padding: "clamp(8px, 9cqw, 14px) clamp(10px, 11cqw, 18px)",
+      containerType: "size",
+      minHeight: 0,
+      padding: "clamp(6px, 9cqmin, 14px) clamp(8px, 11cqmin, 18px)",
       display: "flex",
       flexDirection: "column",
       gap: 5,
@@ -401,10 +417,10 @@ function StatCard({
       borderLeft: `3px solid ${accent}55`,
       background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
     }}>
-      <div style={{ fontSize: "clamp(7px, 7cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(6px, 7cqmin, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: "clamp(12px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(11px, 14cqmin, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -785,6 +801,7 @@ function OverviewSection({ metrics }: {
   };
 }) {
   const { daily, weekly, totalVisits, activePages, users, waitlist, activeSessions, uptime, feed } = metrics;
+  const isMobile = useIsMobile();
 
   // Daily Activity = real site visits, last 12 days (ET). seriesB left empty (no
   // "previous" comparison series for raw daily traffic).
@@ -804,17 +821,17 @@ function OverviewSection({ metrics }: {
   const progPath = progress.map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, progress.length - 1)) * 100},${28 - ((v - pMin) / pRange) * 24}`).join(" ");
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) clamp(260px, 26%, 340px)", gap: 12, alignItems: "start" }}>
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) clamp(260px, 26%, 340px)", gap: 12, alignItems: "start" }}>
       {/* ── Left: main stats column ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
         {/* Top charts row */}
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr)", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1.5fr) minmax(0, 1fr)", gap: 12 }}>
           <LineChartCard title="Daily Activity" subtitle="Site visits · last 12 days" seriesA={seriesNow} seriesB={seriesPrev} labels={months} />
           <BarChartCard title="Weekly Signups" subtitle="New users · last 7 weeks" bars={invoiceBars} labels={invoiceLabels} footerMin={String(wkMin)} footerMax={String(wkMax)} />
         </div>
 
         {/* Big-number metric cards — real owner metrics */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 12 }}>
           <BigMetricCard label="Total Users" value={users != null ? users.toLocaleString() : "—"} delta="" accent={HOME_THEME.purple} />
           <BigMetricCard label="Waitlist Signups" value={waitlist != null ? waitlist.toLocaleString() : "—"} delta="" accent={HOME_THEME.green} />
           <BigMetricCard label="Active Sessions" value={activeSessions != null ? activeSessions.toLocaleString() : "—"} delta="" accent={HOME_THEME.cyan} />
@@ -822,7 +839,7 @@ function OverviewSection({ metrics }: {
         </div>
 
         {/* Small stat chips + progress mini-card */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr)) minmax(0, 1.2fr)", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr)) minmax(0, 1.2fr)", gap: 12 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <StatChip icon="🟢" label="Pages Open Now" value={activePages.toLocaleString()} accent={HOME_THEME.green} />
             <StatChip icon="👥" label="Total Users" value={users != null ? users.toLocaleString() : "—"} accent={HOME_THEME.cyan} />
@@ -876,6 +893,7 @@ function OverviewSection({ metrics }: {
 type OwnerTab = "overview" | "frontend" | "backend";
 
 export default function OwnerDashboard() {
+  const isMobile = useIsMobile();
   // Active page tab (persisted). Sections are assigned to a tab via SECTION_TAB.
   const [ownerTab, setOwnerTab] = useState<OwnerTab>("overview");
   useEffect(() => {
@@ -1612,7 +1630,7 @@ export default function OwnerDashboard() {
       </div>
 
       {/* FE / BE tab toggle */}
-      <div style={{ display: "flex", gap: 6, padding: "10px clamp(14px,2vw,24px) 0" }}>
+      <div style={{ display: "flex", gap: 6, padding: "10px clamp(14px,2vw,24px) 0", flexWrap: "wrap" }}>
         {([
           { id: "overview" as const, label: "Overview" },
           { id: "frontend" as const, label: "Front-End" },
@@ -1677,7 +1695,7 @@ export default function OwnerDashboard() {
           open={openSet.has("system")}
           onToggle={toggleSection}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(10, minmax(0, 1fr))", gap: 10 }}>
             <StatCard label="Server Uptime" value={displayUptime != null ? fmtUptime(displayUptime) : "—"} accent={HOME_THEME.green} mono />
             <StatCard
               label="Postgres"
@@ -1732,7 +1750,7 @@ export default function OwnerDashboard() {
               ))}
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(5, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
             <StatCard
               label={`CF Egress · ${renderWindow === "live" ? "24h" : renderWindow === "weekly" ? "7d" : "30d"}`}
               value={cfMetrics?.egress.value != null
@@ -1826,7 +1844,7 @@ export default function OwnerDashboard() {
               };
               return (
                 <>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 10 }}>
                     <StatCard
                       label="Projected Total"
                       value={wsBw ? fmtRate(total) : "—"}
@@ -1884,7 +1902,7 @@ export default function OwnerDashboard() {
           open={openSet.has("database")}
           onToggle={toggleSection}
         >
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
             {TABLES.map(({ id, label }, idx) => {
               const count = (dbStats as Record<string, number>)[id];
               const palette = [HOME_THEME.cyan, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.orange, HOME_THEME.red, "#a78bfa"];
@@ -1892,19 +1910,20 @@ export default function OwnerDashboard() {
               return (
                 <div key={id} style={{
                   ...homePanelStyle,
-                  containerType: "inline-size",
-                  padding: "clamp(7px, 8cqw, 12px) clamp(9px, 10cqw, 16px)",
+                  containerType: "size",
+                  minHeight: 0,
+                  padding: "clamp(5px, 8cqmin, 12px) clamp(7px, 10cqmin, 16px)",
                   overflow: "hidden",
                   borderLeft: `3px solid ${accent}55`,
                   background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
                 }}>
-                  <div style={{ fontSize: "clamp(7px, 7.5cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(6px, 7.5cqmin, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: "clamp(11px, 13cqw, 20px)", fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(10px, 13cqmin, 20px)", fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
-                  <div style={{ fontSize: "clamp(7px, 6.5cqw, 9px)", color: `${accent}66`, whiteSpace: "nowrap" }}>rows today</div>
+                  <div style={{ fontSize: "clamp(6px, 6.5cqmin, 9px)", color: `${accent}66`, whiteSpace: "nowrap" }}>rows today</div>
                 </div>
               );
             })}
@@ -2553,7 +2572,7 @@ export default function OwnerDashboard() {
             </div>
 
             {/* Per-group grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, 1fr)", gap: 10 }}>
             {NAV_GROUPS.map((group) => {
               return (
                 <div key={group.id} style={{ ...homePanelStyle, overflow: "hidden" }}>

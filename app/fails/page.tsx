@@ -186,12 +186,13 @@ export default function FailsPage() {
 
   const lastClose = todayBars[todayBars.length - 1]?.close ?? null;
 
-  // Today's fail tally: wins (reached ≥ T1), losses, summed max R, per-level counts.
+  // Today's fail tally: WIN = the fade ran ≥ 1R (maxR), independent of how far
+  // the opposite reference sat. tiersHit is kept only as a "how far it ran" stat.
   const todayTotals = useMemo(() => {
     let wins = 0, losses = 0, netR = 0;
     const byLevel = new Map<string, number>();
     for (const e of todayEvents) {
-      if (e.tiersHit >= 1) wins++; else losses++;
+      if ((e.maxR ?? 0) >= 1) wins++; else losses++;
       netR += e.maxR ?? 0;
       byLevel.set(e.short, (byLevel.get(e.short) ?? 0) + 1);
     }
@@ -508,10 +509,11 @@ function FailTable({
               const tradeColor = above ? HOME_THEME.red : HOME_THEME.green;
               // Scaled targets: T1 = 50% to opposite ref, T2 = full opposite ref,
               // T3 = 2× measured move. Result = furthest tier the actual move hit.
-              // WIN if it reached at least T1, else LOSS. Max R = MFE / risk.
+              // WIN = fade ran ≥ 1R (MFE / risk). tiersHit shown separately as
+              // how far toward the opposite reference the move actually reached.
               const tiers = e.tiersHit;
               const maxR = e.maxR;
-              const win = tiers >= 1;
+              const win = (maxR ?? 0) >= 1;
               const resultColor = win ? HOME_THEME.green : HOME_THEME.red;
               const tierColor = (n: number) => tiers >= n ? HOME_THEME.green : rgba(HOME_THEME.text, 0.3);
               return (

@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
         spot: Number(row.spot ?? 0),
         strike: Number(row.strike ?? 0),
         net_gex: Number(row.net_gex ?? 0),
+        net_vol_gex: row.net_vol_gex == null ? undefined : Number(row.net_vol_gex),
       }))
       .filter((row) => row.expiry && row.strike > 0 && Number.isFinite(row.net_gex));
 
@@ -68,12 +69,12 @@ export async function GET(req: NextRequest) {
     // the ES Candles heatmap backfill so history shows immediately on load.
     if (mode === "heatmap") {
       const slots = await getOptionStrikeGexSlots(date, expiry);
-      const bySlot = new Map<number, Array<{ strike: number; net: number }>>();
+      const bySlot = new Map<number, Array<{ strike: number; net: number; netVol: number }>>();
       for (const r of slots) {
         if (!(r.strike > 0) || !Number.isFinite(r.net_gex)) continue;
         let arr = bySlot.get(r.slot_ts);
         if (!arr) { arr = []; bySlot.set(r.slot_ts, arr); }
-        arr.push({ strike: r.strike, net: r.net_gex });
+        arr.push({ strike: r.strike, net: r.net_gex, netVol: Number(r.net_vol_gex ?? 0) });
       }
       const columns = [...bySlot.entries()]
         .sort((a, b) => a[0] - b[0])

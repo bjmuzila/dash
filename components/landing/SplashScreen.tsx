@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 const APP_NAME = (process.env.NEXT_PUBLIC_APP_NAME || "CB Edge").toUpperCase();
-const LAUNCH_DATE = "7/13/26";
 
 // Timing (ms)
 const HOLD = 3500; // how long the splash stays fully visible
@@ -61,6 +60,17 @@ export default function SplashScreen() {
           0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
           50%      { opacity: 0.85; transform: translate(-50%, -50%) scale(1.08); }
         }
+        .splash-fw { position: absolute; width: 4px; height: 4px; border-radius: 50%; opacity: 0; }
+        .splash-fw1 { top: 50%; left: 16px; box-shadow: 0 0 0 #E0162B, 11px -11px 0 #FFFFFF, -11px -11px 0 #3C6FE0, 13px 0 0 #FFFFFF, -13px 0 0 #E0162B, 11px 11px 0 #3C6FE0, -11px 11px 0 #FFFFFF; animation: splashFw 1.8s ease-out infinite; }
+        .splash-fw2 { top: 30%; left: 30px; box-shadow: 0 0 0 #3C6FE0, 10px -10px 0 #E0162B, -10px -10px 0 #FFFFFF, 12px 0 0 #E0162B, -12px 0 0 #3C6FE0, 10px 10px 0 #FFFFFF, -10px 10px 0 #E0162B; animation: splashFw 1.8s ease-out infinite; animation-delay: .9s; }
+        .splash-fw3 { top: 72%; left: 26px; box-shadow: 0 -12px 0 #FFFFFF, 10px -6px 0 #E0162B, -10px -6px 0 #3C6FE0; animation: splashFw 1.8s ease-out infinite; animation-delay: 1.4s; }
+        @keyframes splashFw {
+          0%   { opacity: 0; transform: scale(0.2); }
+          15%  { opacity: 1; }
+          60%  { opacity: 1; transform: scale(1.1); }
+          100% { opacity: 0; transform: scale(1.3); }
+        }
+        @media (prefers-reduced-motion: reduce) { .splash-fw { animation: none !important; opacity: .9; } }
       `}</style>
 
       {/* accent glow behind the wordmark */}
@@ -111,17 +121,28 @@ export default function SplashScreen() {
       </div>
 
       <div
+        className="splash-launch"
         style={{
           position: "relative",
           marginTop: "clamp(18px, 3.5vw, 30px)",
           fontSize: "clamp(15px, 3.4vw, 22px)",
           fontWeight: 800,
           letterSpacing: "0.08em",
-          color: T.muted,
+          padding: "10px 22px",
+          borderRadius: 999,
+          border: "1px solid rgba(255,255,255,0.25)",
+          background: "rgba(255,255,255,0.04)",
+          overflow: "visible",
           animation: "cbSplashSub 700ms ease 600ms both",
         }}
       >
-        {LAUNCH_DATE}
+        <span className="splash-fw splash-fw1" aria-hidden />
+        <span className="splash-fw splash-fw2" aria-hidden />
+        <span className="splash-fw splash-fw3" aria-hidden />
+        <span style={{ color: T.muted, marginRight: 8, marginLeft: 34 }}>LAUNCHING</span>
+        <span style={{ color: "#E0162B" }}>JULY</span>{" "}
+        <span style={{ color: "#FFFFFF" }}>4TH</span>{" "}
+        <span style={{ color: "#3C6FE0" }}>WEEKEND</span>
       </div>
     </div>
   );

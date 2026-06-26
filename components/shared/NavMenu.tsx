@@ -82,6 +82,7 @@ const NAV_GROUPS: NavGroup[] = [
     devOnly: true,
     items: [
       { label: "Owner", href: "/dev/owner" },
+      { label: "Results", href: "/dev/results" },
       { label: "Admin", href: "/dev/admin" },
       { label: "Tree", href: "/dev/tree" },
       { label: "Social Media", href: "/social-media" },

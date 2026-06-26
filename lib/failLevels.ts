@@ -207,6 +207,7 @@ const PROBE_MIN_PTS = 0.5;    // below this = noise, not a real sweep
 const PROBE_MAX_PTS = 12;     // beyond this the excursion is acceptance, not a sweep
 const WICK_MIN_PCT = 0.5;     // reclaim bar must reject ≥50% of its range on the probe side
 const ACCEPT_CLOSES = 2;      // 2 consecutive closes beyond the level = acceptance (no fail)
+const STOP_BUFFER_PTS = 1.5;  // MFE stop sits this far beyond the sweep extreme (re-tap tolerance)
 
 // Opposite-reference lookup so a fail can target the mirror level for R:R.
 const OPPOSITE_KIND: Record<LevelKind, LevelKind> = {
@@ -309,7 +310,9 @@ function scanLevel(
       // measured until the trade would have stopped out (price back through the
       // probe extreme). A real runner gets full credit; a quick reversal gets cut.
       // For a fade-long (below level) favorable = price rising above entry.
-      const stopPrice = extreme;                 // beyond the sweep wick
+      // Stop sits a buffer BEYOND the sweep extreme so a single re-tap of the
+      // probe wick doesn't prematurely truncate MFE on a genuine runner.
+      const stopPrice = above ? extreme + STOP_BUFFER_PTS : extreme - STOP_BUFFER_PTS;
       let ft = 0;
       for (let k = j + 1; k < bars.length; k++) {
         const bk = bars[k];

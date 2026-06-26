@@ -133,8 +133,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
 
     CREATE TABLE IF NOT EXISTS option_strike_gex_history (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
-      expiry TEXT NOT NULL, spot REAL, strike REAL NOT NULL, net_gex REAL NOT NULL
+      expiry TEXT NOT NULL, spot REAL, strike REAL NOT NULL, net_gex REAL NOT NULL,
+      net_vol_gex REAL
     );
+    -- Backfill column for pre-existing tables (Vol-only heatmap history).
+    ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL;
     CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
     CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
     CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);
@@ -379,6 +382,48 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_es_gap_date ON es_gap(date);
 
+    -- ICT setup recorder: one row per detected ICT setup (every concept that
+    -- flips "live"). Written by server-v2/ict-setup-tracker via /api/ict-setups.
+    -- A row is keyed on a stable signature (setup_key) so re-scans never double-
+    -- log the same event: setup_key = "<kind>:<dir>:<trigger_ts>:<round(price)>".
+    --   kind       — concept id (fvg, ob, ifvg, ote, mss, bos, choch, liquidity,
+    --                 eqhl, inducement, turtleSoup, judas, breaker, cisd,
+    --                 model2022, displacement)
+    --   dir        — 'bull' | 'bear' | 'neutral'
+    --   trigger_ts — epoch ms of the candle that fired the setup
+    --   price      — the level/price the setup triggered at
+    --   note       — short human description of the trigger
+    -- Outcome is graded by follow-through over the bars AFTER trigger_ts:
+    --   target       — implied directional objective
+    --   invalidation — level that, if hit first, fails the setup
+    --   outcome      — 'pending' | 'win' | 'loss' | 'chop'
+    --   mfe/mae      — max favorable / adverse excursion (pts) since trigger
+    --   r_multiple   — favorable move achieved / initial risk to invalidation
+    CREATE TABLE IF NOT EXISTS ict_setups (
+      id             SERIAL PRIMARY KEY,
+      setup_key      TEXT NOT NULL UNIQUE,
+      date           TEXT NOT NULL,
+      kind           TEXT NOT NULL,
+      label          TEXT,
+      dir            TEXT,
+      trigger_ts     BIGINT NOT NULL,
+      price          DOUBLE PRECISION,
+      note           TEXT,
+      target         DOUBLE PRECISION,
+      invalidation   DOUBLE PRECISION,
+      outcome        TEXT NOT NULL DEFAULT 'pending',
+      mfe            DOUBLE PRECISION NOT NULL DEFAULT 0,
+      mae            DOUBLE PRECISION NOT NULL DEFAULT 0,
+      r_multiple     DOUBLE PRECISION,
+      resolved_ts    BIGINT,
+      resolved_price DOUBLE PRECISION,
+      created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ict_setups_date ON ict_setups(date);
+    CREATE INDEX IF NOT EXISTS idx_ict_setups_ts ON ict_setups(trigger_ts);
+    CREATE INDEX IF NOT EXISTS idx_ict_setups_outcome ON ict_setups(outcome);
+
     -- Stripe subscription state. One row per Clerk user (clerk_user_id is the PK
     -- and the only identity we trust — never a client-supplied value). Mirrors
     -- the live state of the user's Stripe subscription, written exclusively by
@@ -419,7 +464,41 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       drivers    JSONB NOT NULL DEFAULT '[]'::jsonb,
       generated_at BIGINT NOT NULL
     );
+
+    -- /ict glossary card visibility, per Clerk user. hidden_cards is a JSON array
+    -- of concept ids (from CONCEPTS in app/ict/page.tsx) the user has toggled OFF.
+    -- Empty array = all cards shown (the default). One row per user.
+    CREATE TABLE IF NOT EXISTS ict_card_prefs (
+      clerk_user_id TEXT PRIMARY KEY,
+      hidden_cards  JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
   `);
+}
+
+// ── ICT glossary card prefs (per-user show/hide) ────────────────────────────
+
+/** Concept ids the user has hidden on the /ict glossary. Empty = all shown. */
+export async function getIctCardPrefs(clerkUserId: string): Promise<string[]> {
+  await getDb();
+  const row = await queryOne<{ hidden_cards: unknown }>(
+    `SELECT hidden_cards FROM ict_card_prefs WHERE clerk_user_id = ?`, [clerkUserId]
+  );
+  if (!row) return [];
+  const hc = row.hidden_cards;
+  const arr = typeof hc === "string" ? JSON.parse(hc) : hc;
+  return Array.isArray(arr) ? arr.map(String) : [];
+}
+
+export async function upsertIctCardPrefs(clerkUserId: string, hiddenCards: string[]): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO ict_card_prefs (clerk_user_id, hidden_cards, updated_at)
+     VALUES (?, ?::jsonb, CURRENT_TIMESTAMP)
+     ON CONFLICT (clerk_user_id) DO UPDATE SET
+       hidden_cards = EXCLUDED.hidden_cards, updated_at = CURRENT_TIMESTAMP`,
+    [clerkUserId, JSON.stringify(hiddenCards)]
+  );
 }
 
 // ── Traders Dashboard: per-user prefs ───────────────────────────────────────
@@ -1527,6 +1606,141 @@ export async function getEsGap(date: string): Promise<EsGapRecord | null> {
   return rows[0] ?? null;
 }
 
+// ── ICT Setup recorder ──────────────────────────────────────────────────────
+
+export interface IctSetupRecord {
+  id?: number;
+  setup_key: string;
+  date: string;
+  kind: string;
+  label?: string | null;
+  dir?: string | null;
+  trigger_ts: number;
+  price?: number | null;
+  note?: string | null;
+  target?: number | null;
+  invalidation?: number | null;
+  outcome: "pending" | "win" | "loss" | "chop";
+  mfe: number;
+  mae: number;
+  r_multiple?: number | null;
+  resolved_ts?: number | null;
+  resolved_price?: number | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Record a newly-detected setup. Idempotent on setup_key — a re-scan that sees
+ *  the same event is a no-op (DO NOTHING), so the cron can run every 5m safely. */
+export async function insertIctSetup(r: {
+  setup_key: string; date: string; kind: string; label?: string | null;
+  dir?: string | null; trigger_ts: number; price?: number | null; note?: string | null;
+  target?: number | null; invalidation?: number | null;
+}): Promise<{ inserted: boolean }> {
+  const res = await pgQuery(
+    `INSERT INTO ict_setups
+       (setup_key, date, kind, label, dir, trigger_ts, price, note, target, invalidation)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (setup_key) DO NOTHING
+     RETURNING id`,
+    [r.setup_key, r.date, r.kind, r.label ?? null, r.dir ?? null, r.trigger_ts,
+     r.price ?? null, r.note ?? null, r.target ?? null, r.invalidation ?? null]
+  );
+  return { inserted: (res.rowCount ?? 0) > 0 };
+}
+
+/** Update grading fields on an existing setup (by setup_key). Used as price
+ *  develops: ratchets mfe/mae, and stamps outcome once win/loss/chop resolves. */
+export async function updateIctSetupGrade(r: {
+  setup_key: string;
+  outcome: "pending" | "win" | "loss" | "chop";
+  mfe: number; mae: number;
+  r_multiple?: number | null;
+  resolved_ts?: number | null;
+  resolved_price?: number | null;
+}): Promise<void> {
+  await pgQuery(
+    `UPDATE ict_setups SET
+       outcome = $2, mfe = $3, mae = $4, r_multiple = $5,
+       resolved_ts = $6, resolved_price = $7, updated_at = CURRENT_TIMESTAMP
+     WHERE setup_key = $1`,
+    [r.setup_key, r.outcome, r.mfe, r.mae, r.r_multiple ?? null,
+     r.resolved_ts ?? null, r.resolved_price ?? null]
+  );
+}
+
+/** Feed for the recap panel: newest-first, optionally one ET date. */
+export async function getIctSetups(date?: string, limit = 200): Promise<IctSetupRecord[]> {
+  if (date) {
+    return queryAll<IctSetupRecord>(
+      `SELECT * FROM ict_setups WHERE date = ? ORDER BY trigger_ts DESC LIMIT ?`,
+      [date, limit]
+    );
+  }
+  return queryAll<IctSetupRecord>(
+    `SELECT * FROM ict_setups ORDER BY trigger_ts DESC LIMIT ?`, [limit]
+  );
+}
+
+/** Setups still being graded (outcome='pending') for a date — the grader's worklist. */
+export async function getPendingIctSetups(date: string): Promise<IctSetupRecord[]> {
+  return queryAll<IctSetupRecord>(
+    `SELECT * FROM ict_setups WHERE date = ? AND outcome = 'pending' ORDER BY trigger_ts ASC`,
+    [date]
+  );
+}
+
+/** Per-kind win/loss tally + averages for the results cards. */
+export interface IctSetupSummary {
+  kind: string;
+  wins: number;
+  losses: number;
+  chop: number;
+  pending: number;
+  graded: number;       // wins + losses (chop excluded from win-rate)
+  total: number;
+  win_rate: number | null; // wins / graded
+  avg_r: number | null;    // mean r_multiple over graded (win+loss) rows
+  avg_mfe: number | null;  // mean max-favorable-excursion (pts) over all rows
+}
+
+/** Summary grouped by kind. Filters:
+ *   date     — exact ET date "YYYY-MM-DD"
+ *   sinceDate— inclusive lower bound (date >= sinceDate); for "last 7 days" etc.
+ *  Pass neither for all-time. (date wins if both given.) */
+export async function getIctSetupSummary(opts?: { date?: string; sinceDate?: string }): Promise<IctSetupSummary[]> {
+  const pool = await getDb();
+  let where = ``;
+  const params: unknown[] = [];
+  if (opts?.date) { where = `WHERE date = $1`; params.push(opts.date); }
+  else if (opts?.sinceDate) { where = `WHERE date >= $1`; params.push(opts.sinceDate); }
+  const result = await pool.query(`
+    SELECT kind,
+      COUNT(*) FILTER (WHERE outcome = 'win')::int  AS wins,
+      COUNT(*) FILTER (WHERE outcome = 'loss')::int AS losses,
+      COUNT(*) FILTER (WHERE outcome = 'chop')::int AS chop,
+      COUNT(*) FILTER (WHERE outcome = 'pending')::int AS pending,
+      COUNT(*) FILTER (WHERE outcome IN ('win','loss'))::int AS graded,
+      COUNT(*)::int AS total,
+      AVG(r_multiple) FILTER (WHERE outcome IN ('win','loss')) AS avg_r,
+      AVG(mfe) AS avg_mfe
+    FROM ict_setups ${where}
+    GROUP BY kind ORDER BY total DESC, kind ASC
+  `, params);
+  return result.rows.map((r) => ({
+    kind: r.kind,
+    wins: Number(r.wins ?? 0),
+    losses: Number(r.losses ?? 0),
+    chop: Number(r.chop ?? 0),
+    pending: Number(r.pending ?? 0),
+    graded: Number(r.graded ?? 0),
+    total: Number(r.total ?? 0),
+    win_rate: Number(r.graded) > 0 ? Number(r.wins) / Number(r.graded) : null,
+    avg_r: r.avg_r != null ? Number(r.avg_r) : null,
+    avg_mfe: r.avg_mfe != null ? Number(r.avg_mfe) : null,
+  }));
+}
+
 // ── Expirations Cache ─────────────────────────────────────────────────────────
 
 export async function ensureExpirationsTable(): Promise<void> { /* handled in ensureAllTables */ }
@@ -1561,6 +1775,7 @@ export interface OptionStrikeGexRecord {
   spot: number;
   strike: number;
   net_gex: number;
+  net_vol_gex?: number;
 }
 
 export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord, "id">[]): Promise<void> {
@@ -1568,9 +1783,10 @@ export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord
   const pool = await getDb();
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [row.timestamp, row.date, row.expiry, row.spot, row.strike, row.net_gex]
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [row.timestamp, row.date, row.expiry, row.spot, row.strike, row.net_gex,
+       Number.isFinite(row.net_vol_gex as number) ? row.net_vol_gex : null]
     );
   }
 }
@@ -1612,13 +1828,14 @@ export async function getOptionStrikeRollingNetGex(
 export async function getOptionStrikeGexSlots(
   date: string,
   expiry: string
-): Promise<Array<{ slot_ts: number; strike: number; net_gex: number }>> {
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 300000) * 300000), strike)
             (FLOOR(timestamp / 300000) * 300000)::bigint AS slot_ts,
             strike,
-            net_gex
+            net_gex,
+            net_vol_gex
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
@@ -1629,6 +1846,7 @@ export async function getOptionStrikeGexSlots(
     slot_ts: Number(row.slot_ts ?? 0),
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
   }));
 }
 

@@ -293,6 +293,24 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   .home-col-right .ticker-row { flex-wrap: wrap !important; row-gap: 6px; }
   .home-col-right .ticker-div { display: none; }
 
+  /* Under `display:contents` the panels lose their flex parent, so children
+     sized with `flex:1; min-height:0` (the chart canvas, the heatmap table)
+     collapse to ~0 and the card looks cut off / empty. Give those inner growth
+     areas an explicit minimum height on mobile so they actually fill the panel. */
+  .home-col-left > div:first-child > div:last-child {        /* GEX chart canvas */
+    flex: 1 1 auto !important;
+    min-height: 300px !important;
+  }
+  .home-col-right > div:last-of-type > div:last-child {      /* heatmap body */
+    flex: 1 1 auto !important;
+    min-height: 360px !important;
+    overflow: auto !important;
+  }
+  .home-col-left > div:last-child > div:last-child {         /* flow tabs body */
+    flex: 1 1 auto !important;
+    min-height: 240px !important;
+  }
+
   /* ── Multi-Greek: stack the SPX / SPY / QQQ panels vertically. ── */
   .mg-panels {
     flex-direction: column !important;

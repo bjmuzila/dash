@@ -40,18 +40,31 @@ interface DailyInput {
 // How many strikes above and below the ATM strike to include in the ladder.
 const GEX_LADDER_HALF = 20;
 
+// GEX weighting basis: "oivol" = open-interest GEX (the default dashboard read),
+// "vol" = volume-weighted GEX. Each gexRow carries both netGEX (OI) and netVolGEX
+// (volume), so switching basis is a field selection — no recomputation needed.
+type GexBasis = "oivol" | "vol";
+
+// Pick the per-strike net GEX for the chosen basis off a raw /proxy/gex row.
+function rowNetGex(o: Record<string, unknown>, basis: GexBasis): number {
+  if (basis === "vol") {
+    return Number(o.netVolGEX ?? o.netVolGex ?? o.netGEX ?? o.netGex ?? 0);
+  }
+  return Number(o.netGEX ?? o.netGex ?? 0);
+}
+
 interface GexRow { strike: number; netGEX: number }
 
 // Gamma flip from per-strike net GEX, matching the OVERVIEW/home page exactly
 // (lib/calculations findGEXFlip): the strike where adjacent net-GEX values change
 // sign (linear-interpolated), closest to spot. NOT the cumulative-sum crossing —
 // that gives a different number than the dashboard shows.
-function flipFromGexRows(gexRows: unknown, spot: number): number | null {
+function flipFromGexRows(gexRows: unknown, spot: number, basis: GexBasis = "oivol"): number | null {
   if (!Array.isArray(gexRows)) return null;
   const sorted = gexRows
     .map((r) => {
       const o = (r ?? {}) as Record<string, unknown>;
-      return { strike: Number(o.strike ?? 0), netGEX: Number(o.netGEX ?? o.netGex ?? 0) };
+      return { strike: Number(o.strike ?? 0), netGEX: rowNetGex(o, basis) };
     })
     .filter((r) => r.strike > 0 && Number.isFinite(r.netGEX))
     .sort((a, b) => a.strike - b.strike);
@@ -79,12 +92,12 @@ function flipFromGexRows(gexRows: unknown, spot: number): number | null {
 // Returns netGEX in $millions, windowed around the strike nearest spot, sorted
 // high→low (matching the dashboard ladder orientation). Empty array on any miss
 // so the client can fall back to its visual taper.
-function buildGexLadder(gexRows: unknown, spot: number): { strike: number; netGex: number }[] {
+function buildGexLadder(gexRows: unknown, spot: number, basis: GexBasis = "oivol"): { strike: number; netGex: number }[] {
   if (!Array.isArray(gexRows) || !(spot > 0)) return [];
   const rows: GexRow[] = gexRows
     .map((r) => {
       const o = (r ?? {}) as Record<string, unknown>;
-      return { strike: Number(o.strike ?? 0), netGEX: Number(o.netGEX ?? o.netGex ?? 0) };
+      return { strike: Number(o.strike ?? 0), netGEX: rowNetGex(o, basis) };
     })
     .filter((r) => r.strike > 0 && Number.isFinite(r.netGEX));
   if (!rows.length) return [];
@@ -187,7 +200,7 @@ interface ExpiryGex {
   netGex: number | null; // billions of $
 }
 
-function computeExpiryGex(legs: Leg[], spot: number): ExpiryGex | null {
+function computeExpiryGex(legs: Leg[], spot: number, basis: GexBasis = "oivol"): ExpiryGex | null {
   if (!legs.length || !(spot > 0)) return null;
   const byStrike = new Map<number, { call?: Leg; put?: Leg }>();
   for (const l of legs) {
@@ -196,10 +209,12 @@ function computeExpiryGex(legs: Leg[], spot: number): ExpiryGex | null {
     if (l.type === "CALL") e.call = l; else e.put = l;
     byStrike.set(l.strike, e);
   }
+  // Weight gamma by volume for the "vol" basis, open interest otherwise.
+  const wt = (leg: Leg | undefined) => (basis === "vol" ? (leg?.volume ?? 0) : (leg?.oi ?? 0));
   const rows: StrikeGex[] = [];
   for (const [strike, s] of byStrike) {
-    const callGEX = (s.call?.gamma ?? 0) * (s.call?.oi ?? 0) * spot * spot;
-    const putGEX = -((s.put?.gamma ?? 0) * (s.put?.oi ?? 0) * spot * spot);
+    const callGEX = (s.call?.gamma ?? 0) * wt(s.call) * spot * spot;
+    const putGEX = -((s.put?.gamma ?? 0) * wt(s.put) * spot * spot);
     rows.push({ strike, netGEX: callGEX + putGEX });
   }
   if (!rows.length) return null;
@@ -399,8 +414,11 @@ export async function GET(req: Request) {
   const base = proxyBase();
   // DTE bucket: 0 = front/0DTE (default), 1 = next expiration. Drives which
   // expiration's chain the GEX ladder / walls / flip / net are computed from.
-  const dteParam = new URL(req.url).searchParams.get("dte");
+  const params = new URL(req.url).searchParams;
+  const dteParam = params.get("dte");
   const dte: 0 | 1 = dteParam === "1" ? 1 : 0;
+  // GEX basis: "vol" = volume-weighted, anything else = OI (the default).
+  const basis: GexBasis = params.get("gexBasis") === "vol" ? "vol" : "oivol";
   const out: DailyInput = {
     spxSpot: null,
     gammaFlip: null,
@@ -436,12 +454,34 @@ export async function GET(req: Request) {
       // frame's gexFlip is usually empty). Fall back to p.gexFlip only if rows
       // didn't produce a crossing.
       out.gammaFlip =
-        flipFromGexRows(p.gexRows, spot) ??
+        flipFromGexRows(p.gexRows, spot, basis) ??
         (p.gexFlip != null ? Number(p.gexFlip) || null : null);
-      const totals = p.totals as Record<string, unknown> | null | undefined;
-      const totalGex = totals ? Number(totals.totalGEX ?? 0) : Number(p.totalNetGex ?? 0);
+      // Net GEX total: for the OI basis use the precomputed totals.totalGEX; for
+      // the vol basis sum netVolGEX across the per-strike rows.
+      let totalGex: number;
+      if (basis === "vol" && Array.isArray(p.gexRows)) {
+        totalGex = (p.gexRows as Record<string, unknown>[]).reduce(
+          (s, r) => s + rowNetGex((r ?? {}) as Record<string, unknown>, "vol"),
+          0,
+        );
+      } else {
+        const totals = p.totals as Record<string, unknown> | null | undefined;
+        totalGex = totals ? Number(totals.totalGEX ?? 0) : Number(p.totalNetGex ?? 0);
+      }
       out.netGex = Number.isFinite(totalGex) && totalGex !== 0 ? totalGex / 1e9 : null;
-      out.gexLadder = buildGexLadder(p.gexRows, spot);
+      out.gexLadder = buildGexLadder(p.gexRows, spot, basis);
+      // p.callWall/p.putWall are OI-based. For the vol basis, recompute walls
+      // from the volume-weighted rows: highest +netVolGEX above spot, most
+      // negative below.
+      if (basis === "vol" && Array.isArray(p.gexRows) && spot > 0) {
+        const vrows = (p.gexRows as Record<string, unknown>[])
+          .map((r) => ({ strike: Number((r as Record<string, unknown>).strike ?? 0), netGEX: rowNetGex(r, "vol") }))
+          .filter((r) => r.strike > 0 && Number.isFinite(r.netGEX));
+        const above = vrows.filter((r) => r.strike > spot && r.netGEX > 0);
+        const below = vrows.filter((r) => r.strike < spot && r.netGEX < 0);
+        out.callWall = above.length ? above.reduce((b, r) => (r.netGEX > b.netGEX ? r : b)).strike : out.callWall;
+        out.putWall = below.length ? below.reduce((b, r) => (r.netGEX < b.netGEX ? r : b)).strike : out.putWall;
+      }
     }
   } catch {
     /* leave nulls */
@@ -457,7 +497,7 @@ export async function GET(req: Request) {
       if (expiry) {
         const { legs, underlying } = await fetchExpiryChain(base, expiry);
         const spotForGex = out.spxSpot ?? (underlying > 0 ? underlying : spotForEm);
-        const gx = computeExpiryGex(legs, spotForGex);
+        const gx = computeExpiryGex(legs, spotForGex, basis);
         if (gx) {
           out.gexLadder = gx.ladder;
           if (gx.callWall != null) out.callWall = gx.callWall;

@@ -763,11 +763,12 @@ const XP_CSS = `
 interface SpxCandle { t: number; o: number; h: number; l: number; c: number }
 
 function ExplainerMockup({
-  form, regime, updated, ladder, dte, onDteChange,
+  form, regime, updated, ladder, dte, onDteChange, gexBasis, onBasisChange,
   candles, candlesOn, candlesConnected, onToggleCandles,
 }: {
   form: FormState; regime: Regime; updated: string; ladder: GexLadderRow[];
   dte: 0 | 1; onDteChange: (d: 0 | 1) => void;
+  gexBasis: "oivol" | "vol"; onBasisChange: (b: "oivol" | "vol") => void;
   candles: SpxCandle[]; candlesOn: boolean; candlesConnected: boolean; onToggleCandles: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -1242,6 +1243,10 @@ function ExplainerMockup({
           <button type="button" className={dte === 0 ? "on" : ""} onClick={() => onDteChange(0)}>0DTE</button>
           <button type="button" className={dte === 1 ? "on" : ""} onClick={() => onDteChange(1)}>1DTE</button>
         </span>
+        <span className="xp-dte" role="group" aria-label="GEX basis">
+          <button type="button" className={gexBasis === "oivol" ? "on" : ""} onClick={() => onBasisChange("oivol")}>OI + VOL</button>
+          <button type="button" className={gexBasis === "vol" ? "on" : ""} onClick={() => onBasisChange("vol")}>VOL GEX</button>
+        </span>
         <span className="xp-actions-sp" />
         <button type="button" className="xp-btn" onClick={onCopyScreenshot} disabled={busy}>
           {shot === "copied" ? "✓ Copied" : shot === "saved" ? "✓ Saved" : shot === "err" ? "Failed" : "Copy screenshot"}
@@ -1264,6 +1269,10 @@ function ExplainerMockup({
           <div className="xp-chip cyan">
             <span className="lbl">TOTAL NET GEX</span>
             <span className="val">{totalNetStr}</span>
+          </div>
+          <div className="xp-chip">
+            <span className="lbl">GEX BASIS</span>
+            <span className="val">{gexBasis === "vol" ? "VOL GEX" : "OI + VOL"}</span>
           </div>
         </div>
 
@@ -1439,6 +1448,9 @@ export default function SocialMediaPage() {
   const [gexLadder, setGexLadder] = useState<GexLadderRow[]>([]);
   // DTE bucket for the Explainer GEX read: 0 = front/0DTE, 1 = next expiration.
   const [dte, setDte] = useState<0 | 1>(0);
+  // GEX weighting basis for the Explainer read: "oivol" = open-interest GEX,
+  // "vol" = volume-weighted GEX. Re-pulls the daily-input frame on change.
+  const [gexBasis, setGexBasis] = useState<"oivol" | "vol">("oivol");
   const [hydrated, setHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   // Share-card capture target + transient button status ("" | "copied" | "opened" | "saved" | "error").
@@ -1534,7 +1546,7 @@ export default function SocialMediaPage() {
   // the user freeze it by editing (dirtyRef) — a re-hydrate won't clobber edits.
   const hydrate = useCallback(async () => {
     try {
-      const r = await fetch(`/api/social-media/daily-input?dte=${dte}`, { cache: "no-store" });
+      const r = await fetch(`/api/social-media/daily-input?dte=${dte}&gexBasis=${gexBasis}`, { cache: "no-store" });
       if (!r.ok) return;
       const json = await r.json();
       const d = (json?.data ?? json) as DailyInput;
@@ -1573,7 +1585,7 @@ export default function SocialMediaPage() {
     } catch {
       setHydrated(true);
     }
-  }, [stampUpdated, dte]);
+  }, [stampUpdated, dte, gexBasis]);
 
   // ON-DEMAND ONLY: nothing fetches on mount. The page loads its data only when
   // the user clicks "Load" / "Refresh". After the first load, changing the DTE
@@ -1931,6 +1943,13 @@ export default function SocialMediaPage() {
             // was edited — clear the dirty guard so the new expiry repopulates.
             dirtyRef.current = false;
             setDte(d);
+          }}
+          gexBasis={gexBasis}
+          onBasisChange={(b) => {
+            if (b === gexBasis) return;
+            // Switching basis re-pulls the GEX read even after manual edits.
+            dirtyRef.current = false;
+            setGexBasis(b);
           }}
           candles={spxCandles}
           candlesOn={candlesOn}

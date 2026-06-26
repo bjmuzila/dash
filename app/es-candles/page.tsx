@@ -736,10 +736,10 @@ export default function EsCandlesPage() {
         );
         if (!res.ok) return;
         const json = await res.json();
-        // History API only persists net_gex (OI-based) — no volume split. Map it
-        // into netOiVol; netVol stays 0 (Vol-only mode is blank for historical /
-        // non-front-expiry columns, which is honest rather than duplicating OI).
-        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number }> };
+        // History persists both net_gex (OI+vol) and net_vol_gex (vol-only), so
+        // the Vol-only heatmap mode now has backfill too. netVol falls back to 0
+        // for legacy rows written before the column existed.
+        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }> };
         const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
         if (cancelled || !raw.length) return;
         const map = columnsRef.current;
@@ -747,7 +747,7 @@ export default function EsCandlesPage() {
           if (map.has(col.slotTs)) continue; // live wins on collisions
           const cells: GexCell[] = col.cells
             .filter((c) => c.strike > 0 && Number.isFinite(c.net))
-            .map((c) => ({ strike: c.strike, netOiVol: c.net, netVol: 0 }));
+            .map((c) => ({ strike: c.strike, netOiVol: c.net, netVol: Number(c.netVol ?? 0) }));
           map.set(col.slotTs, { slotTs: col.slotTs, cells });
         }
         drawOverlayRef.current();
