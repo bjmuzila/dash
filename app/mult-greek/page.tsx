@@ -209,7 +209,7 @@ function computeRows(
     return {
       strike: r.strike,
       isATM: r.strike === atmStrike,
-      gex:  ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
+      gex:  (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
       dex:  (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
       chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
       vex:  ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
@@ -254,7 +254,7 @@ function computeTotals(
     const pd = liveData[r.putSym  ?? ""] || {};
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
     const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
-    totals.gex  += ((cd.gamma ?? 0) * cc - (pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
+    totals.gex  += (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
     totals.dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
     totals.chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
     totals.vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;

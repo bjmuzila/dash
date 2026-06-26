@@ -182,8 +182,8 @@ export default function ResultsPage() {
         <div style={{ color: C.label, fontSize: 13 }}>Loading results…</div>
       ) : sorted.length === 0 ? (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", color: C.label, fontSize: 13 }}>
-          No setups recorded for this range yet. The ICT tracker logs and grades them every 5 min during RTH —
-          results will populate here as setups fire and resolve.
+          No setups recorded for this range yet. The ICT tracker logs and grades them every 5 min throughout
+          the futures session (Sun 6pm → Fri 4pm ET) — results will populate here as setups fire and resolve.
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>

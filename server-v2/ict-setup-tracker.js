@@ -2,14 +2,15 @@
 /**
  * server-v2/ict-setup-tracker.js
  *
- * In-process ICT setup recorder. Every 5 minutes during RTH it pokes
+ * In-process ICT setup recorder. Every 5 minutes during the futures session
+ * (Sun 18:00 → Fri 16:00 ET, w/ daily 16:00–18:00 break) it pokes
  * POST /api/ict-setups { action:'scan' }, which:
  *   1. runs analyzeICT over the day's ES candles (same detection the /ict page
  *      renders) and records every NEW setup that fired (idempotent on setup_key),
  *   2. grades all still-pending setups by follow-through (win/loss/chop + R).
  *
- * No browser required — recording happens server-side. Mirrors the gates/loop of
- * es-gap-tracker.js (RTH-only, holiday-aware, self-rescheduling 5m boundary).
+ * No browser required — recording happens server-side. Holiday-aware,
+ * self-rescheduling on the 5m boundary.
  *
  * Start from server-with-proxy.js after server.listen():
  *   require('./ict-setup-tracker').startIctSetupTracker(PORT);
@@ -47,16 +48,31 @@ const MARKET_HOLIDAYS = new Set([
 ]);
 const MARKET_HALF_DAYS = new Set(['2026-11-27', '2026-12-24', '2027-11-26']);
 
-/** RTH = Mon–Fri 09:30–16:00 ET (13:00 on half-days), excluding holidays. We let
- *  it run a few minutes past the close so the final 15:55 bar gets graded. */
+/** Futures session window (all ET):
+ *    Sun 18:00 → Fri 16:00, continuous overnight.
+ *    Mon–Thu: active except the 16:00–18:00 daily maintenance break.
+ *    Fri: active until 16:00. Sat: closed. Sun: opens 18:00.
+ *  Holidays/half-days still gate out the cash day. */
 function isRTH() {
   const { hour, minute, weekday } = nowParts();
-  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  const mins = hour * 60 + minute;
+  const OPEN = 18 * 60;   // 18:00
+  const CLOSE = 16 * 60;  // 16:00
+
+  let active;
+  switch (weekday) {
+    case 'Sat': active = false; break;
+    case 'Sun': active = mins >= OPEN; break;
+    case 'Fri': active = mins < CLOSE; break;            // closes 16:00
+    default:                                              // Mon–Thu
+      active = mins < CLOSE || mins >= OPEN;              // break 16:00–18:00
+  }
+  if (!active) return false;
+
   const today = etDateStr();
   if (MARKET_HOLIDAYS.has(today)) return false;
-  const mins = hour * 60 + minute;
-  const close = (MARKET_HALF_DAYS.has(today) ? 780 : 960) + 10; // +10m grading tail
-  return mins >= 570 && mins < close;
+  if (MARKET_HALF_DAYS.has(today) && mins >= 13 * 60) return false; // 13:00 half-day close
+  return true;
 }
 
 async function tick(base) {
@@ -87,7 +103,7 @@ function startIctSetupTracker(port) {
     return (minsToNext * 60 - now.getSeconds()) * 1000 - now.getMilliseconds();
   }
 
-  console.log(`[ict-setups] enabled — records + grades ICT setups every ${INTERVAL_MIN}m during RTH; first run in ${Math.round(msToNextBoundary() / 60000)}m`);
+  console.log(`[ict-setups] enabled — records + grades ICT setups every ${INTERVAL_MIN}m during the futures session (Sun 18:00→Fri 16:00 ET); first run in ${Math.round(msToNextBoundary() / 60000)}m`);
 
   // Startup probe ~30s after boot (let the candle feed warm) so a mid-session
   // restart back-fills any setups missed while down.

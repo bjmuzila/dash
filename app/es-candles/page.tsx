@@ -582,7 +582,10 @@ export default function EsCandlesPage() {
     let pdh = -Infinity, pdl = Infinity, onh = -Infinity, onl = Infinity;
     for (const r of rows) {
       const d = r.date || dayKey(r.timestamp);
-      if (prevDay && d === prevDay) { if (r.high > pdh) pdh = r.high; if (r.low < pdl) pdl = r.low; }
+      if (prevDay && d === prevDay) {
+        const m = etMinutes(r.timestamp);
+        if (m >= 570 && m < 960) { if (r.high > pdh) pdh = r.high; if (r.low < pdl) pdl = r.low; } // RTH only
+      }
       if (r.timestamp >= onStart && r.timestamp < onEnd) { if (r.high > onh) onh = r.high; if (r.low < onl) onl = r.low; }
     }
     return {

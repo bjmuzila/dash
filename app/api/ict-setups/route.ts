@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   insertIctSetup, updateIctSetupGrade, getIctSetups, getPendingIctSetups,
-  getIctSetupSummary, type IctSetupRecord,
+  getIctSetupSummary, getEsCandles, type IctSetupRecord,
 } from "@/lib/db";
 import { analyzeICT, type IctCandle } from "@/lib/calculations/ictConcepts";
 
@@ -31,18 +31,14 @@ function tokenOk(req: NextRequest): boolean {
   return req.headers.get("x-internal-token") === expected;
 }
 
-// ── Candle fetch (same endpoint es-gap-tracker uses) ─────────────────────────
-async function fetchCandles(origin: string, date: string): Promise<IctCandle[]> {
-  const headers: Record<string, string> = {};
-  if (process.env.INTERNAL_API_TOKEN) headers["x-internal-token"] = process.env.INTERNAL_API_TOKEN;
-  const r = await fetch(`${origin}/api/snapshots/candles?date=${date}&limit=2000`, {
-    cache: "no-store", headers,
-  });
-  if (!r.ok) throw new Error(`/api/snapshots/candles ${r.status}`);
-  const j = await r.json();
-  const rows = Array.isArray(j.rows) ? j.rows : [];
+// ── Candle fetch — read Postgres directly (no self-referential HTTP) ─────────
+// Previously fetched `${origin}/api/snapshots/candles`; behind the proxy `origin`
+// resolves to the public https host, so the in-process loopback got ECONNREFUSED.
+// getEsCandles returns the SAME rows that endpoint serves.
+async function fetchCandles(_origin: string, date: string): Promise<IctCandle[]> {
+  const rows = await getEsCandles(date, undefined, 2000);
   return rows
-    .map((c: Record<string, unknown>) => ({
+    .map((c) => ({
       timestamp: Number(c.timestamp),
       open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
       volume: Number(c.volume ?? 0), date: String(c.date ?? date),

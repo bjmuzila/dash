@@ -106,6 +106,13 @@ const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
+const DATA_MODES = ["oi-vol", "vol-only"] as const;
+type DataMode = typeof DATA_MODES[number];
+const DATA_MODE_LABEL: Record<DataMode, string> = {
+  "oi-vol": "OI + Vol",
+  "vol-only": "Vol Only",
+};
+
 // Number of expirations shown side-by-side across the matrix.
 const EXP_COLUMNS = 7;
 
@@ -306,7 +313,7 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
 // Parse one expiration's chain payload into strike→greek cells.
 // GEX/DEX/CHEX/VEX use the same formulas the single-expiry view used:
 //   contracts = OI + volume (per side); GEX = (γc·cc − γp·pc)·S²·0.01·100, etc.
-function parseExpiration(items: unknown[], expDate: string, spot: number): Map<number, GreekCell> {
+function parseExpiration(items: unknown[], expDate: string, spot: number, dataMode: DataMode = "oi-vol"): Map<number, GreekCell> {
   const cells = new Map<number, GreekCell>();
   const target = (items as { "expiration-date"?: string; strikes?: unknown[] }[]).filter(
     i => String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10),
@@ -325,7 +332,7 @@ function parseExpiration(items: unknown[], expDate: string, spot: number): Map<n
       const num = (o: Record<string, unknown> | undefined, k: string) =>
         o ? parseFloat(String(o[k])) || 0 : 0;
       const cnt = (o: Record<string, unknown> | undefined) =>
-        o ? (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0) +
+        o ? (dataMode === "vol-only" ? 0 : (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0)) +
             (parseInt(String(o.volume ?? 0), 10) || 0)
           : 0;
 
@@ -361,6 +368,10 @@ export default function OptionsChainPage() {
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const [loadProgress, setLoadProgress] = useState(0); // 0-100
   const [greekMode, setGreekMode] = useState<GreekMode>("gex");
+  const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  // Live mirror so loadChain (recreated each render) reads the current toggle.
+  const dataModeRef = useRef<DataMode>("oi-vol");
+  useEffect(() => { dataModeRef.current = dataMode; }, [dataMode]);
   const pageRef = useRef<HTMLDivElement>(null);
   const [chainError, setChainError] = useState<string | null>(null);
   // Weekly EM (from /api/levels, DB-backed). close ± em = 1× band, ± 2·em = 2×.
@@ -426,7 +437,7 @@ export default function OptionsChainPage() {
             expiration: t.value,
             label: t.label,
             underlying,
-            cells: parseExpiration(items, t.value, underlying),
+            cells: parseExpiration(items, t.value, underlying, dataModeRef.current),
           } as ExpColumn;
         }),
       );
@@ -496,6 +507,16 @@ export default function OptionsChainPage() {
       loadChain(ticker, selectedExpiry, true, true); // force: user GO
     }
   }, [tickerInput, selectedExpiry, activeTicker, loadChain]);
+
+  // Re-fetch + re-parse when the OI+Vol / Vol-only toggle changes (skip mount).
+  const dataModeMountRef = useRef(true);
+  useEffect(() => {
+    if (dataModeMountRef.current) { dataModeMountRef.current = false; return; }
+    if (activeTicker && selectedExpiryRef.current) {
+      loadChain(activeTicker, selectedExpiryRef.current, false, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataMode]);
 
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
   useEffect(() => { expiriesRef.current = expiries; }, [expiries]);
@@ -833,6 +854,31 @@ export default function OptionsChainPage() {
         <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
           {intensity.toFixed(2)}x
         </span>
+
+        <span style={{ color: "#1e3050" }}>|</span>
+
+        <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
+          {DATA_MODES.map(m => (
+            <button
+              key={m}
+              onClick={() => setDataMode(m)}
+              title={m === "vol-only" ? "Net GEX from session volume only" : "Net GEX from open interest + volume"}
+              style={{
+                padding: "2px 8px",
+                fontSize: 9,
+                fontWeight: 800,
+                borderRadius: 3,
+                border: "none",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+                background: dataMode === m ? "rgba(0,229,255,.15)" : "transparent",
+                color: dataMode === m ? HT.cyan : "#64748b",
+              }}
+            >
+              {DATA_MODE_LABEL[m]}
+            </button>
+          ))}
+        </div>
 
         <span style={{ color: "#1e3050" }}>|</span>
 
