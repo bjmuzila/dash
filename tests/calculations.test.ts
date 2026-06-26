@@ -72,6 +72,38 @@ test("computeGexSummary annotates rows and totals net gamma", () => {
   assert.equal(summary.callWall, 4950);
 });
 
+// Lock the client GEX formula (lib/calculations) to the server one
+// (server-v2/computation/gex-calculator.js) so the two implementations of the
+// same math can't silently diverge. Single source of truth in spirit: if these
+// drift, this test fails.
+//   client OI+Vol  === server netGEX (OI) + netVolGEX (vol)
+//   client Vol-only === server netVolGEX
+test("client GEX matches server gex-calculator (basis parity)", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { computeGexRows } = require("../server-v2/computation/gex-calculator");
+
+  const spot = 7400;
+  const serverRows = [
+    { strike: 7400, side: "call", oi: 120, volume: 5200, gamma: 0.0011, delta: 0.42, theta: 0, vega: 0, iv: 0.2, dte: 0 },
+    { strike: 7400, side: "put",  oi: 4100, volume: 240, gamma: 0.0013, delta: -0.55, theta: 0, vega: 0, iv: 0.2, dte: 0 },
+  ];
+  const [srv] = computeGexRows(serverRows, spot);
+
+  const clientRow: ChainRow = {
+    strike: 7400, spotPrice: spot,
+    callOI: 120, callVolume: 5200, putOI: 4100, putVolume: 240,
+    callGamma: 0.0011, putGamma: 0.0013,
+  };
+
+  const approx = (a: number, b: number) => Math.abs(a - b) < 1e-3;
+  // OI+Vol (client "net") must equal server's OI net + vol net.
+  assert.ok(approx(calculateNetGEX(clientRow, "net"), srv.netGEX + srv.netVolGEX),
+    `OI+Vol mismatch: client ${calculateNetGEX(clientRow, "net")} vs server ${srv.netGEX + srv.netVolGEX}`);
+  // Vol-only must equal server netVolGEX.
+  assert.ok(approx(calculateNetGEX(clientRow, "vol"), srv.netVolGEX),
+    `Vol-only mismatch: client ${calculateNetGEX(clientRow, "vol")} vs server ${srv.netVolGEX}`);
+});
+
 test("estimated move helpers calculate display bounds", () => {
   assert.deepEqual(calcEstimatedMove(5000, 50, 70), {
     straddleMid: 60,

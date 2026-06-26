@@ -117,7 +117,7 @@ function findGexFlip(gexRows, spot) {
   let prevStrike = null;
   for (const row of sorted) {
     prevCum = cum;
-    cum += row.netGEX;
+    cum += oiVolNet(row);
     if (prevStrike !== null && prevCum < 0 && cum >= 0) {
       const range = cum - prevCum;
       return Math.abs(range) > 0
@@ -129,23 +129,29 @@ function findGexFlip(gexRows, spot) {
   return null;
 }
 
-/** Strike with highest positive net GEX above spot. */
+// OI+Vol net GEX for a row = OI-net (netGEX) + vol-net (netVolGEX). This is the
+// basis the dashboard heatmap / chart / MVC all use, so walls + totals must match.
+function oiVolNet(r) {
+  return Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
+}
+
+/** Strike with highest positive OI+Vol net GEX above spot. */
 function findCallWall(gexRows, spot) {
-  const above = gexRows.filter((r) => r.strike > spot && r.netGEX > 0);
+  const above = gexRows.filter((r) => r.strike > spot && oiVolNet(r) > 0);
   if (!above.length) return null;
-  return above.reduce((best, r) => (r.netGEX > best.netGEX ? r : best)).strike;
+  return above.reduce((best, r) => (oiVolNet(r) > oiVolNet(best) ? r : best)).strike;
 }
 
-/** Strike with most negative net GEX below spot. */
+/** Strike with most negative OI+Vol net GEX below spot. */
 function findPutWall(gexRows, spot) {
-  const below = gexRows.filter((r) => r.strike < spot && r.netGEX < 0);
+  const below = gexRows.filter((r) => r.strike < spot && oiVolNet(r) < 0);
   if (!below.length) return null;
-  return below.reduce((best, r) => (r.netGEX < best.netGEX ? r : best)).strike;
+  return below.reduce((best, r) => (oiVolNet(r) < oiVolNet(best) ? r : best)).strike;
 }
 
-/** Total net GEX across all strikes. */
+/** Total OI+Vol net GEX across all strikes. */
 function totalNetGex(gexRows) {
-  return gexRows.reduce((sum, r) => sum + (r.netGEX ?? 0), 0);
+  return gexRows.reduce((sum, r) => sum + oiVolNet(r), 0);
 }
 
 /**

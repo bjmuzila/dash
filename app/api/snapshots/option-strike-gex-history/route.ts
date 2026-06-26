@@ -74,7 +74,11 @@ export async function GET(req: NextRequest) {
         if (!(r.strike > 0) || !Number.isFinite(r.net_gex)) continue;
         let arr = bySlot.get(r.slot_ts);
         if (!arr) { arr = []; bySlot.set(r.slot_ts, arr); }
-        arr.push({ strike: r.strike, net: r.net_gex, netVol: Number(r.net_vol_gex ?? 0) });
+        // `net` is the OI+Vol convention to match the live front column
+        // (page.tsx: netOiVol = netGEX + netVolGEX). Persisting net_gex alone
+        // here flips the color on close (positive live → red closed bar).
+        const netVol = Number(r.net_vol_gex ?? 0);
+        arr.push({ strike: r.strike, net: r.net_gex + (Number.isFinite(netVol) ? netVol : 0), netVol });
       }
       const columns = [...bySlot.entries()]
         .sort((a, b) => a[0] - b[0])

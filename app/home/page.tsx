@@ -844,6 +844,30 @@ export default function HomePage() {
     }
     return best;
   }, [chartRows]);
+
+  // Call/Put walls on the SAME basis as the heatmap (OI+Vol, or Vol-only when the
+  // toggle is set). The server-provided p.callWall/p.putWall are OI-only and so
+  // disagreed with the OI+Vol NET GEX column (e.g. server said 7410 while the
+  // heatmap peak above spot is 7400). Compute client-side via the single source.
+  const wallCalcMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
+  const callWallOiVol = useMemo(() => {
+    let best: number | null = null, bestV = 0;
+    for (const r of chartRows) {
+      if (!(r.strike > chartSpot)) continue;
+      const v = netGEXOf(r, wallCalcMode, chartSpot);
+      if (v > 0 && v > bestV) { bestV = v; best = r.strike; }
+    }
+    return best;
+  }, [chartRows, chartSpot, wallCalcMode]);
+  const putWallOiVol = useMemo(() => {
+    let best: number | null = null, bestV = 0;
+    for (const r of chartRows) {
+      if (!(r.strike < chartSpot)) continue;
+      const v = netGEXOf(r, wallCalcMode, chartSpot);
+      if (v < 0 && -v > bestV) { bestV = -v; best = r.strike; }
+    }
+    return best;
+  }, [chartRows, chartSpot, wallCalcMode]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot, dataMode), [chartRows, chartSpot, dataMode]);
 
   const etTime = now?.toLocaleTimeString("en-US", {
@@ -981,12 +1005,12 @@ export default function HomePage() {
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.green }}>{callWall ? formatStrikeValue(callWall) : "—"}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.green }}>{(callWallOiVol ?? callWall) ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.red }}>{putWall ? formatStrikeValue(putWall) : "—"}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.red }}>{(putWallOiVol ?? putWall) ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>

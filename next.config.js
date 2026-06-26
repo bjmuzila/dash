@@ -2,6 +2,10 @@
 const path = require('path');
 const pkg = require('./package.json');
 
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+});
+
 const nextConfig = {
   compress: true,
   productionBrowserSourceMaps: false,
@@ -47,4 +51,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = withBundleAnalyzer(nextConfig);

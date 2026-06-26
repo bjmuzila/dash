@@ -148,16 +148,19 @@ export function findGEXFlip(chain: ChainRow[], spotPrice?: number): number | nul
   // Find the strike where net GEX profile crosses zero (gamma flip / gamma zero).
   // Uses linear interpolation between adjacent strikes — equivalent to the
   // spot-sweep model when per-strike gamma is approximately flat between strikes.
+  // OI+Vol net per row (netGEX OI-only + netVolGEX vol-only) — same basis as the
+  // heatmap / chart, so the flip line agrees with the bars.
+  const oiVol = (r: ChainRow) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
   const sorted = [...chain]
-    .filter(r => Number.isFinite(r.netGEX))
+    .filter(r => Number.isFinite(r.netGEX) || Number.isFinite(r.netVolGEX))
     .sort((a, b) => a.strike - b.strike);
   if (!sorted.length) return null;
 
   const crossings: number[] = [];
 
   for (let i = 0; i < sorted.length - 1; i++) {
-    const a = sorted[i].netGEX!;
-    const b = sorted[i + 1].netGEX!;
+    const a = oiVol(sorted[i]);
+    const b = oiVol(sorted[i + 1]);
 
     if (a === 0) { crossings.push(sorted[i].strike); continue; }
     if (b === 0) { crossings.push(sorted[i + 1].strike); continue; }

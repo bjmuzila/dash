@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "2026.6.26-v11",
+    "version":  "2026.6.26-v14",
     "private":  true,
     "workspaces":  [
 
@@ -10,6 +10,7 @@
                     "dev:full":  "node server-v2/server-with-proxy.js",
                     "dev:old":  "node server/server-with-proxy.js",
                     "build":  "next build --no-lint",
+                    "analyze":  "node -e \"process.env.ANALYZE=\u0027true\u0027;require(\u0027child_process\u0027).execSync(\u0027next build --no-lint\u0027,{stdio:\u0027inherit\u0027,env:process.env})\"",
                     "test":  "tsx --test tests/**/*.test.ts",
                     "start":  "node server-v2/server-with-proxy.js",
                     "start:old":  "node server/server-with-proxy.js",
@@ -45,6 +46,7 @@
                          "xlsx":  "^0.18.5"
                      },
     "devDependencies":  {
+                            "@next/bundle-analyzer":  "^16.2.9",
                             "tsx":  "^4.22.4"
                         }
 }

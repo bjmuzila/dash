@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import * as XLSX from "xlsx";
 import {
   HOME_THEME,
   homeButtonStyle,
@@ -142,28 +141,6 @@ export default function DatabasePage() {
     return () => window.removeEventListener("db-mvc-updated", handler);
   }, [tab, dateFilter, limit, load]);
 
-  const exportExcel = useCallback(() => {
-    if (!rows.length || !cols.length) return;
-    const label = TABLES.find((t) => t.id === tab)?.label ?? tab;
-    const exportData = rows.map((row) => {
-      const obj: Record<string, unknown> = {};
-      cols.forEach((c) => {
-        const v = row[c];
-        if (v == null) obj[c] = "";
-        else if (typeof v === "number") obj[c] = Number.isFinite(v) ? v : "";
-        else if (typeof v === "object") obj[c] = JSON.stringify(v);
-        else obj[c] = String(v);
-      });
-      return obj;
-    });
-
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, label);
-    ws["!cols"] = cols.map(() => ({ wch: 18 }));
-    XLSX.writeFile(wb, `${tab}-${dateFilter || "all"}.xlsx`);
-  }, [tab, rows, cols, dateFilter]);
-
   return (
     <div style={homeShellStyle}>
       <div style={homeHeaderStyle}>
@@ -216,18 +193,6 @@ export default function DatabasePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={exportExcel}
-            disabled={!rows.length}
-            style={{
-              ...homeSecondaryButtonStyle,
-              color: rows.length ? HOME_THEME.cyan : HOME_THEME.muted,
-              cursor: rows.length ? "pointer" : "not-allowed",
-              opacity: rows.length ? 1 : 0.5,
-            }}
-          >
-            Export Excel
-          </button>
           <button onClick={() => void load(tab, dateFilter, limit)} style={homeButtonStyle}>
             Refresh
           </button>
