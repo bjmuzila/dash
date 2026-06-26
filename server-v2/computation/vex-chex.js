@@ -26,7 +26,12 @@
  * @param {number} args.vega
  * @param {number} [args.vanna]
  * @param {number} [args.charm]
- * @param {number} args.contracts - OI or volume
+ * @param {number} args.contracts - OI (drives totalGEX and the OI-weighted greeks)
+ * @param {number} [args.volContracts] - OI + volume; drives the parallel
+ *   totalGEXOiVol total (heatmap / mult-greek basis). Defaults to `contracts`
+ *   (OI only) when not supplied, so existing callers are unchanged.
+ * @param {number} [args.volOnly] - volume only; drives totalGEXVol (Vol-only
+ *   basis). Defaults to 0 when not supplied.
  * @param {number} args.spot
  */
 function accumulateExposureTotals({
@@ -39,13 +44,18 @@ function accumulateExposureTotals({
   vanna = 0,
   charm = 0,
   contracts,
+  volContracts,
+  volOnly = 0,
   spot,
 }) {
   const mult = 100 * spot;
   const gexMult = spot * spot;
+  const oiVol = volContracts == null ? contracts : volContracts;
 
   if (isCall) {
     totals.totalGEX += Math.abs(gamma) * contracts * gexMult;
+    totals.totalGEXOiVol += Math.abs(gamma) * oiVol * gexMult;
+    totals.totalGEXVol += Math.abs(gamma) * volOnly * gexMult;
     totals.totalDeltaCall += Math.abs(delta) * contracts * mult;
     totals.totalCharmCall += -theta * contracts * mult;
     totals.totalVegaCall += vega * contracts * mult;
@@ -55,6 +65,8 @@ function accumulateExposureTotals({
   }
 
   totals.totalGEX -= Math.abs(gamma) * contracts * gexMult;
+  totals.totalGEXOiVol -= Math.abs(gamma) * oiVol * gexMult;
+  totals.totalGEXVol -= Math.abs(gamma) * volOnly * gexMult;
   totals.totalDeltaPut -= Math.abs(delta) * contracts * mult;
   totals.totalCharmPut += theta * contracts * mult;
   totals.totalVegaPut -= vega * contracts * mult;
@@ -66,6 +78,8 @@ function accumulateExposureTotals({
 function emptyTotals() {
   return {
     totalGEX: 0,
+    totalGEXOiVol: 0,
+    totalGEXVol: 0,
     totalDeltaCall: 0,
     totalDeltaPut: 0,
     totalCharmCall: 0,

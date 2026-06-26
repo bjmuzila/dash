@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type ChainRow } from "@/lib/calculations/calculations";
+import { type ChainRow, type CalcMode, calculateNetGEX } from "@/lib/calculations/calculations";
 import { type GexBaselines } from "@/hooks/useStrikeGexHistory";
 
 export type GexMode   = "net" | "call-put";
@@ -212,14 +212,16 @@ export default function GexChart({
 
     const isVol     = dataMode === "vol-only";
     const isCallPut = mode === "call-put";
+    // Resolve the contract basis once; compute GEX from the chain rows via the
+    // shared library so all bases (OI+Vol / OI / Vol) are consistent everywhere
+    // and don't depend on how a given page precomputed netGEX/callGEX/putGEX.
+    const calcMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
+    const posC = (r: ChainRow) => calcMode === "vol" ? (r.callVolume ?? 0) : (r.callOI ?? 0) + (r.callVolume ?? 0);
+    const posP = (r: ChainRow) => calcMode === "vol" ? (r.putVolume ?? 0) : (r.putOI ?? 0) + (r.putVolume ?? 0);
 
-    const getNet  = (r: ChainRow) => isVol ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
-    const getCall = (r: ChainRow) => isVol
-      ? (r.callGamma ?? 0) * (r.callVolume ?? 0) * spotPrice * spotPrice
-      : (r.callGEX ?? 0);
-    const getPut  = (r: ChainRow) => isVol
-      ? -Math.abs((r.putGamma ?? 0) * (r.putVolume ?? 0) * spotPrice * spotPrice)
-      : (r.putGEX ?? 0);
+    const getNet  = (r: ChainRow) => calculateNetGEX(r, calcMode);
+    const getCall = (r: ChainRow) => Math.abs(r.callGamma ?? 0) * posC(r) * spotPrice * spotPrice;
+    const getPut  = (r: ChainRow) => -Math.abs((r.putGamma ?? 0) * posP(r) * spotPrice * spotPrice);
 
     // ── Chart area (no axis border space) ──
     const cW    = W - PAD_L - PAD_R;
@@ -830,7 +832,7 @@ export default function GexChart({
       {/* Tooltip */}
       {tooltip && (() => {
         const r    = tooltip.row;
-        const tooltipGex = dataMode === "vol-only" ? (r.netVolGEX ?? 0) : (r.netGEX ?? 0);
+        const tooltipGex = calculateNetGEX(r, dataMode === "vol-only" ? "vol" : "net");
         return (
           <div style={{
             position: "absolute", zIndex: 100, pointerEvents: "none",

@@ -40,17 +40,19 @@ interface DailyInput {
 // How many strikes above and below the ATM strike to include in the ladder.
 const GEX_LADDER_HALF = 20;
 
-// GEX weighting basis: "oivol" = open-interest GEX (the default dashboard read),
-// "vol" = volume-weighted GEX. Each gexRow carries both netGEX (OI) and netVolGEX
-// (volume), so switching basis is a field selection — no recomputation needed.
+// GEX weighting basis: "oivol" = open interest + volume (the default dashboard
+// read, matching the heatmap / mult-greek), "vol" = volume-only GEX. Each gexRow
+// carries netGEX (OI-only) and netVolGEX (vol-only); OI+Vol = their sum, so
+// switching basis needs no recomputation.
 type GexBasis = "oivol" | "vol";
 
 // Pick the per-strike net GEX for the chosen basis off a raw /proxy/gex row.
 function rowNetGex(o: Record<string, unknown>, basis: GexBasis): number {
-  if (basis === "vol") {
-    return Number(o.netVolGEX ?? o.netVolGex ?? o.netGEX ?? o.netGex ?? 0);
-  }
-  return Number(o.netGEX ?? o.netGex ?? 0);
+  const oi = Number(o.netGEX ?? o.netGex ?? 0);
+  const vol = Number(o.netVolGEX ?? o.netVolGex ?? 0);
+  if (basis === "vol") return Number.isFinite(vol) ? vol : 0;
+  // oivol = OI + Volume
+  return (Number.isFinite(oi) ? oi : 0) + (Number.isFinite(vol) ? vol : 0);
 }
 
 interface GexRow { strike: number; netGEX: number }
@@ -209,12 +211,14 @@ function computeExpiryGex(legs: Leg[], spot: number, basis: GexBasis = "oivol"):
     if (l.type === "CALL") e.call = l; else e.put = l;
     byStrike.set(l.strike, e);
   }
-  // Weight gamma by volume for the "vol" basis, open interest otherwise.
-  const wt = (leg: Leg | undefined) => (basis === "vol" ? (leg?.volume ?? 0) : (leg?.oi ?? 0));
+  // Weight gamma by volume for the "vol" basis, OI + volume otherwise (default).
+  const wt = (leg: Leg | undefined) =>
+    basis === "vol" ? (leg?.volume ?? 0) : (leg?.oi ?? 0) + (leg?.volume ?? 0);
   const rows: StrikeGex[] = [];
   for (const [strike, s] of byStrike) {
-    const callGEX = (s.call?.gamma ?? 0) * wt(s.call) * spot * spot;
-    const putGEX = -((s.put?.gamma ?? 0) * wt(s.put) * spot * spot);
+    // abs gamma, calls +, puts − (matches the server / heatmap convention).
+    const callGEX = Math.abs(s.call?.gamma ?? 0) * wt(s.call) * spot * spot;
+    const putGEX = -(Math.abs(s.put?.gamma ?? 0) * wt(s.put) * spot * spot);
     rows.push({ strike, netGEX: callGEX + putGEX });
   }
   if (!rows.length) return null;
@@ -465,8 +469,12 @@ export async function GET(req: Request) {
           0,
         );
       } else {
+        // oivol basis: prefer the server's OI+Vol total, falling back to OI-only
+        // then the legacy net-gex field for older frames.
         const totals = p.totals as Record<string, unknown> | null | undefined;
-        totalGex = totals ? Number(totals.totalGEX ?? 0) : Number(p.totalNetGex ?? 0);
+        totalGex = totals
+          ? Number(totals.totalGEXOiVol ?? totals.totalGEX ?? 0)
+          : Number(p.totalNetGex ?? 0);
       }
       out.netGex = Number.isFinite(totalGex) && totalGex !== 0 ? totalGex / 1e9 : null;
       out.gexLadder = buildGexLadder(p.gexRows, spot, basis);

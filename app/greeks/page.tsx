@@ -19,12 +19,17 @@ import RegimeMatrix from "@/components/greeks/RegimeMatrix";
 
 interface GreekPoint {
   ts: number;
-  gex: number;   // billions
-  dex: number;   // billions
-  chex: number;  // millions
-  vex: number;   // millions
+  gex: number;       // billions — net GEX at the active basis (defaults OI+Vol)
+  gexOiVol?: number; // billions — OI+Vol net GEX (heatmap / mult-greek basis)
+  gexVol?: number;   // billions — Vol-only net GEX
+  dex: number;       // billions
+  chex: number;      // millions
+  vex: number;       // millions
   spot: number;
 }
+
+// OI+Vol (default, matches heatmap / mult-greek) or Volume-only.
+type GexBasis = "oivol" | "vol";
 
 interface VolData {
   vix_spot?: number;     // 30D VIX
@@ -801,6 +806,7 @@ export default function GreeksPage() {
   const [lastPoll, setLastPoll] = useState("--"); // last auto-poll attempt (alive-check, independent of data)
   const [stale, setStale] = useState(false);
   const [mode, setMode] = useState<GraphMode>("line");
+  const [gexBasis, setGexBasis] = useState<GexBasis>("oivol");
   const [vol, setVol] = useState<VolData | null>(null);
   const [feed, setFeed] = useState<(GammaSignal & { time: string; key: number })[]>([]);
   const feedIdRef = useRef(0);
@@ -867,9 +873,13 @@ export default function GreeksPage() {
       let ts = Number(payload?.updatedAt);
       if (!Number.isFinite(ts) || ts <= 0) ts = Date.now();
       else if (ts < 1e12) ts = ts * 1000; // seconds → ms
+      const gexOiVolB = Number(t.totalGEXOiVol ?? t.totalGEX ?? 0) / 1e9;
+      const gexVolB = Number(t.totalGEXVol ?? 0) / 1e9;
       const snap: GreekPoint = {
         ts,
-        gex: Number(t.totalGEX ?? 0) / 1e9,
+        gex: gexOiVolB, // default basis = OI+Vol (matches heatmap / mult-greek)
+        gexOiVol: gexOiVolB,
+        gexVol: gexVolB,
         dex: netDEX / 1e9,
         chex: Number(t.totalCHEX ?? 0) / 1e6,
         vex: Number(t.totalVEX ?? 0) / 1e6,
@@ -893,28 +903,40 @@ export default function GreeksPage() {
     return () => clearInterval(t);
   }, [doRefresh]);
 
+  // GEX basis toggle: OI+Vol (heatmap / mult-greek) by default, or Volume-only.
+  // `gex` already holds the OI+Vol value; remap to gexVol when Vol-only is chosen
+  // so ALL downstream consumers (cards, velocity, chart, signals) stay consistent.
+  const applyBasis = useCallback(
+    (p: GreekPoint): GreekPoint =>
+      gexBasis === "vol" && p.gexVol != null ? { ...p, gex: p.gexVol } : p,
+    [gexBasis],
+  );
+  const historyView = history.map(applyBasis);
+  const latestView = latest ? applyBasis(latest) : null;
+
   // Display values (fall back to last historical point if no live snap yet).
-  const d = latest ?? (history.length ? history[history.length - 1] : null);
+  const history2 = historyView;
+  const d = latestView ?? (history2.length ? history2[history2.length - 1] : null);
   const gexVal = d?.gex ?? null;
   const dexVal = d?.dex ?? null;
   const chexVal = d?.chex ?? null;
   const vexVal = d?.vex ?? null;
 
-  const gexData    = history.map(r => ({ ts: r.ts, value: r.gex }));
-  const dexData    = history.map(r => ({ ts: r.ts, value: r.dex }));
-  const chexData   = history.map(r => ({ ts: r.ts, value: r.chex }));
-  const vexData    = history.map(r => ({ ts: r.ts, value: r.vex }));
+  const gexData    = history2.map(r => ({ ts: r.ts, value: r.gex }));
+  const dexData    = history2.map(r => ({ ts: r.ts, value: r.dex }));
+  const chexData   = history2.map(r => ({ ts: r.ts, value: r.chex }));
+  const vexData    = history2.map(r => ({ ts: r.ts, value: r.vex }));
 
   // Per-Greek velocity (~10 min Δ) shown on each card.
   const velStr = (dv: number, f: (v: number | null) => string) =>
-    history.length < 2 ? "" : `${dv > 0 ? "↑" : dv < 0 ? "↓" : "→"} ${f(dv)}/10m`;
-  const gexVelStr  = velStr(velocityOf(history, p => p.gex).dv, fmtB);
-  const dexVelStr  = velStr(velocityOf(history, p => p.dex).dv, fmtB);
-  const chexVelStr = velStr(velocityOf(history, p => p.chex).dv, fmtM);
-  const vexVelStr  = velStr(velocityOf(history, p => p.vex).dv, fmtM);
+    history2.length < 2 ? "" : `${dv > 0 ? "↑" : dv < 0 ? "↓" : "→"} ${f(dv)}/10m`;
+  const gexVelStr  = velStr(velocityOf(history2, p => p.gex).dv, fmtB);
+  const dexVelStr  = velStr(velocityOf(history2, p => p.dex).dv, fmtB);
+  const chexVelStr = velStr(velocityOf(history2, p => p.chex).dv, fmtM);
+  const vexVelStr  = velStr(velocityOf(history2, p => p.vex).dv, fmtM);
 
   // Current active signals (top of feed shows live state).
-  const activeSignals = history.length ? evaluateGamma(history, vol) : [];
+  const activeSignals = history2.length ? evaluateGamma(history2, vol) : [];
 
   // Append newly-fired signals to the scrolling feed (dedup against the last
   // evaluation so we don't spam the same condition every 30s poll).
@@ -945,6 +967,15 @@ export default function GreeksPage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", border: "1px solid rgba(255,255,255,.14)", borderRadius: 7, overflow: "hidden" }} title="GEX basis: OI+Vol (open interest + volume, matches the heatmap / multi-greek) or Volume only">
+            {([["oivol", "OI+Vol"], ["vol", "Vol Only"]] as [GexBasis, string][]).map(([b, lbl]) => (
+              <button key={b} onClick={() => setGexBasis(b)} style={{
+                padding: "6px 12px", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+                background: gexBasis === b ? "rgba(0,229,255,.16)" : "transparent",
+                color: gexBasis === b ? "#67e8f9" : "#9fb3c8", border: "none", cursor: "pointer",
+              }}>{lbl}</button>
+            ))}
+          </div>
           <div style={{ display: "flex", border: "1px solid rgba(255,255,255,.14)", borderRadius: 7, overflow: "hidden" }}>
             {(["line", "bars"] as GraphMode[]).map(m => (
               <button key={m} onClick={() => setMode(m)} style={{
@@ -964,7 +995,7 @@ export default function GreeksPage() {
       {/* Cards */}
       <div className="greeks-cards" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
         <GreekCard
-          icon="■" label="GEX" subtitle="Gamma Exposure" mode={mode} fmt={fmtB} accent="#22d3ee"
+          icon="■" label="GEX" subtitle={gexBasis === "oivol" ? "Gamma Exposure · OI+Vol" : "Gamma Exposure · Vol Only"} mode={mode} fmt={fmtB} accent="#22d3ee"
           valueStr={fmtB(gexVal)} value={gexVal} velocity={gexVelStr} data={gexData}
           positiveMsg="Dealers long gamma — they trade against moves (buy dips, sell rips). Volatility suppressed, ranges compressed."
           negativeMsg="Dealers short gamma — they chase moves in both directions. Volatility amplified; small pushes can cascade."

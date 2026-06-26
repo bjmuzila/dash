@@ -68,6 +68,7 @@ type ViewMode = "heatmap" | "chart";
 
 export default function MobileGexPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("heatmap");
+  const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
   const [chain, setChain] = useState<ChainRow[]>([]);
   const [spotPrice, setSpotPrice] = useState(0);
   const [selectedExpiry, setSelectedExpiry] = useState("");
@@ -393,6 +394,31 @@ export default function MobileGexPage() {
             </button>
           ))}
         </div>
+
+        {/* GEX basis toggle: OI+Vol (default) / Vol only */}
+        <div style={{ display: "flex", gap: 4, background: "#0a0f16", borderRadius: 2, padding: "2px", flexShrink: 0 }}>
+          {([["oi-vol", "OI+V"], ["vol-only", "VOL"]] as [DataMode, string][]).map(([m, lbl]) => (
+            <button
+              key={m}
+              onClick={() => setDataMode(m)}
+              style={{
+                padding: "4px 10px",
+                border: "none",
+                borderRadius: 2,
+                background: dataMode === m ? "#1a2a3a" : "transparent",
+                color: dataMode === m ? "#00e5ff" : "#3a5570",
+                fontSize: 9,
+                fontWeight: 700,
+                cursor: "pointer",
+                textTransform: "uppercase",
+                transition: "all 0.2s ease",
+                fontFamily: "inherit",
+              }}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Content area */}
@@ -419,7 +445,7 @@ export default function MobileGexPage() {
             </div>
           </div>
         ) : viewMode === "heatmap" ? (
-          <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode="oi-vol" intensity={0.8} window={20} />
+          <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={0.8} window={20} />
         ) : (
           <GexChart
             chain={chain}
@@ -428,7 +454,7 @@ export default function MobileGexPage() {
             gexProfile={gexProfile}
             expiry={selectedExpiry}
             mode="net"
-            dataMode="oi-vol"
+            dataMode={dataMode}
             chartMode="line"
             showOI={false}
             showDex={false}

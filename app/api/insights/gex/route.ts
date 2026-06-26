@@ -28,6 +28,7 @@ export async function GET() {
       updatedAt: p?.updatedAt ?? Date.now(),
       // snake_case fields consumed by the GEX gauge / walls section.
       net_gex_billions: totals ? Number(totals.totalGEX ?? 0) / 1e9 : null,
+      net_gex_oivol_billions: totals ? Number(totals.totalGEXOiVol ?? totals.totalGEX ?? 0) / 1e9 : null,
       call_gex_billions: callGexB,
       put_gex_billions: null,
       call_wall_spx: p?.callWall ?? null,

@@ -2300,6 +2300,8 @@ class TastytradeProxy {
         vanna: r.vanna,
         charm: r.charm,
         contracts: r.oi,
+        volContracts: (r.oi || 0) + (r.volume || 0),
+        volOnly: r.volume || 0,
         spot: this.spot,
       });
     }

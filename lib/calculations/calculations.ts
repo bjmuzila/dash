@@ -71,18 +71,17 @@ export function densifyChainRows(chain: ChainRow[], step = 5): ChainRow[] {
   return rows;
 }
 
+// "net" = OI + Volume (default), "vol" = volume only.
 export type CalcMode = "net" | "vol";
+
+function posOf(oi: number, vol: number, mode: CalcMode): number {
+  return mode === "vol" ? vol : oi + vol;
+}
 
 export function calculateNetGEX(row: ChainRow, mode: CalcMode = "net"): number {
   const spot = Number(row.spotPrice ?? row.spot ?? 0);
-  const callPos =
-    mode === "vol"
-      ? (row.callVolume ?? 0)
-      : (row.callOI ?? 0) + (row.callVolume ?? 0);
-  const putPos =
-    mode === "vol"
-      ? (row.putVolume ?? 0)
-      : (row.putOI ?? 0) + (row.putVolume ?? 0);
+  const callPos = posOf(row.callOI ?? 0, row.callVolume ?? 0, mode);
+  const putPos = posOf(row.putOI ?? 0, row.putVolume ?? 0, mode);
 
   // Force sign by side (calls +, puts −) regardless of the incoming gamma sign,
   // matching the server calculator (gex-calculator.js): a stray negative gamma
@@ -97,14 +96,8 @@ export function calculateNetDEX(
   spotPrice: number,
   mode: CalcMode = "net"
 ): number {
-  const callPos =
-    mode === "vol"
-      ? (row.callVolume ?? 0)
-      : (row.callOI ?? 0) + (row.callVolume ?? 0);
-  const putPos =
-    mode === "vol"
-      ? (row.putVolume ?? 0)
-      : (row.putOI ?? 0) + (row.putVolume ?? 0);
+  const callPos = posOf(row.callOI ?? 0, row.callVolume ?? 0, mode);
+  const putPos = posOf(row.putOI ?? 0, row.putVolume ?? 0, mode);
 
   return ((row.callDelta ?? 0) * callPos - (row.putDelta ?? 0) * putPos) * spotPrice * 100;
 }
@@ -229,16 +222,11 @@ export function computeGEXProfile(
   dataMode: "oi-vol" | "vol-only" = "oi-vol",
 ): GEXProfile | null {
   // Contract basis per data mode (matches the bar chart's OI+Vol / Vol Only toggle):
-  //   oi-vol   → open interest + volume
+  //   oi-vol   → open interest + volume (default)
   //   vol-only → volume only
-  const callContracts = (r: ChainRow) =>
-    dataMode === "vol-only"
-      ? (r.callVolume ?? 0)
-      : (r.callOI ?? 0) + (r.callVolume ?? 0);
-  const putContracts = (r: ChainRow) =>
-    dataMode === "vol-only"
-      ? (r.putVolume ?? 0)
-      : (r.putOI ?? 0) + (r.putVolume ?? 0);
+  const cm: CalcMode = dataMode === "vol-only" ? "vol" : "net";
+  const callContracts = (r: ChainRow) => posOf(r.callOI ?? 0, r.callVolume ?? 0, cm);
+  const putContracts = (r: ChainRow) => posOf(r.putOI ?? 0, r.putVolume ?? 0, cm);
 
   // Need at least some rows with IV data + contracts under the active basis
   const rows = chain.filter(r =>

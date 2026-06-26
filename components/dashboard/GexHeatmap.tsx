@@ -98,9 +98,11 @@ export default function GexHeatmap({
       const putGamma = r.putGamma ?? 0;
       const callDelta = r.callDelta ?? 0;
       const putDelta = r.putDelta ?? 0;
-      const netVolGEX = r.netVolGEX ?? ((callGamma * (r.callVolume ?? 0) - putGamma * (r.putVolume ?? 0)) * spotSq);
+      const netVolGEX = r.netVolGEX ?? ((Math.abs(callGamma) * (r.callVolume ?? 0) - Math.abs(putGamma) * (r.putVolume ?? 0)) * spotSq);
       const vannaValue = useVol ? (r.netVolVanna ?? r.netVanna ?? 0) : (r.netVanna ?? r.netVolVanna ?? 0);
-      const netGEX = r.netGEX ?? (callGamma * callPos * spotSq - putGamma * putPos * spotSq);
+      // Always compute from the active basis (calls +, puts −, abs gamma) — do not
+      // fall back to a precomputed r.netGEX, which may be a different basis.
+      const netGEX = Math.abs(callGamma) * callPos * spotSq - Math.abs(putGamma) * putPos * spotSq;
 
       return {
         strike: r.strike,
