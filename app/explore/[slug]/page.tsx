@@ -32,6 +32,7 @@ export default async function ExplorePage({
 
   return (
     <div
+      className="explore-root"
       style={{
         minHeight: "100vh",
         background: T.bg,

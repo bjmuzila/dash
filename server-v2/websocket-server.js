@@ -174,6 +174,29 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   // Expose to the rest of the process (owner page reads via /proxy/self-metrics).
   _bandwidthGetter = getBandwidth;
 
+  // Connection auth gate. OFF unless WS_AUTH_REQUIRED === "1", so existing
+  // behavior is unchanged until you explicitly enable it after testing. When on,
+  // the upgrade is rejected (no data sent) for any request that isn't a verified
+  // owner/active-subscriber — see server-v2/ws-auth.js.
+  const WS_AUTH_REQUIRED = process.env.WS_AUTH_REQUIRED === '1';
+  let verifyWsRequest = null;
+  if (WS_AUTH_REQUIRED) {
+    try { ({ verifyWsRequest } = require('./ws-auth')); }
+    catch (e) { log.log?.('[WS] ws-auth module failed to load — auth DISABLED:', e?.message); }
+  }
+
+  function rejectUpgrade(socket, code, reason) {
+    try {
+      socket.write(
+        `HTTP/1.1 ${code} ${reason}\r\n` +
+        'Connection: close\r\n' +
+        'Content-Length: 0\r\n' +
+        '\r\n'
+      );
+    } catch { /* ignore */ }
+    try { socket.destroy(); } catch { /* ignore */ }
+  }
+
   server.on('upgrade', (request, socket, head) => {
     let pathname;
     try {
@@ -182,7 +205,30 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       return;
     }
     if (pathname !== path) return; // let other upgrade handlers take it
-    wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+
+    const accept = () =>
+      wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+
+    if (!WS_AUTH_REQUIRED || !verifyWsRequest) {
+      accept();
+      return;
+    }
+
+    // Auth required: verify BEFORE handleUpgrade so no snapshot is ever sent to
+    // an unauthorized connection.
+    verifyWsRequest(request)
+      .then((res) => {
+        if (res && res.ok) {
+          accept();
+        } else {
+          log.log?.(`[WS] upgrade rejected (${res?.reason || 'unknown'})`);
+          rejectUpgrade(socket, 401, 'Unauthorized');
+        }
+      })
+      .catch((e) => {
+        log.log?.('[WS] auth check threw — rejecting:', e?.message);
+        rejectUpgrade(socket, 401, 'Unauthorized');
+      });
   });
 
   wss.on('connection', (ws) => {

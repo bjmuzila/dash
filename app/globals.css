@@ -15,6 +15,16 @@
   --muted: #8b94a7;
 }
 
+/* Public marketing pages (landing card → feature preview, pricing) render
+   full-bleed inside body{overflow:hidden}. Their tall minHeight:100vh content
+   would be clipped, so the page root owns the scroll viewport at every width. */
+.explore-root {
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 * {
   box-sizing: border-box;
   font-family: "Inter", "Helvetica Neue", Arial, sans-serif;

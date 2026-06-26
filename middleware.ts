@@ -40,22 +40,43 @@ function proxyOrigin(req: Request): string {
 }
 
 // Lightly cached read of the proxy maintenance flag so we don't fetch on every
-// request. Cache TTL keeps the toggle near-instant without hammering the proxy.
+// request. Stale-while-revalidate: a fresh-enough value is returned instantly;
+// a stale value is ALSO returned instantly while a single background refresh
+// runs. This means at most the very first request after boot waits on the
+// proxy round-trip — every subsequent request reads cache and never blocks,
+// removing the maintenance fetch from the critical path on normal page loads.
 let maintCache: { value: boolean; at: number } = { value: false, at: 0 };
-const MAINT_TTL_MS = 5000;
+let maintRefreshing = false;
+const MAINT_TTL_MS = 30000;        // serve cached value without refresh for 30s
+const MAINT_HARD_MS = 5 * 60_000;  // beyond this, block once to get a real value
+
+function refreshMaintenance(req: Request): Promise<void> {
+  if (maintRefreshing) return Promise.resolve();
+  maintRefreshing = true;
+  return fetch(`${proxyOrigin(req)}/proxy/maintenance`, { cache: "no-store" })
+    .then(async (r) => {
+      if (r.ok) {
+        const j = await r.json();
+        maintCache = { value: !!j?.maintenance, at: Date.now() };
+      }
+    })
+    .catch(() => { /* proxy unreachable → keep last known value (fail open) */ })
+    .finally(() => { maintRefreshing = false; });
+}
 
 async function isMaintenanceOn(req: Request): Promise<boolean> {
-  if (Date.now() - maintCache.at < MAINT_TTL_MS) return maintCache.value;
-  try {
-    const r = await fetch(`${proxyOrigin(req)}/proxy/maintenance`, { cache: "no-store" });
-    if (r.ok) {
-      const j = await r.json();
-      maintCache = { value: !!j?.maintenance, at: Date.now() };
-      return maintCache.value;
-    }
-  } catch { /* proxy unreachable → fail open (no maintenance) */ }
-  maintCache = { value: false, at: Date.now() };
-  return false;
+  const age = Date.now() - maintCache.at;
+  // Fresh enough → return immediately, no network.
+  if (age < MAINT_TTL_MS) return maintCache.value;
+  // Stale but not ancient → return the last value NOW and refresh in the
+  // background (don't await), so this request isn't blocked by the round-trip.
+  if (age < MAINT_HARD_MS) {
+    void refreshMaintenance(req);
+    return maintCache.value;
+  }
+  // Never fetched, or cache is very old → block once to get an authoritative value.
+  await refreshMaintenance(req);
+  return maintCache.value;
 }
 
 export default clerkMiddleware(async (auth, req) => {

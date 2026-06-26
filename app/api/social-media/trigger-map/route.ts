@@ -31,7 +31,9 @@ Return ONLY a single JSON object — no markdown, no code fences, no commentary 
   "bull": { "odds": number, "desc": string },
   "base": { "odds": number, "desc": string },
   "bear": { "odds": number, "desc": string }
-}`;
+}
+
+Output a SINGLE object with bull/base/bear as keys. Do NOT wrap them in an array and do NOT separate them with "},{". There is exactly one top-level object and one closing brace.`;
 
 interface TriggerInput {
   spxSpot?: number | null;
@@ -84,8 +86,57 @@ function clampCase(o: unknown): TriggerCase | null {
   return { odds: Number.isFinite(odds) ? Math.round(odds) : 0, desc };
 }
 
+// Extract the balanced object that begins at `from` (which must point at a "{").
+function balancedObjectAt(text: string, from: number): string | null {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return text.slice(from, i + 1);
+  }
+  return null;
+}
+
+// Fallback for when the model emits the three cases as separate/array-wrapped
+// objects (e.g. {"bull":{...}},{"base":{...}},{"bear":{...}}]) instead of one
+// object. Find each "key": {...} and parse its object independently.
+function recoverByKey(text: string): TriggerMap | null {
+  const out: Partial<Record<"bull" | "base" | "bear", TriggerCase>> = {};
+  for (const key of ["bull", "base", "bear"] as const) {
+    const k = text.indexOf(`"${key}"`);
+    if (k === -1) return null;
+    const brace = text.indexOf("{", k);
+    if (brace === -1) return null;
+    const objStr = balancedObjectAt(text, brace);
+    if (!objStr) return null;
+    try {
+      const c = clampCase(JSON.parse(objStr));
+      if (!c) return null;
+      out[key] = c;
+    } catch {
+      return null;
+    }
+  }
+  const { bull, base, bear } = out;
+  if (!bull || !base || !bear) return null;
+  const sum = bull.odds + base.odds + bear.odds;
+  if (sum > 0 && sum !== 100) {
+    bull.odds = Math.round((bull.odds / sum) * 100);
+    base.odds = Math.round((base.odds / sum) * 100);
+    bear.odds = 100 - bull.odds - base.odds;
+  }
+  return { bull, base, bear };
+}
+
 // First balanced JSON object out of arbitrary model text (handles ```json fences
-// and surrounding prose).
+// and surrounding prose). Falls back to per-key recovery on malformed shapes.
 function extractJson(raw: string): TriggerMap | null {
   let text = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const start = text.indexOf("{");
@@ -108,7 +159,7 @@ function extractJson(raw: string): TriggerMap | null {
           const bull = clampCase(obj.bull);
           const base = clampCase(obj.base);
           const bear = clampCase(obj.bear);
-          if (!bull || !base || !bear) return null;
+          if (!bull || !base || !bear) return recoverByKey(text);
           // Normalize odds to sum to 100 if the model drifted.
           const sum = bull.odds + base.odds + bear.odds;
           if (sum > 0 && sum !== 100) {
@@ -118,7 +169,7 @@ function extractJson(raw: string): TriggerMap | null {
           }
           return { bull, base, bear };
         } catch {
-          return null;
+          return recoverByKey(text);
         }
       }
     }
@@ -155,8 +206,10 @@ export async function POST(req: NextRequest) {
         messages: [{ role: "user", content: formatUserMessage(input) }],
       }),
       cache: "no-store",
+      signal: AbortSignal.timeout(25000),
     });
   } catch (err) {
+    console.error("[trigger-map] anthropic request failed", String((err as Error)?.message || err));
     return NextResponse.json(
       { error: `anthropic request failed: ${String((err as Error)?.message || err)}` },
       { status: 502 }
@@ -165,6 +218,7 @@ export async function POST(req: NextRequest) {
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
+    console.error("[trigger-map] anthropic error", res.status, detail.slice(0, 500));
     return NextResponse.json({ error: `anthropic ${res.status}`, detail: detail.slice(0, 500) }, { status: 502 });
   }
 
@@ -177,6 +231,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = extractJson(text);
   if (!parsed) {
+    console.error("[trigger-map] unparseable model output", text.slice(0, 800));
     return NextResponse.json({ error: "model returned unparseable output", raw: text.slice(0, 800) }, { status: 502 });
   }
 

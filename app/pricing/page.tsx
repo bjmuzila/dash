@@ -36,6 +36,7 @@ export default async function PricingPage({
 
   return (
     <div
+      className="explore-root"
       style={{
         minHeight: "100vh",
         background: T.bg,

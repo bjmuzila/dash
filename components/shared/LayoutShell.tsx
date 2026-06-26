@@ -10,7 +10,7 @@ import { NotesPanelProvider } from "./NotesPanelContext";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 
 // Routes that render full-bleed without the dashboard chrome.
-const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/terms", "/risk-disclosure", "/privacy", "/disclaimer"];
+const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/terms", "/risk-disclosure", "/privacy", "/disclaimer"];
 
 // Turn a pathname into a stable key + readable label for Page Activity, so every
 // route auto-reports without each page wiring the hook itself.
