@@ -1,4 +1,11 @@
 import { ImageResponse } from "next/og";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+// Real chrome CB Edge logo, inlined so it bakes into the generated PNG.
+const cbLogoDataUri = `data:image/png;base64,${readFileSync(
+  join(process.cwd(), "public", "cb-edge-logo.png")
+).toString("base64")}`;
 
 export const runtime = "nodejs";
 // Render on-demand, not at build time — avoids the Google Fonts fetch running
@@ -44,8 +51,6 @@ const chartSvg = `
       <rect x="416" y="88" width="9" height="30"/><rect x="428" y="100" width="9" height="18"/><rect x="440" y="104" width="9" height="14"/>
       <rect x="452" y="108" width="9" height="10"/><rect x="464" y="110" width="9" height="8"/><rect x="476" y="112" width="9" height="6"/>
     </g>
-    <rect x="104" y="216" width="34" height="14" rx="3" fill="#1a1405" stroke="#E0A82E" stroke-opacity="0.7"/>
-    <text x="121" y="226" text-anchor="middle" fill="#E0A82E" font-family="Inter" font-size="8" font-weight="700">MVC 7,300</text>
   </g>
   <g transform="translate(0,344)" font-family="Inter">
     <rect x="0" y="0" width="516" height="54" fill="#0d1119"/>
@@ -101,29 +106,18 @@ export default function OpengraphImage() {
           <div style={{ display: "flex", flexDirection: "column", width: 500 }}>
             <div style={{ display: "flex", alignItems: "center" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={logoDataUri} width={56} height={56} alt="" />
-              <div
-                style={{
-                  marginLeft: 18,
-                  color: "#FFFFFF",
-                  fontSize: 34,
-                  fontWeight: 800,
-                  letterSpacing: -0.5,
-                }}
-              >
-                CB Edge
-              </div>
+              <img src={cbLogoDataUri} width={420} height={229} alt="CB Edge" style={{ marginLeft: -64, marginTop: -52, marginBottom: -48 }} />
             </div>
 
             <div
               style={{
                 display: "flex",
                 flexDirection: "column",
-                marginTop: 56,
+                marginTop: 0,
                 color: "#FFFFFF",
-                fontSize: 62,
+                fontSize: 52,
                 fontWeight: 800,
-                lineHeight: 1.08,
+                lineHeight: 1.1,
                 letterSpacing: -1,
               }}
             >
@@ -136,7 +130,7 @@ export default function OpengraphImage() {
               style={{
                 display: "flex",
                 flexDirection: "column",
-                marginTop: 34,
+                marginTop: 24,
                 color: "#8b94a7",
                 fontSize: 23,
                 lineHeight: 1.4,
@@ -157,7 +151,7 @@ export default function OpengraphImage() {
                 display: "flex",
                 alignItems: "center",
                 alignSelf: "flex-start",
-                marginTop: 34,
+                marginTop: 26,
                 padding: "14px 28px",
                 borderRadius: 12,
                 background: "#219EBC",
@@ -179,8 +173,22 @@ export default function OpengraphImage() {
               flexDirection: "column",
               alignItems: "flex-end",
               justifyContent: "center",
+              position: "relative",
             }}
           >
+            {/* glow behind the panel — bright, wide bloom to pull the eye */}
+            <div
+              style={{
+                position: "absolute",
+                top: -90,
+                right: -80,
+                bottom: -90,
+                left: -20,
+                background:
+                  "radial-gradient(circle at 55% 50%, rgba(41,182,246,0.70), rgba(41,182,246,0.30) 38%, rgba(41,182,246,0.08) 62%, transparent 78%)",
+              }}
+            />
+
             {/* chart panel: titlebar dots + real-DOM toolbar pills + chart img */}
             <div
               style={{
@@ -244,8 +252,28 @@ export default function OpengraphImage() {
                 </div>
               </div>
 
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={chartDataUri} width={512} height={300} alt="" />
+              <div style={{ display: "flex", position: "relative" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={chartDataUri} width={512} height={300} alt="" />
+                {/* MVC tag — real DOM so the text renders */}
+                <div
+                  style={{
+                    display: "flex",
+                    position: "absolute",
+                    left: 92,
+                    bottom: 30,
+                    padding: "3px 7px",
+                    borderRadius: 4,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    background: "#1a1405",
+                    border: "1px solid rgba(224,168,46,0.7)",
+                    color: "#E0A82E",
+                  }}
+                >
+                  MVC 7,300
+                </div>
+              </div>
             </div>
 
             {/* stat bar — real DOM text so the built-in font renders it */}
