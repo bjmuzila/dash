@@ -1,6 +1,9 @@
 import { ImageResponse } from "next/og";
 
 export const runtime = "nodejs";
+// Render on-demand, not at build time — avoids the Google Fonts fetch running
+// inside `docker build` where outbound network may be unavailable.
+export const dynamic = "force-dynamic";
 export const alt = "CB Edge Dashboard — Real-time SPX GEX & Orderflow";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -104,8 +107,9 @@ export default async function OpengraphImage() {
           display: "flex",
           flexDirection: "column",
           padding: 56,
-          background:
-            "radial-gradient(circle at 76% 40%, rgba(41,182,246,0.15), transparent 55%), #05060A",
+          backgroundColor: "#05060A",
+          backgroundImage:
+            "radial-gradient(circle at 76% 40%, rgba(41,182,246,0.15), transparent 55%)",
           fontFamily: "Inter, sans-serif",
         }}
       >
