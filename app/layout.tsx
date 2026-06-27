@@ -9,16 +9,17 @@ import LayoutShell from "@/components/shared/LayoutShell";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://cbedge.net"),
-  title: "CB Edge Dashboard",
+  title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
   description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
   openGraph: {
-    title: "CB Edge Dashboard",
+    siteName: "CB Edge",
+    title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
     // image auto-injected from app/opengraph-image.tsx
   },
   twitter: {
     card: "summary_large_image",
-    title: "CB Edge Dashboard",
+    title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
     // image auto-injected from app/opengraph-image.tsx
   },

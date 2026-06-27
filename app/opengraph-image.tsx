@@ -107,7 +107,7 @@ export default function OpengraphImage() {
           }}
         >
           {/* LEFT: brand + copy */}
-          <div style={{ display: "flex", flexDirection: "column", width: 540 }}>
+          <div style={{ display: "flex", flexDirection: "column", width: 500 }}>
             <div style={{ display: "flex", alignItems: "center" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={logoDataUri} width={56} height={56} alt="" />
@@ -147,31 +147,65 @@ export default function OpengraphImage() {
                 flexDirection: "column",
                 marginTop: 34,
                 color: "#8b94a7",
-                fontSize: 25,
-                lineHeight: 1.35,
+                fontSize: 23,
+                lineHeight: 1.4,
               }}
             >
-              <span>Track gamma exposure, options flow, and</span>
-              <span>
-                key levels{" "}
+              <span>Track gamma exposure, options</span>
+              <span style={{ display: "flex" }}>
+                flow, and key levels&nbsp;
                 <span style={{ color: "#c7ccd1", fontWeight: 700 }}>
-                  live, every session.
+                  live.
                 </span>
               </span>
             </div>
           </div>
 
-          {/* RIGHT: dashboard mock */}
+          {/* RIGHT: dashboard mock + real-text stat bar */}
           <div
             style={{
               display: "flex",
               flex: 1,
-              alignItems: "center",
-              justifyContent: "flex-end",
+              flexDirection: "column",
+              alignItems: "flex-end",
+              justifyContent: "center",
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={chartDataUri} width={516} height={398} alt="" />
+            <img src={chartDataUri} width={516} height={344} alt="" />
+
+            {/* stat bar — real DOM text so the built-in font renders it */}
+            <div
+              style={{
+                display: "flex",
+                width: 516,
+                marginTop: -2,
+                padding: "12px 18px",
+                background: "#0d1119",
+                borderRadius: "0 0 16px 16px",
+                border: "1px solid rgba(255,255,255,0.10)",
+                borderTop: "none",
+              }}
+            >
+              {[
+                { k: "NET GEX", v: "-$8.40B", c: "#ff5b6e" },
+                { k: "CALL WALL", v: "7,400", c: "#4FC3F7" },
+                { k: "PUT WALL", v: "7,300", c: "#E0A82E" },
+                { k: "FLIP", v: "7,359.90", c: "#f0a83c" },
+              ].map((s) => (
+                <div
+                  key={s.k}
+                  style={{ display: "flex", flexDirection: "column", flex: 1 }}
+                >
+                  <span style={{ color: "#8b94a7", fontSize: 11, fontWeight: 700 }}>
+                    {s.k}
+                  </span>
+                  <span style={{ color: s.c, fontSize: 18, fontWeight: 800, marginTop: 3 }}>
+                    {s.v}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
