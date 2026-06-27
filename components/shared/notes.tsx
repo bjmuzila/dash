@@ -150,11 +150,11 @@ export function NotesBody({
                 // Glass card: faint cyan-tinted translucent fill, blur, almost
                 // borderless. Matches the app's panel/card system.
                 background: hoveredId === n.id
-                  ? "linear-gradient(180deg, rgba(0,240,255,0.07), rgba(13,17,25,0.5))"
+                  ? "linear-gradient(180deg, rgba(33,158,188,0.07), rgba(13,17,25,0.5))"
                   : "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(13,17,25,0.45))",
                 backdropFilter: "blur(16px)",
                 WebkitBackdropFilter: "blur(16px)",
-                border: `1px solid ${hoveredId === n.id ? "rgba(0,240,255,0.18)" : "rgba(255,255,255,0.05)"}`,
+                border: `1px solid ${hoveredId === n.id ? "rgba(33,158,188,0.18)" : "rgba(255,255,255,0.05)"}`,
                 borderRadius: 14,
                 padding: "10px 12px",
                 boxShadow: "0 4px 14px rgba(0,0,0,0.25)",

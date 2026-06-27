@@ -35,6 +35,21 @@ const DEFAULT_TASKS: TaskItem[] = [
 const DRIVER_COLORS = [HT.cyan, HT.orange, HT.red, HT.purple];
 const uid = () => Math.random().toString(36).slice(2, 9);
 
+// US equity-market full-day closures (NYSE/Cboe), ET date strings. Keep in sync with server-v2.
+const MARKET_HOLIDAYS = new Set([
+  "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+  "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+  "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+  "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+]);
+// en-CA gives YYYY-MM-DD; weekday short name in ET.
+const etDateStr = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+const etWeekday = (d: Date) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(d);
+const isTradingDay = (d: Date) => {
+  const wd = etWeekday(d);
+  return wd !== "Sat" && wd !== "Sun" && !MARKET_HOLIDAYS.has(etDateStr(d));
+};
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function TradersDashboardPage() {
@@ -132,16 +147,26 @@ export default function TradersDashboardPage() {
   useEffect(() => { if (zip) loadWeather(zip); }, [zip, loadWeather]);
 
   // ── Derived ──
-  const countdown = useMemo(() => {
-    if (!now) return "--:--:--";
+  const { countdown, targetLabel } = useMemo(() => {
+    if (!now) return { countdown: "--:--:--", targetLabel: "9:30 AM EST" };
     const target = new Date(now);
     target.setHours(9, 30, 0, 0);
     if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1);
+    // Roll forward to the next trading day (skip weekends + market holidays).
+    let guard = 0;
+    while (!isTradingDay(target) && guard++ < 14) target.setDate(target.getDate() + 1);
     let s = Math.floor((target.getTime() - now.getTime()) / 1000);
+    const days = Math.floor(s / 86400);
+    s %= 86400;
     const h = String(Math.floor(s / 3600)).padStart(2, "0");
     s %= 3600;
     const m = String(Math.floor(s / 60)).padStart(2, "0");
-    return `${h}:${m}:${String(s % 60).padStart(2, "0")}`;
+    const hms = `${h}:${m}:${String(s % 60).padStart(2, "0")}`;
+    const isToday = etDateStr(target) === etDateStr(now);
+    const label = isToday
+      ? "Target: 9:30 AM EST"
+      : `Target: ${target.toLocaleDateString("en-US", { weekday: "long" })} 9:30 AM EST`;
+    return { countdown: days > 0 ? `${days}d ${hms}` : hms, targetLabel: label };
   }, [now]);
 
   const dateStr = now
@@ -211,7 +236,7 @@ export default function TradersDashboardPage() {
             <div style={{ ...card, textAlign: "center", padding: "28px 20px" }}>
               <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>Countdown to Market Open</div>
               <div style={{ fontSize: "clamp(48px,8vw,84px)", fontWeight: 800, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{countdown}</div>
-              <div style={{ color: HT.muted, fontSize: 13, marginTop: 8 }}>Target: 9:30 AM EST</div>
+              <div style={{ color: HT.muted, fontSize: 13, marginTop: 8 }}>{targetLabel}</div>
             </div>
 
             {/* Overnight Overview */}
@@ -280,6 +305,29 @@ export default function TradersDashboardPage() {
 
           {/* RIGHT COLUMN */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
+
+            {/* Quick Links */}
+            <div style={card}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 16 }}>🔗 Quick Links</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { label: "Home", href: "/home" },
+                  { label: "Multi Greek", href: "/mult-greek" },
+                  { label: "Analytics", href: "/analytics" },
+                ].map((l) => (
+                  <a
+                    key={l.href}
+                    href={l.href}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.25)", color: HT.text, textDecoration: "none", fontWeight: 600, fontSize: 14, transition: "background .15s, border-color .15s" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(34,211,238,0.12)"; e.currentTarget.style.borderColor = HT.cyan; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.25)"; e.currentTarget.style.borderColor = HT.border; }}
+                  >
+                    <span>{l.label}</span>
+                    <span style={{ color: HT.cyan }}>→</span>
+                  </a>
+                ))}
+              </div>
+            </div>
 
             {/* Schedule */}
             <div style={card}>

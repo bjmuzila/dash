@@ -7,12 +7,12 @@
   --surface: rgba(13, 17, 25, 0.45);
   --surface-solid: #0d1119;
   --border: rgba(255, 255, 255, 0.1);
-  --accent: #00f0ff;
-  --accent-dim: #8b5cf6;
+  --accent: #219ebc;
+  --accent-dim: #126783;
   --red: #ef4444;
-  --yellow: #f97316;
+  --yellow: #fb8501;
   --text: #ffffff;
-  --muted: #8b94a7;
+  --muted: #ffffff;
 }
 
 /* Public marketing pages (landing card → feature preview, pricing) render
@@ -27,7 +27,7 @@
 
 * {
   box-sizing: border-box;
-  font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-inter), "Inter", "Helvetica Neue", Arial, sans-serif;
 }
 
 html,

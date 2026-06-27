@@ -9,7 +9,6 @@ import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import SignalsPanel from "@/components/dashboard/SignalsPanel";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { saveManualMvcSnapshot } from "@/components/shared/SnapButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
 
@@ -221,9 +220,9 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
   const byAbsPos = [...windowRows].filter((row) => oiVol(row) > 0).sort((a, b) => Math.abs(oiVol(b)) - Math.abs(oiVol(a))).slice(0, 5);
   const byAbsNeg = [...windowRows].filter((row) => oiVol(row) < 0).sort((a, b) => Math.abs(oiVol(b)) - Math.abs(oiVol(a))).slice(0, 5);
   const rankMap = new Map<number, { rank: number; rankColor: string }>();
-  byAbsPos.forEach((row, index) => rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#F97316" : "#8B94A7" }));
+  byAbsPos.forEach((row, index) => rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#FB8501" : "#8B94A7" }));
   byAbsNeg.forEach((row, index) => {
-    if (!rankMap.has(row.strike)) rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#F97316" : "#8B94A7" });
+    if (!rankMap.has(row.strike)) rankMap.set(row.strike, { rank: index + 1, rankColor: index === 0 || index === 2 ? "#FB8501" : "#8B94A7" });
   });
 
   const atmStrike = windowRows.reduce((best, row) => (
@@ -281,11 +280,6 @@ function makeSidebarQuotes(quotes: Record<string, { last: number; prev: number }
   });
 }
 
-const BarChart2 = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
-  </svg>
-);
 const CalendarIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
@@ -337,7 +331,6 @@ export default function HomePage() {
   const gexFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastGexAppliedRef = useRef(0);
 
-  const [now, setNow] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<"calendar" | "signals">("calendar");
   const [gexMode, setGexMode] = useState<GexMode>("net");
 
@@ -384,15 +377,6 @@ export default function HomePage() {
   const popupStyle: PopupStyle = "card";
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const heatmapContainerRef = useRef<HTMLDivElement>(null);
-  // Snapshot-to-DB button state for the heatmap header.
-  const [snapDbState, setSnapDbState] = useState<"idle" | "busy" | "ok" | "err">("idle");
-  const recordSnapshot = useCallback(async () => {
-    if (snapDbState === "busy") return;
-    setSnapDbState("busy");
-    try { await saveManualMvcSnapshot(); setSnapDbState("ok"); }
-    catch { setSnapDbState("err"); }
-    finally { setTimeout(() => setSnapDbState("idle"), 1800); }
-  }, [snapDbState]);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const selectedExpiryRef = useRef("");
@@ -472,11 +456,6 @@ export default function HomePage() {
     selectedExpiryRef.current = selectedExpiry;
   }, [selectedExpiry]);
 
-  useEffect(() => {
-    setNow(new Date());
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
 
   const scheduleRender = useCallback(() => {
@@ -864,39 +843,21 @@ export default function HomePage() {
   }, [chartRows, chartSpot, wallCalcMode]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot, dataMode), [chartRows, chartSpot, dataMode]);
 
-  const etTime = now?.toLocaleTimeString("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }) ?? "--:--:--";
-
   const C = {
     bg: "#05060A",
-    cyan: "#00F0FF",
-    purple: "#8B5CF6",
-    orange: "#F97316",
-    green: "#10B981",
+    cyan: "#219EBC",
+    purple: "#126783",
+    orange: "#FB8501",
+    green: "#8ECAE6",
     red: "#EF4444",
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)", fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, minHeight: 0, width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.03) 0%, transparent 50%)", fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
             <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
-              {/* GEX title row */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", flexShrink: 0 }}>
-                <span style={{ color: C.cyan }}><BarChart2 /></span>
-                <span style={{ color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>NET GEX</span>
-                <span suppressHydrationWarning style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em" }}>{etTime}</span>
-                <button onClick={recordSnapshot} disabled={snapDbState === "busy"} title="Record snapshot to database"
-                  style={{ background: "rgba(0,240,255,0.08)", border: "1px solid rgba(0,240,255,0.20)", color: snapDbState === "ok" ? "#00e676" : snapDbState === "err" ? "#ef4444" : C.cyan, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", whiteSpace: "nowrap" }}>
-                  {snapDbState === "busy" ? "Saving…" : snapDbState === "ok" ? "Saved ✓" : snapDbState === "err" ? "Error ✕" : "📸 Snapshot"}
-                </button>
-              </div>
               {/* Full-featured toolbar */}
               <GexToolbar
                 gexMode={gexMode}
@@ -947,7 +908,7 @@ export default function HomePage() {
                 ) : (
                   <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "#05080d" }}>
                     <style>{`@keyframes gexspin{to{transform:rotate(360deg)}}`}</style>
-                    <div style={{ width: 44, height: 44, borderRadius: "50%", border: `3px solid rgba(0,240,255,0.15)`, borderTopColor: C.cyan, animation: "gexspin 0.8s linear infinite" }} />
+                    <div style={{ width: 44, height: 44, borderRadius: "50%", border: `3px solid rgba(33,158,188,0.15)`, borderTopColor: C.cyan, animation: "gexspin 0.8s linear infinite" }} />
                     <div style={{ color: C.cyan, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>Loading SPX chain…</div>
                     <div style={{ color: "#5a6b85", fontSize: 11, letterSpacing: "0.06em" }}>Warming OI &amp; greeks for accurate GEX</div>
                   </div>
@@ -1003,7 +964,7 @@ export default function HomePage() {
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: "#F97316" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: "#FB8501" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
@@ -1026,13 +987,13 @@ export default function HomePage() {
                         type="range" min={0.5} max={3} step={0.01}
                         value={intensity}
                         onChange={(e) => setIntensity(Number(e.target.value))}
-                        style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
+                        style={{ width: 80, height: 3, accentColor: "#219EBC" }}
                       />
-                      <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
+                      <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{ display: "flex", gap: 2, marginRight: 4, border: "1px solid rgba(0,229,255,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ display: "flex", gap: 2, marginRight: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
                       {(["heatmap", "table"] as const).map((v) => (
                         <button
                           key={v}
@@ -1046,8 +1007,8 @@ export default function HomePage() {
                             cursor: "pointer",
                             border: "none",
                             fontFamily: "inherit",
-                            background: heatmapView === v ? "rgba(0,229,255,0.14)" : "transparent",
-                            color: heatmapView === v ? "#00e5ff" : "#5a7a98",
+                            background: heatmapView === v ? "rgba(33,158,188,0.14)" : "transparent",
+                            color: heatmapView === v ? "#219EBC" : "#5a7a98",
                           }}
                         >
                           {v}
@@ -1056,7 +1017,7 @@ export default function HomePage() {
                     </div>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={handleRefresh} title="Refresh heatmap"
-                      style={{ background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
+                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
                     <BoxSnapBtn targetRef={heatmapContainerRef} label="GEX Heatmap" />
                     <BoxDiscordBtn targetRef={heatmapContainerRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} />
                   </div>
@@ -1085,7 +1046,7 @@ export default function HomePage() {
                       const showDivider = index > 0 && heatmapRows[index - 1]?.type === "atm";
                       const rowKey = `${row.strike}-${index}`;
                       const rowStyle: React.CSSProperties = {
-                        background: isAtm ? "linear-gradient(to right, rgba(0,240,255,0.08), rgba(0,240,255,0.04), rgba(0,240,255,0.08))" : "transparent",
+                        background: isAtm ? "linear-gradient(to right, rgba(33,158,188,0.08), rgba(33,158,188,0.04), rgba(33,158,188,0.08))" : "transparent",
                         transition: "background 0.15s",
                         position: "relative",
                         // Distribute rows evenly into the available height so the
@@ -1153,7 +1114,7 @@ export default function HomePage() {
                         <React.Fragment key={rowKey}>
                           {showDivider && (
                             <tr>
-                              <td colSpan={5} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(0,240,255,0.15), rgba(139,92,246,0.10), transparent)" }} />
+                              <td colSpan={5} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(33,158,188,0.15), rgba(18,103,131,0.10), transparent)" }} />
                             </tr>
                           )}
                           <tr
@@ -1176,7 +1137,7 @@ export default function HomePage() {
                               ) : (
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
                                   <span style={{ flexShrink: 0, minWidth: 28 }}>
-                                    {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#F97316" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
+                                    {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#FB8501" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
                                   </span>
                                   <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.strikeNum === mvcStrikeHeatmap && (
@@ -1247,8 +1208,8 @@ export default function HomePage() {
           border-bottom: 1px solid rgba(255,255,255,0.05);
         }
         .heatmap-row-atm td {
-          border-top: 1px solid rgba(0,240,255,0.35);
-          border-bottom: 1px solid rgba(0,240,255,0.35);
+          border-top: 1px solid rgba(33,158,188,0.35);
+          border-bottom: 1px solid rgba(33,158,188,0.35);
         }
         @keyframes mvcGlow {
           0%, 100% { box-shadow: 0 0 3px rgba(255,255,255,0.35); }

@@ -134,7 +134,7 @@ export default function QuotesPanel() {
         <span style={{ fontSize: 9, color: "#4a6a84", fontWeight: 700, letterSpacing: ".12em" }}>QUOTES</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 8, fontVariantNumeric: "tabular-nums" }}>
           <span style={{ color: ts ? "#1e3050" : "#29b6f6" }}>{ts || "LIVE"}</span>
-          <span style={{ color: countdown > 10 ? "#2a5a8a" : countdown > 5 ? "#f97316" : "#ef4444", fontWeight: 700 }}>{countdown}s</span>
+          <span style={{ color: countdown > 10 ? "#2a5a8a" : countdown > 5 ? "#FB8501" : "#ef4444", fontWeight: 700 }}>{countdown}s</span>
         </div>
       </div>
 

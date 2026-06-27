@@ -414,13 +414,13 @@ function StatCard({
       flexDirection: "column",
       gap: 5,
       overflow: "hidden",
-      borderLeft: `3px solid ${accent}55`,
-      background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
+      borderTop: `2px solid ${accent}80`,
+      background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
     }}>
-      <div style={{ fontSize: "clamp(6px, 7cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(6px, 7cqw, 11px)", fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: "clamp(11px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: "clamp(11px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textShadow: `0 0 16px ${accent}4d` }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -455,7 +455,7 @@ const SECTION_TAB: Record<string, "frontend" | "backend"> = {
  * at-a-glance summary on the collapsed header so the card is useful when closed.
  */
 function AccordionCard({
-  id, title, subtitle, open, onToggle, children,
+  id, title, subtitle, open, onToggle, children, accent = HOME_THEME.cyan,
 }: {
   id: string;
   title: string;
@@ -463,10 +463,11 @@ function AccordionCard({
   open: boolean;
   onToggle: (id: string) => void;
   children: React.ReactNode;
+  accent?: string;
 }) {
   void open; void onToggle; void id;
   return (
-    <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+    <div style={{ ...homePanelStyle, overflow: "hidden", borderTop: `2px solid ${accent}80`, background: `radial-gradient(circle at 50% 0%, ${accent}10 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
@@ -640,8 +641,8 @@ function BarChartCard({
             <div style={{
               width: "100%", borderRadius: 5, height: `${(v / max) * 100}%`, minHeight: 4,
               background: i % 2 === 0
-                ? `linear-gradient(180deg, ${HOME_THEME.purple} 0%, ${HOME_THEME.purple}99 100%)`
-                : `linear-gradient(180deg, ${HOME_THEME.cyan} 0%, ${HOME_THEME.cyan}88 100%)`,
+                ? `linear-gradient(180deg, ${HOME_THEME.cyan} 0%, ${HOME_THEME.cyan}99 100%)`
+                : `linear-gradient(180deg, ${HOME_THEME.cyan}aa 0%, ${HOME_THEME.cyan}66 100%)`,
             }} />
             <span style={{ fontSize: 8, color: HOME_THEME.muted, fontFamily: "monospace" }}>{labels[i]}</span>
           </div>
@@ -667,8 +668,8 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
   return (
     <div style={{
       ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10,
-      borderTop: `3px solid ${accent}`, minWidth: 0,
-      background: `linear-gradient(135deg, ${accent}14 0%, transparent 60%)`,
+      borderTop: `2px solid ${accent}80`, minWidth: 0,
+      background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
     }}>
       <div style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}22`, border: `1px solid ${accent}55`, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: accent, boxShadow: `0 0 8px ${accent}` }} />
@@ -685,7 +686,7 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
 // Small stat chip (Likes / Attachments / Team Members style).
 function StatChip({ icon, label, value, accent }: { icon: string; label: string; value: string; accent: string }) {
   return (
-    <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+    <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0, borderTop: `2px solid ${accent}80`, background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
       <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, background: `${accent}1a`, border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{icon}</div>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
@@ -1645,7 +1646,7 @@ export default function OwnerDashboard() {
                 padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
                 textTransform: "uppercase", letterSpacing: "0.1em",
                 cursor: "pointer",
-                background: active ? "rgba(0,229,255,0.15)" : "transparent",
+                background: active ? "rgba(33,158,188,0.15)" : "transparent",
                 color: active ? HOME_THEME.cyan : HOME_THEME.muted,
                 border: `1px solid ${active ? HOME_THEME.cyan + "66" : HOME_THEME.border}`,
               }}
@@ -1709,8 +1710,8 @@ export default function OwnerDashboard() {
             <StatCard label="Contracts Sub'd" value={server.contractsSubscribed ?? "—"} accent={HOME_THEME.cyan} />
             <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
-            <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.green} mono />
-            <StatCard label="Version" value={process.env.NEXT_PUBLIC_APP_VERSION || "—"} accent={HOME_THEME.purple} mono />
+            <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.purple} mono />
+            <StatCard label="Version" value={process.env.NEXT_PUBLIC_APP_VERSION || "—"} accent={HOME_THEME.orange} mono />
           </div>
         </AccordionCard>
         )}
@@ -1718,6 +1719,7 @@ export default function OwnerDashboard() {
         {/* ── Hetzner hosting + Cloudflare edge metrics ── */}
         {SECTION_TAB.hosting === ownerTab && (
         <AccordionCard
+          accent={HOME_THEME.orange}
           id="hosting"
           title="Hosting · Hetzner + Cloudflare"
           subtitle={renderMetrics?.unconfigured ? "setup needed" : `cpu ${renderMetrics?.cpu.value != null ? (renderMetrics.cpu.value * 100).toFixed(0) + "%" : "—"} · mem ${renderMetrics?.memory.value != null ? (renderMetrics.memory.value / 1024 / 1024).toFixed(0) + "MB" : "—"}`}
@@ -1741,7 +1743,7 @@ export default function OwnerDashboard() {
                     cursor: renderLoading ? "wait" : "pointer",
                     textTransform: "uppercase",
                     letterSpacing: "0.08em",
-                    background: renderWindow === w ? "rgba(0,229,255,.15)" : "transparent",
+                    background: renderWindow === w ? "rgba(33,158,188,.15)" : "transparent",
                     color: renderWindow === w ? HOME_THEME.cyan : HOME_THEME.muted,
                   }}
                 >
@@ -1840,7 +1842,7 @@ export default function OwnerDashboard() {
                 .sort((a, b) => b[1] - a[1]);
               const ACCENT: Record<string, string> = {
                 flow: HOME_THEME.orange, gex: HOME_THEME.cyan, snapshot: HOME_THEME.purple,
-                spot: HOME_THEME.green, aux: "#38bdf8", status: HOME_THEME.muted, esCandles: "#a78bfa",
+                spot: HOME_THEME.green, aux: HOME_THEME.cyan, status: HOME_THEME.muted, esCandles: HOME_THEME.purple,
               };
               return (
                 <>
@@ -1896,6 +1898,7 @@ export default function OwnerDashboard() {
         {/* ── DB row counts ── */}
         {SECTION_TAB.database === ownerTab && (
         <AccordionCard
+          accent={HOME_THEME.green}
           id="database"
           title="Database · Today"
           subtitle={`${TABLES.length} tables tracked`}
@@ -1905,7 +1908,7 @@ export default function OwnerDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
             {TABLES.map(({ id, label }, idx) => {
               const count = (dbStats as Record<string, number>)[id];
-              const palette = [HOME_THEME.cyan, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.orange, HOME_THEME.red, "#a78bfa"];
+              const palette = [HOME_THEME.cyan, HOME_THEME.orange, HOME_THEME.green, HOME_THEME.red, HOME_THEME.purple];
               const accent = palette[idx % palette.length];
               return (
                 <div key={id} style={{
@@ -1914,16 +1917,16 @@ export default function OwnerDashboard() {
                   minHeight: 0,
                   padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
                   overflow: "hidden",
-                  borderLeft: `3px solid ${accent}55`,
-                  background: `linear-gradient(135deg, ${accent}18 0%, ${accent}06 50%, transparent 100%)`,
+                  borderTop: `2px solid ${accent}80`,
+                  background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
                 }}>
-                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 800, color: `${accent}99`, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 800, fontFamily: "monospace", color: count == null ? "#fff" : count > 0 ? `${accent}dd` : "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 800, fontFamily: "monospace", color: accent, textShadow: `0 0 16px ${accent}4d`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
-                  <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: `${accent}66`, whiteSpace: "nowrap" }}>rows today</div>
+                  <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>rows today</div>
                 </div>
               );
             })}
@@ -1934,6 +1937,7 @@ export default function OwnerDashboard() {
         {/* ── Controls ── */}
         {SECTION_TAB.controls === ownerTab && (
         <AccordionCard
+          accent={HOME_THEME.purple}
           id="controls"
           title="Controls"
           subtitle={`idle ${isIdle == null ? "—" : isIdle ? "ON" : "OFF"} · mvc ${mvcAuto == null ? "—" : mvcAuto ? "ON" : "OFF"} · maint ${maint == null ? "—" : maint ? "ON" : "OFF"}`}
@@ -2048,6 +2052,7 @@ export default function OwnerDashboard() {
         {/* ── EOD GEX save status ── */}
         {SECTION_TAB.eodgex === ownerTab && (
         <AccordionCard
+          accent={HOME_THEME.red}
           id="eodgex"
           title="EOD GEX · Today"
           subtitle={eodGex.length === 0 ? "not yet recorded" : `${eodGex.length} symbol(s) saved`}
@@ -2238,7 +2243,7 @@ export default function OwnerDashboard() {
                       fontWeight: 700,
                       cursor: copyingAll ? "wait" : "pointer",
                       color: copiedTicker === "__ALL__" ? HOME_THEME.green : HOME_THEME.cyan,
-                      background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(0,229,255,0.15)",
+                      background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(33,158,188,0.15)",
                       border: `1px solid ${copiedTicker === "__ALL__" ? HOME_THEME.green + "66" : HOME_THEME.cyan + "66"}`,
                       padding: "3px 10px",
                       borderRadius: 6,
@@ -2260,7 +2265,7 @@ export default function OwnerDashboard() {
                         fontWeight: 700,
                         cursor: "pointer",
                         color: copied ? HOME_THEME.green : t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
-                        background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(0,229,255,0.08)",
+                        background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(33,158,188,0.08)",
                         border: `1px solid ${copied ? HOME_THEME.green + "66" : t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
                         padding: "3px 8px",
                         borderRadius: 6,

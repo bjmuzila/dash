@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { queryGreeksToday, saveGreeksSnapshot } from "@/lib/snapdb";
 import RegimeMatrix from "@/components/greeks/RegimeMatrix";
+import { Dock, SegGroup, DockButton, DockGap } from "@/components/shared/DockToolbar";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Lean Greeks page.
@@ -966,27 +967,21 @@ export default function GreeksPage() {
             SPX dealer exposure · data {lastRefresh}{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ display: "flex", border: "1px solid rgba(255,255,255,.14)", borderRadius: 7, overflow: "hidden" }} title="GEX basis: OI+Vol (open interest + volume, matches the heatmap / multi-greek) or Volume only">
-            {([["oivol", "OI+Vol"], ["vol", "Vol Only"]] as [GexBasis, string][]).map(([b, lbl]) => (
-              <button key={b} onClick={() => setGexBasis(b)} style={{
-                padding: "6px 12px", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
-                background: gexBasis === b ? "rgba(0,229,255,.16)" : "transparent",
-                color: gexBasis === b ? "#67e8f9" : "#9fb3c8", border: "none", cursor: "pointer",
-              }}>{lbl}</button>
-            ))}
-          </div>
-          <div style={{ display: "flex", border: "1px solid rgba(255,255,255,.14)", borderRadius: 7, overflow: "hidden" }}>
-            {(["line", "bars"] as GraphMode[]).map(m => (
-              <button key={m} onClick={() => setMode(m)} style={{
-                padding: "6px 12px", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
-                background: mode === m ? "rgba(0,229,255,.16)" : "transparent",
-                color: mode === m ? "#67e8f9" : "#9fb3c8", border: "none", cursor: "pointer",
-              }}>{m}</button>
-            ))}
-          </div>
-          <button onClick={trigger} style={btnStyle}>{btnLabel}</button>
-        </div>
+        <Dock className="dock-noscroll">
+          <SegGroup
+            options={[{ label: "OI+Vol", value: "oivol" }, { label: "Vol Only", value: "vol" }]}
+            active={gexBasis}
+            onChange={(v) => setGexBasis(v as GexBasis)}
+          />
+          <DockGap />
+          <SegGroup
+            options={[{ label: "Line", value: "line" }, { label: "Bars", value: "bars" }]}
+            active={mode}
+            onChange={(v) => setMode(v as GraphMode)}
+          />
+          <DockGap />
+          <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
+        </Dock>
       </div>
 
       {/* Regime matrix — live regime highlighted, one-flip neighbors dimly lit */}

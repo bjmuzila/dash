@@ -555,7 +555,7 @@ export default function EmTrackerAdmin() {
               const numStr = (n: number) => (Number.isFinite(Number(n)) ? String(n) : "");
               return (
               <div key={w.week_start + "_" + wi} style={{ border: `1px solid ${w.committed ? HOME_THEME.green + "55" : HOME_THEME.border}`, borderRadius: 10, opacity: w.committed ? 0.6 : 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: w.committed ? `${HOME_THEME.green}0d` : w.week_inferred ? "rgba(249,115,22,0.08)" : "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HOME_THEME.border}`, borderRadius: "10px 10px 0 0", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: w.committed ? `${HOME_THEME.green}0d` : w.week_inferred ? "rgba(249,115,22,0.08)" : "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HOME_THEME.border}`, borderRadius: "10px 10px 0 0", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>Week of</span>
                   <input type="date" value={w.week_start} onChange={(e) => editReviewWeekStart(wi, e.target.value)} disabled={w.committed} style={{ ...homeInputStyle, padding: "5px 8px", fontSize: 13, width: 150 }} />
                   <span style={{ fontSize: 12, color: lowCount && !w.committed ? HOME_THEME.orange : HOME_THEME.muted }}>
@@ -633,7 +633,7 @@ export default function EmTrackerAdmin() {
             <div key={m.ticker}>
               <div
                 onClick={() => setExpanded(open ? null : m.ticker)}
-                style={{ display: "grid", gridTemplateColumns: "90px 1fr 110px 110px 130px 90px", gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, alignItems: "center", cursor: "pointer", fontSize: 12, background: open ? "rgba(0,240,255,0.04)" : "transparent" }}
+                style={{ display: "grid", gridTemplateColumns: "90px 1fr 110px 110px 130px 90px", gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, alignItems: "center", cursor: "pointer", fontSize: 12, background: open ? "rgba(33,158,188,0.04)" : "transparent" }}
               >
                 <span style={{ fontWeight: 800, color: "#fff" }}>{m.ticker}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

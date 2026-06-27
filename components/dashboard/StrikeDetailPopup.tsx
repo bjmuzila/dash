@@ -41,8 +41,8 @@ function fmtRaw(v: number | null | undefined): string {
 
 const C = {
   bg: "rgba(13,17,25,0.96)",
-  border: "rgba(0,240,255,0.30)",
-  cyan: "#00F0FF",
+  border: "rgba(33,158,188,0.30)",
+  cyan: "#219EBC",
   pos: "#29b6f6",
   neg: "#ff4757",
   dim: "#8B94A7",
@@ -50,16 +50,15 @@ const C = {
 
 // ─── Inner content: strike header + 2x2 rolling-diff + OTM contract price ──────
 function PopupBody({ row, spotPrice, baselines }: Pick<Props, "row" | "spotPrice" | "baselines">) {
-  // Live OI-based net GEX (history baselines are OI-based, so the diff is
-  // apples-to-apples). The composite OI+Vol value is shown as the headline.
-  const liveNetGex = row.netGEX ?? 0;
+  // Live OI+Vol composite net GEX. History baselines are now the OI+Vol
+  // composite too, so the rolling diff is apples-to-apples (live-vs-live).
   const compositeNetGex = (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
 
   const base = baselines[row.strike] ?? {};
   // Rolling DIFFERENCE = current − reading at that age. null when no baseline yet.
   const diff = (key: string): number | null => {
     const b = base[key];
-    return b == null || !Number.isFinite(b) ? null : liveNetGex - b;
+    return b == null || !Number.isFinite(b) ? null : compositeNetGex - b;
   };
 
   const boxes: { label: string; key: string }[] = [
@@ -132,7 +131,7 @@ function PopupBody({ row, spotPrice, baselines }: Pick<Props, "row" | "spotPrice
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          background: "rgba(0,240,255,0.05)",
+          background: "rgba(33,158,188,0.05)",
           border: `1px solid ${C.border}`,
           borderRadius: 6,
           padding: "8px 12px",
@@ -215,7 +214,7 @@ export default function StrikeDetailPopup({
     borderRadius: 12,
     padding: 16,
     width: 280,
-    boxShadow: "0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,240,255,0.08)",
+    boxShadow: "0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(33,158,188,0.08)",
     backdropFilter: "blur(12px)",
     ...extra,
   });

@@ -674,7 +674,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
     <div ref={panelRef} style={{ ...homeShellStyle, background: "transparent", height: "100%", overflow: "hidden" }}>
       <div style={{ padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block", background: flow.connected ? "#00e676" : "#ef4444" }} />
-        <span style={{ fontSize: 8, fontWeight: 800, color: "#00e5ff", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
+        <span style={{ fontSize: 8, fontWeight: 800, color: "#219EBC", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
         <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>
           {btnLabel}
         </button>

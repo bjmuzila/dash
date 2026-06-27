@@ -29,7 +29,7 @@ const LS_KEY = "trading_journals";
 
 // Keep local color aliases for green/red (used in charts + data cells)
 const T = {
-  green: "#10b981", red: "#ef4444",
+  green: "#8ECAE6", red: "#ef4444",
 };
 
 const panelStyle: React.CSSProperties = {

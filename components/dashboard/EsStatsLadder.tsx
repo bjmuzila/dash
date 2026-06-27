@@ -13,7 +13,7 @@ const ROWS: LadderRow[] = [
   { key: "NO LONG",  label: "NO LONG",  dotColor: "#ff6b6b", valueKey: "no_long" },
   { key: "UP",       label: "UP EST",   dotColor: "#22c55e", valueKey: "up" },
   { key: "MID",      label: "MID",      dotColor: "#faad14", valueKey: "mid" },
-  { key: "DOWN",     label: "DOWN EST", dotColor: "#f97316", valueKey: "down" },
+  { key: "DOWN",     label: "DOWN EST", dotColor: "#FB8501", valueKey: "down" },
   { key: "NO SHORT", label: "NO SHORT", dotColor: "#ff6b6b", valueKey: "no_short" },
 ];
 
@@ -184,14 +184,14 @@ export default function EsStatsLadder({ esSpot }: Props) {
                   borderBottom: "1px solid #0a1420",
                   position: "relative",
                   zIndex: 1,
-                  background: "linear-gradient(90deg, rgba(0,229,255,0.12) 0%, rgba(0,180,255,0.07) 50%, rgba(0,229,255,0.12) 100%)",
+                  background: "linear-gradient(90deg, rgba(33,158,188,0.12) 0%, rgba(0,180,255,0.07) 50%, rgba(33,158,188,0.12) 100%)",
                 }}
               >
                 {/* Label side */}
                 <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
                   <div style={{
                     fontSize: 13, fontWeight: 700, letterSpacing: "0.1em",
-                    textTransform: "uppercase", color: "#00e5ff", whiteSpace: "nowrap",
+                    textTransform: "uppercase", color: "#219EBC", whiteSpace: "nowrap",
                   }}>
                     ES NOW
                   </div>
@@ -201,9 +201,9 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 <div
                   style={{
                     width: 10, height: 10, borderRadius: "50%",
-                    border: "2px solid #00e5ff",
-                    background: "#00e5ff",
-                    boxShadow: "0 0 6px #00e5ff88",
+                    border: "2px solid #219EBC",
+                    background: "#219EBC",
+                    boxShadow: "0 0 6px #219EBC88",
                     flexShrink: 0, position: "relative", zIndex: 2,
                   }}
                 />
@@ -211,7 +211,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 {/* Value side */}
                 <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 16, fontWeight: 700, color: "#00e5ff",
+                    fontSize: 16, fontWeight: 700, color: "#219EBC",
                     fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
                   }}>
                     {fmtPrice(entry.val)}
@@ -269,7 +269,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 </div>
                 {distStr && (
                   <div style={{
-                    fontSize: 11, color: distPos ? "#22c55e" : "#f97316",
+                    fontSize: 11, color: distPos ? "#22c55e" : "#FB8501",
                     marginTop: 1, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
                   }}>
                     {distStr}

@@ -3,14 +3,13 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import {
   HOME_THEME,
-  homeButtonStyle,
   homeContentStyle,
   homeHeaderStyle,
-  homeInputStyle,
   homePanelStyle,
   homeSecondaryButtonStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
+import { ToggleTile, DockButton, DockCalendar } from "@/components/shared/DockToolbar";
 
 interface ScoreFactors {
   proximity: number;
@@ -842,19 +841,11 @@ export default function ConfidenceScorePage() {
           <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
             {loading ? "Computing…" : data ? `MVC ${fmt(data.level)} · SPX ${fmt(data.spx)}` : ""}
           </span>
-          <div className="flex items-center gap-1">
-            <span className="text-xs" style={{ color: HOME_THEME.text }}>Date:</span>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-              style={{ ...homeInputStyle, fontSize: 11, padding: "4px 8px", fontFamily: "monospace" }} />
-            <button onClick={() => setDate(todayET())} style={{ fontSize: 10, color: HOME_THEME.cyan, background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }}>Today</button>
-          </div>
-          <button onClick={() => setOpex((v) => !v)}
-            style={{ ...homeSecondaryButtonStyle, fontSize: 10, padding: "3px 8px",
-              borderColor: opex ? HOME_THEME.cyan : HOME_THEME.border, color: opex ? HOME_THEME.cyan : HOME_THEME.text }}>
-            0DTE / OPEX {opex ? "ON" : "OFF"}
-          </button>
+          <DockCalendar value={date} onChange={setDate} />
+          <DockButton onClick={() => setDate(todayET())} title="Jump to today">Today</DockButton>
+          <ToggleTile label="0DTE / OPEX" on={opex} onClick={() => setOpex((v) => !v)} />
         </div>
-        <button onClick={() => void load(date, opex)} style={homeButtonStyle}>Refresh</button>
+        <DockButton onClick={() => void load(date, opex)} title="Refresh" style={{ color: HOME_THEME.cyan }}>↻ Refresh</DockButton>
       </div>
 
       <div style={{ ...homeContentStyle, overflow: "auto" }}>

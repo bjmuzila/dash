@@ -23,18 +23,18 @@ const C = {
   bg: "#05060A",
   panel: "rgba(13,17,25,0.45)",
   panelStrong: "rgba(13,17,25,0.72)",
-  cyan: "#00F0FF",
+  cyan: "#219EBC",
   posBar: "#29b6f6", // +GEX / Call bars + heatmap positive cells
   negBar: "#ffb300", // −GEX / Put bars (chart)
   heatNeg: "#ff4757", // heatmap negative cells (red)
-  purple: "#8B5CF6", // DEX line
-  orange: "#F97316", // GEX flip line + curve
-  green: "#10B981", // call OI overlay
+  purple: "#126783", // DEX line
+  orange: "#FB8501", // GEX flip line + curve
+  green: "#8ECAE6", // call OI overlay
   red: "#EF4444", // put OI overlay
-  muted: "#8B94A7",
+  muted: "#FFFFFF",
   text: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",
-  borderSoft: "rgba(0,229,255,0.16)",
+  borderSoft: "rgba(33,158,188,0.16)",
 };
 
 // ─── Small presentational helpers (shared across every article) ───────────────
@@ -81,8 +81,8 @@ function UI({ children }: { children: React.ReactNode }) {
         fontSize: 12.5,
         fontWeight: 700,
         color: C.cyan,
-        background: "rgba(0,240,255,0.08)",
-        border: "1px solid rgba(0,240,255,0.18)",
+        background: "rgba(33,158,188,0.08)",
+        border: "1px solid rgba(33,158,188,0.18)",
         borderRadius: 4,
         padding: "1px 5px",
         whiteSpace: "nowrap",
@@ -141,7 +141,7 @@ type CalloutKind = "tip" | "note" | "warn";
 function Callout({ kind = "note", title, children }: { kind?: CalloutKind; title?: string; children: React.ReactNode }) {
   const map: Record<CalloutKind, { c: string; bg: string; label: string }> = {
     tip: { c: C.green, bg: "rgba(16,185,129,0.08)", label: title ?? "Tip" },
-    note: { c: C.cyan, bg: "rgba(0,240,255,0.06)", label: title ?? "Note" },
+    note: { c: C.cyan, bg: "rgba(33,158,188,0.06)", label: title ?? "Note" },
     warn: { c: C.orange, bg: "rgba(249,115,22,0.08)", label: title ?? "Heads up" },
   };
   const m = map[kind];
@@ -170,8 +170,8 @@ function Steps({ items }: { items: React.ReactNode[] }) {
               width: 22,
               height: 22,
               borderRadius: "50%",
-              background: "rgba(0,240,255,0.12)",
-              border: "1px solid rgba(0,240,255,0.4)",
+              background: "rgba(33,158,188,0.12)",
+              border: "1px solid rgba(33,158,188,0.4)",
               color: C.cyan,
               fontSize: 12,
               fontWeight: 800,
@@ -297,7 +297,7 @@ function GexChartExample() {
       })}
       {/* MVC tag */}
       <g>
-        <rect x={padL + mvcIdx * bw - 6} y={padT - 4} width="48" height="15" rx="3" fill="rgba(0,240,255,0.14)" stroke={C.cyan} strokeWidth="0.8" />
+        <rect x={padL + mvcIdx * bw - 6} y={padT - 4} width="48" height="15" rx="3" fill="rgba(33,158,188,0.14)" stroke={C.cyan} strokeWidth="0.8" />
         <text x={padL + mvcIdx * bw + 18} y={padT + 6.5} textAnchor="middle" fontSize="8.5" fontWeight="800" fill={C.cyan}>MVC</text>
       </g>
       {/* SPX spot dashed line */}
@@ -345,7 +345,7 @@ function HeatmapExample() {
           <g key={r.k}>
             {/* strike label + badge */}
             <rect x="0" y={y} width={labelW} height={rowH - 2} rx="3"
-              fill={r.atm ? "rgba(0,240,255,0.10)" : "transparent"}
+              fill={r.atm ? "rgba(33,158,188,0.10)" : "transparent"}
               stroke={r.atm ? C.cyan : "transparent"} strokeWidth={r.atm ? 1 : 0} />
             <text x="8" y={y + rowH / 2 + 1} fontSize="9" fontWeight={r.atm ? 800 : 600} fill={r.atm ? C.cyan : "#cdd8e6"} fontFamily="monospace">{r.k}</text>
             {r.badge && (
@@ -472,7 +472,7 @@ function MultiGreekExample() {
         {cols.map((c) => <div key={c} style={{ padding: "5px 4px", fontSize: 8, color: "#94a3b8", textAlign: "center", fontWeight: 800 }}>{c}</div>)}
       </div>
       {/* totals row */}
-      <div style={{ display: "grid", gridTemplateColumns: grid, background: "rgba(0,240,255,0.03)", borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ display: "grid", gridTemplateColumns: grid, background: "rgba(33,158,188,0.03)", borderBottom: `1px solid ${C.border}` }}>
         <div style={{ padding: "4px", fontSize: 8.5, color: "#cbd5e1", textAlign: "center", fontWeight: 700 }}>TOTAL</div>
         {totals.map((t, i) => (
           <div key={i} style={{ padding: "4px", fontSize: 9, textAlign: "center", fontWeight: 800, color: totalPos[i] ? "#29b6f6" : "#ff4757" }}>
@@ -509,14 +509,14 @@ function EstimatedMovesTableExample() {
   const colColor = ["#e8edf5", "#eef7ff", "#eef7ff", "#e8c060", "#00e676", "#ff4757"];
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-      <div style={{ background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${C.border}`, padding: "7px 10px", textAlign: "center" }}>
+      <div style={{ background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${C.border}`, padding: "7px 10px", textAlign: "center" }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>
-          Weekly Estimated Move For <span style={{ color: "#00e5ff" }}>Fri 6/27</span>
+          Weekly Estimated Move For <span style={{ color: "#219EBC" }}>Fri 6/27</span>
         </span>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "Consolas, Monaco, monospace" }}>
         <thead>
-          <tr style={{ background: "rgba(13,17,25,0.9)", color: "#00e5ff", textAlign: "center" }}>
+          <tr style={{ background: "rgba(13,17,25,0.9)", color: "#219EBC", textAlign: "center" }}>
             {head.map((h, i) => (
               <th key={h} style={{ padding: "6px 4px", fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", borderRight: i < head.length - 1 ? `1px solid ${C.border}` : undefined, borderBottom: `1px solid ${C.border}` }}>{h}</th>
             ))}
@@ -1166,8 +1166,8 @@ export default function DocsPage() {
         flexDirection: "column",
         background: C.bg,
         backgroundImage:
-          "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)",
-        fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+          "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.03) 0%, transparent 50%)",
+        fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
         color: C.text,
         overflow: "hidden",
       }}
@@ -1257,8 +1257,8 @@ export default function DocsPage() {
                       borderRadius: 8,
                       border: "1px solid transparent",
                       cursor: "pointer",
-                      background: on ? "rgba(0,240,255,0.12)" : "transparent",
-                      borderColor: on ? "rgba(0,240,255,0.3)" : "transparent",
+                      background: on ? "rgba(33,158,188,0.12)" : "transparent",
+                      borderColor: on ? "rgba(33,158,188,0.3)" : "transparent",
                       color: on ? C.cyan : "#c3d0e0",
                       fontSize: 13.5,
                       fontWeight: on ? 700 : 500,

@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-const C = { cyan: "#00F0FF", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8" };
+const C = { cyan: "#219EBC", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8" };
 const GREEN = "#22e08a", RED = "#ff6b6b", AMBER = "#ffb300", MUTED = "#9fb3c8";
 
 type SummaryRow = {
@@ -154,7 +154,7 @@ export default function ResultsPage() {
   });
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 24, color: "#fff", fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ height: "100%", overflowY: "auto", padding: 24, color: "#fff", fontFamily: "var(--font-inter), 'Inter', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>ICT Results</span>
         <span style={{ fontSize: 12, color: C.label }}>Per-setup performance · auto-graded by follow-through</span>

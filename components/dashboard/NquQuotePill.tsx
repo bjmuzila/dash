@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 
 // Same 16 symbols as the sidebar quote list, so the dropdown stays consistent
 // with the rest of the app.
-const QUOTE_SYMBOLS: Array<{ sym: string; label: string; name: string }> = [
+type QuoteSym = { sym: string; label: string; name: string };
+const DEFAULT_QUOTE_SYMBOLS: QuoteSym[] = [
   { sym: "/ESU26", label: "ESU", name: "E-mini S&P 500 Future" },
   { sym: "/NQU26", label: "NQU", name: "E-mini Nasdaq-100 Future" },
   { sym: "SPX", label: "SPX", name: "S&P 500 Index" },
@@ -30,6 +31,13 @@ const PILL_SYMBOL = "/NQU26";
 const UP = "#1FD98A";
 const DOWN = "#EF4444";
 const MUTED = "#5a7a99";
+
+// Dock theme (matches /toolbar-preview Quotes panel)
+const DOCK_CYAN = "#00e5ff";
+const DOCK_PANEL = "rgba(13,17,25,0.92)";
+const DOCK_BORDER = "rgba(255,255,255,0.10)";
+const DOCK_SHADOW = "0 1px 0 rgba(255,255,255,0.06) inset, 0 20px 44px -14px rgba(0,0,0,0.75), 0 6px 16px rgba(0,0,0,0.45)";
+function cyA(a: number) { return `rgba(0,229,255,${a})`; }
 
 type Rec = {
   sym: string;
@@ -128,6 +136,58 @@ export default function NquQuotePill() {
   // Live clock-based REG/EXT (re-checked each minute) — drives the badges so the
   // label flips at 4:00pm ET without waiting on a quotes refresh.
   const [etSession, setEtSession] = useState<"REG" | "EXT">("EXT");
+  const [sortDesc, setSortDesc] = useState(true); // true = top gainers first
+  // Per-user customizable quote list (seeded from defaults; merged w/ server prefs).
+  const [quoteList, setQuoteList] = useState<QuoteSym[]>(DEFAULT_QUOTE_SYMBOLS);
+  const [adding, setAdding] = useState(false);
+  const [newSym, setNewSym] = useState("");
+
+  // Load the user's saved quote list once on mount; fall back to defaults.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/quote-symbols", { cache: "no-store" });
+        if (!r.ok) return;
+        const j = await r.json();
+        const saved: Array<{ sym: string; label: string }> = j?.symbols ?? [];
+        if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+        // Preserve default names where known; user-added symbols use sym as name.
+        const merged: QuoteSym[] = saved.map((s) => {
+          const def = DEFAULT_QUOTE_SYMBOLS.find((d) => d.sym === s.sym);
+          return { sym: s.sym, label: s.label || def?.label || s.sym, name: def?.name || s.sym };
+        });
+        setQuoteList(merged);
+      } catch { /* ignore — keep defaults */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Persist the current list to the server (best-effort).
+  const saveList = (list: QuoteSym[]) => {
+    fetch("/api/quote-symbols", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbols: list.map((q) => ({ sym: q.sym, label: q.label })) }),
+    }).catch(() => { /* ignore */ });
+  };
+
+  const addTicker = () => {
+    const sym = newSym.trim().toUpperCase();
+    if (!sym || !/^[A-Z0-9/.^-]+$/.test(sym)) { setNewSym(""); return; }
+    if (quoteList.some((q) => q.sym === sym)) { setNewSym(""); setAdding(false); return; }
+    const next = [...quoteList, { sym, label: sym.replace(/^\//, "").slice(0, 6), name: sym }];
+    setQuoteList(next);
+    saveList(next);
+    setNewSym("");
+    setAdding(false);
+  };
+
+  const removeTicker = (sym: string) => {
+    const next = quoteList.filter((q) => q.sym !== sym);
+    setQuoteList(next);
+    saveList(next);
+  };
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -140,12 +200,15 @@ export default function NquQuotePill() {
     return () => clearInterval(id);
   }, []);
 
-  // Fetch all 16 symbols (with intraday spark) on mount + every 30s.
+  // Fetch all symbols (with intraday spark) on mount + every 30s. Re-runs when
+  // the user adds/removes a ticker so new symbols start streaming immediately.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const symbols = QUOTE_SYMBOLS.map((q) => q.sym).join(",");
+        // Always include the pill symbol even if removed from the dropdown list.
+        const symSet = new Set<string>([PILL_SYMBOL, ...quoteList.map((q) => q.sym)]);
+        const symbols = Array.from(symSet).join(",");
         const ext = currentEtSession() === "EXT";
         // Yahoo = sparkline (+ fallback price). Broker (Tastytrade) = live price
         // & baseline that update in extended hours.
@@ -175,7 +238,8 @@ export default function NquQuotePill() {
         const next: Record<string, Rec> = {};
         yItems.forEach((it) => {
           const sym = normalizeSym(String(it.symbol ?? ""));
-          const meta = QUOTE_SYMBOLS.find((q) => q.sym === sym);
+          const meta = quoteList.find((q) => q.sym === sym)
+            ?? DEFAULT_QUOTE_SYMBOLS.find((q) => q.sym === sym);
           if (!meta) return;
 
           // Yahoo fallback values.
@@ -219,7 +283,7 @@ export default function NquQuotePill() {
     load();
     const id = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [quoteList]);
 
   // Close on outside click.
   useEffect(() => {
@@ -235,15 +299,15 @@ export default function NquQuotePill() {
   const sorted = useMemo(() => {
     // Exclude the index futures (ESU/NQU) and VIX from the dropdown list; NQU
     // still drives the main toolbar pill.
-    return QUOTE_SYMBOLS.filter((q) => q.sym !== "/ESU26" && q.sym !== "/NQU26" && q.sym !== "VIX")
+    return quoteList.filter((q) => q.sym !== "/ESU26" && q.sym !== "/NQU26" && q.sym !== "VIX")
       .map((q) => recs[q.sym] ?? { sym: q.sym, label: q.label, name: q.name, last: null, prev: null, pct: null, spark: [], session: "REG" as const })
       .sort((a, b) => {
         if (a.pct == null && b.pct == null) return 0;
         if (a.pct == null) return 1;
         if (b.pct == null) return -1;
-        return b.pct - a.pct; // highest gainer first
+        return sortDesc ? b.pct - a.pct : a.pct - b.pct;
       });
-  }, [recs]);
+  }, [recs, sortDesc, quoteList]);
 
   const pill = recs[PILL_SYMBOL];
   const pillUp = (pill?.pct ?? 0) >= 0;
@@ -293,31 +357,47 @@ export default function NquQuotePill() {
             width: 320,
             maxHeight: "70vh",
             overflowY: "auto",
-            background: "rgba(10,15,22,0.97)",
-            border: "1px solid rgba(0,240,255,0.20)",
-            borderRadius: 12,
-            boxShadow: "0 12px 40px rgba(0,0,0,0.7)",
-            backdropFilter: "blur(16px)",
+            background: `radial-gradient(circle at 50% 0%, ${cyA(0.07)} 0%, transparent 55%), ${DOCK_PANEL}`,
+            border: `1px solid ${DOCK_BORDER}`,
+            borderTop: `2px solid ${cyA(0.5)}`,
+            borderRadius: 16,
+            boxShadow: DOCK_SHADOW,
+            backdropFilter: "blur(18px)",
+            WebkitBackdropFilter: "blur(18px)",
             zIndex: 100000,
-            padding: 6,
+            padding: 8,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px 8px", borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 4 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: MUTED, letterSpacing: "0.14em", textTransform: "uppercase" }}>Quotes</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {/* header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px 8px" }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quotes</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {(() => {
                 const ext = etSession === "EXT";
                 return (
                   <span style={{
-                    fontSize: 8, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase",
-                    color: ext ? "#f59e0b" : "#10B981",
-                    border: `1px solid ${ext ? "rgba(245,158,11,0.4)" : "rgba(16,185,129,0.4)"}`,
-                    borderRadius: 3, padding: "0 5px", lineHeight: "14px",
+                    padding: "3px 7px", borderRadius: 6, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+                    color: ext ? "#f59e0b" : DOCK_CYAN,
+                    background: ext ? "rgba(245,158,11,0.1)" : cyA(0.1),
+                    border: `1px solid ${ext ? "rgba(245,158,11,0.4)" : cyA(0.35)}`,
                   }}>{ext ? "Extended hrs" : "Regular hrs"}</span>
                 );
               })()}
-              <span style={{ fontSize: 9, color: "#3a5570", letterSpacing: "0.08em", textTransform: "uppercase" }}>Top gainers ↑</span>
-            </span>
+              <button
+                onClick={() => setSortDesc(v => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  background: "transparent", border: "none", cursor: "pointer",
+                  color: MUTED, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = "#fff")}
+                onMouseLeave={e => (e.currentTarget.style.color = MUTED)}
+              >
+                Top gainers
+                <span style={{ display: "inline-block", transition: "transform .18s", transform: sortDesc ? "none" : "rotate(180deg)" }}>↑</span>
+              </button>
+            </div>
           </div>
           {sorted.map((r, i) => {
             const up = (r.pct ?? 0) >= 0;
@@ -332,14 +412,10 @@ export default function NquQuotePill() {
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 10,
-                  padding: "8px 10px",
+                  padding: "9px 10px",
                   borderRadius: 8,
                   transition: "background 0.12s",
-                  // Faint gradient divider between rows (skip the last one).
-                  borderBottom: i < sorted.length - 1 ? "1px solid transparent" : "none",
-                  borderImage: i < sorted.length - 1
-                    ? "linear-gradient(to right, transparent, rgba(255,255,255,0.14) 50%, transparent) 1"
-                    : undefined,
+                  borderTop: i === 0 ? "none" : `1px solid rgba(255,255,255,0.05)`,
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -354,21 +430,80 @@ export default function NquQuotePill() {
                     {chg && <span style={{ marginRight: 5 }}>{chg}</span>}({fmtPct(r.pct)})
                   </div>
                 </div>
-                {/* Right: sparkline + EXT/REG note */}
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                  <Sparkline data={r.spark} up={up} width={70} height={24} />
+                {/* Right: sparkline + EXT/REG note + remove */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Sparkline data={r.spark} up={up} width={56} height={20} />
                   <span style={{
-                    fontSize: 8, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase",
-                    color: isExt ? "#f59e0b" : "#3a5570",
+                    padding: "2px 6px", borderRadius: 5, fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+                    color: isExt ? "#f59e0b" : MUTED,
+                    background: isExt ? "rgba(245,158,11,0.1)" : "rgba(255,255,255,0.04)",
                     border: `1px solid ${isExt ? "rgba(245,158,11,0.35)" : "rgba(255,255,255,0.08)"}`,
-                    borderRadius: 3, padding: "0 4px", lineHeight: "13px",
                   }}>
                     {isExt ? "EXT" : "REG"}
                   </span>
+                  <button
+                    aria-label={`Remove ${r.label}`}
+                    title={`Remove ${r.label}`}
+                    onClick={(e) => { e.stopPropagation(); removeTicker(r.sym); }}
+                    style={{
+                      background: "transparent", border: "none", cursor: "pointer",
+                      color: MUTED, fontSize: 16, lineHeight: 1, padding: "2px 4px",
+                      fontFamily: "inherit",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = DOWN)}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = MUTED)}
+                  >×</button>
                 </div>
               </div>
             );
           })}
+
+          {/* Add-ticker footer */}
+          <div style={{ padding: "8px 6px 4px", borderTop: `1px solid rgba(255,255,255,0.06)`, marginTop: 4 }}>
+            {adding ? (
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  autoFocus
+                  value={newSym}
+                  onChange={(e) => setNewSym(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addTicker();
+                    if (e.key === "Escape") { setNewSym(""); setAdding(false); }
+                  }}
+                  placeholder="Add ticker (e.g. NFLX)"
+                  style={{
+                    flex: 1, minWidth: 0, padding: "7px 10px", borderRadius: 8,
+                    background: "rgba(255,255,255,0.05)", color: "#fff",
+                    border: `1px solid ${cyA(0.3)}`, fontSize: 13, fontWeight: 700,
+                    textTransform: "uppercase", fontFamily: "inherit", outline: "none",
+                  }}
+                />
+                <button
+                  onClick={addTicker}
+                  style={{
+                    padding: "7px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                    fontSize: 12, fontWeight: 800, color: DOCK_CYAN,
+                    background: cyA(0.12), border: `1px solid ${cyA(0.4)}`,
+                  }}
+                >Add</button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAdding(true)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%",
+                  padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+                  color: MUTED, background: "rgba(255,255,255,0.03)",
+                  border: `1px dashed rgba(255,255,255,0.14)`,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = DOCK_CYAN; e.currentTarget.style.borderColor = cyA(0.4); }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = MUTED; e.currentTarget.style.borderColor = "rgba(255,255,255,0.14)"; }}
+              >
+                + Add ticker
+              </button>
+            )}
+          </div>
         </div>,
         document.body
       )}

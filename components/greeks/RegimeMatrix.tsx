@@ -268,7 +268,7 @@ export default function RegimeMatrix({
           {sel && (
             <button onClick={() => setSel(null)} style={{
               fontSize: 10, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
-              color: "#67e8f9", border: "1px solid rgba(0,229,255,.35)", background: "rgba(0,229,255,.08)",
+              color: "#67e8f9", border: "1px solid rgba(33,158,188,.35)", background: "rgba(33,158,188,.08)",
               padding: "6px 11px", borderRadius: 999, cursor: "pointer",
             }}>Reset to live</button>
           )}
@@ -297,8 +297,8 @@ export default function RegimeMatrix({
               const live = ci === liveCol;
               return (
                 <div key={ci} style={{
-                  border: `1px solid ${live ? "rgba(0,229,255,.5)" : "rgba(255,255,255,.12)"}`,
-                  background: live ? "rgba(0,229,255,.08)" : "rgba(255,255,255,.02)",
+                  border: `1px solid ${live ? "rgba(33,158,188,.5)" : "rgba(255,255,255,.12)"}`,
+                  background: live ? "rgba(33,158,188,.08)" : "rgba(255,255,255,.02)",
                   borderRadius: 8, padding: "6px 6px", textAlign: "center",
                 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{c.label}</div>
@@ -381,8 +381,8 @@ export default function RegimeMatrix({
             <DetailRow label="Price Action Expected" body={detail.price} />
 
             <div style={{
-              marginTop: 10, border: "1px solid rgba(0,229,255,.25)", borderRadius: 8,
-              background: "rgba(0,229,255,.06)", padding: "9px 11px",
+              marginTop: 10, border: "1px solid rgba(33,158,188,.25)", borderRadius: 8,
+              background: "rgba(33,158,188,.06)", padding: "9px 11px",
             }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
                 ◆ Trading Implications (0DTE / SPX)
@@ -418,8 +418,8 @@ function RowFragment({
     <>
       {/* row header */}
       <div style={{
-        border: `1px solid ${liveRowHdr ? "rgba(0,229,255,.5)" : "rgba(255,255,255,.12)"}`,
-        background: liveRowHdr ? "rgba(0,229,255,.08)" : "rgba(255,255,255,.02)",
+        border: `1px solid ${liveRowHdr ? "rgba(33,158,188,.5)" : "rgba(255,255,255,.12)"}`,
+        background: liveRowHdr ? "rgba(33,158,188,.08)" : "rgba(255,255,255,.02)",
         borderRadius: 8, padding: "6px 6px", display: "flex", flexDirection: "column", justifyContent: "center",
       }}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{rd.label}</div>
@@ -437,7 +437,7 @@ function RowFragment({
         // selected (but not live) = cyan ring; otherwise neutral.
         const border =
           isLive ? `2px solid ${tone}`
-          : isSelected ? "2px solid rgba(0,229,255,.8)"
+          : isSelected ? "2px solid rgba(33,158,188,.8)"
           : oneFlip ? `1px solid ${tone}66`
           : "1px solid rgba(255,255,255,.08)";
         const bg =
@@ -545,7 +545,7 @@ function SignPill({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
       fontSize: 10, fontWeight: 900, letterSpacing: ".03em",
       color: text, background: fill, border: `1px solid ${border}`,
       padding: "2px 6px", borderRadius: 999, lineHeight: 1,
-      fontFamily: "system-ui, sans-serif",
+      fontFamily: "var(--font-inter), 'Inter', system-ui, sans-serif",
     }}>
       {lbl}<span style={{ fontSize: 9 }}>{up ? "▲" : "▼"}</span>
     </span>
@@ -657,8 +657,8 @@ export function BehaviorDemo({
         <DetailRow label="Core Behavior" body={detail.behavior} />
         <DetailRow label="Price Action Expected" body={detail.price} />
         <div style={{
-          marginTop: 10, border: "1px solid rgba(0,229,255,.25)", borderRadius: 8,
-          background: "rgba(0,229,255,.06)", padding: "9px 11px",
+          marginTop: 10, border: "1px solid rgba(33,158,188,.25)", borderRadius: 8,
+          background: "rgba(33,158,188,.06)", padding: "9px 11px",
         }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
             ◆ Trading Implications (0DTE / SPX)

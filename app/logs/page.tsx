@@ -204,7 +204,7 @@ export default function LogsPage() {
             <Column
               title="Telemetry Logs"
               icon="[TEL]"
-              accent="#00e5ff"
+              accent="#219EBC"
               countLabel={(n) => `${n} RECORD${n !== 1 ? "S" : ""}`}
               entries={telemetry}
               placeholder="Input operational log telemetry... [Ctrl + Enter to send]"

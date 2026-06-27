@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 import { dark } from "@clerk/themes";
 import "./globals.css";
 import LayoutShell from "@/components/shared/LayoutShell";
@@ -35,9 +38,9 @@ export default function RootLayout({
   return (
     <ClerkProvider
       signUpUrl="/"
-      appearance={{ baseTheme: dark, variables: { colorPrimary: "#00F0FF" } }}
+      appearance={{ baseTheme: dark, variables: { colorPrimary: "#219EBC" } }}
     >
-      <html lang="en" suppressHydrationWarning>
+      <html lang="en" className={inter.variable} suppressHydrationWarning>
         <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
           <LayoutShell>{children}</LayoutShell>
         </body>

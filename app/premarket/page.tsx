@@ -121,7 +121,7 @@ function SectionHeader({ title }: { title: string }) {
       <td
         colSpan={4}
         style={{
-          background: "rgba(0,240,255,0.04)",
+          background: "rgba(33,158,188,0.04)",
           color: HT.cyan,
           fontWeight: 700,
           fontSize: 10,
@@ -386,7 +386,7 @@ export default function PremarketPage() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <h1 style={{ color: "#00e5ff", fontSize: 13, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", margin: 0 }}>
+          <h1 style={{ color: "#219EBC", fontSize: 13, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", margin: 0 }}>
             Premarket Positioning
           </h1>
           <span style={{ fontSize: 11, color: "#ffffff" }}>As of {asOf}</span>
@@ -419,16 +419,16 @@ export default function PremarketPage() {
 
           {/* Premarket Positioning summary */}
           <div style={{ ...homePanelStyle, overflow: "hidden" }}>
-            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
-              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Premarket Positioning</span>
+            <div style={{ padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#219EBC", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Premarket Positioning</span>
             </div>
             <PositioningPanel esRow={esRow} spxRow={spxRow} />
           </div>
 
           {/* Global Markets – US Futures */}
           <div style={{ ...homePanelStyle, overflow: "hidden" }}>
-            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
-              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Global Markets</span>
+            <div style={{ padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#219EBC", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Global Markets</span>
             </div>
             <TableShell>
               <SectionHeader title="US Futures" />
@@ -452,16 +452,16 @@ export default function PremarketPage() {
 
           {/* RV Sigma */}
           <div style={{ ...homePanelStyle, overflow: "hidden" }}>
-            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
-              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Daily RV Sigma Levels</span>
+            <div style={{ padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#219EBC", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Daily RV Sigma Levels</span>
             </div>
             <RVSigmaPanel spxPrice={spxPrice} spxPrev={spxPrev || null} />
           </div>
 
           {/* Commodities, Risk Assets, Fixed Income / FX / Crypto */}
           <div style={{ ...homePanelStyle, overflow: "hidden" }}>
-            <div style={{ padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
-              <span style={{ color: "#00e5ff", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Other Markets</span>
+            <div style={{ padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center" }}>
+              <span style={{ color: "#219EBC", fontWeight: 700, fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", flex: 1 }}>Other Markets</span>
             </div>
             <TableShell>
               <SectionHeader title="Commodities" />

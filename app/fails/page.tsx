@@ -6,12 +6,12 @@ import { LiveIb } from "@/components/insights/IbLogic";
 import { NqIbLive } from "@/components/insights/NqIbLive";
 import {
   HOME_THEME,
-  homeButtonStyle,
   homeContentStyle,
   homeHeaderStyle,
   homePanelStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
+import { SegGroup, DockButton } from "@/components/shared/DockToolbar";
 import {
   computeRefLevels,
   scanToday,
@@ -215,20 +215,11 @@ export default function FailsPage() {
       <div style={homeHeaderStyle}>
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>Fails</span>
-          <div style={{ display: "inline-flex", gap: 4, padding: 3, borderRadius: 8, background: "rgba(255,255,255,0.04)", border: `1px solid ${HOME_THEME.border}` }}>
-            {(["ESU", "NQU"] as const).map((t) => {
-              const on = tab === t;
-              return (
-                <button key={t} onClick={() => setTab(t)} style={{
-                  fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase",
-                  padding: "4px 12px", borderRadius: 6, cursor: "pointer",
-                  color: on ? "#04121a" : HOME_THEME.text,
-                  background: on ? HOME_THEME.cyan : "transparent",
-                  border: "none",
-                }}>{t}</button>
-              );
-            })}
-          </div>
+          <SegGroup
+            options={[{ label: "ESU", value: "ESU" }, { label: "NQU", value: "NQU" }]}
+            active={tab}
+            onChange={(v) => setTab(v as "ESU" | "NQU")}
+          />
           {tab === "ESU" && (
             <>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: HOME_THEME.text, opacity: 0.85 }}>
@@ -244,7 +235,7 @@ export default function FailsPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => void refresh()} style={homeButtonStyle}>Refresh</button>
+          <DockButton onClick={() => void refresh()} title="Refresh" style={{ color: HOME_THEME.cyan }}>↻ Refresh</DockButton>
         </div>
       </div>
 

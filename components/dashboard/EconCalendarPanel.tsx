@@ -256,16 +256,16 @@ export default function EconCalendarPanel() {
             key={`sep-${faded ? "s" : "a"}-${ev.date}`}
             style={{
               padding: "4px 10px",
-              background: isToday ? "rgba(0,229,255,0.06)" : HT.panelBg,
+              background: isToday ? "rgba(33,158,188,0.06)" : HT.panelBg,
               borderTop: `1px solid ${HT.border}`,
               display: "flex", alignItems: "center", gap: 8,
             }}
           >
-            <span style={{ fontSize: 11, fontWeight: 800, color: isToday ? "#00e5ff" : "#3a5570", letterSpacing: "0.1em" }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: isToday ? "#219EBC" : "#3a5570", letterSpacing: "0.1em" }}>
               {label}
             </span>
             {isToday && (
-              <span style={{ fontSize: 8, fontWeight: 900, background: "#00e5ff", color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
+              <span style={{ fontSize: 8, fontWeight: 900, background: "#219EBC", color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
                 TODAY
               </span>
             )}
@@ -318,7 +318,7 @@ export default function EconCalendarPanel() {
                     style={{
                       display: "flex", alignItems: "center", gap: 8,
                       padding: "6px 12px", cursor: "pointer",
-                      background: on ? "rgba(0,240,255,0.08)" : "transparent",
+                      background: on ? "rgba(33,158,188,0.08)" : "transparent",
                     }}
                   >
                     <span style={{

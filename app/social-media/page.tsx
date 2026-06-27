@@ -4,6 +4,7 @@ import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "r
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
 import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
+import { SegGroup } from "@/components/shared/DockToolbar";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Social Media (admin) — turns the daily pre-market GEX read into a shareable
@@ -369,7 +370,7 @@ const GX_CSS = `
   .gx-stage { display: flex; flex-direction: column; gap: 36px; align-items: center; }
   .gx-cardwrap { display: flex; flex-direction: column; gap: 12px; align-items: center; }
   .gx-caplabel { font-size: 12px; color: #9aa4b2; letter-spacing: 0.04em; align-self: flex-start; margin-left: 4px; }
-  .gx-dl { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 16px; border-radius: 7px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all .12s; box-shadow: 0 0 16px rgba(0,240,255,.3); }
+  .gx-dl { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 16px; border-radius: 7px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all .12s; box-shadow: 0 0 16px rgba(33,158,188,.3); }
   .gx-dl:hover { opacity: .92; } .gx-dl:disabled { opacity: .5; cursor: default; }
   .gx-actions { display:flex; gap:10px; align-items:center; }
   .gx-btn { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 16px; border-radius: 7px; border: 1px solid; transition: all .12s; }
@@ -380,17 +381,17 @@ const GX_CSS = `
   /* fit into viewport but keep true pixels for capture */
   .gx-card { width: 1600px; height: 900px; flex: 0 0 auto; position: relative; overflow: hidden;
     background:
-      radial-gradient(900px 380px at 18% -8%, rgba(0,240,255,.10), transparent 60%),
+      radial-gradient(900px 380px at 18% -8%, rgba(33,158,188,.10), transparent 60%),
       radial-gradient(820px 420px at 92% 112%, rgba(249,115,22,.10), transparent 60%),
       linear-gradient(180deg, #0a0e16 0%, #05060a 60%, #04050a 100%);
     border: 1px solid var(--sm-border); border-radius: 22px;
-    box-shadow: 0 0 0 1px rgba(0,240,255,.05), 0 40px 120px rgba(0,0,0,.65);
+    box-shadow: 0 0 0 1px rgba(33,158,188,.05), 0 40px 120px rgba(0,0,0,.65);
     display: flex; flex-direction: column; transform-origin: top center; }
   .gx-card.neg { box-shadow: 0 0 0 1px rgba(239,68,68,.10), 0 40px 120px rgba(0,0,0,.65); }
   .gx-card::before { content:""; position:absolute; top:0; left:0; right:0; height:4px;
-    background: linear-gradient(90deg, var(--cyan), rgba(0,240,255,0) 38%, rgba(249,115,22,0) 62%, var(--amber)); opacity:.9; }
+    background: linear-gradient(90deg, var(--cyan), rgba(33,158,188,0) 38%, rgba(249,115,22,0) 62%, var(--amber)); opacity:.9; }
   .gx-glow { position:absolute; width:420px; height:420px; border-radius:50%; filter: blur(90px); pointer-events:none; z-index:0; }
-  .gx-glow.tl { top:-160px; left:-120px; background: rgba(0,240,255,.18); }
+  .gx-glow.tl { top:-160px; left:-120px; background: rgba(33,158,188,.18); }
   .gx-glow.br { bottom:-180px; right:-140px; background: rgba(249,115,22,.16); }
   .gx-card.neg .gx-glow.br { background: rgba(239,68,68,.16); }
 
@@ -401,10 +402,10 @@ const GX_CSS = `
   .gx-date { font-size:20px; font-weight:800; color:#fff; letter-spacing:.01em; }
   .gx-time { font-size:13px; color:#9aa4b2; letter-spacing:.04em; }
   .gx-logo { position:absolute; top:-30px; left:50%; transform:translateX(-50%); z-index:4; display:flex; align-items:center; justify-content:center; pointer-events:none; }
-  .gx-logo img { height:330px; width:auto; object-fit:contain; filter: drop-shadow(0 6px 30px rgba(0,240,255,.32)); }
+  .gx-logo img { height:330px; width:auto; object-fit:contain; filter: drop-shadow(0 6px 30px rgba(33,158,188,.32)); }
   .gx-regime { position:absolute; top:26px; right:30px; z-index:6; display:inline-flex; align-items:center; gap:8px; white-space:nowrap; font-size:13px; font-weight:800; letter-spacing:.06em; padding:8px 13px; border-radius:8px; border:1px solid; pointer-events:auto; }
   .gx-regime.neg { color:#ef4444; border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.10); box-shadow: 0 0 18px rgba(239,68,68,.25) inset; }
-  .gx-regime.pos { color:#10b981; border-color: rgba(16,185,129,.5); background: rgba(16,185,129,.10); box-shadow: 0 0 18px rgba(16,185,129,.25) inset; }
+  .gx-regime.pos { color:#8ECAE6; border-color: rgba(16,185,129,.5); background: rgba(16,185,129,.10); box-shadow: 0 0 18px rgba(16,185,129,.25) inset; }
   .gx-regime i { width:9px; height:9px; border-radius:50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
 
   /* chart as a full-bleed UNDERLAY — inset ~1in (96px) from the card edge,
@@ -417,13 +418,13 @@ const GX_CSS = `
     position:absolute; bottom:0; left:0; display:block; }
   .gx-drop { position:absolute; inset:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
     border:2px dashed rgba(255,255,255,.18); border-radius:12px; color:#9aa4b2; font-size:16px; text-align:center; transition:.15s; }
-  .gx-imgwrap:hover .gx-drop { border-color: var(--cyan); color:#fff; background: rgba(0,240,255,.03); }
+  .gx-imgwrap:hover .gx-drop { border-color: var(--cyan); color:#fff; background: rgba(33,158,188,.03); }
   .gx-drop .big { font-size:20px; font-weight:800; color:#fff; }
   .gx-ocr { position:absolute; left:14px; bottom:14px; z-index:3; display:inline-flex; align-items:center; gap:8px;
     font-size:12px; font-weight:700; letter-spacing:.03em; padding:7px 12px; border-radius:7px; border:1px solid rgba(255,255,255,.18);
     background: rgba(5,6,10,.85); color:#9aa4b2; }
-  .gx-ocr.busy { color: var(--cyan); border-color: rgba(0,240,255,.4); }
-  .gx-ocr.ok { color:#10b981; border-color: rgba(16,185,129,.4); }
+  .gx-ocr.busy { color: var(--cyan); border-color: rgba(33,158,188,.4); }
+  .gx-ocr.ok { color:#8ECAE6; border-color: rgba(16,185,129,.4); }
   .gx-ocr.warn { color: var(--amber); border-color: rgba(249,115,22,.4); }
   .gx-ocr button { font:inherit; font-size:11px; cursor:pointer; background:transparent; color: var(--cyan); border:none; text-decoration:underline; padding:0; margin-left:6px; }
   .gx-spin { width:11px; height:11px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation: gxspin .7s linear infinite; }
@@ -437,10 +438,10 @@ const GX_CSS = `
   .gx-pill .v { display:flex; align-items:baseline; gap:6px; font-size:30px; font-weight:900; letter-spacing:.01em; line-height:1; }
   .gx-pill .v b { font-weight:900; outline:none; }
   .gx-pill .v small { font-size:14px; font-weight:800; color:#9aa4b2; }
-  .gx-pill .v b.cyan { color:#00f0ff; text-shadow:0 0 18px rgba(0,240,255,.35); }
-  .gx-pill .v b.amber { color:#f97316; text-shadow:0 0 16px rgba(249,115,22,.30); }
+  .gx-pill .v b.cyan { color:#219EBC; text-shadow:0 0 18px rgba(33,158,188,.35); }
+  .gx-pill .v b.amber { color:#FB8501; text-shadow:0 0 16px rgba(249,115,22,.30); }
   .gx-pill .v b.red { color:#ef4444; text-shadow:0 0 16px rgba(239,68,68,.30); }
-  .gx-pill .v b.green { color:#10b981; text-shadow:0 0 16px rgba(16,185,129,.30); }
+  .gx-pill .v b.green { color:#8ECAE6; text-shadow:0 0 16px rgba(16,185,129,.30); }
   .gx-pill.core { flex: 2.4; }
   .gx-pill.core .cv { font-size:16px; font-weight:600; line-height:1.4; color:#d7dee8; outline:none; }
 
@@ -655,7 +656,7 @@ const XP_CSS = `
   .xp-dte { display:inline-flex; gap:3px; padding:3px; background:var(--bg2); border:1px solid var(--sm-border); border-radius:7px; }
   .xp-dte button { font-family:var(--sm-mono); font-size:11px; font-weight:700; letter-spacing:.04em; cursor:pointer; padding:6px 13px; border-radius:5px; border:1px solid transparent; background:transparent; color:var(--sm-muted); transition:.12s; }
   .xp-dte button:hover { color:var(--text1); }
-  .xp-dte button.on { background:var(--cyan); color:#05060a; border-color:var(--cyan); box-shadow:0 0 12px rgba(0,240,255,.35); }
+  .xp-dte button.on { background:var(--cyan); color:#05060a; border-color:var(--cyan); box-shadow:0 0 12px rgba(33,158,188,.35); }
   .xp-candle-btn { display:inline-flex; align-items:center; gap:7px; font-family:var(--sm-mono); font-size:11px; font-weight:700; letter-spacing:.04em; cursor:pointer; padding:7px 13px; border-radius:6px; border:1px solid var(--sm-border); background:var(--bg3); color:var(--text1); transition:.12s; }
   .xp-candle-btn:hover { border-color:var(--cyan); }
   .xp-candle-btn.on { border-color:var(--sm-green); color:var(--sm-green); }
@@ -680,7 +681,7 @@ const XP_CSS = `
   .xp-chip .lbl { font-size:10px; font-weight:700; letter-spacing:.08em; color:#cfd6df; }
   .xp-chip .val { font-size:18px; font-weight:900; color:#fff; }
   .xp-chip.amber { border-color:rgba(249,158,11,.6); } .xp-chip.amber .val { color:var(--amber); }
-  .xp-chip.cyan { border-color:rgba(0,240,255,.5); } .xp-chip.cyan .val { color:var(--cyan); }
+  .xp-chip.cyan { border-color:rgba(33,158,188,.5); } .xp-chip.cyan .val { color:var(--cyan); }
   /* single-line chip (UPDATE): html2canvas ignores flex justify-content, so
      center the lone line with line-height instead of relying on flex. */
   .xp-chip.solo { display:block; text-align:center; line-height:32px; font-size:13px; font-weight:700; color:#cfd6df; }
@@ -733,7 +734,7 @@ const XP_CSS = `
   .xp-kl .v { font-size:18px; font-weight:900; color:#fff; }
   .xp-kl.green { border-color:rgba(16,185,129,.55);} .xp-kl.green .lbl { color:var(--sm-green);}
   .xp-kl.amber { border-color:rgba(249,158,11,.6);} .xp-kl.amber .lbl { color:var(--amber);}
-  .xp-kl.cyan { border-color:rgba(0,240,255,.5);} .xp-kl.cyan .lbl { color:var(--cyan);}
+  .xp-kl.cyan { border-color:rgba(33,158,188,.5);} .xp-kl.cyan .lbl { color:var(--cyan);}
   .xp-kl.red { border-color:rgba(239,68,68,.55);} .xp-kl.red .lbl { color:var(--sm-red);}
 
   .xp-tradeplan .xp-panel-h { justify-content:space-between; }
@@ -753,7 +754,7 @@ const XP_CSS = `
   .xp-insight .txt { font-size:19px; color:#dfe7f0; line-height:1.5; }
   .xp-insight .txt b { color:var(--amber); }
   .xp-insight .txt .disc { display:block; margin-top:8px; font-size:13px; color:#9aa4b2; letter-spacing:.04em; }
-  .xp-insight .xp-logo { margin-left:auto; height:54px; width:auto; object-fit:contain; flex:0 0 auto; filter:drop-shadow(0 4px 16px rgba(0,240,255,.25)); }
+  .xp-insight .xp-logo { margin-left:auto; height:54px; width:auto; object-fit:contain; flex:0 0 auto; filter:drop-shadow(0 4px 16px rgba(33,158,188,.25)); }
 
   .xp-gen-btn { font-family:var(--sm-mono); font-size:10px; font-weight:700; letter-spacing:.03em; cursor:pointer; padding:4px 9px; border-radius:5px; border:1px solid var(--cyan); background:transparent; color:var(--cyan); transition:.12s; }
   .xp-gen-btn:hover { background:var(--cyan); color:#05060a; }
@@ -949,7 +950,7 @@ function ExplainerMockup({
     ctx.clearRect(0, 0, cv.width, cv.height);
     if (!candlesOn || !candleGeo.length) return;
     for (const g of candleGeo) {
-      ctx.fillStyle = g.up ? "#10b981" : "#ef4444";
+      ctx.fillStyle = g.up ? "#8ECAE6" : "#ef4444";
       // wick
       ctx.fillRect(g.cx - g.wickW / 2, g.yHigh, g.wickW, Math.max(1, g.yLow - g.yHigh));
       // body
@@ -1752,10 +1753,10 @@ export default function SocialMediaPage() {
           --bg2: #161b22;
           --bg3: #21262d;
           --bg4: #2d333b;
-          --cyan: var(--accent, #00f0ff);
-          --amber: var(--yellow, #f97316);
+          --cyan: var(--accent, #219ebc);
+          --amber: var(--yellow, #fb8501);
           --sm-red: var(--red, #ef4444);
-          --sm-green: #10b981;
+          --sm-green: #8ecae6;
           --text1: var(--text, #ffffff);
           --text2: #ffffff;
           --sm-muted: #ffffff;
@@ -1772,14 +1773,14 @@ export default function SocialMediaPage() {
              violet radials over the base bg, a touch stronger for this page. */
           background-color: var(--bg0);
           background-image:
-            radial-gradient(circle at 15% 50%, rgba(0, 240, 255, 0.04) 0%, transparent 50%),
-            radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.05) 0%, transparent 50%);
+            radial-gradient(circle at 15% 50%, rgba(33,158,188, 0.04) 0%, transparent 50%),
+            radial-gradient(circle at 85% 30%, rgba(18,103,131, 0.05) 0%, transparent 50%);
           background-attachment: fixed;
           color: var(--text2);
-          font-family: Arial, "Helvetica Neue", sans-serif;
+          font-family: var(--font-inter), "Inter", "Helvetica Neue", Arial, sans-serif;
           padding: 24px;
         }
-        #page-social-media, #page-social-media * { font-family: Arial, "Helvetica Neue", sans-serif; box-sizing: border-box; }
+        #page-social-media, #page-social-media * { font-family: var(--font-inter), "Inter", "Helvetica Neue", Arial, sans-serif; box-sizing: border-box; }
 
         .sm-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--sm-border); padding-bottom: 14px; margin-bottom: 22px; max-width: 1100px; margin-left: auto; margin-right: auto; }
         .sm-head h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; margin: 0; color: var(--text1); }
@@ -1787,7 +1788,7 @@ export default function SocialMediaPage() {
         .sm-tabs { display: inline-flex; gap: 4px; padding: 3px; background: var(--bg2); border: 1px solid var(--sm-border); border-radius: 8px; }
         .sm-tabs button { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 6px 12px; border-radius: 5px; border: 1px solid transparent; background: transparent; color: var(--sm-muted); transition: all 0.12s; }
         .sm-tabs button:hover { color: var(--text1); }
-        .sm-tabs button.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,240,255,0.35); }
+        .sm-tabs button.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(33,158,188,0.35); }
         .sm-date { margin-left: auto; font-family: var(--sm-mono); font-size: 13px; color: var(--sm-muted); }
         .sm-refresh { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 12px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
         .sm-refresh:hover { background: var(--bg4); border-color: var(--cyan); }
@@ -1823,7 +1824,7 @@ export default function SocialMediaPage() {
         .sm-ladder-row .val { text-align: right; color: var(--text1); }
         .dot-call i { background: var(--sm-red); }
         .dot-flip i { background: var(--amber); }
-        .dot-spot i { background: var(--cyan); box-shadow: 0 0 0 3px rgba(0,240,255,0.18); }
+        .dot-spot i { background: var(--cyan); box-shadow: 0 0 0 3px rgba(33,158,188,0.18); }
         .dot-put i { background: var(--sm-green); }
 
         .sm-field { margin-bottom: 11px; }
@@ -1906,11 +1907,15 @@ export default function SocialMediaPage() {
       <div className="sm-head">
         <h1>Social Media</h1>
         <span className="sm-tag">Admin</span>
-        <span className="sm-tabs">
-          <button type="button" className={tab === "levels" ? "on" : ""} onClick={() => setTab("levels")}>Daily Levels</button>
-          <button type="button" className={tab === "cards" ? "on" : ""} onClick={() => setTab("cards")}>GEX Image Cards</button>
-          <button type="button" className={tab === "explainer" ? "on" : ""} onClick={() => setTab("explainer")}>Explainer Mockup</button>
-        </span>
+        <SegGroup
+          options={[
+            { label: "Daily Levels", value: "levels" },
+            { label: "GEX Image Cards", value: "cards" },
+            { label: "Explainer Mockup", value: "explainer" },
+          ]}
+          active={tab}
+          onChange={(v) => setTab(v as "levels" | "cards" | "explainer")}
+        />
         <span className="sm-live"><i />{refreshing ? "Loading…" : hydrated ? "Loaded" : "Not loaded · on demand"}</span>
         <span className="sm-date">{today}</span>
         <button

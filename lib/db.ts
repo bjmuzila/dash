@@ -473,7 +473,45 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       hidden_cards  JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Per-user customized Quotes list (toolbar dropdown). symbols is an ordered
+    -- JSON array of { sym, label }. NULL/absent row = use the built-in defaults.
+    CREATE TABLE IF NOT EXISTS quote_symbol_prefs (
+      clerk_user_id TEXT PRIMARY KEY,
+      symbols       JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
   `);
+}
+
+// ── Quotes list prefs (per-user customized toolbar quotes) ──────────────────
+
+export interface QuoteSymPref { sym: string; label: string }
+
+/** Returns the user's saved quote list, or [] if they've never customized it. */
+export async function getQuoteSymbols(clerkUserId: string): Promise<QuoteSymPref[]> {
+  await getDb();
+  const row = await queryOne<{ symbols: unknown }>(
+    `SELECT symbols FROM quote_symbol_prefs WHERE clerk_user_id = ?`, [clerkUserId]
+  );
+  if (!row) return [];
+  const s = row.symbols;
+  const arr = typeof s === "string" ? JSON.parse(s) : s;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((x): x is QuoteSymPref => !!x && typeof x.sym === "string")
+    .map((x) => ({ sym: String(x.sym), label: String(x.label ?? x.sym) }));
+}
+
+export async function upsertQuoteSymbols(clerkUserId: string, symbols: QuoteSymPref[]): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO quote_symbol_prefs (clerk_user_id, symbols, updated_at)
+     VALUES (?, ?::jsonb, CURRENT_TIMESTAMP)
+     ON CONFLICT (clerk_user_id) DO UPDATE SET
+       symbols = EXCLUDED.symbols, updated_at = CURRENT_TIMESTAMP`,
+    [clerkUserId, JSON.stringify(symbols)]
+  );
 }
 
 // ── ICT glossary card prefs (per-user show/hide) ────────────────────────────
@@ -1860,10 +1898,10 @@ export async function getOptionStrikeNetGexAsOf(
   date: string,
   expiry: string,
   asOfTimestamp: number
-): Promise<Array<{ strike: number; net_gex: number; timestamp: number }>> {
+): Promise<Array<{ strike: number; net_gex: number; net_vol_gex: number; timestamp: number }>> {
   const pool = await getDb();
   const result = await pool.query(
-    `SELECT DISTINCT ON (strike) strike, net_gex, timestamp
+    `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
@@ -1874,6 +1912,7 @@ export async function getOptionStrikeNetGexAsOf(
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
     timestamp: Number(row.timestamp ?? 0),
   }));
 }
@@ -1889,10 +1928,10 @@ export async function getOptionStrikeNetGexAsOfOrNearest(
   date: string,
   expiry: string,
   asOfTimestamp: number
-): Promise<Array<{ strike: number; net_gex: number; timestamp: number }>> {
+): Promise<Array<{ strike: number; net_gex: number; net_vol_gex: number; timestamp: number }>> {
   const pool = await getDb();
   const result = await pool.query(
-    `SELECT DISTINCT ON (strike) strike, net_gex, timestamp
+    `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
@@ -1907,6 +1946,7 @@ export async function getOptionStrikeNetGexAsOfOrNearest(
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
     timestamp: Number(row.timestamp ?? 0),
   }));
 }
@@ -1918,10 +1958,10 @@ export async function getOptionStrikeNetGexAsOfOrNearest(
 export async function getOptionStrikeNetGexAtOpen(
   date: string,
   expiry: string
-): Promise<Array<{ strike: number; net_gex: number; timestamp: number }>> {
+): Promise<Array<{ strike: number; net_gex: number; net_vol_gex: number; timestamp: number }>> {
   const pool = await getDb();
   const result = await pool.query(
-    `SELECT DISTINCT ON (strike) strike, net_gex, timestamp
+    `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
@@ -1931,6 +1971,7 @@ export async function getOptionStrikeNetGexAtOpen(
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
     timestamp: Number(row.timestamp ?? 0),
   }));
 }

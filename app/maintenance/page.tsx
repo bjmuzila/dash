@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 const THEME = {
   bg: "#05060A",
-  cyan: "#00F0FF",
+  cyan: "#219EBC",
   muted: "#8B94A7",
   text: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",
@@ -22,8 +22,8 @@ const shell: CSSProperties = {
   padding: 24,
   background: THEME.bg,
   backgroundImage:
-    "radial-gradient(circle at 20% 40%, rgba(0,240,255,0.05) 0%, transparent 55%), radial-gradient(circle at 80% 60%, rgba(139,92,246,0.04) 0%, transparent 55%)",
-  fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+    "radial-gradient(circle at 20% 40%, rgba(33,158,188,0.05) 0%, transparent 55%), radial-gradient(circle at 80% 60%, rgba(18,103,131,0.04) 0%, transparent 55%)",
+  fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
   color: THEME.text,
 };
 
@@ -52,7 +52,7 @@ export default function MaintenancePage() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: "rgba(0,240,255,0.10)",
+            background: "rgba(33,158,188,0.10)",
             border: `1px solid ${THEME.cyan}44`,
           }}
         >

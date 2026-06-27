@@ -238,7 +238,7 @@ export default function GexHeatmap({
                 display: "grid",
                 gridTemplateColumns: "68px repeat(5, 1fr)",
                 borderBottom: "1px solid #0a1420",
-                outline: isATM ? "1.5px solid rgba(0,229,255,0.7)" : "none",
+                outline: isATM ? "1.5px solid rgba(33,158,188,0.7)" : "none",
                 outlineOffset: isATM ? "-1px" : "0",
                 position: "relative",
                 zIndex: isATM ? 1 : 0,
@@ -250,7 +250,7 @@ export default function GexHeatmap({
                 fontSize: 11,
                 fontWeight: 700,
                 fontFamily: "inherit",
-                color: isATM ? "#00e5ff" : "#7a9ab8",
+                color: isATM ? "#219EBC" : "#7a9ab8",
                 background: isATM ? "#0a2030" : "transparent",
                 display: "flex",
                 alignItems: "center",
@@ -258,7 +258,7 @@ export default function GexHeatmap({
               }}>
                 {row.strike.toLocaleString()}
                 {isATM && (
-                  <span style={{ fontSize: 7, color: "#00e5ff", background: "#062030", padding: "1px 3px", borderRadius: 2 }}>ATM</span>
+                  <span style={{ fontSize: 7, color: "#219EBC", background: "#062030", padding: "1px 3px", borderRadius: 2 }}>ATM</span>
                 )}
                 {rank && (
                   <span style={{ fontSize: 8, fontWeight: 800, color: rankColors[rank], background: `${rankColors[rank]}22`, padding: "0 3px", borderRadius: 2, border: `1px solid ${rankColors[rank]}44` }}>

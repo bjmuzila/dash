@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EmTrackerAdmin from "@/components/dashboard/EmTrackerAdmin";
 import LevelsPublish from "@/components/dashboard/LevelsPublish";
-import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
+import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "@/components/shared/DockToolbar";
 
 async function getHtml2Canvas() {
   const mod = await import("html2canvas" as never);
@@ -933,7 +934,7 @@ export default function EstimatedMoves() {
 
     for (let i = 0; i < SYMBOLS.length; i += 4) {
       const batch = SYMBOLS.slice(i, i + 4);
-      setStatus({ text: `Loading ${i + 1}-${Math.min(i + 4, SYMBOLS.length)} / ${SYMBOLS.length}`, color: "#00e5ff" });
+      setStatus({ text: `Loading ${i + 1}-${Math.min(i + 4, SYMBOLS.length)} / ${SYMBOLS.length}`, color: "#219EBC" });
       const results = await Promise.allSettled(batch.map((sym) => estimateMove(sym, effectiveExp, engine)));
       results.forEach((result, idx) => {
         settled.push(result.status === "fulfilled"
@@ -980,7 +981,7 @@ export default function EstimatedMoves() {
 
   const refreshZones = useCallback(async () => {
     setZoneLevels([]);
-    setStatus({ text: "Loading weekly zones", color: "#00e5ff" });
+    setStatus({ text: "Loading weekly zones", color: "#219EBC" });
     const levels = await fetchNoShortNoLongZones();
     setZoneLevels(levels);
 
@@ -1029,7 +1030,7 @@ export default function EstimatedMoves() {
     busyRef.current = true;
     setLoading(true);
     setStarted(true);
-    setStatus({ text: "Syncing", color: "#00e5ff" });
+    setStatus({ text: "Syncing", color: "#219EBC" });
 
     try {
       if (activeView === "estimated") {
@@ -1059,7 +1060,7 @@ export default function EstimatedMoves() {
     busyRef.current = true;
     setLoading(true);
     setStarted(true);
-    setStatus({ text: "Computing live", color: "#00e5ff" });
+    setStatus({ text: "Computing live", color: "#219EBC" });
     try {
       await refreshEstimatedMoves();
       setLevelsSource("__live__");
@@ -1089,7 +1090,7 @@ export default function EstimatedMoves() {
       return;
     }
 
-    setStatus({ text: "Saving...", color: "#00e5ff" });
+    setStatus({ text: "Saving...", color: "#219EBC" });
     try {
       await dbSaveSnapshot(null, activeView === "estimated"
         ? {
@@ -1117,7 +1118,7 @@ export default function EstimatedMoves() {
   }, [activeView, drawerOpen, hasCurrentData, knownExpirations, rows, targetDateLabel, zoneLevels]);
 
   const exportCsv = useCallback(async () => {
-    setStatus({ text: "Exporting...", color: "#00e5ff" });
+    setStatus({ text: "Exporting...", color: "#219EBC" });
     const all = await dbGetAll().catch(() => [] as Snapshot[]);
     const filtered = all.filter((snap) => (snap.view ?? "estimated") === activeView);
     if (!filtered.length) {
@@ -1200,7 +1201,7 @@ export default function EstimatedMoves() {
 
   const copyShot = useCallback(async () => {
     if (!shotRef.current || !hasCurrentData) return;
-    setStatus({ text: "Capturing...", color: "#00e5ff" });
+    setStatus({ text: "Capturing...", color: "#219EBC" });
     try {
       const html2canvas = await getHtml2Canvas();
       const canvas = await html2canvas(shotRef.current, {
@@ -1245,39 +1246,20 @@ export default function EstimatedMoves() {
 
   return (
     <div style={{ ...homeShellStyle, flex: 1, minHeight: 0, overflow: "hidden", height: "100%" }}>
-      <div style={{ padding: "7px 16px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 10 }}>
-            {[
-              { id: "estimated" as const, label: "Estimated Moves" },
-              { id: "zones" as const, label: "No Short No Long Zones" },
-              { id: "tracker" as const, label: "EM Tracker" },
-            ].map((tab) => {
-              const active = activeView === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveView(tab.id)}
-                  style={{
-                    background: active ? "rgba(0,229,255,0.15)" : "transparent",
-                    border: `1px solid ${active ? "rgba(0,229,255,.4)" : HT.border}`,
-                    color: active ? "#eef7ff" : "#7ab8ff",
-                    fontSize: 12,
-                    padding: "6px 10px",
-                    borderRadius: 2,
-                    cursor: "pointer",
-                    fontWeight: 700,
-                    letterSpacing: ".06em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
+      <div style={{ padding: "7px 12px 3px", flexShrink: 0 }}>
+      <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "wrap", rowGap: 6 }}>
+          <SegGroup
+            options={[
+              { label: "Estimated Moves", value: "estimated" },
+              { label: "No Short No Long Zones", value: "zones" },
+              { label: "EM Tracker", value: "tracker" },
+            ]}
+            active={activeView}
+            onChange={(v) => setActiveView(v as typeof activeView)}
+          />
+          <DockGap />
 
-          <span style={{ fontSize: 15, fontWeight: 700, color: "#00e5ff", letterSpacing: ".15em", textTransform: "uppercase" }}>{viewTitle}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#219EBC", letterSpacing: ".12em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{viewTitle}</span>
           <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
           <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase" }}>
             {activeView === "estimated" ? targetDateLabel : activeView === "tracker" ? "" : "Last Completed Week"}
@@ -1306,42 +1288,36 @@ export default function EstimatedMoves() {
           )}
 
           {activeView === "estimated" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 12 }}>
-              <span style={{ fontSize: 11, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Expiration</span>
-              <select
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+              <span style={{ fontSize: 11, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Exp</span>
+              <DockExpiryPicker
+                expirations={fridayExpirations}
                 value={expOverride}
-                onChange={(e) => { setExpOverride(e.target.value); bulkSubscribedRef.current = false; }}
-                style={{ background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, color: HT.text, fontSize: 12, padding: "5px 8px", borderRadius: 4, cursor: "pointer", fontWeight: 700, letterSpacing: ".06em", outline: "none", minWidth: 180 }}
-              >
-                <option value="">-- Auto --</option>
-                {fridayExpirations.map((exp) => (
-                  <option key={exp} value={exp}>{labelForDate(exp)} ({daysTo(exp)}d)</option>
-                ))}
-              </select>
+                onChange={(v) => { setExpOverride(v); bulkSubscribedRef.current = false; }}
+                includeFront
+                frontLabel="Auto"
+              />
             </div>
           )}
-        </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, letterSpacing: ".12em", textTransform: "uppercase", color: status.color }}>{status.text}</span>
-          <button onClick={refresh} disabled={loading} style={{ ...homeButtonStyle, opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
-            {started ? "Refresh" : "Start"}
-          </button>
-          {activeView === "estimated" && (
-            <button onClick={computeLive} disabled={loading} title="Recompute live for inspection only — does not change the published customer values" style={{ ...homeButtonStyle, opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
-              Compute Live
-            </button>
-          )}
-          <button onClick={saveSnapshot} disabled={!hasCurrentData} style={{ ...homeButtonStyle, opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
-            Save
-          </button>
-          <button onClick={exportCsv} style={{ ...homeButtonStyle }}>
-            Export
-          </button>
-          <button onClick={copyShot} disabled={!hasCurrentData} style={{ ...homeButtonStyle, opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
-            Copy Shot
-          </button>
-        </div>
+        <DockSpacer />
+        <span style={{ fontSize: 11, letterSpacing: ".10em", textTransform: "uppercase", color: status.color, whiteSpace: "nowrap", flexShrink: 0 }}>{status.text}</span>
+        <DockButton onClick={refresh} title="Refresh" style={{ opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer", color: HT.cyan }}>
+          {started ? "Refresh" : "Start"}
+        </DockButton>
+        {activeView === "estimated" && (
+          <DockButton onClick={computeLive} title="Recompute live for inspection only — does not change the published customer values" style={{ opacity: loading ? 0.6 : 1 }}>
+            Compute Live
+          </DockButton>
+        )}
+        <DockButton onClick={saveSnapshot} title="Save snapshot" style={{ opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
+          Save
+        </DockButton>
+        <DockButton onClick={exportCsv} title="Export CSV">Export</DockButton>
+        <DockButton onClick={copyShot} title="Copy screenshot" style={{ opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
+          Copy Shot
+        </DockButton>
+      </Dock>
       </div>
 
       {activeView === "tracker" ? (
@@ -1398,9 +1374,9 @@ export default function EstimatedMoves() {
         <div style={{ flex: 1, minWidth: 0, overflow: "auto", padding: 18 }}>
           {activeView === "estimated" ? (
             <div style={{ width: "100%", maxWidth: 1100, margin: "0 auto", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
-              <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(0,240,255,0.04)", padding: "10px 14px", textAlign: "center" }}>
+              <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(33,158,188,0.04)", padding: "10px 14px", textAlign: "center" }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
-                  <span>Weekly Estimated Move For <span style={{ color: "#00e5ff" }}>{targetDateLabel || "--"}</span></span>
+                  <span>Weekly Estimated Move For <span style={{ color: "#219EBC" }}>{targetDateLabel || "--"}</span></span>
                   {confidenceScore != null && (
                     <span style={{
                       fontSize: 12,
@@ -1420,7 +1396,7 @@ export default function EstimatedMoves() {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 16 }}>
                   <thead style={{ background: HT.panelBgStrong }}>
-                    <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#00e5ff", textAlign: "center", fontSize: 13, letterSpacing: ".12em", textTransform: "uppercase" }}>
+                    <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#219EBC", textAlign: "center", fontSize: 13, letterSpacing: ".12em", textTransform: "uppercase" }}>
                       {["Ticker","Close","Exp","EM","Up","Down"].map((header, idx, arr) => (
                         <th key={header} style={{ padding: 10, borderRight: idx < arr.length - 1 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
                       ))}
@@ -1449,7 +1425,7 @@ export default function EstimatedMoves() {
             </div>
           ) : (
             <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
-              <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(0,240,255,0.04)", padding: "10px 14px", textAlign: "center" }}>
+              <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(33,158,188,0.04)", padding: "10px 14px", textAlign: "center" }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>
                   No Short / No Long Zones <span style={{ color: "#eef7ff" }}>· Last Week Candle</span>
                 </div>
@@ -1462,7 +1438,7 @@ export default function EstimatedMoves() {
                 ) : (
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
                     <thead style={{ background: HT.panelBgStrong }}>
-                      <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#00e5ff", textAlign: "center", fontSize: 12, letterSpacing: ".1em", textTransform: "uppercase" }}>
+                      <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#219EBC", textAlign: "center", fontSize: 12, letterSpacing: ".1em", textTransform: "uppercase" }}>
                         {["Ticker", "Close", "Pivot", "Range", "No Long", "No Short"].map((header, idx) => (
                           <th key={header} style={{ padding: 10, borderRight: idx < 5 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
                         ))}
@@ -1511,17 +1487,17 @@ export default function EstimatedMoves() {
       </div>
       )}
 
-      <div ref={shotRef} style={{ position: "fixed", top: 0, left: "-9999px", background: "#080c14", padding: "0 0 12px 0", width: 420, fontFamily: "Arial, sans-serif" }}>
+      <div ref={shotRef} style={{ position: "fixed", top: 0, left: "-9999px", background: "#080c14", padding: "0 0 12px 0", width: 420, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
         {activeView === "estimated" ? (
           <>
             <div style={{ background: "#0b111b", padding: "14px 0", textAlign: "center", borderBottom: "2px solid #1a2a3a" }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>Weekly Estimated Move For</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#219EBC", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
               {["Ticker","Up","Down"].map((header) => (
-                <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#00e5ff", letterSpacing: ".12em" }}>{header}</div>
+                <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#219EBC", letterSpacing: ".12em" }}>{header}</div>
               ))}
             </div>
 
@@ -1553,7 +1529,7 @@ export default function EstimatedMoves() {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
               {["Ticker", "No Short", "No Long"].map((header) => (
-                <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em" }}>{header}</div>
+                <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#219EBC", letterSpacing: ".1em" }}>{header}</div>
               ))}
             </div>
 

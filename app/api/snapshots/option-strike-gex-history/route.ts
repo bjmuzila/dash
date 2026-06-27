@@ -117,9 +117,15 @@ export async function GET(req: NextRequest) {
       const put = (strike: number, key: string, v: number) => {
         (baselines[strike] ??= {})[key] = v;
       };
-      for (const r of openRows) put(r.strike, "open", r.net_gex);
+      // Baselines are OI+Vol composite (net_gex + net_vol_gex) to match the
+      // live chart bar, which is the OI+Vol netGEX in "net" mode. This makes the
+      // 5m/15m/30m ghost overlay a true live-vs-live comparison instead of
+      // live(OI+Vol) vs prior(OI-only), which previously exaggerated the delta.
+      const oiVol = (r: { net_gex: number; net_vol_gex?: number }) =>
+        r.net_gex + (Number.isFinite(r.net_vol_gex as number) ? (r.net_vol_gex as number) : 0);
+      for (const r of openRows) put(r.strike, "open", oiVol(r));
       ages.forEach((m, i) => {
-        for (const r of ageRowSets[i]) put(r.strike, String(m), r.net_gex);
+        for (const r of ageRowSets[i]) put(r.strike, String(m), oiVol(r));
       });
 
       return NextResponse.json({ mode: "point", ages, baselines });

@@ -89,7 +89,7 @@ export default async function HomeFastPage() {
       style={{
         flex: "1 1 140px",
         background: "rgba(13,17,25,0.6)",
-        border: "1px solid rgba(0,240,255,0.12)",
+        border: "1px solid rgba(33,158,188,0.12)",
         borderRadius: 12,
         padding: "14px 16px",
       }}
@@ -126,10 +126,10 @@ export default async function HomeFastPage() {
           </p>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, maxWidth: 760 }}>
-            {stat("Net GEX", fmtGex(snap.totalNetGex), (snap.totalNetGex ?? 0) >= 0 ? "#00F0FF" : "#EAB308")}
+            {stat("Net GEX", fmtGex(snap.totalNetGex), (snap.totalNetGex ?? 0) >= 0 ? "#219EBC" : "#EAB308")}
             {stat("Call Wall", fmtNum(snap.callWall), "#29b6f6")}
             {stat("Put Wall", fmtNum(snap.putWall), "#ffb300")}
-            {stat("GEX Flip", fmtNum(snap.gexFlip), "#f97316")}
+            {stat("GEX Flip", fmtNum(snap.gexFlip), "#FB8501")}
           </div>
 
           {/* Client island: keeps the numbers live via WebSocket after the

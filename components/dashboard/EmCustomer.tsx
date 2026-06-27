@@ -360,7 +360,7 @@ const S = {
     fontWeight: 700,
     letterSpacing: ".26em",
     textTransform: "uppercase" as const,
-    color: "#00e5ff",
+    color: "#219EBC",
     marginBottom: 8,
   },
   title: {
@@ -441,8 +441,9 @@ const S = {
   },
   resultUpdated: { fontSize: 11, color: "#eef7ff", marginLeft: "auto" },
   card: {
-    background: "#0b111b",
+    background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.08) 0%, transparent 55%), #0b111b",
     border: "1px solid #1a2a3a",
+    borderTop: "2px solid rgba(33,158,188,0.45)",
     borderRadius: 12,
     padding: "16px 18px",
     marginBottom: 14,
@@ -453,7 +454,7 @@ const S = {
     fontWeight: 700,
     letterSpacing: ".14em",
     textTransform: "uppercase" as const,
-    color: "#00e5ff",
+    color: "#219EBC",
     marginBottom: 14,
   },
   emGrid: {
@@ -462,14 +463,14 @@ const S = {
     gap: 10,
   },
   stat: {
-    background: "#04070c",
+    background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 60%), #04070c",
     border: "1px solid #13253a",
     borderRadius: 8,
     padding: "12px 8px",
     textAlign: "center" as const,
   },
   avgStat: {
-    background: "#04070c",
+    background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 60%), #04070c",
     border: "1px solid #13253a",
     borderRadius: 8,
     padding: "12px 8px",

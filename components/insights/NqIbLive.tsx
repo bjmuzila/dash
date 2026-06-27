@@ -122,7 +122,7 @@ function rulesFor(ib: IbState): Rule[] {
     out.push({ title: "IB Forming · Provisional Reads", color: "#ffb300",
       detail: `Tracking the 9:30–10:30 ET range live${ib.range > 0 ? ` — current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}` : ""}. Reads below use the developing range and lock at 10:30 ET.` });
   } else {
-    out.push({ title: "Inside Day Exception", color: "#00e5ff",
+    out.push({ title: "Inside Day Exception", color: "#219EBC",
       detail: "IB window complete. Only ~0.6% of days stay fully inside the IB — plan for at least one breakout." });
   }
 
@@ -228,13 +228,13 @@ export function NqIbLive() {
 
   return (
     <div className="card-hover" style={{
-      border: `1px solid ${ib.done ? "rgba(0,230,118,.28)" : "rgba(0,229,255,.22)"}`,
+      border: `1px solid ${ib.done ? "rgba(0,230,118,.28)" : "rgba(33,158,188,.22)"}`,
       background: "linear-gradient(180deg,rgba(0,26,38,.5),rgba(0,0,0,.3))",
       borderRadius: 10, padding: 16, marginBottom: 4,
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#00e5ff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontSize: 11, color: "#219EBC", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
             Live IB · NQ Futures
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#00e676" : "#5a7a99", boxShadow: connected ? "0 0 8px rgba(0,230,118,.8)" : "none" }} />
           </div>
@@ -258,7 +258,7 @@ export function NqIbLive() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
             {stat("IB High", fmt(ib.high), "#00e676")}
             {stat("IB Low", fmt(ib.low), "#ff5252")}
-            {stat("Midpoint", fmt(ib.mid), "#00e5ff")}
+            {stat("Midpoint", fmt(ib.mid), "#219EBC")}
             {stat("Range", fmt(ib.range), "#eef7ff")}
             {stat("Range %", ib.rangePct ? ib.rangePct.toFixed(2) + "%" : "—", ib.rangePct > 0 && ib.rangePct <= 1 ? "#ffb300" : "#eef7ff")}
             {stat("Last", fmt(ib.last), ib.aboveMid ? "#00e676" : "#ff5252")}
@@ -267,7 +267,7 @@ export function NqIbLive() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>Rules In Play ({rules.length})</span>
+            <span style={{ fontSize: 10, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>Rules In Play ({rules.length})</span>
             {!ib.done && (
               <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#ffb300", border: "1px solid #ffb30055", background: "#ffb3001a", padding: "3px 8px", borderRadius: 6 }}>Provisional · not locked</span>
             )}

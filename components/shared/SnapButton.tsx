@@ -188,15 +188,15 @@ export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
   const color =
     state === "ok" ? "#00e676" :
     state === "err" ? "#ff4757" :
-    (isSave ? "#00e5ff" : "#ffb300");
+    (isSave ? "#219EBC" : "#ffb300");
 
   const borderColor =
     state === "ok" ? "rgba(0,230,118,.35)" :
     state === "err" ? "rgba(255,71,87,.35)" :
-    (isSave ? "rgba(0,229,255,.25)" : "rgba(255,179,0,.28)");
+    (isSave ? "rgba(33,158,188,.25)" : "rgba(255,179,0,.28)");
 
   const background = isSave
-    ? "linear-gradient(180deg,rgba(0,229,255,.12),rgba(0,229,255,.04))"
+    ? "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))"
     : "linear-gradient(180deg,rgba(255,179,0,.12),rgba(255,179,0,.04))";
 
   return (

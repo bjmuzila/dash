@@ -265,7 +265,7 @@ export default function BudgetPage() {
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: "hidden", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
+    <div style={{ flex: 1, minHeight: 0, overflow: "hidden", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
       <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
         <div style={{ ...card(), padding: 0, overflow: "visible" }}>
@@ -585,7 +585,7 @@ function GroupedRegister({
       </thead>
       <tbody>
         {beginningBalance !== null && (
-          <tr style={{ background: "linear-gradient(90deg, rgba(0,240,255,0.07), transparent)", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+          <tr style={{ background: "linear-gradient(90deg, rgba(33,158,188,0.07), transparent)", borderBottom: `1px solid ${HOME_THEME.border}` }}>
             <td style={{ padding: "11px 16px", whiteSpace: "nowrap" }}>
               <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.cyan }}>STARTING BALANCE</span>
             </td>
@@ -803,11 +803,11 @@ function labelCap(): React.CSSProperties {
   return { fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
-  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(0,240,255,0.25)", background: "linear-gradient(180deg, rgba(0,240,255,0.16), rgba(0,240,255,0.05))", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap" };
+  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.25)", background: "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.05))", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap" };
 }
 function ghost(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" };
 }
 function pill(active: boolean): React.CSSProperties {
-  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(0,240,255,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(0,240,255,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 13, fontWeight: 800, cursor: "pointer" };
+  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(33,158,188,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(33,158,188,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 13, fontWeight: 800, cursor: "pointer" };
 }

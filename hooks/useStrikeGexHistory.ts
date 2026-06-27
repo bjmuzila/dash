@@ -16,8 +16,9 @@ interface PointResponse {
  * per-strike baselines at the open and each requested age. The strike-detail
  * popup subtracts these from the live OI-based netGEX to get rolling differences.
  *
- * NOTE: baselines are OI-based net GEX (that's all the history writer stores),
- * so compare against the live row's `netGEX`, not the OI+Vol composite.
+ * NOTE: baselines are the OI+Vol composite (net_gex + net_vol_gex), matching
+ * the live chart bar in "net" mode, so the ghost overlay is a true live-vs-live
+ * comparison. (The popup's per-strike diff also reads these.)
  */
 export function useStrikeGexHistory(
   expiry: string,

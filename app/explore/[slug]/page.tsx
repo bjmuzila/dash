@@ -38,7 +38,7 @@ export default async function ExplorePage({
         background: T.bg,
         backgroundImage: T.shellGlow,
         color: T.text,
-        fontFamily: "'Inter','Helvetica Neue',Arial,sans-serif",
+        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
       }}
     >
       {/* Top bar */}
@@ -173,15 +173,15 @@ const badge: React.CSSProperties = {
   letterSpacing: "0.12em",
   textTransform: "uppercase",
   color: T.cyan,
-  border: "1px solid rgba(0,240,255,0.3)",
-  background: "rgba(0,240,255,0.08)",
+  border: "1px solid rgba(33,158,188,0.3)",
+  background: "rgba(33,158,188,0.08)",
   padding: "5px 12px",
   borderRadius: 999,
 };
 
 const teaserCard: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(0,240,255,0.04), rgba(255,255,255,0.02))",
-  border: "1px solid rgba(0,240,255,0.12)",
+  background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
+  border: "1px solid rgba(33,158,188,0.12)",
   borderRadius: 16,
   padding: "clamp(16px,3vw,24px)",
 };
@@ -216,7 +216,7 @@ const statCell: React.CSSProperties = {
 const ctaBlock: React.CSSProperties = {
   marginTop: "clamp(36px,6vw,64px)",
   background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
-  border: "1px solid rgba(0,240,255,0.14)",
+  border: "1px solid rgba(33,158,188,0.14)",
   borderRadius: 20,
   padding: "clamp(24px,4vw,40px)",
 };

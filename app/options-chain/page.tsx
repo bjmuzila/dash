@@ -39,7 +39,7 @@ function CustomDropdown<T extends string | number>({
         onClick={() => setOpen(o => !o)}
         style={{
           fontSize: 10, fontWeight: 800, padding: "4px 8px",
-          border: `1px solid ${accentCyan !== false ? "rgba(0,229,255,.3)" : HT.border}`,
+          border: `1px solid ${accentCyan !== false ? "rgba(33,158,188,.3)" : HT.border}`,
           borderRadius: 4,
           background: "rgba(0,0,0,0.4)",
           color,
@@ -70,11 +70,11 @@ function CustomDropdown<T extends string | number>({
                   padding: "6px 12px", fontSize: 10, fontWeight: active ? 800 : 600,
                   cursor: "pointer", whiteSpace: "nowrap",
                   color: active ? HT.cyan : HT.text,
-                  background: active ? "rgba(0,229,255,0.10)" : "transparent",
+                  background: active ? "rgba(33,158,188,0.10)" : "transparent",
                   letterSpacing: "0.04em",
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = active ? "rgba(0,229,255,0.15)" : "rgba(255,255,255,0.05)")}
-                onMouseLeave={e => (e.currentTarget.style.background = active ? "rgba(0,229,255,0.10)" : "transparent")}
+                onMouseEnter={e => (e.currentTarget.style.background = active ? "rgba(33,158,188,0.15)" : "rgba(255,255,255,0.05)")}
+                onMouseLeave={e => (e.currentTarget.style.background = active ? "rgba(33,158,188,0.10)" : "transparent")}
               >
                 {optLabel}
               </div>
@@ -752,7 +752,7 @@ export default function OptionsChainPage() {
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
       {loadProgress > 0 && (
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "#05080d", zIndex: 10 }}>
-          <div style={{ height: "100%", width: `${loadProgress}%`, background: "#00e5ff", transition: "width 0.3s ease" }} />
+          <div style={{ height: "100%", width: `${loadProgress}%`, background: "#219EBC", transition: "width 0.3s ease" }} />
         </div>
       )}
       <div
@@ -770,7 +770,7 @@ export default function OptionsChainPage() {
           zIndex: 50,           // ADD: above chain scroll area + highlighted rows (zIndex:1)
         }}
       >
-        <span style={{ fontSize: 11, fontWeight: 800, color: "#00e5ff", letterSpacing: "0.14em", textTransform: "uppercase" }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: "#219EBC", letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
         </span>
 
@@ -788,7 +788,7 @@ export default function OptionsChainPage() {
             fontSize: 10,
             fontWeight: 800,
             padding: "4px 8px",
-            border: `1px solid rgba(0,229,255,.4)`,
+            border: `1px solid rgba(33,158,188,.4)`,
             borderRadius: 4,
             background: "rgba(0,0,0,0.4)",
             color: HT.cyan,
@@ -823,10 +823,10 @@ export default function OptionsChainPage() {
             fontSize: 10,
             fontWeight: 800,
             padding: "4px 12px",
-            border: "1px solid rgba(0,229,255,.5)",
+            border: "1px solid rgba(33,158,188,.5)",
             borderRadius: 4,
-            background: tickerInput && selectedExpiry ? "rgba(0,229,255,.12)" : "rgba(0,229,255,.04)",
-            color: tickerInput && selectedExpiry ? "#00e5ff" : "#4a6a88",
+            background: tickerInput && selectedExpiry ? "rgba(33,158,188,.12)" : "rgba(33,158,188,.04)",
+            color: tickerInput && selectedExpiry ? "#219EBC" : "#4a6a88",
             cursor: tickerInput && selectedExpiry ? "pointer" : "not-allowed",
             outline: "none",
             letterSpacing: "0.08em",
@@ -849,9 +849,9 @@ export default function OptionsChainPage() {
           type="range" min={0.5} max={3} step={0.01}
           value={intensity}
           onChange={(event) => setIntensity(Number(event.target.value))}
-          style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
+          style={{ width: 80, height: 3, accentColor: "#219EBC" }}
         />
-        <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
+        <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
           {intensity.toFixed(2)}x
         </span>
 
@@ -871,7 +871,7 @@ export default function OptionsChainPage() {
                 border: "none",
                 cursor: "pointer",
                 whiteSpace: "nowrap",
-                background: dataMode === m ? "rgba(0,229,255,.15)" : "transparent",
+                background: dataMode === m ? "rgba(33,158,188,.15)" : "transparent",
                 color: dataMode === m ? HT.cyan : "#64748b",
               }}
             >
@@ -895,7 +895,7 @@ export default function OptionsChainPage() {
                 border: "none",
                 cursor: "pointer",
                 textTransform: "uppercase",
-                background: greekMode === m ? "rgba(0,229,255,.15)" : "transparent",
+                background: greekMode === m ? "rgba(33,158,188,.15)" : "transparent",
                 color: greekMode === m ? HT.cyan : "#64748b",
               }}
             >
@@ -906,7 +906,7 @@ export default function OptionsChainPage() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
           <span style={{ fontSize: 11, color: "#e4e4e7", fontWeight: 700 }}>
-            {activeTicker} <span style={{ color: "#00e5ff", fontFamily: "monospace" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
+            {activeTicker} <span style={{ color: "#219EBC", fontFamily: "monospace" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
           </span>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e676" }} />
           <span style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>

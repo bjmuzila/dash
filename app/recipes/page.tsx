@@ -5,10 +5,10 @@ import { useState, useEffect } from 'react';
 const C = {
   bg: "#05060A",
   panel: "#0D1119",
-  cyan: "#00F0FF",
-  purple: "#8B5CF6",
-  orange: "#F97316",
-  green: "#10B981",
+  cyan: "#219EBC",
+  purple: "#126783",
+  orange: "#FB8501",
+  green: "#8ECAE6",
   red: "#EF4444",
   muted: "#8B94A7",
 };
@@ -54,8 +54,8 @@ export default function RecipesPage() {
       width: "100%",
       overflow: "hidden",
       background: C.bg,
-      backgroundImage: "radial-gradient(circle at 15% 50%, rgba(0,240,255,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(139,92,246,0.03) 0%, transparent 50%)",
-      fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+      backgroundImage: "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.03) 0%, transparent 50%)",
+      fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
       color: "#fff",
       display: "flex",
       flexDirection: "column",
@@ -78,8 +78,8 @@ export default function RecipesPage() {
           style={{
             padding: "5px 10px",
             borderRadius: 6,
-            border: `1px solid rgba(0,229,255,.25)`,
-            background: "linear-gradient(180deg,rgba(0,229,255,.12),rgba(0,229,255,.04))",
+            border: `1px solid rgba(33,158,188,.25)`,
+            background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
             color: C.cyan,
             fontSize: 10,
             fontWeight: 700,
@@ -161,8 +161,8 @@ export default function RecipesPage() {
                 style={{
                   padding: "5px 10px",
                   borderRadius: 6,
-                  border: `1px solid rgba(0,229,255,.25)`,
-                  background: "linear-gradient(180deg,rgba(0,229,255,.12),rgba(0,229,255,.04))",
+                  border: `1px solid rgba(33,158,188,.25)`,
+                  background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
                   color: C.cyan,
                   fontSize: 10,
                   fontWeight: 700,
@@ -208,7 +208,7 @@ export default function RecipesPage() {
               borderRadius: 6,
               background: "rgba(0,0,0,0.4)",
               color: "#fff",
-              fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+              fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
               outline: "none",
             }}
           />
@@ -264,7 +264,7 @@ export default function RecipesPage() {
                   <div style={{
                     width: "100%",
                     height: 160,
-                    background: `linear-gradient(135deg, rgba(139,92,246,0.1) 0%, rgba(0,240,255,0.05) 100%)`,
+                    background: `linear-gradient(135deg, rgba(18,103,131,0.1) 0%, rgba(33,158,188,0.05) 100%)`,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -297,7 +297,7 @@ export default function RecipesPage() {
                           style={{
                             fontSize: 9,
                             padding: "2px 6px",
-                            background: `rgba(0,240,255,0.1)`,
+                            background: `rgba(33,158,188,0.1)`,
                             borderRadius: 4,
                             color: C.cyan,
                             fontWeight: 700,

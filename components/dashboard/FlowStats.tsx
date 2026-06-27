@@ -37,7 +37,7 @@ function StatRow({ label, value, color }: StatRowProps) {
 export default function FlowStats({ flow }: FlowStatsProps) {
   const bullPct = (flow.bullPct * 100).toFixed(1);
   const bearPct = (flow.bearPct * 100).toFixed(1);
-  const netColor = flow.netPremiumFlow >= 0 ? "#22c55e" : "#f97316";
+  const netColor = flow.netPremiumFlow >= 0 ? "#22c55e" : "#FB8501";
 
   return (
     <div
@@ -52,7 +52,7 @@ export default function FlowStats({ flow }: FlowStatsProps) {
       <div className="mb-3">
         <div className="flex justify-between text-xs mb-1">
           <span style={{ color: "#22c55e" }}>BULL {bullPct}%</span>
-          <span style={{ color: "#f97316" }}>BEAR {bearPct}%</span>
+          <span style={{ color: "#FB8501" }}>BEAR {bearPct}%</span>
         </div>
         <div className="h-2 rounded overflow-hidden" style={{ background: "var(--border)" }}>
           <div
@@ -65,11 +65,11 @@ export default function FlowStats({ flow }: FlowStatsProps) {
       <div className="flex flex-col gap-0">
         <StatRow label="Net Premium"  value={fmtPremium(flow.netPremiumFlow)} color={netColor} />
         <StatRow label="Call Premium" value={fmtPremium(flow.callPremiumFlow)} color="#22c55e" />
-        <StatRow label="Put Premium"  value={fmtPremium(flow.putPremiumFlow)} color="#f97316" />
+        <StatRow label="Put Premium"  value={fmtPremium(flow.putPremiumFlow)} color="#FB8501" />
         <StatRow label="PCR (vol)"    value={flow.pcr.toFixed(2)} />
         <StatRow label="B/S Ratio"    value={flow.bbr.toFixed(2)} />
         <StatRow label="Bull Vol"     value={fmtVol(flow.cumulativeBullVol)} color="#22c55e" />
-        <StatRow label="Bear Vol"     value={fmtVol(flow.cumulativeBearVol)} color="#f97316" />
+        <StatRow label="Bear Vol"     value={fmtVol(flow.cumulativeBearVol)} color="#FB8501" />
         <StatRow label="Call Vol"     value={fmtVol(flow.cumulativeCallVol)} />
         <StatRow label="Put Vol"      value={fmtVol(flow.cumulativePutVol)} />
         <StatRow label="Orders"       value={String(flow.orders.length)} />

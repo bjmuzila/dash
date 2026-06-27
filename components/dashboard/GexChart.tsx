@@ -35,9 +35,9 @@ interface GexChartProps {
 // Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
 // live bar's color, drawn behind the current bar.
 const GHOST_TINTS: Record<string, { pos: string; neg: string }> = {
-  "5":  { pos: "rgba(41,182,246,0.30)", neg: "rgba(255,179,0,0.30)" },
-  "15": { pos: "rgba(41,182,246,0.22)", neg: "rgba(255,179,0,0.22)" },
-  "30": { pos: "rgba(41,182,246,0.15)", neg: "rgba(255,179,0,0.15)" },
+  "5":  { pos: "rgba(41,182,246,0.60)", neg: "rgba(255,179,0,0.60)" },
+  "15": { pos: "rgba(41,182,246,0.45)", neg: "rgba(255,179,0,0.45)" },
+  "30": { pos: "rgba(41,182,246,0.32)", neg: "rgba(255,179,0,0.32)" },
 };
 
 // ─── Padding — matches vanilla exactly ────────────────────────────────────────
@@ -301,7 +301,7 @@ export default function GexChart({
       if (highlighted) {
         grad.addColorStop(0, "rgba(255,255,255,0.98)");
         grad.addColorStop(1, v >= 0 ? "rgba(180,245,255,0.72)" : "rgba(255,238,180,0.72)");
-        ctx.shadowColor = v >= 0 ? "rgba(0,240,255,0.70)" : "rgba(255,179,0,0.70)";
+        ctx.shadowColor = v >= 0 ? "rgba(33,158,188,0.70)" : "rgba(255,179,0,0.70)";
         ctx.shadowBlur = 12;
       } else if (v >= 0) {
         // Lighten higher-GEX bars very slightly (blend toward white by magnitude).
@@ -327,8 +327,9 @@ export default function GexChart({
     };
 
     // ── Prior-state ghost layers (5/15/30 min) ──────────────────────────────
-    // Baselines are OI-based net GEX (all the history writer stores), so only
-    // overlay them in Net-GEX / OI+Vol mode where `getNet` is comparable.
+    // Baselines are now the OI+Vol composite (matching `getNet` in "net" mode),
+    // so the overlay is a true live-vs-live comparison. Still gated to
+    // Net-GEX / OI+Vol mode (skipped for Call-Put and Vol-only).
     // Per-strike logic:
     //   • GEX fell  (|prior| > |live|): draw the taller, lighter PRIOR bar
     //     BEHIND the live bar so the decline shows as a faded halo.
@@ -463,9 +464,9 @@ export default function GexChart({
         : (r.netDEX ?? 0) + (r.volNetDEX ?? 0));
       const maxDex  = Math.max(...dexVals.map(Math.abs).filter(v => v > 0), 1);
       const yDex    = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6;
-      ctx.strokeStyle = "rgba(139,92,246,0.95)";
+      ctx.strokeStyle = "rgba(18,103,131,0.95)";
       ctx.lineWidth   = 2;
-      ctx.shadowColor = "rgba(139,92,246,0.35)";
+      ctx.shadowColor = "rgba(18,103,131,0.35)";
       ctx.shadowBlur = 10;
       const pts = dexVals.map((v, i) => ({ x: xAt(i), y: yDex(v) }));
       if (pts.length > 1) {
@@ -481,7 +482,7 @@ export default function GexChart({
       }
       // DEX zero-crossing label
       ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(139,92,246,0.85)"; ctx.font = "bold 8px Arial"; ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(18,103,131,0.85)"; ctx.font = "bold 8px Arial"; ctx.textAlign = "left";
       ctx.fillText("+NET DEX", PAD_L + 3, yDex(0) - 3);
     }
 
@@ -501,7 +502,7 @@ export default function GexChart({
         ctx.stroke();
       };
 
-      ctx.strokeStyle = "#f97316";
+      ctx.strokeStyle = "#FB8501";
       ctx.lineWidth   = 1.8;
       ctx.shadowColor = "rgba(249,115,22,0.35)";
       ctx.shadowBlur = 10;
@@ -562,7 +563,7 @@ export default function GexChart({
           ctx.setLineDash([]);
           ctx.restore();
 
-          ctx.fillStyle = "#f97316";
+          ctx.fillStyle = "#FB8501";
           ctx.font = "bold 9px Arial";
           ctx.textAlign = "center";
           const lbl = `+GEX FLIP ${Math.round(flip).toLocaleString()}`;
@@ -649,7 +650,7 @@ export default function GexChart({
       ? [["#29b6f6", "Call GEX"], ["#ffb300", "Put GEX"]]
       : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
     if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
-    if (showFlipCurve) legend.push(["#f97316", gexProfile ? "Profile" : "GEX curve"]);
+    if (showFlipCurve) legend.push(["#FB8501", gexProfile ? "Profile" : "GEX curve"]);
     if (!isCallPut && !isVol && ghostAges.length) {
       const tf = ghostAges[0]; // only one active at a time
       legend.push(["#ffb300", `${tf}m ↓`]);
@@ -840,7 +841,7 @@ export default function GexChart({
           <div style={{
             position: "absolute", zIndex: 100, pointerEvents: "none",
             top: 8, left: "50%", transform: "translateX(-50%)",
-            background: "rgba(13,17,25,0.92)", border: "1px solid rgba(0,240,255,0.25)",
+            background: "rgba(13,17,25,0.92)", border: "1px solid rgba(33,158,188,0.25)",
             borderRadius: 6, padding: "6px 12px",
             fontSize: 11, fontFamily: "monospace",
             color: "#fff", display: "flex", gap: 12, backdropFilter: "blur(8px)",
@@ -848,7 +849,7 @@ export default function GexChart({
             <span style={{ color: "#8B94A7" }}>Strike</span>
             <span style={{ fontWeight: 700 }}>{r.strike.toLocaleString()}</span>
             <span style={{ color: "#8B94A7" }}>GEX</span>
-            <span style={{ fontWeight: 700, color: tooltipGex >= 0 ? "#00F0FF" : "#EAB308" }}>{fmtGex(tooltipGex)}</span>
+            <span style={{ fontWeight: 700, color: tooltipGex >= 0 ? "#219EBC" : "#EAB308" }}>{fmtGex(tooltipGex)}</span>
           </div>
         );
       })()}

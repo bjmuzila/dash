@@ -42,7 +42,7 @@ export default async function PricingPage({
         background: T.bg,
         backgroundImage: T.shellGlow,
         color: T.text,
-        fontFamily: "'Inter','Helvetica Neue',Arial,sans-serif",
+        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
       }}
     >
       <header
@@ -106,7 +106,7 @@ export default async function PricingPage({
           </section>
 
           {/* Plan / action card */}
-          <section style={{ ...panel, border: "1px solid rgba(0,240,255,0.22)" }}>
+          <section style={{ ...panel, border: "1px solid rgba(33,158,188,0.22)" }}>
             <div style={sectionLabel}>Membership</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 4px" }}>
               <span style={{ fontSize: 38, fontWeight: 800 }}>Full access</span>
@@ -170,8 +170,8 @@ const badge: React.CSSProperties = {
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   color: T.cyan,
-  border: "1px solid rgba(0,240,255,0.3)",
-  background: "rgba(0,240,255,0.08)",
+  border: "1px solid rgba(33,158,188,0.3)",
+  background: "rgba(33,158,188,0.08)",
   padding: "5px 12px",
   borderRadius: 999,
 };

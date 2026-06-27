@@ -321,7 +321,7 @@ export default function MobileGexPage() {
         width: "100%",
         height: "100vh",
         background: "#05080d",
-        fontFamily: "Arial, Helvetica, sans-serif",
+        fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
         fontWeight: 700,
         overflow: "hidden",
       }}
@@ -347,7 +347,7 @@ export default function MobileGexPage() {
             style={{
               background: "#0a0f16",
               border: "1px solid #1a2a3a",
-              color: "#00e5ff",
+              color: "#219EBC",
               padding: "4px 8px",
               borderRadius: 2,
               fontSize: 11,
@@ -364,7 +364,7 @@ export default function MobileGexPage() {
             ))}
           </select>
           {spotPrice > 0 && (
-            <span style={{ fontSize: 11, color: "#00e5ff", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: "#219EBC", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
               {spotPrice.toFixed(2)}
             </span>
           )}
@@ -381,7 +381,7 @@ export default function MobileGexPage() {
                 border: "none",
                 borderRadius: 2,
                 background: viewMode === mode ? "#1a2a3a" : "transparent",
-                color: viewMode === mode ? "#00e5ff" : "#3a5570",
+                color: viewMode === mode ? "#219EBC" : "#3a5570",
                 fontSize: 9,
                 fontWeight: 700,
                 cursor: "pointer",
@@ -406,7 +406,7 @@ export default function MobileGexPage() {
                 border: "none",
                 borderRadius: 2,
                 background: dataMode === m ? "#1a2a3a" : "transparent",
-                color: dataMode === m ? "#00e5ff" : "#3a5570",
+                color: dataMode === m ? "#219EBC" : "#3a5570",
                 fontSize: 9,
                 fontWeight: 700,
                 cursor: "pointer",
@@ -438,7 +438,7 @@ export default function MobileGexPage() {
               zIndex: 10,
             }}
           >
-            <div style={{ fontSize: 24, color: "#00e5ff" }}>⬡</div>
+            <div style={{ fontSize: 24, color: "#219EBC" }}>⬡</div>
             <div style={{ color: "#fff" }}>Connecting…</div>
             <div style={{ color: "#3a5570", fontSize: 10 }}>
               WS: <span style={{ color: wsDot }}>●</span> {wsStatus}

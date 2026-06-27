@@ -52,7 +52,7 @@ export default function PersonalPage() {
     borderRadius: 2, color: "#9fb3c8", fontWeight: 600, fontSize: 11,
     textTransform: "uppercase", cursor: "pointer",
     display: "flex", alignItems: "center", justifyContent: "center",
-    fontFamily: "Arial", transition: "background .12s, color .12s",
+    fontFamily: "var(--font-inter), 'Inter', sans-serif", transition: "background .12s, color .12s",
   };
 
   return (
@@ -72,9 +72,9 @@ export default function PersonalPage() {
               {[0, 1, 2, 3].map((i) => (
                 <div key={i} style={{
                   width: 48, height: 48, background: "#0d1520",
-                  border: `1px solid ${i < pin.length ? "#00e5ff" : "#1e3050"}`,
-                  boxShadow: i < pin.length ? "0 0 8px rgba(0,229,255,.2)" : "none",
-                  borderRadius: 2, fontSize: 22, fontWeight: 700, color: "#00e5ff",
+                  border: `1px solid ${i < pin.length ? "#219EBC" : "#1e3050"}`,
+                  boxShadow: i < pin.length ? "0 0 8px rgba(33,158,188,.2)" : "none",
+                  borderRadius: 2, fontSize: 22, fontWeight: 700, color: "#219EBC",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontFamily: "monospace", transition: "border-color .2s, box-shadow .2s",
                 }}>
@@ -110,14 +110,14 @@ export default function PersonalPage() {
               fontSize: 11, fontWeight: 700, textTransform: "uppercase",
               letterSpacing: ".12em", color: "#e8edf5", display: "flex", alignItems: "center", gap: 8,
             }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#00e5ff" }} />
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#219EBC" }} />
               Personal
             </div>
             <button
               onClick={() => setUnlocked(false)}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
-                padding: "4px 10px", fontFamily: "Arial", fontSize: 10,
+                padding: "4px 10px", fontFamily: "var(--font-inter), 'Inter', sans-serif", fontSize: 10,
                 fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase",
                 borderRadius: 2, cursor: "pointer", transition: "all .12s",
                 background: "transparent", color: "#9fb3c8", border: "1px solid #1e3050",

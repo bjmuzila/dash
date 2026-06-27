@@ -95,7 +95,7 @@ function FutureDisplay({ label, pfx, data }: FutureDisplayProps) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: "#00e5ff", letterSpacing: ".1em" }}>{label}</span>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#219EBC", letterSpacing: ".1em" }}>{label}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }} id={`em-${pfx}-grid`}>
         {[
@@ -199,7 +199,7 @@ export default function DailyEmPanel() {
     return () => clearInterval(interval);
   }, [loadEM]);
 
-  const statusColor = status === "live" ? "#00e676" : status === "cached" ? "#29b6f6" : status === "loading" ? "#00e5ff" : "#3a5570";
+  const statusColor = status === "live" ? "#00e676" : status === "cached" ? "#29b6f6" : status === "loading" ? "#219EBC" : "#3a5570";
   const statusText  = status === "live" ? "LIVE" : status === "cached" ? "CACHED" : status === "loading" ? "..." : "WAITING";
 
   return (
@@ -242,7 +242,7 @@ export default function DailyEmPanel() {
             letterSpacing: ".1em",
             textTransform: "uppercase",
             cursor: "pointer",
-            fontFamily: "Arial, sans-serif",
+            fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
             borderRadius: 2,
           }}
         >

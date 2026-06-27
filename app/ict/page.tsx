@@ -604,7 +604,7 @@ export default function IctPage() {
       {/* captureRef wraps the chart AND the live panels so a copyshot grabs both */}
       <div ref={captureRef} className="grid grid-cols-1 gap-4 rounded-xl bg-[#080b10] p-1 lg:grid-cols-[1fr_520px]">
         {/* Chart + overlays */}
-        <div className="self-start rounded-xl border border-white/10 bg-[#0b0f15] p-2">
+        <div className="self-start rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-2">
           {/* Overlay toggles */}
           <div className="mb-2 flex flex-wrap items-center gap-1.5 px-1">
             {([
@@ -811,7 +811,7 @@ export default function IctPage() {
 
         {/* Card manager — show/hide each concept; persists per-user */}
         {manageOpen && (
-          <div className="mb-4 rounded-xl border border-cyan-400/30 bg-[#0b0f15] p-3">
+          <div className="mb-4 rounded-xl border border-cyan-400/30 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-3">
             <div className="mb-2 flex items-center gap-3">
               <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-300">Manage cards</span>
               <span className="text-[10px] text-white/40">
@@ -857,7 +857,7 @@ export default function IctPage() {
               <div
                 key={c.id}
                 onClick={() => toggleCard(c.id)}
-                className="cursor-pointer rounded-xl border border-white/10 bg-[#0b0f15] p-3 transition hover:border-white/25"
+                className="cursor-pointer rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-3 transition hover:border-white/25"
               >
                 {isOpen ? (
                   <>
@@ -887,7 +887,7 @@ export default function IctPage() {
           })}
         </div>
         {CONCEPTS.length - hiddenCards.size === 0 && (
-          <div className="rounded-xl border border-white/10 bg-[#0b0f15] p-5 text-center text-[12px] text-white/50">
+          <div className="rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-5 text-center text-[12px] text-white/50">
             All concept cards are hidden. Use <span className="text-cyan-300">⚙ Manage cards</span> to bring them back.
           </div>
         )}
@@ -970,8 +970,8 @@ function highlightTerms(body: string): React.ReactNode[] {
 // ── Concept thumbnail diagrams ───────────────────────────────────────────────
 // Tiny schematic SVGs (48×40) illustrating each pattern, colored to match the
 // chart overlays. Reusable candle + zone primitives keep them compact.
-const GREEN = "#30d158", RED = "#ff5b5b", BLUE = "#29b6f6", ORANGE = "#ff9f43",
-      PURPLE = "#a78bfa", PINK = "#ec4899";
+const GREEN = "#30d158", RED = "#ff5b5b", BLUE = "#219EBC", ORANGE = "#FB8501",
+      PURPLE = "#126783", PINK = "#ec4899";
 function Candle({ x, o, c, hi, lo, up }: { x: number; o: number; c: number; hi: number; lo: number; up: boolean }) {
   const col = up ? GREEN : RED;
   const top = Math.min(o, c), h = Math.max(2, Math.abs(o - c));
@@ -1024,7 +1024,7 @@ function ConceptIcon({ id, size = 1 }: { id: string; size?: number }) {
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-[#0b0f15] px-2.5 py-2">
+    <div className="rounded-lg border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 px-2.5 py-2">
       <div className="mb-1 text-[9px] font-bold uppercase tracking-[0.14em] text-cyan-300">{title}</div>
       {children}
     </div>

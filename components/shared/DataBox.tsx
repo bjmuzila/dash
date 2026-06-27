@@ -186,7 +186,7 @@ export default function DataBox({
     finally { setTimeout(() => setRefreshState("idle"), 1800); }
   }, [onRefresh, refreshState]);
 
-  const refreshColor = refreshState === "ok" ? "#00e676" : refreshState === "err" ? "#ef4444" : "#00e5ff";
+  const refreshColor = refreshState === "ok" ? "#00e676" : refreshState === "err" ? "#ef4444" : "#219EBC";
 
   return (
     <div ref={containerRef} className={className}

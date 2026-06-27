@@ -129,8 +129,8 @@ export default function DashboardMock() {
                 width: 30,
                 height: 30,
                 borderRadius: 8,
-                background: i === 0 ? "rgba(0,240,255,0.15)" : "rgba(255,255,255,0.05)",
-                border: `1px solid ${i === 0 ? "rgba(0,240,255,0.4)" : T.border}`,
+                background: i === 0 ? "rgba(33,158,188,0.15)" : "rgba(255,255,255,0.05)",
+                border: `1px solid ${i === 0 ? "rgba(33,158,188,0.4)" : T.border}`,
               }}
             />
           ))}

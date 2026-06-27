@@ -85,9 +85,9 @@ export default function SignalsPanel({ esPrice }: SignalsPanelProps = {}) {
         <div style={{
           width: 44, height: 44, borderRadius: "50%", display: "flex",
           alignItems: "center", justifyContent: "center",
-          border: "1px solid rgba(0,240,255,0.25)", background: "rgba(0,240,255,0.06)",
+          border: "1px solid rgba(33,158,188,0.25)", background: "rgba(33,158,188,0.06)",
         }}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00f0ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#219EBC" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
           </svg>
         </div>

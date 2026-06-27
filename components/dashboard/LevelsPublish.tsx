@@ -376,7 +376,7 @@ export default function LevelsPublish() {
               style={{
                 fontSize: 10, fontWeight: 700, cursor: copyingAll ? "wait" : "pointer",
                 color: copiedTicker === "__ALL__" ? HOME_THEME.green : HOME_THEME.cyan,
-                background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(0,229,255,0.15)",
+                background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(33,158,188,0.15)",
                 border: `1px solid ${copiedTicker === "__ALL__" ? HOME_THEME.green + "66" : HOME_THEME.cyan + "66"}`,
                 padding: "3px 10px", borderRadius: 6, fontFamily: "monospace",
               }}
@@ -394,7 +394,7 @@ export default function LevelsPublish() {
                   style={{
                     fontSize: 10, fontWeight: 700, cursor: "pointer",
                     color: copied ? HOME_THEME.green : t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
-                    background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(0,229,255,0.08)",
+                    background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(33,158,188,0.08)",
                     border: `1px solid ${copied ? HOME_THEME.green + "66" : t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
                     padding: "3px 8px", borderRadius: 6, fontFamily: "monospace",
                   }}

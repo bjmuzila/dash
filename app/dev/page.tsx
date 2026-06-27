@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 
-const C = { cyan: "#00F0FF", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8" };
+const C = { cyan: "#219EBC", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8" };
 const NA = "#9fb3c8"; // n/a / muted — lightened from old #5d7388
 
 type ProbeResult = {
@@ -427,7 +427,7 @@ export default function DevPage() {
   const inputStyle: React.CSSProperties = { background: "#0b1320", color: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 16, fontFamily: "monospace", outline: "none" };
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 24, color: "#fff", fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ height: "100%", overflowY: "auto", padding: 24, color: "#fff", fontFamily: "var(--font-inter), 'Inter', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Dev · Symbol Probe</span>
         <span style={{ fontSize: 12, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>

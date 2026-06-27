@@ -179,7 +179,7 @@ export default function EconomicCalendarPage() {
                       style={{
                         display: "flex", alignItems: "center", gap: 10,
                         padding: "8px 16px", cursor: "pointer",
-                        background: on ? "rgba(0,240,255,0.08)" : "transparent",
+                        background: on ? "rgba(33,158,188,0.08)" : "transparent",
                       }}
                     >
                       <span style={{
@@ -252,14 +252,14 @@ export default function EconomicCalendarPage() {
                 <div style={{
                   display: "flex", alignItems: "center", gap: 10,
                   padding: "10px 16px 6px",
-                  background: isToday ? "rgba(0,229,255,0.04)" : "transparent",
+                  background: isToday ? "rgba(33,158,188,0.04)" : "transparent",
                   borderTop: `1px solid ${HT.border}`,
                 }}>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: isToday ? "#00e5ff" : "#fff", letterSpacing: "0.08em" }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: isToday ? "#219EBC" : "#fff", letterSpacing: "0.08em" }}>
                     {fullLabel}
                   </span>
                   {isToday && (
-                    <span style={{ fontSize: 9, fontWeight: 800, background: "#00e5ff", color: "#05080d", padding: "2px 8px", borderRadius: 3, letterSpacing: "0.12em" }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, background: "#219EBC", color: "#05080d", padding: "2px 8px", borderRadius: 3, letterSpacing: "0.12em" }}>
                       TODAY
                     </span>
                   )}
@@ -288,7 +288,7 @@ export default function EconomicCalendarPage() {
                         borderRight: `1px solid ${HT.border}`,
                         gap: 3,
                       }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: isToday && dl === "TODAY" ? "#00e5ff" : "#fff", letterSpacing: "0.06em" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: isToday && dl === "TODAY" ? "#219EBC" : "#fff", letterSpacing: "0.06em" }}>
                           {dl}
                         </span>
                         <span style={{ fontSize: 13, color: "#fff", fontFamily: "monospace" }}>

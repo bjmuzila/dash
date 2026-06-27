@@ -92,21 +92,31 @@ async function fetchSpark(yahooSym: string): Promise<{ spark: number[]; session:
     const closes: Array<number | null> = result?.indicators?.quote?.[0]?.close ?? [];
     // Keep only points at/after the current session boundary, in order.
     const valid: number[] = [];
+    // Also keep every finite close (any session) as a closed-market fallback.
+    const allValid: number[] = [];
     for (let i = 0; i < closes.length; i++) {
       const c = closes[i];
       const t = ts[i];
-      if (typeof c === "number" && Number.isFinite(c) && typeof t === "number" && t >= startSec) {
-        valid.push(c);
+      if (typeof c === "number" && Number.isFinite(c)) {
+        allValid.push(c);
+        if (typeof t === "number" && t >= startSec) valid.push(c);
       }
     }
-    if (valid.length < 2) return { spark: [], session };
+    // Market closed → current session has no fresh candles. Fall back to the
+    // last session's curve (the tail of the 2-day series) so the line still
+    // shows shape instead of collapsing to the "—" placeholder.
+    let series = valid;
+    if (series.length < 2) {
+      if (allValid.length < 2) return { spark: [], session };
+      series = allValid.slice(-78); // ~ last full RTH session of 5m bars
+    }
     // Downsample to at most 24 evenly-spaced points.
     const MAX = 24;
-    if (valid.length <= MAX) return { spark: valid, session };
-    const step = valid.length / MAX;
+    if (series.length <= MAX) return { spark: series, session };
+    const step = series.length / MAX;
     const out: number[] = [];
-    for (let i = 0; i < MAX; i++) out.push(valid[Math.floor(i * step)]);
-    out.push(valid[valid.length - 1]);
+    for (let i = 0; i < MAX; i++) out.push(series[Math.floor(i * step)]);
+    out.push(series[series.length - 1]);
     return { spark: out, session };
   } catch {
     return { spark: [], session };

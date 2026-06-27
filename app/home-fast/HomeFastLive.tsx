@@ -65,7 +65,7 @@ export default function HomeFastLive({ initial }: { initial: Snap }) {
 
   return (
     <div style={{ marginTop: 16, fontSize: 12, color: "#6b7689" }}>
-      <span style={{ color: "#00F0FF" }}>● live</span>{" "}
+      <span style={{ color: "#219EBC" }}>● live</span>{" "}
       Net GEX now {fmtGex(snap.totalNetGex)} · SPX{" "}
       {snap.spotPrice ? snap.spotPrice.toFixed(2) : "—"} · refreshed {tick}× since
       load (updates every 5s; real /home uses the WebSocket).

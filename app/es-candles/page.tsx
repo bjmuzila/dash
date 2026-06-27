@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 
 
 function toChartTime(ts: number): UTCTimestamp {
@@ -481,11 +483,21 @@ export default function EsCandlesPage() {
   const selectedExpiryRef = useRef("");
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
   const [dteOpen, setDteOpen] = useState(false);
+  const [dteRect, setDteRect] = useState<{ left: number; top: number } | null>(null);
   const dteBoxRef = useRef<HTMLDivElement>(null);
+  const dteMenuRef = useRef<HTMLDivElement>(null);
+  const openDte = useCallback(() => {
+    const r = dteBoxRef.current?.getBoundingClientRect();
+    if (r) setDteRect({ left: r.left, top: r.bottom + 4 });
+    setDteOpen((v) => !v);
+  }, []);
   useEffect(() => {
     if (!dteOpen) return;
     const onDoc = (e: MouseEvent) => {
-      if (dteBoxRef.current && !dteBoxRef.current.contains(e.target as Node)) setDteOpen(false);
+      const t = e.target as Node;
+      if (dteBoxRef.current?.contains(t)) return;
+      if (dteMenuRef.current?.contains(t)) return;
+      setDteOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -495,6 +507,12 @@ export default function EsCandlesPage() {
   const dteOf = (exp: string): number => {
     const todayEt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
     return Math.round((Date.parse(exp + "T00:00:00Z") - Date.parse(todayEt + "T00:00:00Z")) / 86_400_000);
+  };
+  // "Fri 6/27" — day name + M/D for an expiry date string.
+  const dayDateOf = (exp: string): string => {
+    const d = new Date(exp + "T00:00:00");
+    const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+    return `${day} ${d.getMonth() + 1}/${d.getDate()}`;
   };
 
   const [showProfile, setShowProfile] = useState(false);
@@ -1365,122 +1383,79 @@ export default function EsCandlesPage() {
 
   return (
     <div className="es-candles-root flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)" }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)", position: "relative", zIndex: 30 }}>
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.24em]" style={{ color: "#ff5b5b" }}>ES 5m Candles</div>
           <div className="mt-1 text-xs text-white/70">5m ES candles from Postgres, merged live over /ws/gex.</div>
         </div>
-        <div className="es-candles-toggles flex items-center gap-3 text-xs">
-          <span className="rounded border px-2 py-1" style={{ borderColor: "rgba(255,255,255,.12)", color: status === "live" ? "#30d158" : "#94a3b8" }}>
+        <Dock className="dock-noscroll" flat fullWidth style={{ flex: 1, minWidth: 0 }}>
+          {/* status + count badges */}
+          <span style={{ fontSize: 11, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
             {status.toUpperCase()}
           </span>
-          <span className="rounded border px-2 py-1 text-white/70" style={{ borderColor: "rgba(255,255,255,.12)" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
             {`${rows.length} candles`}
           </span>
-          <div ref={dteBoxRef} className="relative">
-            <button
-              onClick={() => setDteOpen((v) => !v)}
-              className="flex items-center gap-2 rounded border px-3 py-1 text-xs"
-              style={{ borderColor: "rgba(255,255,255,.12)", background: "rgba(255,255,255,.04)", color: "#cbd5e1" }}
-              title="Heatmap expiry / DTE"
-            >
-              <span className="font-mono">
-                {selectedExpiry ? `${dteOf(selectedExpiry)}DTE` : "Front"}
-              </span>
-              <span className="text-white/40" style={{ transform: dteOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
-            </button>
-            {dteOpen ? (
-              <div
-                className="absolute left-0 z-50 mt-1 max-h-72 w-48 overflow-y-auto rounded-lg border py-1 shadow-2xl"
-                style={{ borderColor: "rgba(255,255,255,.12)", background: "rgba(12,16,22,.98)", backdropFilter: "blur(8px)" }}
-              >
-                {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
-                  value: exp, label: `${dteOf(exp)}DTE`, sub: exp,
-                }))].map((opt) => {
-                  const active = selectedExpiry === opt.value;
-                  return (
-                    <button
-                      key={opt.value || "front"}
-                      onClick={() => { setSelectedExpiry(opt.value); setDteOpen(false); }}
-                      className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
-                      style={{ background: active ? "rgba(41,182,246,.18)" : "transparent", color: active ? "#7dd3fc" : "rgba(255,255,255,.75)" }}
-                    >
-                      <span className="font-mono font-semibold">{opt.label}</span>
-                      <span className="text-white/35">{opt.sub}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
+
+          {/* DTE dropdown */}
+          <div ref={dteBoxRef} style={{ flexShrink: 0 }}>
+            <DockButton onClick={openDte} title="Heatmap expiry / DTE">
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedExpiry ? dayDateOf(selectedExpiry) : "Front"}</span>
+              <span style={{ opacity: 0.5, transform: dteOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+            </DockButton>
           </div>
-          <button
-            onClick={() => setShowHeatmap((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showHeatmap ? "#29b6f6" : "#94a3b8" }}
-          >
-            Heatmap {showHeatmap ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowProfile((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showProfile ? "#f59e0b" : "#94a3b8" }}
-          >
-            Profile {showProfile ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowMvcLine((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showMvcLine ? "#ffffff" : "#94a3b8" }}
-          >
-            MVC {showMvcLine ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowLevels((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showLevels ? "#a78bfa" : "#94a3b8" }}
-            title="Call Wall / Put Wall / Flip / MVC lines"
-          >
-            Levels {showLevels ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowSessions((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showSessions ? "#60a5fa" : "#94a3b8" }}
-            title="Prior-day H/L + overnight H/L"
-          >
-            PDH/ON {showSessions ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setShowFlow((v) => !v)}
-            className="rounded border px-3 py-1 text-xs"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: showFlow ? "#cbd5e1" : "#94a3b8" }}
-            title="Greek-flow readout box (net DEX/GEX/CHEX/VEX values + mini sparklines) — top-left of the chart"
-          >
-            Flow {showFlow ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setGexMetric((m) => (m === "voloi" ? "vol" : "voloi"))}
-            className="rounded border px-3 py-1 text-xs font-mono"
-            style={{ borderColor: "rgba(255,255,255,.12)", color: gexMetric === "vol" ? "#f0997b" : "#5dcaa5" }}
-            title="Heatmap metric: Vol+OI net GEX or Volume-only net GEX"
-          >
-            {gexMetric === "vol" ? "GEX: Vol" : "GEX: Vol+OI"}
-          </button>
-          <label className="flex items-center gap-1.5 text-white/55" title="Heatmap brightness — raises the lighter low-GEX zones without blowing out the walls">
-            intensity
-            <input
-              type="range" min={0.1} max={1} step={0.05} value={intensity}
-              onChange={(e) => setIntensity(Number(e.target.value))}
-              style={{ width: 110 }}
-            />
-            <span className="w-7 font-mono text-[10px] tabular-nums text-white/70">{intensity.toFixed(2)}</span>
-          </label>
-          <button onClick={() => void refresh()} className="rounded border px-3 py-1 text-xs" style={{ borderColor: "rgba(255,255,255,.12)", color: "#ffb4b4" }}>
-            Refresh
-          </button>
+          {dteOpen && dteRect && createPortal(
+            <div
+              ref={dteMenuRef}
+              className="max-h-72 w-48 overflow-y-auto rounded-lg border py-1 shadow-2xl"
+              style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderColor: "rgba(255,255,255,.12)", background: "rgba(12,16,22,.98)", backdropFilter: "blur(8px)", zIndex: 100000 }}
+            >
+              {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
+                value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
+              }))].map((opt) => {
+                const active = selectedExpiry === opt.value;
+                return (
+                  <button
+                    key={opt.value || "front"}
+                    onClick={() => { setSelectedExpiry(opt.value); setDteOpen(false); }}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
+                    style={{ background: active ? "rgba(41,182,246,.18)" : "transparent", color: active ? "#7dd3fc" : "rgba(255,255,255,.75)" }}
+                  >
+                    <span className="font-mono font-semibold">{opt.label}</span>
+                    <span className="text-white/35">{opt.sub}</span>
+                  </button>
+                );
+              })}
+            </div>,
+            document.body
+          )}
+
+          <DockGap />
+
+          {/* overlay toggles — each keeps its accent color */}
+          <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
+          <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
+          <ToggleTile label="MVC"     on={showMvcLine}   onClick={() => setShowMvcLine((v) => !v)}  accent="#ffffff" />
+          <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
+          <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
+          <ToggleTile label="Flow"    on={showFlow}      onClick={() => setShowFlow((v) => !v)}     accent="#cbd5e1" />
+
+          <DockGap />
+
+          {/* GEX metric */}
+          <SegGroup
+            options={[{ label: "Vol+OI", value: "voloi" }, { label: "Vol", value: "vol" }]}
+            active={gexMetric}
+            onChange={(v) => setGexMetric(v as typeof gexMetric)}
+          />
+
+          {/* intensity slider */}
+          <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />
+
+          <DockButton onClick={() => void refresh()} title="Refresh" style={{ color: "#ffb4b4" }}>↻ Refresh</DockButton>
           <BoxSnapBtn targetRef={captureRef} label="ES Candles" />
           <BoxDiscordBtn targetRef={captureRef} label="ES Candles" />
-        </div>
+        </Dock>
       </div>
 
 

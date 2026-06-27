@@ -13,8 +13,8 @@ const MONEYNESS_OPTIONS = ["otm", "all"] as const;
 
 const ACTION_COLORS: Record<string, string> = {
   "BUY CALL": "#22c55e",
-  "SELL CALL": "#f97316",
-  "BUY PUT": "#f97316",
+  "SELL CALL": "#FB8501",
+  "BUY PUT": "#FB8501",
   "SELL PUT": "#22c55e",
 };
 
@@ -64,8 +64,8 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
       className="flex flex-col rounded overflow-hidden"
       style={{
         border: "1px solid var(--border)",
-        borderTop: "2px solid rgba(0,240,255,0.55)",
-        background: "radial-gradient(circle at 50% 0%, rgba(0,240,255,0.06) 0%, transparent 55%), transparent",
+        borderTop: "2px solid rgba(33,158,188,0.55)",
+        background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 55%), transparent",
       }}
     >
       <div

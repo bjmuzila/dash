@@ -195,7 +195,7 @@ export default function QuotesPanel() {
   }, []);
 
   return (
-    <div id="page-quotes" style={{display:'flex',flexDirection:'column',flex:1,minHeight:0,background:'var(--bg0)',color:'var(--text2)',fontFamily:'Arial,sans-serif'}}>
+    <div id="page-quotes" style={{display:'flex',flexDirection:'column',flex:1,minHeight:0,background:'var(--bg0)',color:'var(--text2)',fontFamily:"var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif"}}>
       <style>{`
         #quotes-container {
           display: flex;
@@ -218,7 +218,7 @@ export default function QuotesPanel() {
         }
 
         .quote-row:hover {
-          background-color: rgba(0, 229, 255, 0.05);
+          background-color: rgba(33,158,188, 0.05);
         }
 
         .quote-symbol {
@@ -300,7 +300,7 @@ export default function QuotesPanel() {
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px',background:'#0a0f16',borderBottom:'1px solid #1a2a3a',flexShrink:0}}>
         <div style={{fontWeight:700,color:'var(--cyan)',fontSize:13}}>Quotes</div>
         <input type="text" id="quote-search" placeholder="Search symbol..." style={{flex:1,maxWidth:200,padding:'4px 8px',fontSize:11,background:'#070c14',border:'1px solid #1a2a3a',borderRadius:3,color:'#fff'}} />
-        <button onClick={() => window.location.reload()} style={{padding:'4px 10px',fontSize:10,background:'#0d1825',border:'1px solid #1a3a5f',borderRadius:3,color:'#00e5ff',cursor:'pointer',fontWeight:700}}>RELOAD</button>
+        <button onClick={() => window.location.reload()} style={{padding:'4px 10px',fontSize:10,background:'#0d1825',border:'1px solid #1a3a5f',borderRadius:3,color:'#219EBC',cursor:'pointer',fontWeight:700}}>RELOAD</button>
       </div>
 
       {/* Quotes List */}

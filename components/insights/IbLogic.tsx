@@ -147,7 +147,7 @@ function applicableRules(ib: IbState): AppliedRule[] {
     out.push({ title: "IB Forming · Provisional Reads", color: "#ffb300",
       detail: `Tracking the 9:30–10:30 ET range live${ib.range > 0 ? ` — current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}` : ""}. The reads below use the developing range and can still change; they lock at 10:30 ET.` });
   } else {
-    out.push({ title: "Inside Day Exception", color: "#00e5ff",
+    out.push({ title: "Inside Day Exception", color: "#219EBC",
       detail: "IB window complete. Only 0.6% of days stay fully inside the IB — plan for at least one breakout." });
   }
 
@@ -334,13 +334,13 @@ export function LiveIb() {
 
   return (
     <div className="card-hover" style={{
-      border: `1px solid ${ib.done ? "rgba(0,230,118,.28)" : "rgba(0,229,255,.22)"}`,
+      border: `1px solid ${ib.done ? "rgba(0,230,118,.28)" : "rgba(33,158,188,.22)"}`,
       background: "linear-gradient(180deg,rgba(0,26,38,.5),rgba(0,0,0,.3))",
       borderRadius: 10, padding: 16, marginBottom: 4,
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 14, color: "#00e5ff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
+          <div style={{ fontSize: 14, color: "#219EBC", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
           <div style={{ fontSize: 22, color: "#eef7ff", fontWeight: 800 }}>Initial Balance (9:30–10:30 ET)</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -365,7 +365,7 @@ export function LiveIb() {
             </span>
           )}
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: ib.done ? "#00e676" : "#ffb300", border: `1px solid ${ib.done ? "#00e676" : "#ffb300"}55`, padding: "5px 10px", borderRadius: 6 }}>{ib.done ? "IB Done" : "Forming"}</span>
-          {locked && <span title="IB high/low frozen in database — will not reset" style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#00e5ff", border: "1px solid #00e5ff55", background: "#00e5ff1a", padding: "5px 10px", borderRadius: 6 }}>🔒 Locked</span>}
+          {locked && <span title="IB high/low frozen in database — will not reset" style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#219EBC", border: "1px solid #219EBC55", background: "#219EBC1a", padding: "5px 10px", borderRadius: 6 }}>🔒 Locked</span>}
         </div>
       </div>
 
@@ -378,7 +378,7 @@ export function LiveIb() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
             {stat("IB High", fmt(ib.high), "#00e676")}
             {stat("IB Low", fmt(ib.low), "#ff5252")}
-            {stat("Midpoint", fmt(ib.mid), "#00e5ff")}
+            {stat("Midpoint", fmt(ib.mid), "#219EBC")}
             {stat("Range", fmt(ib.range), "#eef7ff")}
             {stat("Range %", ib.rangePct ? ib.rangePct.toFixed(2) + "%" : "—", ib.rangePct > 0 && ib.rangePct <= 1 ? "#ffb300" : "#eef7ff")}
             {stat("Last", fmt(ib.lastClose), ib.aboveMid ? "#00e676" : "#ff5252")}
@@ -387,7 +387,7 @@ export function LiveIb() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 18, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
+            <span style={{ fontSize: 18, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
               Rules In Play ({rules.length})
             </span>
             {!ib.done && (
@@ -431,7 +431,7 @@ export function LiveIb() {
 const LOGIC_ROWS: { title: string; color: string; items: string[] }[] = [
   {
     title: "The Inside Day Exception",
-    color: "#00e5ff",
+    color: "#219EBC",
     items: [
       "If the 60-minute RTH Initial Balance completes from 9:30 to 10:30 AM ET, the remainder of the session stays fully inside that range only 0.6% of the time.",
       "Operationally, the default expectation is at least one breakout. Do not build a plan that depends on the range holding.",
@@ -508,7 +508,7 @@ const LOGIC_ROWS: { title: string; color: string; items: string[] }[] = [
   },
   {
     title: "Modern Regimes",
-    color: "#00e5ff",
+    color: "#219EBC",
     items: [
       "Recent 6-month data shows cleaner trend holding than the older 10-year baseline.",
       "NQ single-break trend day rate: 80.95%.",
@@ -566,10 +566,10 @@ export default function IbLogic() {
       </div>
 
       <div style={{
-        border: "1px solid rgba(0,229,255,.18)", background: "rgba(0,229,255,.04)",
+        border: "1px solid rgba(33,158,188,.18)", background: "rgba(33,158,188,.04)",
         borderRadius: 8, padding: 12,
       }}>
-        <div style={{ fontSize: 11, color: "#00e5ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
+        <div style={{ fontSize: 11, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Reference Summary
         </div>
         <div style={{ fontSize: 13, color: "#ffffff", lineHeight: 1.55 }}>

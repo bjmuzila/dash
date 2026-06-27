@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { HOME_THEME } from "./homeTheme";
 import { useNotes } from "./notes";
@@ -32,19 +32,42 @@ function MenuIcon({ size = 24 }: { size?: number }) {
     </svg>
   );
 }
-function SearchIcon({ size = 18 }: { size?: number }) {
+
+// ── ET clock (top-right) — ticks every second, ET timezone ──
+function EtClock() {
+  const [time, setTime] = useState("--:--:--");
+  useEffect(() => {
+    const tick = () =>
+      setTime(
+        new Date().toLocaleTimeString("en-US", {
+          timeZone: "America/New_York",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        })
+      );
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="7" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  );
-}
-function ChevronDown({ size = 15 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
+    <span
+      suppressHydrationWarning
+      title="Eastern Time"
+      style={{
+        flexShrink: 0,
+        fontSize: 13,
+        fontWeight: 700,
+        color: "#e8edf5",
+        fontVariantNumeric: "tabular-nums",
+        letterSpacing: ".05em",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {time}
+      <span style={{ fontSize: 10, opacity: 0.55, marginLeft: 4 }}>ET</span>
+    </span>
   );
 }
 
@@ -55,7 +78,6 @@ export default function GlobalToolbar() {
   const { menuOpen, toggleMenu } = useMobileNav();
 
   // ── presentational-only state ──
-  const [query, setQuery] = useState("");
   const [hoverMenu, setHoverMenu] = useState(false);
 
   // Hamburger geometry → so the NavMenu dropdown lines up under the button.
@@ -78,16 +100,32 @@ export default function GlobalToolbar() {
         padding: "0 clamp(6px, 1vw, 12px)",
         // Notch-safe on mobile; insets are 0 on desktop so this is a no-op there.
         paddingTop: "env(safe-area-inset-top, 0px)",
+        paddingBottom: 0,
         paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
         paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
-        boxSizing: "content-box",
-        background: HOME_THEME.panelBgStrong,
+        boxSizing: "border-box",
+        background: `radial-gradient(ellipse 70% 140% at 50% -40%, rgba(33,158,188,0.07) 0%, transparent 70%), ${HOME_THEME.panelBgStrong}`,
         backdropFilter: "blur(16px)",
         borderBottom: `1px solid ${HOME_THEME.border}`,
         position: "relative",
         zIndex: 50,
       }}
     >
+      {/* ── Dock-style gradient top accent: bright cyan center → dark edges ── */}
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 2,
+          pointerEvents: "none",
+          background: "linear-gradient(90deg, transparent 0%, rgba(33,158,188,0.12) 15%, rgba(33,158,188,0.9) 50%, rgba(33,158,188,0.12) 85%, transparent 100%)",
+          boxShadow: "0 0 8px rgba(33,158,188,0.35)",
+        }}
+      />
+
       {/* ── Hamburger — opens the navigation dropdown (NavMenu) ── */}
       <button
         ref={hamburgerRef}
@@ -107,8 +145,8 @@ export default function GlobalToolbar() {
           height: 42,
           flexShrink: 0,
           borderRadius: 10,
-          border: `1px solid ${hoverMenu || menuOpen ? "rgba(0,240,255,0.30)" : HOME_THEME.border}`,
-          background: hoverMenu || menuOpen ? "rgba(0,240,255,0.08)" : "rgba(255,255,255,0.04)",
+          border: `1px solid ${hoverMenu || menuOpen ? "rgba(33,158,188,0.30)" : HOME_THEME.border}`,
+          background: hoverMenu || menuOpen ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.04)",
           color: hoverMenu || menuOpen ? HOME_THEME.cyan : HOME_THEME.text,
           cursor: "pointer",
           transition: "background 0.15s, border-color 0.15s, color 0.15s",
@@ -136,71 +174,6 @@ export default function GlobalToolbar() {
         </div>
       )}
 
-      {/* ── Search tickers (presentational) ── */}
-      <form
-        onSubmit={(e) => e.preventDefault()}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          flexShrink: 1000,
-          flexBasis: 230,
-          width: "auto",
-          minWidth: 44,
-          height: 42,
-          padding: "0 14px",
-          borderRadius: 10,
-          border: `1px solid ${HOME_THEME.border}`,
-          background: "rgba(0,0,0,0.35)",
-        }}
-      >
-        <span style={{ color: HOME_THEME.muted, display: "flex", flexShrink: 0 }}>
-          <SearchIcon />
-        </span>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search tickers…"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            border: "none",
-            outline: "none",
-            background: "transparent",
-            color: HOME_THEME.text,
-            fontSize: 15,
-            fontFamily: "inherit",
-          }}
-        />
-      </form>
-
-      {/* ── Expiration date picker (presentational) — sits next to the search box ── */}
-      <div className="toolbar-datechip" style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-        {/* date chip */}
-        <button
-          title="Pick expiration date"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            height: 42,
-            padding: "0 14px",
-            borderRadius: 10,
-            border: `1px solid ${HOME_THEME.border}`,
-            background: "rgba(0,0,0,0.35)",
-            color: HOME_THEME.text,
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span>Thu 6/25</span>
-          <span style={{ color: HOME_THEME.muted, display: "flex" }}>
-            <ChevronDown />
-          </span>
-        </button>
-      </div>
 
       {/* ── Live ticker (VIX / ESU / SPX / NQU + dropdown) — flows inline as a
           flex child so it can never overlap the search box. It takes the
@@ -208,19 +181,26 @@ export default function GlobalToolbar() {
           instead of spilling over the left controls. ── */}
       <div
         style={{
-          flexGrow: 1,
-          flexShrink: 1,
-          flexBasis: "auto",
-          minWidth: 0,
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
+          maxWidth: "60%",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           overflow: "hidden",
+          pointerEvents: "none",
         }}
       >
-        <div style={{ minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden" }}>
+        <div style={{ minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden", pointerEvents: "auto" }}>
           <ToolbarTicker />
         </div>
+      </div>
+
+      {/* ── ET clock — pinned far right ── */}
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", flexShrink: 0 }}>
+        <EtClock />
       </div>
 
       {/* ── Notes ── */}
@@ -236,9 +216,9 @@ export default function GlobalToolbar() {
             flexShrink: 0,
             padding: "0 14px",
             borderRadius: 10,
-            border: `1px solid ${open ? "rgba(0,240,255,0.35)" : HOME_THEME.border}`,
+            border: `1px solid ${open ? "rgba(33,158,188,0.35)" : HOME_THEME.border}`,
             background: open
-              ? "linear-gradient(180deg, rgba(0,240,255,0.12), rgba(0,240,255,0.04))"
+              ? "linear-gradient(180deg, rgba(33,158,188,0.12), rgba(33,158,188,0.04))"
               : "rgba(255,255,255,0.04)",
             color: open ? HOME_THEME.cyan : HOME_THEME.text,
             fontSize: 13,

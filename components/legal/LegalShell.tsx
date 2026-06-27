@@ -9,7 +9,7 @@ import Link from "next/link";
 const T = {
   bg: "#05060A",
   panel: "#0D1119",
-  cyan: "#00F0FF",
+  cyan: "#219EBC",
   muted: "#8B94A7",
   text: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",
@@ -27,9 +27,9 @@ const shell: CSSProperties = {
   minHeight: 0,
   overflowY: "auto",
   background:
-    "radial-gradient(circle at top, rgba(0,240,255,0.06), transparent 42%), #05060A",
+    "radial-gradient(circle at top, rgba(33,158,188,0.06), transparent 42%), #05060A",
   color: T.text,
-  fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+  fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
 };
 
 const inner: CSSProperties = {
@@ -39,7 +39,7 @@ const inner: CSSProperties = {
 };
 
 const card: CSSProperties = {
-  border: "1px solid rgba(0,240,255,0.14)",
+  border: "1px solid rgba(33,158,188,0.14)",
   borderRadius: 18,
   background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
   boxShadow: "0 24px 70px rgba(0,0,0,0.5)",
@@ -86,8 +86,8 @@ export default function LegalShell({
               textTransform: "uppercase",
               color: T.cyan,
               textDecoration: "none",
-              border: "1px solid rgba(0,240,255,0.28)",
-              background: "rgba(0,240,255,0.06)",
+              border: "1px solid rgba(33,158,188,0.28)",
+              background: "rgba(33,158,188,0.06)",
               borderRadius: 8,
               padding: "7px 14px",
             }}
@@ -122,7 +122,7 @@ export default function LegalShell({
           <div
             style={{
               height: 1,
-              background: "linear-gradient(90deg, rgba(0,240,255,0.4), transparent)",
+              background: "linear-gradient(90deg, rgba(33,158,188,0.4), transparent)",
               margin: "20px 0 24px",
             }}
           />
@@ -153,8 +153,8 @@ export default function LegalShell({
                   fontWeight: 600,
                   textDecoration: "none",
                   color: active ? T.cyan : T.muted,
-                  border: `1px solid ${active ? "rgba(0,240,255,0.4)" : T.border}`,
-                  background: active ? "rgba(0,240,255,0.08)" : "rgba(255,255,255,0.02)",
+                  border: `1px solid ${active ? "rgba(33,158,188,0.4)" : T.border}`,
+                  background: active ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.02)",
                   borderRadius: 999,
                   padding: "6px 14px",
                 }}
@@ -185,15 +185,15 @@ export default function LegalShell({
         .legal-body ul, .legal-body ol { margin: 0 0 14px; padding-left: 22px; }
         .legal-body li { margin: 0 0 7px; }
         .legal-body strong { color: #FFFFFF; font-weight: 700; }
-        .legal-body a { color: #00F0FF; text-decoration: none; }
+        .legal-body a { color: #219EBC; text-decoration: none; }
         .legal-body a:hover { text-decoration: underline; }
         .legal-body .lead {
-          font-size: 13px; color: #8B94A7; background: rgba(0,240,255,0.04);
-          border: 1px solid rgba(0,240,255,0.12); border-radius: 10px;
+          font-size: 13px; color: #8B94A7; background: rgba(33,158,188,0.04);
+          border: 1px solid rgba(33,158,188,0.12); border-radius: 10px;
           padding: 12px 14px; margin: 0 0 22px; line-height: 1.6;
         }
         .legal-body .callout {
-          border-left: 3px solid #F97316; background: rgba(249,115,22,0.06);
+          border-left: 3px solid #FB8501; background: rgba(249,115,22,0.06);
           border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 0 0 18px;
           color: #F4D9C4; font-size: 13.5px; line-height: 1.65;
         }

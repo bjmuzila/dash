@@ -413,7 +413,7 @@ export default function TopBar() {
       >
         {/* Logo */}
         <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 7, background: "rgba(0,229,255,.08)", border: "1px solid rgba(0,229,255,.25)", color: "#00e5ff", fontSize: 12, fontWeight: 700 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 7, background: "rgba(33,158,188,.08)", border: "1px solid rgba(33,158,188,.25)", color: "#219EBC", fontSize: 12, fontWeight: 700 }}>
             SPX
           </span>
           <span style={{ color: "#5a7a99", fontSize: 18 }}>/</span>
@@ -452,7 +452,7 @@ export default function TopBar() {
         <select
           value={pathname}
           onChange={e => router.push(e.target.value)}
-          style={{ background: "#07101b", color: "#00e5ff", border: "1px solid #1e3050", borderRadius: 3, fontSize: 11, fontWeight: 700, padding: "0 8px", height: 34, cursor: "pointer", letterSpacing: ".04em", flexShrink: 0 }}
+          style={{ background: "#07101b", color: "#219EBC", border: "1px solid #1e3050", borderRadius: 3, fontSize: 11, fontWeight: 700, padding: "0 8px", height: 34, cursor: "pointer", letterSpacing: ".04em", flexShrink: 0 }}
         >
           {navItems.map(({ label, href }) => (
             <option key={href} value={href}>{label}</option>

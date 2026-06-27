@@ -53,7 +53,7 @@ export default function LandingClient() {
         position: "absolute",
         inset: 0,
         overflow: "hidden",
-        fontFamily: "'Inter','Helvetica Neue',Arial,sans-serif",
+        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
         color: T.text,
       }}
     >
@@ -74,7 +74,7 @@ export default function LandingClient() {
         }
         @media (prefers-reduced-motion: reduce) { .fw { animation: none !important; opacity: 1; } }
         .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; cursor: pointer; }
-        .landing-feature:hover { border-color: rgba(0,240,255,0.45) !important; box-shadow: 0 0 18px rgba(0,240,255,0.25); transform: translateY(-2px); }
+        .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
           .landing-card .landing-intro { font-size: 13.5px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
@@ -214,8 +214,8 @@ export default function LandingClient() {
               ...(xHover
                 ? {
                     color: T.cyan,
-                    borderColor: "rgba(0,240,255,0.5)",
-                    boxShadow: "0 0 14px rgba(0,240,255,0.45)",
+                    borderColor: "rgba(33,158,188,0.5)",
+                    boxShadow: "0 0 14px rgba(33,158,188,0.45)",
                   }
                 : {}),
             }}
@@ -294,11 +294,11 @@ const card: React.CSSProperties = {
   background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
   backdropFilter: "blur(22px)",
   WebkitBackdropFilter: "blur(22px)",
-  border: "1px solid rgba(0,240,255,0.14)",
+  border: "1px solid rgba(33,158,188,0.14)",
   borderRadius: 20,
   padding: "clamp(16px, 4vw, 40px)",
   boxShadow:
-    "0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(0,240,255,0.04)",
+    "0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(33,158,188,0.04)",
 };
 
 const cardGlow: React.CSSProperties = {
@@ -309,7 +309,7 @@ const cardGlow: React.CSSProperties = {
   width: 420,
   height: 220,
   background:
-    "radial-gradient(circle, rgba(0,240,255,0.16) 0%, rgba(139,92,246,0.08) 45%, transparent 70%)",
+    "radial-gradient(circle, rgba(33,158,188,0.16) 0%, rgba(18,103,131,0.08) 45%, transparent 70%)",
   pointerEvents: "none",
   filter: "blur(10px)",
 };
@@ -322,7 +322,7 @@ const logo: React.CSSProperties = {
   maxHeight: 200,
   objectFit: "contain",
   margin: "18px 0 18px",
-  filter: "drop-shadow(0 6px 20px rgba(0,240,255,0.25))",
+  filter: "drop-shadow(0 6px 20px rgba(33,158,188,0.25))",
 };
 
 const badge: React.CSSProperties = {
@@ -332,8 +332,8 @@ const badge: React.CSSProperties = {
   letterSpacing: "0.12em",
   textTransform: "uppercase",
   color: T.cyan,
-  border: "1px solid rgba(0,240,255,0.3)",
-  background: "rgba(0,240,255,0.08)",
+  border: "1px solid rgba(33,158,188,0.3)",
+  background: "rgba(33,158,188,0.08)",
   padding: "5px 12px 5px 40px",
   borderRadius: 999,
 };
@@ -345,8 +345,8 @@ const featureGrid: React.CSSProperties = {
 };
 
 const featureCell: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(0,240,255,0.04), rgba(255,255,255,0.02))",
-  border: "1px solid rgba(0,240,255,0.10)",
+  background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
+  border: "1px solid rgba(33,158,188,0.10)",
   borderRadius: 12,
   padding: 14,
 };
@@ -366,8 +366,8 @@ const emailInput: React.CSSProperties = {
 const notifyBtn: React.CSSProperties = {
   padding: "12px 22px",
   borderRadius: 10,
-  border: "1px solid rgba(0,240,255,0.4)",
-  background: "linear-gradient(180deg,rgba(0,240,255,0.25),rgba(0,240,255,0.08))",
+  border: "1px solid rgba(33,158,188,0.4)",
+  background: "linear-gradient(180deg,rgba(33,158,188,0.25),rgba(33,158,188,0.08))",
   color: T.cyan,
   fontSize: 14,
   fontWeight: 700,

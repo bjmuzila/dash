@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  HOME_THEME,
+  HOME_THEME as HOME_THEME_BASE,
   homeButtonStyle,
   homeContentStyle,
   homeHeaderStyle,
@@ -19,6 +19,16 @@ import {
   homeSecondaryButtonStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
+
+// Page override: no gray text + iColorpalette accent scheme
+const HOME_THEME = {
+  ...HOME_THEME_BASE,
+  muted: "#FFFFFF",
+  cyan: "#219EBC",   // bright blue
+  purple: "#126783", // Ideas → deep teal
+  green: "#8ECAE6",  // light blue (Completed) — avoids orange-next-to-yellow
+  orange: "#FB8501", // orange
+};
 
 // ── Types & defaults ──────────────────────────────────────────────────────────
 
@@ -82,7 +92,7 @@ const BOXES = [
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  Ideas: HOME_THEME.purple, "In Progress": HOME_THEME.orange, Completed: HOME_THEME.green,
+  Ideas: HOME_THEME.purple, "In Progress": HOME_THEME.orange, Completed: HOME_THEME.red,
 };
 
 const CATEGORIES = ["Personal", "Career", "Health", "Learning", "Finances"];
@@ -297,6 +307,7 @@ export default function TodoPage() {
           <div key={status} style={{
             ...homePanelStyle, flex: 1, display: "flex", flexDirection: "column", minWidth: 260,
             borderTop: `2px solid ${rgba(col, 0.55)}`,
+            background: `radial-gradient(circle at 50% 0%, ${rgba(col, 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
           }}>
             <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
@@ -399,12 +410,12 @@ export default function TodoPage() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
               <MetricCard label="Ideas" value={ideas} sub="Pending review" color={HOME_THEME.purple} />
               <MetricCard label="In Progress" value={prog} sub="Active tasks" color={HOME_THEME.orange} />
-              <MetricCard label="Completed" value={done} sub="Shipped" color={HOME_THEME.green} />
+              <MetricCard label="Completed" value={done} sub="Shipped" color={HOME_THEME.red} />
               <MetricCard
                 label="Daily Progress"
                 value={<>{pct}<span style={{ fontSize: 14, color: HOME_THEME.muted }}>%</span></>}
                 sub={<span style={{ color: HOME_THEME.green }}>{checked} / {total} habits</span>}
-                color={HOME_THEME.cyan}
+                color="#8ECAE6"
               />
             </div>
 
@@ -417,6 +428,7 @@ export default function TodoPage() {
                     <div key={box.key} className="conf-hover" style={{
                       ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
                       borderTop: `2px solid ${rgba(box.color, 0.5)}`,
+                      background: `radial-gradient(circle at 50% 0%, ${rgba(box.color, 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
                     }}>
                       <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />

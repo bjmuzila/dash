@@ -37,7 +37,7 @@ export default function SplashScreen() {
         justifyContent: "center",
         background:
           "radial-gradient(circle at 50% 45%, #0a0e16 0%, #05060A 70%, #000 100%)",
-        fontFamily: "'Inter','Helvetica Neue',Arial,sans-serif",
+        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
         opacity: leaving ? 0 : 1,
         transition: `opacity ${FADE}ms ease`,
         pointerEvents: leaving ? "none" : "auto",
@@ -84,7 +84,7 @@ export default function SplashScreen() {
           maxWidth: "90vw",
           transform: "translate(-50%, -50%)",
           background:
-            "radial-gradient(circle, rgba(0,240,255,0.18) 0%, rgba(139,92,246,0.08) 45%, transparent 70%)",
+            "radial-gradient(circle, rgba(33,158,188,0.18) 0%, rgba(18,103,131,0.08) 45%, transparent 70%)",
           filter: "blur(12px)",
           pointerEvents: "none",
           animation: "cbSplashGlow 2.4s ease-in-out infinite",
@@ -98,7 +98,7 @@ export default function SplashScreen() {
           fontWeight: 900,
           color: T.text,
           letterSpacing: "0.18em",
-          textShadow: "0 0 28px rgba(0,240,255,0.45)",
+          textShadow: "0 0 28px rgba(33,158,188,0.45)",
           animation: "cbSplashIn 900ms cubic-bezier(0.16,1,0.3,1) both",
         }}
       >

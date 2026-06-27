@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-06-26 — toolbar-preview quotes/dropdown examples + per-user add-ticker
+
+`app/toolbar-preview/page.tsx`: added three dock-themed standalone previews (Quotes panel w/ sparklines + sort toggle, DTE/Expiry "Day Date" dropdown, month-grid Calendar) laid out in a 3-column row. `app/api/quotes-batch/route.ts`: sparkline now falls back to the prior session's curve when the market is closed. `components/dashboard/NquQuotePill.tsx`: restyled the live toolbar Quotes dropdown to the dock theme and added per-user add/remove ticker, backed by new `app/api/quote-symbols/route.ts` + `quote_symbol_prefs` table and `getQuoteSymbols`/`upsertQuoteSymbols` in `lib/db.ts`.
+
+## 2026-06-26 — NavMenu restyle + drag-and-drop + monochrome glyphs
+
+`components/shared/NavMenu.tsx`: restyled the flyout to the frosted dock theme (cyan top-accent, gradient active tiles, themed cyan scrollbar) and removed the social icons + Clerk avatar (legal-only footer). Added direct row drag-and-drop to reorder within groups and drop into Quick Pages (cap 4, replace-at-slot when full; persisted to `sidebar-group-order-v1`), removed the grip handles and star pin buttons, added per-route monochrome Unicode glyphs, and made all groups collapse on every menu open.
+
+## 2026-06-26 — Toolbar vertical-centering + middle-aligned ticker, removed search/expiry
+
+`components/shared/GlobalToolbar.tsx`: switched the bar to `box-sizing: border-box` so `align-items:center` vertically centers content on every page (global — rendered once in LayoutShell). Made the live ticker absolutely centered over the whole toolbar (`position:absolute`, left/top 50% + translate) instead of a flex spacer, and removed the Search-tickers box, the expiration date chip, and their now-unused `query` state and `SearchIcon`/`ChevronDown` components; Notes stays pinned top-right.
+
+
+## 2026-06-26 — Local WS `verify-error` triage + stray env-file cleanup
+
+Debug session (no code changes). Local `npm run dev` was logging `[WS] upgrade rejected (verify-error)` on `/ws/gex`.
+
+- **Root cause:** stale local dev process still holding `WS_AUTH_REQUIRED=1` from before the env edit. Root `.env.local` was already `=0`; prod container has the var unset (gate off, owner streaming confirmed). Fix = clean kill + relaunch of `npm run dev` (env is read at process start).
+- **Confirmed prod is fine:** `docker compose exec dashboard printenv WS_AUTH_REQUIRED` → empty → `=== '1'` false → `verifyWsRequest` never called. Rejects were local-only.
+- **Security cleanup:** found a stray full copy of `.env.local` (all live secrets in plaintext) at `md files/.env.local`. Deleted it; confirmed via `git status` it was never tracked → no history leak. Root `.env.local` remains the single source.
+
+
+## 2026-06-26 — WS auth gate, perf hardening, server-render POC (v17)
+
+Pre-launch session: closed the one real launch blocker (unauthenticated `/ws/gex`) and shipped perf fixes. Diagnosed (and prototyped) the perceived sluggishness as a client-render waterfall, not a data/architecture problem.
+
+### WS authentication gate (launch blocker — fixed & live)
+- **`/ws/gex` was unauthenticated** — anyone with the URL could stream paid GEX free (upgrade handler only checked path). **`server-v2/ws-auth.js`** (new) — `verifyWsRequest` reads the Clerk session cookie via `@clerk/backend` `authenticateRequest` (cookie-based → zero client changes across the 7+ WS call sites), resolves userId, then owner/active/trialing check against `subscriptions` (mirrors `lib/subscription.getAccessForUser`; PAID_STATUSES kept in sync).
+- **`server-v2/websocket-server.js`** — upgrade handler verifies BEFORE `handleUpgrade` so no snapshot reaches an unauthorized socket; rejects 401 + `socket.destroy()`. Gated by env `WS_AUTH_REQUIRED` (default off → unchanged behavior). Needs production Clerk (cookie unreliable on dev instance). Enabled in prod with `WS_AUTH_REQUIRED=1` + `CLERK_AUTHORIZED_PARTIES=https://cbedge.net`; owner confirmed still streaming.
+
+### Performance
+- **`app/database/page.tsx`** — removed the unused client-side Excel export (271 KB `xlsx`/SheetJS off First Load; `/database` ~200→~130 kB). `xlsx` stays for the server-side `scripts/import-mvc.js`.
+- **`middleware.ts`** — maintenance flag check is now stale-while-revalidate (30s TTL, background refresh) so it no longer blocks every page on a `/proxy/maintenance` round-trip; only the first request after boot waits.
+- **`next.config.js`** — wired `@next/bundle-analyzer` (`npm run analyze`, env-scoped so dev/build never trigger it).
+
+### Server-render POC (perceived speed — full work deferred to post-launch)
+- **`app/home-fast/`** (new, `page.tsx` + `HomeFastLive.tsx`) — proves server-rendering the GEX snapshot from the hot in-process feed (`/proxy/gex`) into the initial HTML, so a live card paints with real data on first byte (no client fetch waterfall). The WS then handles updates. Full `/home` refactor planned after Monday launch + ThetaData swap.
+
 ## 2026-06-26 — ICT setup recorder, owner Results page, glossary card manager
 
 Three-part session: auto-record every ICT setup to Postgres with auto-graded outcomes, surface the performance on a new owner-only Results page, and let each user show/hide glossary cards (persisted server-side). All detection reuses the existing client `analyzeICT` — no detection logic duplicated.

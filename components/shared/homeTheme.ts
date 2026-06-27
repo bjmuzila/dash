@@ -3,12 +3,12 @@ import type { CSSProperties } from "react";
 export const HOME_THEME = {
   bg: "#05060A",
   panel: "#0D1119",
-  cyan: "#00F0FF",
-  purple: "#8B5CF6",
-  orange: "#F97316",
-  green: "#10B981",
+  cyan: "#219EBC",
+  purple: "#126783",
+  orange: "#FB8501",
+  green: "#8ECAE6",
   red: "#EF4444",
-  muted: "#8B94A7",
+  muted: "#FFFFFF",
   text: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",
   panelBg: "rgba(13,17,25,0.45)",
@@ -23,7 +23,7 @@ export const homeShellStyle: CSSProperties = {
   overflow: "hidden",
   background: HOME_THEME.bg,
   backgroundImage: HOME_THEME.shellGlow,
-  fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+  fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
   color: HOME_THEME.text,
   display: "flex",
   flexDirection: "column",
@@ -53,11 +53,29 @@ export const homeHeaderStyle: CSSProperties = {
 };
 
 export const homePanelStyle: CSSProperties = {
-  background: HOME_THEME.panelBg,
+  background: `radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), ${HOME_THEME.panelBg}`,
   backdropFilter: "blur(16px)",
   borderRadius: 16,
   border: `1px solid ${HOME_THEME.border}`,
 };
+
+// rgba helper for accent tints
+function themeRgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// Glossy top-glow panel — pass an accent to tint the radial gradient.
+export function homeGlossPanelStyle(accent: string = HOME_THEME.cyan): CSSProperties {
+  return {
+    ...homePanelStyle,
+    borderTop: `2px solid ${themeRgba(accent, 0.5)}`,
+    background: `radial-gradient(circle at 50% 0%, ${themeRgba(accent, 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+  };
+}
 
 export const homeInputStyle: CSSProperties = {
   fontSize: 13,

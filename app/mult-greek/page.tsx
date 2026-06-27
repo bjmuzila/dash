@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
+import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -107,13 +108,6 @@ function nearestStrikeTo(target: number, strikes: number[]): number | null {
     if (dd < bestD) { bestD = dd; best = s; }
   }
   return best;
-}
-
-function etTimeNow(): string {
-  return new Date().toLocaleTimeString("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  });
 }
 
 function isMarketOpen(): boolean {
@@ -325,12 +319,12 @@ function TickerPanel({
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
       {/* Panel header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(0,240,255,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 10, fontFamily: "monospace", color: "#94a3b8" }}>
           {spot > 0 && (
             <>
-              <span style={{ color: "#00e5ff", fontWeight: 700 }}>{spot.toFixed(2)}</span>
+              <span style={{ color: "#219EBC", fontWeight: 700 }}>{spot.toFixed(2)}</span>
             </>
           )}
           {spot === 0 && <span style={{ color: "#475569" }}>--</span>}
@@ -346,7 +340,7 @@ function TickerPanel({
       </div>
 
       {/* Totals row */}
-      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(0,240,255,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
           const v = totals?.[c] ?? 0;
@@ -463,7 +457,6 @@ export default function MultGreekPage() {
   const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
   const [intensity, setIntensity] = useState(1.75);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>({ state: "idle", msg: "READY" });
-  const [lastUpdate, setLastUpdate] = useState("");
 
   // Per-ticker state
   const [strikes, setStrikes]   = useState<Record<Ticker, StrikeRow[]>>({ SPX: [], SPY: [], QQQ: [] });
@@ -613,7 +606,6 @@ export default function MultGreekPage() {
     } else {
       setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "LIVE" : "CLOSED" });
     }
-    setLastUpdate(etTimeNow());
   }, []);
 
 
@@ -667,7 +659,7 @@ export default function MultGreekPage() {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
   const statusColors: Record<string, string> = {
-    live: "#00e676", loading: "#ffb300", err: "#ff4757", idle: "#475569",
+    live: "#00e676", loading: "#ffb300", err: "#ff4757", idle: "#ff4757",
   };
 
   const pageRef = useRef<HTMLDivElement>(null);
@@ -676,87 +668,45 @@ export default function MultGreekPage() {
     <div ref={pageRef} style={{ ...homeShellStyle, height: "100%", overflow: "hidden" }}>
 
       {/* Toolbar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
-        background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, flexWrap: "wrap",
-      }}>
+      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
+      <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%" }}>
 
         {/* Status dot */}
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status.state] ?? "#475569", flexShrink: 0, display: "inline-block" }} />
-        <span style={{ fontSize: 9, fontWeight: 800, color: statusColors[status.state] ?? "#e4e4e7", letterSpacing: "0.1em" }}>{status.msg}</span>
+        <span style={{ fontSize: 9, fontWeight: 800, color: statusColors[status.state] ?? "#e4e4e7", letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>{status.msg}</span>
 
-        <span style={{ color: HT.border }}>|</span>
-
-        {/* Expiry select */}
-        <select
+        {/* Expiry picker */}
+        <DockExpiryPicker
+          expirations={expirations.map((e) => e.date)}
           value={selectedExpiry}
-          onChange={e => setSelectedExpiry(e.target.value)}
-          style={{
-            background: "rgba(0,0,0,0.4)", color: HT.text, border: `1px solid ${HT.border}`,
-            borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer",
-            fontFamily: "monospace", colorScheme: "dark",
-          }}
-        >
-          <option value="" style={{ background: "#0b0f1a", color: HT.text }}>-- Expiry --</option>
-          {expirations.map(exp => (
-            <option key={exp.date} value={exp.date} style={{ background: "#0b0f1a", color: HT.text }}>{exp.label}</option>
-          ))}
-        </select>
+          onChange={setSelectedExpiry}
+          includeFront
+          frontLabel="— Expiry —"
+        />
 
         {/* GO button */}
-        <button
-          onClick={doGo}
-          disabled={!selectedExpiry}
-          style={{
-            ...homeButtonStyle,
-            padding: "3px 14px", fontSize: 10,
-          }}
-        >
-          GO
-        </button>
+        <DockButton onClick={doGo} title="Load expiry" style={{ opacity: selectedExpiry ? 1 : 0.45, color: HT.cyan }}>GO</DockButton>
 
-        <span style={{ color: HT.border }}>|</span>
+        <DockGap />
 
-        {/* Contract basis toggle: OI+VOL (default) or VOL-only. */}
-        <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
-          {(["oivol", "vol"] as const).map(m => (
-            <button
-              key={m}
-              onClick={() => setContractMode(m)}
-              style={{
-                padding: "2px 10px", fontSize: 9, fontWeight: 800, borderRadius: 3,
-                border: "none", cursor: "pointer",
-                background: contractMode === m ? "rgba(0,229,255,.15)" : "transparent",
-                color: contractMode === m ? HT.cyan : "#64748b",
-              }}
-            >
-              {m === "oivol" ? "OI+VOL" : "VOL"}
-            </button>
-          ))}
-        </div>
+        {/* Contract basis toggle */}
+        <SegGroup
+          options={[{ label: "OI+VOL", value: "oivol" }, { label: "VOL", value: "vol" }]}
+          active={contractMode}
+          onChange={(v) => setContractMode(v as typeof contractMode)}
+        />
 
-        <span style={{ color: HT.border }}>|</span>
+        <DockGap />
 
         {/* Intensity slider */}
-        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
-        <input
-          type="range" min={0.5} max={3} step={0.01}
-          value={intensity}
-          onChange={e => setIntensity(Number(e.target.value))}
-          style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
-        />
-        <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
-          {intensity.toFixed(2)}x
-        </span>
+        <DockSlider label="Intensity" value={intensity} min={0.5} max={3} step={0.01} onChange={setIntensity} width={80} format={(v) => `${v.toFixed(2)}x`} />
 
         {/* Refresh / Snap / Discord */}
-        <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>{btnLabel}</button>
+        <DockSpacer />
+        <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         <BoxSnapBtn targetRef={pageRef} label="📷" />
         <BoxDiscordBtn targetRef={pageRef} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
-
-        {lastUpdate && (
-          <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate} ET</span>
-        )}
+      </Dock>
       </div>
 
       {/* Panels */}
