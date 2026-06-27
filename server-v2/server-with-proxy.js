@@ -350,6 +350,15 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Generate the pre-market AI summary now (ignores the 8am schedule).
+      // POST /proxy/premarket-summary-run
+      if (pathname === '/proxy/premarket-summary-run' && req.method === 'POST') {
+        const { generate } = require('./premarket-summary-generator');
+        generate(`http://localhost:${PORT}`)
+          .then(() => sendJson(res, 200, { ok: true }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Toggle the MVC auto-collector on/off at runtime, or read its state.
       //   GET  /proxy/mvc-auto            → { enabled }
       //   POST /proxy/mvc-auto { on: bool } → { enabled }
@@ -579,6 +588,10 @@ async function main() {
     // Traders Dashboard overnight overview: at ~07:00 ET (weekdays) Claude
     // web-searches what moved markets overnight and writes td_overview.
     require('./overview-generator').startOverviewGenerator(PORT);
+
+    // Analytics Premarket card: at ~08:00 ET (weekdays) Claude turns the global
+    // overnight tape + SPX gap/fair-value into a 5-bullet read → premarket_summary.
+    require('./premarket-summary-generator').startPremarketSummaryGenerator(PORT);
   });
 
   const shutdown = () => {

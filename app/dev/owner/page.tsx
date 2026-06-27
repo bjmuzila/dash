@@ -1433,6 +1433,17 @@ export default function OwnerDashboard() {
     } finally { setCtlBusy(null); void refresh(); }
   }, [flashMsg, refresh]);
 
+  const doPremarketRun = useCallback(async () => {
+    setCtlBusy("premarket");
+    try {
+      const r = await fetch("/proxy/premarket-summary-run", { method: "POST" });
+      const j = await r.json();
+      flashMsg("premarket", j?.ok ? "Premarket summary generated" : `Failed: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("premarket", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); void refresh(); }
+  }, [flashMsg, refresh]);
+
   const fetchRenderWindow = useCallback(async (w: "live" | "weekly" | "monthly") => {
     setRenderWindow(w);
     setRenderLoading(true);
@@ -2082,6 +2093,14 @@ export default function OwnerDashboard() {
                 style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "mvcSnap" ? "Saving…" : "📸 MVC Snapshot now"}
+              </button>
+              <button
+                onClick={doPremarketRun}
+                disabled={ctlBusy === "premarket"}
+                title="Generate the Analytics Premarket card's 5-bullet AI summary now (instead of waiting for the ~8am ET run)."
+                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
+              >
+                {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
               </button>
             </div>
 

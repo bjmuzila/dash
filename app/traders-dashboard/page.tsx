@@ -243,9 +243,9 @@ export default function TradersDashboardPage() {
             <div style={card}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700 }}>📈 Overnight Market Overview</div>
-                {overview && (
+                {overview && Number(overview.generated_at) > 0 && (
                   <span style={{ fontSize: 10, color: HT.muted }}>
-                    Generated {new Date(overview.generated_at).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })} ET
+                    Generated {new Date(Number(overview.generated_at)).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })} ET
                   </span>
                 )}
               </div>

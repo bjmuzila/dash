@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef, type CSSProperties, type Reac
 import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
-import { computeRefLevels, scanToday, type LevelStatus } from "@/lib/failLevels";
+import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance } from "@/lib/failLevels";
+import { NqIbLive } from "@/components/insights/NqIbLive";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Analytics — strategy builder. UI-only scaffold with MOCK data.
@@ -116,11 +117,41 @@ function fmtBig(n: number | null | undefined): string {
   return `${sign}${a.toFixed(0)}`;
 }
 
-// Loading / error inline state for a card body.
-function CardState({ loading, error }: { loading: boolean; error: string | null }) {
-  if (loading) return <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>Loading…</span>;
-  if (error) return <span style={{ fontSize: 13, color: T.red }}>⚠ {error}</span>;
-  return <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>No data.</span>;
+// True only for the first `ms` after mount — used to distinguish "still loading"
+// from "loaded but empty" for feeds (like useEsCandles) that don't expose a
+// ready flag, so a card with no data eventually shows its placeholder instead of
+// spinning forever.
+function useGrace(ms = 4000): boolean {
+  const [grace, setGrace] = useState(true);
+  useEffect(() => {
+    const id = setTimeout(() => setGrace(false), ms);
+    return () => clearTimeout(id);
+  }, [ms]);
+  return grace;
+}
+
+// Dashed placeholder box for empty/no-data states (matches Strategy Output).
+function Placeholder({ children, minHeight = 70 }: { children: ReactNode; minHeight?: number }) {
+  return (
+    <div
+      className="flex items-center justify-center"
+      style={{
+        minHeight, borderRadius: 10, border: `1px dashed ${T.border}`,
+        color: T.muted, fontSize: 12, fontStyle: "italic", textAlign: "center",
+        padding: "8px 12px", opacity: 0.8,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Loading / error / empty state for a card body. Renders a dashed placeholder so
+// a card never looks broken when its feed is empty.
+function CardState({ loading, error, empty = "No data yet" }: { loading: boolean; error: string | null; empty?: ReactNode }) {
+  if (loading) return <Placeholder>Loading…</Placeholder>;
+  if (error) return <Placeholder><span style={{ color: T.red }}>⚠ {error}</span></Placeholder>;
+  return <Placeholder>{empty}</Placeholder>;
 }
 
 // ── 1. MULTI GREEK ───────────────────────────────────────────────────────────
@@ -130,21 +161,26 @@ type GreekKey = "GEX" | "DEX" | "CHEX" | "VEX";
 interface PeakGreek { strike: number; value: number }
 
 function computePeakGreeks(payload: unknown): Record<GreekKey, PeakGreek | null> {
+  type MgLeg = Record<string, unknown>;
   const data = (payload as { data?: { items?: unknown[]; underlyingPrice?: unknown } })?.data;
   const items = (data?.items as { strikes?: unknown[] }[]) ?? [];
   const S = numOr(data?.underlyingPrice) ?? 0;
   const acc = new Map<number, { gex: number; dex: number; chex: number; vex: number }>();
-  const n = (o: Leg | undefined, k: string) => legNum(o, k);
-  const cnt = (o: Leg | undefined) =>
-    o ? (parseInt(String(o["open-interest"] ?? (o as Record<string, unknown>).openInterest ?? 0), 10) || 0) +
-        (parseInt(String((o as Record<string, unknown>).volume ?? 0), 10) || 0) : 0;
+  const n = (o: MgLeg | undefined, k: string) => {
+    const v = o?.[k];
+    const num = Number(v);
+    return v != null && v !== "" && isFinite(num) ? num : 0;
+  };
+  const cnt = (o: MgLeg | undefined) =>
+    o ? (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0) +
+        (parseInt(String(o.volume ?? 0), 10) || 0) : 0;
 
   for (const group of items) {
-    for (const s of (group.strikes ?? []) as Leg[]) {
+    for (const s of (group.strikes ?? []) as MgLeg[]) {
       const strike = parseFloat(String(s["strike-price"] ?? 0));
       if (!strike) continue;
-      const c = s.call as Leg | undefined;
-      const p = s.put as Leg | undefined;
+      const c = s.call as MgLeg | undefined;
+      const p = s.put as MgLeg | undefined;
       const cc = cnt(c), pc = cnt(p);
       if (cc === 0 && pc === 0) continue;
       const e = acc.get(strike) ?? { gex: 0, dex: 0, chex: 0, vex: 0 };
@@ -188,7 +224,7 @@ function MultiGreekCard() {
       </Row>
       <PillSelect value={tk} options={["SPX", "QQQ", "SPY"] as const} onChange={setTk} />
       {loading || error || !hasAny ? (
-        <CardState loading={loading} error={error} />
+        <CardState loading={loading} error={error} empty={`No live chain for ${tk}.`} />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {order.map((k) => {
@@ -268,7 +304,7 @@ function EstimatedMoveCard() {
       </Row>
       <PillSelect value={tk} options={EM_TICKERS} onChange={setTk} />
       {lvLoading || lvError || !ready ? (
-        <CardState loading={lvLoading} error={lvError} />
+        <CardState loading={lvLoading} error={lvError} empty={`No published EM for ${tk}.`} />
       ) : (
         <>
           <Row>
@@ -307,43 +343,49 @@ interface EsGapResp {
   } | null;
 }
 
+interface PremarketSummaryResp {
+  summary?: { date?: string; bullets?: string[]; generated_at?: number } | null;
+  error?: string;
+}
+
 function PremarketCard() {
-  const { data, loading, error } = useLiveData<EsGapResp>(`/api/es-gap?date=${etDateISO()}`);
-  const g = data?.gap ?? null;
-  const prevClose = g?.prior_close ?? null;
-  const open = g?.open_0930 ?? null;
+  // AI 5-bullet read of the global pre-market tape. Written daily by the VPS cron
+  // (premarket-summary-generator.js → premarket_summary); the card just reads the
+  // latest stored row — same pattern as the Traders Dashboard overview.
+  const { data, loading, error } = useLiveData<PremarketSummaryResp>(
+    "/api/premarket-summary",
+    5 * 60_000
+  );
+  // Live ES gap shown as a compact footer.
+  const { data: gapData } = useLiveData<EsGapResp>(`/api/es-gap?date=${etDateISO()}`);
+
+  const bullets = data?.summary?.bullets ?? [];
+  const sumDate = data?.summary?.date ?? null;
+  const g = gapData?.gap ?? null;
   const gapPts = g?.gap_pts ?? null;
   const up = (gapPts ?? 0) > 0;
-  const pctFilled = g?.pct_filled != null ? Math.round(Number(g.pct_filled) * (g.pct_filled <= 1 ? 100 : 1)) : null;
-  const filled = g?.filled === true || g?.filled === 1;
 
   return (
     <Card accent="red" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.red }}>Premarket</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>/ES gap</span>
+        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{sumDate ?? ""}</span>
       </Row>
-      {loading || error || g == null || gapPts == null ? (
-        <CardState loading={loading} error={error} />
+      {loading || error || bullets.length === 0 ? (
+        <CardState loading={loading} error={error ?? data?.error ?? null} empty="No premarket summary yet — generates ~8am ET." />
       ) : (
+        <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
+          {bullets.map((b, i) => (
+            <li key={i} style={{ fontSize: 13, lineHeight: 1.45, color: T.text }}>{b}</li>
+          ))}
+        </ul>
+      )}
+      {gapPts != null && (
         <>
-          <Row>
-            <Stat label="Prev Close" value={prevClose != null ? prevClose.toLocaleString() : "—"} />
-            <Stat label="9:30 Open" value={open != null ? open.toLocaleString() : "—"} />
-          </Row>
           <div style={divider} />
-          <Row>
-            <Stat label="Gap" value={`${up ? "+" : ""}${gapPts.toFixed(2)} pts`} color={up ? POS_GREEN : T.red} size={18} />
-            <Stat
-              label="Gap %"
-              value={prevClose ? `${((gapPts / prevClose) * 100).toFixed(2)}%` : "—"}
-              color={up ? POS_GREEN : T.red}
-            />
-          </Row>
-          <span style={{ fontSize: 13, color: T.muted, opacity: 0.8 }}>
-            {up ? "Gap UP" : "Gap DOWN"}
-            {pctFilled != null && ` · ${pctFilled}% filled`}
-            {filled && " · FILLED"}
+          <span style={{ fontSize: 12, color: T.muted, opacity: 0.8, fontFamily: "monospace" }}>
+            /ES gap: <span style={{ color: up ? POS_GREEN : T.red }}>{up ? "+" : ""}{gapPts.toFixed(2)} pts</span>
+            {g?.prior_close ? ` (${((gapPts / g.prior_close) * 100).toFixed(2)}%)` : ""}
           </span>
         </>
       )}
@@ -411,13 +453,9 @@ function EconCalendarCard() {
         <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.green }}>Economic Calendar</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{today}</span>
       </Row>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {loading ? (
-          <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>Loading…</span>
-        ) : error ? (
-          <span style={{ fontSize: 13, color: T.red }}>⚠ {error}</span>
-        ) : todays.length === 0 ? (
-          <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>No events today.</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
+        {loading || error || todays.length === 0 ? (
+          <CardState loading={loading} error={error} empty="No economic events today." />
         ) : (
           todays.map((e, i) => (
             <Row key={`${e.title}-${i}`} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
@@ -543,7 +581,7 @@ function ConfidenceCard() {
         )}
       </Row>
       {loading || error || score == null ? (
-        <CardState loading={loading} error={error} />
+        <CardState loading={loading} error={error} empty="No MVC snapshot yet for scoring." />
       ) : (
         <>
           <Row>
@@ -630,7 +668,7 @@ function GreeksCard() {
         <span style={{ fontSize: 10, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>now · Δ15m · Δ30m</span>
       </Row>
       {loading || error || !cur ? (
-        <CardState loading={loading} error={error} />
+        <CardState loading={loading} error={error} empty="No greeks series for today yet." />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {keys.map(({ g, k }) => {
@@ -660,48 +698,119 @@ function GreeksCard() {
 }
 
 // ── 7. INITIAL BALANCE ────────────────────────────────────────────────────────
-interface IbResp {
-  row?: {
-    high?: number;
-    low?: number;
-    range?: number;
-    mid?: number;
-    locked?: number | boolean;
-    symbol?: string;
-  } | null;
+// IB window 09:30–10:30 ET. Returns minutes-of-day in ET + a countdown string to
+// the next IB phase ("starts in" before 9:30, "forming — Xm left" until 10:30).
+const IB_OPEN_MIN = 9 * 60 + 30;
+const IB_END_MIN = 10 * 60 + 30;
+
+function nowEtMinutesSec(): { min: number; sec: number } {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const g = (t: string) => Number(p.find((x) => x.type === t)?.value ?? 0);
+  return { min: (g("hour") % 24) * 60 + g("minute"), sec: g("second") };
+}
+
+function ibCountdown(): { phase: "pre" | "forming" | "done"; text: string } {
+  const { min, sec } = nowEtMinutesSec();
+  const fmtMS = (totalSec: number) => {
+    const m = Math.floor(totalSec / 60), s = totalSec % 60;
+    return `${m}m ${String(s).padStart(2, "0")}s`;
+  };
+  if (min < IB_OPEN_MIN) {
+    const secsTo = (IB_OPEN_MIN - min) * 60 - sec;
+    return { phase: "pre", text: `IB forms in ${fmtMS(secsTo)}` };
+  }
+  if (min < IB_END_MIN) {
+    const secsTo = (IB_END_MIN - min) * 60 - sec;
+    return { phase: "forming", text: `Forming — ${fmtMS(secsTo)} left` };
+  }
+  return { phase: "done", text: "IB locked" };
 }
 
 function IbCard() {
-  const { data, loading, error } = useLiveData<IbResp>(`/api/snapshots/ib?date=${etDateISO()}`);
-  const row = data?.row ?? null;
-  const ibHigh = row?.high ?? null;
-  const ibLow = row?.low ?? null;
-  const range = row?.range ?? (ibHigh != null && ibLow != null ? ibHigh - ibLow : null);
-  const locked = row?.locked === 1 || row?.locked === true;
-  const fmt = (n: number | null) => (n != null ? Math.round(n).toLocaleString() : "—");
+  const [tab, setTab] = useState<"ESU" | "NQU">("ESU");
+  const { candles } = useEsCandles(true);
+  const grace = useGrace();
+  const today = etDateISO();
+  const [, tick] = useState(0);
+
+  // 1s clock so the countdown ticks.
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const cd = ibCountdown();
+
+  // ESU IB + setups from the shared ES candle feed (filter to ESU contract).
+  const { ib, setups } = (() => {
+    if (tab !== "ESU" || !candles.length) return { ib: null as InitialBalance | null, setups: [] as Trigger[] };
+    const esu = candles.filter((c) => (c.symbol ?? "").toUpperCase().includes("ESU"));
+    const src = esu.length ? esu : candles;
+    const amt = computeAmt(src, today);
+    const triggers = detectTriggers(src, today, amt).filter((t) => t.active);
+    return { ib: amt.ib, setups: triggers };
+  })();
+
+  const fmt = (n: number | null | undefined) => (n != null ? Math.round(n).toLocaleString() : "—");
+  const rangePts = ib ? ib.high - ib.low : null;
 
   return (
     <Card accent="purple" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.purple }}>Initial Balance</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{locked ? "locked" : "forming"}</span>
+        <PillSelect value={tab} options={["ESU", "NQU"] as const} onChange={setTab} />
       </Row>
-      {loading || error || row == null || ibHigh == null || ibLow == null ? (
-        <CardState loading={loading} error={error} />
+
+      {/* Countdown bar (both tabs share the 9:30–10:30 ET window). */}
+      <div style={{ fontSize: 12, fontFamily: "monospace", color: cd.phase === "forming" ? T.orange : cd.phase === "done" ? POS_GREEN : T.muted }}>
+        {cd.text}
+      </div>
+
+      {tab === "NQU" ? (
+        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+          <NqIbLive />
+        </div>
+      ) : ib == null ? (
+        <CardState
+          loading={candles.length === 0 && grace}
+          error={null}
+          empty={cd.phase === "pre" ? "IB hasn't formed yet — waiting for 9:30 ET open." : "No ES data for this session."}
+        />
       ) : (
         <>
           <Row>
-            <Stat label="IB High" value={fmt(ibHigh)} color={POS_GREEN} />
-            <Stat label="IB Low" value={fmt(ibLow)} color={T.red} />
-            <Stat label="Range" value={range != null ? `${Math.round(range)} pts` : "—"} />
+            <Stat label="IB High" value={fmt(ib.high)} color={POS_GREEN} />
+            <Stat label="IB Low" value={fmt(ib.low)} color={T.red} />
+            <Stat label="Range" value={cd.phase === "forming" ? "forming" : rangePts != null ? `${Math.round(rangePts)} pts` : "—"} />
           </Row>
           <div style={divider} />
-          <Label>Possible outcomes</Label>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <Row><span style={{ fontSize: 13 }}>IB Extension Up (range × 2)</span><Value color={POS_GREEN} size={14}>{range != null ? fmt(ibHigh + range) : "—"}</Value></Row>
-            <Row><span style={{ fontSize: 13 }}>IB Extension Down (range × 2)</span><Value color={T.red} size={14}>{range != null ? fmt(ibLow - range) : "—"}</Value></Row>
-            <Row><span style={{ fontSize: 13 }}>IB Mid</span><Value color={T.muted} size={14}>{fmt(row?.mid ?? (ibHigh + ibLow) / 2)}</Value></Row>
-          </div>
+          <Label>Active setups</Label>
+          {setups.length === 0 ? (
+            <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>
+              {cd.phase === "pre" ? "Waiting for the open." : "No active setups."}
+            </span>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+              {setups.map((s, i) => {
+                const long = s.direction === "long";
+                return (
+                  <div key={`${s.kind}-${s.ts}-${i}`} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+                    <Row>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>
+                        <span style={{ color: long ? POS_GREEN : T.red }}>{long ? "▲" : "▼"}</span> {s.title}
+                      </span>
+                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
+                    </Row>
+                    <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted }}>
+                      entry {fmt(s.entry)} · stop {fmt(s.stop)} · tgt {fmt(s.target)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </>
       )}
     </Card>
@@ -725,6 +834,7 @@ function LevelsCard() {
   // mount, so reference levels compute even when the market's closed (weekend);
   // the live spot + in-play status only fill in once the WS feed is streaming.
   const { candles, connected } = useEsCandles(true);
+  const grace = useGrace();
   const today = etDateISO();
 
   const { spot, statuses, hasLiveSpot } = (() => {
@@ -757,7 +867,7 @@ function LevelsCard() {
         </span>
       </Row>
       {!hasLevels ? (
-        <CardState loading={!candles.length} error={null} />
+        <CardState loading={!candles.length && grace} error={null} empty="No ES candles yet — levels populate when the feed streams." />
       ) : (
         <>
           <Stat
@@ -793,47 +903,34 @@ function LevelsCard() {
 }
 
 // ── 9. CONTRACT LOOKUP ────────────────────────────────────────────────────────
-type Leg = Record<string, unknown>;
-interface ContractResult {
-  bid: number; ask: number; mark: number; last: number;
-  volume: number; oi: number;
-  delta: number; gamma: number; theta: number; vega: number; iv: number;
+// Uses /proxy/probe-rest — the SAME path the /dev page uses: chain → resolve
+// strike → market-data, returning per-strike COMPUTED greek exposures
+// (gex=γ·OI·S², dex=δ·OI·100·S, vex=vega·OI·100·S, charm/vanna), plus the
+// raw feeds (Quote / Trade / Summary / Greeks).
+type Probe = Record<string, unknown>;
+interface ProbeResult {
+  feeds?: Record<string, Probe>;
+  exposures?: Probe;
 }
 
-function legNum(o: Leg | undefined, ...keys: string[]): number {
-  if (!o) return 0;
+function pnum(o: Probe | undefined, ...keys: string[]): number | null {
+  if (!o) return null;
   for (const k of keys) {
-    const v = Number(o[k]);
-    if (isFinite(v) && o[k] != null && o[k] !== "") return v;
-  }
-  return 0;
-}
-
-// Find the call/put leg for a strike in a /api/chains payload and normalize it.
-function extractContract(payload: unknown, strike: number, side: "C" | "P"): ContractResult | null {
-  const data = (payload as { data?: { items?: unknown[] } })?.data;
-  const items = (data?.items as { strikes?: unknown[] }[]) ?? [];
-  for (const group of items) {
-    for (const s of (group.strikes ?? []) as Leg[]) {
-      if (parseFloat(String(s["strike-price"] ?? 0)) !== strike) continue;
-      const leg = (side === "C" ? s.call : s.put) as Leg | undefined;
-      if (!leg) return null;
-      return {
-        bid: legNum(leg, "bid", "bidPrice", "bid-price"),
-        ask: legNum(leg, "ask", "askPrice", "ask-price"),
-        mark: legNum(leg, "mark", "mark-price", "mid-price", "midPrice"),
-        last: legNum(leg, "last", "last-price", "lastPrice"),
-        volume: legNum(leg, "volume"),
-        oi: legNum(leg, "open-interest", "openInterest"),
-        delta: legNum(leg, "delta"),
-        gamma: legNum(leg, "gamma"),
-        theta: legNum(leg, "theta"),
-        vega: legNum(leg, "vega"),
-        iv: legNum(leg, "iv", "implied-volatility", "impliedVolatility"),
-      };
-    }
+    const v = o[k];
+    const n = Number(v);
+    if (v != null && v !== "" && isFinite(n)) return n;
   }
   return null;
+}
+
+// Compact signed exposure formatter (B/M/K) — mirrors /dev's fmtExp.
+function fmtExpVal(v: number | null): string {
+  if (v == null || !isFinite(v)) return "—";
+  const a = Math.abs(v), s = v < 0 ? "-" : "";
+  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(1)}K`;
+  return `${s}${a.toFixed(2)}`;
 }
 
 function ContractLookupCard() {
@@ -843,10 +940,10 @@ function ContractLookupCard() {
   const [strike, setStrike] = useState("6050");
   const [side, setSide] = useState<"C" | "P">("C");
 
-  const [result, setResult] = useState<ContractResult | null>(null);
+  const [result, setResult] = useState<ProbeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState<string | null>(null); // label of last lookup
+  const [loaded, setLoaded] = useState<string | null>(null);
 
   // Real listed expirations for the active ticker.
   useEffect(() => {
@@ -876,15 +973,19 @@ function ContractLookupCard() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(
-        `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(exp)}&range=all`,
-        { cache: "no-store" }
-      );
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      const c = extractContract(j, k, side);
-      if (!c) throw new Error(`No ${strike}${side} contract in ${ticker} ${exp}`);
-      setResult(c);
+      // Same call /dev makes (one side at a time).
+      const url = `/proxy/probe-rest?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(exp)}&type=${side}&strike=${encodeURIComponent(strike)}`;
+      const r = await fetch(url, { cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+      if (!d?.found) {
+        throw new Error(
+          d?.status === "no-strike" ? `No ${strike} strike for ${ticker} ${exp}`
+          : d?.status === "no-expiry" ? `No expiry ${exp} for ${ticker}`
+          : d?.error || `No data (${d?.status ?? "?"})`
+        );
+      }
+      setResult(d.result as ProbeResult);
       setLoaded(`${ticker} ${exp} ${strike}${side}`);
     } catch (e) {
       setError(String(e));
@@ -894,10 +995,27 @@ function ContractLookupCard() {
     }
   }, [ticker, exp, strike, side]);
 
-  const mid = result ? (result.mark || (result.bid + result.ask) / 2) : 0;
-  const fmtUsd = (n: number) => `$${n.toFixed(2)}`;
-  // Per-contract $ greeks (×100 multiplier).
-  const dollarGreek = (g: number) => `${g >= 0 ? "+" : "-"}$${Math.abs(g * 100).toFixed(0)}`;
+  const feeds = result?.feeds ?? {};
+  const ex = result?.exposures ?? {};
+  const quote = feeds.Quote, trade = feeds.Trade, summary = feeds.Summary, greeks = feeds.Greeks;
+
+  const bid = pnum(quote, "bidPrice", "bid", "bid-price");
+  const ask = pnum(quote, "askPrice", "ask", "ask-price");
+  const mark = pnum(quote, "markPrice", "mark", "mark-price") ?? pnum(trade, "price", "last", "last-price");
+  const oi = pnum(summary, "openInterest", "open-interest");
+  const vol = pnum(trade, "volume") ?? pnum(summary, "volume");
+  const iv = pnum(greeks, "iv", "volatility", "impliedVolatility");
+  const fmtUsd = (n: number | null) => (n == null ? "—" : `$${n.toFixed(2)}`);
+
+  // Strike-computed exposures (signed), as on /dev.
+  const exposureRows: Array<{ label: string; key: string }> = [
+    { label: "GEX (γ·OI·S²)", key: "gex" },
+    { label: "DEX (δ·OI·100·S)", key: "dex" },
+    { label: "VEX (vega·OI·100·S)", key: "vex" },
+    { label: "Theta exp", key: "thetaExp" },
+    { label: "Charm exp", key: "charmExp" },
+    { label: "Vanna exp", key: "vannaExp" },
+  ];
 
   return (
     <Card accent="red" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -919,7 +1037,7 @@ function ContractLookupCard() {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Strike</Label>
-          <input style={{ ...homeInputStyle, width: 90 }} value={strike} onChange={(e) => setStrike(e.target.value)} />
+          <input style={{ ...homeInputStyle, width: 90 }} value={strike} onChange={(e) => setStrike(e.target.value.replace(/[^\d.]/g, ""))} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Side</Label>
@@ -931,25 +1049,24 @@ function ContractLookupCard() {
       </div>
       <div style={divider} />
       {error ? (
-        <span style={{ fontSize: 13, color: T.red }}>⚠ {error}</span>
+        <CardState loading={false} error={error} />
       ) : !result ? (
-        <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>Choose a contract and press Look up.</span>
+        <CardState loading={false} error={null} empty="Choose a contract and press Look up." />
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 12 }}>
-            <Stat label="Mid" value={fmtUsd(mid)} color={T.cyan} />
-            <Stat label="Bid / Ask" value={`${result.bid.toFixed(2)} / ${result.ask.toFixed(2)}`} />
-            <Stat label="Volume" value={result.volume.toLocaleString()} />
-            <Stat label="Open Interest" value={result.oi.toLocaleString()} />
-            <Stat label="Last" value={result.last ? fmtUsd(result.last) : "—"} />
-            <Stat label="IV" value={result.iv ? `${(result.iv * (result.iv <= 1 ? 100 : 1)).toFixed(1)}%` : "—"} color={T.orange} />
+            <Stat label="Mark" value={fmtUsd(mark)} color={T.cyan} />
+            <Stat label="Bid / Ask" value={bid != null && ask != null ? `${bid.toFixed(2)} / ${ask.toFixed(2)}` : "—"} />
+            <Stat label="Volume" value={vol != null ? vol.toLocaleString() : "—"} />
+            <Stat label="Open Interest" value={oi != null ? oi.toLocaleString() : "—"} />
+            <Stat label="IV" value={iv != null ? `${(iv * (iv <= 1 ? 100 : 1)).toFixed(1)}%` : "—"} color={T.orange} />
           </div>
-          <Label>Greeks · $ per contract</Label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 12 }}>
-            <Stat label="Delta" value={result.delta.toFixed(2)} color={signColor(result.delta)} />
-            <Stat label="Gamma $" value={dollarGreek(result.gamma)} color={signColor(result.gamma)} />
-            <Stat label="Theta $/day" value={dollarGreek(result.theta)} color={signColor(result.theta)} />
-            <Stat label="Vega $" value={dollarGreek(result.vega)} color={signColor(result.vega)} />
+          <Label>Greeks · strike-computed exposures</Label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 12 }}>
+            {exposureRows.map(({ label, key }) => {
+              const v = pnum(ex, key);
+              return <Stat key={key} label={label} value={fmtExpVal(v)} color={v == null ? T.muted : signColor(v)} />;
+            })}
           </div>
         </>
       )}
