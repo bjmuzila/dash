@@ -201,55 +201,47 @@ export default function OpengraphImage() {
                 <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#22e3a0" }} />
               </div>
 
-              {/* toolbar pill row — matches the real GexToolbar */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 14px 12px" }}>
+              {/* toolbar pill row — clean, legible subset */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 16px 14px" }}>
                 {[
-                  { t: "Mon 6/29", on: true },
-                  { t: "Tue 6/30", on: false },
-                  { gap: true },
                   { t: "Net GEX", on: true },
                   { t: "Call−Put", on: false },
-                  { gap: true },
                   { t: "OI+Vol", on: true },
-                  { t: "Vol Only", on: false },
-                  { gap: true },
-                  { t: "OI", dot: true },
-                  { t: "DEX", dot: true },
-                  { t: "Flip", dot: true },
-                  { gap: true },
-                  { t: "5m", dot: true },
-                  { t: "15m", dot: true },
-                  { t: "30m", dot: true },
-                  { gap: true },
-                  { t: "↻ Now", now: true },
-                ].map((p, i) =>
-                  p.gap ? (
-                    <div key={i} style={{ display: "flex", width: 1, height: 20, background: "rgba(255,255,255,0.10)", margin: "0 3px" }} />
-                  ) : (
-                    <div
-                      key={i}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5,
-                        padding: "5px 9px",
-                        borderRadius: 7,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        background: p.on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.03)",
-                        border: p.on
-                          ? "1px solid rgba(41,182,246,0.55)"
-                          : "1px solid rgba(255,255,255,0.08)",
-                        color: p.on || p.now ? "#4FC3F7" : "#c2c8d2",
-                      }}
-                    >
-                      {p.dot && (
-                        <div style={{ display: "flex", width: 6, height: 6, borderRadius: 4, background: "#5a6270" }} />
-                      )}
-                      {p.t}
-                    </div>
-                  )
-                )}
+                  { t: "Flip", on: false },
+                ].map((p, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex",
+                      padding: "7px 16px",
+                      borderRadius: 8,
+                      fontSize: 15,
+                      fontWeight: 700,
+                      background: p.on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.03)",
+                      border: p.on
+                        ? "1px solid rgba(41,182,246,0.55)"
+                        : "1px solid rgba(255,255,255,0.08)",
+                      color: p.on ? "#4FC3F7" : "#aeb4be",
+                    }}
+                  >
+                    {p.t}
+                  </div>
+                ))}
+                <div style={{ display: "flex", flex: 1 }} />
+                <div
+                  style={{
+                    display: "flex",
+                    padding: "7px 14px",
+                    borderRadius: 8,
+                    fontSize: 15,
+                    fontWeight: 700,
+                    background: "rgba(41,182,246,0.16)",
+                    border: "1px solid rgba(41,182,246,0.55)",
+                    color: "#4FC3F7",
+                  }}
+                >
+                  ↻ Now
+                </div>
               </div>
 
               {/* eslint-disable-next-line @next/next/no-img-element */}
