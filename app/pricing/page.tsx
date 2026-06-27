@@ -119,12 +119,12 @@ export default async function PricingPage({
               <PricingActions hasAccess={access.ok} hasBilling={hasBilling} />
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <SignUpButton forceRedirectUrl="/home">
+                <Link href="/sign-up" style={{ textDecoration: "none" }}>
                   <button style={joinBtn}>Join now — create account</button>
-                </SignUpButton>
-                <SignInButton forceRedirectUrl="/home">
+                </Link>
+                <Link href="/sign-in" style={{ textDecoration: "none" }}>
                   <button style={secondaryBtn}>I already have an account</button>
-                </SignInButton>
+                </Link>
                 <p style={{ color: T.muted, fontSize: 11.5, margin: "4px 0 0", lineHeight: 1.4, textAlign: "center" }}>
                   You'll choose your plan right after creating your account.
                 </p>
