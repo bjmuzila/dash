@@ -7,9 +7,12 @@
  * each ticker to /api/levels, which persists them to Postgres. The /em page then
  * reads them per-ticker. No browser, no manual Refresh.
  *
- * Cadence: once per week, Monday ~09:35 ET (after the cash open so the new
- * week's quotes are live and last week's candle is complete). A one-time startup
- * run fires ~30s after boot so a fresh deploy publishes immediately.
+ * Cadence: once per week, Saturday ~09:00 ET (PUBLISH_DOW/PUBLISH_HOUR below).
+ * The weekend pass often can't price the whole roster (markets closed), so the
+ * run auto-retries the not-found tickers on a backoff (runWeeklyWithRetry) until
+ * everything prices. There is intentionally NO startup/boot publish: levels are
+ * frozen for the week and a restart must not overwrite them with mid-week
+ * numbers. To (re)publish off-schedule, use the gated "Publish Now" button.
  *
  * Wired from server-with-proxy.js after server.listen():
  *   require('./levels-auto-publish').startLevelsAutoPublish(PORT);
@@ -39,6 +42,23 @@ const { DISPLAY_LABEL } = (() => {
 // Last publish run summary, surfaced to the owner page via /proxy/levels-status.
 let lastRun = null; // { at, reason, ms, emOk, emTotal, posted, failedEm:[], error }
 let publishing = false; // true while a run is in flight (so the UI shows progress)
+let publishWatchdog = null; // self-clears `publishing` if a run hangs (see below)
+
+// A full-roster publish takes a few minutes. If a run hangs (network stall, a
+// wedged upstream) the `publishing` flag would otherwise stay true forever and
+// the UI "Publish Now" button would no-op indefinitely. This watchdog force-
+// clears the flag after a hard ceiling so the system is never permanently stuck.
+const PUBLISH_MAX_MS = 15 * 60 * 1000;
+function armPublishWatchdog() {
+  clearTimeout(publishWatchdog);
+  publishWatchdog = setTimeout(() => {
+    if (publishing) {
+      console.log('[levels-pub] WATCHDOG — run exceeded ceiling, force-clearing stuck flag');
+      publishing = false;
+    }
+  }, PUBLISH_MAX_MS);
+  publishWatchdog.unref?.();
+}
 
 const PUBLISH_HOUR = 9;   // ET
 const PUBLISH_MIN = 0;    // ET
@@ -84,6 +104,7 @@ function weekKeyET(d = new Date()) {
 async function publishOnce(base, reason, opts = {}) {
   const t0 = Date.now();
   publishing = true;
+  armPublishWatchdog(); // never let the flag stay stuck if this run hangs
   const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null;
   console.log(`[levels-pub] publishing (${reason})${only ? ` — retry ${only.length} not-found` : ''}…`);
   // Expected display tickers (so the "missing EM" diff matches the published rows).
@@ -169,6 +190,7 @@ async function publishOnce(base, reason, opts = {}) {
     return { ok: posted > 0, ...lastRun };
   } finally {
     publishing = false;
+    clearTimeout(publishWatchdog);
   }
 }
 
@@ -212,6 +234,54 @@ function exportToPineSeeds() {
 function getLastRun() { return lastRun; }
 function isPublishing() { return publishing; }
 
+// Auto-retry config for the weekly run. Weekend quotes are often empty, so the
+// Saturday 9am pass typically prices only part of the roster; the rest would
+// otherwise sit on last week's (now-expired) levels until the next manual retry.
+// We re-run JUST the not-found tickers on a backoff — markets reopen Sunday 6pm
+// ET (futures) / Monday (equities), so later passes pick up the stragglers.
+const RETRY_DELAYS_MS = [
+  30 * 60 * 1000,        // +30m
+  2 * 60 * 60 * 1000,    // +2h
+  6 * 60 * 60 * 1000,    // +6h
+  24 * 60 * 60 * 1000,   // +24h (Sunday — futures back)
+  36 * 60 * 60 * 1000,   // +36h
+  50 * 60 * 60 * 1000,   // +50h (Monday cash open)
+];
+
+/**
+ * Run the full weekly publish, then auto-retry the not-found tickers on a
+ * backoff until every name prices or we run out of attempts. Each retry only
+ * recomputes lastRun.failedEm (cheap) and merges the result, so successful
+ * names drop off and the customer /em page stops showing their expired levels.
+ * Returns the first run's result; retries continue in the background.
+ */
+async function runWeeklyWithRetry(base) {
+  const first = await publishOnce(base, 'weekly');
+  scheduleRetries(base, 0);
+  return first;
+}
+
+function scheduleRetries(base, attempt) {
+  if (attempt >= RETRY_DELAYS_MS.length) return;
+  const failed = Array.isArray(lastRun?.failedEm)
+    ? lastRun.failedEm.map((f) => (typeof f === 'string' ? f : f && f.ticker)).filter(Boolean)
+    : [];
+  if (!failed.length) { console.log('[levels-pub] roster fully priced — no retries needed'); return; }
+  const delay = RETRY_DELAYS_MS[attempt];
+  console.log(`[levels-pub] ${failed.length} ticker(s) unpriced — retry ${attempt + 1}/${RETRY_DELAYS_MS.length} in ${Math.round(delay / 60000)}m`);
+  const t = setTimeout(() => {
+    if (publishing) { scheduleRetries(base, attempt); return; } // a run is live; re-arm same attempt
+    const stillFailed = Array.isArray(lastRun?.failedEm)
+      ? lastRun.failedEm.map((f) => (typeof f === 'string' ? f : f && f.ticker)).filter(Boolean)
+      : [];
+    if (!stillFailed.length) { console.log('[levels-pub] roster now fully priced — stopping retries'); return; }
+    publishOnce(base, 'retry', { only: stillFailed })
+      .catch((e) => console.log('[levels-pub] auto-retry error:', e && e.message))
+      .finally(() => scheduleRetries(base, attempt + 1));
+  }, delay);
+  t.unref?.();
+}
+
 function startLevelsAutoPublish(port) {
   const base = `http://localhost:${port}`;
   // Seed from disk so a restart remembers we already published this week.
@@ -237,7 +307,9 @@ function startLevelsAutoPublish(port) {
     if (lastPublishedWeek === wk) return;
     const isSatAfterTarget = dow === PUBLISH_DOW && mins >= target;
     if (isSatAfterTarget) {
-      publishOnce(base, 'weekly').then((res) => {
+      // Full publish + background auto-retry of any not-found tickers, so the
+      // whole roster is current and the /em page never shows expired levels.
+      runWeeklyWithRetry(base).then((res) => {
         if (res && res.ok) {
           lastPublishedWeek = wk;
           writePublishedWeek(wk); // persist so restarts don't re-publish
@@ -250,4 +322,4 @@ function startLevelsAutoPublish(port) {
   return () => clearInterval(timer);
 }
 
-module.exports = { startLevelsAutoPublish, publishOnce, getLastRun, isPublishing };
+module.exports = { startLevelsAutoPublish, publishOnce, runWeeklyWithRetry, getLastRun, isPublishing };

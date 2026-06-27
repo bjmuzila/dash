@@ -605,10 +605,44 @@ async function computeAllLevels(base, opts = {}) {
  */
 async function fetchWeeklyClose(engine, ticker, targetWeek) {
   const bars = await fetchWeeklyHistory(engine, zoneSymbol(ticker));
-  const exact = bars.find((i) => getWeekKey(new Date(i.time)) === targetWeek);
-  const candidates = bars.filter((i) => getWeekKey(new Date(i.time)) <= targetWeek);
-  const selected = exact || candidates[candidates.length - 1] || bars[bars.length - 1];
-  if (!selected) throw new Error(`No weekly candle for ${ticker}`);
+
+  // A finalized weekly bar is anchored to the week's MONDAY open. While a week is
+  // still trading, the feed also returns a SECOND, partial bar for that same week
+  // (timestamped intraweek, e.g. Fri …T20:00:01Z) whose close is the live price —
+  // NOT the realized weekly close. The old code did bars.find(week === target),
+  // which grabbed whichever bar came first; when the evaluator ran early (before
+  // the week finalized) that was the forming bar, scoring against a partial close
+  // and flipping hit/miss. Fix: among bars for the target week, pick the one whose
+  // timestamp IS the week's Monday boundary (the canonical weekly bar). If only a
+  // forming/partial bar exists for the target week, refuse to score it.
+  const weekStartMs = Date.parse(`${targetWeek}T04:00:00.000Z`); // Monday 00:00 ET
+  const sameWeek = bars.filter((i) => getWeekKey(new Date(i.time)) === targetWeek);
+  // Canonical = the bar anchored at (or before) the Monday open; among those, the
+  // earliest-timestamped is the true weekly aggregate. Forming bars sit later.
+  const canonical = sameWeek
+    .filter((i) => i.time <= weekStartMs + 12 * 60 * 60 * 1000) // within Mon of week start
+    .sort((a, b) => a.time - b.time)[0];
+
+  // Refuse to score until the target week's trading has actually ended. The week
+  // closes at Friday 16:00 ET; we require we're past that before trusting a close.
+  // (Comparing week-keys is wrong here: on the Saturday scoring run, the completed
+  // week and "now" share the same Monday, so a week-key check would reject the
+  // legitimate run. We check the wall-clock Friday-close boundary instead.)
+  const fridayCloseMs = Date.parse(`${targetWeek}T04:00:00.000Z`)  // Mon 00:00 ET
+    + 4 * 24 * 60 * 60 * 1000   // → Friday 00:00 ET
+    + 16 * 60 * 60 * 1000;      // → Friday 16:00 ET (cash close)
+  if (Date.now() < fridayCloseMs) {
+    throw new Error(`Week ${targetWeek} not yet closed for ${ticker} — refusing to score a forming candle`);
+  }
+
+  // Use the canonical (Monday-anchored) weekly bar. We deliberately do NOT fall
+  // back to a forming same-week bar — scoring a partial close is exactly the bug
+  // we're fixing. If the canonical bar for the target week is missing entirely,
+  // fall back to the most recent OLDER completed week (better than nothing for a
+  // backfill); never to an intraweek forming bar.
+  const priorWeeks = bars.filter((i) => getWeekKey(new Date(i.time)) < targetWeek);
+  const selected = canonical || priorWeeks[priorWeeks.length - 1] || null;
+  if (!selected) throw new Error(`No finalized weekly candle for ${ticker} (week ${targetWeek})`);
   return { close: selected.close, high: selected.high, low: selected.low, open: selected.open, week: getWeekKey(new Date(selected.time)) };
 }
 

@@ -264,17 +264,34 @@ async function main() {
       // Manual weekly-levels publish. The auto-publisher only fires Saturday, so
       // this lets you (re)publish on demand — e.g. after editing the ticker list
       // or for the first load — without overwriting on every restart.
-      //   POST /proxy/levels-publish
+      //   POST /proxy/levels-publish   body: { confirm: "PUBLISH" }   // REQUIRED
+      //
+      // SERVER-SIDE GATE: a full-roster publish overwrites the frozen weekly
+      // snapshot the customer /em page reads, so it must NOT be triggerable by a
+      // bare POST (deploy hook, curl, an interrupted boot-time run, etc.). The
+      // two browser confirm() pop-ups guard the UI; this token guards the wire.
+      // Only the gated "Publish Now" buttons send { confirm: "PUBLISH" }.
       if (pathname === '/proxy/levels-publish' && req.method === 'POST') {
         const { publishOnce, isPublishing } = require('./levels-auto-publish');
         if (isPublishing()) { sendJson(res, 200, { started: false, running: true }); return; }
-        // Fire-and-forget: a full-roster publish takes minutes. Kick it off and
-        // return immediately; the owner page polls /proxy/levels-status for the
-        // result. Errors are captured into lastRun by publishOnce itself.
-        publishOnce(`http://localhost:${PORT}`, 'manual').catch((e) => {
-          console.log('[levels-pub] manual run error:', e && e.message);
+        let raw = '';
+        req.on('data', (c) => { raw += c; if (raw.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let confirm = '';
+          try { confirm = String(JSON.parse(raw || '{}').confirm || ''); } catch {}
+          if (confirm !== 'PUBLISH') {
+            console.log('[levels-pub] manual publish REJECTED — missing/!= confirm token');
+            sendJson(res, 400, { started: false, error: 'confirm token required' });
+            return;
+          }
+          // Fire-and-forget: a full-roster publish takes minutes. Kick it off and
+          // return immediately; the owner page polls /proxy/levels-status for the
+          // result. Errors are captured into lastRun by publishOnce itself.
+          publishOnce(`http://localhost:${PORT}`, 'manual').catch((e) => {
+            console.log('[levels-pub] manual run error:', e && e.message);
+          });
+          sendJson(res, 200, { started: true, running: true });
         });
-        sendJson(res, 200, { started: true, running: true });
         return;
       }
       // Retry ONLY the not-found tickers from the last run (no full re-publish).
@@ -545,7 +562,8 @@ async function main() {
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);
     // In-process weekly publisher for the customer /em page: computes EM + zones
-    // server-side and POSTs each ticker to /api/levels (Mon ~09:35 ET + startup).
+    // server-side and POSTs each ticker to /api/levels (Sat ~09:00 ET, then
+    // auto-retries unpriced tickers on a backoff). No startup publish by design.
     require('./levels-auto-publish').startLevelsAutoPublish(PORT);
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.

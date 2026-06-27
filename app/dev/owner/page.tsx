@@ -467,7 +467,7 @@ function AccordionCard({
 }) {
   void open; void onToggle; void id;
   return (
-    <div style={{ ...homePanelStyle, overflow: "hidden", borderTop: `2px solid ${accent}80`, background: `radial-gradient(circle at 50% 0%, ${accent}10 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+    <div style={{ ...homePanelStyle, overflow: "hidden", border: "none", borderTop: `2px solid ${accent}80`, backdropFilter: "none", background: "transparent" }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
@@ -1447,7 +1447,13 @@ export default function OwnerDashboard() {
     if (!window.confirm("Are you sure? This will replace the current published levels on the customer /em page.")) return;
     setPublishing(true);
     try {
-      await fetch("/proxy/levels-publish", { method: "POST" });
+      // Server-side gate: the proxy rejects any publish POST without this token,
+      // so a bare/accidental POST can't republish. Only this confirmed path sends it.
+      await fetch("/proxy/levels-publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "PUBLISH" }),
+      });
     } catch { /* the poll below still reflects state */ }
     pollPublishStatus(() => setPublishing(false));
   }, [publishing, retrying, pollPublishStatus]);
@@ -1605,7 +1611,7 @@ export default function OwnerDashboard() {
   })();
 
   return (
-    <div style={homeShellStyle}>
+    <div style={{ ...homeShellStyle, height: "100dvh", maxHeight: "100dvh" }}>
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

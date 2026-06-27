@@ -248,7 +248,13 @@ export default function LevelsPublish() {
     if (!window.confirm("Are you sure? This will replace the current published levels on the customer /em page.")) return;
     setPublishing(true);
     try {
-      await fetch("/proxy/levels-publish", { method: "POST" });
+      // Server-side gate: the proxy rejects any publish POST without this token,
+      // so a bare/accidental POST can't republish. Only this confirmed path sends it.
+      await fetch("/proxy/levels-publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "PUBLISH" }),
+      });
     } catch { /* the poll below still reflects state */ }
     pollPublishStatus(() => setPublishing(false));
   }, [publishing, retrying, pollPublishStatus]);
