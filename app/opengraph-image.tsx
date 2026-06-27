@@ -159,6 +159,25 @@ export default function OpengraphImage() {
                 </span>
               </span>
             </div>
+
+            {/* CTA pill */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                alignSelf: "flex-start",
+                marginTop: 34,
+                padding: "14px 28px",
+                borderRadius: 12,
+                background: "#219EBC",
+                color: "#04121A",
+                fontSize: 22,
+                fontWeight: 800,
+                letterSpacing: 0.5,
+              }}
+            >
+              SIGN UP NOW →
+            </div>
           </div>
 
           {/* RIGHT: dashboard mock + real-text stat bar */}
