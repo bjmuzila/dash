@@ -18,8 +18,23 @@ export function getStripe(): Stripe {
 }
 
 // The single subscription price the dashboard sells. Set in env.
+// Kept for backwards-compat / fallback when plan-specific vars aren't set.
 export function getPriceId(): string {
   const id = process.env.STRIPE_PRICE_ID;
   if (!id) throw new Error("STRIPE_PRICE_ID is not set");
+  return id;
+}
+
+export type Plan = "monthly" | "yearly";
+
+// Resolve a plan to its Stripe price id. Prefers the plan-specific env vars
+// (STRIPE_PRICE_ID_MONTHLY / _YEARLY); falls back to STRIPE_PRICE_ID so a
+// single-price setup still works. Throws if the requested plan has no price.
+export function getPriceIdForPlan(plan: Plan): string {
+  const monthly = process.env.STRIPE_PRICE_ID_MONTHLY;
+  const yearly = process.env.STRIPE_PRICE_ID_YEARLY;
+  const fallback = process.env.STRIPE_PRICE_ID;
+  const id = plan === "yearly" ? (yearly || fallback) : (monthly || fallback);
+  if (!id) throw new Error(`No Stripe price configured for plan "${plan}"`);
   return id;
 }

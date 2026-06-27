@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { getStripe, getPriceId } from "@/lib/stripe";
+import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +30,10 @@ export async function POST(req: NextRequest) {
     const stripe = getStripe();
     const origin = publicOrigin(req);
 
+    // Plan comes from the request body ("monthly" | "yearly"); default monthly.
+    const body = await req.json().catch(() => ({}));
+    const plan: Plan = body?.plan === "yearly" ? "yearly" : "monthly";
+
     // Reuse an existing Stripe customer for this user if we've seen one, else
     // create one stamped with the Clerk id. Never trust a client-supplied id.
     let customerId = (await getSubscription(userId))?.stripe_customer_id ?? null;
@@ -47,7 +51,7 @@ export async function POST(req: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
-      line_items: [{ price: getPriceId(), quantity: 1 }],
+      line_items: [{ price: getPriceIdForPlan(plan), quantity: 1 }],
       // clerk_user_id on the session is the webhook's fallback mapping if the
       // customer lookup ever misses.
       metadata: { clerk_user_id: userId },
