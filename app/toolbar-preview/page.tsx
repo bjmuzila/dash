@@ -297,7 +297,7 @@ export default function ToolbarPreviewPage() {
           position: "relative",
           width: "100%",
           maxWidth: 920,
-          height: 360,
+          flexShrink: 0,   // parent is a flex column; without this the panel collapses and clips the toolbar
           borderRadius: 18,
           background: "rgba(13,17,25,0.45)",
           backdropFilter: "blur(16px)",
@@ -329,15 +329,6 @@ export default function ToolbarPreviewPage() {
           onToggleGhost30={() => { setG30(v => !v); setG5(false); setG15(false); }}
           onRefresh={async () => { await new Promise(r => setTimeout(r, 600)); }}
         />
-
-        {/* faux chart gridlines below the toolbar */}
-        <div style={{ position: "relative", flex: 1 }}>
-          <svg width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: 0.25 }}>
-            {Array.from({ length: 7 }).map((_, i) => (
-              <line key={i} x1="0" x2="100%" y1={(i + 1) * 40} y2={(i + 1) * 40} stroke="#1a2a3a" strokeWidth="1" />
-            ))}
-          </svg>
-        </div>
       </div>
 
       <p style={{ fontSize: 12, color: C.muted }}>

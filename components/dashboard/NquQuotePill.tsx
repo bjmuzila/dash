@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 
 // Same 16 symbols as the sidebar quote list, so the dropdown stays consistent
 // with the rest of the app.
@@ -32,12 +33,12 @@ const UP = "#1FD98A";
 const DOWN = "#EF4444";
 const MUTED = "#5a7a99";
 
-// Dock theme (matches /toolbar-preview Quotes panel)
-const DOCK_CYAN = "#00e5ff";
+// Dock theme — centralized in homeTheme.ts (DOCK_THEME). cyan = #219EBC.
+const DOCK_CYAN = HOME_THEME.cyan;
 const DOCK_PANEL = "rgba(13,17,25,0.92)";
-const DOCK_BORDER = "rgba(255,255,255,0.10)";
-const DOCK_SHADOW = "0 1px 0 rgba(255,255,255,0.06) inset, 0 20px 44px -14px rgba(0,0,0,0.75), 0 6px 16px rgba(0,0,0,0.45)";
-function cyA(a: number) { return `rgba(0,229,255,${a})`; }
+const DOCK_BORDER = HOME_THEME.border;
+const DOCK_SHADOW = DOCK_THEME.shadow;
+function cyA(a: number) { return `rgba(33,158,188,${a})`; }
 
 type Rec = {
   sym: string;

@@ -446,7 +446,19 @@ const SECTION_TAB: Record<string, "frontend" | "backend"> = {
   eodgex:    "backend",
   auth:      "frontend",
   activity:  "frontend",
+  feedback:  "frontend",
 };
+
+interface FeedbackItem {
+  id: number;
+  clerk_user_id: string | null;
+  email: string | null;
+  category: string;
+  message: string;
+  page: string | null;
+  status: string;
+  created_at: string | null;
+}
 
 /**
  * Collapsible section card for the owner dashboard. The whole header is the
@@ -923,7 +935,14 @@ export default function OwnerDashboard() {
   useEffect(() => {
     try {
       const v = localStorage.getItem("owner-open-sections");
-      if (v != null) setOpenSet(new Set(JSON.parse(v) as string[]));
+      if (v != null) {
+        // Restore persisted open/closed choices, but always include any sections
+        // added since the set was last saved (e.g. "feedback") so a new card
+        // isn't hidden by a stale localStorage value.
+        const restored = new Set(JSON.parse(v) as string[]);
+        for (const k of Object.keys(SECTION_TAB)) restored.add(k);
+        setOpenSet(restored);
+      }
     } catch { /* ignore */ }
   }, []);
   const toggleSection = useCallback((id: string) => {
@@ -983,6 +1002,32 @@ export default function OwnerDashboard() {
 
   // Masked Clerk key status (auth provider). Null until first fetch.
   const [clerk, setClerk] = useState<ClerkStatus | null>(null);
+
+  // Customer feedback feed
+  const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
+  const [feedbackOpenCount, setFeedbackOpenCount] = useState(0);
+  const [feedbackShowResolved, setFeedbackShowResolved] = useState(false);
+  const loadFeedback = useCallback(async () => {
+    try {
+      const r = await fetch("/api/feedback", { cache: "no-store" });
+      if (r.ok) {
+        const j = await r.json();
+        setFeedback(Array.isArray(j.items) ? j.items : []);
+        setFeedbackOpenCount(Number(j.openCount ?? 0));
+      }
+    } catch { /* ignore */ }
+  }, []);
+  const resolveFeedback = useCallback(async (id: number, status: "open" | "resolved") => {
+    try {
+      await fetch("/api/feedback", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      await loadFeedback();
+    } catch { /* ignore */ }
+  }, [loadFeedback]);
+  useEffect(() => { loadFeedback(); }, [loadFeedback]);
 
   // Visit log (page loads w/ IP). Collapsed state persisted in localStorage.
   const [visits, setVisits] = useState<PageVisit[]>([]);
@@ -2287,6 +2332,92 @@ export default function OwnerDashboard() {
             )}
           </div>}
         </div>
+        )}
+
+        {/* ── Customer feedback feed ── */}
+        {SECTION_TAB.feedback === ownerTab && (
+        <AccordionCard
+          id="feedback"
+          title="Feedback"
+          subtitle={`${feedbackOpenCount} open · ${feedback.length} total`}
+          open={openSet.has("feedback")}
+          onToggle={toggleSection}
+          accent={HOME_THEME.orange}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                style={{ ...homeSecondaryButtonStyle }}
+                onClick={() => loadFeedback()}
+              >
+                Refresh
+              </button>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#fff", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={feedbackShowResolved}
+                  onChange={(e) => setFeedbackShowResolved(e.target.checked)}
+                />
+                Show resolved
+              </label>
+            </div>
+
+            {(() => {
+              const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
+              if (visible.length === 0) {
+                return <span style={{ fontSize: 12, color: "#fff", opacity: 0.6 }}>No feedback yet.</span>;
+              }
+              const catColor: Record<string, string> = {
+                bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
+              };
+              return visible.map((f) => {
+                const resolved = f.status === "resolved";
+                return (
+                  <div
+                    key={f.id}
+                    style={{
+                      display: "flex", gap: 12, padding: "12px 14px", borderRadius: 10,
+                      border: `1px solid ${HOME_THEME.border}`,
+                      background: resolved ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
+                      opacity: resolved ? 0.55 : 1,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em",
+                          padding: "2px 8px", borderRadius: 20,
+                          color: catColor[f.category] ?? HOME_THEME.cyan,
+                          background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
+                          border: `1px solid ${catColor[f.category] ?? HOME_THEME.cyan}44`,
+                        }}>
+                          {f.category}
+                        </span>
+                        <span style={{ fontSize: 11, color: "#fff", opacity: 0.7 }}>
+                          {f.email || f.clerk_user_id || "unknown"}
+                        </span>
+                        {f.created_at && (
+                          <span style={{ fontSize: 10, color: "#fff", opacity: 0.45 }}>
+                            {new Date(f.created_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#fff", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {f.message}
+                      </div>
+                    </div>
+                    <button
+                      style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap" }}
+                      onClick={() => resolveFeedback(f.id, resolved ? "open" : "resolved")}
+                    >
+                      {resolved ? "Reopen" : "Resolve"}
+                    </button>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </AccordionCard>
         )}
 
         {/* ── Auth / Clerk keys ── */}

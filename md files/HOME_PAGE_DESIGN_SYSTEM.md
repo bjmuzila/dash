@@ -1,5 +1,43 @@
 # Home Page Design System & UI Setup Guide
 
+---
+
+## ⭐ CANONICAL RULE — Every New Page Must Use `PageShell` + `Card`
+
+**Do not hand-build the shell or card styling on a new page.** Theming is centralized so it can never drift. To create a new page that matches the dashboard automatically:
+
+1. Copy `app/_template/page.tsx.txt` → `app/<your-route>/page.tsx` and rename it.
+2. Wrap everything in `<PageShell>` and put each panel in a `<Card>`.
+
+```tsx
+"use client";
+import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
+import { PageShell, Card } from "@/components/shared/PageCard";
+
+export default function MyPage() {
+  return (
+    <PageShell maxWidth={620} align="center">   {/* omit both for a full-width dashboard */}
+      <Card accent="cyan" title="My Page" subtitle="What this page does.">
+        {/* your content; use HOME_THEME colors + homeInputStyle/homeButtonStyle */}
+      </Card>
+      {/* add more <Card>s — they stack with the shell's gap automatically */}
+    </PageShell>
+  );
+}
+```
+
+**What you get for free:** dark themed shell, background glow, the top accent strip, the top-down radial glow, and the dashboard-wide hover lift — identical to the home/confidence cards.
+
+**Accents:** `cyan` | `purple` | `orange` | `green` | `red` (or pass a hex).
+
+**Single source of truth:** the look lives in `components/shared/PageCard.tsx` (which builds on `homeShellStyle` / `homeContentStyle` / `homeGlossPanelStyle` in `components/shared/homeTheme.ts`). Change it there once and every page follows. Never re-create shell/card styling inline.
+
+**Reference example:** `app/feedback/page.tsx` is built entirely on `PageShell` + `Card`.
+
+The sections below document the underlying tokens (colors, gradients, etc.) that these components are built from — read them when you need to style *inside* a card, not to rebuild the card itself.
+
+---
+
 ## Core Design Principles
 
 The home page (/app/home/page.tsx) uses a **dark theme with frosted-glass panels, cyan/purple accents, and live data visualizations**. This document details every aspect needed to replicate this design for new pages.

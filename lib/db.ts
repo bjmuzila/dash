@@ -297,6 +297,23 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);
 
+    -- Customer feedback / notes. Any signed-in user can submit; the owner reads
+    -- the feed on /dev/owner. category is one of 'bug'|'idea'|'note'|'other'.
+    -- status is 'open' (new) or 'resolved' (owner cleared it).
+    CREATE TABLE IF NOT EXISTS customer_feedback (
+      id          SERIAL PRIMARY KEY,
+      clerk_user_id TEXT,
+      email       TEXT,
+      category    TEXT NOT NULL DEFAULT 'note',
+      message     TEXT NOT NULL,
+      page        TEXT,
+      status      TEXT NOT NULL DEFAULT 'open',
+      created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_created ON customer_feedback(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_feedback_status ON customer_feedback(status);
+
     -- Per-ticker weekly Estimated Move tracking. One row per (ticker, week).
     -- week_label is the human label that matches the EstimatedMoves columns
     -- (e.g. "10/3"); week_start is the Monday ISO date for ordering. em is the
@@ -906,6 +923,61 @@ export async function listWaitlist(limit = 1000): Promise<WaitlistRecord[]> {
 export async function countWaitlist(): Promise<number> {
   const row = await queryOne<{ n: number }>("SELECT COUNT(*)::int AS n FROM waitlist", []);
   return Number(row?.n ?? 0);
+}
+
+// ── Customer feedback ──────────────────────────────────────────────────────
+
+export interface FeedbackRecord {
+  id: number;
+  clerk_user_id: string | null;
+  email: string | null;
+  category: string;
+  message: string;
+  page: string | null;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+const FEEDBACK_CATEGORIES = ["bug", "idea", "note", "other"] as const;
+
+export async function addFeedback(input: {
+  clerk_user_id?: string | null;
+  email?: string | null;
+  category?: string | null;
+  message: string;
+  page?: string | null;
+}): Promise<FeedbackRecord | undefined> {
+  const category = FEEDBACK_CATEGORIES.includes((input.category ?? "") as never)
+    ? String(input.category)
+    : "note";
+  return queryOne<FeedbackRecord>(
+    `INSERT INTO customer_feedback (clerk_user_id, email, category, message, page)
+     VALUES (?, ?, ?, ?, ?)
+     RETURNING *`,
+    [input.clerk_user_id ?? null, input.email ?? null, category, input.message.trim(), input.page ?? null]
+  );
+}
+
+export async function listFeedback(opts: { status?: string; limit?: number } = {}): Promise<FeedbackRecord[]> {
+  const limit = opts.limit ?? 500;
+  if (opts.status === "open" || opts.status === "resolved") {
+    return queryAll<FeedbackRecord>(
+      "SELECT * FROM customer_feedback WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+      [opts.status, limit]
+    );
+  }
+  return queryAll<FeedbackRecord>(
+    "SELECT * FROM customer_feedback ORDER BY created_at DESC LIMIT ?",
+    [limit]
+  );
+}
+
+export async function setFeedbackStatus(id: number, status: "open" | "resolved"): Promise<void> {
+  await pgQuery(
+    `UPDATE customer_feedback SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+    [status, id]
+  );
 }
 
 /** No-op: pg writes are immediate, no file persistence needed */

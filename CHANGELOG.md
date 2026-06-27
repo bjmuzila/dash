@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-27 — Nav restructure (GEX trim, Backend, Owner order)
+
+Restructured `NAV_GROUPS` in both `components/shared/NavMenu.tsx` (active) and `components/NavMenu.tsx`: trimmed GEX to Home, Traders Dashboard, Options Chain, Estimated Moves (renamed from "Estimated Moves Front End"), Analytics, ES Candles, ICT, Journal; moved Multi Greek, Greeks, Confidence, Fails, Premarket, Economic Calendar into the `devOnly` Backend group; kept Owner as its own `devOnly` group and ordered groups GEX → Backend → Owner.
+
+## 2026-06-27 — Customer-facing "What's New" changelog (/whats-new)
+
+Added a public daily changelog: new `CUSTOMER_CHANGELOG.md` (root, compiles per day under `## Weekday M/D/YYYY` headings, plain-language bullets) read by new `app/whats-new/page.tsx` (parses `##` date headings + `*`/`-` bullets into styled dated cards, force-dynamic). Wired into `components/shared/NavMenu.tsx` as a centered uppercase bordered-pill link (matching the Disclaimer & Legal button) directly above the legal footer, visible to all users, with a `✦` route glyph; `/close` skill updated to also append simplified per-day customer entries.
+
+## 2026-06-27 — EM Tracker partial-candle scoring fix + levels-publish guards
+
+Fixed `server-v2/levels-engine.js` `fetchWeeklyClose()` to score against the finalized Monday-anchored weekly candle (refuses intraweek forming bars / pre-Friday-close), then re-scored week 2026-06-22 (cleared 383 rows → `/api/em-tracker/evaluate`, MSFT now hit; 222/161). Also hardened `server-v2/levels-auto-publish.js` (auto-retry unpriced tickers + stuck-flag watchdog) and `server-v2/server-with-proxy.js` + `components/dashboard/LevelsPublish.tsx` + `app/dev/owner/page.tsx` (server-side `confirm:"PUBLISH"` token gate on `/proxy/levels-publish`); audit/runbook in `em-tracker-misscored-2026-06-22.md` + `RUNBOOK-rescore-week-0622.md`.
+
+
 ## 2026-06-27 — Dashboard-wide dock toolbar rollout + Inter global font
 
 Created `components/shared/DockToolbar.tsx` (Dock, SegGroup, ToggleTile, DockButton, DockSlider, DockExpiryPicker, DockCalendar — glossy flat full-width bar w/ cyan gradient top-line, portal'd pickers) and converted every chart/filter toolbar to it: `GexToolbar.tsx`, `app/es-candles`, `app/greeks`, `app/mult-greek`, `EstimatedMoves.tsx`, `app/fails`, `app/confidence-score`, `app/social-media`, plus the global `GlobalToolbar.tsx` (top accent line + ET clock moved top-right). Also fixed Inter never actually loading (now via `next/font` in `app/layout.tsx` + `tailwind.config.ts` `font-sans` + ~30 hardcoded stacks routed through `var(--font-inter)`), removed the GEX snapshot button/header, and fixed the dropdown-under-chart z-index bug via portals.

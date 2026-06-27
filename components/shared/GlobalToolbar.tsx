@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { UserButton, useUser } from "@clerk/nextjs";
-import { HOME_THEME } from "./homeTheme";
+import { HOME_THEME, DOCK_THEME, homeToolbarAccentBar } from "./homeTheme";
 import { useNotes } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
 import { useMobileNav } from "./MobileNavContext";
@@ -71,6 +72,104 @@ function EtClock() {
   );
 }
 
+// ── CB Edge logo → small dropdown (Feedback, etc.) ──
+// Matches the frosted-dock visual language used by NavMenu.
+const LOGO_MENU_ITEMS: { label: string; href: string; emoji: string }[] = [
+  { label: "Send Feedback", href: "/feedback", emoji: "✉️" },
+];
+
+function LogoMenu() {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside-click and Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="CB Edge"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: 0,
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+          borderRadius: 8,
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/cb-edge-logo.png"
+          alt="CB Edge"
+          style={{ height: 40, width: "auto", display: "block" }}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 8px)",
+            left: 0,
+            minWidth: 200,
+            padding: 6,
+            borderRadius: 12,
+            border: `1px solid ${HOME_THEME.border}`,
+            borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
+            background: DOCK_THEME.bg,
+            boxShadow: DOCK_THEME.shadow,
+            backdropFilter: "blur(16px)",
+            zIndex: 60,
+          }}
+        >
+          {LOGO_MENU_ITEMS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={() => setOpen(false)}
+              role="menuitem"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "9px 12px",
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                color: HOME_THEME.text,
+                textDecoration: "none",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 15, lineHeight: 1 }} aria-hidden>{item.emoji}</span>
+              {item.label}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function GlobalToolbar() {
   const { isSignedIn, user } = useUser();
   const { notes } = useNotes(user?.id);
@@ -112,19 +211,7 @@ export default function GlobalToolbar() {
       }}
     >
       {/* ── Dock-style gradient top accent: bright cyan center → dark edges ── */}
-      <span
-        aria-hidden
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 2,
-          pointerEvents: "none",
-          background: "linear-gradient(90deg, transparent 0%, rgba(33,158,188,0.12) 15%, rgba(33,158,188,0.9) 50%, rgba(33,158,188,0.12) 85%, transparent 100%)",
-          boxShadow: "0 0 8px rgba(33,158,188,0.35)",
-        }}
-      />
+      <span aria-hidden style={homeToolbarAccentBar} />
 
       {/* ── Hamburger — opens the navigation dropdown (NavMenu) ── */}
       <button
@@ -156,13 +243,8 @@ export default function GlobalToolbar() {
       </button>
       <NavMenu anchor={anchor} />
 
-      {/* ── CB Edge logo ── */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/cb-edge-logo.png"
-        alt="CB Edge"
-        style={{ height: 40, width: "auto", display: "block", flexShrink: 0 }}
-      />
+      {/* ── CB Edge logo → dropdown (Feedback, etc.) ── */}
+      <LogoMenu />
 
       {/* ── Clerk user button ── */}
       {isSignedIn && (

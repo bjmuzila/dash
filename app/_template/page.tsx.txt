@@ -1,0 +1,40 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW PAGE TEMPLATE  —  copy this to app/<your-route>/page.tsx and rename it.
+//
+// Using <PageShell> + <Card> guarantees the page matches the dashboard theme
+// (dark shell, background glow, top accent strip on cards, hover lift) without
+// hand-wiring any styles. Do NOT re-create the shell/card styling inline — if it
+// needs to change, it changes once in components/shared/PageCard.tsx.
+//
+// Quick rules:
+//   • Wrap everything in <PageShell>. Use maxWidth={620} + align="center" for a
+//     single narrow card (forms); omit both for a full-width dashboard.
+//   • Every panel is a <Card>. Pick an accent: "cyan" | "purple" | "orange" |
+//     "green" | "red" (or pass a hex).
+//   • Pull values you need from HOME_THEME (colors) instead of hardcoding.
+// ─────────────────────────────────────────────────────────────────────────────
+
+"use client";
+
+import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
+import { PageShell, Card } from "@/components/shared/PageCard";
+
+export default function TemplatePage() {
+  return (
+    <PageShell maxWidth={620} align="center">
+      <Card accent="cyan" title="My Page" subtitle="Short description of what this page does.">
+        <p style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.6 }}>
+          Replace this with your content. Inputs and buttons should reuse the
+          shared styles so they match the rest of the app:
+        </p>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <input style={{ ...homeInputStyle, flex: 1 }} placeholder="An input…" />
+          <button style={{ ...homeButtonStyle, padding: "8px 16px" }}>Action</button>
+        </div>
+      </Card>
+
+      {/* Add more <Card>s here. They stack with the shell's gap automatically. */}
+    </PageShell>
+  );
+}

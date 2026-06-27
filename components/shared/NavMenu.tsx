@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useUser } from "@clerk/nextjs";
 
-import { HOME_THEME } from "./homeTheme";
+import { HOME_THEME, DOCK_THEME } from "./homeTheme";
 import { useMobileNav } from "./MobileNavContext";
 
 // ─── icons (20px, stroke = currentColor) ─────────────────────────────────────
@@ -30,11 +30,11 @@ const CloseIcon = ({ size = 12 }: IconProps) => (
 );
 const ShieldIcon = (p: IconProps) => <Svg {...p}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V5z" /></Svg>;
 
-// glossy frosted dock language (ported from toolbar-preview)
-const CYAN_TOP = "rgba(33,158,188,0.5)";
-const DOCK_BG = "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), rgba(10,13,20,0.98)";
-const DOCK_SHADOW = "0 1px 0 rgba(255,255,255,0.06) inset, 0 20px 44px -14px rgba(0,0,0,0.75), 0 6px 16px rgba(0,0,0,0.45)";
-const ACTIVE_TILE = "linear-gradient(180deg,rgba(33,158,188,.16),rgba(33,158,188,.04))";
+// glossy frosted dock language — centralized in homeTheme.ts (DOCK_THEME)
+const CYAN_TOP = DOCK_THEME.cyanTop;
+const DOCK_BG = DOCK_THEME.bg;
+const DOCK_SHADOW = DOCK_THEME.shadow;
+const ACTIVE_TILE = DOCK_THEME.activeTile;
 
 const LEGAL_LINKS: { label: string; href: string }[] = [
   { label: "Disclaimer", href: "/disclaimer" },
@@ -56,18 +56,33 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Home", href: "/home" },
       { label: "Traders Dashboard", href: "/traders-dashboard" },
-      { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" },
-      { label: "Greeks", href: "/greeks" },
-      { label: "Confidence", href: "/confidence-score" },
-      { label: "Estimated Moves Front End", href: "/em" },
+      { label: "Estimated Moves", href: "/em" },
       { label: "Analytics", href: "/analytics" },
       { label: "ES Candles", href: "/es-candles" },
       { label: "ICT", href: "/ict" },
+      { label: "Journal", href: "/trading" },
+      { label: "Feedback", href: "/feedback" },
+    ],
+  },
+  {
+    id: "backend",
+    label: "Backend",
+    Icon: WrenchIcon,
+    devOnly: true,
+    items: [
+      { label: "Multi Greek", href: "/mult-greek" },
+      { label: "Greeks", href: "/greeks" },
+      { label: "Confidence", href: "/confidence-score" },
       { label: "Fails", href: "/fails" },
       { label: "Premarket", href: "/premarket" },
       { label: "Economic Calendar", href: "/economic-calendar" },
-      { label: "Journal", href: "/trading" },
+      { label: "Database", href: "/database" },
+      { label: "Dev", href: "/dev" },
+      { label: "Estimated Moves BE", href: "/estimated-move" },
+      { label: "Budget", href: "/budget" },
+      { label: "To-Do", href: "/personal/todo" },
+      { label: "Logs", href: "/logs" },
     ],
   },
   {
@@ -82,20 +97,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Tree", href: "/dev/tree" },
       { label: "Social Media", href: "/social-media" },
       { label: "Changelog", href: "/changelog" },
-    ],
-  },
-  {
-    id: "backend",
-    label: "Backend",
-    Icon: WrenchIcon,
-    devOnly: true,
-    items: [
-      { label: "Database", href: "/database" },
-      { label: "Dev", href: "/dev" },
-      { label: "Estimated Moves BE", href: "/estimated-move" },
-      { label: "Budget", href: "/budget" },
-      { label: "To-Do", href: "/personal/todo" },
-      { label: "Logs", href: "/logs" },
     ],
   },
 ];
@@ -120,6 +121,7 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/database": "⛁",
   "/pricing": "$",
   "/changelog": "↻",
+  "/whats-new": "✦",
   "/budget": "⚖",
   "/dev": "⚙",
   "/personal": "☺",
@@ -138,6 +140,7 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/dev/tree": "⌥",
   "/estimated-move": "⇄",
   "/logs": "❏",
+  "/feedback": "✉",
 };
 const routeSymbol = (href: string) => ROUTE_SYMBOL[href] ?? "•";
 
@@ -603,6 +606,36 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
           </div>
         );
       })}
+
+      {/* What's New (customer-facing changelog) — visible to everyone */}
+      <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
+      <div style={{ padding: "2px 2px 2px" }}>
+        <Link
+          href="/whats-new"
+          onClick={closeMenu}
+          style={{
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            padding: "10px 12px",
+            borderRadius: 10,
+            cursor: "pointer",
+            textDecoration: "none",
+            color: isActive("/whats-new") ? HOME_THEME.cyan : HOME_THEME.muted,
+            background: isActive("/whats-new") ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.03)",
+            border: `1px solid ${isActive("/whats-new") ? "rgba(33,158,188,0.28)" : HOME_THEME.border}`,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>✦</span>
+          <span>What&apos;s New</span>
+        </Link>
+      </div>
 
       {/* footer: legal only (socials + Clerk avatar removed) */}
       <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
