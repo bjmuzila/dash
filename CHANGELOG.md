@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-27 — Dashboard-wide dock toolbar rollout + Inter global font
+
+Created `components/shared/DockToolbar.tsx` (Dock, SegGroup, ToggleTile, DockButton, DockSlider, DockExpiryPicker, DockCalendar — glossy flat full-width bar w/ cyan gradient top-line, portal'd pickers) and converted every chart/filter toolbar to it: `GexToolbar.tsx`, `app/es-candles`, `app/greeks`, `app/mult-greek`, `EstimatedMoves.tsx`, `app/fails`, `app/confidence-score`, `app/social-media`, plus the global `GlobalToolbar.tsx` (top accent line + ET clock moved top-right). Also fixed Inter never actually loading (now via `next/font` in `app/layout.tsx` + `tailwind.config.ts` `font-sans` + ~30 hardcoded stacks routed through `var(--font-inter)`), removed the GEX snapshot button/header, and fixed the dropdown-under-chart z-index bug via portals.
+
+
 ## 2026-06-26 — toolbar-preview quotes/dropdown examples + per-user add-ticker
 
 `app/toolbar-preview/page.tsx`: added three dock-themed standalone previews (Quotes panel w/ sparklines + sort toggle, DTE/Expiry "Day Date" dropdown, month-grid Calendar) laid out in a 3-column row. `app/api/quotes-batch/route.ts`: sparkline now falls back to the prior session's curve when the market is closed. `components/dashboard/NquQuotePill.tsx`: restyled the live toolbar Quotes dropdown to the dock theme and added per-user add/remove ticker, backed by new `app/api/quote-symbols/route.ts` + `quote_symbol_prefs` table and `getQuoteSymbols`/`upsertQuoteSymbols` in `lib/db.ts`.

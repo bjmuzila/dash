@@ -17,6 +17,13 @@ const isPublicRoute = createRouteMatcher([
   "/risk-disclosure",
   "/privacy",
   "/disclaimer",
+  // Metadata routes must be public so link-preview scrapers (Discord, X,
+  // Slack, iMessage) and favicon requests aren't redirected to sign-in.
+  "/opengraph-image(.*)",
+  "/twitter-image(.*)",
+  "/icon(.*)",
+  "/apple-icon(.*)",
+  "/favicon.ico",
 ]);
 
 // Owner Clerk user ID that bypasses maintenance mode. Set OWNER_USER_ID in env.

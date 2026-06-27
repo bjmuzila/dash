@@ -14,13 +14,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: "CB Edge Dashboard",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
-    images: ["/og.png"], // ADD: place a 1200x630 image at /public/og.png
+    // image auto-injected from app/opengraph-image.tsx
   },
   twitter: {
     card: "summary_large_image",
     title: "CB Edge Dashboard",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
-    images: ["/og.png"],
+    // image auto-injected from app/opengraph-image.tsx
   },
 };
 
