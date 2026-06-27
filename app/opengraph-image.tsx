@@ -10,7 +10,7 @@ export const contentType = "image/png";
 
 // Real-dashboard GEX histogram rendered as a single inline SVG (Satori-supported).
 const chartSvg = `
-<svg width="516" height="398" viewBox="0 0 516 398" xmlns="http://www.w3.org/2000/svg">
+<svg width="512" height="300" viewBox="0 0 512 300" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="posBar" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#4FC3F7"/><stop offset="1" stop-color="#1976A8"/>
@@ -19,11 +19,8 @@ const chartSvg = `
       <stop offset="0" stop-color="#E0A82E"/><stop offset="1" stop-color="#B8860B"/>
     </linearGradient>
   </defs>
-  <rect x="1" y="1" width="514" height="396" rx="16" fill="#0a0d13" stroke="#29B6F6" stroke-opacity="0.45" stroke-width="2"/>
-  <path d="M1 16 a16 16 0 0 1 16 -16 h482 a16 16 0 0 1 16 16 v24 h-514 z" fill="#0d1119"/>
-  <rect x="2" y="40" width="512" height="2" fill="#29B6F6" fill-opacity="0.35"/>
-  <circle cx="22" cy="20" r="6" fill="#ff5b6e"/><circle cx="42" cy="20" r="6" fill="#f0a83c"/><circle cx="62" cy="20" r="6" fill="#22e3a0"/>
-  <g transform="translate(0,40)">
+  <rect x="0" y="0" width="512" height="300" fill="#0a0d13"/>
+  <g transform="translate(0,30)">
     <line x1="14" y1="118" x2="502" y2="118" stroke="#ffffff" stroke-opacity="0.10"/>
     <line x1="238" y1="6" x2="238" y2="230" stroke="#9aa0a6" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>
     <text x="238" y="2" text-anchor="middle" fill="#9aa0a6" font-family="Inter" font-size="9">SPX 7,354</text>
@@ -184,54 +181,79 @@ export default function OpengraphImage() {
               justifyContent: "center",
             }}
           >
-            {/* glow wrapper + chart with real-DOM toolbar pills on top */}
+            {/* chart panel: titlebar dots + real-DOM toolbar pills + chart img */}
             <div
               style={{
                 display: "flex",
                 flexDirection: "column",
                 width: 516,
-                position: "relative",
+                background: "#0d1119",
+                borderRadius: "16px 16px 0 0",
+                border: "2px solid rgba(41,182,246,0.45)",
+                borderBottom: "none",
+                overflow: "hidden",
               }}
             >
-              {/* toolbar pill row (real DOM = text renders) */}
-              <div
-                style={{
-                  display: "flex",
-                  position: "absolute",
-                  top: 50,
-                  left: 16,
-                  gap: 8,
-                }}
-              >
+              {/* titlebar */}
+              <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", gap: 8 }}>
+                <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#ff5b6e" }} />
+                <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#f0a83c" }} />
+                <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#22e3a0" }} />
+              </div>
+
+              {/* toolbar pill row — matches the real GexToolbar */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 14px 12px" }}>
                 {[
+                  { t: "Mon 6/29", on: true },
+                  { t: "Tue 6/30", on: false },
+                  { gap: true },
                   { t: "Net GEX", on: true },
-                  { t: "Call-Put", on: false },
+                  { t: "Call−Put", on: false },
+                  { gap: true },
                   { t: "OI+Vol", on: true },
-                  { t: "Flip", on: false },
-                  { t: "5m", on: false },
-                ].map((p) => (
-                  <div
-                    key={p.t}
-                    style={{
-                      display: "flex",
-                      padding: "5px 11px",
-                      borderRadius: 7,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      background: p.on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.04)",
-                      border: p.on
-                        ? "1px solid rgba(41,182,246,0.55)"
-                        : "1px solid rgba(255,255,255,0.10)",
-                      color: p.on ? "#4FC3F7" : "#8b94a7",
-                    }}
-                  >
-                    {p.t}
-                  </div>
-                ))}
+                  { t: "Vol Only", on: false },
+                  { gap: true },
+                  { t: "OI", dot: true },
+                  { t: "DEX", dot: true },
+                  { t: "Flip", dot: true },
+                  { gap: true },
+                  { t: "5m", dot: true },
+                  { t: "15m", dot: true },
+                  { t: "30m", dot: true },
+                  { gap: true },
+                  { t: "↻ Now", now: true },
+                ].map((p, i) =>
+                  p.gap ? (
+                    <div key={i} style={{ display: "flex", width: 1, height: 20, background: "rgba(255,255,255,0.10)", margin: "0 3px" }} />
+                  ) : (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        padding: "5px 9px",
+                        borderRadius: 7,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: p.on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.03)",
+                        border: p.on
+                          ? "1px solid rgba(41,182,246,0.55)"
+                          : "1px solid rgba(255,255,255,0.08)",
+                        color: p.on || p.now ? "#4FC3F7" : "#c2c8d2",
+                      }}
+                    >
+                      {p.dot && (
+                        <div style={{ display: "flex", width: 6, height: 6, borderRadius: 4, background: "#5a6270" }} />
+                      )}
+                      {p.t}
+                    </div>
+                  )
+                )}
               </div>
 
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={chartDataUri} width={516} height={344} alt="" />
+              <img src={chartDataUri} width={512} height={300} alt="" />
             </div>
 
             {/* stat bar — real DOM text so the built-in font renders it */}
