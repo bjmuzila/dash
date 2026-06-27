@@ -80,23 +80,7 @@ const logoSvg = `
 </svg>`;
 const logoDataUri = `data:image/svg+xml;base64,${Buffer.from(logoSvg).toString("base64")}`;
 
-// Satori needs real font bytes — fetch Inter weights once (Next caches the fetch).
-async function loadInter(weight: 400 | 700 | 800): Promise<ArrayBuffer> {
-  const css = await fetch(
-    `https://fonts.googleapis.com/css2?family=Inter:wght@${weight}`,
-    { headers: { "User-Agent": "Mozilla/5.0" } }
-  ).then((r) => r.text());
-  const url = css.match(/src: url\((https:[^)]+\.(?:woff2?|ttf))\)/)?.[1];
-  if (!url) throw new Error("Inter font URL not found");
-  return fetch(url).then((r) => r.arrayBuffer());
-}
-
-export default async function OpengraphImage() {
-  const [regular, bold, extrabold] = await Promise.all([
-    loadInter(400),
-    loadInter(700),
-    loadInter(800),
-  ]);
+export default function OpengraphImage() {
 
   return new ImageResponse(
     (
@@ -110,7 +94,7 @@ export default async function OpengraphImage() {
           backgroundColor: "#05060A",
           backgroundImage:
             "radial-gradient(circle at 76% 40%, rgba(41,182,246,0.15), transparent 55%)",
-          fontFamily: "Inter, sans-serif",
+          fontFamily: "sans-serif",
         }}
       >
         <div
@@ -192,13 +176,6 @@ export default async function OpengraphImage() {
         </div>
       </div>
     ),
-    {
-      ...size,
-      fonts: [
-        { name: "Inter", data: regular, weight: 400, style: "normal" },
-        { name: "Inter", data: bold, weight: 700, style: "normal" },
-        { name: "Inter", data: extrabold, weight: 800, style: "normal" },
-      ],
-    }
+    { ...size }
   );
 }
