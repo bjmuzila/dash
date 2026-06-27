@@ -19,17 +19,11 @@ const chartSvg = `
       <stop offset="0" stop-color="#E0A82E"/><stop offset="1" stop-color="#B8860B"/>
     </linearGradient>
   </defs>
-  <rect x="0" y="0" width="516" height="398" rx="16" fill="#0a0d13" stroke="#ffffff" stroke-opacity="0.10"/>
-  <path d="M0 16 a16 16 0 0 1 16 -16 h484 a16 16 0 0 1 16 16 v24 h-516 z" fill="#0d1119"/>
+  <rect x="1" y="1" width="514" height="396" rx="16" fill="#0a0d13" stroke="#29B6F6" stroke-opacity="0.45" stroke-width="2"/>
+  <path d="M1 16 a16 16 0 0 1 16 -16 h482 a16 16 0 0 1 16 16 v24 h-514 z" fill="#0d1119"/>
+  <rect x="2" y="40" width="512" height="2" fill="#29B6F6" fill-opacity="0.35"/>
   <circle cx="22" cy="20" r="6" fill="#ff5b6e"/><circle cx="42" cy="20" r="6" fill="#f0a83c"/><circle cx="62" cy="20" r="6" fill="#22e3a0"/>
-  <g font-family="Inter" font-size="11" font-weight="700">
-    <rect x="16" y="50" width="64" height="22" rx="7" fill="#13202b" stroke="#29B6F6" stroke-opacity="0.5"/><text x="48" y="65" text-anchor="middle" fill="#4FC3F7">Net GEX</text>
-    <rect x="88" y="50" width="60" height="22" rx="7" fill="#11161f" stroke="#ffffff" stroke-opacity="0.08"/><text x="118" y="65" text-anchor="middle" fill="#8b94a7">Call-Put</text>
-    <rect x="156" y="50" width="56" height="22" rx="7" fill="#13202b" stroke="#29B6F6" stroke-opacity="0.5"/><text x="184" y="65" text-anchor="middle" fill="#4FC3F7">OI+Vol</text>
-    <rect x="220" y="50" width="40" height="22" rx="7" fill="#11161f" stroke="#ffffff" stroke-opacity="0.08"/><text x="240" y="65" text-anchor="middle" fill="#8b94a7">Flip</text>
-    <rect x="268" y="50" width="34" height="22" rx="7" fill="#11161f" stroke="#ffffff" stroke-opacity="0.08"/><text x="285" y="65" text-anchor="middle" fill="#8b94a7">5m</text>
-  </g>
-  <g transform="translate(0,84)">
+  <g transform="translate(0,40)">
     <line x1="14" y1="118" x2="502" y2="118" stroke="#ffffff" stroke-opacity="0.10"/>
     <line x1="238" y1="6" x2="238" y2="230" stroke="#9aa0a6" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>
     <text x="238" y="2" text-anchor="middle" fill="#9aa0a6" font-family="Inter" font-size="9">SPX 7,354</text>
@@ -190,8 +184,55 @@ export default function OpengraphImage() {
               justifyContent: "center",
             }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={chartDataUri} width={516} height={344} alt="" />
+            {/* glow wrapper + chart with real-DOM toolbar pills on top */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                width: 516,
+                position: "relative",
+              }}
+            >
+              {/* toolbar pill row (real DOM = text renders) */}
+              <div
+                style={{
+                  display: "flex",
+                  position: "absolute",
+                  top: 50,
+                  left: 16,
+                  gap: 8,
+                }}
+              >
+                {[
+                  { t: "Net GEX", on: true },
+                  { t: "Call-Put", on: false },
+                  { t: "OI+Vol", on: true },
+                  { t: "Flip", on: false },
+                  { t: "5m", on: false },
+                ].map((p) => (
+                  <div
+                    key={p.t}
+                    style={{
+                      display: "flex",
+                      padding: "5px 11px",
+                      borderRadius: 7,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      background: p.on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.04)",
+                      border: p.on
+                        ? "1px solid rgba(41,182,246,0.55)"
+                        : "1px solid rgba(255,255,255,0.10)",
+                      color: p.on ? "#4FC3F7" : "#8b94a7",
+                    }}
+                  >
+                    {p.t}
+                  </div>
+                ))}
+              </div>
+
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={chartDataUri} width={516} height={344} alt="" />
+            </div>
 
             {/* stat bar — real DOM text so the built-in font renders it */}
             <div
@@ -202,7 +243,7 @@ export default function OpengraphImage() {
                 padding: "12px 18px",
                 background: "#0d1119",
                 borderRadius: "0 0 16px 16px",
-                border: "1px solid rgba(255,255,255,0.10)",
+                border: "2px solid rgba(41,182,246,0.45)",
                 borderTop: "none",
               }}
             >
