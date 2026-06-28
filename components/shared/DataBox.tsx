@@ -13,97 +13,65 @@ function useIsOwner(): boolean {
   return ownerId ? user?.id === ownerId : !!isSignedIn;
 }
 
-// ── cb-edge watermark + link, baked into the canvas pixels ────────────────────
-let _logoPromise: Promise<HTMLImageElement | null> | null = null;
-function loadLogo(): Promise<HTMLImageElement | null> {
-  if (_logoPromise) return _logoPromise;
-  _logoPromise = new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = "/cb-edge-logo.png";
-  });
-  return _logoPromise;
-}
-
-// Draw a "(TICKER) GEX • Day M/D" title baked into the top-left.
-function drawTitle(canvas: HTMLCanvasElement, title: string): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx || !title) return;
-  const W = canvas.width;
-  const pad = Math.round(W * 0.018);
-  const fontPx = Math.max(14, Math.round(W * 0.022));
-  ctx.save();
-  ctx.textBaseline = "top";
-  ctx.textAlign = "left";
-  ctx.font = `bold ${fontPx}px Arial, sans-serif`;
-  ctx.lineWidth = Math.max(2, Math.round(fontPx * 0.12));
-  ctx.strokeStyle = "rgba(0,0,0,0.85)";
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeText(title, pad, pad);
-  ctx.fillText(title, pad, pad);
-  ctx.restore();
-}
-
-async function drawWatermark(canvas: HTMLCanvasElement): Promise<void> {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const W = canvas.width;
-  const H = canvas.height;
-
-  // Bottom-right: logo, tight to the corner
-  const logo = await loadLogo();
-  if (logo) {
-    const lh = Math.round(H * 0.10);
-    const lw = Math.round(lh * (logo.width / logo.height));
-    const edge = Math.round(W * 0.006);
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.drawImage(logo, W - edge - lw, H - edge - lh, lw, lh);
-    ctx.restore();
-  }
-}
-
-// ── html2canvas lazy loader ───────────────────────────────────────────────────
-// html2canvas re-paints the DOM but cannot read pixels out of existing <canvas>
-// elements (lightweight-charts, GEX heatmap overlay). We capture the DOM, then
-// composite every live canvas back on top at its real on-screen position, then
-// bake the cb-edge watermark.
+// ── Screenshot capture ────────────────────────────────────────────────────────
+// Captures `el` to a PNG via html2canvas, with a baked-in title band + watermark.
+// Hard-won gotchas (see memory "html2canvas screenshot gotchas"):
+//  • Text/images drawn onto the RETURNED canvas no-op in this browser — they MUST
+//    be injected as real DOM in onclone so html2canvas renders them natively.
+//  • Never set the clone height to "auto" on a flex/percentage-height table — it
+//    collapses to 0 and crashes html2canvas ("createPattern ... height of 0").
+//    Measure the table's scrollHeight and set an explicit px height instead.
+//  • onclone strips external <link>/<style> so html2canvas never refetches a
+//    (sometimes 404'ing) stylesheet that can abort the render.
 async function captureElement(el: HTMLElement, title?: string): Promise<string> {
   const { default: html2canvas } = await import("html2canvas");
-  // GexChart is a single same-origin <canvas>; html2canvas renders it directly.
-  // (Manual compositing was drawing a second, mis-scaled copy — the ghost bar.)
-  // onclone strips external <link>/<style> so html2canvas never tries to refetch
-  // a (sometimes 404'ing) stylesheet — that fetch was aborting the render before
-  // our title/watermark post-draws ran. The chart is inline-styled, so nothing
-  // visual is lost.
   const titleText = title && title.trim() ? title : "SPX GEX";
+  // Measure the true content height of the scrollable body so the capture wraps
+  // the data tightly (no empty space) without collapsing rows to zero.
+  const inner = el.querySelector("table") as HTMLElement | null;
+  const contentH = inner ? inner.scrollHeight : el.scrollHeight;
+  const captureH = contentH + 48; // + title band
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
     allowTaint: true,
     scale: window.devicePixelRatio || 1,
+    height: captureH,
+    windowHeight: captureH,
     logging: false,
     onclone: (doc, clone) => {
       doc.querySelectorAll('link[rel="stylesheet"], style').forEach((n) => n.remove());
       // Inject overlay text as real DOM so html2canvas renders it natively
       // (drawing text onto the returned canvas no-ops in this browser).
       clone.style.position = "relative";
+      // Expand to full content so all rows render (no scroll clipping), and
+      // reserve space at the top for the title band so nothing hides behind it.
+      // Expand to the measured content height (explicit px — never auto/0) and
+      // reserve room for the title band so no rows hide behind it.
+      clone.style.height = `${captureH}px`;
+      clone.style.maxHeight = "none";
+      clone.style.overflow = "visible";
+      clone.style.paddingTop = "44px";
+      const tbl = clone.querySelector("table") as HTMLElement | null;
+      if (tbl) tbl.style.height = `${contentH}px`;
       const inter = "var(--font-inter), Inter, Arial, sans-serif";
-      const mk = (text: string, top: number, sizePx: number, color: string) => {
-        const d = doc.createElement("div");
-        d.textContent = text;
-        d.style.cssText = [
-          "position:absolute", `top:${top}px`, "left:12px",
-          `font:700 ${sizePx}px ${inter}`, `color:${color}`,
-          "text-shadow:0 1px 3px rgba(0,0,0,0.9)", "z-index:9999",
-          "pointer-events:none", "white-space:nowrap",
-        ].join(";");
-        clone.appendChild(d);
-      };
-      mk(titleText, 8, 15, "#ffffff");
-      mk("Data provided by CBEdge.net", 28, 11, "rgba(255,255,255,0.7)");
+      // Solid title band across the top so it never collides with table headers
+      // or chart legends behind it.
+      const band = doc.createElement("div");
+      band.style.cssText = [
+        "position:absolute", "top:0", "left:0", "right:0",
+        "padding:8px 12px 8px", "background:#05080d",
+        "z-index:9999", "pointer-events:none",
+      ].join(";");
+      const t1 = doc.createElement("div");
+      t1.textContent = titleText;
+      t1.style.cssText = `font:700 15px ${inter};color:#ffffff;white-space:nowrap;`;
+      const t2 = doc.createElement("div");
+      t2.textContent = "Data provided by CBEdge.net";
+      t2.style.cssText = `font:700 11px ${inter};color:rgba(255,255,255,0.7);white-space:nowrap;margin-top:3px;`;
+      band.appendChild(t1);
+      band.appendChild(t2);
+      clone.appendChild(band);
     },
   });
 
@@ -182,7 +150,7 @@ export function BoxSnapBtn({ targetRef, title }: { targetRef: RefObject<HTMLElem
       const blob = new Blob([bytes], { type: "image/png" });
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       set("ok");
-    } catch { set("err"); }
+    } catch (e) { console.error("[snap] capture failed:", e); set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
   }, [s, targetRef, title]);
 

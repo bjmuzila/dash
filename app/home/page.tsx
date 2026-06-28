@@ -390,6 +390,7 @@ export default function HomePage() {
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const gexChartRef = useRef<HTMLDivElement>(null);
   const heatmapContainerRef = useRef<HTMLDivElement>(null);
+  const heatmapBodyRef = useRef<HTMLDivElement>(null);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const selectedExpiryRef = useRef("");
@@ -756,6 +757,14 @@ export default function HomePage() {
     return best;
   }, [heatmapRows]);
 
+  // Screenshot title date, e.g. "Mon 6/29" — mirrors the GEX chart title format.
+  const heatmapTitleDate = useMemo(() => {
+    if (!selectedExpiry) return "";
+    const d = new Date(selectedExpiry + "T00:00:00");
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return `${days[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`;
+  }, [selectedExpiry]);
+
   // Poll the 30-min rolling net GEX history for the active expiry.
   useEffect(() => {
     if (!selectedExpiry) return;
@@ -1036,13 +1045,13 @@ export default function HomePage() {
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={handleRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
-                    <BoxSnapBtn targetRef={heatmapContainerRef} label="GEX Heatmap" />
-                    <BoxDiscordBtn targetRef={heatmapContainerRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} />
+                    <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
+                    <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                   </div>
                 </div>
               </div>
 
-              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
                 <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "10%" }} />
