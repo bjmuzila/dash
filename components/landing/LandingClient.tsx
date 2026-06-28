@@ -172,7 +172,7 @@ export default function LandingClient() {
           {/* Waitlist form */}
           <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
             <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
-              Get notified when we launch
+              Beta signups open June 30, 9:30 AM ET · official launch July 3. Get notified.
             </label>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <input
@@ -236,7 +236,7 @@ export default function LandingClient() {
               <button style={primaryBtn}>Sign in to dashboard</button>
             </SignInButton>
             <Link href="/pricing?from=landing" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
-              Join now
+              Join the beta
             </Link>
           </div>
         </div>

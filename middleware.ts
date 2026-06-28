@@ -36,6 +36,7 @@ const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 // for any signed-in user (e.g. the test account) — this locks the routes too.
 const isOwnerRoute = createRouteMatcher([
   "/dev(.*)",
+  "/admin(.*)",
   "/budget(.*)",
   "/personal(.*)",
 ]);

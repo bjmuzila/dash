@@ -18,8 +18,8 @@ export default function ChatPanel() {
   const { user } = useUser();
   const displayName = useMemo(
     () =>
-      user?.firstName ||
       user?.username ||
+      user?.firstName ||
       user?.primaryEmailAddress?.emailAddress?.split("@")[0] ||
       "trader",
     [user],

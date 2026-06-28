@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "How CB Edge collects, uses, and protects your information.",
 };
 
-const LAST_UPDATED = "June 24, 2026";
+const LAST_UPDATED = "June 28, 2026";
 
 export default function PrivacyPage() {
   return (
@@ -26,18 +26,21 @@ export default function PrivacyPage() {
       <h3>Information you provide</h3>
       <ul>
         <li>
-          <strong>Account information.</strong> When you sign up, our authentication provider collects
+          <strong>Account information.</strong> When you sign up, our authentication provider (Clerk) collects
           information such as your name, email address, and login credentials. We receive a unique user
           identifier and basic profile details from that provider.
         </li>
         <li>
           <strong>Waitlist information.</strong> If you join our waitlist, we collect the email address you
-          submit and the source of the signup.
+          submit, the source of the signup, the referring web page, and your browser&rsquo;s user-agent string.
+          Waitlist signups are stored in our database and also recorded in a Google Sheet that we use to manage
+          the list.
         </li>
         <li>
           <strong>Payment information.</strong> If you purchase a subscription, our third-party payment
-          processor collects and processes your payment details. We do not store full card numbers on our own
-          servers.
+          processor (Stripe) collects and processes your payment details, including your name and billing
+          information. We do not store full card numbers on our own servers; we retain a customer identifier
+          and subscription status to manage your access.
         </li>
         <li>
           <strong>Communications.</strong> If you contact us, we keep the messages and contact details you
@@ -47,9 +50,10 @@ export default function PrivacyPage() {
       <h3>Information collected automatically</h3>
       <ul>
         <li>
-          <strong>Usage and device data.</strong> We may collect log and device information such as IP
-          address, browser type, pages viewed, features used, and timestamps, in order to operate, secure, and
-          improve the Service.
+          <strong>Usage and device data.</strong> When you visit the Service, we automatically collect and log
+          your IP address, browser type, the pages you view, features you use, and timestamps. We record this
+          page-activity data for visitors and signed-in users alike, in order to operate, secure, and improve
+          the Service. For signed-in users, this activity is associated with your account identifier.
         </li>
         <li>
           <strong>Cookies and similar technologies.</strong> We and our providers use cookies and similar
@@ -80,8 +84,9 @@ export default function PrivacyPage() {
       <ul>
         <li>
           <strong>Service providers.</strong> With vendors who perform services on our behalf — including
-          authentication, hosting, database, analytics, email, and payment processing — under obligations to
-          protect your information and use it only to provide those services.
+          authentication (Clerk), payment processing (Stripe), hosting and database infrastructure, content
+          delivery and network security (Cloudflare), and waitlist management (Google Sheets) — under
+          obligations to protect your information and use it only to provide those services.
         </li>
         <li>
           <strong>Legal and safety.</strong> When we believe disclosure is necessary to comply with the law,
@@ -121,13 +126,69 @@ export default function PrivacyPage() {
         law and may need to verify your identity first.
       </p>
 
-      <h2>7. Children&rsquo;s privacy</h2>
+      <h2>7. California privacy rights (CCPA/CPRA)</h2>
+      <p>
+        If you are a California resident, the California Consumer Privacy Act, as amended, gives you the
+        following rights regarding your personal information:
+      </p>
+      <ul>
+        <li>
+          <strong>Right to know.</strong> You may request the categories and specific pieces of personal
+          information we have collected about you, the sources, the business purpose for collecting it, and the
+          categories of third parties with whom we share it.
+        </li>
+        <li>
+          <strong>Right to delete.</strong> You may request that we delete the personal information we hold
+          about you, subject to certain legal exceptions.
+        </li>
+        <li>
+          <strong>Right to correct.</strong> You may request that we correct inaccurate personal information.
+        </li>
+        <li>
+          <strong>Right to opt out of sale or sharing.</strong> We do not sell your personal information and we
+          do not share it for cross-context behavioral advertising. There is therefore nothing to opt out of in
+          this respect.
+        </li>
+        <li>
+          <strong>Right to non-discrimination.</strong> We will not discriminate against you for exercising any
+          of these rights.
+        </li>
+      </ul>
+      <p>
+        The categories of personal information we collect are described in Section 1 and include identifiers
+        (such as name, email address, IP address, and account identifier), commercial information (subscription
+        and payment-related data processed by our payment provider), and internet activity information (such as
+        pages viewed and usage data). To exercise any of these rights, contact us at{" "}
+        <a href="mailto:support@cbedge.net">support@cbedge.net</a>. We may need to verify your identity before
+        responding, and you may use an authorized agent where permitted by law.
+      </p>
+
+      <h2>8. European Economic Area, UK, and Switzerland rights (GDPR)</h2>
+      <p>
+        If you are located in the European Economic Area, the United Kingdom, or Switzerland, you have the
+        following rights under the General Data Protection Regulation and equivalent laws: to access your
+        personal data; to have inaccurate data corrected; to have your data erased; to restrict or object to
+        certain processing; to data portability; and, where we rely on consent, to withdraw that consent at any
+        time without affecting prior processing.
+      </p>
+      <p>
+        We process your personal data on the following legal bases: <strong>performance of a contract</strong>{" "}
+        (to provide the Service and your account and to process subscriptions); <strong>legitimate
+        interests</strong> (to secure the Service, prevent fraud and abuse, and understand and improve how the
+        Service is used); <strong>consent</strong> (for non-essential communications and any optional cookies);
+        and <strong>compliance with legal obligations</strong>. To exercise your rights, contact us at{" "}
+        <a href="mailto:support@cbedge.net">support@cbedge.net</a>. You also have the right to lodge a complaint
+        with your local data-protection supervisory authority. Because we operate in the United States, your
+        data may be transferred outside your country as described in Section 10.
+      </p>
+
+      <h2>9. Children&rsquo;s privacy</h2>
       <p>
         The Service is not directed to, and we do not knowingly collect personal information from, anyone under
         18. If you believe a minor has provided us information, please contact us so we can delete it.
       </p>
 
-      <h2>8. International users</h2>
+      <h2>10. International users</h2>
       <p>
         We operate in the United States, and your information may be processed and stored in the United States
         or other countries where our service providers operate. These countries may have data-protection laws
@@ -135,14 +196,14 @@ export default function PrivacyPage() {
         transferred to and processed in these locations.
       </p>
 
-      <h2>9. Changes to this Policy</h2>
+      <h2>11. Changes to this Policy</h2>
       <p>
         We may update this Privacy Policy from time to time. We will revise the &ldquo;Last updated&rdquo; date
         above and, for material changes, provide additional notice where appropriate. Your continued use of the
         Service after changes take effect constitutes acceptance of the updated Policy.
       </p>
 
-      <h2>10. Contact us</h2>
+      <h2>12. Contact us</h2>
       <p>
         If you have questions about this Privacy Policy or our data practices, contact us at{" "}
         <a href="mailto:support@cbedge.net">support@cbedge.net</a>.

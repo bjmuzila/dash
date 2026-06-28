@@ -407,20 +407,18 @@ function StatCard({
   return (
     <div style={{
       ...homePanelStyle,
-      containerType: "inline-size",
       minHeight: 0,
-      padding: "clamp(6px, 9cqw, 14px) clamp(8px, 11cqw, 18px)",
+      padding: "12px 14px",
       display: "flex",
       flexDirection: "column",
-      gap: 5,
-      overflow: "hidden",
-      borderTop: `2px solid ${accent}80`,
+      gap: 6,
+      borderTop: `2px solid ${accent}d9`,
       background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
     }}>
-      <div style={{ fontSize: "clamp(6px, 7cqw, 11px)", fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: "clamp(11px, 14cqw, 22px)", fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textShadow: `0 0 16px ${accent}4d` }}>
+      <div style={{ fontSize: 17, fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textShadow: `0 0 16px ${accent}4d` }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -479,7 +477,7 @@ function AccordionCard({
 }) {
   void open; void onToggle; void id;
   return (
-    <div style={{ ...homePanelStyle, overflow: "hidden", border: "none", borderTop: `2px solid ${accent}80`, backdropFilter: "none", background: "transparent" }}>
+    <div style={{ ...homePanelStyle, overflow: "visible", borderTop: `2px solid ${accent}d9`, background: `radial-gradient(circle at 50% 0%, ${accent}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
@@ -1781,9 +1779,9 @@ export default function OwnerDashboard() {
             <StatCard label="Idle Mode" value={server.idleMode == null ? "—" : server.idleMode ? "ON" : "OFF"} accent={server.idleMode ? HOME_THEME.red : HOME_THEME.green} />
             <StatCard label="dxLink Feed (TT→Proxy)" value={server.dxLinkState || "—"} accent={dxOk ? HOME_THEME.green : HOME_THEME.red} mono />
             <StatCard label="TT Auth" value={server.ttAuthenticated == null ? "—" : ttOk ? "OK" : "FAIL"} accent={ttOk ? HOME_THEME.green : HOME_THEME.red} />
-            <StatCard label="Contracts Sub'd" value={server.contractsSubscribed ?? "—"} accent={HOME_THEME.cyan} />
+            <StatCard label="Contracts Sub'd" value={server.contractsSubscribed ?? "—"} accent={HOME_THEME.orange} />
             <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
-            <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.cyan} mono />
+            <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.purple} mono />
             <StatCard label="Version" value={process.env.NEXT_PUBLIC_APP_VERSION || "—"} accent={HOME_THEME.orange} mono />
           </div>
@@ -2409,7 +2407,9 @@ export default function OwnerDashboard() {
               const catColor: Record<string, string> = {
                 bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
               };
-              return visible.map((f) => {
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
+              {visible.map((f) => {
                 const resolved = f.status === "resolved";
                 return (
                   <div
@@ -2453,7 +2453,9 @@ export default function OwnerDashboard() {
                     </button>
                   </div>
                 );
-              });
+              })}
+                </div>
+              );
             })()}
           </div>
         </AccordionCard>
@@ -2463,6 +2465,7 @@ export default function OwnerDashboard() {
         {SECTION_TAB.auth === ownerTab && (
         <AccordionCard
           id="auth"
+          accent={HOME_THEME.green}
           title="Auth · Clerk"
           subtitle={clerk == null ? "loading…" : `${clerk.configured ? "configured" : "not configured"} · env ${clerk.environment}${clerk.stats?.userCount != null ? ` · ${clerk.stats.userCount} users` : ""}`}
           open={openSet.has("auth")}
@@ -2666,7 +2669,7 @@ export default function OwnerDashboard() {
           const activeCount = pageStatuses.filter((p) => p.status === "active").length;
 
           return (
-        <div style={{ ...homePanelStyle }}>
+        <div style={{ ...homePanelStyle, borderTop: `2px solid ${HOME_THEME.cyan}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
           <div
             style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${HOME_THEME.border}` }}
           >

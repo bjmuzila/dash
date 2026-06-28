@@ -79,6 +79,9 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
       <div
         style={{
           flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
           overflow: "hidden",
           position: "relative",
           isolation: "isolate",
