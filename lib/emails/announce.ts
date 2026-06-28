@@ -9,7 +9,7 @@
 //
 // Brand palette: bg #05060A · panel #0D1119 · cyan #219EBC · accent #8ECAE6
 
-import { unsubscribeUrl } from "@/lib/unsubscribe";
+import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
@@ -29,17 +29,19 @@ function escapeHtml(s: string): string {
 }
 
 function footer(email?: string | null): string {
-  const unsub = email
-    ? `<a href="${escapeHtml(unsubscribeUrl(email))}" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
-                &nbsp;·&nbsp;`
-    : "";
+  // Always render an unsubscribe link. Use the recipient's real URL when known
+  // (webhook path); otherwise emit the placeholder, which the send route swaps
+  // for the per-recipient tokenized URL. Either way, never zero links.
+  const unsubHref = email ? escapeHtml(unsubscribeUrl(email)) : UNSUB_URL_PLACEHOLDER;
   return `
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
           <tr>
             <td align="center" style="padding:18px 32px;">
               <div style="font:400 11px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">
                 CB Edge · You're receiving this because you signed up for updates.<br>
-                ${unsub}<a href="${SITE_URL}" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a><br>
+                <a href="${unsubHref}" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
+                &nbsp;·&nbsp;
+                <a href="${SITE_URL}" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a><br>
                 <span style="color:#5a6b7d;">Market analytics, not financial advice.</span>
               </div>
             </td>
@@ -154,7 +156,9 @@ export function comingSoonText(opts: AnnounceOpts = {}): string {
     "Beta signups open soon. You're on the list — we'll email you the moment the doors open. Stay tuned.",
     "",
     "— The CB Edge team",
-    ...(opts.email ? ["", "—", `Unsubscribe: ${unsubscribeUrl(opts.email)}`] : []),
+    "",
+    "—",
+    `Unsubscribe: ${opts.email ? unsubscribeUrl(opts.email) : UNSUB_URL_PLACEHOLDER}`,
   ].join("\n");
 }
 
@@ -200,6 +204,8 @@ export function betaLiveText(opts: AnnounceOpts = {}): string {
     `Join the beta: ${cta}`,
     "",
     "— The CB Edge team",
-    ...(opts.email ? ["", "—", `Unsubscribe: ${unsubscribeUrl(opts.email)}`] : []),
+    "",
+    "—",
+    `Unsubscribe: ${opts.email ? unsubscribeUrl(opts.email) : UNSUB_URL_PLACEHOLDER}`,
   ].join("\n");
 }

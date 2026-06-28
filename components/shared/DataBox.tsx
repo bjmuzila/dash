@@ -27,37 +27,42 @@ function loadLogo(): Promise<HTMLImageElement | null> {
   return _logoPromise;
 }
 
+// Draw a "(TICKER) GEX • Day M/D" title baked into the top-left.
+function drawTitle(canvas: HTMLCanvasElement, title: string): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx || !title) return;
+  const W = canvas.width;
+  const pad = Math.round(W * 0.018);
+  const fontPx = Math.max(14, Math.round(W * 0.022));
+  ctx.save();
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.font = `bold ${fontPx}px Arial, sans-serif`;
+  ctx.lineWidth = Math.max(2, Math.round(fontPx * 0.12));
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeText(title, pad, pad);
+  ctx.fillText(title, pad, pad);
+  ctx.restore();
+}
+
 async function drawWatermark(canvas: HTMLCanvasElement): Promise<void> {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const W = canvas.width;
   const H = canvas.height;
-  const pad = Math.round(W * 0.012);
-  const fontPx = Math.max(12, Math.round(W * 0.014));
-  ctx.save();
-  ctx.globalAlpha = 0.6;
-  ctx.textBaseline = "bottom";
-  ctx.font = `700 ${fontPx}px ui-sans-serif, Inter, Arial, sans-serif`;
 
+  // Bottom-right: logo, tight to the corner
   const logo = await loadLogo();
-  let x = W - pad;
   if (logo) {
-    const lh = Math.round(fontPx * 1.6);
+    const lh = Math.round(H * 0.10);
     const lw = Math.round(lh * (logo.width / logo.height));
-    // text first (to the left of the logo)
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.textAlign = "right";
-    const text = "cbedge.net";
-    ctx.fillText(text, x - lw - pad * 0.6, H - pad);
-    // logo
-    ctx.globalAlpha = 0.85;
-    ctx.drawImage(logo, x - lw, H - pad - lh, lw, lh);
-  } else {
-    ctx.fillStyle = "rgba(255,255,255,0.7)";
-    ctx.textAlign = "right";
-    ctx.fillText("cbedge.net", x, H - pad);
+    const edge = Math.round(W * 0.006);
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(logo, W - edge - lw, H - edge - lh, lw, lh);
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 // ── html2canvas lazy loader ───────────────────────────────────────────────────
@@ -65,39 +70,41 @@ async function drawWatermark(canvas: HTMLCanvasElement): Promise<void> {
 // elements (lightweight-charts, GEX heatmap overlay). We capture the DOM, then
 // composite every live canvas back on top at its real on-screen position, then
 // bake the cb-edge watermark.
-async function captureElement(el: HTMLElement): Promise<string> {
+async function captureElement(el: HTMLElement, title?: string): Promise<string> {
   const { default: html2canvas } = await import("html2canvas");
+  // GexChart is a single same-origin <canvas>; html2canvas renders it directly.
+  // (Manual compositing was drawing a second, mis-scaled copy — the ghost bar.)
+  // onclone strips external <link>/<style> so html2canvas never tries to refetch
+  // a (sometimes 404'ing) stylesheet — that fetch was aborting the render before
+  // our title/watermark post-draws ran. The chart is inline-styled, so nothing
+  // visual is lost.
+  const titleText = title && title.trim() ? title : "SPX GEX";
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
     allowTaint: true,
     scale: window.devicePixelRatio || 1,
     logging: false,
+    onclone: (doc, clone) => {
+      doc.querySelectorAll('link[rel="stylesheet"], style').forEach((n) => n.remove());
+      // Inject overlay text as real DOM so html2canvas renders it natively
+      // (drawing text onto the returned canvas no-ops in this browser).
+      clone.style.position = "relative";
+      const mk = (text: string, side: "left" | "right") => {
+        const d = doc.createElement("div");
+        d.textContent = text;
+        d.style.cssText = [
+          "position:absolute", "top:10px", `${side}:12px`,
+          "font:700 15px Arial, sans-serif", "color:#ffffff",
+          "text-shadow:0 1px 3px rgba(0,0,0,0.9)", "z-index:9999",
+          "pointer-events:none", "white-space:nowrap",
+        ].join(";");
+        clone.appendChild(d);
+      };
+      mk(titleText, "left");
+      mk("Data provided by CBEdge.net", "right");
+    },
   });
-
-  // Composite live canvases (charts / heatmap) that html2canvas left blank.
-  const scale = window.devicePixelRatio || 1;
-  const hostRect = el.getBoundingClientRect();
-  const ctx = base.getContext("2d");
-  if (ctx) {
-    const liveCanvases = el.querySelectorAll<HTMLCanvasElement>("canvas");
-    liveCanvases.forEach((c) => {
-      if (!c.width || !c.height) return;
-      const r = c.getBoundingClientRect();
-      if (!r.width || !r.height) return;
-      try {
-        ctx.drawImage(
-          c,
-          (r.left - hostRect.left) * scale,
-          (r.top - hostRect.top) * scale,
-          r.width * scale,
-          r.height * scale,
-        );
-      } catch {
-        /* tainted canvas — skip rather than throw */
-      }
-    });
-  }
 
   await drawWatermark(base);
   return base.toDataURL("image/png");
@@ -162,13 +169,13 @@ function IconX({ size = 10 }: { size?: number }) {
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
 /** Screenshot the target element and copy PNG to clipboard. */
-export function BoxSnapBtn({ targetRef }: { targetRef: RefObject<HTMLElement | null>; label?: string }) {
+export function BoxSnapBtn({ targetRef, title }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string }) {
   const [s, set] = useState<BtnState>("idle");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
-      const img = await captureElement(targetRef.current);
+      const img = await captureElement(targetRef.current, title);
       // Convert base64 data URL → Blob → ClipboardItem
       const base64 = img.replace(/^data:image\/\w+;base64,/, "");
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
@@ -177,7 +184,7 @@ export function BoxSnapBtn({ targetRef }: { targetRef: RefObject<HTMLElement | n
       set("ok");
     } catch { set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef]);
+  }, [s, targetRef, title]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
@@ -195,11 +202,14 @@ export function BoxDiscordBtn({
   targetRef,
   label,
   message,
+  title,
 }: {
   targetRef: RefObject<HTMLElement | null>;
   label?: string;
   /** Full message text to send. Defaults to "📸 **label** — HH:MM ET" */
   message?: string;
+  /** Title baked into the top-left of the screenshot, e.g. "SPX GEX • Fri 6/26" */
+  title?: string;
 }) {
   const [s, set] = useState<BtnState>("idle");
   const isOwner = useIsOwner();
@@ -207,14 +217,14 @@ export function BoxDiscordBtn({
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
-      const img = await captureElement(targetRef.current);
+      const img = await captureElement(targetRef.current, title);
       const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
       const content = message ?? `📸 **${label || "Panel"}** — ${now} ET`;
       await postToDiscord(img, content);
       set("ok");
     } catch { set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, label, message]);
+  }, [s, targetRef, label, message, title]);
 
   // Discord share is owner-only (cosmetic gate).
   if (!isOwner) return null;

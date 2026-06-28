@@ -32,6 +32,8 @@ interface GexToolbarProps {
   containerRef?: RefObject<HTMLElement | null>;
   /** Message text sent to Discord (title + expiry) */
   discordMessage?: string;
+  /** Underlying ticker for the screenshot title, e.g. "SPX" */
+  ticker?: string;
 }
 
 // Format expiry date → DTE label e.g. "0DTE  Fri 6/13"
@@ -50,8 +52,11 @@ export default function GexToolbar({
   onToggleOI, onToggleDex, onToggleFlip,
   onToggleGhost5, onToggleGhost15, onToggleGhost30,
   onRefresh,
-  containerRef, discordMessage,
+  containerRef, discordMessage, ticker = "SPX",
 }: GexToolbarProps) {
+  // Title baked into the top-left of the screenshot: "SPX GEX • Fri 6/26"
+  const { day: exDay, date: exDate } = expiryLabel(selectedExpiry);
+  const screenshotTitle = `${ticker} GEX  •  ${exDay} ${exDate}`;
   // Prior-state ghost overlays are only meaningful in Net-GEX + OI mode.
   const ghostEnabled = gexMode === "net" && dataMode === "oi-vol";
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
@@ -111,8 +116,8 @@ export default function GexToolbar({
         <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>
           {btnLabel}
         </DockButton>
-        {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" />}
-        {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} />}
+        {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" title={screenshotTitle} />}
+        {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} title={screenshotTitle} />}
       </Dock>
     </div>
   );

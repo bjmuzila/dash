@@ -7,7 +7,7 @@
 // Brand palette mirrors components/shared/homeTheme.ts:
 //   bg #05060A · panel #0D1119 · cyan #219EBC · accent text #8ECAE6
 
-import { unsubscribeUrl } from "@/lib/unsubscribe";
+import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
@@ -49,9 +49,9 @@ export function welcomeEmailText(opts: WelcomeEmailOpts = {}): string {
     "We're still in beta, so things move fast and your feedback shapes what we build next — there's a Feedback page right in the app.",
     "",
     "— The CB Edge team",
-    // Composer path appends its own unsubscribe line; only add one on the
-    // webhook path (opts.email set) to avoid duplicates.
-    ...(opts.email ? ["", "—", `Unsubscribe: ${unsubscribeUrl(opts.email)}`] : []),
+    "",
+    "—",
+    `Unsubscribe: ${opts.email ? unsubscribeUrl(opts.email) : UNSUB_URL_PLACEHOLDER}`,
   ].join("\n");
 }
 
@@ -60,15 +60,10 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
   const name = opts.firstName?.trim();
   const hi = name ? `Hi ${escapeHtml(name)},` : "Hi there,";
   const cta = escapeHtml(opts.ctaUrl || SIGN_IN_URL);
-  // Unsubscribe footer.
-  // - Webhook path (opts.email set): render a real tokenized link here, since
-  //   nothing else will.
-  // - Composer path (no email): the /api/admin/send-email route appends its own
-  //   per-recipient tokenized footer, so we render NONE here to avoid two links.
-  const unsubFooter = opts.email
-    ? `<a href="${escapeHtml(unsubscribeUrl(opts.email))}" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
-                &nbsp;·&nbsp;`
-    : "";
+  // Always render an unsubscribe link. Real tokenized URL when the recipient is
+  // known (webhook path); otherwise the {{UNSUBSCRIBE_URL}} placeholder, which
+  // the send route swaps per recipient. Guarantees one link, never zero.
+  const unsubHref = opts.email ? escapeHtml(unsubscribeUrl(opts.email)) : UNSUB_URL_PLACEHOLDER;
 
   const feature = (title: string, desc: string) => `
     <tr>
@@ -171,7 +166,9 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
             <td align="center" style="padding:18px 32px;">
               <div style="font:400 11px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">
                 CB Edge · You're receiving this because you signed up for the beta.<br>
-                ${unsubFooter}<a href="${SITE_URL}" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a>
+                <a href="${unsubHref}" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
+                &nbsp;·&nbsp;
+                <a href="${SITE_URL}" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a>
                 <br>
                 <span style="color:#5a6b7d;">Market analytics, not financial advice.</span>
               </div>

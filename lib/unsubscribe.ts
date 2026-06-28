@@ -28,6 +28,31 @@ function origin(baseUrl?: string): string {
   return (baseUrl || process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 }
 
+// Placeholder tokens templates embed when the recipient isn't known yet. The
+// send route swaps these for the real per-recipient unsubscribe URL right before
+// sending. This guarantees EVERY template always contains an unsubscribe link
+// (never zero) while the route fills in the correct tokenized URL (never a dead
+// placeholder in a delivered email).
+export const UNSUB_URL_PLACEHOLDER = "{{UNSUBSCRIBE_URL}}";
+
+// Replace the placeholder with the recipient's real unsubscribe URL. If the body
+// has no placeholder (e.g. legacy/plain HTML), append a standard footer so an
+// unsubscribe link is still guaranteed. Used for HTML bodies.
+export function applyUnsubscribeHtml(html: string, email: string, baseUrl?: string): string {
+  if (html.includes(UNSUB_URL_PLACEHOLDER)) {
+    return html.split(UNSUB_URL_PLACEHOLDER).join(unsubscribeUrl(email, baseUrl));
+  }
+  return html + unsubscribeFooterHtml(email, baseUrl);
+}
+
+// Text-body equivalent of applyUnsubscribeHtml.
+export function applyUnsubscribeText(text: string, email: string, baseUrl?: string): string {
+  if (text.includes(UNSUB_URL_PLACEHOLDER)) {
+    return text.split(UNSUB_URL_PLACEHOLDER).join(unsubscribeUrl(email, baseUrl));
+  }
+  return text + unsubscribeFooterText(email, baseUrl);
+}
+
 // Human-facing confirmation page (footer link). GET → shows a confirm button.
 export function unsubscribeUrl(email: string, baseUrl?: string): string {
   const e = encodeURIComponent(norm(email));

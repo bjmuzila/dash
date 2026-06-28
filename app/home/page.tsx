@@ -333,6 +333,7 @@ export default function HomePage() {
   const lastGexAppliedRef = useRef(0);
 
   const [activeTab, setActiveTab] = useState<"calendar" | "signals">("calendar");
+  const [econCollapsed, setEconCollapsed] = useState(false);
   const [gexMode, setGexMode] = useState<GexMode>("net");
 
   // ── Ticker auto-fit: scale the whole ticker box down so it always fits its
@@ -387,6 +388,7 @@ export default function HomePage() {
   const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
   const popupStyle: PopupStyle = "card";
   const gexContainerRef = useRef<HTMLDivElement>(null);
+  const gexChartRef = useRef<HTMLDivElement>(null);
   const heatmapContainerRef = useRef<HTMLDivElement>(null);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
@@ -892,14 +894,14 @@ export default function HomePage() {
                 onToggleGhost15={() => { setShowGhost15(v => !v); setShowGhost5(false); setShowGhost30(false); }}
                 onToggleGhost30={() => { setShowGhost30(v => !v); setShowGhost5(false); setShowGhost15(false); }}
                 onRefresh={handleRefresh}
-                containerRef={gexContainerRef}
+                containerRef={gexChartRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
               </FitScale>
               {/* Chart canvas — uses fast gex-chain data. Held behind a loader
                   until the server reports OI + greeks are warm, so a half-built
                   / inflated frame never renders. */}
-              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+              <div ref={gexChartRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
                 {chartReady && chartRows.length > 0 ? (
                   <GexChart
                     chain={chartRows}
@@ -929,7 +931,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
+            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: econCollapsed ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
               <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
@@ -939,8 +941,11 @@ export default function HomePage() {
                     {tab.icon}{tab.label}
                   </button>
                 ))}
+                <button onClick={() => setEconCollapsed((v) => !v)} aria-label={econCollapsed ? "Expand" : "Collapse"} style={{ marginLeft: "auto", display: "flex", alignItems: "center", padding: "12px 16px", background: "none", border: "none", cursor: "pointer", color: "#fff" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: econCollapsed ? "rotate(-90deg)" : "none", transition: "transform 0.2s" }}><polyline points="6 9 12 15 18 9" /></svg>
+                </button>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: 24, display: econCollapsed ? "none" : "block" }}>
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel />

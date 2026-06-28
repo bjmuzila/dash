@@ -8,6 +8,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Added a beta signup experience with a live countdown — beta opens June 30 at market open, official launch July 3
 * Estimated Moves now highlighted across 500+ stocks, with footprint & order-flow strategies coming in August 2026
 * Refreshed the pricing page styling so it's easier to read and on-theme
+* You can now collapse the Economic Calendar section on the home page to save space — it stays open by default and remembers your events when reopened
 * Launch-update emails now include a one-click unsubscribe link
 * Gave the whole dashboard a consistent look — matching dropdowns, calendars, toolbars, and cards on every page
 * Dropdowns and date pickers now always open on top of cards instead of getting hidden behind them

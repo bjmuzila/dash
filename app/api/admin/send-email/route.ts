@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { getSubscription, PAID_STATUSES } from "@/lib/db";
-import { unsubscribeApiUrl, unsubscribeFooterHtml, unsubscribeFooterText } from "@/lib/unsubscribe";
+import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
 // returns the resolvable recipient lists (all signed-up users / paid subscribers
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
 // Verified Cloudflare domain sender. Override per-deploy via env if desired.
-const FROM_EMAIL = (process.env.EMAIL_FROM || "CB Edge <noreply@cbedge.net>").trim();
+const FROM_EMAIL = (process.env.EMAIL_FROM || "CB Edge <hello@cbedge.net>").trim();
 
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
   const { userId } = await auth();
@@ -150,8 +150,11 @@ export async function POST(req: NextRequest) {
           "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         },
       };
-      if (html) payload.html = html + unsubscribeFooterHtml(recipient);
-      if (text) payload.text = text + unsubscribeFooterText(recipient);
+      // Swap the template's {{UNSUBSCRIBE_URL}} placeholder for this recipient's
+      // real tokenized URL (or append a footer if the body has no placeholder).
+      // Guarantees exactly one working unsubscribe link in every email.
+      if (html) payload.html = applyUnsubscribeHtml(html, recipient);
+      if (text) payload.text = applyUnsubscribeText(text, recipient);
 
       const r = await fetch("https://api.resend.com/emails", {
         method: "POST",
