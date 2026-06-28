@@ -1,21 +1,106 @@
 "use client";
 
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
+import { useUser } from "@clerk/nextjs";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
 
+// ── Owner gate (cosmetic — matches NavMenu) ───────────────────────────────────
+function useIsOwner(): boolean {
+  const { isSignedIn, user } = useUser();
+  const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
+  return ownerId ? user?.id === ownerId : !!isSignedIn;
+}
+
+// ── cb-edge watermark + link, baked into the canvas pixels ────────────────────
+let _logoPromise: Promise<HTMLImageElement | null> | null = null;
+function loadLogo(): Promise<HTMLImageElement | null> {
+  if (_logoPromise) return _logoPromise;
+  _logoPromise = new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = "/cb-edge-logo.png";
+  });
+  return _logoPromise;
+}
+
+async function drawWatermark(canvas: HTMLCanvasElement): Promise<void> {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const W = canvas.width;
+  const H = canvas.height;
+  const pad = Math.round(W * 0.012);
+  const fontPx = Math.max(12, Math.round(W * 0.014));
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  ctx.textBaseline = "bottom";
+  ctx.font = `700 ${fontPx}px ui-sans-serif, Inter, Arial, sans-serif`;
+
+  const logo = await loadLogo();
+  let x = W - pad;
+  if (logo) {
+    const lh = Math.round(fontPx * 1.6);
+    const lw = Math.round(lh * (logo.width / logo.height));
+    // text first (to the left of the logo)
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.textAlign = "right";
+    const text = "cbedge.net";
+    ctx.fillText(text, x - lw - pad * 0.6, H - pad);
+    // logo
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(logo, x - lw, H - pad - lh, lw, lh);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.textAlign = "right";
+    ctx.fillText("cbedge.net", x, H - pad);
+  }
+  ctx.restore();
+}
+
 // ── html2canvas lazy loader ───────────────────────────────────────────────────
+// html2canvas re-paints the DOM but cannot read pixels out of existing <canvas>
+// elements (lightweight-charts, GEX heatmap overlay). We capture the DOM, then
+// composite every live canvas back on top at its real on-screen position, then
+// bake the cb-edge watermark.
 async function captureElement(el: HTMLElement): Promise<string> {
   const { default: html2canvas } = await import("html2canvas");
-  const canvas = await html2canvas(el, {
+  const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
     allowTaint: true,
     scale: window.devicePixelRatio || 1,
     logging: false,
   });
-  return canvas.toDataURL("image/png");
+
+  // Composite live canvases (charts / heatmap) that html2canvas left blank.
+  const scale = window.devicePixelRatio || 1;
+  const hostRect = el.getBoundingClientRect();
+  const ctx = base.getContext("2d");
+  if (ctx) {
+    const liveCanvases = el.querySelectorAll<HTMLCanvasElement>("canvas");
+    liveCanvases.forEach((c) => {
+      if (!c.width || !c.height) return;
+      const r = c.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      try {
+        ctx.drawImage(
+          c,
+          (r.left - hostRect.left) * scale,
+          (r.top - hostRect.top) * scale,
+          r.width * scale,
+          r.height * scale,
+        );
+      } catch {
+        /* tainted canvas — skip rather than throw */
+      }
+    });
+  }
+
+  await drawWatermark(base);
+  return base.toDataURL("image/png");
 }
 
 async function postToDiscord(imageBase64: string, content: string): Promise<void> {
@@ -117,6 +202,7 @@ export function BoxDiscordBtn({
   message?: string;
 }) {
   const [s, set] = useState<BtnState>("idle");
+  const isOwner = useIsOwner();
     const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
@@ -129,6 +215,9 @@ export function BoxDiscordBtn({
     } catch { set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
   }, [s, targetRef, label, message]);
+
+  // Discord share is owner-only (cosmetic gate).
+  if (!isOwner) return null;
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#7289da";
   const statusText = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : null;
