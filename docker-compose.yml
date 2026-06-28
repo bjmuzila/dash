@@ -9,6 +9,9 @@ services:
         # Clerk key must be present at BUILD time too — prerendering pages that
         # init Clerk (/budget, /_not-found) throws "Missing publishableKey" otherwise.
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+        # Supabase client keys are also inlined at BUILD time (subscriber /chat).
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
     image: bzila-dashboard:latest
     restart: unless-stopped
     # server-v2 reads .env.local at boot (dotenv override:true). Mount your real
