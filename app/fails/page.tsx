@@ -6,11 +6,11 @@ import { LiveIb } from "@/components/insights/IbLogic";
 import { NqIbLive } from "@/components/insights/NqIbLive";
 import {
   HOME_THEME,
-  homeContentStyle,
+  homeGlossPanelStyle,
   homeHeaderStyle,
   homePanelStyle,
-  homeShellStyle,
 } from "@/components/shared/homeTheme";
+import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton } from "@/components/shared/DockToolbar";
 import {
   computeRefLevels,
@@ -205,14 +205,14 @@ export default function FailsPage() {
   }, [todayEvents]);
 
   return (
-    <div style={homeShellStyle}>
+    <PageShell>
       <style>{`
         .fail-hover{transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;}
         .fail-hover:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.35);border-color:${rgba(HOME_THEME.cyan, 0.35)};}
       `}</style>
 
-      {/* header */}
-      <div style={homeHeaderStyle}>
+      {/* header — sticky bar pinned to top of the scrollable content column */}
+      <div style={{ ...homeHeaderStyle, position: "sticky", top: 0, zIndex: 10, borderRadius: 12 }}>
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-xs font-bold uppercase tracking-widest" style={{ color: HOME_THEME.cyan }}>Fails</span>
           <SegGroup
@@ -239,7 +239,7 @@ export default function FailsPage() {
         </div>
       </div>
 
-      <div style={{ ...homeContentStyle, overflow: "auto", display: tab === "NQU" ? "block" : undefined }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "clamp(16px, 2vw, 32px)" }}>
         {tab === "NQU" ? (
           <NqIbLive />
         ) : (
@@ -249,9 +249,7 @@ export default function FailsPage() {
           const dtCol = dayTypeColor(amt.dayType);
           const blCol = biasColor(amt.bias.lean);
           return (
-            <div className="fail-hover" style={{ ...homePanelStyle, padding: "16px 20px", marginBottom: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16,
-              borderLeft: `3px solid ${dtCol}`,
-              background: `radial-gradient(circle at 0% 0%, ${rgba(dtCol, 0.1)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+            <div className="card-hover" style={{ ...homeGlossPanelStyle(dtCol), padding: "16px 20px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
                 <SectionTitle text="Day Type · AMT" accent={HOME_THEME.text} />
                 <span style={{ fontSize: 22, fontWeight: 800, color: dtCol, lineHeight: 1 }}>{amt.dayTypeLabel}</span>
@@ -260,7 +258,7 @@ export default function FailsPage() {
                 <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>{amt.dayTypeDetail}</span>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <span style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
-                    color: blCol, background: "rgba(255,255,255,0.05)", border: `1px solid ${rgba(blCol, 0.35)}`, flexShrink: 0 }}>
+                    color: blCol, background: rgba(HOME_THEME.text, 0.05), border: `1px solid ${rgba(blCol, 0.35)}`, flexShrink: 0 }}>
                     {amt.bias.lean}
                   </span>
                   <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{amt.bias.text}</span>
@@ -276,7 +274,7 @@ export default function FailsPage() {
         <LiveIb />
 
         {/* Active AMT setups */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card accent="cyan" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <SectionTitle text="Active Setups" accent={HOME_THEME.cyan} big />
             <span style={{ fontSize: 10, color: HOME_THEME.text }}>AMT entry triggers · first 2h strongest</span>
@@ -307,10 +305,10 @@ export default function FailsPage() {
               </>
             );
           })()}
-        </div>
+        </Card>
 
         {/* live status panel */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card accent="cyan" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <SectionTitle text="Live Status" accent={HOME_THEME.cyan} big />
             <span style={{ fontSize: 11, color: HOME_THEME.text }}>
@@ -319,7 +317,7 @@ export default function FailsPage() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
             {statuses.length === 0 ? (
-              <div style={{ ...homePanelStyle, gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
+              <div style={{ ...homeGlossPanelStyle(), gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
                 {connected ? "Waiting for ES candles to build levels…" : "Loading candles…"}
               </div>
             ) : statuses.map((s) => {
@@ -327,13 +325,11 @@ export default function FailsPage() {
               const accent = s.level.side === "above" ? HOME_THEME.green : HOME_THEME.red;
               const dist = s.distancePts;
               return (
-                <div key={s.level.kind} className="fail-hover" style={{ ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 8,
-                  borderLeft: `2px solid ${rgba(accent, 0.5)}`,
-                  background: `radial-gradient(circle at 0% 0%, ${rgba(accent, 0.08)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+                <div key={s.level.kind} className="card-hover" style={{ ...homeGlossPanelStyle(accent), padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                     <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>{s.level.short}</span>
                     <span style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
-                      color: meta.color, background: "rgba(255,255,255,0.05)", border: `1px solid ${rgba(meta.color, 0.3)}` }}>
+                      color: meta.color, background: rgba(HOME_THEME.text, 0.05), border: `1px solid ${rgba(meta.color, 0.3)}` }}>
                       {meta.label}
                     </span>
                   </div>
@@ -367,17 +363,16 @@ export default function FailsPage() {
               );
             })}
           </div>
-        </div>
+        </Card>
 
         {/* today's fail log */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card accent="orange" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionTitle text={`Today's Fails${todayEvents.length ? ` (${todayEvents.length})` : ""}`} accent={HOME_THEME.orange} big />
           {todayEvents.length === 0 ? (
             <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No fails logged today yet.</div>
           ) : (
             <>
-              <div style={{ ...homePanelStyle, padding: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 24,
-                border: "1.5px solid rgba(255,255,255,0.35)", background: "rgba(255,255,255,0.06)" }}>
+              <div style={{ ...homeGlossPanelStyle(HOME_THEME.orange), padding: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 24 }}>
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>Wins</span>
                   <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: HOME_THEME.green }}>{todayTotals.wins}</span>
@@ -411,10 +406,10 @@ export default function FailsPage() {
               <FailTable rows={[...todayEvents].reverse()} fmt={fmt} unit={unit} />
             </>
           )}
-        </div>
+        </Card>
 
         {/* hit-rate stats */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card accent="purple" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <SectionTitle text="Fail Rate" accent={HOME_THEME.purple} />
             <span style={{ fontSize: 10, color: HOME_THEME.text }}>last ~20 sessions</span>
@@ -430,19 +425,19 @@ export default function FailsPage() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 16 }}>
             {stats.length === 0 ? (
-              <div style={{ ...homePanelStyle, gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
+              <div style={{ ...homeGlossPanelStyle(HOME_THEME.purple), gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
                 Building history…
               </div>
             ) : stats.map((st) => {
               const pct = Math.round(st.failRate * 100);
               const accent = st.kind.endsWith("High") ? HOME_THEME.green : HOME_THEME.red;
               return (
-                <div key={st.kind} className="fail-hover" style={{ ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 10, border: "1.5px solid rgba(255,255,255,0.35)", background: "rgba(255,255,255,0.06)" }}>
+                <div key={st.kind} className="card-hover" style={{ ...homeGlossPanelStyle(accent), padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                     <span style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.text }}>{st.label}</span>
                     <span style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", color: accent }}>{st.tests ? `${pct}%` : "—"}</span>
                   </div>
-                  <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
+                  <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: rgba(HOME_THEME.text, 0.08) }}>
                     <div style={{ width: `${pct}%`, height: "100%", background: accent }} />
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HOME_THEME.text }}>
@@ -454,21 +449,21 @@ export default function FailsPage() {
               );
             })}
           </div>
-        </div>
+        </Card>
 
         {/* historical fail log */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card accent="cyan" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionTitle text={`Recent Fail Log${log.length ? ` (${log.length})` : ""}`} accent={HOME_THEME.cyan} />
           {log.length === 0 ? (
             <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No historical fails in window.</div>
           ) : (
             <FailTable rows={log.slice(0, 60)} fmt={fmt} unit={unit} showDate />
           )}
-        </div>
+        </Card>
         </>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }
 

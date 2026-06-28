@@ -602,7 +602,7 @@ export default function IctPage() {
       </div>
 
       {/* captureRef wraps the chart AND the live panels so a copyshot grabs both */}
-      <div ref={captureRef} className="grid grid-cols-1 gap-4 rounded-xl bg-[#080b10] p-1 lg:grid-cols-[1fr_520px]">
+      <div ref={captureRef} className="grid grid-cols-1 gap-4 rounded-xl bg-[#080b10] p-1">
         {/* Chart + overlays */}
         <div className="self-start rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-2">
           {/* Overlay toggles */}
@@ -621,7 +621,7 @@ export default function IctPage() {
           </div>
           <div
             className="relative"
-            style={{ height: 560 }}
+            style={{ height: "68vh", minHeight: 480 }}
             onMouseMove={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               const mx = e.clientX - rect.left, my = e.clientY - rect.top;
@@ -669,8 +669,8 @@ export default function IctPage() {
           </div>
         </div>
 
-        {/* Live signal panel — compact 2-col grid sized to roughly the chart height */}
-        <div className="grid grid-cols-1 gap-2 self-start sm:grid-cols-2">
+        {/* Live signal panel — all tiles in one full-width row below the chart */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           <Panel title="Daily Bias">
             <div className="flex items-baseline gap-2">
               <span className="text-xl font-bold" style={{ color: ict.bias.dir === "bull" ? "#30d158" : ict.bias.dir === "bear" ? "#ff5b5b" : "#9fb3c8" }}>

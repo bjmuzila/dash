@@ -113,6 +113,11 @@ export default function ToolbarTicker() {
     return () => { ro.disconnect(); clearTimeout(t); window.removeEventListener("resize", fit); };
   });
 
+  // Ref to the NQU pill's button so clicking ANY part of the ticker
+  // (VIX / ESU / SPX) opens the same quotes dropdown.
+  const nquBtnRef = useRef<HTMLButtonElement | null>(null);
+  const openQuotes = () => nquBtnRef.current?.click();
+
   const shouldConnect = useWsLifecycle();
   const shouldConnectRef = useRef(shouldConnect);
   shouldConnectRef.current = shouldConnect;
@@ -249,14 +254,23 @@ export default function ToolbarTicker() {
           transformOrigin: "center center",
         }}
       >
-        <Pill label="VIX" price={vix.price} prev={vix.prev} color="#e8c060" />
-        <Divider />
-        <Pill label="ESU" price={es.price} prev={es.prev} quarter />
-        <Divider />
-        <Pill label="SPX" price={spx.price} prev={spx.prev} />
+        {/* VIX / ESU / SPX — clicking any of these opens the quotes dropdown
+            (same panel the NQU pill owns). */}
+        <div
+          data-quotes-trigger
+          onClick={openQuotes}
+          title="Click to see all quotes"
+          style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+        >
+          <Pill label="VIX" price={vix.price} prev={vix.prev} color="#e8c060" />
+          <Divider />
+          <Pill label="ESU" price={es.price} prev={es.prev} quarter />
+          <Divider />
+          <Pill label="SPX" price={spx.price} prev={spx.prev} />
+        </div>
         <Divider />
         {/* NQU pill + 16-symbol "all quotes" dropdown */}
-        <NquQuotePill />
+        <NquQuotePill buttonRef={nquBtnRef} />
       </div>
     </div>
   );

@@ -1,9 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { Dock, SegGroup } from "@/components/shared/DockToolbar";
+
+// rgba helper — matches the convention used across themed pages.
+function rgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+}
 
 // ── Custom dropdown (bypasses native OS rendering) ─────────────────────────
 function CustomDropdown<T extends string | number>({
@@ -21,11 +29,33 @@ function CustomDropdown<T extends string | number>({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
   const label = formatLabel ? formatLabel(value) : String(value);
 
+  // Anchor the portal'd menu under the trigger.
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setRect({ left: r.left, top: r.bottom + 3, width: r.width });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  // Close on outside click (trigger or portal'd menu both count as "inside").
   useEffect(() => {
     function h(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -36,6 +66,7 @@ function CustomDropdown<T extends string | number>({
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
+        ref={btnRef}
         onClick={() => setOpen(o => !o)}
         style={{
           fontSize: 10, fontWeight: 800, padding: "4px 8px",
@@ -51,13 +82,15 @@ function CustomDropdown<T extends string | number>({
         {label}
         <span style={{ fontSize: 7, opacity: 0.7 }}>▾</span>
       </button>
-      {open && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 3px)", left: 0, zIndex: 999,
-          background: "rgba(13,17,25,0.97)", backdropFilter: "blur(20px)",
-          border: `1px solid ${HT.border}`, borderRadius: 6,
-          padding: "3px 0", minWidth: "100%",
+      {open && rect && createPortal(
+        <div ref={menuRef} style={{
+          position: "fixed", left: rect.left, top: rect.top, zIndex: 9999,
+          minWidth: rect.width,
+          background: "rgba(13,17,25,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+          border: `1px solid ${HT.border}`, borderTop: `2px solid ${rgba(HT.cyan, 0.5)}`, borderRadius: 6,
+          padding: "3px 0",
           boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
+          maxHeight: 320, overflowY: "auto",
         }}>
           {options.map(opt => {
             const optLabel = formatLabel ? formatLabel(opt) : String(opt);
@@ -80,7 +113,8 @@ function CustomDropdown<T extends string | number>({
               </div>
             );
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -157,6 +191,18 @@ function isHoliday(date: Date): boolean {
 
   // Check fixed holidays
   if (holidays.some(([m, d]) => month === m && day === d)) return true;
+
+  // Observed holidays: a fixed holiday on Sat is observed the Fri before;
+  // on Sun it's observed the Mon after. (e.g. Jul 4 2026 = Sat → Fri Jul 3.)
+  const dow = date.getDay();
+  if (dow === 5) { // Friday — is tomorrow (Sat) a fixed holiday?
+    const sat = new Date(year, date.getMonth(), day + 1);
+    if (holidays.some(([m, d]) => sat.getMonth() + 1 === m && sat.getDate() === d)) return true;
+  }
+  if (dow === 1) { // Monday — was yesterday (Sun) a fixed holiday?
+    const sun = new Date(year, date.getMonth(), day - 1);
+    if (holidays.some(([m, d]) => sun.getMonth() + 1 === m && sun.getDate() === d)) return true;
+  }
 
   // MLK Day (3rd Monday in January)
   if (month === 1) {
@@ -751,26 +797,13 @@ export default function OptionsChainPage() {
     >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
       {loadProgress > 0 && (
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "#05080d", zIndex: 10 }}>
-          <div style={{ height: "100%", width: `${loadProgress}%`, background: "#219EBC", transition: "width 0.3s ease" }} />
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: HT.bg, zIndex: 10 }}>
+          <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
         </div>
       )}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "6px 12px",
-          background: HT.panelBgStrong,
-          backdropFilter: "blur(16px)",
-          borderBottom: `1px solid ${HT.border}`,
-          flexShrink: 0,
-          flexWrap: "wrap",
-          position: "relative", // ADD: own stacking context so dropdowns paint above chain
-          zIndex: 50,           // ADD: above chain scroll area + highlighted rows (zIndex:1)
-        }}
-      >
-        <span style={{ fontSize: 11, fontWeight: 800, color: "#219EBC", letterSpacing: "0.14em", textTransform: "uppercase" }}>
+      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50 }}>
+      <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
         </span>
 
@@ -806,7 +839,6 @@ export default function OptionsChainPage() {
           options={expiries.map(e => e.value) as string[]}
           onChange={setSelectedExpiry}
           formatLabel={v => expiries.find(e => e.value === v)?.label ?? v}
-          accentCyan={false}
         />
 
         <CustomDropdown
@@ -826,7 +858,7 @@ export default function OptionsChainPage() {
             border: "1px solid rgba(33,158,188,.5)",
             borderRadius: 4,
             background: tickerInput && selectedExpiry ? "rgba(33,158,188,.12)" : "rgba(33,158,188,.04)",
-            color: tickerInput && selectedExpiry ? "#219EBC" : "#4a6a88",
+            color: tickerInput && selectedExpiry ? HT.cyan : "#4a6a88",
             cursor: tickerInput && selectedExpiry ? "pointer" : "not-allowed",
             outline: "none",
             letterSpacing: "0.08em",
@@ -837,7 +869,7 @@ export default function OptionsChainPage() {
         </button>
 
         {autoPercentNote ? (
-          <span style={{ fontSize: 9, fontWeight: 800, color: "#ffb300", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+          <span style={{ fontSize: 9, fontWeight: 800, color: HT.orange, letterSpacing: "0.08em", textTransform: "uppercase" }}>
             {autoPercentNote}
           </span>
         ) : null}
@@ -849,68 +881,31 @@ export default function OptionsChainPage() {
           type="range" min={0.5} max={3} step={0.01}
           value={intensity}
           onChange={(event) => setIntensity(Number(event.target.value))}
-          style={{ width: 80, height: 3, accentColor: "#219EBC" }}
+          style={{ width: 80, height: 3, accentColor: HT.cyan }}
         />
-        <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
+        <span style={{ fontSize: 10, color: HT.cyan, fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
           {intensity.toFixed(2)}x
         </span>
 
-        <span style={{ color: "#1e3050" }}>|</span>
+        <span style={{ color: HT.border }}>|</span>
 
-        <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
-          {DATA_MODES.map(m => (
-            <button
-              key={m}
-              onClick={() => setDataMode(m)}
-              title={m === "vol-only" ? "Net GEX from session volume only" : "Net GEX from open interest + volume"}
-              style={{
-                padding: "2px 8px",
-                fontSize: 9,
-                fontWeight: 800,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                background: dataMode === m ? "rgba(33,158,188,.15)" : "transparent",
-                color: dataMode === m ? HT.cyan : "#64748b",
-              }}
-            >
-              {DATA_MODE_LABEL[m]}
-            </button>
-          ))}
-        </div>
+        <SegGroup
+          options={DATA_MODES.map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
+          active={dataMode}
+          onChange={(v) => setDataMode(v as DataMode)}
+        />
 
-        <span style={{ color: "#1e3050" }}>|</span>
+        <span style={{ color: HT.border }}>|</span>
 
-        <div style={{ display: "flex", gap: 2, background: HT.panelBg, backdropFilter: "blur(8px)", borderRadius: 4, padding: 2 }}>
-          {GREEK_MODES.map(m => (
-            <button
-              key={m}
-              onClick={() => setGreekMode(m)}
-              style={{
-                padding: "2px 8px",
-                fontSize: 9,
-                fontWeight: 800,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                textTransform: "uppercase",
-                background: greekMode === m ? "rgba(33,158,188,.15)" : "transparent",
-                color: greekMode === m ? HT.cyan : "#64748b",
-              }}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <SegGroup
+          options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
+          active={greekMode}
+          onChange={(v) => setGreekMode(v as GreekMode)}
+        />
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
-          <span style={{ fontSize: 11, color: "#e4e4e7", fontWeight: 700 }}>
-            {activeTicker} <span style={{ color: "#219EBC", fontFamily: "monospace" }}>{spot > 0 ? spot.toFixed(2) : "—"}</span>
-          </span>
-          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e676" }} />
-          <span style={{ fontSize: 9, color: "#00e676", fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
-          <span style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>{lastUpdate}</span>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: HT.green }} />
+          <span style={{ fontSize: 9, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
         </div>
 
         <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
@@ -919,141 +914,113 @@ export default function OptionsChainPage() {
           targetRef={pageRef}
           message={`📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
+      </Dock>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `100px repeat(${gridCols}, minmax(78px, 1fr))`,
-          background: HT.panelBgStrong,
-          borderBottom: `1px solid ${HT.border}`,
-          flexShrink: 0,
-          fontSize: 9,
-          fontWeight: 800,
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-        }}
-      >
-        <div style={{ padding: "5px 8px", textAlign: "left", color: HT.muted }}>Strike</div>
-        {Array.from({ length: gridCols }).map((_, i) => {
-          const col = columns[i];
-          return (
-            <div
-              key={col?.expiration ?? `col-${i}`}
-              style={{
-                padding: "5px 8px",
-                textAlign: "right",
-                color: HT.cyan,
-                borderLeft: "1px solid rgba(255,255,255,.05)",
-                lineHeight: 1.25,
-              }}
-            >
-              <div style={{ fontSize: 12 }}>{greekMode.toUpperCase()}</div>
-              <div style={{ fontSize: 10, color: HT.muted, fontWeight: 700, letterSpacing: 0 }}>
-                {col ? fmtExpHeader(col.expiration) : "—"}
-              </div>
+      {!visibleStrikes.length ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+              {chainError ? "No Live Chain Data" : "Select ticker, expiry & % strikes"}
             </div>
-          );
-        })}
-      </div>
-
-      <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        {!visibleStrikes.length ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 12, color: "#4a6a88" }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-                {chainError ? "No Live Chain Data" : "Select ticker, expiry & % strikes"}
-              </div>
-              <div style={{ fontSize: 11 }}>
-                {chainError ?? "Then click GO to load chain"}
-              </div>
+            <div style={{ fontSize: 11 }}>
+              {chainError ?? "Then click GO to load chain"}
             </div>
           </div>
-        ) : visibleStrikes.map((strike) => {
-          const isATM = strike === nearestStrike;
-          // EM band membership (only meaningful when a current-week column shows).
-          const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
-          const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
-          const emBorder = is1x
-            ? { borderTop: "2px solid rgba(255,255,255,.92)" }
-            : is2x
-            ? { borderTop: "2px dashed rgba(255,255,255,.85)" }
-            : null;
-          const rowStyle = isATM
-            ? { background: "rgba(255,179,0,.07)", outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
-            : { borderBottom: "1px solid rgba(30,48,80,.35)" };
-
+        </div>
+      ) : (
+        /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
+           inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
+        <div style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
+          {(() => {
+          // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
+          const renderIdx = Array.from({ length: gridCols })
+            .map((_, i) => i)
+            .filter((i) => {
+              const c = columns[i];
+              if (!c) return true; // keep empty placeholder slots
+              return isTradingDay(new Date(c.expiration + "T00:00:00"));
+            });
           return (
-            <div
-              key={strike}
-              style={{
-                display: "grid",
-                gridTemplateColumns: `100px repeat(${gridCols}, minmax(78px, 1fr))`,
-                position: "relative",
-                ...rowStyle,
-                ...(emBorder ?? {}),
-              }}
-            >
-              {(is1x || is2x) && (
-                <span style={{
-                  position: "absolute", top: -8, left: 4, zIndex: 3,
-                  fontSize: 8, fontWeight: 800, letterSpacing: "0.05em",
-                  color: "#0b0f1a", background: "rgba(255,255,255,.92)",
-                  padding: "0 4px", borderRadius: 3, pointerEvents: "none",
-                  fontFamily: "sans-serif",
-                }}>{is1x ? "EM" : "2× EM"}</span>
-              )}
-              <div
-                style={{
-                  padding: "4px 6px",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  fontFamily: "monospace",
-                  textAlign: "left",
-                  color: isATM ? "#ffb300" : "#e4e4e7",
-                  background: isATM ? "rgba(255,179,0,.12)" : "transparent",
-                  borderRight: "1px solid rgba(255,255,255,.06)",
-                }}
-              >
-                {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
-              </div>
-
-              {Array.from({ length: gridCols }).map((_, i) => {
-                const col = columns[i];
-                const value = col ? valueAt(col, strike) : null;
-                const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
-                const isMvc = greekMode === "gex" && col != null && mvcByCol[i] === strike;
-                return (
-                  <div
-                    key={col?.expiration ?? `c-${i}`}
-                    className={isMvc ? "mvc-peak-cell" : undefined}
-                    style={{
-                      position: "relative",
-                      padding: "4px 6px",
-                      fontSize: 11,
-                      fontFamily: "monospace",
-                      textAlign: "right",
-                      color: value == null ? "#3a4a5e" : "#ffffff",
-                      background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
-                      borderLeft: "1px solid rgba(255,255,255,.04)",
-                      fontWeight: 700,
-                      ...(isMvc ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
-                    }}
-                  >
-                    {isMvc && (
-                      <span title="MVC — highest |net GEX|" style={{
-                        position: "absolute", top: 1, left: 3, fontSize: 12, lineHeight: 1,
-                        color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
-                      }}>★</span>
-                    )}
-                    {value == null ? "·" : fmtMoney(value)}
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${renderIdx.length}, minmax(120px, 1fr))`, gap: 10, alignItems: "start" }}>
+            {renderIdx.map((i) => {
+              const col = columns[i];
+              const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
+              // Column total of the active greek across visible strikes.
+              const colTotal = col
+                ? visibleStrikes.reduce((s, k) => { const v = valueAt(col, k); return s + (v ?? 0); }, 0)
+                : null;
+              return (
+                <div
+                  key={col?.expiration ?? `card-${i}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    border: `1px solid ${HT.border}`,
+                    borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
+                    background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.08)} 0%, transparent 70%), ${HT.panelBg}`,
+                  }}
+                >
+                  {/* Card header — expiry */}
+                  <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: "7px 8px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}</div>
                   </div>
-                );
-              })}
-            </div>
+
+                  {/* Total — sits right under the header, before the strikes */}
+                  <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: HT.muted, padding: "6px 8px", borderBottom: `1px solid ${HT.border}`, background: rgba(HT.cyan, 0.04) }}>Total {greekMode.toUpperCase()}</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", textAlign: "right", padding: "6px 8px", borderBottom: `1px solid ${HT.border}`, background: rgba(HT.cyan, 0.04), color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+                    {colTotal == null ? "—" : fmtMoney(colTotal)}
+                  </div>
+
+                  {/* Column sub-headers */}
+                  <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: HT.muted, padding: "4px 8px", borderBottom: `1px solid ${HT.border}` }}>Strike</div>
+                  <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: HT.cyan, textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${HT.border}` }}>{greekMode.toUpperCase()}</div>
+
+                  {/* One pair of cells per shared strike (row N = same strike in every card) */}
+                  {visibleStrikes.map((strike) => {
+                    const isATM = strike === nearestStrike;
+                    const is1x = anyCurrentWeek && colIsCurrentWeek[i] && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
+                    const is2x = anyCurrentWeek && colIsCurrentWeek[i] && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
+                    const emBorder = is1x ? "2px solid rgba(255,255,255,.92)" : is2x ? "2px dashed rgba(255,255,255,.85)" : undefined;
+                    const value = col ? valueAt(col, strike) : null;
+                    const isMvc = greekMode === "gex" && col != null && mvcByCol[i] === strike;
+                    return (
+                      <div key={strike} style={{ display: "contents" }}>
+                        <div style={{
+                          padding: "4px 8px", fontSize: 11, fontWeight: 700, fontFamily: "monospace", textAlign: "left",
+                          color: isATM ? "#ffb300" : "#e4e4e7",
+                          background: isATM ? "rgba(255,179,0,.12)" : value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
+                          borderTop: emBorder,
+                          ...(isMvc ? { borderLeft: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
+                        }}>
+                          {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
+                        </div>
+                        <div
+                          className={isMvc ? "mvc-peak-cell" : undefined}
+                          style={{
+                            padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
+                            color: value == null ? "#3a4a5e" : "#ffffff",
+                            background: isATM ? "rgba(255,179,0,.07)" : value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
+                            borderTop: emBorder,
+                            ...(isMvc ? { borderRight: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
+                          }}
+                        >
+                          {isMvc && <span title="MVC — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
+                          {value == null ? "·" : fmtMoney(value)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
           );
-        })}
-      </div>
+          })()}
+        </div>
+      )}
     </div>
   );
 }

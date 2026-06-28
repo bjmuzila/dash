@@ -11,6 +11,7 @@ import {
   homeSecondaryButtonStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
+import { DockCalendar } from "@/components/shared/DockToolbar";
 
 const TABLES = [
   { id: "eod_gex", label: "EOD GEX" },
@@ -153,12 +154,7 @@ export default function DatabasePage() {
           </span>
           <div className="flex items-center gap-1">
             <span className="text-xs" style={{ color: HOME_THEME.muted }}>Date:</span>
-            <input
-              type="date"
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              style={{ ...homeInputStyle, fontSize: 11, padding: "4px 8px", fontFamily: "monospace" }}
-            />
+            <DockCalendar value={dateFilter} onChange={setDateFilter} />
             <button
               onClick={() => setDateFilter(todayET())}
               style={{ fontSize: 10, color: HOME_THEME.cyan, background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }}
@@ -201,30 +197,36 @@ export default function DatabasePage() {
 
       <div style={homeContentStyle}>
         <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <div className="flex flex-shrink-0 overflow-x-auto" style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
-            {TABLES.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                style={{
-                  padding: "12px 14px",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: ".08em",
-                  textTransform: "uppercase",
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: "2px solid",
-                  borderBottomColor: tab === t.id ? HOME_THEME.cyan : "transparent",
-                  color: tab === t.id ? HOME_THEME.cyan : HOME_THEME.muted,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
+          <div className="flex flex-shrink-0 overflow-x-auto" style={{ gap: 6, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            {TABLES.map((t) => {
+              const on = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  style={{
+                    padding: "6px 12px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: ".08em",
+                    textTransform: "uppercase",
+                    borderRadius: 8,
+                    border: on ? `1px solid ${HOME_THEME.cyan}59` : `1px solid ${HOME_THEME.border}`,
+                    background: on
+                      ? `linear-gradient(180deg, ${HOME_THEME.cyan}2e, ${HOME_THEME.cyan}0d)`
+                      : "rgba(255,255,255,0.04)",
+                    color: on ? HOME_THEME.cyan : HOME_THEME.text,
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                    boxShadow: on ? `0 0 14px ${HOME_THEME.cyan}3a, 0 2px 8px rgba(0,0,0,0.35)` : "none",
+                    transition: "background .14s, color .14s, border-color .14s",
+                  }}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex-1 overflow-auto">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 
 interface CalEvent {
   date: string;
@@ -166,9 +166,10 @@ export default function EconomicCalendarPage() {
             </button>
             {dropOpen && (
               <div style={{
-                position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 200,
-                background: HT.panelBgStrong, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 4,
-                padding: "4px 0", minWidth: 170, boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
+                position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 200,
+                background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+                border: `1px solid ${HT.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, borderRadius: 14,
+                padding: 6, minWidth: 180, boxShadow: DOCK_THEME.shadow,
               }}>
                 {FILTER_OPTS.map(o => {
                   const on = activeFilters.has(o.value);
@@ -178,9 +179,12 @@ export default function EconomicCalendarPage() {
                       onClick={() => toggleFilter(o.value)}
                       style={{
                         display: "flex", alignItems: "center", gap: 10,
-                        padding: "8px 16px", cursor: "pointer",
-                        background: on ? "rgba(33,158,188,0.08)" : "transparent",
+                        padding: "8px 12px", cursor: "pointer", borderRadius: 8,
+                        background: on ? DOCK_THEME.activeTile : "transparent",
+                        border: on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent",
                       }}
+                      onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+                      onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}
                     >
                       <span style={{
                         width: 14, height: 14, borderRadius: 3, flexShrink: 0,
@@ -189,7 +193,7 @@ export default function EconomicCalendarPage() {
                         display: "flex", alignItems: "center", justifyContent: "center",
                         fontSize: 9, color: "#05080d", fontWeight: 900,
                       }}>{on ? "✓" : ""}</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: on ? "#fff" : "#8a9ab8" }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: on ? HT.cyan : HT.text }}>
                         {o.label}
                       </span>
                     </div>

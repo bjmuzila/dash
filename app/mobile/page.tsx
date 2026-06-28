@@ -5,6 +5,13 @@ import GexChart, { type GexMode, type DataMode } from "@/components/dashboard/Ge
 import GexHeatmap from "@/components/dashboard/GexHeatmap";
 import { computeGexSummary } from "@/lib/calculations/gex";
 import { callGEXOf, putGEXOf, netGEXOf, type ChainRow } from "@/lib/calculations/calculations";
+import { HOME_THEME } from "@/components/shared/homeTheme";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
+
+// Status-dot colors (live/err/pending) — sourced from theme.
+const STATUS_LIVE = HOME_THEME.green;
+const STATUS_ERR = HOME_THEME.red;
+const STATUS_PENDING = HOME_THEME.orange;
 
 interface LiveEntry {
   bid?: number; ask?: number; last?: number;
@@ -311,7 +318,7 @@ export default function MobileGexPage() {
     };
   }, []);
 
-  const wsDot = wsStatus === "live" ? "#00e676" : wsStatus === "err" ? "#ef4444" : "#faad14";
+  const wsDot = wsStatus === "live" ? STATUS_LIVE : wsStatus === "err" ? STATUS_ERR : STATUS_PENDING;
 
   return (
     <div
@@ -320,7 +327,8 @@ export default function MobileGexPage() {
         flexDirection: "column",
         width: "100%",
         height: "100vh",
-        background: "#05080d",
+        background: HOME_THEME.bg,
+        backgroundImage: HOME_THEME.shellGlow,
         fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
         fontWeight: 700,
         overflow: "hidden",
@@ -333,38 +341,25 @@ export default function MobileGexPage() {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "8px 12px",
-          background: "#070c14",
-          borderBottom: "1px solid #0d1f30",
+          background: HOME_THEME.panelBgStrong,
+          backdropFilter: "blur(16px)",
+          borderBottom: `1px solid ${HOME_THEME.border}`,
           flexShrink: 0,
           gap: 8,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: wsDot }} />
-          <select
-            value={selectedExpiry}
-            onChange={(e) => handleExpiry(e.target.value)}
-            style={{
-              background: "#0a0f16",
-              border: "1px solid #1a2a3a",
-              color: "#219EBC",
-              padding: "4px 8px",
-              borderRadius: 2,
-              fontSize: 11,
-              fontWeight: 700,
-              flex: 1,
-              minWidth: 0,
-              fontFamily: "inherit",
-            }}
-          >
-            {expirations.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
-            ))}
-          </select>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ThemedSelect
+              value={selectedExpiry}
+              onChange={handleExpiry}
+              options={expirations.map((e) => ({ value: e, label: e }))}
+              width="100%"
+            />
+          </div>
           {spotPrice > 0 && (
-            <span style={{ fontSize: 11, color: "#219EBC", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: HOME_THEME.cyan, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
               {spotPrice.toFixed(2)}
             </span>
           )}

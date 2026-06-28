@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-27 — Universal toolbar (floating pill) + ticker click-to-quotes + EM Buy Zone accent
+
+Rebuilt `components/shared/GlobalToolbar.tsx` into the V2 "floating pill" design: rounded full-width bar with a blue→teal gradient border and a cursor-follow cyan highlight, round hamburger (opens real `NavMenu`) with hover lift, `/cb-edge-logo.png` logo menu, centered live `ToolbarTicker` between divider rules, ET clock with seconds, round pencil Notes button with live count badge, and Clerk `UserButton`; mockups iterated in `app/toolbar-preview/page.tsx` (kept V2 only). Made the whole ticker open the quotes dropdown: `components/dashboard/NquQuotePill.tsx` accepts an optional `buttonRef` and ignores `[data-quotes-trigger]` clicks in its outside-close handler, and `components/shared/ToolbarTicker.tsx` wraps VIX/ESU/SPX in a clickable group that forwards to the NQU button. Fixed `components/dashboard/EmCustomer.tsx` Buy Zone border to true green `#00e67640` (was `HOME_THEME.green` = light blue `#8ECAE6`) so it matches the Sell Zone red accent.
+
 ## 2026-06-27 — Nav restructure (GEX trim, Backend, Owner order)
 
 Restructured `NAV_GROUPS` in both `components/shared/NavMenu.tsx` (active) and `components/NavMenu.tsx`: trimmed GEX to Home, Traders Dashboard, Options Chain, Estimated Moves (renamed from "Estimated Moves Front End"), Analytics, ES Candles, ICT, Journal; moved Multi Greek, Greeks, Confidence, Fails, Premarket, Economic Calendar into the `devOnly` Backend group; kept Owner as its own `devOnly` group and ordered groups GEX → Backend → Owner.

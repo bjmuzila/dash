@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
 
 interface TickerEmStats {
   recentAvg: number | null;
@@ -162,41 +163,46 @@ export default function EmCustomer() {
     <div style={S.page}>
       <div style={S.wrap}>
         <div style={S.header}>
-          <div style={S.kicker}>CB Edge</div>
+          {/* CB EDGE logo */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={S.logo} />
           <h1 style={S.title}>Weekly Estimated Move & Zones</h1>
           <p style={S.sub}>
             Enter a ticker to see this week&apos;s estimated move and the buy / sell zones.
           </p>
         </div>
 
-        <form onSubmit={onSubmit} style={S.form}>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Enter ticker  (e.g. SPX, NDX, AAPL)"
-            spellCheck={false}
-            autoCapitalize="characters"
-            style={S.input}
-          />
-          <button type="submit" disabled={loading || !input.trim()} style={S.btn(loading || !input.trim())}>
-            {loading ? "Loading…" : "Get Levels"}
-          </button>
-        </form>
-
-        <div style={S.chips}>
-          {POPULAR.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => {
-                setInput(s);
-                lookup(s);
-              }}
-              style={S.chip(ticker === s)}
-            >
-              {s}
+        {/* Search card */}
+        <div style={S.searchCard}>
+          <form onSubmit={onSubmit} style={S.form}>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Enter ticker  (e.g. SPX, NDX, AAPL)"
+              spellCheck={false}
+              autoCapitalize="characters"
+              style={S.input}
+            />
+            <button type="submit" disabled={loading || !input.trim()} style={S.btn(loading || !input.trim())}>
+              {loading ? "Loading…" : "Get Levels"}
             </button>
-          ))}
+          </form>
+
+          <div style={S.chips}>
+            {POPULAR.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => {
+                  setInput(s);
+                  lookup(s);
+                }}
+                style={S.chip(ticker === s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
 
         {error && <div style={S.error}>{error}</div>}
@@ -238,7 +244,7 @@ export default function EmCustomer() {
                         <div style={{ fontSize: 20, fontWeight: 700, color: winPct >= 65 ? "#00e676" : winPct >= 50 ? "#ffc107" : "#ff4757", marginBottom: 8 }}>
                           {winPct}% Hit
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#eef7ff", marginBottom: 4 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: HOME_THEME.text, marginBottom: 4 }}>
                           <span>Miss ({losses})</span>
                           <span>{winPct}%</span>
                           <span>Hit ({winRate.hits})</span>
@@ -255,14 +261,14 @@ export default function EmCustomer() {
 
             {/* Zones */}
             <div style={S.zoneRow}>
-              <section style={{ ...S.card, ...S.zoneCard, borderColor: "#15402a" }}>
+              <section style={{ ...S.card, ...S.zoneCard, borderColor: "#00e67640" }}>
                 <div style={{ ...S.cardTitle, color: "#00e676" }}>Buy Zone</div>
                 <p style={S.zoneHint}>Support area — bias long while price holds above.</p>
                 <ZoneLine label="Near" value={val(data.buy_near)} color="#00e676" />
                 <ZoneLine label="Far" value={val(data.buy_far)} color="#00e676" dim />
               </section>
 
-              <section style={{ ...S.card, ...S.zoneCard, borderColor: "#42171c" }}>
+              <section style={{ ...S.card, ...S.zoneCard, borderColor: `${HOME_THEME.red}40` }}>
                 <div style={{ ...S.cardTitle, color: "#ff5a6a" }}>Sell Zone</div>
                 <p style={S.zoneHint}>Resistance area — bias short while price stays below.</p>
                 <ZoneLine label="Near" value={val(data.sell_near)} color="#ff5a6a" />
@@ -278,7 +284,7 @@ export default function EmCustomer() {
                   return (
                     <div style={S.avgStat}>
                       <div style={S.statLabel}>{label}</div>
-                      <div style={{ ...S.statValue, color: "#eef7ff", fontSize: 14 }}>--</div>
+                      <div style={{ ...S.statValue, color: HOME_THEME.text, fontSize: 14 }}>--</div>
                     </div>
                   );
                 }
@@ -302,7 +308,7 @@ export default function EmCustomer() {
                     {renderAvg(emStats.midAvg, "vs 12-Wk Avg")}
                   </div>
                   {emStats.sampleSize > 0 && (
-                    <div style={{ fontSize: 10, color: "#eef7ff", marginTop: 10, letterSpacing: ".08em", textTransform: "uppercase" as const }}>
+                    <div style={{ fontSize: 10, color: HOME_THEME.text, marginTop: 10, letterSpacing: ".08em", textTransform: "uppercase" as const }}>
                       Based on {emStats.sampleSize} week{emStats.sampleSize !== 1 ? "s" : ""} of recorded data
                     </div>
                   )}
@@ -348,7 +354,8 @@ const S = {
   page: {
     flex: 1,
     overflow: "auto",
-    background: "#080c14",
+    background: HOME_THEME.bg,
+    backgroundImage: HOME_THEME.shellGlow,
     height: "100%",
     padding: "32px 20px 60px",
     boxSizing: "border-box" as const,
@@ -360,24 +367,24 @@ const S = {
     fontWeight: 700,
     letterSpacing: ".26em",
     textTransform: "uppercase" as const,
-    color: "#219EBC",
+    color: HOME_THEME.cyan,
     marginBottom: 8,
   },
   title: {
     fontSize: 26,
     fontWeight: 800,
-    color: "#eef7ff",
+    color: HOME_THEME.text,
     margin: 0,
     letterSpacing: ".01em",
   },
-  sub: { fontSize: 14, color: "#eef7ff", marginTop: 8 },
+  sub: { fontSize: 14, color: HOME_THEME.text, marginTop: 8 },
   form: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" as const },
   input: {
     flex: 1,
     minWidth: 200,
-    background: "#04070c",
-    border: "1px solid #1e3a5f",
-    color: "#eef7ff",
+    background: "rgba(0,0,0,0.4)",
+    border: `1px solid ${HOME_THEME.border}`,
+    color: HOME_THEME.text,
     fontSize: 16,
     padding: "12px 14px",
     borderRadius: 8,
@@ -386,33 +393,50 @@ const S = {
     letterSpacing: ".04em",
   },
   btn: (disabled: boolean) => ({
-    background: disabled ? "#0a1628" : "#0d2b46",
-    border: `1px solid ${disabled ? "#1e3a5f" : "#2d6da3"}`,
-    color: disabled ? "#456" : "#eef7ff",
-    fontSize: 14,
-    fontWeight: 700,
-    letterSpacing: ".08em",
-    textTransform: "uppercase" as const,
+    ...homeButtonStyle,
+    fontSize: 12,
     padding: "12px 20px",
-    borderRadius: 8,
+    opacity: disabled ? 0.45 : 1,
     cursor: disabled ? "not-allowed" : "pointer",
   }),
-  chips: { display: "flex", flexWrap: "wrap" as const, gap: 6, marginBottom: 22 },
+  chips: { display: "flex", flexWrap: "wrap" as const, justifyContent: "center" as const, gap: 6 },
+  searchCard: {
+    background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+    border: `1px solid ${HOME_THEME.border}`,
+    borderTop: `2px solid ${HOME_THEME.cyan}d9`,
+    borderRadius: 16,
+    padding: "18px 18px",
+    marginBottom: 22,
+    backdropFilter: "blur(16px)",
+    boxShadow: "0 14px 40px rgba(0,0,0,.3)",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 14,
+  },
+  logo: {
+    height: 144,
+    width: "auto",
+    display: "block",
+    margin: "0 auto -18px",
+  },
   chip: (active: boolean) => ({
-    background: active ? "#0d2b46" : "#07111d",
-    border: `1px solid ${active ? "#2d6da3" : "#13253a"}`,
-    color: active ? "#eef7ff" : "#7ab8ff",
+    background: active
+      ? `linear-gradient(180deg, ${HOME_THEME.cyan}29, ${HOME_THEME.cyan}0d)`
+      : `${HOME_THEME.cyan}12`,
+    border: `1px solid ${active ? HOME_THEME.cyan + "73" : HOME_THEME.cyan + "33"}`,
+    color: HOME_THEME.cyan,
     fontSize: 12,
-    fontWeight: 700,
-    padding: "6px 11px",
+    fontWeight: 800,
+    letterSpacing: ".06em",
+    padding: "6px 13px",
     borderRadius: 20,
     cursor: "pointer",
-    letterSpacing: ".04em",
+    boxShadow: active ? `0 0 12px ${HOME_THEME.cyan}3a` : "none",
   }),
   error: {
-    background: "#1a0e12",
-    border: "1px solid #42171c",
-    color: "#ff8a96",
+    background: `${HOME_THEME.red}14`,
+    border: `1px solid ${HOME_THEME.red}40`,
+    color: HOME_THEME.red,
     fontSize: 14,
     padding: "14px 16px",
     borderRadius: 8,
@@ -420,7 +444,7 @@ const S = {
   },
   empty: {
     textAlign: "center" as const,
-    color: "#eef7ff",
+    color: HOME_THEME.text,
     fontSize: 14,
     padding: "40px 0",
   },
@@ -431,30 +455,31 @@ const S = {
     flexWrap: "wrap" as const,
     marginBottom: 14,
   },
-  resultTicker: { fontSize: 30, fontWeight: 800, color: "#eef7ff", letterSpacing: ".02em" },
+  resultTicker: { fontSize: 30, fontWeight: 800, color: HOME_THEME.text, letterSpacing: ".02em" },
   resultExp: {
     fontSize: 12,
-    color: "#eef7ff",
+    color: HOME_THEME.text,
     textTransform: "uppercase" as const,
     letterSpacing: ".1em",
     fontWeight: 700,
   },
-  resultUpdated: { fontSize: 11, color: "#eef7ff", marginLeft: "auto" },
+  resultUpdated: { fontSize: 11, color: HOME_THEME.text, marginLeft: "auto" },
   card: {
-    background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.08) 0%, transparent 55%), #0b111b",
-    border: "1px solid #1a2a3a",
-    borderTop: "2px solid rgba(33,158,188,0.45)",
+    background: `radial-gradient(circle at 50% 0%, rgba(33,158,188,0.08) 0%, transparent 55%), ${HOME_THEME.panelBg}`,
+    border: `1px solid ${HOME_THEME.border}`,
+    borderTop: `2px solid ${HOME_THEME.cyan}80`,
     borderRadius: 12,
     padding: "16px 18px",
     marginBottom: 14,
     boxShadow: "0 14px 40px rgba(0,0,0,.3)",
+    backdropFilter: "blur(16px)",
   },
   cardTitle: {
     fontSize: 12,
     fontWeight: 700,
     letterSpacing: ".14em",
     textTransform: "uppercase" as const,
-    color: "#219EBC",
+    color: HOME_THEME.cyan,
     marginBottom: 14,
   },
   emGrid: {
@@ -463,22 +488,22 @@ const S = {
     gap: 10,
   },
   stat: {
-    background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 60%), #04070c",
-    border: "1px solid #13253a",
+    background: `radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 60%), rgba(0,0,0,0.4)`,
+    border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 8,
     padding: "12px 8px",
     textAlign: "center" as const,
   },
   avgStat: {
-    background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 60%), #04070c",
-    border: "1px solid #13253a",
+    background: `radial-gradient(circle at 50% 0%, rgba(33,158,188,0.06) 0%, transparent 60%), rgba(0,0,0,0.4)`,
+    border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 8,
     padding: "12px 8px",
     textAlign: "center" as const,
   },
   statLabel: {
     fontSize: 10,
-    color: "#eef7ff",
+    color: HOME_THEME.text,
     letterSpacing: ".12em",
     textTransform: "uppercase" as const,
     fontWeight: 700,
@@ -491,7 +516,7 @@ const S = {
     gap: 14,
   },
   zoneCard: { marginBottom: 14 },
-  zoneHint: { fontSize: 11, color: "#eef7ff", margin: "0 0 14px", lineHeight: 1.45 },
+  zoneHint: { fontSize: 11, color: HOME_THEME.text, margin: "0 0 14px", lineHeight: 1.45 },
   zoneLine: {
     display: "flex",
     justifyContent: "space-between",
@@ -501,7 +526,7 @@ const S = {
   },
   zoneLineLabel: {
     fontSize: 11,
-    color: "#eef7ff",
+    color: HOME_THEME.text,
     letterSpacing: ".1em",
     textTransform: "uppercase" as const,
     fontWeight: 700,
@@ -516,11 +541,11 @@ const S = {
     fontWeight: 700,
     margin: "4px 0 10px",
   },
-  pivotVal: { color: "#eef7ff", fontFamily: mono, marginLeft: 8, fontSize: 16 },
+  pivotVal: { color: HOME_THEME.text, fontFamily: mono, marginLeft: 8, fontSize: 16 },
   disclaimer: {
     textAlign: "center" as const,
     fontSize: 11,
-    color: "#eef7ff",
+    color: HOME_THEME.text,
     marginTop: 18,
     lineHeight: 1.5,
   },

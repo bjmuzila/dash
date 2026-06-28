@@ -1259,9 +1259,9 @@ export default function EstimatedMoves() {
           />
           <DockGap />
 
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#219EBC", letterSpacing: ".12em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{viewTitle}</span>
-          <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
-          <span style={{ fontSize: 12, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: HT.cyan, letterSpacing: ".12em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{viewTitle}</span>
+          <span style={{ fontSize: 12, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
+          <span style={{ fontSize: 12, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase" }}>
             {activeView === "estimated" ? targetDateLabel : activeView === "tracker" ? "" : "Last Completed Week"}
           </span>
 
@@ -1289,7 +1289,7 @@ export default function EstimatedMoves() {
 
           {activeView === "estimated" && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
-              <span style={{ fontSize: 11, color: "#eef7ff", letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Exp</span>
+              <span style={{ fontSize: 11, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Exp</span>
               <DockExpiryPicker
                 expirations={fridayExpirations}
                 value={expOverride}

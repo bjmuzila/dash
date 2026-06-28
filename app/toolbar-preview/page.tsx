@@ -336,6 +336,15 @@ export default function ToolbarPreviewPage() {
       </p>
 
       {/* =========================================================
+          UNIVERSAL TOOLBAR — design mockups (4 variants)
+          Same items as the live GlobalToolbar: hamburger, logo,
+          user avatar, VIX/ES/SPX/NQ ticker, ET clock, Notes.
+          ========================================================= */}
+      <div style={{ width: "100vw", marginLeft: "calc(50% - 50vw)" }}>
+        <UniversalToolbarMockups />
+      </div>
+
+      {/* =========================================================
           STANDALONE EXAMPLES — 3-column row, one example per column
           ========================================================= */}
       <div style={{
@@ -995,6 +1004,388 @@ function CalendarDropdown() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   UNIVERSAL TOOLBAR MOCKUPS — 4 variants, same items as GlobalToolbar.
+   ===================================================================== */
+const UP = "#22e3a0";
+const DN = "#ff5b6e";
+
+const HAMBURGER = "M4 7h16M4 12h16M4 17h16";
+const PENCIL = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z";
+
+/* ── live ET clock (ticks every second, always shows seconds) ── */
+function useEtClock() {
+  const [t, setT] = useState("--:--:--");
+  useEffect(() => {
+    const tick = () => setT(new Date().toLocaleTimeString("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return t;
+}
+
+/* ── shared open/close dropdown wrapper (outside-click + Esc) ── */
+function Dropdown({ open, onClose, align = "left", width, children }: {
+  open: boolean; onClose: () => void; align?: "left" | "right"; width?: number; children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onEsc);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onEsc); };
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div ref={ref} style={{
+      position: "absolute", top: "calc(100% + 10px)", [align]: 0, width, zIndex: 80,
+    }}>{children}</div>
+  );
+}
+
+function Logo({ size = 15 }: { size?: number }) {
+  return (
+    <span style={{ fontWeight: 800, letterSpacing: 0.4, fontSize: size, color: C.text, whiteSpace: "nowrap" }}>
+      CB<span style={{ color: C.cyan }}>·</span>EDGE
+    </span>
+  );
+}
+
+function Avatar({ s = 30 }: { s?: number }) {
+  return (
+    <span style={{
+      width: s, height: s, borderRadius: "50%", flexShrink: 0,
+      background: rgba(C.cyan, 0.18), border: `1px solid ${rgba(C.cyan, 0.4)}`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: s * 0.36, fontWeight: 700, color: "#7fd4e6",
+    }}>BM</span>
+  );
+}
+
+type Tk = { s: string; base: number; chg: number; pct: number; dec: number };
+const SEED_TICKS: Tk[] = [
+  { s: "VIX", base: 14.2, chg: -0.38, pct: -2.61, dec: 2 },
+  { s: "ES", base: 7412, chg: 18.25, pct: 0.25, dec: 0 },
+  { s: "SPX", base: 7501, chg: 12.40, pct: 0.17, dec: 0 },
+  { s: "NQ", base: 22140, chg: -64.50, pct: -0.29, dec: 0 },
+];
+
+function fmtSigned(n: number, dec = 2) {
+  return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(dec)}`;
+}
+
+/* ── live-drifting ticker values (shared across all toolbars) ── */
+function useLiveTicks() {
+  const [ticks, setTicks] = useState(SEED_TICKS);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTicks(prev => prev.map(t => {
+        const jitter = (Math.random() - 0.5) * (t.base * 0.0004 + 0.02);
+        const price = t.base + t.chg + jitter;
+        const chg = t.chg + jitter;
+        const pct = (chg / t.base) * 100;
+        return { ...t, _price: price, _chg: chg, _pct: pct } as any;
+      }));
+    }, 1500);
+    return () => clearInterval(id);
+  }, []);
+  return ticks;
+}
+
+/** Interactive ticker — click opens the quotes panel under the caret (NQ side). */
+function Ticker({ fs = 12, gap = 14 }: { fs?: number; gap?: number }) {
+  const [open, setOpen] = useState(false);
+  const ticks = useLiveTicks();
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        title="Open quotes panel"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          display: "flex", alignItems: "center", gap, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+          cursor: "pointer", padding: "5px 10px", borderRadius: 10, fontFamily: "inherit",
+          border: `1px solid ${open ? rgba(C.cyan, 0.45) : rgba(C.cyan, 0.18)}`,
+          background: open ? rgba(C.cyan, 0.08) : "rgba(255,255,255,0.02)",
+          boxShadow: open ? `0 0 14px ${rgba(C.cyan, 0.25)}` : "none",
+          transition: "border-color .14s, background .14s",
+        }}
+      >
+        {ticks.map((t: any) => {
+          const chg = t._chg ?? t.chg, pct = t._pct ?? t.pct, price = t._price ?? (t.base + t.chg);
+          const up = chg >= 0, col = up ? UP : DN;
+          return (
+            <span key={t.s} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: fs }}>
+              <span style={{ color: C.muted, fontWeight: 700 }}>{t.s}</span>
+              <span style={{ color: C.text, fontWeight: 700 }}>{price.toFixed(t.dec)}</span>
+              <span style={{ color: col, fontWeight: 700 }}>{up ? "▲" : "▼"}</span>
+              <span style={{ color: col, fontWeight: 600, fontSize: fs - 1 }}>
+                {fmtSigned(chg, t.dec === 0 ? 2 : t.dec)} ({fmtSigned(pct)}%)
+              </span>
+            </span>
+          );
+        })}
+        <span style={{ display: "flex", color: C.cyan, marginLeft: 2, transition: "transform .18s", transform: open ? "rotate(180deg)" : "none" }}>
+          <Icon d="M6 9l6 6 6-6" size={fs + 4} />
+        </span>
+      </button>
+      <Dropdown open={open} onClose={() => setOpen(false)} align="right">
+        <div style={{ width: 320 }}><QuotesPreview /></div>
+      </Dropdown>
+    </div>
+  );
+}
+
+function Clock({ fs = 13 }: { fs?: number }) {
+  const t = useEtClock();
+  return (
+    <span suppressHydrationWarning style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700, letterSpacing: 0.5, whiteSpace: "nowrap", color: "#e8edf5", fontSize: fs }}>
+      {t}
+      <span style={{ fontSize: 10, opacity: 0.55, marginLeft: 3 }}>ET</span>
+    </span>
+  );
+}
+
+/** Hamburger that opens the nav panel. */
+function MenuTrigger({ children, align = "left" }: { children: (open: boolean, toggle: () => void) => React.ReactNode; align?: "left" | "right" }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      {children(open, () => setOpen(v => !v))}
+      <Dropdown open={open} onClose={() => setOpen(false)} align={align}>
+        <NavPanel />
+      </Dropdown>
+    </div>
+  );
+}
+
+/** Logo that opens a small Feedback menu. */
+function LogoTrigger({ size = 15 }: { size?: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(v => !v)} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", fontFamily: "inherit" }}>
+        <Logo size={size} />
+      </button>
+      <Dropdown open={open} onClose={() => setOpen(false)} width={200}>
+        <div style={{
+          padding: 6, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`,
+          background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow,
+        }}>
+          <button onClick={() => setOpen(false)} style={{ ...rowBase, width: "100%", cursor: "pointer", fontWeight: 600 }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>✉️ Send Feedback</span>
+          </button>
+        </div>
+      </Dropdown>
+    </div>
+  );
+}
+
+/** Avatar that opens a small account menu. */
+function AvatarTrigger({ s = 30 }: { s?: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(v => !v)} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, display: "flex" }}>
+        <Avatar s={s} />
+      </button>
+      <Dropdown open={open} onClose={() => setOpen(false)} width={180}>
+        <div style={{
+          padding: 6, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`,
+          background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow,
+        }}>
+          {["Account", "Settings", "Sign out"].map(l => (
+            <button key={l} onClick={() => setOpen(false)} style={{ ...rowBase, width: "100%", cursor: "pointer", fontWeight: 600 }}
+              onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>{l}</button>
+          ))}
+        </div>
+      </Dropdown>
+    </div>
+  );
+}
+
+/** Notes button — full pill (label + count), toggles a notes panel. */
+function NotesButton({ fs = 13 }: { fs?: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        title="Notes"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 7, height: 42, padding: "0 14px",
+          borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
+          border: `1px solid ${open ? rgba(C.cyan, 0.55) : rgba(C.cyan, 0.35)}`,
+          background: open ? "linear-gradient(180deg,rgba(33,158,188,.22),rgba(33,158,188,.06))" : "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
+          color: "#7fd4e6", fontSize: fs, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", whiteSpace: "nowrap",
+          boxShadow: open ? `0 0 14px ${rgba(C.cyan, 0.3)}` : "none",
+        }}
+      >
+        <Icon d={PENCIL} size={fs + 4} />Notes<span style={{ color: "#7fd4e6", fontSize: fs - 1 }}>3</span>
+      </button>
+      <Dropdown open={open} onClose={() => setOpen(false)} align="right" width={260}>
+        <div style={{
+          padding: 12, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`,
+          background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow,
+        }}>
+          <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
+          {["Watch SPX 7500 flip", "ES gap fill by 10:30", "Trim NQ into VWAP"].map((n, i) => (
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 13, color: C.text }}>{n}</div>
+          ))}
+        </div>
+      </Dropdown>
+    </div>
+  );
+}
+
+/** Compact icon-only Notes (V4) with count dot. */
+function NotesIcon() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(v => !v)} title="Notes" aria-label="Notes" style={{ position: "relative", display: "flex", background: "transparent", border: "none", cursor: "pointer", padding: 0, color: open ? C.cyan : "#7fd4e6" }}>
+        <Icon d={PENCIL} size={18} />
+        <span style={{ position: "absolute", top: 0, right: -1, width: 7, height: 7, borderRadius: "50%", background: C.cyan }} />
+      </button>
+      <Dropdown open={open} onClose={() => setOpen(false)} align="right" width={260}>
+        <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`, background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow }}>
+          <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
+          {["Watch SPX 7500 flip", "ES gap fill by 10:30", "Trim NQ into VWAP"].map((n, i) => (
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 13, color: C.text }}>{n}</div>
+          ))}
+        </div>
+      </Dropdown>
+    </div>
+  );
+}
+
+/** Round notes button with count badge (V2 pill). */
+function NotesPillIcon() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(v => !v)} title="Notes" aria-label="Notes" style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", width: 38, height: 38, borderRadius: "50%", cursor: "pointer", fontFamily: "inherit", background: rgba(C.cyan, 0.14), border: `1px solid ${open ? rgba(C.cyan, 0.6) : rgba(C.cyan, 0.35)}`, color: "#7fd4e6", boxShadow: open ? `0 0 14px ${rgba(C.cyan, 0.3)}` : "none" }}>
+        <Icon d={PENCIL} size={18} />
+        <span style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: C.cyan, color: "#04222b", fontSize: 9, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>3</span>
+      </button>
+      <Dropdown open={open} onClose={() => setOpen(false)} align="right" width={260}>
+        <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`, background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow }}>
+          <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
+          {["Watch SPX 7500 flip", "ES gap fill by 10:30", "Trim NQ into VWAP"].map((n, i) => (
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 13, color: C.text }}>{n}</div>
+          ))}
+        </div>
+      </Dropdown>
+    </div>
+  );
+}
+
+/** Icon-only menu trigger (V2/V3/V4) returning a styled round/tile button. */
+function IconMenu({ render }: { render: (open: boolean, toggle: () => void) => React.ReactNode }) {
+  return <MenuTrigger>{(open, toggle) => render(open, toggle)}</MenuTrigger>;
+}
+
+/* ── Toolbar shell: blue/teal gradient border + cursor-follow highlight ──
+   `row` = the flex layout style for the toolbar contents (height, padding, gap, bg). */
+function ToolbarShell({ radius = 0, row, wrapStyle, children }: {
+  radius?: number; row: React.CSSProperties; wrapStyle?: React.CSSProperties; children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const inner = Math.max(0, radius - 1.5);
+  const onMove = (e: React.MouseEvent) => {
+    const r = ref.current?.getBoundingClientRect();
+    if (r) setPos({ x: e.clientX - r.left, y: e.clientY - r.top });
+  };
+  return (
+    <div style={{
+      position: "relative", borderRadius: radius, padding: 1.5,
+      background: `linear-gradient(110deg, ${rgba(C.cyan, 0.55)}, ${rgba("#3b82f6", 0.4)} 35%, ${rgba(C.cyan, 0.15)} 60%, ${rgba(C.cyan, 0.55)})`,
+      boxShadow: `0 0 18px -6px ${rgba(C.cyan, 0.4)}`,
+      ...wrapStyle,
+    }}>
+      <div
+        ref={ref}
+        onMouseMove={onMove}
+        onMouseLeave={() => setPos(null)}
+        style={{ position: "relative", borderRadius: inner, ...row, padding: 0 }}
+      >
+        {/* highlight + bg clip layer (kept separate so dropdowns aren't clipped) */}
+        <div aria-hidden style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: inner, zIndex: 0, pointerEvents: "none" }}>
+          <div style={{
+            position: "absolute", inset: 0,
+            opacity: pos ? 1 : 0, transition: "opacity .25s",
+            background: pos ? `radial-gradient(170px circle at ${pos.x}px ${pos.y}px, ${rgba(C.cyan, 0.20)}, transparent 70%)` : "none",
+          }} />
+        </div>
+        <div style={{
+          position: "relative", zIndex: 1, display: "flex", alignItems: "center", width: "100%", boxSizing: "border-box",
+          height: (row as any).height, padding: (row as any).padding ?? "0 24px", gap: (row as any).gap ?? 14,
+        }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* hover-accent helpers — cyan tint + small shadow on mouse over (cleared on open/leave) */
+const hoverShadow = `0 4px 12px -2px ${rgba(C.cyan, 0.45)}`;
+function applyHover(el: HTMLElement) {
+  el.style.color = C.cyan;
+  el.style.borderColor = rgba(C.cyan, 0.45);
+  el.style.boxShadow = hoverShadow;
+  el.style.transform = "translateY(-1px)";
+}
+function clearHover(el: HTMLElement, open: boolean, baseColor: string, baseBorder: string) {
+  el.style.color = open ? C.cyan : baseColor;
+  el.style.borderColor = baseBorder;
+  el.style.boxShadow = open ? `0 0 14px ${rgba(C.cyan, 0.3)}` : "none";
+  el.style.transform = "none";
+}
+
+function VariantCard({ children }: { tag?: string; title?: string; note?: string; children: React.ReactNode }) {
+  return <div style={{ width: "100%" }}>{children}</div>;
+}
+
+function UniversalToolbarMockups() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+
+      {/* Floating pill toolbar */}
+      <VariantCard>
+        <div style={{ display: "flex", justifyContent: "center", padding: "4px 24px" }}>
+          <ToolbarShell radius={999} wrapStyle={{ width: "100%", boxShadow: `0 14px 34px -14px rgba(0,0,0,.8), 0 0 18px -6px ${rgba(C.cyan, 0.4)}` }} row={{
+            height: 56, padding: "0 16px", gap: 16, background: "rgba(10,13,20,0.96)",
+          }}>
+            <IconMenu render={(open, toggle) => (
+              <button onClick={toggle} aria-label="Menu"
+                onMouseEnter={e => applyHover(e.currentTarget)}
+                onMouseLeave={e => clearHover(e.currentTarget, open, C.text, "transparent")}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 38, height: 38, borderRadius: "50%", cursor: "pointer", fontFamily: "inherit", border: "1px solid transparent", background: open ? rgba(C.cyan, 0.16) : C.tile, color: open ? C.cyan : C.text, transition: "color .14s, border-color .14s, box-shadow .14s, transform .14s" }}><Icon d={HAMBURGER} size={20} /></button>
+            )} />
+            <LogoTrigger size={15} />
+            <span style={{ width: 1, height: 24, background: C.border }} />
+            <div style={{ flex: 1, display: "flex", justifyContent: "center" }}><Ticker fs={13} gap={20} /></div>
+            <span style={{ width: 1, height: 24, background: C.border }} />
+            <Clock fs={13} />
+            <NotesPillIcon />
+            <AvatarTrigger s={38} />
+          </ToolbarShell>
+        </div>
+      </VariantCard>
+
     </div>
   );
 }

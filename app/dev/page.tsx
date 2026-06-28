@@ -1,10 +1,26 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { HOME_THEME, homeGlossPanelStyle } from "@/components/shared/homeTheme";
+import { PageShell } from "@/components/shared/PageCard";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
-
-const C = { cyan: "#219EBC", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8" };
-const NA = "#9fb3c8"; // n/a / muted — lightened from old #5d7388
+// All chrome sourced from the shared theme. Data-encoding colors (calls=green,
+// puts=red, net=purple, pos/neg) are theme tokens too.
+const C = {
+  cyan: HOME_THEME.cyan,
+  border: HOME_THEME.border,
+  card: HOME_THEME.panelBg,
+  label: HOME_THEME.text,
+};
+const NA = "rgba(255,255,255,0.45)";        // n/a / muted
+const POS = HOME_THEME.green;               // positive / calls accent value
+const NEG = HOME_THEME.red;                 // negative / puts value
+const CALLS = HOME_THEME.green;             // calls row accent
+const PUTS = HOME_THEME.red;                // puts row accent
+const NET = HOME_THEME.purple;              // net row accent
+const WARN = HOME_THEME.orange;             // warn / amber
+const VAL = "#CFE6F5";                       // neutral monospace value (count fields)
 
 type ProbeResult = {
   feeds?: Record<string, Record<string, unknown>>;
@@ -34,7 +50,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}55`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.14em" }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: "#fff", fontFamily: "monospace" }}>{children}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: HOME_THEME.text, fontFamily: "monospace" }}>{children}</div>
     </div>
   );
 }
@@ -70,7 +86,7 @@ const EXPOSURE_ROWS: { key: string; label: string }[] = [
 ];
 
 // 5th panel: net-greek exposures for the single contract.
-function ExposurePanel({ data, accent = "#ffb300" }: { data: Record<string, unknown> | undefined; accent?: string }) {
+function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> | undefined; accent?: string }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Greeks</div>
@@ -83,7 +99,7 @@ function ExposurePanel({ data, accent = "#ffb300" }: { data: Record<string, unkn
             return (
               <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
                 <span style={{ color: C.label }}>{label}</span>
-                <span style={{ color: na ? NA : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
+                <span style={{ color: na ? NA : (typeof v === "number" && v < 0 ? NEG : POS), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
               </div>
             );
           })}
@@ -154,7 +170,7 @@ function ShareActions({ text }: { text: string }) {
   const btn: React.CSSProperties = { fontSize: 11, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };
   return (
     <div style={{ display: "flex", gap: 8 }}>
-      <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? "#22e08a" : "#cfe" }}>{copied ? "✓ Copied" : "⧉ Copy"}</button>
+      <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? POS : VAL }}>{copied ? "✓ Copied" : "⧉ Copy"}</button>
       <button onClick={share} disabled={sending} style={{ ...btn, background: "#5865F2", color: "#fff", borderColor: "#5865F2", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         {sending ? "Sending…" : sent === "ok" ? "✓ Sent" : sent === "err" ? "✗ Failed" : "↗ Discord"}
       </button>
@@ -164,11 +180,11 @@ function ShareActions({ text }: { text: string }) {
 
 function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unknown> | undefined; ticker: string; strike: string }) {
   return (
-    <div style={{ background: C.card, border: `1px solid #a78bfa55`, borderTop: "3px solid #a78bfa", borderRadius: 12, padding: "14px 18px" }}>
+    <div style={{ background: C.card, border: `1px solid ${NET}55`, borderTop: `3px solid ${NET}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.14em" }}>Net Greeks · Call + Put</span>
-          <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", fontFamily: "monospace", padding: "2px 8px", borderRadius: 6, background: "#a78bfa22", border: "1px solid #a78bfa55" }}>{ticker || "?"} · {strike || "?"}</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: NET, textTransform: "uppercase", letterSpacing: "0.14em" }}>Net Greeks · Call + Put</span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.text, fontFamily: "monospace", padding: "2px 8px", borderRadius: 6, background: `${NET}22`, border: `1px solid ${NET}55` }}>{ticker || "?"} · {strike || "?"}</span>
         </div>
         <ShareActions text={buildNetShareText(data, ticker, strike)} />
       </div>
@@ -182,7 +198,7 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
             return (
               <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
                 <span style={{ color: C.label }}>{label}</span>
-                <span style={{ color: na ? NA : isCount ? "#cfe" : (typeof v === "number" && v < 0 ? "#ff6b6b" : "#22e08a"), fontWeight: 700 }}>
+                <span style={{ color: na ? NA : isCount ? VAL : (typeof v === "number" && v < 0 ? NEG : POS), fontWeight: 700 }}>
                   {na ? "n/a" : isCount ? fmt(v) : fmtExp(v)}
                 </span>
               </div>
@@ -199,7 +215,7 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
 
 // OI cross-check panel: our (TastyTrade) open interest vs Yahoo's for the same
 // contract — the A/B test for our persistent OI discrepancies.
-function OiComparePanel({ data, accent = "#a78bfa" }: { data: Record<string, unknown> | undefined; accent?: string }) {
+function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> | undefined; accent?: string }) {
   const ok = data?.ok === true;
   const matched = ok && data?.match === true;
   const ours = data?.ours as number | null | undefined;
@@ -208,24 +224,24 @@ function OiComparePanel({ data, accent = "#a78bfa" }: { data: Record<string, unk
   const pct = data?.pctDiff as number | null | undefined;
   // Highlight: green if within 2%, amber if 2–10%, red if >10% off.
   const aPct = typeof pct === "number" ? Math.abs(pct) : null;
-  const diffColor = aPct == null ? NA : aPct <= 2 ? "#22e08a" : aPct <= 10 ? "#ffb300" : "#ff6b6b";
+  const diffColor = aPct == null ? NA : aPct <= 2 ? POS : aPct <= 10 ? WARN : NEG;
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && !ok && (
-        <div style={{ color: "#ff6b6b", fontFamily: "monospace", fontSize: 13 }}>CBOE error: {fmt(data.status)}</div>
+        <div style={{ color: NEG, fontFamily: "monospace", fontSize: 13 }}>CBOE error: {fmt(data.status)}</div>
       )}
       {ok && !matched && (
-        <div style={{ color: "#ffb300", fontFamily: "monospace", fontSize: 13 }}>No CBOE match ({fmt(data.yahooContracts)} contracts scanned)</div>
+        <div style={{ color: WARN, fontFamily: "monospace", fontSize: 13 }}>No CBOE match ({fmt(data.yahooContracts)} contracts scanned)</div>
       )}
       {matched && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "monospace", fontSize: 13.5 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ color: C.label }}>Ours (TT)</span><span style={{ color: "#cfe", fontWeight: 700 }}>{fmt(ours)}</span>
+            <span style={{ color: C.label }}>Ours (TT)</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(ours)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ color: C.label }}>CBOE</span><span style={{ color: "#cfe", fontWeight: 700 }}>{fmt(yahoo)}</span>
+            <span style={{ color: C.label }}>CBOE</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(yahoo)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 2 }}>
             <span style={{ color: C.label }}>Diff</span>
@@ -253,7 +269,7 @@ function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record
         {entries.map(([k, v]) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "monospace", fontSize: 13.5 }}>
             <span style={{ color: C.label }}>{k}</span>
-            <span style={{ color: v == null || v === "" ? NA : "#cfe", fontWeight: 700 }}>{fmt(v)}</span>
+            <span style={{ color: v == null || v === "" ? NA : VAL, fontWeight: 700 }}>{fmt(v)}</span>
           </div>
         ))}
       </div>
@@ -424,14 +440,15 @@ export default function DevPage() {
     }
   }
 
-  const inputStyle: React.CSSProperties = { background: "#0b1320", color: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 16, fontFamily: "monospace", outline: "none" };
+  const inputStyle: React.CSSProperties = { background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 16, fontFamily: "monospace", outline: "none" };
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 24, color: "#fff", fontFamily: "var(--font-inter), 'Inter', sans-serif" }}>
+    <PageShell>
+      <div style={{ color: HOME_THEME.text }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Dev · Symbol Probe</span>
         <span style={{ fontSize: 12, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
-        <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 6, background: "#0c2535", color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
+        <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1f`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
       </div>
 
       {/* Controls */}
@@ -450,21 +467,24 @@ export default function DevPage() {
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
           Expiry
-          <select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={{ ...inputStyle, minWidth: 140 }}>
-            {!expirations.length && <option value="">—</option>}
-            {expirations.map((x) => <option key={x} value={x}>{x}</option>)}
-          </select>
+          <ThemedSelect
+            value={expiry}
+            placeholder="—"
+            width={160}
+            options={expirations.map((x) => ({ value: x, label: x }))}
+            onChange={setExpiry}
+          />
         </label>
-        <button onClick={render} disabled={loading} style={{ ...inputStyle, cursor: loading ? "wait" : "pointer", background: C.cyan, color: "#041016", fontWeight: 800, padding: "9px 22px", border: "none" }}>
+        <button onClick={render} disabled={loading} style={{ ...inputStyle, cursor: loading ? "wait" : "pointer", background: C.cyan, color: HOME_THEME.bg, fontWeight: 800, padding: "9px 22px", border: "none" }}>
           {loading ? "Loading…" : "Render"}
         </button>
-        <button onClick={stop} disabled={!loading} style={{ ...inputStyle, cursor: loading ? "pointer" : "not-allowed", background: loading ? "#ef4444" : "#2a1414", color: "#fff", fontWeight: 800, padding: "9px 22px", border: "none", opacity: loading ? 1 : 0.5 }}>
+        <button onClick={stop} disabled={!loading} style={{ ...inputStyle, cursor: loading ? "pointer" : "not-allowed", background: loading ? HOME_THEME.red : `${HOME_THEME.red}22`, color: HOME_THEME.text, fontWeight: 800, padding: "9px 22px", border: "none", opacity: loading ? 1 : 0.5 }}>
           ■ Stop
         </button>
       </div>
 
-      {error && <div style={{ color: "#ef4444", fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{error}</div>}
-      {statusMsg && !error && <div style={{ color: loading || statusMsg.startsWith("⚠") ? "#ffb300" : C.cyan, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{statusMsg}</div>}
+      {error && <div style={{ color: HOME_THEME.red, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{error}</div>}
+      {statusMsg && !error && <div style={{ color: loading || statusMsg.startsWith("⚠") ? WARN : C.cyan, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>{statusMsg}</div>}
 
       {/* Readout */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
@@ -473,29 +493,29 @@ export default function DevPage() {
         <Field label="Resolved Symbol">{sentSymbol || "—"}</Field>
         <Field label="Elapsed">
           {loading
-            ? <span style={{ color: "#ffb300" }}>{(liveMs / 1000).toFixed(1)}s ⏱</span>
+            ? <span style={{ color: WARN }}>{(liveMs / 1000).toFixed(1)}s ⏱</span>
             : elapsed != null ? `${elapsed} ms` : "—"}
         </Field>
       </div>
 
       {/* Row 1 — CALL cards */}
-      <RowLabel text="Calls" color="#22e08a" />
+      <RowLabel text="Calls" color={CALLS} />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} accent="#22e08a" />)}
-        <ExposurePanel data={callResult?.exposures} accent="#22e08a" />
-        <OiComparePanel data={callResult?.oiCompare} accent="#22e08a" />
+        {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} accent={CALLS} />)}
+        <ExposurePanel data={callResult?.exposures} accent={CALLS} />
+        <OiComparePanel data={callResult?.oiCompare} accent={CALLS} />
       </div>
 
       {/* Row 2 — PUT cards */}
-      <RowLabel text="Puts" color="#ff6b6b" />
+      <RowLabel text="Puts" color={PUTS} />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} accent="#ff6b6b" />)}
-        <ExposurePanel data={putResult?.exposures} accent="#ff6b6b" />
-        <OiComparePanel data={putResult?.oiCompare} accent="#ff6b6b" />
+        {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} accent={PUTS} />)}
+        <ExposurePanel data={putResult?.exposures} accent={PUTS} />
+        <OiComparePanel data={putResult?.oiCompare} accent={PUTS} />
       </div>
 
       {/* Row 3 — NET (call + put) Greeks */}
-      <RowLabel text="Net · Calls + Puts" color="#a78bfa" />
+      <RowLabel text="Net · Calls + Puts" color={NET} />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
         <NetExposurePanel data={combineExposures(callResult?.exposures, putResult?.exposures)} ticker={tkr} strike={strike} />
       </div>
@@ -503,7 +523,7 @@ export default function DevPage() {
       {/* Raw market-data items — every field, nothing dropped */}
       <details style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
         <summary style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em", cursor: "pointer" }}>Raw response (call + put)</summary>
-        <pre style={{ margin: "10px 0 0", fontSize: 13, fontFamily: "monospace", color: "#cfe", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <pre style={{ margin: "10px 0 0", fontSize: 13, fontFamily: "monospace", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {(callResult || putResult) ? JSON.stringify({ call: callResult, put: putResult }, null, 2) : "—"}
         </pre>
       </details>
@@ -517,7 +537,7 @@ export default function DevPage() {
         <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "monospace", fontSize: 12.5, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
           {!logs.length && <span style={{ color: C.label }}>—</span>}
           {logs.map((l, i) => {
-            const color = l.level === "ok" ? "#22e08a" : l.level === "warn" ? "#ffb300" : l.level === "err" ? "#ef4444" : "#dbe7f3";
+            const color = l.level === "ok" ? POS : l.level === "warn" ? WARN : l.level === "err" ? HOME_THEME.red : HOME_THEME.text;
             const ts = new Date(l.t).toLocaleTimeString("en-US", { hour12: false }) + "." + String(l.t % 1000).padStart(3, "0");
             return (
               <div key={i} style={{ color, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -527,6 +547,7 @@ export default function DevPage() {
           })}
         </div>
       </div>
-    </div>
+      </div>
+    </PageShell>
   );
 }

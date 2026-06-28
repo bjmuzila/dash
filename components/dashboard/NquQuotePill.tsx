@@ -129,7 +129,7 @@ function Sparkline({ data, up, width = 88, height = 26 }: { data: number[]; up: 
   );
 }
 
-export default function NquQuotePill() {
+export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?: React.MutableRefObject<HTMLButtonElement | null> } = {}) {
   const [recs, setRecs] = useState<Record<string, Rec>>({});
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
@@ -291,6 +291,9 @@ export default function NquQuotePill() {
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      // Clicks on the VIX/ESU/SPX trigger forward to this button — let that
+      // handler toggle, don't also close here (would cancel the toggle).
+      if (t instanceof Element && t.closest("[data-quotes-trigger]")) return;
       setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
@@ -319,7 +322,7 @@ export default function NquQuotePill() {
   return (
     <div style={{ position: "relative", flexShrink: 0, display: "flex", alignItems: "center" }}>
       <button
-        ref={btnRef}
+        ref={(el) => { btnRef.current = el; if (externalBtnRef) externalBtnRef.current = el; }}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
           setAnchor({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });

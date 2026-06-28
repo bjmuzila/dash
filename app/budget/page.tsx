@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { ThemedMonthPicker } from "@/components/shared/ThemedMonthPicker";
 
 // Clerk publishableKey isn't present at build time (mounted at runtime), so
 // prerendering this page throws "Missing publishableKey". Render at request time.
@@ -94,6 +96,7 @@ export default function BudgetPage() {
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"register" | "amazon">("register");
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
 
   // Add-row composer
   const [rwDate, setRwDate] = useState(todayIso());
@@ -265,10 +268,10 @@ export default function BudgetPage() {
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: "hidden", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
+      <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
-        <div style={{ ...card(), padding: 0, overflow: "visible" }}>
+        <div style={{ ...cardAccent(4), padding: 0, overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center", padding: "14px 18px 6px" }}>
             <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
             <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
@@ -276,7 +279,7 @@ export default function BudgetPage() {
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 20, flexWrap: "wrap", padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
             <div>
               <div style={labelCap()}>Month</div>
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ ...field(), width: 170 }} />
+              <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
             </div>
             <BeginningEditor beginningByBank={computed.beginningByBank} totals={computed.totals} onSave={saveBeginning} currency={currency} />
           </div>
@@ -285,12 +288,12 @@ export default function BudgetPage() {
         {/* Stat cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
           {[
-            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? HOME_THEME.red : HOME_THEME.cyan, icon: "📊" },
+            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? HOME_THEME.red : HOME_THEME.purple, icon: "📊" },
             { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },
             { label: "Total Outflows", value: Math.abs(computed.payments), color: HOME_THEME.red, icon: "📉" },
             { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? HOME_THEME.red : HOME_THEME.green, icon: "💵" },
           ].map((t) => (
-            <div key={t.label} style={{ ...card(), padding: 16 }}>
+            <div key={t.label} style={{ ...card(), padding: 16, borderTop: `2px solid ${bRgba(t.color, 0.85)}`, background: `radial-gradient(circle at 50% 0%, ${bRgba(t.color, 0.16)} 0%, transparent 62%), ${HOME_THEME.panelBg}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 14 }}>{t.icon}</span>
                 <span style={labelCap()}>{t.label}</span>
@@ -302,11 +305,11 @@ export default function BudgetPage() {
 
         {/* Projection chart + top expenses */}
         <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 14 }}>
-          <div style={{ ...card(), padding: 16 }}>
+          <div style={{ ...cardAccent(0), padding: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
             <ProjectionChart series={computed.series} currency={currency} />
           </div>
-          <div style={{ ...card(), padding: 16 }}>
+          <div style={{ ...cardAccent(1), padding: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>TOP EXPENSES</div>
             <TopExpenses items={computed.topExpenses} currency={currency} />
           </div>
@@ -337,7 +340,7 @@ export default function BudgetPage() {
         )}
 
         {/* Content */}
-        <div style={{ ...card(), flex: 1, minHeight: 0, overflow: "auto", padding: 0 }}>
+        <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
           {tab === "register" ? (
             <GroupedRegister groups={computed.groups} beginningBalance={computed.anyBeginning ? computed.beginningBalance : null} currency={currency} onEdit={editRow} onDelete={deleteRow} />
           ) : (
@@ -347,14 +350,11 @@ export default function BudgetPage() {
 
         {/* Composer */}
         {tab === "register" ? (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 1fr 130px 90px 130px 110px", gap: 10, alignItems: "center" }}>
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 1fr 130px 120px 130px 110px", gap: 10, alignItems: "center", position: "relative", zIndex: 20 }}>
             <input type="date" value={rwDate} onChange={(e) => setRwDate(e.target.value)} style={field()} />
             <input value={rwLabel} onChange={(e) => setRwLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Item (RENT, H PAY, VENMO…)" style={field()} />
-            <select value={rwBank} onChange={(e) => setRwBank(e.target.value as Bank)} style={field()}>{BANKS.map((b) => <option key={b} value={b}>{BANK_LABEL[b]}</option>)}</select>
-            <select value={rwSign} onChange={(e) => setRwSign(e.target.value as "-" | "+")} style={field()}>
-              <option value="-">− Pay</option>
-              <option value="+">+ Income</option>
-            </select>
+            <ThemedSelect value={rwBank} onChange={(v) => setRwBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
+            <ThemedSelect value={rwSign} onChange={(v) => setRwSign(v as "-" | "+")} options={[{ value: "-", label: "− Pay" }, { value: "+", label: "+ Income" }]} />
             <input value={rwAmount} onChange={(e) => setRwAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Amount" type="number" style={field()} />
             <button onClick={addRow} style={primary()}>Add Row</button>
           </div>
@@ -393,21 +393,26 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
 
   return (
     <div>
-      <div style={{ ...labelCap(), color: "#fff", display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
+      <div style={{ ...labelCap(), color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
         <span style={{ fontSize: 14 }}>🏦</span> Account balances
       </div>
       <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
         {BANKS.map((b) => (
           <div key={b} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
-            <span style={{ fontSize: 18, fontWeight: 900, color: totals[b] < 0 ? HOME_THEME.red : "#fff", lineHeight: 1.1 }}>{fmtMoney(totals[b], currency)}</span>
+            {(() => {
+              const shown = beginningByBank[b] ?? 0;
+              return (
+                <span style={{ fontSize: 18, fontWeight: 900, color: shown < 0 ? HOME_THEME.red : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
+              );
+            })()}
             <input
               value={vals[b]}
               onChange={(e) => setVals((p) => ({ ...p, [b]: e.target.value }))}
               onKeyDown={(e) => e.key === "Enter" && save()}
-              placeholder="set start…"
+              placeholder="set balance…"
               type="number"
-              title="Set this account's starting balance"
+              title="Set this account's balance"
               style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 12 }}
             />
           </div>
@@ -488,9 +493,9 @@ function RecurringManager({
       {/* Add a new rule */}
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 0.9fr 1fr 90px", gap: 10, alignItems: "end", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
         <div><div style={labelCap()}>Item</div><input value={label} onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="RENT, H PAY…" style={field()} /></div>
-        <div><div style={labelCap()}>How often</div><select value={frequency} onChange={(e) => setFrequency(e.target.value as Frequency)} style={field()}>{FREQS.map((f) => <option key={f} value={f}>{FREQ_LABEL[f]}</option>)}</select></div>
-        <div><div style={labelCap()}>Bank</div><select value={bank} onChange={(e) => setBank(e.target.value as Bank)} style={field()}>{BANKS.map((b) => <option key={b} value={b}>{BANK_LABEL[b]}</option>)}</select></div>
-        <div><div style={labelCap()}>Type</div><select value={sign} onChange={(e) => setSign(e.target.value as "-" | "+")} style={field()}><option value="-">− Pay</option><option value="+">+ Income</option></select></div>
+        <div><div style={labelCap()}>How often</div><ThemedSelect value={frequency} onChange={(v) => setFrequency(v as Frequency)} options={FREQS.map((f) => ({ value: f, label: FREQ_LABEL[f] }))} /></div>
+        <div><div style={labelCap()}>Bank</div><ThemedSelect value={bank} onChange={(v) => setBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} /></div>
+        <div><div style={labelCap()}>Type</div><ThemedSelect value={sign} onChange={(v) => setSign(v as "-" | "+")} options={[{ value: "-", label: "− Pay" }, { value: "+", label: "+ Income" }]} /></div>
         <div><div style={labelCap()}>{frequency === "monthly" ? "Day (from date)" : "Start date"}</div><input type="date" value={anchor} onChange={(e) => setAnchor(e.target.value)} style={field()} /></div>
         <div><div style={labelCap()}>Amount</div><input value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="0" type="number" style={field()} /></div>
         <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
@@ -522,7 +527,7 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
       <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
-      <path d={path} fill="none" stroke="#3b82f6" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+      <path d={path} fill="none" stroke={HOME_THEME.orange} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
       {ticks.map((p, i) => (
         <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={9} textAnchor="middle">{shortDate(p.date)}</text>
       ))}
@@ -541,7 +546,7 @@ function TopExpenses({ items, currency }: { items: { label: string; amount: numb
           <span style={{ fontSize: 11, color: HOME_THEME.muted, textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={it.label}>{it.label}</span>
           <div style={{ position: "relative", height: 16, background: "rgba(255,255,255,0.04)", borderRadius: 5 }}>
             <div style={{ width: `${Math.max(6, (it.amount / max) * 100)}%`, height: "100%", borderRadius: 5, background: "linear-gradient(90deg, rgba(239,68,68,0.55), rgba(239,68,68,0.95))" }} />
-            <span style={{ position: "absolute", right: 6, top: 0, lineHeight: "16px", fontSize: 10, fontWeight: 700, color: "#fff" }}>{fmtMoney(it.amount, currency)}</span>
+            <span style={{ position: "absolute", right: 6, top: 0, lineHeight: "16px", fontSize: 10, fontWeight: 700, color: HOME_THEME.text }}>{fmtMoney(it.amount, currency)}</span>
           </div>
         </div>
       ))}
@@ -796,8 +801,24 @@ function th(align: "left" | "right" | "center"): React.CSSProperties {
 function card(): React.CSSProperties {
   return { background: HOME_THEME.panelBg, backdropFilter: "blur(16px)", borderRadius: 18, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 18px 40px rgba(0,0,0,0.22)" };
 }
+// hex → rgba for accent tints.
+function bRgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+}
+// Warm-weighted accent rotation (no cyan) so the cards alternate color instead
+// of reading all-blue. Each adds a colored top strip + radial glow over card().
+const CARD_ACCENTS = [HOME_THEME.orange, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.red];
+function cardAccent(i: number): React.CSSProperties {
+  const c = CARD_ACCENTS[((i % CARD_ACCENTS.length) + CARD_ACCENTS.length) % CARD_ACCENTS.length];
+  return {
+    ...card(),
+    borderTop: `2px solid ${bRgba(c, 0.85)}`,
+    background: `radial-gradient(circle at 50% 0%, ${bRgba(c, 0.16)} 0%, transparent 62%), ${HOME_THEME.panelBg}`,
+  };
+}
 function field(): React.CSSProperties {
-  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 13 };
+  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 13, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
 }
 function labelCap(): React.CSSProperties {
   return { fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };

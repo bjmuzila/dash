@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HOME_THEME as HT, homeShellStyle, homePanelStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT } from "@/components/shared/homeTheme";
+import { PageShell, Card } from "@/components/shared/PageCard";
+
+// rgba helper — matches the convention used across themed pages.
+function rgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -186,9 +193,8 @@ export default function TradersDashboardPage() {
   const completed = tasks.filter((t) => t.done).length;
   const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
 
-  const card = { ...homePanelStyle, padding: 20 } as const;
   const sectionLabel = { fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: HT.muted };
-  const miniBtn = { padding: "3px 8px", borderRadius: 5, border: `1px solid ${HT.border}`, background: "rgba(255,255,255,0.04)", color: HT.cyan, fontSize: 10, fontWeight: 700, cursor: "pointer" } as const;
+  const miniBtn = { padding: "3px 8px", borderRadius: 5, border: `1px solid ${HT.border}`, background: rgba(HT.text, 0.04), color: HT.cyan, fontSize: 10, fontWeight: 700, cursor: "pointer" } as const;
   const inputStyle = { fontSize: 13, padding: "5px 8px", border: `1px solid ${HT.border}`, borderRadius: 5, background: "rgba(0,0,0,0.4)", color: HT.text, outline: "none" } as const;
 
   // ── Mutators ──
@@ -196,11 +202,10 @@ export default function TradersDashboardPage() {
   const updTasks = (next: TaskItem[]) => { setTasks(next); if (loaded) savePrefs({ tasks: next }); };
 
   return (
-    <div style={{ ...homeShellStyle, overflow: "auto" }}>
-      <div style={{ padding: "clamp(14px,2vw,24px)", display: "flex", flexDirection: "column", gap: 20, maxWidth: 1200, margin: "0 auto", width: "100%" }}>
+    <PageShell maxWidth={1200}>
 
         {/* Header */}
-        <div style={{ ...card, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <Card accent="cyan" padding={20} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, background: `linear-gradient(90deg,${HT.cyan},${HT.purple})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
               Traders Dashboard
@@ -226,21 +231,21 @@ export default function TradersDashboardPage() {
               <button onClick={() => { setWeather(null); setZip(""); setZipInput(""); savePrefs({ zip: null }); }} style={{ ...miniBtn, marginTop: 4 }}>Change ZIP</button>
             )}
           </div>
-        </div>
+        </Card>
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)", gap: 20 }}>
           {/* LEFT COLUMN */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
             {/* Countdown */}
-            <div style={{ ...card, textAlign: "center", padding: "28px 20px" }}>
+            <Card accent="orange" padding="28px 20px" style={{ textAlign: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>Countdown to Market Open</div>
               <div style={{ fontSize: "clamp(48px,8vw,84px)", fontWeight: 800, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{countdown}</div>
               <div style={{ color: HT.muted, fontSize: 13, marginTop: 8 }}>{targetLabel}</div>
-            </div>
+            </Card>
 
             {/* Overnight Overview */}
-            <div style={card}>
+            <Card accent="green" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700 }}>📈 Overnight Market Overview</div>
                 {overview && Number(overview.generated_at) > 0 && (
@@ -250,7 +255,7 @@ export default function TradersDashboardPage() {
                 )}
               </div>
 
-              <div style={{ borderLeft: `3px solid ${HT.cyan}`, paddingLeft: 14, marginBottom: 20, color: "#C7CEDB", fontSize: 14, lineHeight: 1.5 }}>
+              <div style={{ borderLeft: `3px solid ${HT.cyan}`, paddingLeft: 14, marginBottom: 20, color: rgba(HT.text, 0.78), fontSize: 14, lineHeight: 1.5 }}>
                 {overview ? (
                   <><strong style={{ color: HT.text }}>Sentiment:</strong> {overview.summary}</>
                 ) : (
@@ -300,14 +305,14 @@ export default function TradersDashboardPage() {
                   </div>
                 </div>
               </div>
-            </div>
+            </Card>
           </div>
 
           {/* RIGHT COLUMN */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
             {/* Quick Links */}
-            <div style={card}>
+            <Card accent="cyan" padding={20}>
               <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 16 }}>🔗 Quick Links</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
@@ -319,7 +324,7 @@ export default function TradersDashboardPage() {
                     key={l.href}
                     href={l.href}
                     style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.25)", color: HT.text, textDecoration: "none", fontWeight: 600, fontSize: 14, transition: "background .15s, border-color .15s" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(34,211,238,0.12)"; e.currentTarget.style.borderColor = HT.cyan; }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = rgba(HT.cyan, 0.12); e.currentTarget.style.borderColor = HT.cyan; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.25)"; e.currentTarget.style.borderColor = HT.border; }}
                   >
                     <span>{l.label}</span>
@@ -327,12 +332,12 @@ export default function TradersDashboardPage() {
                   </a>
                 ))}
               </div>
-            </div>
+            </Card>
 
             {/* Schedule */}
-            <div style={card}>
+            <Card accent="red" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: HT.purple }}>🕐 Morning Schedule</div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: HT.red }}>🕐 Morning Schedule</div>
                 <button onClick={() => setEditSched((v) => !v)} style={miniBtn}>{editSched ? "Done" : "Edit"}</button>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -352,10 +357,10 @@ export default function TradersDashboardPage() {
               {editSched && (
                 <button onClick={() => updSchedule([...schedule, { id: uid(), time: "09:00 AM", label: "New item" }])} style={{ ...miniBtn, marginTop: 12 }}>+ Add</button>
               )}
-            </div>
+            </Card>
 
             {/* Tasks */}
-            <div style={card}>
+            <Card accent="green" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.green }}>✅ Pre-Market Tasks</div>
                 <button onClick={() => setEditTasks((v) => !v)} style={miniBtn}>{editTasks ? "Done" : "Edit"}</button>
@@ -381,15 +386,14 @@ export default function TradersDashboardPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HT.muted, marginBottom: 6 }}>
                     <span>Task Progress</span><span>{progress}%</span>
                   </div>
-                  <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                  <div style={{ height: 4, borderRadius: 2, background: rgba(HT.text, 0.08), overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${progress}%`, background: `linear-gradient(90deg,${HT.cyan},${HT.green})`, transition: "width .3s" }} />
                   </div>
                 </div>
               )}
-            </div>
+            </Card>
           </div>
         </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

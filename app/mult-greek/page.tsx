@@ -659,7 +659,7 @@ export default function MultGreekPage() {
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
   const statusColors: Record<string, string> = {
-    live: "#00e676", loading: "#ffb300", err: "#ff4757", idle: "#ff4757",
+    live: HT.green, loading: HT.orange, err: HT.red, idle: HT.red,
   };
 
   const pageRef = useRef<HTMLDivElement>(null);
@@ -672,8 +672,8 @@ export default function MultGreekPage() {
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%" }}>
 
         {/* Status dot */}
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status.state] ?? "#475569", flexShrink: 0, display: "inline-block" }} />
-        <span style={{ fontSize: 9, fontWeight: 800, color: statusColors[status.state] ?? "#e4e4e7", letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>{status.msg}</span>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status.state] ?? HT.muted, flexShrink: 0, display: "inline-block" }} />
+        <span style={{ fontSize: 9, fontWeight: 800, color: statusColors[status.state] ?? HT.text, letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>{status.msg}</span>
 
         {/* Expiry picker */}
         <DockExpiryPicker

@@ -1444,6 +1444,18 @@ export default function OwnerDashboard() {
     } finally { setCtlBusy(null); void refresh(); }
   }, [flashMsg, refresh]);
 
+  const doClearChat = useCallback(async () => {
+    if (!window.confirm("Erase ALL subscriber chat messages? This cannot be undone.")) return;
+    setCtlBusy("clearChat");
+    try {
+      const r = await fetch("/api/chat/clear", { method: "POST" });
+      const j = await r.json();
+      flashMsg("clearChat", j?.ok ? `Chat cleared (${j.deleted ?? "?"} messages)` : `Failed: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("clearChat", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); }
+  }, [flashMsg]);
+
   const fetchRenderWindow = useCallback(async (w: "live" | "weekly" | "monthly") => {
     setRenderWindow(w);
     setRenderLoading(true);
@@ -2101,6 +2113,14 @@ export default function OwnerDashboard() {
                 style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
+              </button>
+              <button
+                onClick={doClearChat}
+                disabled={ctlBusy === "clearChat"}
+                title="Permanently delete ALL subscriber chat messages. Cannot be undone."
+                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, color: HOME_THEME.red, borderColor: `${HOME_THEME.red}66`, opacity: ctlBusy === "clearChat" ? 0.6 : 1, cursor: ctlBusy === "clearChat" ? "wait" : "pointer" }}
+              >
+                {ctlBusy === "clearChat" ? "Erasing…" : "🗑️ Erase all chat"}
               </button>
             </div>
 

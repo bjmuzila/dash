@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance } from "@/lib/failLevels";
 import { NqIbLive } from "@/components/insights/NqIbLive";
@@ -944,6 +945,7 @@ function ContractLookupCard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
+  const [expOpen, setExpOpen] = useState(false);
 
   // Real listed expirations for the active ticker.
   useEffect(() => {
@@ -1018,7 +1020,7 @@ function ContractLookupCard() {
   ];
 
   return (
-    <Card accent="red" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
+    <Card accent="red" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
       <Row>
         <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.red }}>Contract Lookup</span>
         {loaded && <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
@@ -1026,18 +1028,22 @@ function ContractLookupCard() {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Ticker</Label>
-          <input style={{ ...homeInputStyle, width: 90 }} value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} />
+          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Expiration</Label>
-          <select style={{ ...homeInputStyle, width: 150 }} value={exp} onChange={(e) => setExp(e.target.value)}>
-            {exps.length === 0 && <option value="">—</option>}
-            {exps.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
+          <ThemedSelect
+            width={150}
+            value={exp}
+            placeholder="—"
+            options={exps.map((d) => ({ value: d, label: d }))}
+            onChange={setExp}
+            onOpenChange={setExpOpen}
+          />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Strike</Label>
-          <input style={{ ...homeInputStyle, width: 90 }} value={strike} onChange={(e) => setStrike(e.target.value.replace(/[^\d.]/g, ""))} />
+          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} value={strike} onChange={(e) => setStrike(e.target.value.replace(/[^\d.]/g, ""))} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Side</Label>

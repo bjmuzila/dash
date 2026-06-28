@@ -19,6 +19,7 @@ import {
   homeSecondaryButtonStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // Page override: no gray text + iColorpalette accent scheme
 const HOME_THEME = {
@@ -559,17 +560,11 @@ export default function TodoPage() {
               <div style={formGroup}><label style={formLabel}>Details</label>
                 <input style={formInput} value={eDetails} onChange={(e) => setEDetails(e.target.value)} placeholder="Subtitle or notes..." /></div>
               <div style={formGroup}><label style={formLabel}>Category</label>
-                <select style={formInput} value={eCat} onChange={(e) => setECat(e.target.value)}>
-                  {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
-                </select></div>
+                <ThemedSelect value={eCat} onChange={setECat} options={CATEGORIES.map((c) => ({ value: c, label: c }))} /></div>
               <div style={formGroup}><label style={formLabel}>Priority</label>
-                <select style={formInput} value={ePri} onChange={(e) => setEPri(e.target.value)}>
-                  <option value="LOW">Low</option><option value="MED">Medium</option><option value="HIGH">High</option>
-                </select></div>
+                <ThemedSelect value={ePri} onChange={setEPri} options={[{ value: "LOW", label: "Low" }, { value: "MED", label: "Medium" }, { value: "HIGH", label: "High" }]} /></div>
               <div style={formGroup}><label style={formLabel}>Status</label>
-                <select style={formInput} value={eStatus} onChange={(e) => setEStatus(e.target.value)}>
-                  {STATUSES.map((s) => <option key={s}>{s}</option>)}
-                </select></div>
+                <ThemedSelect value={eStatus} onChange={setEStatus} options={STATUSES.map((s) => ({ value: s, label: s }))} /></div>
               <div style={{ marginTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <button type="button" style={btnDanger} onClick={() => { if (editId) deleteTask(editId); setEditId(null); }}>Delete</button>
                 <div style={{ display: "flex", gap: 8 }}>
@@ -594,29 +589,18 @@ export default function TodoPage() {
               <div style={formGroup}><label style={formLabel}>Title</label>
                 <input style={formInput} value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="e.g. Review portfolio" required /></div>
               <div style={formGroup}><label style={formLabel}>Type</label>
-                <select style={formInput} value={cType} onChange={(e) => setCType(e.target.value)}>
-                  <option value="checklist">Checklist Item</option>
-                  <option value="board">Board Task</option>
-                </select></div>
+                <ThemedSelect value={cType} onChange={setCType} options={[{ value: "checklist", label: "Checklist Item" }, { value: "board", label: "Board Task" }]} /></div>
               {cType === "checklist" ? (
                 <div style={formGroup}><label style={formLabel}>Target List</label>
-                  <select style={formInput} value={cBox} onChange={(e) => setCBox(e.target.value)}>
-                    {BOXES.map((b) => <option key={b.key} value={b.key}>{titles[b.key]}</option>)}
-                  </select></div>
+                  <ThemedSelect value={cBox} onChange={setCBox} options={BOXES.map((b) => ({ value: b.key, label: titles[b.key] }))} /></div>
               ) : (
                 <>
                   <div style={formGroup}><label style={formLabel}>Category</label>
-                    <select style={formInput} value={cCat} onChange={(e) => setCCat(e.target.value)}>
-                      {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
-                    </select></div>
+                    <ThemedSelect value={cCat} onChange={setCCat} options={CATEGORIES.map((c) => ({ value: c, label: c }))} /></div>
                   <div style={formGroup}><label style={formLabel}>Priority</label>
-                    <select style={formInput} value={cPri} onChange={(e) => setCPri(e.target.value)}>
-                      <option value="LOW">Low</option><option value="MED">Medium</option><option value="HIGH">High</option>
-                    </select></div>
+                    <ThemedSelect value={cPri} onChange={setCPri} options={[{ value: "LOW", label: "Low" }, { value: "MED", label: "Medium" }, { value: "HIGH", label: "High" }]} /></div>
                   <div style={formGroup}><label style={formLabel}>Status</label>
-                    <select style={formInput} value={cStatus} onChange={(e) => setCStatus(e.target.value)}>
-                      {STATUSES.map((s) => <option key={s}>{s}</option>)}
-                    </select></div>
+                    <ThemedSelect value={cStatus} onChange={setCStatus} options={STATUSES.map((s) => ({ value: s, label: s }))} /></div>
                 </>
               )}
               <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { UserButton, useUser } from "@clerk/nextjs";
-import { HOME_THEME, DOCK_THEME, homeToolbarAccentBar } from "./homeTheme";
+import { HOME_THEME, DOCK_THEME } from "./homeTheme";
 import { useNotes } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
 import { useMobileNav } from "./MobileNavContext";
@@ -14,13 +14,13 @@ import NavMenu from "./NavMenu";
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
  * dashboard route (see LayoutShell).
  *
- * Layout (left → right):
- *   ☰ hamburger  logo  Clerk  [Search]  ‹live ticker›  [expiry]  🖍️ Notes
+ * Floating-pill layout (left → right):
+ *   ☰ menu  ·  CB Edge logo  │  ‹live ticker + quotes dropdown›  │  ET clock  Notes  Clerk
  *
- * The hamburger opens NavMenu — a dropdown of the full grouped navigation
- * (anchored under the button). There is no persistent left sidebar anymore. The
- * live ticker (ToolbarTicker) sources its own quotes and works on every route.
- * Search + the expiration picker are presentational for now (local state only).
+ * The whole bar is a rounded pill with a blue→teal gradient border and a
+ * cursor-follow cyan highlight. The hamburger opens NavMenu (anchored under the
+ * button); the logo opens a small feedback menu; the live ticker (ToolbarTicker)
+ * sources its own quotes and carries the NQU "all quotes" dropdown.
  */
 
 // ── icons ─────────────────────────────────────────────────────────────────────
@@ -74,9 +74,7 @@ function EtClock() {
 
 // ── CB Edge logo → small dropdown (Feedback, etc.) ──
 // Matches the frosted-dock visual language used by NavMenu.
-const LOGO_MENU_ITEMS: { label: string; href: string; emoji: string }[] = [
-  { label: "Send Feedback", href: "/feedback", emoji: "✉️" },
-];
+const LOGO_MENU_ITEMS: { label: string; href: string; emoji: string }[] = [];
 
 function LogoMenu() {
   const [open, setOpen] = useState(false);
@@ -118,11 +116,11 @@ function LogoMenu() {
         <img
           src="/cb-edge-logo.png"
           alt="CB Edge"
-          style={{ height: 40, width: "auto", display: "block" }}
+          style={{ height: 48, width: "auto", display: "block" }}
         />
       </button>
 
-      {open && (
+      {open && LOGO_MENU_ITEMS.length > 0 && (
         <div
           role="menu"
           style={{
@@ -170,14 +168,29 @@ function LogoMenu() {
   );
 }
 
+const CYAN = HOME_THEME.cyan; // #219EBC
+function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
+function blueA(a: number) { return `rgba(59,130,246,${a})`; }
+
+/** Pencil "notes" icon (stroked, matches toolbar icon language). */
+function PencilIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  );
+}
+
 export default function GlobalToolbar() {
   const { isSignedIn, user } = useUser();
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
   const { menuOpen, toggleMenu } = useMobileNav();
 
-  // ── presentational-only state ──
+  // ── hover state for the menu/notes round buttons ──
   const [hoverMenu, setHoverMenu] = useState(false);
+  const [hoverNotes, setHoverNotes] = useState(false);
 
   // Hamburger geometry → so the NavMenu dropdown lines up under the button.
   const hamburgerRef = useRef<HTMLButtonElement | null>(null);
@@ -188,138 +201,202 @@ export default function GlobalToolbar() {
     toggleMenu();
   };
 
+  // ── cursor-follow highlight position (relative to the pill) ──
+  const pillRef = useRef<HTMLDivElement | null>(null);
+  const [glow, setGlow] = useState<{ x: number; y: number } | null>(null);
+  const onMove = (e: React.MouseEvent) => {
+    const r = pillRef.current?.getBoundingClientRect();
+    if (r) setGlow({ x: e.clientX - r.left, y: e.clientY - r.top });
+  };
+
+  const menuActive = hoverMenu || menuOpen;
+
   return (
+    // Outer band — gives the pill breathing room so it floats over content.
     <div
       style={{
         display: "flex",
-        alignItems: "center",
-        gap: "clamp(4px, 1.2vw, 12px)",
-        height: 64,
+        justifyContent: "center",
         flexShrink: 0,
-        padding: "0 clamp(6px, 1vw, 12px)",
-        // Notch-safe on mobile; insets are 0 on desktop so this is a no-op there.
-        paddingTop: "env(safe-area-inset-top, 0px)",
-        paddingBottom: 0,
-        paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
-        paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
+        padding: "8px 14px",
+        paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
         boxSizing: "border-box",
-        background: `radial-gradient(ellipse 70% 140% at 50% -40%, rgba(33,158,188,0.07) 0%, transparent 70%), ${HOME_THEME.panelBgStrong}`,
-        backdropFilter: "blur(16px)",
-        borderBottom: `1px solid ${HOME_THEME.border}`,
         position: "relative",
         zIndex: 50,
       }}
     >
-      {/* ── Dock-style gradient top accent: bright cyan center → dark edges ── */}
-      <span aria-hidden style={homeToolbarAccentBar} />
-
-      {/* ── Hamburger — opens the navigation dropdown (NavMenu) ── */}
-      <button
-        ref={hamburgerRef}
-        data-nav-hamburger
-        onClick={onHamburger}
-        title="Menu"
-        aria-label="Menu"
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onMouseEnter={() => setHoverMenu(true)}
-        onMouseLeave={() => setHoverMenu(false)}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 42,
-          height: 42,
-          flexShrink: 0,
-          borderRadius: 10,
-          border: `1px solid ${hoverMenu || menuOpen ? "rgba(33,158,188,0.30)" : HOME_THEME.border}`,
-          background: hoverMenu || menuOpen ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.04)",
-          color: hoverMenu || menuOpen ? HOME_THEME.cyan : HOME_THEME.text,
-          cursor: "pointer",
-          transition: "background 0.15s, border-color 0.15s, color 0.15s",
-        }}
-      >
-        <MenuIcon />
-      </button>
-      <NavMenu anchor={anchor} />
-
-      {/* ── CB Edge logo → dropdown (Feedback, etc.) ── */}
-      <LogoMenu />
-
-      {/* ── Clerk user button ── */}
-      {isSignedIn && (
-        <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-          <UserButton
-            afterSignOutUrl="/"
-            appearance={{ elements: { avatarBox: { width: 40, height: 40 } } }}
-          />
-        </div>
-      )}
-
-
-      {/* ── Live ticker (VIX / ESU / SPX / NQU + dropdown) — flows inline as a
-          flex child so it can never overlap the search box. It takes the
-          remaining space, centers its content, and clips on narrow screens
-          instead of spilling over the left controls. ── */}
+      {/* Gradient-border frame (blue → teal) */}
       <div
         style={{
-          position: "absolute",
-          left: "50%",
-          top: "50%",
-          transform: "translate(-50%, -50%)",
-          maxWidth: "60%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          overflow: "hidden",
-          pointerEvents: "none",
+          width: "100%",
+          borderRadius: 999,
+          padding: 1.5,
+          background: `linear-gradient(110deg, ${cyanA(0.55)}, ${blueA(0.4)} 35%, ${cyanA(0.15)} 60%, ${cyanA(0.55)})`,
+          boxShadow: `0 14px 34px -14px rgba(0,0,0,0.8), 0 0 18px -6px ${cyanA(0.4)}`,
         }}
       >
-        <div style={{ minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden", pointerEvents: "auto" }}>
-          <ToolbarTicker />
-        </div>
-      </div>
-
-      {/* ── ET clock — pinned far right ── */}
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", flexShrink: 0 }}>
-        <EtClock />
-      </div>
-
-      {/* ── Notes ── */}
-      {isSignedIn && (
-        <button
-          onClick={togglePanel}
-          title="Notes"
+        <div
+          ref={pillRef}
+          onMouseMove={onMove}
+          onMouseLeave={() => setGlow(null)}
           style={{
-            display: "inline-flex",
+            position: "relative",
+            display: "flex",
             alignItems: "center",
-            gap: 7,
-            height: 42,
-            flexShrink: 0,
-            padding: "0 14px",
-            borderRadius: 10,
-            border: `1px solid ${open ? "rgba(33,158,188,0.35)" : HOME_THEME.border}`,
-            background: open
-              ? "linear-gradient(180deg, rgba(33,158,188,0.12), rgba(33,158,188,0.04))"
-              : "rgba(255,255,255,0.04)",
-            color: open ? HOME_THEME.cyan : HOME_THEME.text,
-            fontSize: 13,
-            fontWeight: 700,
-            letterSpacing: "0.10em",
-            textTransform: "uppercase",
-            cursor: "pointer",
-            transition: "background 0.15s, border-color 0.15s, color 0.15s",
+            gap: "clamp(8px, 1.2vw, 16px)",
+            height: 56,
+            padding: "0 16px",
+            borderRadius: 998,
+            background: "rgba(10,13,20,0.96)",
+            backdropFilter: "blur(16px)",
+            boxSizing: "border-box",
           }}
         >
-          <span style={{ fontSize: 17, lineHeight: 1 }} aria-hidden>🖍️</span>
-          <span className="toolbar-notes-label">Notes</span>
-          {notes.length > 0 && (
-            <span style={{ fontSize: 12, fontWeight: 700, color: open ? HOME_THEME.cyan : HOME_THEME.muted }}>
-              {notes.length}
-            </span>
+          {/* cursor-follow cyan highlight (clipped to the pill) */}
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 998,
+              overflow: "hidden",
+              pointerEvents: "none",
+              zIndex: 0,
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                inset: 0,
+                opacity: glow ? 1 : 0,
+                transition: "opacity 0.25s",
+                background: glow
+                  ? `radial-gradient(170px circle at ${glow.x}px ${glow.y}px, ${cyanA(0.2)}, transparent 70%)`
+                  : "none",
+              }}
+            />
+          </span>
+
+          {/* ── Hamburger — opens the navigation dropdown (NavMenu) ── */}
+          <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
+            <button
+              ref={hamburgerRef}
+              data-nav-hamburger
+              onClick={onHamburger}
+              title="Menu"
+              aria-label="Menu"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onMouseEnter={() => setHoverMenu(true)}
+              onMouseLeave={() => setHoverMenu(false)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 38,
+                height: 38,
+                flexShrink: 0,
+                borderRadius: "50%",
+                border: `1px solid ${menuActive ? cyanA(0.45) : "transparent"}`,
+                background: menuActive ? cyanA(0.12) : "rgba(255,255,255,0.04)",
+                color: menuActive ? CYAN : HOME_THEME.text,
+                cursor: "pointer",
+                boxShadow: hoverMenu ? `0 4px 12px -2px ${cyanA(0.45)}` : "none",
+                transform: hoverMenu ? "translateY(-1px)" : "none",
+                transition: "background 0.14s, border-color 0.14s, color 0.14s, box-shadow 0.14s, transform 0.14s",
+              }}
+            >
+              <MenuIcon size={20} />
+            </button>
+            <NavMenu anchor={anchor} />
+          </div>
+
+          {/* ── CB Edge logo → dropdown (Feedback, etc.) ── */}
+          <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
+            <LogoMenu />
+          </div>
+
+          <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />
+
+          {/* ── Live ticker (VIX / ESU / SPX / NQU + dropdown) — grows to fill,
+              centered, clips on narrow screens. ── */}
+          <div style={{ position: "relative", zIndex: 1, flex: 1, minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden" }}>
+            <ToolbarTicker />
+          </div>
+
+          <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />
+
+          {/* ── ET clock ── */}
+          <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <EtClock />
+          </div>
+
+          {/* ── Notes — round icon button with count badge ── */}
+          {isSignedIn && (
+            <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
+              <button
+                onClick={togglePanel}
+                title="Notes"
+                aria-label="Notes"
+                onMouseEnter={() => setHoverNotes(true)}
+                onMouseLeave={() => setHoverNotes(false)}
+                style={{
+                  position: "relative",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 38,
+                  height: 38,
+                  flexShrink: 0,
+                  borderRadius: "50%",
+                  border: `1px solid ${open || hoverNotes ? cyanA(0.55) : cyanA(0.35)}`,
+                  background: cyanA(0.14),
+                  color: "#7fd4e6",
+                  cursor: "pointer",
+                  boxShadow: open || hoverNotes ? `0 4px 12px -2px ${cyanA(0.45)}` : "none",
+                  transform: hoverNotes ? "translateY(-1px)" : "none",
+                  transition: "border-color 0.14s, box-shadow 0.14s, transform 0.14s",
+                }}
+              >
+                <PencilIcon size={18} />
+                {notes.length > 0 && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: -2,
+                      right: -2,
+                      minWidth: 16,
+                      height: 16,
+                      padding: "0 3px",
+                      borderRadius: 999,
+                      background: CYAN,
+                      color: "#04222b",
+                      fontSize: 9,
+                      fontWeight: 800,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    {notes.length}
+                  </span>
+                )}
+              </button>
+            </div>
           )}
-        </button>
-      )}
+
+          {/* ── Clerk user button ── */}
+          {isSignedIn && (
+            <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
+              <UserButton
+                afterSignOutUrl="/"
+                appearance={{ elements: { avatarBox: { width: 38, height: 38 } } }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

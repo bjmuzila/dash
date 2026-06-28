@@ -14,6 +14,13 @@ import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { saveIbLevels, queryIbLevels, type IbLevelsRecord } from "@/lib/snapdb";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { HOME_THEME, homeGlossPanelStyle } from "@/components/shared/homeTheme";
+
+// rgba helper — matches the convention used across themed pages.
+function rgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+}
 
 function todayETStr(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -313,10 +320,10 @@ export function LiveIb() {
     : ib.brokeLow ? "🚨 IB LOW BROKEN"
     : ib.done ? "INSIDE (no break yet)"
     : "FORMING";
-  const breakColor = ib.doubleBreak ? "#ff1744"
-    : ib.brokeHigh ? "#00e676"
-    : ib.brokeLow ? "#ff5252"
-    : "#94a3b8";
+  const breakColor = ib.doubleBreak ? HOME_THEME.red
+    : ib.brokeHigh ? HOME_THEME.green
+    : ib.brokeLow ? HOME_THEME.red
+    : HOME_THEME.text;
 
   // Timestamp of the first IB break (earliest of high/low breaks).
   const firstBreakTs = (() => {
@@ -325,23 +332,22 @@ export function LiveIb() {
   })();
   const breakTimeLabel = etTimeLabel(firstBreakTs);
 
-  const stat = (label: string, value: string, color = "#eef7ff") => (
-    <div style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, padding: "18px 20px", background: "rgba(255,255,255,.02)" }}>
-      <div style={{ fontSize: 14, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
+  const stat = (label: string, value: string, color: string = HOME_THEME.text) => (
+    <div style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: "18px 20px", background: rgba(HOME_THEME.text, 0.02) }}>
+      <div style={{ fontSize: 14, color: HOME_THEME.text, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
       <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace", marginTop: 8 }}>{value}</div>
     </div>
   );
 
   return (
     <div className="card-hover" style={{
-      border: `1px solid ${ib.done ? "rgba(0,230,118,.28)" : "rgba(33,158,188,.22)"}`,
-      background: "linear-gradient(180deg,rgba(0,26,38,.5),rgba(0,0,0,.3))",
-      borderRadius: 10, padding: 16, marginBottom: 4,
+      ...homeGlossPanelStyle(ib.done ? HOME_THEME.green : HOME_THEME.cyan),
+      padding: 16,
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 14, color: "#219EBC", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
-          <div style={{ fontSize: 22, color: "#eef7ff", fontWeight: 800 }}>Initial Balance (9:30–10:30 ET)</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.cyan, letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800 }}>Live IB · ES Futures</div>
+          <div style={{ fontSize: 22, color: HOME_THEME.text, fontWeight: 800 }}>Initial Balance (9:30–10:30 ET)</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {flashing && (
@@ -353,51 +359,51 @@ export function LiveIb() {
               @media (prefers-reduced-motion: reduce) { .ib-alert-flash { animation: none !important; } }
             `}</style>
           )}
-          <span className={flashing ? "ib-alert-flash" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: breakColor, border: `1px solid ${breakColor}55`, background: `${breakColor}1a`, padding: "5px 10px", borderRadius: 6, animation: flashing ? "ibAlertFlash 1.1s ease-in-out infinite" : undefined }}>
+          <span className={flashing ? "ib-alert-flash" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: breakColor, opacity: broke ? 1 : 0.7, border: `1px solid ${rgba(breakColor, 0.33)}`, background: rgba(breakColor, 0.1), padding: "5px 10px", borderRadius: 6, animation: flashing ? "ibAlertFlash 1.1s ease-in-out infinite" : undefined }}>
             {breakLabel}
             {broke && breakTimeLabel && (
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", textTransform: "none", color: breakColor, opacity: .9, fontFamily: "monospace", paddingLeft: 6, borderLeft: `1px solid ${breakColor}55` }}>{breakTimeLabel}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", textTransform: "none", color: breakColor, opacity: .9, fontFamily: "monospace", paddingLeft: 6, borderLeft: `1px solid ${rgba(breakColor, 0.33)}` }}>{breakTimeLabel}</span>
             )}
           </span>
           {ib.doubleBreak && (
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: "#ffffff", border: "1px solid rgba(255,255,255,.12)", padding: "5px 10px", borderRadius: 6, fontFamily: "monospace" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: HOME_THEME.text, border: `1px solid ${rgba(HOME_THEME.text, 0.12)}`, padding: "5px 10px", borderRadius: 6, fontFamily: "monospace" }}>
               ⬆ {etTimeLabel(ib.brokeHighTs) || "—"} · ⬇ {etTimeLabel(ib.brokeLowTs) || "—"}
             </span>
           )}
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: ib.done ? "#00e676" : "#ffb300", border: `1px solid ${ib.done ? "#00e676" : "#ffb300"}55`, padding: "5px 10px", borderRadius: 6 }}>{ib.done ? "IB Done" : "Forming"}</span>
-          {locked && <span title="IB high/low frozen in database — will not reset" style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#219EBC", border: "1px solid #219EBC55", background: "#219EBC1a", padding: "5px 10px", borderRadius: 6 }}>🔒 Locked</span>}
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: ib.done ? HOME_THEME.green : HOME_THEME.orange, border: `1px solid ${rgba(ib.done ? HOME_THEME.green : HOME_THEME.orange, 0.33)}`, padding: "5px 10px", borderRadius: 6 }}>{ib.done ? "IB Done" : "Forming"}</span>
+          {locked && <span title="IB high/low frozen in database — will not reset" style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.cyan, border: `1px solid ${rgba(HOME_THEME.cyan, 0.33)}`, background: rgba(HOME_THEME.cyan, 0.1), padding: "5px 10px", borderRadius: 6 }}>🔒 Locked</span>}
         </div>
       </div>
 
       {!ib.hasData ? (
-        <div style={{ fontSize: 13, color: "#ffffff", padding: "12px 0" }}>
+        <div style={{ fontSize: 13, color: HOME_THEME.text, padding: "12px 0" }}>
           No ES candle data yet for today’s IB window. Live IB populates from the 5m ES candle feed during 9:30–10:30 ET.
         </div>
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
-            {stat("IB High", fmt(ib.high), "#00e676")}
-            {stat("IB Low", fmt(ib.low), "#ff5252")}
-            {stat("Midpoint", fmt(ib.mid), "#219EBC")}
-            {stat("Range", fmt(ib.range), "#eef7ff")}
-            {stat("Range %", ib.rangePct ? ib.rangePct.toFixed(2) + "%" : "—", ib.rangePct > 0 && ib.rangePct <= 1 ? "#ffb300" : "#eef7ff")}
-            {stat("Last", fmt(ib.lastClose), ib.aboveMid ? "#00e676" : "#ff5252")}
-            {stat("Formed First", ib.lowFirst == null ? "—" : ib.lowFirst ? "LOW" : "HIGH", ib.lowFirst ? "#7cff6b" : "#ffb300")}
-            {stat("vs Mid", ib.aboveMid == null ? "—" : ib.aboveMid ? "ABOVE" : "BELOW", ib.aboveMid ? "#00e676" : "#ff5252")}
+            {stat("IB High", fmt(ib.high), HOME_THEME.green)}
+            {stat("IB Low", fmt(ib.low), HOME_THEME.red)}
+            {stat("Midpoint", fmt(ib.mid), HOME_THEME.cyan)}
+            {stat("Range", fmt(ib.range), HOME_THEME.text)}
+            {stat("Range %", ib.rangePct ? ib.rangePct.toFixed(2) + "%" : "—", ib.rangePct > 0 && ib.rangePct <= 1 ? HOME_THEME.orange : HOME_THEME.text)}
+            {stat("Last", fmt(ib.lastClose), ib.aboveMid ? HOME_THEME.green : HOME_THEME.red)}
+            {stat("Formed First", ib.lowFirst == null ? "—" : ib.lowFirst ? "LOW" : "HIGH", ib.lowFirst ? HOME_THEME.green : HOME_THEME.orange)}
+            {stat("vs Mid", ib.aboveMid == null ? "—" : ib.aboveMid ? "ABOVE" : "BELOW", ib.aboveMid ? HOME_THEME.green : HOME_THEME.red)}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 18, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
+            <span style={{ fontSize: 18, color: HOME_THEME.cyan, letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
               Rules In Play ({rules.length})
             </span>
             {!ib.done && (
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#ffb300", border: "1px solid #ffb30055", background: "#ffb3001a", padding: "3px 8px", borderRadius: 6 }}>
+              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.orange, border: `1px solid ${rgba(HOME_THEME.orange, 0.33)}`, background: rgba(HOME_THEME.orange, 0.1), padding: "3px 8px", borderRadius: 6 }}>
                 Provisional · not locked
               </span>
             )}
           </div>
           {rules.length === 0 ? (
-            <div style={{ fontSize: 12, color: "#ffffff" }}>No rules triggered yet.</div>
+            <div style={{ fontSize: 12, color: HOME_THEME.text }}>No rules triggered yet.</div>
           ) : (
             <div style={{
               display: "grid",
@@ -409,15 +415,15 @@ export function LiveIb() {
               {rules.map((r) => (
                 <div key={r.title} style={{
                   borderLeft: `3px solid ${r.color}`,
-                  borderTop: "1px solid rgba(255,255,255,.08)",
-                  borderRight: "1px solid rgba(255,255,255,.08)",
-                  borderBottom: "1px solid rgba(255,255,255,.08)",
+                  borderTop: `1px solid ${HOME_THEME.border}`,
+                  borderRight: `1px solid ${HOME_THEME.border}`,
+                  borderBottom: `1px solid ${HOME_THEME.border}`,
                   borderRadius: 8,
                   padding: "10px 12px",
-                  background: "rgba(255,255,255,.02)",
+                  background: rgba(HOME_THEME.text, 0.02),
                 }}>
                   <div style={{ fontSize: 15, fontWeight: 800, color: r.color }}>{r.title}</div>
-                  <div style={{ fontSize: 14, color: "#ffffff", lineHeight: 1.5, marginTop: 4 }}>{highlightPct(r.detail)}</div>
+                  <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, marginTop: 4 }}>{highlightPct(r.detail)}</div>
                 </div>
               ))}
             </div>

@@ -18,6 +18,7 @@
  * ──────────────────────────────────────────────────────────────────────────── */
 
 import { useMemo, useState } from "react";
+import { HOME_THEME } from "@/components/shared/homeTheme";
 
 // A regime "key" is the 4 signs in fixed order: gex, vex, dex, cex.
 type Sign = 1 | -1;
@@ -234,9 +235,12 @@ export default function RegimeMatrix({
   const detailColor = TONE_COLOR[detail.tone];
 
   return (
-    <section style={{
-      border: "1px solid rgba(255,255,255,.1)", borderRadius: 14, marginBottom: 16,
-      background: "linear-gradient(180deg,rgba(8,12,18,.6),rgba(0,0,0,.3))", overflow: "hidden",
+    <section className="card-hover" style={{
+      border: `1px solid ${HOME_THEME.border}`,
+      borderTop: `2px solid ${HOME_THEME.cyan}d9`,
+      borderRadius: 16, marginBottom: 16, overflow: "hidden",
+      backdropFilter: "blur(16px)",
+      background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}1f 0%, transparent 55%), ${HOME_THEME.panelBg}`,
     }}>
       {/* Header */}
       <div style={{

@@ -9,6 +9,7 @@ import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
+import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 
 
 function toChartTime(ts: number): UTCTimestamp {
@@ -1382,13 +1383,20 @@ export default function EsCandlesPage() {
   }, []);
 
   return (
-    <div className="es-candles-root flex h-full flex-col" style={{ background: "linear-gradient(180deg,#06080d,#0b1018)" }}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "rgba(255,255,255,.08)", position: "relative", zIndex: 30 }}>
-        <div>
-          <div className="text-xs font-bold uppercase tracking-[0.24em]" style={{ color: "#ff5b5b" }}>ES 5m Candles</div>
-          <div className="mt-1 text-xs text-white/70">5m ES candles from Postgres, merged live over /ws/gex.</div>
-        </div>
-        <Dock className="dock-noscroll" flat fullWidth style={{ flex: 1, minWidth: 0 }}>
+    <div className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
+      <div className="flex items-center justify-center px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
+        <Dock className="dock-noscroll" style={{ maxWidth: "100%", minWidth: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
+            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: "#ff5b5b", whiteSpace: "nowrap" }}>ES 5m Candles</span>
+            {(() => {
+              const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
+              return (
+                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
+                  ES Basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}
+                </span>
+              );
+            })()}
+          </div>
           {/* status + count badges */}
           <span style={{ fontSize: 11, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
             {status.toUpperCase()}
@@ -1407,8 +1415,8 @@ export default function EsCandlesPage() {
           {dteOpen && dteRect && createPortal(
             <div
               ref={dteMenuRef}
-              className="max-h-72 w-48 overflow-y-auto rounded-lg border py-1 shadow-2xl"
-              style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderColor: "rgba(255,255,255,.12)", background: "rgba(12,16,22,.98)", backdropFilter: "blur(8px)", zIndex: 100000 }}
+              className="max-h-72 w-48 overflow-y-auto py-1"
+              style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
             >
               {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
                 value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
@@ -1419,10 +1427,12 @@ export default function EsCandlesPage() {
                     key={opt.value || "front"}
                     onClick={() => { setSelectedExpiry(opt.value); setDteOpen(false); }}
                     className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
-                    style={{ background: active ? "rgba(41,182,246,.18)" : "transparent", color: active ? "#7dd3fc" : "rgba(255,255,255,.75)" }}
+                    style={{ borderRadius: 8, border: active ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: active ? DOCK_THEME.activeTile : "transparent", color: active ? HOME_THEME.cyan : HOME_THEME.text }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
                   >
                     <span className="font-mono font-semibold">{opt.label}</span>
-                    <span className="text-white/35">{opt.sub}</span>
+                    <span style={{ color: HOME_THEME.muted, opacity: 0.5 }}>{opt.sub}</span>
                   </button>
                 );
               })}
@@ -1459,24 +1469,73 @@ export default function EsCandlesPage() {
       </div>
 
 
-      <div className="flex flex-wrap items-center gap-4 px-4 pb-1 text-xs">
+      <div className="flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
           const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
           const es = (v: number | null) => (v != null ? (v + basis).toFixed(2) : "—");
-          const Chip = ({ c, label, v }: { c: string; label: string; v: number | null }) => (
-            <span className="flex items-center gap-1.5">
-              <span style={{ display: "inline-block", width: 14, height: 0, borderTop: `2px dashed ${c}` }} />
-              <span className="text-white/55">{label}</span>
-              <span className="font-mono font-bold" style={{ color: c }}>{es(v)}</span>
-            </span>
+          const StatBox = ({ c, label, v }: { c: string; label: string; v: number | null }) => (
+            <div
+              style={{
+                flex: "1 1 130px", minWidth: 120,
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                padding: "7px 12px", borderRadius: 12,
+                border: `1px solid ${HOME_THEME.border}`,
+                borderTop: `2px solid ${c}d9`,
+                background: `radial-gradient(circle at 50% 0%, ${c}1f 0%, transparent 70%), ${HOME_THEME.panelBg}`,
+                backdropFilter: "blur(16px)",
+              }}
+            >
+              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap" }}>{label}</span>
+              <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "monospace", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
+            </div>
           );
           return (
             <>
-              <Chip c="#30d158" label="Call Wall" v={levels.callWall} />
-              <Chip c="#ff5b5b" label="Put Wall" v={levels.putWall} />
-              <Chip c="#f5c518" label="Flip" v={levels.gexFlip} />
-              <Chip c="#4aa3ff" label="MVC" v={levels.mvc} />
-              <span className="text-white/35">basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}</span>
+              <StatBox c="#30d158" label="Call Wall" v={levels.callWall} />
+              <StatBox c="#ff5b5b" label="Put Wall" v={levels.putWall} />
+              <StatBox c="#f5c518" label="Flip" v={levels.gexFlip} />
+              <StatBox c="#4aa3ff" label="MVC" v={levels.mvc} />
+
+              {/* Net greek totals — latest value of each live flow series. */}
+              {(() => {
+                // Series units: gex/dex are already in $B, chex/vex in $M.
+                const UNIT: Record<FlowMetric, "B" | "M"> = { gex: "B", dex: "B", chex: "M", vex: "M" };
+                const fmtNet = (val: number | null, unit: "B" | "M"): string => {
+                  if (val == null || !isFinite(val)) return "—";
+                  const s = val < 0 ? "-" : "+";
+                  return `${s}$${Math.abs(val).toFixed(2)}${unit}`;
+                };
+                const lastOf = (m: FlowMetric): number | null => {
+                  const arr = flowHistory[m];
+                  return arr.length ? arr[arr.length - 1].value : null;
+                };
+                const GreekStat = ({ c, label, m }: { c: string; label: string; m: FlowMetric }) => {
+                  const v = lastOf(m);
+                  const col = v == null ? HOME_THEME.muted : v >= 0 ? "#30d158" : "#ff5b5b";
+                  return (
+                    <div style={{
+                      flex: "1 1 110px", minWidth: 100,
+                      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                      padding: "7px 12px", borderRadius: 12,
+                      border: `1px solid ${HOME_THEME.border}`,
+                      borderTop: `2px solid ${c}d9`,
+                      background: `radial-gradient(circle at 50% 0%, ${c}1f 0%, transparent 70%), ${HOME_THEME.panelBg}`,
+                      backdropFilter: "blur(16px)",
+                    }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: c, whiteSpace: "nowrap" }}>{label}</span>
+                      <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "monospace", color: col, whiteSpace: "nowrap" }}>{fmtNet(v, UNIT[m])}</span>
+                    </div>
+                  );
+                };
+                return (
+                  <>
+                    <GreekStat c="#22d3ee" label="Net GEX" m="gex" />
+                    <GreekStat c="#f59e0b" label="Net DEX" m="dex" />
+                    <GreekStat c="#2dd4bf" label="Net CHEX" m="chex" />
+                    <GreekStat c="#60a5fa" label="Net VEX" m="vex" />
+                  </>
+                );
+              })()}
             </>
           );
         })()}

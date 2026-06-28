@@ -4,6 +4,7 @@ import { useUser } from "@clerk/nextjs";
 import { HOME_THEME } from "./homeTheme";
 import { useNotes, NotesBody } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
+import ChatPanel from "./ChatPanel";
 
 const PANEL_WIDTH = 320;
 
@@ -67,8 +68,25 @@ export default function NotesDock() {
           </button>
         </div>
 
-        {/* body — always mounted so notes persist while collapsed */}
-        <NotesBody notes={notes} addNote={addNote} editNote={editNote} deleteNote={deleteNote} />
+        {/* notes body — top region, scrolls within its own space */}
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <NotesBody notes={notes} addNote={addNote} editNote={editNote} deleteNote={deleteNote} />
+        </div>
+
+        {/* chat — pinned to the bottom of the dock, below a divider */}
+        <div
+          style={{
+            flexShrink: 0,
+            marginTop: 14,
+            paddingTop: 14,
+            borderTop: `1px solid ${HOME_THEME.border}`,
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: "45%",
+          }}
+        >
+          <ChatPanel />
+        </div>
       </div>
     </aside>
   );

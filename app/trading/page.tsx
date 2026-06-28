@@ -7,7 +7,8 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { HOME_THEME as HT, homeShellStyle, homePanelStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeGlossPanelStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { PageShell, Card } from "@/components/shared/PageCard";
 
 interface Journal {
   id: number;
@@ -27,14 +28,34 @@ interface Journal {
 
 const LS_KEY = "trading_journals";
 
-// Keep local color aliases for green/red (used in charts + data cells)
+// Data-viz color aliases (chart series + win/loss cells) sourced from the theme.
 const T = {
-  green: "#8ECAE6", red: "#ef4444",
+  green: HT.green, red: HT.red,
 };
 
-const panelStyle: React.CSSProperties = {
-  ...homePanelStyle, padding: 16,
+// Rotating accent palette so cards alternate colors. Warm-weighted (no cyan) so
+// the page doesn't read all-blue.
+const ACCENT_CYCLE = [HT.orange, HT.purple, HT.green, HT.red];
+const accentAt = (i: number) => ACCENT_CYCLE[((i % ACCENT_CYCLE.length) + ACCENT_CYCLE.length) % ACCENT_CYCLE.length];
+
+// hex → rgba helper (local, mirrors homeTheme's private one).
+const aRgba = (hex: string, a: number) => {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 };
+
+// Stronger-glow gloss panel — more saturated top strip + radial so the accent
+// actually shows through the dark glass instead of reading blue.
+const panelStyleAt = (i: number): React.CSSProperties => {
+  const c = accentAt(i);
+  return {
+    ...homeGlossPanelStyle(c),
+    padding: 16,
+    borderTop: `2px solid ${aRgba(c, 0.85)}`,
+    background: `radial-gradient(circle at 50% 0%, ${aRgba(c, 0.16)} 0%, transparent 62%), ${HT.panelBg}`,
+  };
+};
+const panelStyle: React.CSSProperties = panelStyleAt(0);
 const btnStyle = (active = false): React.CSSProperties => ({
   ...homeButtonStyle,
   background: active ? HT.cyan : "transparent",
@@ -44,7 +65,7 @@ const btnStyle = (active = false): React.CSSProperties => ({
 const inputStyle: React.CSSProperties = {
   background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, padding: "7px 9px",
   borderRadius: 4, color: HT.text, fontSize: 12, outline: "none", width: "100%",
-  colorScheme: "dark",
+  colorScheme: "dark", accentColor: HT.cyan,
 };
 const labelStyle: React.CSSProperties = {
   fontSize: 10, fontWeight: 700, color: HT.muted, textTransform: "uppercase",
@@ -212,8 +233,8 @@ export default function TradingPage() {
     URL.revokeObjectURL(a.href);
   };
 
-  const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode) => (
-    <div style={{ ...panelStyle, display: "flex", flexDirection: "column", minHeight: 130 }}>
+  const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode, idx = 0) => (
+    <div style={{ ...panelStyleAt(idx), display: "flex", flexDirection: "column", minHeight: 130 }}>
       <div style={{ fontSize: 10, fontWeight: 700, color: HT.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: HT.text }}>{val}</div>
       <div style={{ fontSize: 10, color: HT.muted, marginTop: 2 }}>{sub}</div>
@@ -222,15 +243,9 @@ export default function TradingPage() {
   );
 
   return (
-    <div style={{
-      display: "flex", flexDirection: "column",
-      overflow: "hidden", ...homeShellStyle, flex: 1, minHeight: 0,
-    }}>
+    <PageShell>
       {/* Header */}
-      <header style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "16px 32px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0,
-      }}>
+      <Card accent="orange" padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontSize: 14, fontWeight: 700 }}>Journaling Dashboard</div>
         <div style={{
           fontSize: 10, fontWeight: 700, color: T.green, border: `1px solid ${T.green}55`,
@@ -238,9 +253,9 @@ export default function TradingPage() {
         }}>
           Market Open
         </div>
-      </header>
+      </Card>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "20px 32px", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {/* Filters */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -283,47 +298,47 @@ export default function TradingPage() {
                 <div style={{ height: 6, background: HT.border, borderRadius: 3, overflow: "hidden", display: "flex" }}>
                   <div style={{ width: `${k.winPct ?? 0}%`, background: T.green }} />
                   <div style={{ width: `${k.winPct != null ? 100 - k.winPct : 0}%`, background: T.red }} />
-                </div>)}
+                </div>, 0)}
               {kpiCard("Avg Win / Loss",
                 k.avgLoss !== 0 ? Math.abs(k.avgWin / k.avgLoss).toFixed(2) : "—",
                 "Avg Absolute Trade",
                 <div style={{ fontSize: 10 }}>
                   <div style={{ color: T.green }}>W {k.avgWin ? fmt$(k.avgWin) : "—"}</div>
                   <div style={{ color: T.red }}>L {k.avgLoss ? fmt$(k.avgLoss) : "—"}</div>
-                </div>)}
+                </div>, 1)}
               {kpiCard("Net PnL",
                 <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>,
-                "Total Net PnL")}
+                "Total Net PnL", undefined, 2)}
               {kpiCard("Max Streaks", k.bestW || "—", "Best win streak",
                 <div style={{ fontSize: 10 }}>
                   <div>Consecutive wins <span style={{ color: T.green }}>{k.bestW}</span></div>
                   <div>Consecutive losses <span style={{ color: T.red }}>{k.bestL}</span></div>
-                </div>)}
+                </div>, 3)}
               {kpiCard("Per Trade",
                 k.pnlPerTrade != null ? fmt$(k.pnlPerTrade) : "—",
                 "Net PnL / trade",
-                <div style={{ fontSize: 10 }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>)}
+                <div style={{ fontSize: 10 }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>, 4)}
             </div>
 
             {/* Charts strip */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              <div style={panelStyle}>
+              <div style={panelStyleAt(0)}>
                 <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>Capture Efficiency Score</div>
-                <MiniLine values={k.efficiency} color="#29b6f6" />
+                <MiniLine values={k.efficiency} color={HT.cyan} />
               </div>
-              <div style={panelStyle}>
+              <div style={panelStyleAt(1)}>
                 <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
                   Cumulative PnL <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>
                 </div>
                 <MiniLine values={k.cum} color={T.green} />
               </div>
-              <div style={panelStyle}>
+              <div style={panelStyleAt(2)}>
                 <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
                   Drawdown (Max) <span style={{ color: T.red }}>{visible.length ? fmt$(k.maxDD) : "—"}</span>
                 </div>
                 <MiniLine values={k.dd} color={T.red} />
               </div>
-              <div style={panelStyle}>
+              <div style={panelStyleAt(3)}>
                 <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>PnL Per Day</div>
                 <MiniBars values={visible.map((j) => j.netPnl)} />
               </div>
@@ -331,7 +346,7 @@ export default function TradingPage() {
 
             {/* Tables */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
-              <div style={panelStyle}>
+              <div style={panelStyleAt(4)}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, targets: !c.targets }))}
                   style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", cursor: "pointer" }}
@@ -357,7 +372,7 @@ export default function TradingPage() {
                 )}
               </div>
 
-              <div style={panelStyle}>
+              <div style={panelStyleAt(5)}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, log: !c.log }))}
                   style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", cursor: "pointer" }}
@@ -402,7 +417,7 @@ export default function TradingPage() {
             </div>
 
             {/* Calendar */}
-            <div style={panelStyle}>
+            <div style={panelStyleAt(6)}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>Session Calendar</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, color: HT.muted, fontSize: 13 }}>
@@ -482,6 +497,6 @@ export default function TradingPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

@@ -5,6 +5,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { queryGreeksToday, saveGreeksSnapshot } from "@/lib/snapdb";
 import RegimeMatrix from "@/components/greeks/RegimeMatrix";
 import { Dock, SegGroup, DockButton, DockGap } from "@/components/shared/DockToolbar";
+import { HOME_THEME, homeShellStyle } from "@/components/shared/homeTheme";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Lean Greeks page.
@@ -184,9 +185,10 @@ function ZeroCrossGraph({
     }
     ctx.restore();
 
-    // ── Zero baseline (bold) ──
+    // ── Zero baseline — tinted in the card's accent so each chart carries its
+    // greek identity (green/red trend still encodes sign above/below it). ──
     ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,.38)";
+    ctx.strokeStyle = `${color}99`;
     ctx.lineWidth = 1.25 * dpr;
     ctx.setLineDash([4 * dpr, 4 * dpr]);
     ctx.beginPath();
@@ -392,10 +394,12 @@ function GreekCard({
   const msg = value == null ? neutralMsg : pos ? positiveMsg : negativeMsg;
 
   return (
-    <section style={{
-      border: `1px solid ${border}`,
-      background: `linear-gradient(180deg,${accent}14,rgba(0,0,0,.28))`,
-      borderRadius: 12, padding: 16, display: "flex", flexDirection: "column",
+    <section className="card-hover" style={{
+      border: `1px solid ${HOME_THEME.border}`,
+      borderTop: `2px solid ${accent}d9`,
+      background: `radial-gradient(circle at 50% 0%, ${accent}1f 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+      backdropFilter: "blur(16px)",
+      borderRadius: 16, padding: 16, display: "flex", flexDirection: "column",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -456,9 +460,10 @@ function VolCard({ vol }: { vol: VolData | null }) {
     : "Mid-range IV — let GEX/DEX lead; size normally.";
 
   return (
-    <section style={{
-      marginTop: 14, border: "1px solid rgba(96,165,250,.3)", borderRadius: 12, padding: 16,
-      background: "linear-gradient(180deg,rgba(96,165,250,.07),rgba(0,0,0,.28))",
+    <section className="card-hover" style={{
+      marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: "2px solid rgba(96,165,250,.85)",
+      borderRadius: 16, padding: 16, backdropFilter: "blur(16px)",
+      background: "radial-gradient(circle at 50% 0%, rgba(96,165,250,.14) 0%, transparent 60%), rgba(13,17,25,0.45)",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -957,12 +962,12 @@ export default function GreeksPage() {
   }, [history, vol]);
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+    <div style={{ ...homeShellStyle, height: "100%", overflowY: "auto" }}>
     <div style={{ padding: "18px 20px 40px", maxWidth: 1280, margin: "0 auto" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 900, color: "#eef7ff", letterSpacing: ".03em" }}>Greeks</div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: HOME_THEME.text, letterSpacing: ".03em" }}>Greeks</div>
           <div style={{ fontSize: 11, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em" }}>
             SPX dealer exposure · data {lastRefresh}{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
           </div>
