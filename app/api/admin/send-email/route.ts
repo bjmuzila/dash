@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { getSubscription, PAID_STATUSES } from "@/lib/db";
+import { getSubscription, PAID_STATUSES, listWaitlist } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
@@ -72,6 +72,16 @@ async function listRecipients(): Promise<Recipient[]> {
   return out;
 }
 
+// Landing-page waitlist emails (the /api/waitlist signups), excluding anyone who
+// already unsubscribed. Separate from Clerk users — these people never created
+// an account.
+async function listWaitlistEmails(): Promise<string[]> {
+  const rows = await listWaitlist(5000);
+  return rows
+    .filter((r) => !r.unsubscribed_at && r.email)
+    .map((r) => r.email.trim().toLowerCase());
+}
+
 // GET — owner only. Returns recipient lists for the compose UI preview.
 export async function GET() {
   try {
@@ -81,12 +91,14 @@ export async function GET() {
     const recipients = await listRecipients();
     const all = recipients.map((r) => r.email);
     const subscribers = recipients.filter((r) => r.paid).map((r) => r.email);
+    let waitlist: string[] = [];
+    try { waitlist = await listWaitlistEmails(); } catch { /* table optional */ }
     return NextResponse.json({
       ok: true,
       configured: !!RESEND_API_KEY,
       from: FROM_EMAIL,
-      counts: { all: all.length, subscribers: subscribers.length },
-      recipients: { all, subscribers },
+      counts: { all: all.length, subscribers: subscribers.length, waitlist: waitlist.length },
+      recipients: { all, subscribers, waitlist },
     });
   } catch (err) {
     return NextResponse.json({ error: "Recipient load failed", detail: String(err) }, { status: 500 });
@@ -123,6 +135,8 @@ export async function POST(req: NextRequest) {
     if (audience === "all" || audience === "subscribers") {
       const recipients = await listRecipients();
       to = (audience === "subscribers" ? recipients.filter((r) => r.paid) : recipients).map((r) => r.email);
+    } else if (audience === "waitlist") {
+      to = await listWaitlistEmails();
     } else {
       to = Array.isArray(body?.to) ? body.to.map((x: unknown) => String(x).trim()) : [];
     }

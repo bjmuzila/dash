@@ -90,23 +90,23 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       // Inject overlay text as real DOM so html2canvas renders it natively
       // (drawing text onto the returned canvas no-ops in this browser).
       clone.style.position = "relative";
-      const mk = (text: string, side: "left" | "right") => {
+      const inter = "var(--font-inter), Inter, Arial, sans-serif";
+      const mk = (text: string, top: number, sizePx: number, color: string) => {
         const d = doc.createElement("div");
         d.textContent = text;
         d.style.cssText = [
-          "position:absolute", "top:10px", `${side}:12px`,
-          "font:700 15px Arial, sans-serif", "color:#ffffff",
+          "position:absolute", `top:${top}px`, "left:12px",
+          `font:700 ${sizePx}px ${inter}`, `color:${color}`,
           "text-shadow:0 1px 3px rgba(0,0,0,0.9)", "z-index:9999",
           "pointer-events:none", "white-space:nowrap",
         ].join(";");
         clone.appendChild(d);
       };
-      mk(titleText, "left");
-      mk("Data provided by CBEdge.net", "right");
+      mk(titleText, 8, 15, "#ffffff");
+      mk("Data provided by CBEdge.net", 28, 11, "rgba(255,255,255,0.7)");
     },
   });
 
-  await drawWatermark(base);
   return base.toDataURL("image/png");
 }
 

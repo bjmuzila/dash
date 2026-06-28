@@ -644,23 +644,7 @@ export default function GexChart({
       ctx.fillText(r.strike.toLocaleString(), xAt(i), PAD_T + cH - 18);
     });
 
-    // ── Legend (top-left) ──
-    ctx.textAlign = "left"; ctx.font = "bold 9px Arial";
-    const legend: [string, string][] = isCallPut
-      ? [["#29b6f6", "Call GEX"], ["#ffb300", "Put GEX"]]
-      : [["#29b6f6", "+ GEX"],    ["#ffb300", "− GEX"]];
-    if (showDex)       legend.push(["rgba(255,255,255,0.8)", "DEX"]);
-    if (showFlipCurve) legend.push(["#FB8501", gexProfile ? "Profile" : "GEX curve"]);
-    if (!isCallPut && !isVol && ghostAges.length) {
-      const tf = ghostAges[0]; // only one active at a time
-      legend.push(["#ffb300", `${tf}m ↓`]);
-      legend.push(["#29b6f6", `${tf}m ↑`]);
-    }
-    legend.forEach(([col, lbl], i) => {
-      const lx = PAD_L + i * 72;
-      ctx.fillStyle = col;        ctx.fillRect(lx, 5, 8, 7);
-      ctx.fillStyle = "#4a6a88";  ctx.fillText(lbl, lx + 11, 12);
-    });
+    // ── Legend (top-left) — removed per design ──
 
     // ── Viewport hint (bottom-right, very dim) ──
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";

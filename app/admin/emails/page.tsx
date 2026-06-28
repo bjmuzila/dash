@@ -5,16 +5,17 @@ import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton, type SegOption } from "@/components/shared/DockToolbar";
 
-type Audience = "all" | "subscribers" | "custom";
+type Audience = "all" | "subscribers" | "waitlist" | "custom";
 
 const AUDIENCE_OPTIONS: SegOption[] = [
   { value: "all", label: "👥 All users" },
   { value: "subscribers", label: "💳 Subscribers" },
+  { value: "waitlist", label: "📋 Waitlist" },
   { value: "custom", label: "✏️ Custom" },
 ];
 
-interface Counts { all: number; subscribers: number }
-interface Lists { all: string[]; subscribers: string[] }
+interface Counts { all: number; subscribers: number; waitlist: number }
+interface Lists { all: string[]; subscribers: string[]; waitlist: string[] }
 
 export default function AdminEmailsPage() {
   const [audience, setAudience] = useState<Audience>("subscribers");
@@ -79,6 +80,7 @@ export default function AdminEmailsPage() {
   const recipientCount =
     audience === "all" ? counts?.all ?? 0
     : audience === "subscribers" ? counts?.subscribers ?? 0
+    : audience === "waitlist" ? counts?.waitlist ?? 0
     : customTo.split(/[\s,;]+/).filter(Boolean).length;
 
   async function send() {
@@ -182,7 +184,7 @@ export default function AdminEmailsPage() {
 
             {showList && audience !== "custom" && lists && (
               <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.25)" }}>
-                {(audience === "all" ? lists.all : lists.subscribers).map((email) => (
+                {(audience === "all" ? lists.all : audience === "waitlist" ? lists.waitlist : lists.subscribers).map((email) => (
                   <div key={email} style={{ fontSize: 12, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "monospace" }}>
                     {email}
                   </div>
