@@ -10,6 +10,7 @@ import {
   homeShellStyle,
   homeSecondaryButtonStyle,
 } from "@/components/shared/homeTheme";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -802,20 +803,8 @@ export default function AdminDashboard() {
               </button>
             ))}
           </div>
-          {/* Owner — navigates to the separate /dev/owner page. */}
-          <a
-            href="/dev/owner?tab=overview"
-            style={{
-              padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
-              textTransform: "uppercase", letterSpacing: "0.1em",
-              cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6,
-              background: "transparent",
-              color: HOME_THEME.purple,
-              border: `1px solid ${HOME_THEME.purple}66`,
-            }}
-          >
-            Owner <span style={{ fontSize: 12 }}>↗</span>
-          </a>
+          {/* Owner-group quick links */}
+          <OwnerQuickLinks current="/dev/admin" />
         </div>
       </div>
 

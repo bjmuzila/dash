@@ -12,6 +12,7 @@ import {
   homeShellStyle,
 } from "@/components/shared/homeTheme";
 import { DockCalendar } from "@/components/shared/DockToolbar";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 const TABLES = [
   { id: "eod_gex", label: "EOD GEX" },
@@ -189,6 +190,7 @@ export default function DatabasePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <OwnerQuickLinks current="/database" />
           <button onClick={() => void load(tab, dateFilter, limit)} style={homeButtonStyle}>
             Refresh
           </button>

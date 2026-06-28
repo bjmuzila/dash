@@ -48,6 +48,7 @@ export function Dock({
   className,
   flat = false,
   fullWidth = false,
+  noScroll = false,
 }: {
   children: ReactNode;
   accent?: string;
@@ -57,6 +58,8 @@ export function Dock({
   flat?: boolean;
   /** Stretch to fill its container instead of hugging content. */
   fullWidth?: boolean;
+  /** Disable horizontal scroll so the bar lays out at full content width (for scale-to-fit wrappers). */
+  noScroll?: boolean;
 }) {
   return (
     <div
@@ -82,8 +85,8 @@ export function Dock({
         boxShadow: flat ? "0 1px 0 rgba(255,255,255,0.04) inset" : dockShadow,
         flexShrink: 0,
         flexWrap: "nowrap",
-        overflowX: "auto",
-        overflowY: "hidden",
+        overflowX: noScroll ? "visible" : "auto",
+        overflowY: noScroll ? "visible" : "hidden",
         scrollbarWidth: "none",
         msOverflowStyle: "none" as const,
         ...style,
@@ -133,12 +136,15 @@ export function SegGroup({
     <div
       style={{
         display: "flex",
+        alignItems: "center",
         gap: "clamp(2px, 0.4vw, 5px)",
+        height: 34,
         padding: 4,
         background: "rgba(0,0,0,0.22)",
         borderRadius: 12,
         border: "1px solid rgba(255,255,255,0.04)",
         flexShrink: 0,
+        boxSizing: "border-box",
       }}
     >
       {options.map((o) => {
@@ -154,7 +160,8 @@ export function SegGroup({
               justifyContent: "center",
               gap: "clamp(3px, 0.4vw, 5px)",
               flexShrink: 0,
-              padding: "5px clamp(7px, 1vw, 14px)",
+              height: "100%",
+              padding: "0 clamp(7px, 1vw, 14px)",
               fontSize: "clamp(10px, 0.85vw, 12px)",
               border: on ? `1px solid ${rgba(accent, 0.35)}` : "1px solid transparent",
               borderRadius: 8,
@@ -198,8 +205,10 @@ export function ToggleTile({
         display: "flex",
         alignItems: "center",
         gap: "clamp(4px, 0.5vw, 6px)",
-        padding: "6px clamp(7px, 0.9vw, 13px)",
+        height: 34,
+        padding: "0 clamp(7px, 0.9vw, 13px)",
         borderRadius: 9,
+        boxSizing: "border-box",
         border: on ? `1px solid ${rgba(accent, 0.3)}` : "1px solid rgba(255,255,255,0.05)",
         background: on ? `linear-gradient(180deg,${rgba(accent, 0.16)},${rgba(accent, 0.04)})` : T.tile,
         color: on ? accent : T.text,
@@ -245,9 +254,10 @@ export function DockButton({
       title={title}
       style={{
         minWidth: 34,
-        height: 30,
+        height: 34,
         padding: "0 clamp(7px, 0.9vw, 11px)",
         borderRadius: 9,
+        boxSizing: "border-box",
         border: "1px solid rgba(255,255,255,0.06)",
         background: "linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))",
         color: T.text,

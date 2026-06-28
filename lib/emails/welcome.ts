@@ -7,6 +7,8 @@
 // Brand palette mirrors components/shared/homeTheme.ts:
 //   bg #05060A · panel #0D1119 · cyan #219EBC · accent text #8ECAE6
 
+import { unsubscribeUrl } from "@/lib/unsubscribe";
+
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
 const SIGN_IN_URL = `${SITE_URL}/home`;
@@ -16,6 +18,12 @@ export interface WelcomeEmailOpts {
   firstName?: string | null;
   /** Override the sign-in/CTA URL (defaults to the dashboard home). */
   ctaUrl?: string;
+  /**
+   * Recipient email. When provided (webhook path), the footer renders a real
+   * tokenized unsubscribe link. When sent via /admin/emails, leave this unset —
+   * the send route appends its own per-recipient tokenized footer.
+   */
+  email?: string | null;
 }
 
 export const WELCOME_SUBJECT = "Welcome to the CB Edge beta 🎉";
@@ -41,6 +49,9 @@ export function welcomeEmailText(opts: WelcomeEmailOpts = {}): string {
     "We're still in beta, so things move fast and your feedback shapes what we build next — there's a Feedback page right in the app.",
     "",
     "— The CB Edge team",
+    // Composer path appends its own unsubscribe line; only add one on the
+    // webhook path (opts.email set) to avoid duplicates.
+    ...(opts.email ? ["", "—", `Unsubscribe: ${unsubscribeUrl(opts.email)}`] : []),
   ].join("\n");
 }
 
@@ -49,6 +60,15 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
   const name = opts.firstName?.trim();
   const hi = name ? `Hi ${escapeHtml(name)},` : "Hi there,";
   const cta = escapeHtml(opts.ctaUrl || SIGN_IN_URL);
+  // Unsubscribe footer.
+  // - Webhook path (opts.email set): render a real tokenized link here, since
+  //   nothing else will.
+  // - Composer path (no email): the /api/admin/send-email route appends its own
+  //   per-recipient tokenized footer, so we render NONE here to avoid two links.
+  const unsubFooter = opts.email
+    ? `<a href="${escapeHtml(unsubscribeUrl(opts.email))}" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
+                &nbsp;·&nbsp;`
+    : "";
 
   const feature = (title: string, desc: string) => `
     <tr>
@@ -59,8 +79,8 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
               <div style="width:6px;height:6px;border-radius:50%;background:#219EBC;"></div>
             </td>
             <td style="padding-left:12px;">
-              <div style="font:700 14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">${title}</div>
-              <div style="font:400 13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:2px;">${desc}</div>
+              <div style="font:700 14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;">${title}</div>
+              <div style="font:400 13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#aeb9c4;margin-top:2px;">${desc}</div>
             </td>
           </tr>
         </table>
@@ -85,17 +105,17 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
           <!-- accent bar -->
           <tr><td style="height:3px;background:linear-gradient(90deg,rgba(33,158,188,0) 0%,#219EBC 50%,rgba(33,158,188,0) 100%);font-size:0;line-height:0;">&nbsp;</td></tr>
 
-          <!-- logo -->
+          <!-- logo (larger; tight to heading via negative-feel small bottom pad) -->
           <tr>
-            <td align="center" style="padding:32px 32px 8px 32px;">
-              <img src="${LOGO_URL}" alt="CB Edge" width="160" style="display:block;width:160px;max-width:60%;height:auto;border:0;">
+            <td align="center" style="padding:28px 24px 0 24px;">
+              <img src="${LOGO_URL}" alt="CB Edge" width="260" style="display:block;width:260px;max-width:88%;height:auto;border:0;">
             </td>
           </tr>
 
           <!-- heading -->
           <tr>
-            <td align="center" style="padding:8px 32px 4px 32px;">
-              <div style="font:800 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Welcome to the beta 🎉</div>
+            <td align="center" style="padding:0 32px 4px 32px;">
+              <div style="font:800 23px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Welcome to the beta 🎉</div>
               <div style="font:600 13px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;margin-top:6px;">You're in — your edge starts here.</div>
             </td>
           </tr>
@@ -103,9 +123,9 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
           <!-- body copy -->
           <tr>
             <td style="padding:20px 32px 4px 32px;">
-              <p style="margin:0 0 14px 0;font:400 14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#c8d6e5;">${hi}</p>
-              <p style="margin:0 0 18px 0;font:400 14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#c8d6e5;">
-                Thanks for joining the CB Edge beta. It's a real-time options &amp; gamma-exposure dashboard built for index traders. Here's what's waiting inside:
+              <p style="margin:0 0 14px 0;font:600 15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">${hi}</p>
+              <p style="margin:0 0 18px 0;font:400 14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
+                Thanks for joining the <strong style="color:#219EBC;">CB Edge</strong> beta. It's a <strong style="color:#8ECAE6;">real-time options &amp; gamma-exposure</strong> dashboard built for index traders. Here's what's waiting inside:
               </p>
             </td>
           </tr>
@@ -149,9 +169,11 @@ export function welcomeEmail(opts: WelcomeEmailOpts = {}): string {
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
           <tr>
             <td align="center" style="padding:18px 32px;">
-              <div style="font:400 11px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#5a6b7d;">
+              <div style="font:400 11px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">
                 CB Edge · You're receiving this because you signed up for the beta.<br>
-                <a href="${SITE_URL}" style="color:#5a6b7d;text-decoration:underline;">cbedge.net</a>
+                ${unsubFooter}<a href="${SITE_URL}" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a>
+                <br>
+                <span style="color:#5a6b7d;">Market analytics, not financial advice.</span>
               </div>
             </td>
           </tr>

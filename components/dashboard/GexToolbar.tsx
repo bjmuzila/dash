@@ -65,7 +65,7 @@ export default function GexToolbar({
 
   return (
     <div style={{ display: "flex", padding: "6px 8px 2px", flexShrink: 0 }}>
-      <Dock className="dock-noscroll" style={{ width: "100%", gap: 8 }} fullWidth flat>
+      <Dock className="dock-noscroll" style={{ width: "100%", gap: 8 }} fullWidth flat noScroll>
         {/* DTE / Expiry picker */}
         {dteOptions.length > 0 && (
           <>

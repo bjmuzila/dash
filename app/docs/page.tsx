@@ -17,6 +17,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { HOME_THEME, homeShellStyle } from "@/components/shared/homeTheme";
 
 // ─── Palette (mirrors the values used by the GEX components) ──────────────────
 const C = {
@@ -189,9 +190,17 @@ function Steps({ items }: { items: React.ReactNode[] }) {
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function Card({ children, accent = C.cyan }: { children: React.ReactNode; accent?: string }) {
   return (
-    <div style={{ background: "rgba(0,0,0,0.25)", border: `1px solid ${C.border}`, borderRadius: 12, padding: "4px 16px", margin: "10px 0" }}>
+    <div style={{
+      background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${C.panel}`,
+      border: `1px solid ${C.border}`,
+      borderTop: `2px solid ${accent}d9`,
+      borderRadius: 12,
+      padding: "4px 16px",
+      margin: "12px 0",
+      backdropFilter: "blur(16px)",
+    }}>
       {children}
     </div>
   );
@@ -228,8 +237,9 @@ function Figure({ caption, maxWidth = 420, children }: { caption: React.ReactNod
     <figure style={{ margin: "18px auto 6px", maxWidth, width: "100%" }}>
       <div
         style={{
-          background: "linear-gradient(180deg, rgba(13,17,25,0.72) 0%, rgba(5,6,10,0.72) 100%)",
-          border: `1px solid ${C.borderSoft}`,
+          background: `radial-gradient(circle at 50% 0%, ${C.cyan}12 0%, transparent 60%), ${C.panelStrong}`,
+          border: `1px solid ${C.border}`,
+          borderTop: `2px solid ${C.cyan}d9`,
           borderRadius: 12,
           padding: 14,
           position: "relative",
@@ -603,7 +613,7 @@ const ARTICLES: Article[] = [
           The vertical axis is <Term>gamma exposure (GEX)</Term> — bars go <em>up</em> for positive gamma and <em>down</em>{" "}
           for negative gamma, measured from the center zero line.
         </P>
-        <Card>
+        <Card accent={C.green}>
           <LegendRow color={C.posBar} name="Positive GEX (up)">
             Dealers are long gamma here. They trade <em>against</em> moves — selling rallies, buying dips — which{" "}
             <Term>dampens</Term> volatility and tends to pin price. Bars brighten slightly as magnitude grows.
@@ -615,7 +625,7 @@ const ARTICLES: Article[] = [
         </Card>
 
         <H3>The labels on the chart</H3>
-        <Card>
+        <Card accent={C.orange}>
           <LegendRow color={C.text} name="MVC tag">
             Sits over the single largest bar by absolute net GEX — the <Term>Most Valuable Contract</Term>, the strike with
             the most dealer gamma. This is your headline magnet / wall level. Colored cyan if positive, gold if negative.
@@ -644,7 +654,7 @@ const ARTICLES: Article[] = [
         <H3>
           <UI>Net GEX</UI> vs <UI>Call - Put</UI>
         </H3>
-        <Card>
+        <Card accent={C.purple}>
           <LegendRow color={C.posBar} name="Net GEX">
             Each bar is call gamma minus put gamma — one net value per strike. The default, and the cleanest read of where
             price gets pinned or pushed.
@@ -1160,15 +1170,8 @@ export default function DocsPage() {
   return (
     <div
       style={{
+        ...homeShellStyle,
         height: "100%",
-        width: "100%",
-        display: "flex",
-        flexDirection: "column",
-        background: C.bg,
-        backgroundImage:
-          "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.03) 0%, transparent 50%)",
-        fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
-        color: C.text,
         overflow: "hidden",
       }}
     >
@@ -1179,14 +1182,14 @@ export default function DocsPage() {
           alignItems: "center",
           gap: 12,
           padding: "14px 22px",
-          background: C.panel,
+          background: HOME_THEME.panelBgStrong,
           backdropFilter: "blur(16px)",
-          borderBottom: `1px solid ${C.border}`,
+          borderBottom: `1px solid ${HOME_THEME.border}`,
           flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800 }}>
+          <span style={{ fontSize: 10, color: HOME_THEME.cyan, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800 }}>
             Knowledge Base
           </span>
           <span style={{ fontSize: 19, fontWeight: 800, lineHeight: 1 }}>Help &amp; Docs</span>

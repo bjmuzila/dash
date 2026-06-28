@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { welcomeEmail, welcomeEmailText, WELCOME_SUBJECT } from "@/lib/emails/welcome";
+import {
+  comingSoonEmail, comingSoonText, COMING_SOON_SUBJECT,
+  betaLiveEmail, betaLiveText, BETA_LIVE_SUBJECT,
+} from "@/lib/emails/announce";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -19,6 +23,20 @@ function buildTemplates(): Template[] {
       subject: WELCOME_SUBJECT,
       html: welcomeEmail(),
       text: welcomeEmailText(),
+    },
+    {
+      id: "coming-soon",
+      label: "Beta coming soon",
+      subject: COMING_SOON_SUBJECT,
+      html: comingSoonEmail(),
+      text: comingSoonText(),
+    },
+    {
+      id: "beta-live",
+      label: "Beta is live — join",
+      subject: BETA_LIVE_SUBJECT,
+      html: betaLiveEmail(),
+      text: betaLiveText(),
     },
   ];
 }

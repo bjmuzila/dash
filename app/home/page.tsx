@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
+import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -346,15 +347,25 @@ export default function HomePage() {
     if (!cq || !box) return;
     const fit = () => {
       const s = tickerScaleRef.current || 1;
-      // The box is width:100% and its rows use space-between, so it normally
-      // fills the column exactly (stretches with the window). It only needs to
-      // SHRINK when the items' minimum widths can't fit: in that case the box
-      // overflows and scrollWidth > clientWidth. Use that ratio as a clip guard.
-      // (scrollWidth/clientWidth are layout-box values, unaffected by transform.)
-      const overflow = box.scrollWidth / Math.max(1, box.clientWidth);
-      const next = overflow > 1.001 ? Math.min(1, s / overflow) : 1;
+      // Measure the box's TRUE natural width by momentarily neutralizing the
+      // transform and letting it size to its content (max-content). Reading
+      // scrollWidth while scaled/width:100% can't tell us the unscaled need —
+      // which is why it shrank but never grew back. We restore immediately, so
+      // nothing flickers. Comparing natural vs the untransformed container
+      // (cq.clientWidth) yields an absolute scale with no feedback loop.
+      const prevT = box.style.transform;
+      const prevW = box.style.width;
+      box.style.transform = "none";
+      box.style.width = "max-content";
+      const natural = box.scrollWidth;
+      const naturalH = box.offsetHeight;
+      box.style.transform = prevT;
+      box.style.width = prevW;
+
+      const avail = cq.clientWidth;
+      const next = natural > avail + 1 ? Math.max(0.5, avail / natural) : 1;
       if (Math.abs(next - s) > 0.005) { tickerScaleRef.current = next; setTickerScale(next); }
-      setTickerBoxH(box.offsetHeight);
+      setTickerBoxH(naturalH);
     };
     const ro = new ResizeObserver(fit);
     ro.observe(cq);
@@ -858,7 +869,8 @@ export default function HomePage() {
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
             <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
-              {/* Full-featured toolbar */}
+              {/* Full-featured toolbar — scales to fit instead of scrolling */}
+              <FitScale min={0.6}>
               <GexToolbar
                 gexMode={gexMode}
                 dataMode={dataMode}
@@ -883,6 +895,7 @@ export default function HomePage() {
                 containerRef={gexContainerRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
+              </FitScale>
               {/* Chart canvas — uses fast gex-chain data. Held behind a loader
                   until the server reports OI + greeks are warm, so a half-built
                   / inflated frame never renders. */}
@@ -947,27 +960,27 @@ export default function HomePage() {
              <div ref={tickerBoxRef} style={{ display: "block", width: "100%", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
               {/* VIX / ESU / SPX / NQU quotes moved to the global top toolbar (ToolbarTicker). */}
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", width: "100%", minWidth: 0, paddingLeft: 13 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoneyB(netGex)}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.green }}>{(callWallOiVol ?? callWall) ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.red }}>{(putWallOiVol ?? putWall) ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: "#FB8501" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>

@@ -552,7 +552,7 @@ function LineChartCard({
   const vbH = H + 18;
 
   return (
-    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.purple}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.purple}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.orange}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.orange}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
         <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
@@ -561,8 +561,8 @@ function LineChartCard({
       <svg viewBox={`0 0 ${W} ${vbH}`} preserveAspectRatio="none" style={{ width: "100%", height: 190, display: "block" }}>
         <defs>
           <linearGradient id="ov-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={HOME_THEME.purple} stopOpacity="0.30" />
-            <stop offset="100%" stopColor={HOME_THEME.purple} stopOpacity="0" />
+            <stop offset="0%" stopColor={HOME_THEME.orange} stopOpacity="0.30" />
+            <stop offset="100%" stopColor={HOME_THEME.orange} stopOpacity="0" />
           </linearGradient>
         </defs>
         {[0, 0.25, 0.5, 0.75, 1].map((g) => (
@@ -570,12 +570,12 @@ function LineChartCard({
         ))}
         <path d={areaA} fill="url(#ov-area)" />
         {hasB && <path d={lineB} fill="none" stroke={HOME_THEME.cyan} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.85" />}
-        <path d={lineA} fill="none" stroke={HOME_THEME.purple} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        <path d={lineA} fill="none" stroke={HOME_THEME.orange} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         {/* Hover guide line + dot for the active point */}
         {hover != null && ptsA[hover] && (
           <>
-            <line x1={ptsA[hover].x} x2={ptsA[hover].x} y1={padY} y2={H} stroke={`${HOME_THEME.purple}66`} strokeWidth="1" vectorEffect="non-scaling-stroke" />
-            <circle cx={ptsA[hover].x} cy={ptsA[hover].y} r="4" fill={HOME_THEME.purple} stroke="#0d1119" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+            <line x1={ptsA[hover].x} x2={ptsA[hover].x} y1={padY} y2={H} stroke={`${HOME_THEME.orange}66`} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <circle cx={ptsA[hover].x} cy={ptsA[hover].y} r="4" fill={HOME_THEME.orange} stroke="#0d1119" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </>
         )}
         {labels.map((lb, i) => (
@@ -873,7 +873,7 @@ function OverviewSection({ metrics }: {
       </div>
 
       {/* ── Right: real recent-activity feed ── */}
-      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.cyan}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.purple}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.purple}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Recent Activity</span>
           <span style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace" }}>newest first</span>
@@ -1679,6 +1679,13 @@ export default function OwnerDashboard() {
 
   return (
     <div style={{ ...homeShellStyle, height: "100dvh", maxHeight: "100dvh" }}>
+      <style>{`
+        .owner-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+        .owner-scroll::-webkit-scrollbar-track { background: transparent; }
+        .owner-scroll::-webkit-scrollbar-thumb { background: ${HOME_THEME.cyan}40; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+        .owner-scroll::-webkit-scrollbar-thumb:hover { background: ${HOME_THEME.cyan}80; background-clip: padding-box; }
+        .owner-scroll { scrollbar-width: thin; scrollbar-color: ${HOME_THEME.cyan}40 transparent; }
+      `}</style>
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -1749,6 +1756,7 @@ export default function OwnerDashboard() {
 
       {/* Scrollable body */}
       <div
+        className="owner-scroll"
         style={{
           flex: 1,
           minHeight: 0,
@@ -2378,7 +2386,7 @@ export default function OwnerDashboard() {
         {SECTION_TAB.auth === ownerTab && (
         <AccordionCard
           id="auth"
-          accent={HOME_THEME.green}
+          accent={HOME_THEME.purple}
           title="Auth · Clerk"
           subtitle={clerk == null ? "loading…" : `${clerk.configured ? "configured" : "not configured"} · env ${clerk.environment}${clerk.stats?.userCount != null ? ` · ${clerk.stats.userCount} users` : ""}`}
           open={openSet.has("auth")}
@@ -2582,7 +2590,7 @@ export default function OwnerDashboard() {
           const activeCount = pageStatuses.filter((p) => p.status === "active").length;
 
           return (
-        <div style={{ ...homePanelStyle, borderTop: `2px solid ${HOME_THEME.cyan}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+        <div style={{ ...homePanelStyle, borderTop: `2px solid ${HOME_THEME.green}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.green}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
           <div
             style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${HOME_THEME.border}` }}
           >
@@ -2707,17 +2715,23 @@ export default function OwnerDashboard() {
                           }}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                            <span
-                              style={{
-                                width: 6,
-                                height: 6,
-                                borderRadius: "50%",
-                                flexShrink: 0,
-                                background: status ? (active ? HOME_THEME.green : HOME_THEME.muted) : "rgba(255,255,255,0.15)",
-                                boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : "none",
-                              }}
-                            />
-                            <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", whiteSpace: "nowrap" }}>{item.label}</span>
+                            {(() => {
+                              const dot = active ? HOME_THEME.green : status ? HOME_THEME.cyan : HOME_THEME.red;
+                              return (
+                                <span
+                                  style={{
+                                    width: 7,
+                                    height: 7,
+                                    borderRadius: "50%",
+                                    flexShrink: 0,
+                                    background: status ? dot : "transparent",
+                                    border: status ? "none" : `1px solid ${HOME_THEME.red}66`,
+                                    boxShadow: active ? `0 0 7px ${dot}` : "none",
+                                  }}
+                                />
+                              );
+                            })()}
+                            <span style={{ fontSize: 12, fontWeight: 600, color: active ? HOME_THEME.text : HOME_THEME.muted, opacity: active ? 1 : 0.7, whiteSpace: "nowrap" }}>{item.label}</span>
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                             {/* Visit count pill */}
@@ -2742,7 +2756,7 @@ export default function OwnerDashboard() {
                               <span style={{ fontSize: 10, color: HOME_THEME.muted }}>never visited</span>
                             )}
                             {seen && (
-                              <span style={{ fontSize: 9, color: "#fff", fontFamily: "monospace" }}>
+                              <span style={{ fontSize: 9, color: HOME_THEME.muted, opacity: 0.6, fontFamily: "monospace" }}>
                                 {fmtAgo(seen)}
                               </span>
                             )}
@@ -2798,7 +2812,7 @@ export default function OwnerDashboard() {
                 bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
               };
               return (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
+                <div className="owner-scroll" style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
               {visible.map((f) => {
                 const resolved = f.status === "resolved";
                 return (

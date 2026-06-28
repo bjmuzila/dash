@@ -10,6 +10,7 @@ import {
   homePanelStyle,
   homeShellStyle,
 } from "@/components/shared/homeTheme";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 interface LogEntry {
   id: number;
@@ -196,6 +197,7 @@ export default function LogsPage() {
           Personal Logs
         </div>
         {error && <div style={{ fontSize: 10, color: HOME_THEME.red }}>Proxy offline - {error}</div>}
+        <div style={{ marginLeft: "auto" }}><OwnerQuickLinks current="/logs" /></div>
       </div>
 
       <div style={homeContentStyle}>

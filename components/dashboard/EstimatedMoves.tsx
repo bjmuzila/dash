@@ -5,6 +5,7 @@ import EmTrackerAdmin from "@/components/dashboard/EmTrackerAdmin";
 import LevelsPublish from "@/components/dashboard/LevelsPublish";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "@/components/shared/DockToolbar";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 async function getHtml2Canvas() {
   const mod = await import("html2canvas" as never);
@@ -1246,6 +1247,9 @@ export default function EstimatedMoves() {
 
   return (
     <div style={{ ...homeShellStyle, flex: 1, minHeight: 0, overflow: "hidden", height: "100%" }}>
+      <div style={{ padding: "8px 12px 0", flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
+        <OwnerQuickLinks current="/estimated-move" />
+      </div>
       <div style={{ padding: "7px 12px 3px", flexShrink: 0 }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "wrap", rowGap: 6 }}>
           <SegGroup

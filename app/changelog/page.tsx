@@ -1,5 +1,6 @@
 import { readFile } from "fs/promises";
 import path from "path";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -29,6 +30,9 @@ export default async function ChangelogPage() {
       }}
     >
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+          <OwnerQuickLinks current="/changelog" />
+        </div>
         <div style={{ fontSize: 11, color: "#FFFFFF", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Live Notes
         </div>

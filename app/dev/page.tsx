@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { HOME_THEME, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // All chrome sourced from the shared theme. Data-encoding colors (calls=green,
 // puts=red, net=purple, pos/neg) are theme tokens too.
@@ -449,6 +450,7 @@ export default function DevPage() {
         <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Dev · Symbol Probe</span>
         <span style={{ fontSize: 12, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
         <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1f`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
+        <div style={{ marginLeft: "auto" }}><OwnerQuickLinks current="/dev" /></div>
       </div>
 
       {/* Controls */}

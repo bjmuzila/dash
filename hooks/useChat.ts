@@ -33,6 +33,11 @@ export function useChat(displayName: string) {
     setMessages((prev) => [...prev, m]);
   }, []);
 
+  const remove = useCallback((id: number) => {
+    seen.current.delete(id);
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
   useEffect(() => {
     if (!userId) return;
     const supabase = getSupabase(getToken);
@@ -72,6 +77,14 @@ export function useChat(displayName: string) {
           { event: "INSERT", schema: "public", table: "chat_messages" },
           (payload) => append(payload.new as ChatMessage),
         )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "chat_messages" },
+          (payload) => {
+            const id = (payload.old as { id?: number })?.id;
+            if (typeof id === "number") remove(id);
+          },
+        )
         .subscribe();
     })();
 
@@ -79,7 +92,7 @@ export function useChat(displayName: string) {
       active = false;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [userId, getToken, append]);
+  }, [userId, getToken, append, remove]);
 
   const send = useCallback(
     async (raw: string) => {
