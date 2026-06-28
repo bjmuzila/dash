@@ -26,8 +26,26 @@ export default function AdminEmailsPage() {
   const [configured, setConfigured] = useState<boolean | null>(null);
 
   const [sending, setSending] = useState(false);
+  const [loadingPreset, setLoadingPreset] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Load a server-rendered template (e.g. the beta welcome) into the composer.
+  async function loadPreset(id: string) {
+    setLoadingPreset(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/email-templates?id=${encodeURIComponent(id)}`);
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `Failed to load template (${res.status})`);
+      setSubject(j.template?.subject ?? "");
+      setBody(j.template?.html ?? "");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Template load failed");
+    } finally {
+      setLoadingPreset(false);
+    }
+  }
 
   // Load recipient counts + Resend config status on mount.
   useEffect(() => {
@@ -113,6 +131,15 @@ export default function AdminEmailsPage() {
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <DockButton
+              onClick={() => loadPreset("welcome")}
+              style={{ height: 32, padding: "0 14px", fontSize: 11, opacity: loadingPreset ? 0.6 : 1 }}
+            >
+              {loadingPreset ? "Loading…" : "📨 Load beta welcome"}
+            </DockButton>
+          </div>
+
           <div>
             {label("Audience")}
             <SegGroup

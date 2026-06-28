@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 6/28/2026
+
+* Added a beta signup experience with a live countdown — beta opens June 30 at market open, official launch July 3
+* Estimated Moves now highlighted across 500+ stocks, with footprint & order-flow strategies coming in August 2026
+* Refreshed the pricing page styling so it's easier to read and on-theme
+* Launch-update emails now include a one-click unsubscribe link
+
 ## Saturday 6/27/2026
 
 * Improved Estimated Moves so weekly win/loss results are scored more accurately

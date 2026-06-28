@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { getSubscription, PAID_STATUSES } from "@/lib/db";
+import { unsubscribeApiUrl, unsubscribeFooterHtml, unsubscribeFooterText } from "@/lib/unsubscribe";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
 // returns the resolvable recipient lists (all signed-up users / paid subscribers
@@ -130,21 +131,27 @@ export async function POST(req: NextRequest) {
     to = Array.from(new Set(to.filter((e) => EMAIL_RE.test(e))));
     if (to.length === 0) return NextResponse.json({ error: "No valid recipients" }, { status: 400 });
 
-    // Resend caps `to` at 50 per call — send in batches and recipients go in BCC
-    // so addresses aren't exposed to one another.
-    const CHUNK = 50;
+    // Send PER RECIPIENT so each email carries its own tokenized unsubscribe
+    // link + one-click List-Unsubscribe header (CAN-SPAM / Gmail bulk-sender
+    // requirement). Slower than BCC batching, but correct and keeps addresses
+    // private. Fine for current list sizes.
     const sent: string[] = [];
     const failed: Array<{ batch: string[]; error: string }> = [];
-    for (let i = 0; i < to.length; i += CHUNK) {
-      const batch = to.slice(i, i + CHUNK);
+    for (const recipient of to) {
+      const unsubUrl = unsubscribeApiUrl(recipient);
       const payload: Record<string, unknown> = {
         from: FROM_EMAIL,
-        to: [FROM_EMAIL],   // send to self; real recipients hidden in bcc
-        bcc: batch,
+        to: [recipient],
         subject,
+        // RFC 8058 one-click unsubscribe — surfaced as the native "Unsubscribe"
+        // link by Gmail/Apple Mail. POSTs to our endpoint via List-Unsubscribe-Post.
+        headers: {
+          "List-Unsubscribe": `<${unsubUrl}>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
       };
-      if (html) payload.html = html;
-      if (text) payload.text = text;
+      if (html) payload.html = html + unsubscribeFooterHtml(recipient);
+      if (text) payload.text = text + unsubscribeFooterText(recipient);
 
       const r = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -155,10 +162,10 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify(payload),
       });
       if (r.ok) {
-        sent.push(...batch);
+        sent.push(recipient);
       } else {
         const detail = await r.text().catch(() => `HTTP ${r.status}`);
-        failed.push({ batch, error: detail.slice(0, 500) });
+        failed.push({ batch: [recipient], error: detail.slice(0, 500) });
       }
     }
 

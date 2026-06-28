@@ -293,9 +293,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       source TEXT DEFAULT 'landing',
       referrer TEXT,
       user_agent TEXT,
-      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      unsubscribed_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);
+    ALTER TABLE waitlist ADD COLUMN IF NOT EXISTS unsubscribed_at TIMESTAMPTZ;
 
     -- Customer feedback / notes. Any signed-in user can submit; the owner reads
     -- the feed on /dev/owner. category is one of 'bug'|'idea'|'note'|'other'.
@@ -931,6 +933,7 @@ export interface WaitlistRecord {
   referrer?: string | null;
   user_agent?: string | null;
   created_at?: string | null;
+  unsubscribed_at?: string | null;
 }
 
 /** Insert an email; returns true if newly added, false if it already existed. */
@@ -949,6 +952,17 @@ export async function addWaitlistEmail(input: {
     [input.email, input.source ?? "landing", input.referrer ?? null, input.user_agent ?? null]
   );
   return { added: (result.rowCount ?? 0) > 0 };
+}
+
+/** Mark an email as unsubscribed. Returns true if a matching row was updated. */
+export async function unsubscribeWaitlistEmail(email: string): Promise<{ updated: boolean }> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `UPDATE waitlist SET unsubscribed_at = CURRENT_TIMESTAMP
+     WHERE email = $1 AND unsubscribed_at IS NULL`,
+    [email]
+  );
+  return { updated: (result.rowCount ?? 0) > 0 };
 }
 
 export async function listWaitlist(limit = 1000): Promise<WaitlistRecord[]> {

@@ -139,10 +139,10 @@ export default function SplashScreen() {
         <span className="splash-fw splash-fw1" aria-hidden />
         <span className="splash-fw splash-fw2" aria-hidden />
         <span className="splash-fw splash-fw3" aria-hidden />
-        <span style={{ color: T.muted, marginRight: 8, marginLeft: 34 }}>LAUNCHING</span>
-        <span style={{ color: "#E0162B" }}>JULY</span>{" "}
-        <span style={{ color: "#FFFFFF" }}>4TH</span>{" "}
-        <span style={{ color: "#3C6FE0" }}>WEEKEND</span>
+        <span style={{ color: T.muted, marginRight: 8, marginLeft: 34 }}>BETA SIGNUPS</span>
+        <span style={{ color: "#E0162B" }}>MONDAY</span>{" "}
+        <span style={{ color: "#FFFFFF" }}>JUNE 30</span>{" "}
+        <span style={{ color: "#3C6FE0" }}>9:30 AM ET</span>
       </div>
     </div>
   );

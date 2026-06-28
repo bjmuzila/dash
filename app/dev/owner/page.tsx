@@ -9,6 +9,7 @@ import {
   homeShellStyle,
   homeSecondaryButtonStyle,
 } from "@/components/shared/homeTheme";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
 // Mobile detection so the fixed-column grids below can collapse instead of
@@ -551,7 +552,7 @@ function LineChartCard({
   const vbH = H + 18;
 
   return (
-    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.purple}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.purple}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
         <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
@@ -640,7 +641,7 @@ function BarChartCard({
 }) {
   const max = Math.max(...bars) || 1;
   return (
-    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.green}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.green}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
         <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
@@ -651,8 +652,8 @@ function BarChartCard({
             <div style={{
               width: "100%", borderRadius: 5, height: `${(v / max) * 100}%`, minHeight: 4,
               background: i % 2 === 0
-                ? `linear-gradient(180deg, ${HOME_THEME.cyan} 0%, ${HOME_THEME.cyan}99 100%)`
-                : `linear-gradient(180deg, ${HOME_THEME.cyan}aa 0%, ${HOME_THEME.cyan}66 100%)`,
+                ? `linear-gradient(180deg, ${HOME_THEME.green} 0%, ${HOME_THEME.green}99 100%)`
+                : `linear-gradient(180deg, ${HOME_THEME.green}aa 0%, ${HOME_THEME.green}66 100%)`,
             }} />
             <span style={{ fontSize: 8, color: HOME_THEME.muted, fontFamily: "monospace" }}>{labels[i]}</span>
           </div>
@@ -845,7 +846,7 @@ function OverviewSection({ metrics }: {
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 12 }}>
           <BigMetricCard label="Total Users" value={users != null ? users.toLocaleString() : "—"} delta="" accent={HOME_THEME.purple} />
           <BigMetricCard label="Waitlist Signups" value={waitlist != null ? waitlist.toLocaleString() : "—"} delta="" accent={HOME_THEME.green} />
-          <BigMetricCard label="Active Sessions" value={activeSessions != null ? activeSessions.toLocaleString() : "—"} delta="" accent={HOME_THEME.cyan} />
+          <BigMetricCard label="Active Sessions" value={activeSessions != null ? activeSessions.toLocaleString() : "—"} delta="" accent={HOME_THEME.red} />
           <BigMetricCard label="Visits (window)" value={totalVisits.toLocaleString()} delta="" accent={HOME_THEME.orange} />
         </div>
 
@@ -872,7 +873,7 @@ function OverviewSection({ metrics }: {
       </div>
 
       {/* ── Right: real recent-activity feed ── */}
-      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.cyan}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Recent Activity</span>
           <span style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace" }}>newest first</span>
@@ -1690,7 +1691,9 @@ export default function OwnerDashboard() {
           <StatusBadge ok={ttOk} label={`TT ${ttOk ? "Auth" : "Unauth"}`} />
           <StatusBadge ok={!!dbHealth?.ok} label={dbHealth == null ? "Postgres —" : dbHealth.ok ? "Postgres OK" : "Postgres DOWN"} />
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {/* Owner-group quick links */}
+          <OwnerQuickLinks current="/dev/owner" />
           {lastRefresh && (
             <span style={{ fontSize: 10, color: "#fff", fontFamily: "monospace" }}>
               {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
@@ -2371,96 +2374,6 @@ export default function OwnerDashboard() {
         </div>
         )}
 
-        {/* ── Customer feedback feed ── */}
-        {SECTION_TAB.feedback === ownerTab && (
-        <AccordionCard
-          id="feedback"
-          title="Feedback"
-          subtitle={`${feedbackOpenCount} open · ${feedback.length} total`}
-          open={openSet.has("feedback")}
-          onToggle={toggleSection}
-          accent={HOME_THEME.orange}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button
-                style={{ ...homeSecondaryButtonStyle }}
-                onClick={() => loadFeedback()}
-              >
-                Refresh
-              </button>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#fff", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={feedbackShowResolved}
-                  onChange={(e) => setFeedbackShowResolved(e.target.checked)}
-                />
-                Show resolved
-              </label>
-            </div>
-
-            {(() => {
-              const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
-              if (visible.length === 0) {
-                return <span style={{ fontSize: 12, color: "#fff", opacity: 0.6 }}>No feedback yet.</span>;
-              }
-              const catColor: Record<string, string> = {
-                bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
-              };
-              return (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
-              {visible.map((f) => {
-                const resolved = f.status === "resolved";
-                return (
-                  <div
-                    key={f.id}
-                    style={{
-                      display: "flex", gap: 12, padding: "12px 14px", borderRadius: 10,
-                      border: `1px solid ${HOME_THEME.border}`,
-                      background: resolved ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
-                      opacity: resolved ? 0.55 : 1,
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{
-                          fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em",
-                          padding: "2px 8px", borderRadius: 20,
-                          color: catColor[f.category] ?? HOME_THEME.cyan,
-                          background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
-                          border: `1px solid ${catColor[f.category] ?? HOME_THEME.cyan}44`,
-                        }}>
-                          {f.category}
-                        </span>
-                        <span style={{ fontSize: 11, color: "#fff", opacity: 0.7 }}>
-                          {f.email || f.clerk_user_id || "unknown"}
-                        </span>
-                        {f.created_at && (
-                          <span style={{ fontSize: 10, color: "#fff", opacity: 0.45 }}>
-                            {new Date(f.created_at).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 13, color: "#fff", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {f.message}
-                      </div>
-                    </div>
-                    <button
-                      style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap" }}
-                      onClick={() => resolveFeedback(f.id, resolved ? "open" : "resolved")}
-                    >
-                      {resolved ? "Reopen" : "Resolve"}
-                    </button>
-                  </div>
-                );
-              })}
-                </div>
-              );
-            })()}
-          </div>
-        </AccordionCard>
-        )}
-
         {/* ── Auth / Clerk keys ── */}
         {SECTION_TAB.auth === ownerTab && (
         <AccordionCard
@@ -2847,6 +2760,96 @@ export default function OwnerDashboard() {
         </div>
           );
         })()}
+
+        {/* ── Customer feedback feed (rendered last on the Front-End tab) ── */}
+        {SECTION_TAB.feedback === ownerTab && (
+        <AccordionCard
+          id="feedback"
+          title="Feedback"
+          subtitle={`${feedbackOpenCount} open · ${feedback.length} total`}
+          open={openSet.has("feedback")}
+          onToggle={toggleSection}
+          accent={HOME_THEME.orange}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                style={{ ...homeSecondaryButtonStyle }}
+                onClick={() => loadFeedback()}
+              >
+                Refresh
+              </button>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#fff", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={feedbackShowResolved}
+                  onChange={(e) => setFeedbackShowResolved(e.target.checked)}
+                />
+                Show resolved
+              </label>
+            </div>
+
+            {(() => {
+              const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
+              if (visible.length === 0) {
+                return <span style={{ fontSize: 12, color: "#fff", opacity: 0.6 }}>No feedback yet.</span>;
+              }
+              const catColor: Record<string, string> = {
+                bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
+              };
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
+              {visible.map((f) => {
+                const resolved = f.status === "resolved";
+                return (
+                  <div
+                    key={f.id}
+                    style={{
+                      display: "flex", gap: 12, padding: "12px 14px", borderRadius: 10,
+                      border: `1px solid ${HOME_THEME.border}`,
+                      background: resolved ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
+                      opacity: resolved ? 0.55 : 1,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em",
+                          padding: "2px 8px", borderRadius: 20,
+                          color: catColor[f.category] ?? HOME_THEME.cyan,
+                          background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
+                          border: `1px solid ${catColor[f.category] ?? HOME_THEME.cyan}44`,
+                        }}>
+                          {f.category}
+                        </span>
+                        <span style={{ fontSize: 11, color: "#fff", opacity: 0.7 }}>
+                          {f.email || f.clerk_user_id || "unknown"}
+                        </span>
+                        {f.created_at && (
+                          <span style={{ fontSize: 10, color: "#fff", opacity: 0.45 }}>
+                            {new Date(f.created_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#fff", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {f.message}
+                      </div>
+                    </div>
+                    <button
+                      style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap" }}
+                      onClick={() => resolveFeedback(f.id, resolved ? "open" : "resolved")}
+                    >
+                      {resolved ? "Reopen" : "Resolve"}
+                    </button>
+                  </div>
+                );
+              })}
+                </div>
+              );
+            })()}
+          </div>
+        </AccordionCard>
+        )}
 
       </div>
     </div>

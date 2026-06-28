@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: #05060A;
+    background-image:
+      radial-gradient(circle at 18% 28%, rgba(33,158,188,0.16) 0%, transparent 46%),
+      radial-gradient(circle at 86% 78%, rgba(18,103,131,0.18) 0%, transparent 48%);
+    color: #fff;
+    width: 1200px; height: 630px;
+    position: relative;
+    overflow: hidden;
+  }
+  /* subtle grid */
+  body::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(circle at 50% 45%, #000 30%, transparent 78%);
+            mask-image: radial-gradient(circle at 50% 45%, #000 30%, transparent 78%);
+  }
+  .frame {
+    position: absolute; inset: 28px;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 22px;
+    padding: 64px 72px;
+    display: flex; flex-direction: column;
+    justify-content: space-between;
+    background: linear-gradient(180deg, rgba(13,17,25,0.30), rgba(7,9,14,0.10));
+  }
+  .top { display:flex; align-items:center; justify-content:space-between; }
+  .brand { display:flex; align-items:center; gap:14px; }
+  .logo {
+    width:46px; height:46px; border-radius:12px;
+    background: linear-gradient(180deg, #219EBC, #126783);
+    display:flex; align-items:center; justify-content:center;
+    font-weight:900; font-size:22px; color:#04121a;
+    box-shadow: 0 0 22px rgba(33,158,188,0.45);
+  }
+  .brand .name { font-size:22px; font-weight:800; letter-spacing:0.02em; }
+  .brand .name span { color:#219EBC; }
+  .pill {
+    font-size:13px; font-weight:800; letter-spacing:0.14em; text-transform:uppercase;
+    color:#FB8501; border:1px solid rgba(251,133,1,0.45);
+    background: rgba(251,133,1,0.08);
+    padding:8px 16px; border-radius:999px;
+  }
+  .mid { margin-top: 6px; }
+  .eyebrow {
+    font-size:15px; font-weight:800; letter-spacing:0.22em; text-transform:uppercase;
+    color:#8ECAE6; margin-bottom:18px;
+  }
+  h1 {
+    font-size:78px; line-height:1.02; font-weight:900; letter-spacing:-0.015em;
+  }
+  h1 .cyan { color:#219EBC; }
+  .sub {
+    margin-top:22px; font-size:21px; line-height:1.5; max-width:760px;
+    color: rgba(255,255,255,0.62); font-weight:500;
+  }
+  .dates { display:flex; gap:14px; margin-top:30px; }
+  .date {
+    border:1px solid rgba(255,255,255,0.12);
+    background: rgba(13,17,25,0.55);
+    border-top:2px solid rgba(33,158,188,0.55);
+    border-radius:14px; padding:16px 22px;
+  }
+  .date .k { font-size:12px; font-weight:800; letter-spacing:0.12em; text-transform:uppercase; color:#8ECAE6; }
+  .date .v { font-size:22px; font-weight:800; margin-top:4px; }
+  .date.launch { border-top-color: rgba(251,133,1,0.6); }
+  .date.launch .k { color:#FB8501; }
+  .foot { display:flex; align-items:center; justify-content:space-between; color:rgba(255,255,255,0.5); font-size:15px; }
+  .foot .url { color:#219EBC; font-weight:700; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="top">
+      <div class="brand">
+        <div class="logo">CB</div>
+        <div class="name">CB <span>Edge</span></div>
+      </div>
+      <div class="pill">● Beta · Prelaunch</div>
+    </div>
+
+    <div class="mid">
+      <div class="eyebrow">Real-time SPX gamma &amp; options-flow</div>
+      <h1>Beta Signups<br><span class="cyan">Coming Soon</span></h1>
+      <div class="sub">Live dealer positioning, scored levels, and estimated moves across 500+ stocks — the moment they move. Beta members lock in early-access pricing.</div>
+      <div class="dates">
+        <div class="date">
+          <div class="k">Beta opens</div>
+          <div class="v">June 30 · 9:30 AM ET</div>
+        </div>
+        <div class="date launch">
+          <div class="k">Official launch</div>
+          <div class="v">July 3</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="url">cbedge.app</div>
+      <div>Market analytics — not financial advice</div>
+    </div>
+  </div>
+</body>
+</html>
