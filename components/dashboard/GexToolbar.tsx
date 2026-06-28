@@ -2,7 +2,7 @@
 
 import { type RefObject } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { BoxDiscordBtn } from "@/components/shared/DataBox";
+import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, type SegOption } from "@/components/shared/DockToolbar";
 import type { GexMode, DataMode } from "./GexChart";
 
@@ -111,6 +111,7 @@ export default function GexToolbar({
         <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>
           {btnLabel}
         </DockButton>
+        {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" />}
         {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} />}
       </Dock>
     </div>
