@@ -23,7 +23,7 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 
-const { useTheta } = require('./config/data-source');
+const { useTheta, useThetaIndex } = require('./config/data-source');
 const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
@@ -484,90 +484,12 @@ async function getChainCached(ticker) {
   return p;
 }
 
-// CBOE delayed-quote symbol: index roots are underscore-prefixed (_SPX, _NDX…).
-const CBOE_INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
-function cboeSymbol(root) {
-  return CBOE_INDEX_ROOTS.has(root) ? `_${root}` : root;
-}
-const _cboeCache = new Map(); // cboeSymbol -> { at, byOcc: Map<occNorm,{oi,volume,symbol}> }
-const CBOE_TTL_MS = 60_000;
-
-/** Fetch + cache CBOE's full delayed option chain, indexed by normalized OCC. */
-async function fetchCboeChain(root) {
-  const sym = cboeSymbol(root);
-  const cached = _cboeCache.get(sym);
-  if (cached && Date.now() - cached.at < CBOE_TTL_MS) return cached;
-  const url = `https://cdn.cboe.com/api/global/delayed_quotes/options/${encodeURIComponent(sym)}.json`;
-  // CBOE's CDN WAF 401s bare server requests; mimic a browser-originated fetch.
-  const r = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      Accept: 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      Origin: 'https://www.cboe.com',
-      Referer: 'https://www.cboe.com/',
-    },
-  });
-  if (!r.ok) { const e = new Error(`CBOE ${sym} -> ${r.status}`); e.status = r.status; throw e; }
-  const data = await r.json();
-  const rows = data?.data?.options || [];
-  const byOcc = new Map();
-  for (const o of rows) {
-    // CBOE `option` looks like "SPXW250620P05000000" — same OCC body we use.
-    if (!o?.option) continue;
-    byOcc.set(normalizeOcc(o.option), {
-      oi: Number.isFinite(o.open_interest) ? o.open_interest : null,
-      volume: Number.isFinite(o.volume) ? o.volume : null,
-      symbol: o.option,
-    });
-  }
-  const entry = { at: Date.now(), byOcc };
-  _cboeCache.set(sym, entry);
-  return entry;
-}
-
-/**
- * Independent open-interest cross-check for a SINGLE option contract via CBOE's
- * public delayed-quotes feed (no auth — Yahoo's v7 options endpoint now 401s).
- * Dev-page only: matches by OCC contract symbol so the page can show our OI
- * (TastyTrade) beside CBOE's for the exact same strike — to debug OI mismatches.
- *
- * Return shape keeps the `yahoo`/`yahooVolume` keys so the dev UI is unchanged;
- * `source` reports the real provider.
- * @param {object} a
- * @param {string} a.root      chain root, e.g. "SPX" / "AAPL"
- * @param {string} a.occSymbol our OCC symbol (spaces removed = CBOE `option`)
- * @param {string} a.expiry    YYYY-MM-DD (unused by CBOE; full chain returned)
- * @param {number} a.oursOI    our (TastyTrade) open interest for the contract
- */
-async function fetchYahooContractOI({ root, occSymbol, oursOI }) {
-  try {
-    const { byOcc } = await fetchCboeChain(root);
-    const want = normalizeOcc(occSymbol);
-    // SPX weeklies trade under the SPXW body on CBOE too; try the swap as a fallback.
-    let hit = byOcc.get(want);
-    if (!hit && root === 'SPX') hit = byOcc.get(want.replace(/^SPX(?=\d)/, 'SPXW'));
-    if (!hit) {
-      return { source: 'cboe', ok: true, match: false, underlying: cboeSymbol(root), contractSymbol: want, yahooContracts: byOcc.size };
-    }
-    const refOI = Number.isFinite(hit.oi) ? hit.oi : null;
-    const ours = Number.isFinite(oursOI) ? oursOI : null;
-    return {
-      source: 'cboe',
-      ok: true,
-      match: true,
-      underlying: cboeSymbol(root),
-      contractSymbol: hit.symbol,
-      ours,
-      yahoo: refOI, // key kept for UI compatibility; value is CBOE OI
-      diff: ours != null && refOI != null ? ours - refOI : null,
-      pctDiff: ours != null && refOI > 0 ? ((ours - refOI) / refOI) * 100 : null,
-      yahooVolume: Number.isFinite(hit.volume) ? hit.volume : null,
-    };
-  } catch (err) {
-    return { source: 'cboe', ok: false, status: err?.status ? `HTTP ${err.status}` : String(err?.message || err).slice(0, 120) };
-  }
-}
+// CBOE OI cross-check (cboeSymbol / fetchCboeChain / fetchYahooContractOI) was
+// removed 2026-06-29 (Phase 4 cleanup). It existed solely to A/B TastyTrade OI
+// against CBOE's delayed feed while chasing the persistent-OI discrepancy.
+// ThetaData OPRA OI is now authoritative (178/178 exact vs TT, doc §9b), so the
+// cross-check is dead code. See git history if the CBOE chain fetch is ever
+// needed again.
 
 /**
  * Probe any ticker via REST. Resolves the requested strike to the nearest real
@@ -708,22 +630,17 @@ async function probeRest({ ticker, expiry, type, strike }) {
       }
     : { spot: null, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
 
-  // Independent OI cross-check (Yahoo) for THIS one contract — dev-page A/B test
-  // for our persistent open-interest discrepancies. Best-effort; never throws.
-  const oiCompare = await fetchYahooContractOI({
-    root: chainTicker(ticker),
-    occSymbol: best.occSymbol,
-    expiry: best.expiration,
-    oursOI: oi,
-  });
-
+  // NOTE: the CBOE/Yahoo OI cross-check (oiCompare) was removed 2026-06-29 — it
+  // existed only to A/B our TT-sourced OI against CBOE during the persistent-OI
+  // discrepancy investigation. ThetaData OPRA OI is now authoritative (validated
+  // 178/178 exact vs TT, doc §9b), so the cross-check is obsolete. fetchCboeChain
+  // / fetchYahooContractOI deleted with it.
   const result = {
     eventType: 'REST',
     eventSymbol: best.streamerSymbol,
     occSymbol: best.occSymbol,
     feeds,
     exposures,
-    oiCompare, // { ours, yahoo, diff, pctDiff, match, ... } — OI sanity check
     raw: it, // full unmodified market-data item — every field, nothing dropped
   };
   return { ...meta, found: true, status: 'ready', source: 'rest', result };
@@ -1682,10 +1599,19 @@ class TastytradeProxy {
         this.thetaStream = new thetaAdapter.ThetaStreamClient({
           getSpot: () => this.spot || marketState.getSpot(),
           onTrade: (print) => { try { this.flow.addPrint(print); } catch {} },
+          onIndex: (root, price) => this._onThetaIndex(root, price),
         });
         this.thetaStream.connect();
       }
       this._subscribeThetaFlow();
+      // SPX/VIX spot from Theta's index price stream (separate INDEX_SOURCE flag).
+      if (useThetaIndex()) {
+        this.thetaStream.subscribeIndex('SPX');
+        this.thetaStream.subscribeIndex('VIX');
+        // Seed immediately from a REST snapshot so spot isn't 0 until the first tick.
+        thetaAdapter.fetchIndexPriceTheta('SPX').then((p) => { if (p) this._onThetaIndex('SPX', p); }).catch(() => {});
+        thetaAdapter.fetchIndexPriceTheta('VIX').then((p) => { if (p) this._onThetaIndex('VIX', p); }).catch(() => {});
+      }
     }
 
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
@@ -1870,6 +1796,24 @@ class TastytradeProxy {
       .filter((c) => c.expiration === this.expiry)
       .map((c) => ({ strike: c.strike, type: c.type, expiration: c.expiration }));
     this.thetaStream.subscribeActive(legs, root);
+  }
+
+  /**
+   * Theta index price tick (INDEX_SOURCE=theta). Feeds the SAME fields the dxLink
+   * Quote branch sets: SPX → this.spot (which _publishSpotDisplay + all GEX math
+   * read; cash-basis seam preserved unchanged since it keys off this.spot), VIX →
+   * aux. Indices tick only on change, so a quiet gap = unchanged; the last value
+   * persists, which is the correct interpretation (no gap-fill needed).
+   */
+  _onThetaIndex(root, price) {
+    if (!(price > 0)) return;
+    if (root === 'SPX' || root === SYMBOL) {
+      this.spot = price;
+      marketState.setSpot(price);
+      this._publishSpotDisplay(); // refresh display SPX + RTH cash-basis capture
+    } else if (root === 'VIX') {
+      marketState.setAux({ vix: price });
+    }
   }
 
   /**
@@ -2159,7 +2103,9 @@ class TastytradeProxy {
       const ask = Number(ev.askPrice);
       const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
       if (sym === this.spotSymbol) {
-        if (mid > 0) {
+        // When INDEX_SOURCE=theta, Theta's index stream owns spot — ignore the
+        // dxLink SPX quote so the two sources don't fight over this.spot.
+        if (mid > 0 && !useThetaIndex()) {
           this.spot = mid;
           marketState.setSpot(mid);
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
@@ -2167,7 +2113,7 @@ class TastytradeProxy {
         return;
       }
       if (sym === this.vixSymbol) {
-        if (mid > 0) marketState.setAux({ vix: mid });
+        if (mid > 0 && !useThetaIndex()) marketState.setAux({ vix: mid });
         return;
       }
       if (sym === this.esSymbol) {
@@ -2209,7 +2155,7 @@ class TastytradeProxy {
     if (ev.eventType === 'Trade') {
       if (sym === this.spotSymbol) {
         const px = Number(ev.price);
-        if (px > 0) {
+        if (px > 0 && !useThetaIndex()) {
           this.spot = px;
           marketState.setSpot(px);
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
@@ -2218,7 +2164,7 @@ class TastytradeProxy {
       }
       if (sym === this.vixSymbol) {
         const px = Number(ev.price);
-        if (px > 0) marketState.setAux({ vix: px });
+        if (px > 0 && !useThetaIndex()) marketState.setAux({ vix: px });
         return;
       }
       if (sym === this.esSymbol) {

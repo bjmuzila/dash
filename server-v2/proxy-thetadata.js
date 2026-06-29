@@ -287,6 +287,18 @@ async function fetchGreeksEodHistoryTheta(underlying, date, { strikeRange = 40 }
   return out;
 }
 
+/**
+ * Real-time index price snapshot (SPX/VIX). Needs Index Standard+. Returns the
+ * last price, or null if unavailable/gated. Index ticks only on change, so this
+ * is the authoritative last value (no staleness inference needed).
+ */
+async function fetchIndexPriceTheta(symbol) {
+  const json = await thetaGet(`/v3/index/snapshot/price?symbol=${encodeURIComponent(symbol)}`);
+  const rows = rowsFromV3(json);
+  const price = Number(rows[0]?.price);
+  return price > 0 ? price : null;
+}
+
 async function fetchIndexEodTheta(symbol, date) {
   const d = ymdCompact(date);
   const json = await thetaGet(
@@ -334,8 +346,9 @@ class ThetaStreamClient {
    * @param {(print:{streamerSymbol:string,price:number,size:number,quote:object|null,spot:number})=>void} opts.onTrade
    * @param {() => number} [opts.getSpot] supplies current spot for each print
    */
-  constructor({ onTrade, getSpot = () => 0 } = {}) {
+  constructor({ onTrade, onIndex, getSpot = () => 0 } = {}) {
     this.onTrade = onTrade;
+    this.onIndex = onIndex; // (root, price) => void  — index price ticks (SPX/VIX)
     this.getSpot = getSpot;
     this.ws = null;
     this.nextId = 1;
@@ -345,6 +358,7 @@ class ThetaStreamClient {
     this.quotes = new Map();
     // remember subscriptions so we can resubscribe on reconnect
     this.subs = []; // [{root, expInt, strikeTenthCents, right}]
+    this.indexSubs = []; // ["SPX","VIX"] index roots to (re)subscribe
   }
 
   _ckey(root, expInt, strikeTenthCents, right) {
@@ -363,6 +377,9 @@ class ThetaStreamClient {
       const pending = this.subs.slice();
       this.subs = [];
       for (const s of pending) this.subscribeContract(s, /*record*/ true);
+      const idx = this.indexSubs.slice();
+      this.indexSubs = [];
+      for (const root of idx) this.subscribeIndex(root, /*record*/ true);
     });
     ws.on('message', (buf) => this._onMessage(buf));
     ws.on('close', () => {
@@ -432,12 +449,43 @@ class ThetaStreamClient {
     console.log(`[THETA-WS] subscribed ${contracts.length} contracts (TRADE+QUOTE) root=${root}`);
   }
 
+  /**
+   * Subscribe an index price stream (SPX / VIX). sec_type INDEX, req_type TRADE,
+   * contract is just { root }. Index reports ~1/sec and ONLY on price change.
+   */
+  subscribeIndex(root, record = true) {
+    if (record && !this.indexSubs.includes(root)) this.indexSubs.push(root);
+    if (!this.connected) return;
+    this._send({
+      msg_type: 'STREAM',
+      sec_type: 'INDEX',
+      req_type: 'TRADE',
+      add: true,
+      id: this.nextId++,
+      contract: { root },
+    });
+    console.log(`[THETA-WS] subscribed INDEX price stream root=${root}`);
+  }
+
   _onMessage(buf) {
     let msg;
     try { msg = JSON.parse(buf.toString()); } catch { return; }
     const type = msg?.header?.type;
     const contract = msg?.contract;
     if (!contract) return;
+
+    // Index price tick (SPX/VIX): sec_type INDEX, no strike/right. Handle first
+    // and return — the option-contract logic below assumes strike/right exist.
+    if (contract.security_type === 'INDEX' || (contract.root && contract.strike == null && contract.right == null)) {
+      if (type === 'TRADE' && msg.trade) {
+        const price = Number(msg.trade.price);
+        if (price > 0 && this.onIndex) {
+          try { this.onIndex(contract.root, price); } catch { /* never kill the socket */ }
+        }
+      }
+      return;
+    }
+
     const root = contract.root;
     const expInt = contract.expiration;
     const strikeTenthCents = contract.strike;
@@ -506,4 +554,5 @@ module.exports = {
   fetchOiHistoryTheta,
   fetchIndexEodTheta,
   fetchGreeksEodHistoryTheta,
+  fetchIndexPriceTheta,
 };

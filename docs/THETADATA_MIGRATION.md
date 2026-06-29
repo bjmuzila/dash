@@ -528,7 +528,36 @@ All three authored; the only steps left need Brandon's keyboard (running process
 - **Soak monitor** — `scripts/theta-soak-monitor.mjs`: polls /proxy/gex + /proxy/flow, logs to
   `theta-soak-YYYY-MM-DD.log`, flags wall-jumps / flow-stall / gex-sign-flip / route errors.
 
-### Commands left for Brandon (keyboard-only)
+## 9h. SHIPPED TO PROD (2026-06-29)
+
+Theta is **live in production** on the VPS, `DATA_SOURCE=theta`.
+- Terminal runs as the `theta-terminal` Docker service (sibling to `dashboard`), banner
+  `Options: PROFESSIONAL`, REST on `0.0.0.0:25503`, 8 concurrent.
+- Dashboard reaches it at `http://theta-terminal:25503` over the compose default network;
+  confirmed `[OI] 414/496`, `[READY] OI 94% + greeks 100%`, `/proxy/gex` → walls 7450/7300,
+  GEX ~16.7B. `[DATA_SOURCE] = theta`, `THETA_BASE_URL=http://theta-terminal:25503`.
+
+**Two deploy gotchas that cost time (now fixed + committed `2373a75`):**
+1. The bootstrap Terminal build does NOT reliably read `THETA_DATA_API_KEY` from the env var —
+   it falls back to `creds.txt` and crash-loops. Fix: entrypoint passes the key via the
+   `--api-key` FLAG (`ENTRYPOINT ["sh","-c","exec java -jar ThetaTerminalv3.jar --api-key \"$THETA_DATA_API_KEY\""]`).
+2. Compose `environment: KEY: ${KEY}` interpolates from Compose's `.env`/shell, NOT `.env.local`.
+   Fix: the theta-terminal service needs its own `env_file: - .env.local` (same as dashboard).
+- Jar is gitignored → Dockerfile `ADD`s it from `https://download-unstable.thetadata.us/ThetaTerminalv3.jar`
+  at build time (not COPY from repo).
+- VPS is on the `prod` branch; promote with `git merge origin/main` on the box (commit/push from
+  Windows only). Box reconciled, `git diff deploy/theta/` empty = no drift.
+
+Rollback: `DATA_SOURCE=tt` in `/opt/dashboard/.env.local` + `docker compose ... up -d --force-recreate dashboard`.
+
+### Done. Remaining optional (no longer blocking):
+- **Soak** — prod is live; watch it over a session, `scripts/theta-soak-monitor.mjs` available.
+- **Greeks-true backfill** — `--greeks` flag, path verified (`history/greeks/eod`).
+- **Rotate the Theta API key** — it was pasted in a chat session during deploy; regenerate in the
+  portal and update `.env.local` when convenient.
+- **Spot on Theta** — deferred, Index tier still FREE.
+
+### (historical) Commands that were left for Brandon (keyboard-only)
 1. **Soak (do this first):** with server-v2 running on `DATA_SOURCE=theta`:
    `node scripts/theta-soak-monitor.mjs 60` — leave a full session, skim the log for ⚠ lines.
 2. **Persist the flag** (only after a clean soak): add `DATA_SOURCE=theta` to `.env.local`.

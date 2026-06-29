@@ -21,6 +21,14 @@ const DATA_SOURCE = RAW === 'theta' ? 'theta' : 'tt';
 const useTheta = () => DATA_SOURCE === 'theta';
 const useTastytradeForOptions = () => DATA_SOURCE === 'tt';
 
+// INDEX_SOURCE is a SEPARATE flag for SPX/VIX spot (indices), independent of the
+// options DATA_SOURCE. Default dxlink (real-time, free with the brokerage). Set
+// to theta only after confirming Theta Index is real-time during RTH (PRO Index
+// tier). ES futures ALWAYS stay on dxLink regardless — Theta has no futures.
+const RAW_IDX = String(process.env.INDEX_SOURCE || 'dxlink').trim().toLowerCase();
+const INDEX_SOURCE = RAW_IDX === 'theta' ? 'theta' : 'dxlink';
+const useThetaIndex = () => INDEX_SOURCE === 'theta';
+
 // ThetaData Terminal connection. Locally the Terminal binds 127.0.0.1:25503
 // (v3 REST, paths under /v3/...) and ws://127.0.0.1:25520/v1/events. On the VPS
 // the Terminal is a sibling container, so point these at the compose service
@@ -38,10 +46,20 @@ if (useTheta()) {
   console.log('[DATA_SOURCE] options provider = TASTYTRADE/dxLink (default)');
 }
 
+if (useThetaIndex()) {
+  // eslint-disable-next-line no-console
+  console.log('[INDEX_SOURCE] SPX/VIX spot = THETA index price stream');
+} else {
+  // eslint-disable-next-line no-console
+  console.log('[INDEX_SOURCE] SPX/VIX spot = dxLink (default)');
+}
+
 module.exports = {
   DATA_SOURCE,
   useTheta,
   useTastytradeForOptions,
+  INDEX_SOURCE,
+  useThetaIndex,
   THETA_BASE_URL,
   THETA_WS_URL,
   THETA_DATA_API_KEY,
