@@ -1,7 +1,21 @@
 import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
+
+// Server-side owner gate (defense-in-depth — the UI buttons are cosmetic and can
+// be bypassed by POSTing directly). Only the configured owner may push to the
+// Discord webhook. If OWNER_USER_ID isn't set, fall back to any signed-in user
+// so the owner can't lock themselves out; signed-out is always rejected.
+const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
 export async function POST(request: Request) {
   try {
+    const { userId } = await auth();
+    const id = (userId || "").trim();
+    const allowed = id !== "" && (OWNER_USER_ID ? id === OWNER_USER_ID : true);
+    if (!allowed) {
+      return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+    }
+
     const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
     if (!webhookUrl) {
       return NextResponse.json(

@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
-  HOME_THEME,
+  OWNER_THEME as HOME_THEME,
   homeButtonStyle,
   homeHeaderStyle,
   homePanelStyle,
   homeShellStyle,
   homeSecondaryButtonStyle,
-} from "@/components/shared/homeTheme";
+} from "@/components/shared/ownerTheme";
 import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -249,8 +249,8 @@ function KpiCard({ label, value, delta, prefix = "" }: { label: string; value: s
   const up = delta >= 0;
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.14em" }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 800, color: "#fff", lineHeight: 1 }}>{prefix}{value}</div>
+      <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 500, color: HOME_THEME.text, lineHeight: 1 }}>{prefix}{value}</div>
       <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
         <span>{up ? "▲" : "▼"}</span>
         <span>{Math.abs(delta)}% vs prior period</span>
@@ -261,7 +261,7 @@ function KpiCard({ label, value, delta, prefix = "" }: { label: string; value: s
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 8 }}>
+    <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em", marginBottom: 8 }}>
       {children}
     </div>
   );
@@ -333,15 +333,15 @@ function BarChart({ data, height = 160, color = HOME_THEME.cyan, valueKey = "rev
       </div>
       {tip && (
         <Tooltip x={tip.x} y={tip.y}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#fff", marginBottom: 5 }}>{tip.d.label}</div>
+          <div style={{ fontSize: 11, fontWeight: 500, color: HOME_THEME.text, marginBottom: 5 }}>{tip.d.label}</div>
           <div style={{ display: "flex", gap: 16 }}>
             <div>
               <div style={{ fontSize: 9, color: HOME_THEME.muted, marginBottom: 2 }}>REVENUE</div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.cyan }}>{fmtMoney(tip.d.revenue)}</div>
+              <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.cyan }}>{fmtMoney(tip.d.revenue)}</div>
             </div>
             <div>
               <div style={{ fontSize: 9, color: HOME_THEME.muted, marginBottom: 2 }}>ORDERS</div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.green }}>{tip.d.orders}</div>
+              <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.green }}>{tip.d.orders}</div>
             </div>
           </div>
         </Tooltip>
@@ -409,7 +409,7 @@ function SalesCalendar({ year, month, days, onNav }: {
     <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{MONTH_NAMES[month]} {year}</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text }}>{MONTH_NAMES[month]} {year}</span>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => onNav(-1)} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 11 }}>‹</button>
           <button onClick={() => onNav(1)} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 11 }}>›</button>
@@ -418,7 +418,7 @@ function SalesCalendar({ year, month, days, onNav }: {
       {/* Day headers */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
         {WEEK_DAYS.map((d) => (
-          <div key={d} style={{ textAlign: "center", fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", padding: "4px 0" }}>{d}</div>
+          <div key={d} style={{ textAlign: "center", fontSize: 9, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em", padding: "4px 0" }}>{d}</div>
         ))}
         {days.map((day, i) => {
           const intensity = day.inMonth && day.revenue > 0 ? (day.revenue / max) : 0;
@@ -457,12 +457,12 @@ function SalesCalendar({ year, month, days, onNav }: {
       </div>
       {tip && (
         <Tooltip x={tip.x} y={tip.y}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#fff", marginBottom: 4 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, color: HOME_THEME.text, marginBottom: 4 }}>
             {MONTH_NAMES[month]} {tip.day.date}, {year}
           </div>
           <div>
             <div style={{ fontSize: 9, color: HOME_THEME.muted, marginBottom: 2 }}>DAILY REVENUE</div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.cyan }}>{fmtMoney(tip.day.revenue)}</div>
+            <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.cyan }}>{fmtMoney(tip.day.revenue)}</div>
           </div>
         </Tooltip>
       )}
@@ -482,11 +482,11 @@ function TransactionLog({ txns }: { txns: Transaction[] }) {
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: HOME_THEME.green, boxShadow: `0 0 7px ${HOME_THEME.green}`, flexShrink: 0, display: "inline-block" }} />
-        <span style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.cyan, textTransform: "uppercase", letterSpacing: "0.14em" }}>Live Transactions</span>
+        <span style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.cyan, letterSpacing: "0.01em" }}>Live Transactions</span>
         <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${HOME_THEME.cyan}15`, border: `1px solid ${HOME_THEME.cyan}33`, color: HOME_THEME.cyan }}>{txns.length}</span>
       </div>
       {/* Column headers */}
-      <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 70px 70px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 70px 70px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, fontSize: 9, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>ID</span><span>Customer</span><span>Product</span><span style={{ textAlign: "right" }}>Amount</span><span style={{ textAlign: "right" }}>Status</span>
       </div>
       <div style={{ flex: 1, overflowY: "auto", fontFamily: "monospace" }}>
@@ -505,7 +505,7 @@ function TransactionLog({ txns }: { txns: Transaction[] }) {
             }}
           >
             <span style={{ color: HOME_THEME.muted }}>{t.id}</span>
-            <span style={{ color: "#fff", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.customer}</span>
+            <span style={{ color: HOME_THEME.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.customer}</span>
             <span style={{ color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.product}</span>
             <span style={{ textAlign: "right", color: HOME_THEME.cyan, fontWeight: 700 }}>${t.amount.toFixed(2)}</span>
             <span style={{ textAlign: "right" }}>
@@ -616,7 +616,7 @@ function FinancialAnalytics({ period }: { period: Period }) {
       {/* Top: bar chart + totals */}
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
         <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", marginBottom: 2 }}>Income vs Expenses</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 2 }}>Income vs Expenses</div>
           <div style={{ fontSize: 11, color: HOME_THEME.muted, marginBottom: 16 }}>{PERIOD_LABELS[period]} · 2026</div>
           <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 230 }}>
             {months.map((d) => (
@@ -642,9 +642,9 @@ function FinancialAnalytics({ period }: { period: Period }) {
             { label: "Total Net Income", value: netIncome, delta: 21.4, up: true },
           ].map((row) => (
             <div key={row.label}>
-              <div style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>{row.label}</div>
+              <div style={{ fontSize: 10, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{row.label}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>{fmtMoney(row.value)}</div>
+                <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.text }}>{fmtMoney(row.value)}</div>
                 <span style={{ fontSize: 10, fontWeight: 700, color: row.up ? HOME_THEME.green : HOME_THEME.red }}>
                   {row.up ? "▲" : "▼"} {Math.abs(row.delta)}%
                 </span>
@@ -658,8 +658,8 @@ function FinancialAnalytics({ period }: { period: Period }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 12 }}>
         {/* Income Overview */}
         <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 10 }}>Income Overview</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", marginBottom: 10 }}>{fmtMoney(incomeOverviewTotal)}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, marginBottom: 10 }}>Income Overview</div>
+          <div style={{ fontSize: 24, fontWeight: 500, color: HOME_THEME.text, marginBottom: 10 }}>{fmtMoney(incomeOverviewTotal)}</div>
           <div style={{ display: "flex", height: 6, borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
             {sources.map((s) => (<div key={s.name} style={{ width: `${s.pct}%`, background: s.color }} />))}
           </div>
@@ -667,7 +667,7 @@ function FinancialAnalytics({ period }: { period: Period }) {
             {sources.map((s) => (
               <div key={s.name}>
                 <div style={{ fontSize: 10, color: HOME_THEME.muted }}><span style={{ color: s.color }}>●</span> {s.name}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{fmtMoney(s.value)}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text }}>{fmtMoney(s.value)}</div>
                 <div style={{ fontSize: 10, color: HOME_THEME.muted }}>{s.pct}%</div>
               </div>
             ))}
@@ -676,7 +676,7 @@ function FinancialAnalytics({ period }: { period: Period }) {
 
         {/* Expense Analysis donut */}
         <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 10 }}>Expense Analysis</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, marginBottom: 10 }}>Expense Analysis</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <svg width="120" height="120" viewBox="0 0 120 120">
               <g transform="rotate(-90 60 60)">
@@ -692,7 +692,7 @@ function FinancialAnalytics({ period }: { period: Period }) {
               {expenseCats.map((c) => (
                 <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 4 }}>
                   <span style={{ color: HOME_THEME.muted }}><span style={{ color: c.color }}>●</span> {c.name}</span>
-                  <span style={{ color: "#fff", fontWeight: 700 }}>{c.pct}%</span>
+                  <span style={{ color: HOME_THEME.text, fontWeight: 700 }}>{c.pct}%</span>
                 </div>
               ))}
             </div>
@@ -701,7 +701,7 @@ function FinancialAnalytics({ period }: { period: Period }) {
 
         {/* Financial Forecast */}
         <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 10 }}>Financial Forecast</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, marginBottom: 10 }}>Financial Forecast</div>
           <svg width="100%" height="90" viewBox="0 0 100 44" preserveAspectRatio="none">
             <polyline points={poly("income")} fill="none" stroke={HOME_THEME.cyan} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
             <polyline points={poly("expenses")} fill="none" stroke={HOME_THEME.purple} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
@@ -778,8 +778,8 @@ export default function AdminDashboard() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.cyan }}>
-            Admin Dashboard
+          <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: "0.01em", color: HOME_THEME.text }}>
+            Admin dashboard
           </span>
           <span style={{ fontSize: 10, color: HOME_THEME.muted }}>Sales · Traffic · Growth</span>
         </div>
@@ -831,10 +831,10 @@ export default function AdminDashboard() {
           <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>Revenue Growth</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text }}>Revenue Growth</div>
                 <div style={{ fontSize: 10, color: HOME_THEME.muted, marginTop: 2 }}>Daily breakdown · {PERIOD_LABELS[period]}</div>
               </div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.cyan }}>{fmtMoney(kpi.totalRevenue)}</div>
+              <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.cyan }}>{fmtMoney(kpi.totalRevenue)}</div>
             </div>
             <BarChart data={dailySales} height={140} color={HOME_THEME.cyan} valueKey="revenue" />
           </div>
@@ -843,10 +843,10 @@ export default function AdminDashboard() {
           <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>Order Volume</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text }}>Order Volume</div>
                 <div style={{ fontSize: 10, color: HOME_THEME.muted, marginTop: 2 }}>Units sold per day · {PERIOD_LABELS[period]}</div>
               </div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.green }}>
+              <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.green }}>
                 {dailySales.reduce((s, d) => s + d.orders, 0).toLocaleString()} orders
               </div>
             </div>
@@ -857,23 +857,23 @@ export default function AdminDashboard() {
         {/* ── Traffic row ── */}
         <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", alignItems: "center", gap: 24 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", marginBottom: 8 }}>Traffic · 24h</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, marginBottom: 8 }}>Traffic · 24h</div>
             <TrafficSparkline data={trafficData} />
           </div>
           <div style={{ display: "flex", gap: 16, flexShrink: 0 }}>
             <div style={{ background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: "10px 16px", textAlign: "center" }}>
               <div style={{ fontSize: 9, color: HOME_THEME.muted, marginBottom: 3 }}>PEAK / HR</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: HOME_THEME.purple }}>{Math.max(...trafficData).toLocaleString()}</div>
+              <div style={{ fontSize: 20, fontWeight: 500, color: HOME_THEME.purple }}>{Math.max(...trafficData).toLocaleString()}</div>
             </div>
             <div style={{ background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: "10px 16px", textAlign: "center" }}>
               <div style={{ fontSize: 9, color: HOME_THEME.muted, marginBottom: 3 }}>AVG / HR</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: HOME_THEME.purple }}>
+              <div style={{ fontSize: 20, fontWeight: 500, color: HOME_THEME.purple }}>
                 {Math.round(trafficData.reduce((a, b) => a + b, 0) / trafficData.length).toLocaleString()}
               </div>
             </div>
             <div style={{ background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: "10px 16px", textAlign: "center" }}>
               <div style={{ fontSize: 9, color: HOME_THEME.muted, marginBottom: 3 }}>TOTAL</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: HOME_THEME.purple }}>
+              <div style={{ fontSize: 20, fontWeight: 500, color: HOME_THEME.purple }}>
                 {fmtNum(trafficData.reduce((a, b) => a + b, 0))}
               </div>
             </div>
@@ -884,14 +884,14 @@ export default function AdminDashboard() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           {/* Earnings by product */}
           <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", marginBottom: 14 }}>Earnings by Product</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, marginBottom: 14 }}>Earnings by Product</div>
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <DonutChart products={products} />
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
                 {products.map((p) => (
                   <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: p.color, flexShrink: 0 }} />
-                    <div style={{ flex: 1, fontSize: 11, color: "#fff", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                    <div style={{ flex: 1, fontSize: 11, color: HOME_THEME.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
                     <div style={{ fontSize: 11, fontWeight: 700, color: p.color }}>{p.pct}%</div>
                   </div>
                 ))}
@@ -902,7 +902,7 @@ export default function AdminDashboard() {
                 <div key={p.name}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: HOME_THEME.muted, marginBottom: 3 }}>
                     <span>{p.name}</span>
-                    <span style={{ color: "#fff" }}>{fmtMoney(p.revenue)}</span>
+                    <span style={{ color: HOME_THEME.text }}>{fmtMoney(p.revenue)}</span>
                   </div>
                   <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${p.pct}%`, background: p.color, borderRadius: 2 }} />
@@ -914,14 +914,14 @@ export default function AdminDashboard() {
 
           {/* Users by country */}
           <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", marginBottom: 14 }}>Users by Country</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, marginBottom: 14 }}>Users by Country</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {countries.map((c) => (
                 <div key={c.country}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: 16 }}>{c.flag}</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{c.country}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: HOME_THEME.text }}>{c.country}</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: 11, color: HOME_THEME.muted }}>{c.users.toLocaleString()}</span>

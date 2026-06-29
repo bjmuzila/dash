@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  HOME_THEME,
+  OWNER_THEME as HOME_THEME,
   homeButtonStyle,
   homeHeaderStyle,
   homePanelStyle,
   homeShellStyle,
   homeSecondaryButtonStyle,
-} from "@/components/shared/homeTheme";
+} from "@/components/shared/ownerTheme";
 import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
@@ -337,12 +337,12 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
         alignItems: "center",
         gap: 5,
         padding: "3px 9px",
-        borderRadius: 20,
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: "0.06em",
-        background: ok ? "rgba(16,185,129,0.14)" : "rgba(239,68,68,0.14)",
-        border: `1px solid ${ok ? HOME_THEME.green : HOME_THEME.red}44`,
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 500,
+        letterSpacing: "0.01em",
+        background: ok ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
+        border: `1px solid ${ok ? HOME_THEME.green : HOME_THEME.red}40`,
         color: ok ? HOME_THEME.green : HOME_THEME.red,
       }}
     >
@@ -352,7 +352,6 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
           height: 6,
           borderRadius: "50%",
           background: ok ? HOME_THEME.green : HOME_THEME.red,
-          boxShadow: ok ? `0 0 6px ${HOME_THEME.green}` : `0 0 6px ${HOME_THEME.red}`,
         }}
       />
       {label}
@@ -413,13 +412,11 @@ function StatCard({
       display: "flex",
       flexDirection: "column",
       gap: 6,
-      borderTop: `2px solid ${accent}d9`,
-      background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
     }}>
-      <div style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 11, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: 17, fontWeight: 800, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textShadow: `0 0 16px ${accent}4d` }}>
+      <div style={{ fontSize: 18, fontWeight: 500, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -429,7 +426,7 @@ function StatCard({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 6 }}>
+    <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 8 }}>
       {children}
     </div>
   );
@@ -478,7 +475,7 @@ function AccordionCard({
 }) {
   void open; void onToggle; void id;
   return (
-    <div style={{ ...homePanelStyle, overflow: "visible", borderTop: `2px solid ${accent}d9`, background: `radial-gradient(circle at 50% 0%, ${accent}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+    <div style={{ ...homePanelStyle, overflow: "visible" }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
@@ -488,11 +485,12 @@ function AccordionCard({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-          <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.14em", whiteSpace: "nowrap" }}>
+          <span style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
             {title}
           </span>
           {subtitle != null && (
-            <span style={{ fontSize: 9.5, fontFamily: "monospace", color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 11, fontFamily: "monospace", color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {subtitle}
             </span>
           )}
@@ -552,10 +550,10 @@ function LineChartCard({
   const vbH = H + 18;
 
   return (
-    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.orange}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.orange}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
+        <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text }}>{title}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.01em", marginTop: 2 }}>{subtitle}</div>
       </div>
       <div style={{ position: "relative", width: "100%" }}>
       <svg viewBox={`0 0 ${W} ${vbH}`} preserveAspectRatio="none" style={{ width: "100%", height: 190, display: "block" }}>
@@ -618,7 +616,7 @@ function LineChartCard({
           }}
         >
           <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted, fontFamily: "monospace" }}>{labels[hover]}</div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: "#fff", fontFamily: "monospace" }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>
             {ptsA[hover].v.toLocaleString()} <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.muted }}>visits</span>
           </div>
         </div>
@@ -641,10 +639,10 @@ function BarChartCard({
 }) {
   const max = Math.max(...bars) || 1;
   return (
-    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.green}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.green}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+    <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{title}</div>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginTop: 2 }}>{subtitle}</div>
+        <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text }}>{title}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.01em", marginTop: 2 }}>{subtitle}</div>
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 150, paddingTop: 6 }}>
         {bars.map((v, i) => (
@@ -661,12 +659,12 @@ function BarChartCard({
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
-          <div style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Minimum</div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", fontFamily: "monospace" }}>{footerMin}</div>
+          <div style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 400, letterSpacing: "0.01em" }}>Minimum</div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>{footerMin}</div>
         </div>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
-          <div style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Maximum</div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", fontFamily: "monospace" }}>{footerMax}</div>
+          <div style={{ fontSize: 9, color: HOME_THEME.muted, fontWeight: 400, letterSpacing: "0.01em" }}>Maximum</div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>{footerMax}</div>
         </div>
       </div>
     </div>
@@ -679,16 +677,15 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
   return (
     <div style={{
       ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10,
-      borderTop: `2px solid ${accent}80`, minWidth: 0,
-      background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+      minWidth: 0,
     }}>
-      <div style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}22`, border: `1px solid ${accent}55`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ width: 9, height: 9, borderRadius: "50%", background: accent, boxShadow: `0 0 8px ${accent}` }} />
+      <div style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}1a`, border: `1px solid ${accent}33`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: accent }} />
       </div>
-      <div style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>{label}</div>
+      <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 30, fontWeight: 800, color: "#fff", lineHeight: 1 }}>{value}</span>
-        {delta ? <span style={{ fontSize: 11, fontWeight: 800, color: up ? HOME_THEME.green : HOME_THEME.red }}>{delta}</span> : null}
+        <span style={{ fontSize: 30, fontWeight: 500, color: HOME_THEME.text, lineHeight: 1 }}>{value}</span>
+        {delta ? <span style={{ fontSize: 11, fontWeight: 500, color: up ? HOME_THEME.green : HOME_THEME.red }}>{delta}</span> : null}
       </div>
     </div>
   );
@@ -697,12 +694,12 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
 // Small stat chip (Likes / Attachments / Team Members style).
 function StatChip({ icon, label, value, accent }: { icon: string; label: string; value: string; accent: string }) {
   return (
-    <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0, borderTop: `2px solid ${accent}80`, background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+    <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
       <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, background: `${accent}1a`, border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{icon}</div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+        <div style={{ fontSize: 11, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
       </div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: "#fff", fontFamily: "monospace", flexShrink: 0 }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace", flexShrink: 0 }}>{value}</div>
     </div>
   );
 }
@@ -715,11 +712,11 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
         <span style={{ fontSize: 13, color: accent }}>◷</span>
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 12, fontWeight: 800, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
+        <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
         <div style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
       </div>
       {status && (
-        <span style={{ fontSize: 8.5, fontWeight: 800, color: HOME_THEME.green, background: "rgba(16,185,129,0.14)", border: `1px solid ${HOME_THEME.green}44`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
+        <span style={{ fontSize: 8.5, fontWeight: 500, color: HOME_THEME.green, background: "rgba(16,185,129,0.14)", border: `1px solid ${HOME_THEME.green}44`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
       )}
     </div>
   );
@@ -862,8 +859,8 @@ function OverviewSection({ metrics }: {
           </div>
           <div style={{ ...homePanelStyle, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, fontWeight: 800, color: "#fff" }}>Traffic Trend</span>
-              <span style={{ fontSize: 8.5, fontWeight: 800, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}22`, border: `1px solid ${HOME_THEME.cyan}44`, borderRadius: 12, padding: "2px 8px", letterSpacing: "0.06em" }}>12 DAYS</span>
+              <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text }}>Traffic Trend</span>
+              <span style={{ fontSize: 8.5, fontWeight: 500, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}22`, border: `1px solid ${HOME_THEME.cyan}44`, borderRadius: 12, padding: "2px 8px", letterSpacing: "0.06em" }}>12 DAYS</span>
             </div>
             <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ width: "100%", height: 56, display: "block" }}>
               <path d={progPath} fill="none" stroke={HOME_THEME.purple} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
@@ -873,9 +870,9 @@ function OverviewSection({ metrics }: {
       </div>
 
       {/* ── Right: real recent-activity feed ── */}
-      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0, borderTop: `2px solid ${HOME_THEME.purple}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.purple}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Recent Activity</span>
+          <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Recent Activity</span>
           <span style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace" }}>newest first</span>
         </div>
         {feed.length === 0 ? (
@@ -1689,8 +1686,8 @@ export default function OwnerDashboard() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.cyan }}>
-            Owner Dashboard
+          <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: "0.01em", color: HOME_THEME.text }}>
+            Owner dashboard
           </span>
           <StatusBadge ok={isServerUp} label={isServerUp ? "Server Live" : "Idle"} />
           <StatusBadge ok={wsConnected} label={wsConnected ? "Proxy WS" : "Proxy WS Offline"} />
@@ -1702,7 +1699,7 @@ export default function OwnerDashboard() {
           {/* Owner-group quick links */}
           <OwnerQuickLinks current="/dev/owner" />
           {lastRefresh && (
-            <span style={{ fontSize: 10, color: "#fff", fontFamily: "monospace" }}>
+            <span style={{ fontSize: 10, color: HOME_THEME.text, fontFamily: "monospace" }}>
               {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
             </span>
           )}
@@ -1725,8 +1722,8 @@ export default function OwnerDashboard() {
               key={t.id}
               onClick={() => selectTab(t.id)}
               style={{
-                padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
-                textTransform: "uppercase", letterSpacing: "0.1em",
+                padding: "7px 18px", fontSize: 12, fontWeight: 500, borderRadius: 8,
+                letterSpacing: "0.01em",
                 cursor: "pointer",
                 background: active ? "rgba(33,158,188,0.15)" : "transparent",
                 color: active ? HOME_THEME.cyan : HOME_THEME.muted,
@@ -1741,8 +1738,8 @@ export default function OwnerDashboard() {
         <a
           href="/dev/admin"
           style={{
-            padding: "7px 18px", fontSize: 11, fontWeight: 800, borderRadius: 8,
-            textTransform: "uppercase", letterSpacing: "0.1em",
+            padding: "7px 18px", fontSize: 12, fontWeight: 500, borderRadius: 8,
+            letterSpacing: "0.01em",
             cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6,
             marginLeft: "auto",
             background: "transparent",
@@ -1810,7 +1807,7 @@ export default function OwnerDashboard() {
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <div style={{ fontSize: 10, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>Window</div>
+            <div style={{ fontSize: 11, color: HOME_THEME.muted, fontWeight: 400, letterSpacing: "0.01em" }}>Window</div>
             <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
               {(["live", "weekly", "monthly"] as const).map(w => (
                 <button
@@ -1820,7 +1817,7 @@ export default function OwnerDashboard() {
                   style={{
                     padding: "3px 10px",
                     fontSize: 9,
-                    fontWeight: 800,
+                    fontWeight: 500,
                     borderRadius: 4,
                     border: "none",
                     cursor: renderLoading ? "wait" : "pointer",
@@ -1889,7 +1886,7 @@ export default function OwnerDashboard() {
               footer={<Sparkline data={renderMetrics?.cpu.spark ?? []} accent={cpuAccent} />}
             />
             <div style={{ containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px", overflow: "hidden" }}>
-              <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>Updated</div>
+              <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.muted, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>Updated</div>
               <div style={{ fontSize: "clamp(8px, 7.5cqw, 11px)", fontFamily: "monospace", color: HOME_THEME.muted, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {renderMetrics?.fetchedAt
                   ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
@@ -1902,7 +1899,7 @@ export default function OwnerDashboard() {
               host bandwidth card can't show). Live trailing-60s window. */}
           <div style={{ marginTop: 12 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+              <div style={{ fontSize: 11, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>
                 /ws/gex Outbound · Live (last 60s)
               </div>
               <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
@@ -2000,13 +1997,12 @@ export default function OwnerDashboard() {
                   minHeight: 0,
                   padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
                   overflow: "hidden",
-                  borderTop: `2px solid ${accent}80`,
-                  background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+                  borderLeft: `2px solid ${accent}`,
                 }}>
-                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 800, fontFamily: "monospace", color: accent, textShadow: `0 0 16px ${accent}4d`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 500, fontFamily: "monospace", color: accent, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
                   <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>rows today</div>
@@ -2032,7 +2028,7 @@ export default function OwnerDashboard() {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
               {/* Idle */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Idle Mode (feed)</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Idle Mode (feed)</span>
                 <button
                   onClick={toggleIdle}
                   disabled={ctlBusy === "idle"}
@@ -2051,7 +2047,7 @@ export default function OwnerDashboard() {
               </div>
               {/* MVC auto */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>MVC Auto (5m)</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>MVC Auto (5m)</span>
                 <button
                   onClick={toggleMvcAuto}
                   disabled={ctlBusy === "mvcAuto"}
@@ -2070,7 +2066,7 @@ export default function OwnerDashboard() {
               </div>
               {/* Maintenance mode */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Maintenance</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Maintenance</span>
                 <button
                   onClick={toggleMaint}
                   disabled={ctlBusy === "maint"}
@@ -2195,13 +2191,13 @@ export default function OwnerDashboard() {
                           boxShadow: ok ? `0 0 6px ${HOME_THEME.green}` : `0 0 6px ${HOME_THEME.red}`,
                           flexShrink: 0,
                         }} />
-                        <span style={{ fontSize: 12, fontWeight: 800, color: ok ? HOME_THEME.green : HOME_THEME.red, letterSpacing: "0.1em" }}>
+                        <span style={{ fontSize: 12, fontWeight: 500, color: ok ? HOME_THEME.green : HOME_THEME.red, letterSpacing: "0.1em" }}>
                           {sym}
                         </span>
                       </div>
                       {row ? (
                         <>
-                          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", color: row.total_gex >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "monospace", color: row.total_gex >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                             {fmtGex(row.total_gex)}
                           </div>
                           <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
@@ -2234,20 +2230,20 @@ export default function OwnerDashboard() {
                 label={levels.lastRun ? (levelsAreStale(levels.lastRun) ? "Stale" : "Current") : "Never run"}
               />
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Last Published</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Last Published</span>
                 <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.lastRun)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>EM Grabbed</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>EM Grabbed</span>
                 <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.emGrabbed)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Tickers</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Tickers</span>
                 <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{levels.count}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "monospace" }}>Sat ~09:00 ET</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Schedule</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: HOME_THEME.text, fontFamily: "monospace" }}>Sat ~09:00 ET</span>
               </div>
               <button
                 onClick={triggerPublish}
@@ -2274,14 +2270,14 @@ export default function OwnerDashboard() {
             {(pubRun.running || pubRun.at) && (
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 11, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
                 {pubRun.running ? (
-                  <span style={{ fontWeight: 800, color: HOME_THEME.cyan }}>● Running… computing levels (this can take a few minutes)</span>
+                  <span style={{ fontWeight: 500, color: HOME_THEME.cyan }}>● Running… computing levels (this can take a few minutes)</span>
                 ) : (
                   <>
-                    <span style={{ fontWeight: 800, color: pubRun.error ? HOME_THEME.red : HOME_THEME.green }}>
+                    <span style={{ fontWeight: 500, color: pubRun.error ? HOME_THEME.red : HOME_THEME.green }}>
                       {pubRun.error ? "✗ Failed" : "✓ Last run OK"}
                     </span>
                     {pubRun.emTotal != null && (
-                      <span style={{ color: "#fff", fontFamily: "monospace" }}>
+                      <span style={{ color: HOME_THEME.text, fontFamily: "monospace" }}>
                         EM <b style={{ color: (pubRun.failedEm.length ? HOME_THEME.orange : HOME_THEME.green) }}>{pubRun.emOk}/{pubRun.emTotal}</b>
                         {pubRun.posted != null ? <> · {pubRun.posted} rows</> : null}
                       </span>
@@ -2302,7 +2298,7 @@ export default function OwnerDashboard() {
                     onClick={triggerRetry}
                     disabled={retrying || publishing}
                     style={{
-                      fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 6, cursor: (retrying || publishing) ? "default" : "pointer",
+                      fontSize: 10, fontWeight: 500, padding: "3px 10px", borderRadius: 6, cursor: (retrying || publishing) ? "default" : "pointer",
                       color: (retrying || publishing) ? HOME_THEME.muted : "#000",
                       background: (retrying || publishing) ? "rgba(255,255,255,0.06)" : HOME_THEME.orange,
                       border: `1px solid ${HOME_THEME.orange}`, opacity: (retrying || publishing) ? 0.6 : 1,
@@ -2314,7 +2310,7 @@ export default function OwnerDashboard() {
                 </div>
                 {pubRun.failedEm.map((f) => (
                   <span key={f.ticker} style={{ marginRight: 10, whiteSpace: "nowrap" }}>
-                    <b style={{ color: "#fff" }}>{f.ticker}</b>
+                    <b style={{ color: HOME_THEME.text }}>{f.ticker}</b>
                     {f.reason ? <span style={{ color: HOME_THEME.muted }}> ({f.reason})</span> : null}
                   </span>
                 ))}
@@ -2394,7 +2390,7 @@ export default function OwnerDashboard() {
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {clerk == null ? (
-              <span style={{ fontSize: 11, color: "#fff", fontFamily: "monospace" }}>Loading…</span>
+              <span style={{ fontSize: 11, color: HOME_THEME.text, fontFamily: "monospace" }}>Loading…</span>
             ) : (
               <>
               {/* Key status row */}
@@ -2402,7 +2398,7 @@ export default function OwnerDashboard() {
                 <StatusBadge ok={clerk.configured} label={clerk.configured ? "Configured" : "Not configured"} />
                 {/* Environment badge: live = amber (be careful), test = cyan. */}
                 <span style={{
-                  fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
+                  fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase",
                   padding: "3px 9px", borderRadius: 20,
                   color: clerk.environment === "live" ? HOME_THEME.orange : clerk.environment === "test" ? HOME_THEME.cyan : HOME_THEME.muted,
                   background: clerk.environment === "live" ? `${HOME_THEME.orange}1a` : clerk.environment === "test" ? `${HOME_THEME.cyan}1a` : "transparent",
@@ -2413,7 +2409,7 @@ export default function OwnerDashboard() {
 
                 {/* Publishable key — masked (this key is public by design). */}
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Publishable</span>
+                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Publishable</span>
                   <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.publishable.present ? "#c8d8e8" : HOME_THEME.red }}>
                     {clerk.publishable.present ? clerk.publishable.masked : "missing"}
                   </span>
@@ -2421,7 +2417,7 @@ export default function OwnerDashboard() {
 
                 {/* Secret key — presence only, value never leaves the server. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Secret</span>
+                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Secret</span>
                   <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.secret.present ? HOME_THEME.green : HOME_THEME.red }}>
                     {clerk.secret.present ? "set ✓ (hidden)" : "missing"}
                   </span>
@@ -2454,14 +2450,14 @@ export default function OwnerDashboard() {
                     {/* Stat chips */}
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
-                        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Users</span>
-                        <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.cyan, fontFamily: "monospace" }}>
+                        <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Users</span>
+                        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.cyan, fontFamily: "monospace" }}>
                           {s!.userCount != null ? s!.userCount.toLocaleString() : "—"}
                         </span>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.green}14`, border: `1px solid ${HOME_THEME.green}33` }}>
-                        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em" }}>Active sessions</span>
-                        <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.green, fontFamily: "monospace" }}>
+                        <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Active sessions</span>
+                        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.green, fontFamily: "monospace" }}>
                           {s!.activeSessions != null ? s!.activeSessions.toLocaleString() : "—"}
                         </span>
                       </div>
@@ -2470,7 +2466,7 @@ export default function OwnerDashboard() {
                     {/* Recent signups */}
                     {s!.recent.length > 0 && (
                       <div>
-                        <div style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6 }}>
+                        <div style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 6 }}>
                           Recent signups
                         </div>
                         <div style={{ display: "flex", flexDirection: "column" }}>
@@ -2483,12 +2479,12 @@ export default function OwnerDashboard() {
                                 borderBottom: i < s!.recent.length - 1 ? `1px solid ${HOME_THEME.border}` : "none",
                               }}
                             >
-                              <span style={{ fontSize: 11, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
+                              <span style={{ fontSize: 11, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
                                 {u.name ? <b style={{ fontWeight: 700 }}>{u.name}</b> : null}
                                 {u.name && u.email ? "  " : null}
                                 {u.email ? <span style={{ fontFamily: "monospace", color: "#c8d8e8" }}>{u.email}</span> : (!u.name ? <span style={{ color: HOME_THEME.muted }}>(no email)</span> : null)}
                               </span>
-                              <span style={{ fontSize: 9, color: "#fff", fontFamily: "monospace", flexShrink: 0 }}>
+                              <span style={{ fontSize: 9, color: HOME_THEME.text, fontFamily: "monospace", flexShrink: 0 }}>
                                 {u.createdAt ? fmtAgo(new Date(u.createdAt).toISOString()) : "—"}
                               </span>
                             </div>
@@ -2506,7 +2502,7 @@ export default function OwnerDashboard() {
                 return (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                      <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                         Role Sets
                       </span>
                       <span style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.muted }}>
@@ -2523,10 +2519,10 @@ export default function OwnerDashboard() {
                         {sets.map((rs) => (
                           <div key={rs.id || rs.key} style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                              <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{rs.name || rs.key}</span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.text }}>{rs.name || rs.key}</span>
                               <span style={{ fontSize: 9, fontFamily: "monospace", color: "#c8d8e8" }}>{rs.key}</span>
                               {rs.type && (
-                                <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", padding: "1px 6px", borderRadius: 10, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
+                                <span style={{ fontSize: 8, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", padding: "1px 6px", borderRadius: 10, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
                                   {rs.type}
                                 </span>
                               )}
@@ -2541,7 +2537,7 @@ export default function OwnerDashboard() {
                                     key={role.id || role.key}
                                     title={`${role.key}${role.membersCount != null ? ` · ${role.membersCount} members` : ""}`}
                                     style={{
-                                      fontSize: 10, fontWeight: 600, color: "#fff",
+                                      fontSize: 10, fontWeight: 600, color: HOME_THEME.text,
                                       padding: "2px 8px", borderRadius: 6,
                                       background: `${accent}14`, border: `1px solid ${accent}44`,
                                       display: "inline-flex", alignItems: "center", gap: 5,
@@ -2551,8 +2547,8 @@ export default function OwnerDashboard() {
                                     {role.membersCount != null && (
                                       <span style={{ fontFamily: "monospace", color: "#c8d8e8" }}>{role.membersCount}</span>
                                     )}
-                                    {isDefault && <span style={{ fontSize: 8, color: HOME_THEME.green, fontWeight: 800 }}>DEFAULT</span>}
-                                    {isCreator && <span style={{ fontSize: 8, color: HOME_THEME.orange, fontWeight: 800 }}>CREATOR</span>}
+                                    {isDefault && <span style={{ fontSize: 8, color: HOME_THEME.green, fontWeight: 500 }}>DEFAULT</span>}
+                                    {isCreator && <span style={{ fontSize: 8, color: HOME_THEME.orange, fontWeight: 500 }}>CREATOR</span>}
                                   </span>
                                 );
                               })}
@@ -2590,7 +2586,7 @@ export default function OwnerDashboard() {
           const activeCount = pageStatuses.filter((p) => p.status === "active").length;
 
           return (
-        <div style={{ ...homePanelStyle, borderTop: `2px solid ${HOME_THEME.green}d9`, background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.green}12 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+        <div style={{ ...homePanelStyle }}>
           <div
             style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${HOME_THEME.border}` }}
           >
@@ -2632,7 +2628,7 @@ export default function OwnerDashboard() {
                 background: "rgba(13,17,25,0.60)",
               }}>
                 <span style={{ fontSize: 13 }}>🛰️</span>
-                <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                <span style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                   Recent Activity
                 </span>
                 <span style={{ fontSize: 9, color: HOME_THEME.muted, marginLeft: "auto", fontFamily: "monospace" }}>
@@ -2661,7 +2657,7 @@ export default function OwnerDashboard() {
                         background: active ? HOME_THEME.green : HOME_THEME.muted,
                         boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : "none",
                       }} />
-                      <span style={{ color: "#fff", fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                      <span style={{ color: HOME_THEME.text, fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                         {labelFor(p.pageKey)}
                       </span>
                       <span style={{ color: HOME_THEME.muted, flexShrink: 0 }}>
@@ -2689,7 +2685,7 @@ export default function OwnerDashboard() {
                     background: "rgba(13,17,25,0.60)",
                   }}>
                     <span style={{ fontSize: 15 }}>{group.emoji}</span>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                    <span style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                       {group.label}
                     </span>
                   </div>
@@ -2793,7 +2789,7 @@ export default function OwnerDashboard() {
               >
                 Refresh
               </button>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#fff", cursor: "pointer" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: HOME_THEME.text, cursor: "pointer" }}>
                 <input
                   type="checkbox"
                   checked={feedbackShowResolved}
@@ -2806,7 +2802,7 @@ export default function OwnerDashboard() {
             {(() => {
               const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
               if (visible.length === 0) {
-                return <span style={{ fontSize: 12, color: "#fff", opacity: 0.6 }}>No feedback yet.</span>;
+                return <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6 }}>No feedback yet.</span>;
               }
               const catColor: Record<string, string> = {
                 bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
@@ -2828,7 +2824,7 @@ export default function OwnerDashboard() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
                         <span style={{
-                          fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em",
+                          fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
                           padding: "2px 8px", borderRadius: 20,
                           color: catColor[f.category] ?? HOME_THEME.cyan,
                           background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
@@ -2836,16 +2832,16 @@ export default function OwnerDashboard() {
                         }}>
                           {f.category}
                         </span>
-                        <span style={{ fontSize: 11, color: "#fff", opacity: 0.7 }}>
+                        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
                           {f.email || f.clerk_user_id || "unknown"}
                         </span>
                         {f.created_at && (
-                          <span style={{ fontSize: 10, color: "#fff", opacity: 0.45 }}>
+                          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.45 }}>
                             {new Date(f.created_at).toLocaleString()}
                           </span>
                         )}
                       </div>
-                      <div style={{ fontSize: 13, color: "#fff", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                      <div style={{ fontSize: 13, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                         {f.message}
                       </div>
                     </div>

@@ -795,7 +795,7 @@ export default function OptionsChainPage() {
         overflow: "hidden",
       }}
     >
-      <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
+      <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,179,0,.35)}50%{box-shadow:0 0 10px rgba(255,179,0,.9)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
       {loadProgress > 0 && (
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: HT.bg, zIndex: 10 }}>
           <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
@@ -993,7 +993,8 @@ export default function OptionsChainPage() {
                           color: isATM ? "#ffb300" : "#e4e4e7",
                           background: isATM ? "rgba(255,179,0,.12)" : value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
                           borderTop: emBorder,
-                          ...(isMvc ? { borderLeft: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
+                          ...(isMvc ? { borderLeft: "2px solid #ffb300", borderTop: "2px solid #ffb300", borderBottom: "2px solid #ffb300" } : {}),
+                          ...(isATM ? { borderLeft: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
                         }}>
                           {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
                         </div>
@@ -1004,7 +1005,8 @@ export default function OptionsChainPage() {
                             color: value == null ? "#3a4a5e" : "#ffffff",
                             background: isATM ? "rgba(255,179,0,.07)" : value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
                             borderTop: emBorder,
-                            ...(isMvc ? { borderRight: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
+                            ...(isMvc ? { borderRight: "2px solid #ffb300", borderTop: "2px solid #ffb300", borderBottom: "2px solid #ffb300" } : {}),
+                            ...(isATM ? { borderRight: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
                           }}
                         >
                           {isMvc && <span title="MVC — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}

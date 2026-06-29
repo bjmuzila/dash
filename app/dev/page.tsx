@@ -1,10 +1,21 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { HOME_THEME, homeGlossPanelStyle } from "@/components/shared/homeTheme";
-import { PageShell } from "@/components/shared/PageCard";
+import type { ReactNode } from "react";
+import { OWNER_THEME as HOME_THEME, homeShellStyle } from "@/components/shared/ownerTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
+
+// Local calm shell (replaces PageShell's glow background for owner pages).
+function PageShell({ children }: { children: ReactNode }) {
+  return (
+    <div style={homeShellStyle}>
+      <main style={{ flex: 1, overflow: "auto", padding: "clamp(14px,2vw,24px)", display: "flex", flexDirection: "column", gap: "clamp(16px,2vw,32px)", minHeight: 0 }}>
+        {children}
+      </main>
+    </div>
+  );
+}
 
 // All chrome sourced from the shared theme. Data-encoding colors (calls=green,
 // puts=red, net=purple, pos/neg) are theme tokens too.
@@ -49,9 +60,9 @@ function combineExposures(call?: Record<string, unknown>, put?: Record<string, u
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}55`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.14em" }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: HOME_THEME.text, fontFamily: "monospace" }}>{children}</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>{children}</div>
     </div>
   );
 }
@@ -89,8 +100,8 @@ const EXPOSURE_ROWS: { key: string; label: string }[] = [
 // 5th panel: net-greek exposures for the single contract.
 function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> | undefined; accent?: string }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>Greeks</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>Greeks</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -117,7 +128,7 @@ function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> 
 function RowLabel({ text, color }: { text: string; color: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}>
-      <span style={{ fontSize: 13, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.14em" }}>{text}</span>
+      <span style={{ fontSize: 13, fontWeight: 500, color, letterSpacing: "0.01em" }}>{text}</span>
       <div style={{ flex: 1, height: 1, background: C.border }} />
     </div>
   );
@@ -181,11 +192,11 @@ function ShareActions({ text }: { text: string }) {
 
 function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unknown> | undefined; ticker: string; strike: string }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${NET}55`, borderTop: `3px solid ${NET}`, borderRadius: 12, padding: "14px 18px" }}>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${NET}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span style={{ fontSize: 11, fontWeight: 800, color: NET, textTransform: "uppercase", letterSpacing: "0.14em" }}>Net Greeks · Call + Put</span>
-          <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.text, fontFamily: "monospace", padding: "2px 8px", borderRadius: 6, background: `${NET}22`, border: `1px solid ${NET}55` }}>{ticker || "?"} · {strike || "?"}</span>
+          <span style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Net Greeks · Call + Put</span>
+          <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
         </div>
         <ShareActions text={buildNetShareText(data, ticker, strike)} />
       </div>
@@ -227,8 +238,8 @@ function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> 
   const aPct = typeof pct === "number" ? Math.abs(pct) : null;
   const diffColor = aPct == null ? NA : aPct <= 2 ? POS : aPct <= 10 ? WARN : NEG;
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && !ok && (
         <div style={{ color: NEG, fontFamily: "monospace", fontSize: 13 }}>CBOE error: {fmt(data.status)}</div>
@@ -263,8 +274,8 @@ function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> 
 function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record<string, unknown> | undefined; accent?: string }) {
   const entries = data ? Object.entries(data) : [];
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>{name}</div>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>{name}</div>
       {entries.length === 0 && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {entries.map(([k, v]) => (
@@ -447,15 +458,15 @@ export default function DevPage() {
     <PageShell>
       <div style={{ color: HOME_THEME.text }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Dev · Symbol Probe</span>
+        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Dev · Symbol probe</span>
         <span style={{ fontSize: 12, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
-        <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1f`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
+        <span style={{ fontSize: 11, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
         <div style={{ marginLeft: "auto" }}><OwnerQuickLinks current="/dev" /></div>
       </div>
 
       {/* Controls */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 20 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
           Ticker
           <input
             value={ticker}
@@ -463,11 +474,11 @@ export default function DevPage() {
             style={{ ...inputStyle, width: 110 }}
           />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
           Strike
           <input value={strike} onChange={(e) => { strikeTouched.current = true; setStrike(e.target.value.replace(/[^\d.]/g, "")); }} style={{ ...inputStyle, width: 120 }} />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
           Expiry
           <ThemedSelect
             value={expiry}
@@ -477,10 +488,10 @@ export default function DevPage() {
             onChange={setExpiry}
           />
         </label>
-        <button onClick={render} disabled={loading} style={{ ...inputStyle, cursor: loading ? "wait" : "pointer", background: C.cyan, color: HOME_THEME.bg, fontWeight: 800, padding: "9px 22px", border: "none" }}>
+        <button onClick={render} disabled={loading} style={{ ...inputStyle, cursor: loading ? "wait" : "pointer", background: C.cyan, color: HOME_THEME.bg, fontWeight: 500, padding: "9px 22px", border: "none" }}>
           {loading ? "Loading…" : "Render"}
         </button>
-        <button onClick={stop} disabled={!loading} style={{ ...inputStyle, cursor: loading ? "pointer" : "not-allowed", background: loading ? HOME_THEME.red : `${HOME_THEME.red}22`, color: HOME_THEME.text, fontWeight: 800, padding: "9px 22px", border: "none", opacity: loading ? 1 : 0.5 }}>
+        <button onClick={stop} disabled={!loading} style={{ ...inputStyle, cursor: loading ? "pointer" : "not-allowed", background: loading ? HOME_THEME.red : `${HOME_THEME.red}22`, color: HOME_THEME.text, fontWeight: 500, padding: "9px 22px", border: "none", opacity: loading ? 1 : 0.5 }}>
           ■ Stop
         </button>
       </div>
@@ -524,7 +535,7 @@ export default function DevPage() {
 
       {/* Raw market-data items — every field, nothing dropped */}
       <details style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
-        <summary style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em", cursor: "pointer" }}>Raw response (call + put)</summary>
+        <summary style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", cursor: "pointer" }}>Raw response (call + put)</summary>
         <pre style={{ margin: "10px 0 0", fontSize: 13, fontFamily: "monospace", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {(callResult || putResult) ? JSON.stringify({ call: callResult, put: putResult }, null, 2) : "—"}
         </pre>
@@ -533,7 +544,7 @@ export default function DevPage() {
       {/* Log panel */}
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em" }}>Log</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Log</div>
           <button onClick={() => setLogs([])} style={{ ...inputStyle, padding: "4px 12px", fontSize: 11, cursor: "pointer" }}>Clear</button>
         </div>
         <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "monospace", fontSize: 12.5, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>

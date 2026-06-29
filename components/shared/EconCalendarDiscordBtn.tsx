@@ -9,6 +9,14 @@
  */
 
 import { useState, useCallback } from "react";
+import { useUser } from "@clerk/nextjs";
+
+// ── Owner gate (cosmetic — matches DataBox/NavMenu) ───────────────────────────
+function useIsOwner(): boolean {
+  const { isSignedIn, user } = useUser();
+  const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
+  return ownerId ? user?.id === ownerId : !!isSignedIn;
+}
 
 interface CalEvent {
   date: string;
@@ -386,6 +394,7 @@ function IconCamera({ size = 11 }: { size?: number }) {
 
 export default function EconCalendarDiscordBtn() {
   const [s, set] = useState<TemplateBtnState>("idle");
+  const isOwner = useIsOwner();
 
   const run = useCallback(async () => {
     if (s === "busy") return;
@@ -401,6 +410,9 @@ export default function EconCalendarDiscordBtn() {
       setTimeout(() => set("idle"), 1800);
     }
   }, [s]);
+
+  // Discord share is owner-only (cosmetic gate).
+  if (!isOwner) return null;
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#7289da";
   const statusLabel = s === "busy" ? "..." : s === "ok" ? "OK" : s === "err" ? "ERR" : null;
@@ -431,6 +443,7 @@ export default function EconCalendarDiscordBtn() {
 
 export function EconCalendarTemplateCopyBtn() {
   const [s, set] = useState<TemplateBtnState>("idle");
+  const isOwner = useIsOwner();
 
   const run = useCallback(async () => {
     if (s === "busy") return;
@@ -446,6 +459,8 @@ export function EconCalendarTemplateCopyBtn() {
       setTimeout(() => set("idle"), 1800);
     }
   }, [s]);
+
+  if (!isOwner) return null;
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const statusLabel = s === "busy" ? "..." : s === "ok" ? "OK" : s === "err" ? "ERR" : null;

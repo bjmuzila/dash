@@ -18,6 +18,7 @@
 
 import { useMemo, useState } from "react";
 import { HOME_THEME, homeShellStyle } from "@/components/shared/homeTheme";
+import { Card as ThemeCard } from "@/components/shared/PageCard";
 
 // ─── Palette (mirrors the values used by the GEX components) ──────────────────
 const C = {
@@ -140,14 +141,27 @@ function DefRow({ term, children }: { term: string; children: React.ReactNode })
 
 type CalloutKind = "tip" | "note" | "warn";
 function Callout({ kind = "note", title, children }: { kind?: CalloutKind; title?: string; children: React.ReactNode }) {
-  const map: Record<CalloutKind, { c: string; bg: string; label: string }> = {
-    tip: { c: C.green, bg: "rgba(16,185,129,0.08)", label: title ?? "Tip" },
-    note: { c: C.cyan, bg: "rgba(33,158,188,0.06)", label: title ?? "Note" },
-    warn: { c: C.orange, bg: "rgba(249,115,22,0.08)", label: title ?? "Heads up" },
+  const map: Record<CalloutKind, { c: string; label: string }> = {
+    tip: { c: C.green, label: title ?? "Tip" },
+    note: { c: C.cyan, label: title ?? "Note" },
+    warn: { c: C.orange, label: title ?? "Heads up" },
   };
   const m = map[kind];
+  // Themed-card chrome (radial glow + 2px top accent strip) so callouts match
+  // the Card look used across the articles. The kind drives the accent color +
+  // the uppercase label.
   return (
-    <div style={{ margin: "14px 0", borderLeft: `3px solid ${m.c}`, background: m.bg, borderRadius: 8, padding: "11px 14px" }}>
+    <div
+      style={{
+        margin: "12px 0",
+        background: `radial-gradient(circle at 50% 0%, ${m.c}14 0%, transparent 60%), ${C.panel}`,
+        border: `1px solid ${C.border}`,
+        borderTop: `2px solid ${m.c}d9`,
+        borderRadius: 12,
+        padding: "12px 16px",
+        backdropFilter: "blur(16px)",
+      }}
+    >
       <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: m.c, marginBottom: 5 }}>
         {m.label}
       </div>
@@ -202,26 +216,6 @@ function Card({ children, accent = C.cyan }: { children: React.ReactNode; accent
       backdropFilter: "blur(16px)",
     }}>
       {children}
-    </div>
-  );
-}
-
-function Stub({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        marginTop: 18,
-        padding: "14px 16px",
-        borderRadius: 10,
-        border: `1px dashed ${C.border}`,
-        background: "rgba(255,255,255,0.02)",
-        fontSize: 12.5,
-        color: C.muted,
-        lineHeight: 1.6,
-      }}
-    >
-      <span style={{ color: C.cyan, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", fontSize: 10.5 }}>Draft</span>
-      <span style={{ marginLeft: 8 }}>{children}</span>
     </div>
   );
 }
@@ -546,6 +540,209 @@ function EstimatedMovesTableExample() {
   );
 }
 
+/** ES Candles page: 5m candles + GEX heatmap columns behind them, call/put/flip
+ *  level lines, and a volume profile (POC/VAH/VAL) down the right. */
+function EsCandlesExample() {
+  const W = 560, H = 250, padL = 6, padR = 92, padT = 14, padB = 18;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  // 12 candles, gently trending up then pulling back
+  const candles = [
+    { o: 40, c: 52, h: 56, l: 36 }, { o: 52, c: 48, h: 58, l: 44 },
+    { o: 48, c: 63, h: 66, l: 46 }, { o: 63, c: 70, h: 74, l: 60 },
+    { o: 70, c: 66, h: 73, l: 62 }, { o: 66, c: 80, h: 84, l: 64 },
+    { o: 80, c: 88, h: 92, l: 78 }, { o: 88, c: 84, h: 91, l: 80 },
+    { o: 84, c: 76, h: 87, l: 72 }, { o: 76, c: 82, h: 85, l: 70 },
+    { o: 82, c: 94, h: 98, l: 80 }, { o: 94, c: 90, h: 99, l: 86 },
+  ];
+  const vMin = 30, vMax = 104;
+  const yOf = (v: number) => padT + innerH - ((v - vMin) / (vMax - vMin)) * innerH;
+  const bw = innerW / candles.length;
+  // heatmap columns: per slot, a few strike cells of varying gamma intensity
+  const heatRows = [96, 86, 76, 66, 56, 46, 38];
+  const heatColor = (i: number, ci: number) => {
+    const pos = i < 5;
+    const a = 0.06 + Math.abs(Math.sin(ci * 1.3 + i)) * 0.28;
+    return pos ? `rgba(41,182,246,${a.toFixed(2)})` : `rgba(255,71,87,${a.toFixed(2)})`;
+  };
+  // profile (right gutter)
+  const prof = [0.3, 0.5, 0.9, 1.0, 0.7, 0.45, 0.25];
+  const pocIdx = 3;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Example ES candles with GEX heatmap overlay">
+      {/* heatmap columns behind candles */}
+      {candles.map((_, ci) => (
+        <g key={ci}>
+          {heatRows.map((hv, i) => (
+            <rect key={i} x={padL + ci * bw} y={yOf(hv) - 7} width={bw - 1} height={14} fill={heatColor(i, ci)} />
+          ))}
+        </g>
+      ))}
+      {/* level lines */}
+      <line x1={padL} y1={yOf(90)} x2={padL + innerW} y2={yOf(90)} stroke={C.posBar} strokeWidth="1" strokeDasharray="4 3" opacity="0.9" />
+      <text x={padL + 3} y={yOf(90) - 3} fontSize="7.5" fill={C.posBar} fontWeight="700">CALL WALL</text>
+      <line x1={padL} y1={yOf(44)} x2={padL + innerW} y2={yOf(44)} stroke={C.heatNeg} strokeWidth="1" strokeDasharray="4 3" opacity="0.9" />
+      <text x={padL + 3} y={yOf(44) + 9} fontSize="7.5" fill={C.heatNeg} fontWeight="700">PUT WALL</text>
+      <line x1={padL} y1={yOf(67)} x2={padL + innerW} y2={yOf(67)} stroke={C.orange} strokeWidth="1.1" strokeDasharray="2 2" opacity="0.95" />
+      <text x={padL + 3} y={yOf(67) - 3} fontSize="7.5" fill={C.orange} fontWeight="700">FLIP</text>
+      {/* candles */}
+      {candles.map((cd, i) => {
+        const up = cd.c >= cd.o;
+        const col = up ? "#26a69a" : "#ef5350";
+        const x = padL + i * bw + bw / 2;
+        const bodyW = bw * 0.52;
+        return (
+          <g key={i}>
+            <line x1={x} y1={yOf(cd.h)} x2={x} y2={yOf(cd.l)} stroke={col} strokeWidth="1" />
+            <rect x={x - bodyW / 2} y={yOf(Math.max(cd.o, cd.c))} width={bodyW} height={Math.max(1, Math.abs(yOf(cd.o) - yOf(cd.c)))} fill={col} />
+          </g>
+        );
+      })}
+      {/* volume profile gutter */}
+      {heatRows.map((hv, i) => {
+        const w = prof[i] * (padR - 16);
+        return (
+          <g key={i}>
+            <rect x={W - padR + 6} y={yOf(hv) - 6} width={w} height={12} rx="1.5" fill={i === pocIdx ? C.cyan : "rgba(120,170,220,0.35)"} opacity={i === pocIdx ? 0.9 : 0.7} />
+            {i === pocIdx && <text x={W - padR + 8} y={yOf(hv) + 3} fontSize="7" fontWeight="800" fill="#06121d">POC</text>}
+          </g>
+        );
+      })}
+      <text x={W - padR + 6} y={padT + 6} fontSize="7.5" fill={C.muted} fontWeight="700">VOL PROFILE</text>
+    </svg>
+  );
+}
+
+/** ICT page: candles with a Fair Value Gap box, a bullish Order Block, a swept
+ *  liquidity level (BSL) and a CHOCH structure-break tag. */
+function IctExample() {
+  const W = 560, H = 220, padL = 8, padR = 8, padT = 14, padB = 16;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const candles = [
+    { o: 60, c: 52, h: 64, l: 48 }, { o: 52, c: 58, h: 62, l: 50 },
+    { o: 58, c: 46, h: 60, l: 42 }, { o: 46, c: 40, h: 48, l: 34 }, // OB = last down candle
+    { o: 40, c: 64, h: 66, l: 39 }, // displacement up (leaves FVG)
+    { o: 64, c: 78, h: 82, l: 62 },
+    { o: 78, c: 74, h: 84, l: 71 }, { o: 74, c: 88, h: 92, l: 72 }, // sweeps BSL
+    { o: 88, c: 80, h: 90, l: 76 }, { o: 80, c: 70, h: 83, l: 66 }, // CHOCH down
+    { o: 70, c: 74, h: 77, l: 66 }, { o: 74, c: 68, h: 78, l: 64 },
+  ];
+  const vMin = 30, vMax = 98;
+  const yOf = (v: number) => padT + innerH - ((v - vMin) / (vMax - vMin)) * innerH;
+  const bw = innerW / candles.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Example ICT chart with FVG, order block, liquidity sweep and CHOCH">
+      {/* BSL liquidity line (swept) */}
+      <line x1={padL} y1={yOf(84)} x2={padL + innerW} y2={yOf(84)} stroke={C.green} strokeWidth="1" strokeDasharray="3 2" opacity="0.8" />
+      <text x={padL + 2} y={yOf(84) - 3} fontSize="7.5" fill={C.green} fontWeight="700">BSL (equal highs)</text>
+      {/* FVG box between candle 3 high and candle 5 low region */}
+      <rect x={padL + 3.5 * bw} y={yOf(64)} width={bw * 3} height={yOf(48) - yOf(64)} fill="rgba(33,158,188,0.16)" stroke={C.cyan} strokeWidth="0.7" strokeDasharray="2 2" />
+      <text x={padL + 3.6 * bw} y={yOf(64) + 9} fontSize="7" fill={C.cyan} fontWeight="800">FVG</text>
+      {/* Order block on candle 4 */}
+      <rect x={padL + 3 * bw - 1} y={yOf(48)} width={bw} height={yOf(34) - yOf(48)} fill="rgba(142,202,230,0.18)" stroke={C.green} strokeWidth="0.8" />
+      <text x={padL + 3 * bw - 1} y={yOf(34) + 8} fontSize="6.5" fill={C.green} fontWeight="800">OB</text>
+      {/* CHOCH tag */}
+      <line x1={padL + 8.5 * bw} y1={yOf(76)} x2={padL + 9.7 * bw} y2={yOf(76)} stroke={C.orange} strokeWidth="1" />
+      <rect x={padL + 8.6 * bw} y={yOf(76) - 14} width="40" height="12" rx="2" fill="rgba(251,133,1,0.16)" stroke={C.orange} strokeWidth="0.7" />
+      <text x={padL + 8.6 * bw + 20} y={yOf(76) - 5} textAnchor="middle" fontSize="7.5" fontWeight="800" fill={C.orange}>CHOCH</text>
+      {/* candles */}
+      {candles.map((cd, i) => {
+        const up = cd.c >= cd.o;
+        const col = up ? "#26a69a" : "#ef5350";
+        const x = padL + i * bw + bw / 2;
+        const bodyW = bw * 0.5;
+        return (
+          <g key={i}>
+            <line x1={x} y1={yOf(cd.h)} x2={x} y2={yOf(cd.l)} stroke={col} strokeWidth="1" />
+            <rect x={x - bodyW / 2} y={yOf(Math.max(cd.o, cd.c))} width={bodyW} height={Math.max(1, Math.abs(yOf(cd.o) - yOf(cd.c)))} fill={col} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Options Chain page: calls on the left, strikes in the center, puts on the
+ *  right, ATM row highlighted. Mirrors the by-strike layout. */
+function OptionsChainExample() {
+  const rows = [
+    { k: "5320", atm: false, cBid: "2.10", cMid: "2.35", pBid: "61.4", pMid: "62.0" },
+    { k: "5310", atm: false, cBid: "4.05", cMid: "4.30", pBid: "53.2", pMid: "53.9" },
+    { k: "5300", atm: false, cBid: "7.80", cMid: "8.10", pBid: "46.0", pMid: "46.7" },
+    { k: "5290", atm: true,  cBid: "14.2", cMid: "14.6", pBid: "38.1", pMid: "38.8" },
+    { k: "5280", atm: false, cBid: "23.5", cMid: "24.0", pBid: "27.4", pMid: "28.0" },
+    { k: "5270", atm: false, cBid: "35.1", cMid: "35.7", pBid: "19.0", pMid: "19.6" },
+  ];
+  const cell = (v: string, color: string, bold = false) => (
+    <td style={{ padding: "5px 6px", fontSize: 10, color, textAlign: "center", fontWeight: bold ? 700 : 400, fontFamily: "monospace" }}>{v}</td>
+  );
+  return (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "rgba(13,17,25,0.9)", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ padding: "5px", fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.green }}>CALLS</div>
+        <div style={{ padding: "5px", fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.cyan }}>STRIKE</div>
+        <div style={{ padding: "5px", fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.red }}>PUTS</div>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ color: C.muted, fontSize: 8, textAlign: "center" }}>
+            {cellHead("Bid")}{cellHead("Mid")}{cellHead("")}{cellHead("Bid")}{cellHead("Mid")}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.k} style={{ background: r.atm ? "rgba(33,158,188,0.10)" : "transparent", outline: r.atm ? `1px solid ${C.cyan}` : "none", outlineOffset: -1, borderBottom: `1px solid ${C.border}` }}>
+              {cell(r.cBid, "#cdd8e6")}{cell(r.cMid, C.green)}
+              {cell(r.k, r.atm ? C.cyan : "#cdd8e6", true)}
+              {cell(r.pBid, "#cdd8e6")}{cell(r.pMid, C.red)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function cellHead(v: string) {
+  return <th style={{ padding: "3px 6px", fontSize: 7.5, fontWeight: 700, color: "#7e93ab", textAlign: "center" }}>{v}</th>;
+}
+
+/** Traders Dashboard: a 2x2 mini layout — schedule, futures, key drivers, AI overview. */
+function TradersDashboardExample() {
+  const panel = (title: string, accent: string, children: React.ReactNode) => (
+    <div style={{ border: `1px solid ${accent}40`, background: `linear-gradient(180deg,${accent}10,rgba(0,0,0,.2))`, borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: accent, marginBottom: 6 }}>{title}</div>
+      {children}
+    </div>
+  );
+  const line = (a: string, b: string, bc: string) => (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, padding: "2px 0", color: "#cdd8e6", fontFamily: "monospace" }}>
+      <span>{a}</span><span style={{ color: bc, fontWeight: 700 }}>{b}</span>
+    </div>
+  );
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      {panel("Schedule & Tasks", C.cyan, <>
+        {line("06:30  Premarket prep", "✓", C.green)}
+        {line("09:30  Open / GEX check", "•", C.cyan)}
+        {line("15:00  Power hour", "", C.muted)}
+      </>)}
+      {panel("Live Futures", C.posBar, <>
+        {line("ES", "+0.42%", C.green)}
+        {line("NQ", "+0.61%", C.green)}
+        {line("YM", "−0.08%", C.heatNeg)}
+      </>)}
+      {panel("Key Drivers", C.orange, <>
+        {line("08:30  CPI (USD)", "HIGH", C.orange)}
+        {line("10:00  Fed speak", "MED", C.muted)}
+      </>)}
+      {panel("AI Overview", C.green, (
+        <div style={{ fontSize: 8.5, lineHeight: 1.5, color: "#cdd8e6" }}>
+          Risk-on bias into CPI; ES holding above flip with the call wall overhead as the magnet…
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Article registry ─────────────────────────────────────────────────────────
 
 interface Article {
@@ -567,23 +764,30 @@ const ARTICLES: Article[] = [
     status: "complete",
     body: () => (
       <>
-        <Lead>
-          This is the CB Edge knowledge base — short, practical guides to reading the dashboard and turning what you see
-          into decisions. Start with the two flagship tools below; the concept pages explain the &ldquo;why&rdquo; behind them.
-        </Lead>
-        <H2>Where to begin</H2>
-        <Steps
-          items={[
-            <>New to gamma exposure? Read <Term>What is GEX?</Term> first — it&rsquo;s the foundation for everything else.</>,
-            <>Then work through the <Term>GEX Chart</Term> guide — the main visual on the home page.</>,
-            <>Pair it with the <Term>GEX Heatmap</Term> guide — the same data as a strike-by-strike grid.</>,
-            <>Keep the <Term>Glossary</Term> open in another tab the first few sessions.</>,
-          ]}
-        />
-        <Callout kind="note" title="How to read these guides">
-          Anything shown like <UI>Net GEX</UI> is a button or label you&rsquo;ll find on screen. Color chips like{" "}
-          <Swatch color={C.posBar} /> match the exact colors used in the app.
-        </Callout>
+        <ThemeCard accent="cyan" title="CB Edge Knowledge Base" style={{ margin: "4px 0 18px" }}>
+          <Lead>
+            Short, practical guides to reading the dashboard and turning what you see into decisions. Start with the two
+            flagship tools below; the concept pages explain the &ldquo;why&rdquo; behind them.
+          </Lead>
+        </ThemeCard>
+
+        <ThemeCard accent="purple" title="Where to begin" style={{ margin: "0 0 18px" }}>
+          <Steps
+            items={[
+              <>New to gamma exposure? Read <Term>What is GEX?</Term> first — it&rsquo;s the foundation for everything else.</>,
+              <>Then work through the <Term>GEX Chart</Term> guide — the main visual on the home page.</>,
+              <>Pair it with the <Term>GEX Heatmap</Term> guide — the same data as a strike-by-strike grid.</>,
+              <>Keep the <Term>Glossary</Term> open in another tab the first few sessions.</>,
+            ]}
+          />
+        </ThemeCard>
+
+        <ThemeCard accent="green" title="How to read these guides" style={{ margin: 0 }}>
+          <P>
+            Anything shown like <UI>Net GEX</UI> is a button or label you&rsquo;ll find on screen. Color chips like{" "}
+            <Swatch color={C.posBar} /> match the exact colors used in the app.
+          </P>
+        </ThemeCard>
       </>
     ),
   },
@@ -925,21 +1129,89 @@ const ARTICLES: Article[] = [
     title: "MVC — Most Valuable Contract",
     group: "Concepts",
     blurb: "The single biggest gamma strike, and how it's used across the app.",
-    status: "draft",
+    status: "complete",
     body: () => (
       <>
         <Lead>
-          The MVC is the strike carrying the largest absolute net GEX — the dominant gamma wall. It&rsquo;s tagged on the
-          chart and feeds the top bar, snapshots, and the Confidence score.
+          The <Term>MVC — Most Valuable Contract</Term> is the strike carrying the largest absolute net GEX: the single
+          heaviest concentration of dealer gamma on the board. It&rsquo;s the headline level for the day, tagged right on the
+          chart and threaded through the top bar, snapshots, and the Confidence score.
         </Lead>
+
+        <H2>How it&rsquo;s chosen</H2>
         <P>
-          Because it&rsquo;s the heaviest concentration of dealer gamma, the MVC tends to act as the day&rsquo;s primary
-          magnet (in positive gamma) or breakdown pivot (in negative gamma).
+          The dashboard computes net GEX at every strike across the active chain, takes the <Term>absolute value</Term> of
+          each (so a huge negative wall counts just as much as a huge positive one), and picks the single largest. That winner
+          is the MVC. Because it&rsquo;s based on magnitude, the MVC can sit above or below price, and it can be a positive
+          (long-gamma) wall or a negative (short-gamma) wall — the tag is colored cyan when positive, gold when negative.
         </P>
-        <Stub>
-          Expand with: how MVC is selected across the full chain, how it relates to the Confidence score&rsquo;s Hit / Pivot
-          / Chop outcomes, and what it means when the MVC shifts strikes mid-session.
-        </Stub>
+        <Card accent={C.cyan}>
+          <LegendRow color={C.cyan} name="Follows the chart mode">
+            The MVC follows the mode you pick on the chart toolbar. In <UI>OI + Vol</UI> it reflects the full standing book; in{" "}
+            <UI>Vol Only</UI> it tracks the largest wall being built from <em>today&rsquo;s</em> volume, which can sit at a
+            different strike than the OI-based one.
+          </LegendRow>
+        </Card>
+
+        <H2>Why it matters</H2>
+        <Card accent={C.orange}>
+          <LegendRow color={C.posBar} name="Positive MVC → magnet">
+            When the MVC is a long-gamma wall, dealers trade against moves around it — selling into rallies toward it and
+            buying dips. Price tends to gravitate to and <Term>pin</Term> near that strike, especially into the close on 0DTE.
+          </LegendRow>
+          <LegendRow color={C.negBar} name="Negative MVC → pivot">
+            When the MVC is a short-gamma wall, dealer hedging reinforces moves through it. Rather than a magnet, it behaves
+            like a <Term>breakdown / breakout pivot</Term> — losing it can accelerate a trend.
+          </LegendRow>
+        </Card>
+
+        <H2>Where it shows up</H2>
+        <Card>
+          <DefRow term="GEX Chart">The <UI>MVC</UI> tag sits over the tallest bar by absolute net GEX.</DefRow>
+          <DefRow term="Top bar">The MVC strike is surfaced in the header stat row as the day&rsquo;s key level.</DefRow>
+          <DefRow term="Confidence">The Confidence score grades the MVC live as Hit / Pivot / Chop (see below).</DefRow>
+        </Card>
+
+        <H2>MVC and the Confidence score</H2>
+        <P>
+          The Confidence page scores how the MVC is behaving in real time and classifies the session&rsquo;s likely outcome
+          relative to that level:
+        </P>
+        <Card accent={C.green}>
+          <LegendRow color={C.posBar} name="Hit">
+            Price reaches and respects the MVC — the magnet read played out. Most common when the MVC is a strong positive
+            wall and price is in positive gamma.
+          </LegendRow>
+          <LegendRow color={C.cyan} name="Pivot">
+            Price uses the MVC as a turning point — tags it and reverses, or breaks it and the level flips role.
+          </LegendRow>
+          <LegendRow color={C.negBar} name="Chop">
+            Price oscillates around the MVC without committing — typical of balanced, low-conviction tape.
+          </LegendRow>
+        </Card>
+
+        <H2>When the MVC shifts mid-session</H2>
+        <P>
+          The MVC isn&rsquo;t fixed — as volume builds and positioning changes, a different strike can overtake it. A{" "}
+          <Term>migrating MVC</Term> is information: if it climbs toward higher strikes through the morning, the dominant wall
+          (and likely magnet) is moving up; if it jumps to a brand-new strike on heavy volume, fresh positioning is being laid
+          down right where you should expect price to react.
+        </P>
+        <Steps
+          items={[
+            <>Find the <UI>MVC</UI> tag — that&rsquo;s the day&rsquo;s primary level.</>,
+            <>Note its sign: positive = magnet, negative = pivot.</>,
+            <>Check where <Term>SPX</Term> sits relative to it and to the flip line.</>,
+            <>Watch whether it holds the same strike or migrates as volume comes in.</>,
+            <>Cross-reference the Confidence Hit / Pivot / Chop read for context.</>,
+          ]}
+        />
+        <Card accent={C.orange}>
+          <LegendRow color={C.orange} name="One level, not a system">
+            The MVC is the loudest level on the board, but it&rsquo;s still just positioning. Use it to frame where price is
+            likely to react — pair it with the flip line, the heatmap ranks, and your own setup rather than trading it blind.
+          </LegendRow>
+        </Card>
       </>
     ),
   },
@@ -948,18 +1220,90 @@ const ARTICLES: Article[] = [
     title: "DEX & VEX",
     group: "Concepts",
     blurb: "Delta and vanna exposure — the directional and volatility cousins of gamma.",
-    status: "draft",
+    status: "complete",
     body: () => (
       <>
         <Lead>
-          Gamma isn&rsquo;t the only greek dealers hedge. <Term>DEX</Term> (delta exposure) captures directional pressure;{" "}
-          <Term>VEX/vanna</Term> captures how hedging shifts as implied volatility changes.
+          Gamma is the headline greek, but it isn&rsquo;t the only one dealers hedge. <Term>DEX</Term> (delta exposure)
+          measures their <em>directional</em> pressure, and <Term>VEX / vanna</Term> measures how that hedging shifts as
+          implied volatility moves. Together they tell you not just where the walls are, but which way dealers are leaning and
+          how fragile that lean is.
         </Lead>
+
+        <H2>DEX — delta exposure</H2>
         <P>
-          DEX appears as the purple line on the chart and its own heatmap column. GEX + VEX is the combined column that
-          matters most on days when IV is moving meaningfully.
+          Where GEX answers &ldquo;how hard do dealers fight a move,&rdquo; DEX answers &ldquo;which way are they already
+          tilted.&rdquo; It aggregates the net delta dealers must carry across the chain — the directional inventory they&rsquo;ll
+          hedge as price drifts. On the chart it&rsquo;s the <UI>Net DEX</UI> purple line; it also has its own heatmap column.
         </P>
-        <Stub>Expand with: sign conventions, how DEX lean confirms or fades a gamma read, and when vanna dominates.</Stub>
+        <Card accent={C.purple}>
+          <LegendRow color={C.purple} name="Positive DEX">
+            Dealers are net <Term>long delta</Term> — leaning bullish in their hedges. To stay flat they tend to sell into
+            strength, which can cap upside.
+          </LegendRow>
+          <LegendRow color={C.purple} name="Negative DEX">
+            Dealers are net <Term>short delta</Term> — leaning bearish. They tend to buy weakness to flatten, which can cushion
+            downside.
+          </LegendRow>
+          <LegendRow color="#dcdcdc" name="DEX zero-crossing" soft>
+            Where the purple line crosses zero marks the price at which dealer directional lean flips sign — a secondary
+            regime line alongside the gamma flip.
+          </LegendRow>
+        </Card>
+
+        <H3>Using DEX to confirm or fade a gamma read</H3>
+        <Steps
+          items={[
+            <>Read the gamma picture first — walls, MVC, and the flip line.</>,
+            <>Check whether <UI>Net DEX</UI> leans the <em>same</em> way the gamma terrain implies. Agreement = higher conviction.</>,
+            <>A big gamma wall that also coincides with a strong DEX lean is a sturdier level than gamma alone.</>,
+            <>When DEX leans <em>against</em> the gamma read, expect a choppier, less reliable level — the two forces are pulling apart.</>,
+          ]}
+        />
+
+        <H2>VEX / vanna — volatility exposure</H2>
+        <P>
+          <Term>Vanna</Term> is the cross-greek between delta and volatility: it measures how a position&rsquo;s delta changes
+          when implied vol moves. VEX aggregates that across the chain. The practical effect is that on days when IV is
+          shifting, dealer deltas move <em>even if price doesn&rsquo;t</em> — forcing extra hedging flow that pure gamma
+          models miss.
+        </P>
+        <Card accent={C.cyan}>
+          <LegendRow color={C.posBar} name="Falling IV (vol crush)">
+            Vanna flow typically adds a tailwind — as fear bleeds out, dealer hedging often supports a drift higher. This is
+            the classic post-event &ldquo;vol crush melt-up.&rdquo;
+          </LegendRow>
+          <LegendRow color={C.heatNeg} name="Rising IV (vol spike)">
+            Vanna flow turns into a headwind — climbing IV pushes dealer hedging in the selling direction, amplifying
+            downside.
+          </LegendRow>
+        </Card>
+        <P>
+          On the heatmap, the <UI>GEX + VEX</UI> column blends gamma and vanna into one read. It matters most on{" "}
+          <Term>high-IV or event days</Term> — CPI, FOMC, opex — when a vol move can force more re-hedging than the price move
+          itself.
+        </P>
+
+        <H2>When vanna dominates</H2>
+        <Card>
+          <DefRow term="Event days">Around CPI / FOMC, IV swings are large — VEX can outweigh raw GEX.</DefRow>
+          <DefRow term="High VIX regimes">Elevated, moving IV makes vanna flow a persistent background force.</DefRow>
+          <DefRow term="Opex week">Large IV/positioning shifts into expiration amplify both DEX and VEX effects.</DefRow>
+          <DefRow term="Quiet, low-IV tape">Vanna is small; gamma and DEX carry the read. Lean on GEX.</DefRow>
+        </Card>
+
+        <Card accent={C.green}>
+          <LegendRow color={C.green} name="Stack the greeks">
+            The strongest levels are where GEX, DEX, and VEX <em>agree</em> at the same strike. The Multi-Greek grid lays all
+            four net greeks side by side precisely so you can spot that confluence at a glance.
+          </LegendRow>
+        </Card>
+        <Card accent={C.cyan}>
+          <LegendRow color={C.cyan} name="Units & caveat">
+            GEX and DEX are reported in billions; CHEX and VEX in millions. All are model estimates from the options chain, not
+            published figures — treat them as a map of likely dealer behavior.
+          </LegendRow>
+        </Card>
       </>
     ),
   },
@@ -968,17 +1312,65 @@ const ARTICLES: Article[] = [
     title: "0DTE vs 1DTE",
     group: "Concepts",
     blurb: "Why same-day expiration gamma behaves differently, and when to look at each.",
-    status: "draft",
+    status: "complete",
     body: () => (
       <>
         <Lead>
-          The expiry you select changes the whole picture. 0DTE gamma is the most reactive force intraday; 1DTE shows the
-          next session&rsquo;s setup.
+          The expiry you pick on the chart toolbar changes the whole picture. <UI>0DTE</UI> is today&rsquo;s expiration — the
+          most reactive gamma force intraday — while <UI>1DTE</UI> is the next session, showing tomorrow&rsquo;s setup
+          building today. They behave very differently, and knowing which to watch (and when) is half the skill.
         </Lead>
-        <Stub>
-          Expand with: gamma&rsquo;s acceleration into the close on 0DTE, why levels &ldquo;harden&rdquo; late in the day,
-          and how to blend the two expiries.
-        </Stub>
+
+        <H2>What changes between them</H2>
+        <Card>
+          <LegendRow color={C.posBar} name="0DTE — expires today">
+            Gamma is at its most concentrated and sensitive. Tiny price moves force large hedging adjustments, so 0DTE walls
+            pin and repel hard — but the levels also shift fast as the day&rsquo;s volume rewrites the book.
+          </LegendRow>
+          <LegendRow color={C.negBar} name="1DTE — expires next session">
+            Gamma is more spread out and slower-moving. Less intraday whip, but it previews where the <em>next</em>{" "}
+            day&rsquo;s magnets and pivots are forming, and it carries overnight positioning the 0DTE book doesn&rsquo;t.
+          </LegendRow>
+        </Card>
+
+        <H2>Why 0DTE gamma accelerates into the close</H2>
+        <P>
+          As expiration approaches, gamma per contract <Term>spikes</Term> for strikes near the money — an option that&rsquo;s
+          a coin-flip with hours left has enormous gamma. That means dealer hedging gets more violent and more localized as
+          the afternoon wears on, which is why 0DTE levels tend to <Term>harden</Term> late: price gets increasingly snapped
+          toward the dominant strike (often the MVC) into the final hour.
+        </P>
+        <Card accent={C.cyan}>
+          <LegendRow color={C.cyan} name="Early-session softness">
+            Early in the session the 0DTE book is still thin and shifting, so levels are softer and the time-decay ghost
+            overlays may read &ldquo;no prior history yet.&rdquo; The picture sharpens as volume accumulates.
+          </LegendRow>
+        </Card>
+
+        <H2>When to look at each</H2>
+        <Card accent={C.orange}>
+          <DefRow term="Intraday scalping">0DTE — it&rsquo;s the dominant force on same-day moves.</DefRow>
+          <DefRow term="Into the close">0DTE — pinning and acceleration peak in the last hour.</DefRow>
+          <DefRow term="Overnight / gap risk">1DTE — it carries the positioning that survives the bell.</DefRow>
+          <DefRow term="Planning tomorrow">1DTE — preview the next session&rsquo;s walls before they go live.</DefRow>
+          <DefRow term="Friday / opex">Watch both — weekly expiration concentrates gamma even further.</DefRow>
+        </Card>
+
+        <H2>Blending the two</H2>
+        <Steps
+          items={[
+            <>Start on <UI>0DTE</UI> for the live intraday terrain — walls, MVC, flip.</>,
+            <>Flip to <UI>1DTE</UI> to see whether tomorrow&rsquo;s levels line up with or pull away from today&rsquo;s.</>,
+            <>When a strike is a big wall on <em>both</em> expiries, it&rsquo;s a higher-conviction level — positioning agrees across days.</>,
+            <>Late in the session, lean on 0DTE for the close; before the open, lean on 1DTE for the gap and early read.</>,
+          ]}
+        />
+        <Card accent={C.orange}>
+          <LegendRow color={C.orange} name="0DTE is fast — respect it">
+            The same concentration that makes 0DTE levels precise also makes losing one violent. Below the flip in negative
+            0DTE gamma, moves can be abrupt — size and stops should account for the faster tape.
+          </LegendRow>
+        </Card>
       </>
     ),
   },
@@ -1014,6 +1406,356 @@ const ARTICLES: Article[] = [
   },
 
   // ── Pages (walkthroughs of specific dashboard pages) ─────────────────────────
+  {
+    id: "home-page",
+    title: "Home",
+    group: "Pages",
+    blurb: "The main landing page: the live GEX chart, heatmap, and the key-level stat bar.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          Home is the command center — the live GEX chart and heatmap side by side, topped by a stat bar of the
+          day&rsquo;s key numbers. It&rsquo;s the page you&rsquo;ll keep open all session; almost everything else in the docs
+          explains a piece of what you see here.
+        </Lead>
+        <H2>What&rsquo;s on the page</H2>
+        <Card>
+          <LegendRow color={C.cyan} name="Stat bar">
+            The top row surfaces the headline numbers — VIX, SPX, Net GEX, the gamma walls, and the MVC level — so you get the
+            regime at a glance before reading the chart.
+          </LegendRow>
+          <LegendRow color={C.posBar} name="GEX chart">
+            The centerpiece bar chart of net gamma by strike. See the <Term>GEX Chart</Term> guide for the full breakdown of
+            bars, overlays, and the toolbar.
+          </LegendRow>
+          <LegendRow color={C.heatNeg} name="GEX heatmap">
+            The same data as a strike-by-strike grid with five exposure columns and rank badges. Covered in the{" "}
+            <Term>GEX Heatmap</Term> guide.
+          </LegendRow>
+        </Card>
+        <Callout kind="tip" title="Chart for shape, heatmap for numbers">
+          Read the chart for the terrain at a glance, then drop to the heatmap when you need the exact value at a strike.
+          They&rsquo;re driven by the same live feed.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "traders-dashboard-page",
+    title: "Traders Dashboard",
+    group: "Pages",
+    blurb: "Your morning prep page: schedule, tasks, weather, live futures, key drivers, and an AI overview.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The Traders Dashboard is the page to open before the bell. It pulls your day together in one view — an editable
+          schedule and task list, weather, live futures, the session&rsquo;s key drivers, and a fresh AI market overview each
+          morning — so you start the session oriented.
+        </Lead>
+
+        <Figure maxWidth={460} caption={<>The morning layout: an editable <strong style={{ color: C.cyan }}>schedule</strong>, live <strong style={{ color: C.posBar }}>futures</strong>, the day&rsquo;s <strong style={{ color: C.orange }}>key drivers</strong>, and an auto-generated <strong style={{ color: C.green }}>AI overview</strong>.</>}>
+          <TradersDashboardExample />
+        </Figure>
+
+        <H2>The panels</H2>
+        <Card>
+          <LegendRow color={C.cyan} name="Schedule & tasks">
+            An editable daily schedule and to-do list, saved to your own preferences so they persist between sessions.
+          </LegendRow>
+          <LegendRow color={C.green} name="Weather">
+            Your local conditions for the day, configured per user.
+          </LegendRow>
+          <LegendRow color={C.posBar} name="Live futures">
+            Real-time index futures with the day-change measured against the prior regular-session close, not the overnight
+            print.
+          </LegendRow>
+          <LegendRow color={C.orange} name="Key drivers">
+            The day&rsquo;s scheduled economic events and catalysts pulled from the calendar.
+          </LegendRow>
+        </Card>
+        <H2>The morning AI overview</H2>
+        <P>
+          Each morning an automated job writes a fresh market overview — a short, web-informed read on what&rsquo;s setting up
+          for the session — so the page is already current when you arrive.
+        </P>
+        <Callout kind="note">
+          The schedule, tasks, and weather are saved to your personal preferences, so what you set here is yours and follows
+          you between sessions.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "options-chain-page",
+    title: "Options Chain",
+    group: "Pages",
+    blurb: "The full options chain by strike — calls and puts, pricing, and the greeks behind the GEX read.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The Options Chain page is the raw source the rest of the dashboard is built on: every strike, calls on one side and
+          puts on the other, with live pricing and the per-contract data the GEX and greek models aggregate.
+        </Lead>
+
+        <Figure caption={<>Calls on the left, <strong style={{ color: C.cyan }}>strikes</strong> down the center, puts on the right. The cyan-outlined row is <strong style={{ color: C.cyan }}>ATM</strong> — the strike nearest spot that everything else is measured from.</>}>
+          <OptionsChainExample />
+        </Figure>
+
+        <H2>Reading the chain</H2>
+        <Card>
+          <LegendRow color={C.green} name="Calls / Puts">
+            Calls and puts are laid out around the at-the-money strike so you can compare the two sides at each level.
+          </LegendRow>
+          <LegendRow color={C.cyan} name="Strikes & ATM">
+            Strikes run down the center; the cyan-outlined row nearest spot is the ATM reference. It&rsquo;s the pivot the GEX
+            chart centers on and the anchor for the expected-move math.
+          </LegendRow>
+          <LegendRow color={C.orange} name="Expiry">
+            Pick the expiration to inspect — the same 0DTE / 1DTE choice that drives the chart applies here.
+          </LegendRow>
+        </Card>
+
+        <H2>Why it&rsquo;s the source of truth</H2>
+        <P>
+          Every gamma wall, DEX lean, and expected-move band on the dashboard is computed <em>from</em> these rows. The bid /
+          mid pricing and the implied volatility behind each contract are what feed the Black-Scholes greeks that the GEX
+          chart and heatmap aggregate. When a level on another page looks surprising, the chain is where you confirm it.
+        </P>
+        <Steps
+          items={[
+            <>Find the <Term>ATM</Term> row to orient — that&rsquo;s where price is.</>,
+            <>Scan call vs put pricing around a strike to see which side the market is paying up for.</>,
+            <>Switch <Term>expiry</Term> to compare today&rsquo;s 0DTE book against the 1DTE setup.</>,
+            <>Cross-check a strike here against its bar on the GEX chart to see the positioning behind the price.</>,
+          ]}
+        />
+
+        <Callout kind="tip" title="From chain to read">
+          The chain is the ground truth; the GEX chart, heatmap, and greek pages are summaries of it. Drop here when you want
+          to verify exactly what&rsquo;s priced at a specific strike.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "analytics-page",
+    title: "Analytics",
+    group: "Pages",
+    blurb: "Aggregated stats and historical context for the dashboard's signals and levels.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The Analytics page steps back from the live tape to show aggregated stats and historical context — how the
+          dashboard&rsquo;s levels and signals have behaved over time, so today&rsquo;s read sits against a track record rather
+          than in isolation.
+        </Lead>
+        <H2>What it&rsquo;s for</H2>
+        <Card>
+          <LegendRow color={C.cyan} name="Historical context">
+            Compare the current session&rsquo;s setup against how similar setups resolved in the past.
+          </LegendRow>
+          <LegendRow color={C.green} name="Aggregated stats">
+            Roll-ups of the signals scattered across the live pages into a few summary views.
+          </LegendRow>
+        </Card>
+        <Callout kind="note">
+          Analytics is best read alongside the live pages — it tells you how much weight a given signal has earned, not what to
+          do this minute.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "es-candles-page",
+    title: "ES Candles",
+    group: "Pages",
+    blurb: "Live 5-minute ES futures candles with a GEX heatmap overlay, key levels, and a volume profile.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The ES Candles page is a live 5-minute candlestick chart of ES futures with the gamma picture painted right onto it
+          — a GEX heatmap overlay, the call/put/flip levels mapped from SPX onto ES, and a volume-by-price profile down the
+          side. It&rsquo;s where price action and dealer positioning meet on one chart.
+        </Lead>
+
+        <Figure caption={<>5-minute ES candles over a <strong style={{ color: C.posBar }}>GEX heatmap</strong>, with the <strong style={{ color: C.posBar }}>call</strong> / <strong style={{ color: C.heatNeg }}>put</strong> walls and orange <strong style={{ color: C.orange }}>flip</strong> drawn on the futures price. The <strong style={{ color: C.cyan }}>volume profile</strong> and its POC sit in the right gutter.</>}>
+          <EsCandlesExample />
+        </Figure>
+
+        <H2>The layers</H2>
+        <Card>
+          <LegendRow color={C.posBar} name="5-minute candles">
+            Live ES OHLC candles, the same feed the ICT page uses, so the tape is right where the levels are.
+          </LegendRow>
+          <LegendRow color={C.heatNeg} name="GEX heatmap overlay">
+            Each 5-minute slot paints a column of gamma-by-strike behind the candles — you watch walls build and bleed in real
+            time. Toggle between OI+Vol and Vol-only.
+          </LegendRow>
+          <LegendRow color={C.orange} name="Call / Put / Flip levels">
+            The key gamma levels drawn as horizontal lines, converted from SPX to the ES basis so they line up with the
+            futures price.
+          </LegendRow>
+          <LegendRow color={C.cyan} name="Volume profile">
+            A volume-by-price histogram with value-area levels, derived from the candle volume.
+          </LegendRow>
+        </Card>
+
+        <H2>Reading the volume profile</H2>
+        <P>
+          The right-gutter histogram spreads each candle&rsquo;s volume across the price range it touched, building a session
+          map of where trade actually happened:
+        </P>
+        <Card>
+          <DefRow term="POC">Point of control — the single most-traded price. Acts as a magnet / fair-value pivot.</DefRow>
+          <DefRow term="VAH / VAL">Value-area high and low — the band holding ~70% of the session&rsquo;s volume.</DefRow>
+          <DefRow term="LVN">Low-volume node — a thin price level inside the range that price tends to move through quickly.</DefRow>
+        </Card>
+        <Callout kind="note">
+          When the <Term>POC</Term> or a value-area edge lines up with a gamma <Term>wall</Term>, that confluence is a
+          stronger level than either the profile or the gamma read alone.
+        </Callout>
+
+        <H2>Reading it in practice</H2>
+        <Steps
+          items={[
+            <>Note where price sits between the <Term>call wall</Term> and <Term>put wall</Term> — those bracket the expected range.</>,
+            <>Watch the heatmap columns: a wall <em>brightening</em> over recent slots is positioning being added at that strike.</>,
+            <>Use the <Term>flip</Term> line as the regime divider — above it expect chop, below it expect faster moves.</>,
+            <>Lean on the <Term>POC</Term> and value area for where price is likely to balance when it&rsquo;s between walls.</>,
+          ]}
+        />
+
+        <Callout kind="tip" title="Levels you can trade against">
+          Because the gamma walls are drawn on the actual futures price, this is the cleanest place to see price reacting to a
+          level as it happens, rather than translating SPX levels in your head.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "ict-page",
+    title: "ICT",
+    group: "Pages",
+    blurb: "Live ICT concept detection on the 5-minute ES feed, plus a glossary of every concept.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The ICT page runs Inner Circle Trader concepts live over the 5-minute ES feed and lists what it finds beside a
+          glossary of every concept. If you trade ICT, it&rsquo;s an automated second set of eyes; if you&rsquo;re learning it,
+          the live reads sit right next to their definitions.
+        </Lead>
+
+        <Figure caption={<>The detector marks structure as it forms: a <strong style={{ color: C.cyan }}>Fair Value Gap</strong>, the <strong style={{ color: C.green }}>order block</strong> and swept <strong style={{ color: C.green }}>BSL</strong> liquidity, and a <strong style={{ color: C.orange }}>CHOCH</strong> when character changes.</>}>
+          <IctExample />
+        </Figure>
+
+        <H2>Live detection</H2>
+        <P>
+          A candlestick chart is overlaid with the ICT primitives the page computes in real time — so the structure is marked
+          on the chart as it forms, and a side panel lists the current reads.
+        </P>
+        <Card>
+          <LegendRow color={C.cyan} name="Fair Value Gaps & Order Blocks">
+            Three-candle imbalances and the last opposing candle before an impulse — the re-entry / defense zones price tends
+            to return to.
+          </LegendRow>
+          <LegendRow color={C.green} name="Liquidity pools (BSL / SSL)">
+            Resting liquidity above highs and below lows that price often sweeps before reversing.
+          </LegendRow>
+          <LegendRow color={C.orange} name="Structure events (BOS / CHOCH / MSS)">
+            Breaks of structure, changes of character, and market-structure shifts that flag continuation vs reversal.
+          </LegendRow>
+          <LegendRow color={C.purple} name="Kill zones & premium/discount">
+            Session kill zones, Silver Bullet / macro windows, and the premium/discount + OTE dealing range.
+          </LegendRow>
+        </Card>
+
+        <H2>How the pieces fit a setup</H2>
+        <P>
+          The concepts aren&rsquo;t independent signals — they chain into a sequence. A textbook ICT setup reads in order:
+        </P>
+        <Steps
+          items={[
+            <>Price sweeps a <Term>liquidity pool</Term> (BSL / SSL) — stops are taken above a high or below a low.</>,
+            <>A <Term>displacement</Term> leg leaves a <Term>Fair Value Gap</Term> and breaks structure (<Term>CHOCH / MSS</Term>).</>,
+            <>Price retraces into the <Term>order block</Term> or FVG within the <Term>OTE</Term> (62–79%) band.</>,
+            <>The real move delivers toward the opposing liquidity — ideally inside a <Term>kill zone</Term>.</>,
+          ]}
+        />
+
+        <H2>The glossary</H2>
+        <P>
+          Every concept the page detects is defined alongside the live signals, so a read you don&rsquo;t recognize is one
+          click from its explanation.
+        </P>
+        <Callout kind="warn" title="A tool, not a trigger">
+          The page marks where ICT structure exists — it doesn&rsquo;t place trades. Use the live reads to frame your own
+          entries within your plan.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "journal-page",
+    title: "Journal",
+    group: "Pages",
+    blurb: "Log your trades and review them over time to find what's working.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The Journal is where you record your trades and review them. Logging entries, exits, and notes turns a string of
+          individual trades into a record you can actually learn from.
+        </Lead>
+        <H2>Using it</H2>
+        <Card>
+          <LegendRow color={C.cyan} name="Log trades">
+            Capture each trade as you take it — the setup, the levels, and how it resolved.
+          </LegendRow>
+          <LegendRow color={C.green} name="Review over time">
+            Look back across entries to see which setups and levels are carrying your results.
+          </LegendRow>
+        </Card>
+        <Callout kind="tip" title="Tie it back to the levels">
+          Note which GEX levels or ICT reads were in play on each trade — over time the journal shows you which of the
+          dashboard&rsquo;s signals you actually trade well.
+        </Callout>
+      </>
+    ),
+  },
+  {
+    id: "feedback-page",
+    title: "Feedback",
+    group: "Pages",
+    blurb: "Send suggestions, bug reports, and requests straight to the team.",
+    status: "complete",
+    body: () => (
+      <>
+        <Lead>
+          The Feedback page is the direct line to the team — suggestions, bug reports, and feature requests all go here. If
+          something&rsquo;s off or missing, this is the fastest way to flag it.
+        </Lead>
+        <H2>What to send</H2>
+        <Card>
+          <LegendRow color={C.cyan} name="Suggestions & requests">
+            Ideas for new features or changes to existing ones.
+          </LegendRow>
+          <LegendRow color={C.orange} name="Bug reports">
+            Anything that looks wrong or broken — the more specific (page, time, what you saw), the faster it gets fixed.
+          </LegendRow>
+        </Card>
+        <Callout kind="note">
+          Concrete details — which page, what you expected, what happened — make a report far easier to act on.
+        </Callout>
+      </>
+    ),
+  },
   {
     id: "greeks-page",
     title: "Greeks Dashboard",
