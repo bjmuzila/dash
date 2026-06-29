@@ -27,6 +27,16 @@ const IMPACT_COLOR: Record<string, string> = {
 
 function impactColor(i: string) { return IMPACT_COLOR[i] ?? "#3a5570"; }
 
+interface EarnRow { symbol: string; company: string; callTime: string; marketCap: number; }
+
+const CHIP_W = 44;   // chip column width
+const CHIP_GAP = 12; // flex gap between chips
+
+// FMP per-ticker logo (free, predictable URL).
+function logoUrl(sym: string) {
+  return `https://financialmodelingprep.com/image-stock/${sym.toUpperCase()}.png`;
+}
+
 function etToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 }
@@ -97,8 +107,11 @@ export default function EconCalendarPanel() {
   const [now,           setNow]           = useState(() => Date.now());
   const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "medium-usd", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
+  const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
+  const [maxChips,      setMaxChips]      = useState(8);
   const dropRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function h(e: MouseEvent) {
@@ -110,9 +123,10 @@ export default function EconCalendarPanel() {
 
   const doLoad = useCallback(async () => {
     setError(null);
-    const [econRes, qRes] = await Promise.all([
+    const [econRes, qRes, earnRes] = await Promise.all([
       fetch("/api/calendar", { cache: "no-store" }),
       fetch("/api/calendar-quote", { cache: "no-store" }),
+      fetch("/api/earnings-today", { cache: "no-store" }),
     ]);
     const econJson = await econRes.json();
     if (!econRes.ok) {
@@ -129,6 +143,10 @@ export default function EconCalendarPanel() {
       const qj = await qRes.json();
       if (qj.quote) setQuote(qj.quote);
     }
+    if (earnRes.ok) {
+      const ej = await earnRes.json();
+      setEarnings(Array.isArray(ej.earnings) ? ej.earnings : []);
+    }
   }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(async () => {
@@ -144,6 +162,22 @@ export default function EconCalendarPanel() {
     const id = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(id);
   }, []);
+
+  // Measure how many logo chips fit on a single row; reserve one slot for the "+N" chip.
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w <= 0) return;
+      const fit = Math.max(1, Math.floor((w + CHIP_GAP) / (CHIP_W + CHIP_GAP)));
+      setMaxChips(fit);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [earnings.length]);
 
   const today    = etToday();
   const weekDays = etWeekDays();
@@ -376,6 +410,105 @@ export default function EconCalendarPanel() {
           </>
         )}
       </div>
+
+      {/* Earnings Today — logo strip pinned to the bottom of the panel */}
+      {earnings.length > 0 && (
+        <div style={{
+          flexShrink: 0,
+          borderTop: `1px solid ${HT.border}`,
+          background: HT.panelBgStrong,
+          backdropFilter: "blur(16px)",
+          padding: "6px 10px 8px",
+        }}>
+          <div style={{
+            fontSize: 9, fontWeight: 800, letterSpacing: "0.12em",
+            textTransform: "uppercase", color: "#219EBC", marginBottom: 6,
+          }}>
+            Earnings Today · {earnings.length}
+          </div>
+          <div ref={stripRef} style={{
+            display: "flex", gap: CHIP_GAP, overflow: "hidden",
+            paddingBottom: 2, flexWrap: "nowrap",
+          }}>
+            {(() => {
+              const overflow = earnings.length - maxChips;
+              const showCount = overflow > 0 ? Math.max(0, maxChips - 1) : maxChips;
+              const shown = earnings.slice(0, showCount);
+              const hidden = earnings.length - shown.length;
+              return (<>
+            {shown.map((e) => (
+              <a
+                key={e.symbol}
+                href={`https://finance.yahoo.com/quote/${e.symbol}`}
+                target="_blank"
+                rel="noreferrer"
+                title={`${e.company || e.symbol}${e.callTime ? ` · ${e.callTime}` : ""}`}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center",
+                  gap: 4, flexShrink: 0, width: 44, textDecoration: "none",
+                }}
+              >
+                <span style={{
+                  width: 32, height: 32, borderRadius: 8, overflow: "hidden",
+                  background: "#fff", border: `1px solid ${HT.border}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  flexShrink: 0,
+                }}>
+                  <img
+                    src={logoUrl(e.symbol)}
+                    alt={e.symbol}
+                    width={32}
+                    height={32}
+                    style={{ width: 32, height: 32, objectFit: "contain" }}
+                    onError={(ev) => {
+                      const t = ev.currentTarget;
+                      t.style.display = "none";
+                      const p = t.parentElement;
+                      if (p && !p.querySelector(".logo-fallback")) {
+                        const s = document.createElement("span");
+                        s.className = "logo-fallback";
+                        s.textContent = e.symbol.slice(0, 4);
+                        s.style.cssText = "font-size:8px;font-weight:800;color:#05080d;text-align:center;line-height:1;";
+                        p.appendChild(s);
+                      }
+                    }}
+                  />
+                </span>
+                <span style={{
+                  fontSize: 9, fontWeight: 700, color: "#fff",
+                  fontFamily: "monospace", letterSpacing: "0.02em",
+                  maxWidth: 44, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                  {e.symbol}
+                </span>
+              </a>
+            ))}
+            {hidden > 0 && (
+              <div
+                title={`${hidden} more reporting today`}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center",
+                  justifyContent: "flex-start", gap: 4, flexShrink: 0, width: CHIP_W,
+                }}
+              >
+                <span style={{
+                  width: 32, height: 32, borderRadius: 8,
+                  background: "rgba(33,158,188,0.10)", border: `1px solid ${HT.border}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 10, fontWeight: 800, color: "#219EBC",
+                }}>
+                  +{hidden}
+                </span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "monospace" }}>
+                  MORE
+                </span>
+              </div>
+            )}
+              </>);
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

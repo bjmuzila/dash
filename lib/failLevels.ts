@@ -45,6 +45,7 @@ export interface FailEvent {
   tiersHit: 0 | 1 | 2 | 3;   // furthest scaled target reached by the actual move
   maxFavPts: number;         // max favorable excursion from entry before stop-out (ES)
   maxR: number | null;       // maxFavPts / riskPts
+  stopped: boolean;          // trade resolved by hitting its stop (true) vs still open (false)
   wickPct: number;           // rejection-wick size on the probe side, as % of the reclaim bar range
   lowVolProbe: boolean;      // probe bar volume below its recent baseline (lack of conviction)
 }
@@ -168,10 +169,16 @@ export function computeRefLevels(candles: EsCandle[], todayDate: string): RefLev
     out.push({ kind: "onLow",  label: "Overnight Low",  short: "ON-L", price: on.low,  side: "below" });
   }
 
-  // Previous day RTH H/L.
-  if (prevDate) {
-    const pdBars = rthBarsForDate(candles, prevDate);
-    const pd = hiLo(pdBars);
+  // Previous day RTH H/L. NOTE: the nearest calendar date < today can be a
+  // session with NO RTH bars (e.g. Sunday-evening globex open, or a holiday),
+  // which would silently drop PDH/PDL. Walk back to the most recent prior date
+  // that actually has RTH bars.
+  const prevRthDate = dates
+    .filter((d) => d < todayDate)
+    .reverse()
+    .find((d) => rthBarsForDate(candles, d).length > 0);
+  if (prevRthDate) {
+    const pd = hiLo(rthBarsForDate(candles, prevRthDate));
     if (pd) {
       out.push({ kind: "pdHigh", label: "Prev Day High", short: "PDH", price: pd.high, side: "above" });
       out.push({ kind: "pdLow",  label: "Prev Day Low",  short: "PDL", price: pd.low,  side: "below" });
@@ -314,13 +321,14 @@ function scanLevel(
       // probe wick doesn't prematurely truncate MFE on a genuine runner.
       const stopPrice = above ? extreme + STOP_BUFFER_PTS : extreme - STOP_BUFFER_PTS;
       let ft = 0;
+      let stopped = false;
       for (let k = j + 1; k < bars.length; k++) {
         const bk = bars[k];
         // stopped out?
-        const stopped = above ? bk.high >= stopPrice : bk.low <= stopPrice;
+        const hit = above ? bk.high >= stopPrice : bk.low <= stopPrice;
         const fav = above ? entry - bk.low : bk.high - entry; // favorable move from entry
         if (fav > ft) ft = fav;
-        if (stopped) break;
+        if (hit) { stopped = true; break; }
       }
       const oppositeLevel = oppositePrice ?? null;
 
@@ -367,6 +375,7 @@ function scanLevel(
         tiersHit,
         maxFavPts: ft,
         maxR,
+        stopped,
         wickPct: wick / barRange(failBar),
         lowVolProbe,
       });
@@ -418,12 +427,14 @@ export function scanToday(
         ? last.high > lv.price + bufferPts
         : last.low < lv.price - bufferPts;
       const cleanBreak = lv.side === "above" ? last.close > lv.price : last.close < lv.price;
-      const lastEv = evs[evs.length - 1];
-      const recentlyFailed = lastEv && last.timestamp - lastEv.failTs <= confirmBars * 5 * 60_000;
+      // Sticky: once the level has been faded at all today it stays "Failed"
+      // for the rest of the session, unless price is currently poking it
+      // (testing) or has since broken cleanly through (above/below).
+      const failedToday = evs.length > 0;
 
       if (pokeNow && !cleanBreak) state = "testing";
       else if (cleanBreak) state = lv.side === "above" ? "above" : "below";
-      else if (recentlyFailed) state = "failed";
+      else if (failedToday) state = "failed";
       else state = "idle";
     }
 

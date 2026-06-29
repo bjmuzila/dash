@@ -77,8 +77,12 @@ function buildSlotAverages(historical: EsCandleRecord[], today: string, nDays: n
  *   /ws/gex socket — it stays fully idle (no connection, no bandwidth). Flipping
  *   it true connects on demand; flipping back to false tears the socket down.
  *   Defaults to true so existing always-on callers are unchanged.
+ * @param historyDays  How many prior sessions of candles to pull on load. Only
+ *   the fail-rate stats need the full ~20; the live /fails panels only need
+ *   last week + yesterday, so they pass a smaller window (e.g. 8) to cut the
+ *   initial payload. Defaults to 20 so existing callers are unchanged.
  */
-export function useEsCandles(enabled: boolean = true) {
+export function useEsCandles(enabled: boolean = true, historyDays: number = 20) {
   // Final gate = global bandwidth lifecycle AND the caller's enable flag.
   const lifecycle = useWsLifecycle();
   const shouldConnect = lifecycle && enabled;
@@ -99,7 +103,7 @@ export function useEsCandles(enabled: boolean = true) {
 
   // SQLite load (today + history). Reused by mount and manual reload.
   const loadFromDb = useCallback(async () => {
-    const [today, hist] = await Promise.all([queryEsCandlesToday(), queryEsCandlesHistorical(20)]);
+    const [today, hist] = await Promise.all([queryEsCandlesToday(), queryEsCandlesHistorical(historyDays)]);
     if (unmountedRef.current) return;
     if (hist.length) setHistorical(hist);
     if (today.length) {
@@ -111,7 +115,7 @@ export function useEsCandles(enabled: boolean = true) {
       setTodayRows([...liveMapRef.current.values()]);
       setSessionTick((n) => n + 1);
     }
-  }, []);
+  }, [historyDays]);
 
   // Initial SQLite load — only when enabled (stays idle until turned on).
   useEffect(() => { if (enabled) loadFromDb().catch(() => {}); }, [enabled, loadFromDb]);

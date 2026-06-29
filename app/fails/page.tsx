@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { LiveIb } from "@/components/insights/IbLogic";
 import { NqIbLive } from "@/components/insights/NqIbLive";
@@ -15,11 +15,9 @@ import { SegGroup, DockButton } from "@/components/shared/DockToolbar";
 import {
   computeRefLevels,
   scanToday,
-  computeStats,
   computeAmt,
   detectTriggers,
   type FailEvent,
-  type FailStat,
   type LevelStatus,
   type AmtResult,
   type Trigger,
@@ -88,7 +86,11 @@ function SectionTitle({ text, accent, big }: { text: string; accent: string; big
 
 export default function FailsPage() {
   const [tab, setTab] = useState<"ESU" | "NQU">("ESU");
-  const { candles: liveCandles, historical, connected, refresh } = useEsCandles();
+  // /fails only needs last week's H/L (PWH/PWL, fixed for the week) + yesterday
+  // (PDH/PDL). 8 days always spans the prior full week + yesterday across a
+  // weekend. The 20-day fail-rate history now lives on /dev/results, which pulls
+  // its own full window — so this page no longer drags a 10k-row payload on load.
+  const { candles: liveCandles, historical, connected, refresh } = useEsCandles(true, 8);
 
   // useEsCandles returns ONLY today's bars in `candles`; `historical` holds the
   // prior ~20 trading days. The fail-rate stats and historical fail log need
@@ -130,13 +132,6 @@ export default function FailsPage() {
     return `${n}:${last?.slotKey ?? ""}:${lc}:${lh}:${ll}`;
   }, [candles]);
 
-  // Historical-only key: changes when prior-day/week history changes, NOT when
-  // today's forming bar ticks. Drives the 20-day stats so they stay stable.
-  const historyKey = useMemo(() => {
-    const hist = candles.filter((c) => c.date !== today);
-    return `${hist.length}:${hist[hist.length - 1]?.slotKey ?? ""}`;
-  }, [candles, today]);
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const levels = useMemo(() => computeRefLevels(candles, today), [candlesKey, today]);
   const todayBars = useMemo(
@@ -148,34 +143,6 @@ export default function FailsPage() {
     () => scanToday(levels, todayBars),
     [levels, todayBars],
   );
-  // Defer the heavy 20-day history build off the initial paint so the page
-  // loads and scrolls immediately. Recompute only when historyKey changes
-  // (i.e. when prior-day/week history actually changes — not on live ticks),
-  // and run it in an idle callback so it never blocks scroll.
-  const candlesRef = useRef(candles);
-  candlesRef.current = candles;
-  const [statsState, setStatsState] = useState<{ stats: FailStat[]; log: FailEvent[] }>({ stats: [], log: [] });
-  useEffect(() => {
-    let cancelled = false;
-    const run = () => {
-      if (cancelled) return;
-      const result = computeStats(candlesRef.current, 20);
-      if (!cancelled) setStatsState(result);
-    };
-    // Prefer requestIdleCallback; fall back to a short timeout.
-    const ric = (typeof window !== "undefined" && (window as any).requestIdleCallback) as
-      | ((cb: () => void, opts?: { timeout: number }) => number) | undefined;
-    const id = ric ? ric(run, { timeout: 1500 }) : (setTimeout(run, 200) as unknown as number);
-    return () => {
-      cancelled = true;
-      const cic = (typeof window !== "undefined" && (window as any).cancelIdleCallback) as
-        | ((id: number) => void) | undefined;
-      if (ric && cic) cic(id); else clearTimeout(id);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyKey]);
-  const { stats, log } = statsState;
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const amt = useMemo(() => computeAmt(candles, today), [candlesKey, today]);
   const triggers = useMemo(() => detectTriggers(candles, today, amt), [candlesKey, today, amt]);
@@ -192,7 +159,9 @@ export default function FailsPage() {
     let wins = 0, losses = 0, netR = 0;
     const byLevel = new Map<string, number>();
     for (const e of todayEvents) {
-      if ((e.maxR ?? 0) >= 1) wins++; else losses++;
+      const won = (e.maxR ?? 0) >= 1;
+      const lost = e.stopped && (e.maxR ?? 0) < 1;
+      if (won) wins++; else if (lost) losses++; // open trades count toward neither
       netR += e.maxR ?? 0;
       byLevel.set(e.short, (byLevel.get(e.short) ?? 0) + 1);
     }
@@ -320,7 +289,7 @@ export default function FailsPage() {
               <div style={{ ...homeGlossPanelStyle(), gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
                 {connected ? "Waiting for ES candles to build levels…" : "Loading candles…"}
               </div>
-            ) : statuses.map((s) => {
+            ) : [...statuses].sort((a, b) => b.level.price - a.level.price).map((s) => {
               const meta = STATE_META[s.state];
               const accent = s.level.side === "above" ? HOME_THEME.green : HOME_THEME.red;
               const dist = s.distancePts;
@@ -408,58 +377,6 @@ export default function FailsPage() {
           )}
         </Card>
 
-        {/* hit-rate stats */}
-        <Card accent="purple" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <SectionTitle text="Fail Rate" accent={HOME_THEME.purple} />
-            <span style={{ fontSize: 10, color: HOME_THEME.text }}>last ~20 sessions</span>
-            {stats.length > 0 && (() => {
-              const tot = stats.reduce((a, s) => ({ fails: a.fails + s.fails, tests: a.tests + s.tests }), { fails: 0, tests: 0 });
-              const pct = tot.tests ? Math.round((tot.fails / tot.tests) * 100) : 0;
-              return (
-                <span style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, fontFamily: "monospace", color: HOME_THEME.purple }}>
-                  {tot.fails} fails / {tot.tests} tests · {tot.tests ? `${pct}%` : "—"}
-                </span>
-              );
-            })()}
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 16 }}>
-            {stats.length === 0 ? (
-              <div style={{ ...homeGlossPanelStyle(HOME_THEME.purple), gridColumn: "1 / -1", padding: 24, textAlign: "center", fontSize: 13, color: HOME_THEME.text }}>
-                Building history…
-              </div>
-            ) : stats.map((st) => {
-              const pct = Math.round(st.failRate * 100);
-              const accent = st.kind.endsWith("High") ? HOME_THEME.green : HOME_THEME.red;
-              return (
-                <div key={st.kind} className="card-hover" style={{ ...homeGlossPanelStyle(accent), padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.text }}>{st.label}</span>
-                    <span style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", color: accent }}>{st.tests ? `${pct}%` : "—"}</span>
-                  </div>
-                  <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: rgba(HOME_THEME.text, 0.08) }}>
-                    <div style={{ width: `${pct}%`, height: "100%", background: accent }} />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HOME_THEME.text }}>
-                    <span>{st.fails} fails</span>
-                    <span>{st.breaks} breaks</span>
-                    <span>{st.tests} tests</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-
-        {/* historical fail log */}
-        <Card accent="cyan" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <SectionTitle text={`Recent Fail Log${log.length ? ` (${log.length})` : ""}`} accent={HOME_THEME.cyan} />
-          {log.length === 0 ? (
-            <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No historical fails in window.</div>
-          ) : (
-            <FailTable rows={log.slice(0, 60)} fmt={fmt} unit={unit} showDate />
-          )}
-        </Card>
         </>
         )}
       </div>
@@ -500,7 +417,9 @@ function FailTable({
               const tiers = e.tiersHit;
               const maxR = e.maxR;
               const win = (maxR ?? 0) >= 1;
-              const resultColor = win ? HOME_THEME.green : HOME_THEME.red;
+              const lost = e.stopped && (maxR ?? 0) < 1;
+              const open = !win && !lost; // still running — not yet 1R and not stopped
+              const resultColor = win ? HOME_THEME.green : lost ? HOME_THEME.red : HOME_THEME.orange;
               const tierColor = (n: number) => tiers >= n ? HOME_THEME.green : rgba(HOME_THEME.text, 0.3);
               return (
                 <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: `1px solid ${HOME_THEME.border}`,
@@ -531,7 +450,7 @@ function FailTable({
                   <Td right>
                     <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".05em", padding: "3px 8px", borderRadius: 4,
                       color: resultColor, background: rgba(resultColor, 0.12), border: `1px solid ${rgba(resultColor, 0.35)}` }}>
-                      {win ? `WIN T${tiers}` : "LOSS"}
+                      {win ? `WIN T${tiers}` : open ? "OPEN" : "LOSS"}
                     </span>
                   </Td>
                 </tr>

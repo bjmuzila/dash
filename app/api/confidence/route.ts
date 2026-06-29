@@ -367,21 +367,48 @@ export async function GET(req: NextRequest) {
     const isOpexOr0DTE = searchParams.get("opex") === "1";
 
     // 1) Current level = latest MVC snapshot for the date.
-    const latest = await queryOne<MvcRecord>(
+    // Fall back to the most recent prior day with data (weekend / pre-market /
+    // before the first snapshot of the day) so the page always renders.
+    let effDate = date;
+    let latest = await queryOne<MvcRecord>(
       `SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT 1`,
       [date]
     );
     if (!latest) {
-      return NextResponse.json({ error: "No MVC snapshot for date", date }, { status: 404 });
+      const prevDay = await queryOne<MvcRecord>(
+        `SELECT * FROM mvc_snapshots WHERE date < ? ORDER BY date DESC, timestamp DESC LIMIT 1`,
+        [date]
+      );
+      if (!prevDay) {
+        return NextResponse.json({ error: "No MVC snapshot for date", date }, { status: 404 });
+      }
+      latest = prevDay;
+      effDate = prevDay.date;
     }
     const cur = pickLevel(latest);
 
     // Today's SPX series (all snapshots) for EM proxy + session progress.
     const todayRows = await queryAll<MvcRecord>(
       `SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`,
-      [date]
+      [effDate]
     );
     const todaySpx = todayRows.map((r) => num(r.spxPrice)).filter((v): v is number => v != null);
+
+    // Fallback: if today carries no SPX (pre-market, weekend, or null spxPrice),
+    // use the most recent prior day's last SPX snapshot so the page renders a
+    // sensible reference instead of collapsing to the strike level.
+    if (!(cur.spx != null && Number.isFinite(cur.spx) && cur.spx > 0) && !todaySpx.length) {
+      const prevSpxRow = await queryOne<MvcRecord>(
+        `SELECT * FROM mvc_snapshots
+         WHERE date < ? AND spxPrice IS NOT NULL
+         ORDER BY date DESC, timestamp DESC LIMIT 1`,
+        [effDate]
+      );
+      const prevSpx = prevSpxRow ? num(prevSpxRow.spxPrice) : null;
+      if (prevSpx != null && Number.isFinite(prevSpx) && prevSpx > 0) {
+        cur.spx = prevSpx;
+      }
+    }
     const intradayRange =
       todaySpx.length > 1 ? (Math.max(...todaySpx) - Math.min(...todaySpx)) / 2 : 0;
     const refPrice = cur.spx || todaySpx[todaySpx.length - 1] || cur.level || 0;
@@ -399,13 +426,13 @@ export async function GET(req: NextRequest) {
     );
     // Session progress from the RTH clock (cadence-independent: works for 5m,
     // 30m, or any snapshot interval). Past dates are complete.
-    const sessionProgress = sessionProgressET(date);
+    const sessionProgress = sessionProgressET(effDate);
 
     // 2) Find historical analog days (same gamma regime + similar GEX dominance)
     //    and classify each from its own SPX series — no ES candles needed.
     const priorDays = await queryAll<{ date: string }>(
       `SELECT DISTINCT date FROM mvc_snapshots WHERE date < ? ORDER BY date DESC LIMIT ?`,
-      [date, ANALOG_MAX]
+      [effDate, ANALOG_MAX]
     );
 
     const curGexMag = cur.totalAbsNetGEX > 0 ? Math.abs(cur.netGex) / cur.totalAbsNetGEX : 0;
@@ -502,7 +529,7 @@ export async function GET(req: NextRequest) {
     const FIRST_15M = 15 / 390;
     const openSpx = todaySpx.length ? todaySpx[0] : cur.spx;
     const openAtMVC =
-      date === todayET() &&
+      effDate === todayET() &&
       sessionProgress > 0 && sessionProgress <= FIRST_15M &&
       Number.isFinite(openSpx) && Math.abs(openSpx - cur.level) <= HIT_PTS;
 
@@ -524,7 +551,7 @@ export async function GET(req: NextRequest) {
     const result = scoreConfidence(ctx, history);
 
     // 4) Today's own outcome vs the MVC level (provisional during RTH, final at close).
-    const isFinal = date < todayET() || sessionProgress >= 0.95;
+    const isFinal = effDate < todayET() || sessionProgress >= 0.95;
 
     // Reconstruct a true 5-minute SPX intraday series from ES candles using the
     // day's cash basis (esClose - spxClose). The basis is derived from the SAME
@@ -539,7 +566,7 @@ export async function GET(req: NextRequest) {
     let seriesSource: "es5m" | "snapshots" = "snapshots";
     let basis: number | null = null;
     try {
-      const esCandles = await getEsCandles(date, undefined, 2000);
+      const esCandles = await getEsCandles(effDate, undefined, 2000);
       const rth = esCandles
         .map((c) => ({ c, m: etMinutesOf(c.slotKey) }))
         .filter((x): x is { c: typeof esCandles[number]; m: number } =>
@@ -710,7 +737,10 @@ export async function GET(req: NextRequest) {
     };
 
     return NextResponse.json({
-      date,
+      date: effDate,
+      requestedDate: date,
+      stale: effDate !== date,
+      mvcTimestamp: latest.timestamp ?? null,
       level: cur.level,
       price: cur.spx,
       spx: cur.spx,

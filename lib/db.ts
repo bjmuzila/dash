@@ -2071,6 +2071,37 @@ export async function getOptionStrikeGexSlots(
 }
 
 /**
+ * Same as getOptionStrikeGexSlots but bounded by a rolling timestamp window
+ * (timestamp >= sinceTs) instead of a single calendar `date`. Lets the ES
+ * Candles heatmap span ~24h across the ET-midnight boundary, since rows are
+ * written 24/7 (only the day-keyed read was capping it to one ET day).
+ */
+export async function getOptionStrikeGexSlotsWindow(
+  sinceTs: number,
+  expiry: string
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON ((FLOOR(timestamp / 300000) * 300000), strike)
+            (FLOOR(timestamp / 300000) * 300000)::bigint AS slot_ts,
+            strike,
+            net_gex,
+            net_vol_gex
+       FROM option_strike_gex_history
+      WHERE timestamp >= $1
+        AND expiry = $2
+      ORDER BY (FLOOR(timestamp / 300000) * 300000) ASC, strike ASC, timestamp DESC`,
+    [sinceTs, expiry]
+  );
+  return result.rows.map((row) => ({
+    slot_ts: Number(row.slot_ts ?? 0),
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
+  }));
+}
+
+/**
  * Per-strike net GEX as it read at the most recent snapshot AT OR BEFORE
  * `asOfTimestamp` (point-in-time, not an average). Used by the strike-detail
  * popup to compute rolling differences (current − reading N minutes ago).

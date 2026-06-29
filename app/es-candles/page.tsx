@@ -753,7 +753,7 @@ export default function EsCandlesPage() {
     (async () => {
       try {
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&expiry=${encodeURIComponent(heatmapExpiry)}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=1440&expiry=${encodeURIComponent(heatmapExpiry)}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;

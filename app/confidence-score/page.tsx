@@ -102,6 +102,9 @@ interface MvcSummary {
 }
 interface ApiResp {
   date: string;
+  requestedDate?: string;
+  stale?: boolean;
+  mvcTimestamp?: number | string | null;
   level: number;
   price: number;
   spx: number;
@@ -841,9 +844,23 @@ export default function ConfidenceScorePage() {
           <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
             {loading ? "Computing…" : data ? `MVC ${fmt(data.level)} · SPX ${fmt(data.spx)}` : ""}
           </span>
+          {data?.mvcTimestamp != null && (
+            <span style={{ opacity: 0.6, fontSize: 10, fontFamily: "monospace" }}
+              title="When the latest MVC snapshot was captured">
+              MVC found {new Date(typeof data.mvcTimestamp === "string" ? Number(data.mvcTimestamp) : data.mvcTimestamp)
+                .toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} ET
+            </span>
+          )}
+          {data?.stale && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.amber ?? "#f5a623",
+              border: `1px solid ${rgba(HOME_THEME.amber ?? "#f5a623", 0.5)}`, borderRadius: 4, padding: "1px 6px" }}
+              title={`No snapshot for ${data.requestedDate}; showing last session with data (${data.date}).`}>
+              STALE · {data.date}
+            </span>
+          )}
           <DockCalendar value={date} onChange={setDate} />
           <DockButton onClick={() => setDate(todayET())} title="Jump to today">Today</DockButton>
-          <ToggleTile label="0DTE / OPEX" on={opex} onClick={() => setOpex((v) => !v)} />
+          <ToggleTile label="OPEX" on={opex} onClick={() => setOpex((v) => !v)} />
         </div>
         <DockButton onClick={() => void load(date, opex)} title="Refresh" style={{ color: HOME_THEME.cyan }}>↻ Refresh</DockButton>
       </div>

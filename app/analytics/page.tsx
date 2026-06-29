@@ -76,6 +76,7 @@ function useLiveData<R>(url: string | null, refreshMs = 30_000) {
   const [data, setData] = useState<R | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null); // ms of last successful fetch
 
   const load = useCallback(async () => {
     if (!url) return;
@@ -85,6 +86,7 @@ function useLiveData<R>(url: string | null, refreshMs = 30_000) {
       if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
       setData(json as R);
       setError(null);
+      setLastUpdated(Date.now());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -99,7 +101,21 @@ function useLiveData<R>(url: string | null, refreshMs = 30_000) {
     return () => clearInterval(id);
   }, [load, url, refreshMs]);
 
-  return { data, loading, error, reload: load };
+  return { data, loading, error, lastUpdated, reload: load };
+}
+
+// "updated 3:42:18 PM ET" footer — stamped at each card's last successful fetch.
+function UpdatedStamp({ at }: { at: number | null }) {
+  const text = at == null
+    ? "—"
+    : new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+      }).format(at) + " ET";
+  return (
+    <span style={{ fontSize: 9, fontFamily: "monospace", color: T.muted, opacity: 0.55, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
+      updated {text}
+    </span>
+  );
 }
 
 // ET today (YYYY-MM-DD) — used as the ?date= param for snapshot endpoints.
@@ -212,7 +228,7 @@ function computePeakGreeks(payload: unknown): Record<GreekKey, PeakGreek | null>
 
 function MultiGreekCard() {
   const [tk, setTk] = useState<"SPX" | "QQQ" | "SPY">("SPX");
-  const { data, loading, error } = useLiveData<unknown>(`/api/chains?ticker=${tk}&range=all`, 60_000);
+  const { data, loading, error, lastUpdated } = useLiveData<unknown>(`/api/chains?ticker=${tk}&range=all`, 60_000);
   const peaks = data ? computePeakGreeks(data) : null;
   const order: GreekKey[] = ["GEX", "DEX", "CHEX", "VEX"];
   const hasAny = peaks ? order.some((k) => peaks[k] != null) : false;
@@ -242,6 +258,7 @@ function MultiGreekCard() {
           })}
         </div>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -269,7 +286,7 @@ const EM_QUOTE_SYMBOL: Record<EmTicker, string> = {
 
 function EstimatedMoveCard() {
   const [tk, setTk] = useState<EmTicker>("SPX");
-  const { data: lv, loading: lvLoading, error: lvError } = useLiveData<LevelsRow>(`/api/levels?ticker=${tk}`);
+  const { data: lv, loading: lvLoading, error: lvError, lastUpdated } = useLiveData<LevelsRow>(`/api/levels?ticker=${tk}`);
   const { data: q } = useLiveData<QuotesResp>(`/api/tt-quotes?symbols=${encodeURIComponent(EM_QUOTE_SYMBOL[tk])}`, 15_000);
 
   const up = numOr(lv?.up);
@@ -298,9 +315,9 @@ function EstimatedMoveCard() {
   const crossed = near < 0;
 
   return (
-    <Card accent="orange" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.orange }}>Estimated Move</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>weekly</span>
       </Row>
       <PillSelect value={tk} options={EM_TICKERS} onChange={setTk} />
@@ -327,6 +344,7 @@ function EstimatedMoveCard() {
           </div>
         </>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -349,11 +367,45 @@ interface PremarketSummaryResp {
   error?: string;
 }
 
+// Current ET wall-clock parts (weekday 0=Sun..6=Sat, minutes-since-midnight).
+function nowEtClock(): { dow: number; mins: number; dateISO: string } {
+  const now = new Date();
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+  const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    dow: DOW[get("weekday")] ?? 0,
+    mins: Number(get("hour")) * 60 + Number(get("minute")),
+    dateISO: etDateISO(),
+  };
+}
+
+// The next premarket session's date (the cron writes weekdays ~08:00 ET). After
+// 4pm ET, or on a weekend, roll forward to the next weekday.
+function nextPremarketDate(): string {
+  const { dow, mins } = nowEtClock();
+  const rollForward = mins >= 16 * 60 || dow === 0 || dow === 6; // after RTH close / weekend
+  // Build a Date at noon ET today, then add days until it's a weekday we want.
+  const base = new Date(`${etDateISO()}T12:00:00-05:00`);
+  let add = rollForward ? 1 : 0;
+  // skip weekends
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(base.getTime() + add * 86400000);
+    const wd = d.getUTCDay();
+    if (wd !== 0 && wd !== 6) break;
+    add++;
+  }
+  const target = new Date(base.getTime() + add * 86400000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(target);
+}
+
 function PremarketCard() {
   // AI 5-bullet read of the global pre-market tape. Written daily by the VPS cron
   // (premarket-summary-generator.js → premarket_summary); the card just reads the
   // latest stored row — same pattern as the Traders Dashboard overview.
-  const { data, loading, error } = useLiveData<PremarketSummaryResp>(
+  const { data, loading, error, lastUpdated } = useLiveData<PremarketSummaryResp>(
     "/api/premarket-summary",
     5 * 60_000
   );
@@ -362,18 +414,26 @@ function PremarketCard() {
 
   const bullets = data?.summary?.bullets ?? [];
   const sumDate = data?.summary?.date ?? null;
+  // The summary is only valid for the upcoming session. Any stored summary whose
+  // date isn't the next premarket session is stale (e.g. Friday's read on a
+  // Monday pre-open, or the prior session after 4pm) — show the "coming" message.
+  const nextDate = nextPremarketDate();
+  const isStale = sumDate !== nextDate;
+  const emptyMsg = isStale && sumDate
+    ? `Coming 8:00 AM ET for ${nextDate}.`
+    : "No premarket summary yet — generates ~8am ET.";
   const g = gapData?.gap ?? null;
   const gapPts = g?.gap_pts ?? null;
   const up = (gapPts ?? 0) > 0;
 
   return (
-    <Card accent="red" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.red }}>Premarket</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{sumDate ?? ""}</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
+        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
       </Row>
-      {loading || error || bullets.length === 0 ? (
-        <CardState loading={loading} error={error ?? data?.error ?? null} empty="No premarket summary yet — generates ~8am ET." />
+      {loading || error || bullets.length === 0 || isStale ? (
+        <CardState loading={loading} error={error ?? data?.error ?? null} empty={emptyMsg} />
       ) : (
         <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
           {bullets.map((b, i) => (
@@ -390,6 +450,7 @@ function PremarketCard() {
           </span>
         </>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -423,6 +484,7 @@ function EconCalendarCard() {
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -433,6 +495,7 @@ function EconCalendarCard() {
       if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
       const list: CalEvent[] = Array.isArray(json?.events) ? json.events : Array.isArray(json) ? json : [];
       setEvents(list);
+      setLastUpdated(Date.now());
     } catch (e) {
       setError(String(e));
       setEvents([]);
@@ -444,14 +507,16 @@ function EconCalendarCard() {
   useEffect(() => { load(); }, [load]);
 
   const today = etToday();
+  // USD only — this also includes the President (Trump) schedule, which the feed
+  // tags country "USD" with impact "President". Foreign-currency events excluded.
   const todays = events
-    .filter((e) => e.date === today)
+    .filter((e) => e.date === today && (e.country ?? "").toUpperCase() === "USD")
     .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
 
   return (
-    <Card accent="green" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.green }}>Economic Calendar</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Economic Calendar</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{today}</span>
       </Row>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
@@ -467,6 +532,7 @@ function EconCalendarCard() {
           ))
         )}
       </div>
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -494,6 +560,7 @@ function ConfidenceCard() {
   const [forDate, setForDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   // MVC-change tracking: remember the prior level + when it changed, and whether
   // price has reached the new level since (so the timer can stop).
@@ -538,6 +605,7 @@ function ConfidenceCard() {
 
       setData(json);
       setForDate(date);
+      setLastUpdated(Date.now());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -574,9 +642,12 @@ function ConfidenceCard() {
   const showChange = changedAt != null;
 
   return (
-    <Card accent="green" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.green }}>Confidence Score</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+          Confidence Score
+          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
+        </span>
         {isStale && forDate && (
           <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>pre-open · {forDate}</span>
         )}
@@ -617,6 +688,7 @@ function ConfidenceCard() {
           )}
         </>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -647,13 +719,30 @@ function rowNearestAgo(rows: GreeksTsRow[], latestTs: number, minsAgo: number, t
 }
 
 function GreeksCard() {
-  const { data, loading, error } = useLiveData<GreeksTsResp>(
-    `/api/snapshots/greeks?date=${etDateISO()}&limit=5000`
+  const today = etDateISO();
+  // Today's series (ascending). Empty pre-open / overnight because the writer is
+  // RTH-gated — so we fall back to the most recent prior session below.
+  const { data, loading, error, lastUpdated } = useLiveData<GreeksTsResp>(
+    `/api/snapshots/greeks?date=${today}&limit=5000`
   );
-  const rows = data?.rows ?? [];
-  const cur = rows.length ? rows[rows.length - 1] : null; // series is ascending
-  const ago15 = cur ? rowNearestAgo(rows, cur.timestamp, 15) : null;
-  const ago30 = cur ? rowNearestAgo(rows, cur.timestamp, 30) : null;
+  // Latest-available row regardless of date — only used when today has none yet,
+  // so the card shows the last session's net greeks instead of going blank.
+  const { data: latest } = useLiveData<GreeksTsResp>(`/api/snapshots/greeks?limit=1`, 60_000);
+
+  const todayRows = data?.rows ?? [];
+  const usingFallback = todayRows.length === 0 && (latest?.rows?.length ?? 0) > 0;
+  // Fallback endpoint returns newest-first (limit 1); today series is ascending.
+  const rows = usingFallback ? (latest!.rows as GreeksTsRow[]) : todayRows;
+  const cur = usingFallback
+    ? rows[0]
+    : rows.length ? rows[rows.length - 1] : null;
+  const staleDate = usingFallback ? (cur as GreeksTsRow & { date?: string })?.date ?? null : null;
+  // While the today fetch is still loading we don't yet know if we'll need the
+  // fallback — only spin if BOTH have no data.
+  const showLoading = loading && !cur;
+  // Intraday deltas only make sense on today's live series, not the 1-row fallback.
+  const ago15 = cur && !usingFallback ? rowNearestAgo(rows, cur.timestamp, 15) : null;
+  const ago30 = cur && !usingFallback ? rowNearestAgo(rows, cur.timestamp, 30) : null;
 
   const keys: Array<{ g: string; k: "gex" | "dex" | "chex" | "vex" }> = [
     { g: "Net GEX", k: "gex" },
@@ -663,13 +752,15 @@ function GreeksCard() {
   ];
 
   return (
-    <Card accent={POS_GREEN} padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: POS_GREEN }}>Net Greeks</span>
-        <span style={{ fontSize: 10, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>now · Δ15m · Δ30m</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
+        <span style={{ fontSize: 10, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>
+          {usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
+        </span>
       </Row>
-      {loading || error || !cur ? (
-        <CardState loading={loading} error={error} empty="No greeks series for today yet." />
+      {showLoading || error || !cur ? (
+        <CardState loading={showLoading} error={error} empty="No greeks series yet." />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {keys.map(({ g, k }) => {
@@ -680,7 +771,7 @@ function GreeksCard() {
             return (
               <div key={g} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 4 }}>
                 <Label>{g}</Label>
-                <Value color={signColor(nowVal)} size={16}>{fmtBig(nowVal)}</Value>
+                <Value color={nowVal > 0 ? POS_GREEN : nowVal < 0 ? T.red : T.text} size={22}>{fmtBig(nowVal)}</Value>
                 <div style={{ display: "flex", gap: 10, fontFamily: "monospace", fontSize: 11 }}>
                   <span style={{ color: d15 == null ? T.muted : signColor(d15), opacity: d15 == null ? 0.5 : 1 }}>
                     15m {d15 == null ? "—" : fmtBig(d15)}
@@ -694,6 +785,7 @@ function GreeksCard() {
           })}
         </div>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -743,6 +835,8 @@ function IbCard() {
   }, []);
 
   const cd = ibCountdown();
+  // Newest candle ts = the feed's last update.
+  const lastUpdated = candles.length ? Number(candles[candles.length - 1].timestamp) : null;
 
   // ESU IB + setups from the shared ES candle feed (filter to ESU contract).
   const { ib, setups } = (() => {
@@ -758,9 +852,9 @@ function IbCard() {
   const rangePts = ib ? ib.high - ib.low : null;
 
   return (
-    <Card accent="purple" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.purple }}>Initial Balance</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
         <PillSelect value={tab} options={["ESU", "NQU"] as const} onChange={setTab} />
       </Row>
 
@@ -814,6 +908,7 @@ function IbCard() {
           )}
         </>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -831,38 +926,65 @@ function stateLabel(st: LevelStatus["state"]): { text: string; color: string } {
 }
 
 function LevelsCard() {
-  // Live + historical 5m ES candles. The hook loads ~20 days from SQLite on
-  // mount, so reference levels compute even when the market's closed (weekend);
-  // the live spot + in-play status only fill in once the WS feed is streaming.
-  const { candles, connected } = useEsCandles(true);
+  // Live + historical 5m ES candles. `candles` from the hook is TODAY-only;
+  // `historical` holds ~20 prior days from SQLite. PDH/PDL/PWH/PWL only compute
+  // when the prior-session/week RTH bars are present, so we feed the COMBINED set
+  // into computeRefLevels — otherwise only Overnight H/L (which live in today's
+  // pre-open bars) would ever appear.
+  const { candles, historical, connected } = useEsCandles(true);
   const grace = useGrace();
   const today = etDateISO();
+  const lastUpdated = candles.length ? Number(candles[candles.length - 1].timestamp) : null;
 
   const { spot, statuses, hasLiveSpot } = (() => {
-    if (!candles.length) {
+    // De-dup historical + today by slotKey (today wins) so reference levels see
+    // both the prior sessions/week AND today's overnight block.
+    const merged = (() => {
+      const map = new Map<string, (typeof candles)[number]>();
+      for (const c of historical as unknown as typeof candles) {
+        if (c?.slotKey) map.set(c.slotKey, c);
+      }
+      for (const c of candles) if (c?.slotKey) map.set(c.slotKey, c);
+      return [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
+    })();
+
+    if (!merged.length) {
       return { spot: null as number | null, statuses: [] as LevelStatus[], hasLiveSpot: false };
     }
-    // Compute the levels themselves against the most recent session date present
-    // (today when streaming; otherwise the last historical date, e.g. Friday).
-    const lastDate = candles[candles.length - 1]?.date ?? today;
-    const refDate = candles.some((c) => c.date === today) ? today : lastDate;
-    const levels = computeRefLevels(candles, refDate);
+    // Compute the levels against the most recent session date present (today when
+    // streaming; otherwise the last historical date, e.g. Friday).
+    const lastDate = merged[merged.length - 1]?.date ?? today;
+    const refDate = merged.some((c) => c.date === today) ? today : lastDate;
+    const levels = computeRefLevels(merged, refDate);
 
     const todayBars = candles.filter((c) => (c.date ?? "") === today);
     const liveSpot = todayBars.length ? Number(todayBars[todayBars.length - 1].close) : null;
     // Status scan needs the active session's bars; only meaningful with today's.
-    const { statuses } = scanToday(levels, todayBars.length ? todayBars : candles);
+    const { statuses } = scanToday(levels, todayBars.length ? todayBars : merged);
     // Fallback spot for distance display when closed = last available close.
-    const fallbackSpot = candles.length ? Number(candles[candles.length - 1].close) : null;
+    const fallbackSpot = merged.length ? Number(merged[merged.length - 1].close) : null;
     return { spot: liveSpot ?? fallbackSpot, statuses, hasLiveSpot: liveSpot != null };
   })();
 
   const hasLevels = statuses.length > 0;
 
+  // Are we currently inside the RTH session (09:30–16:00 ET)? Overnight H/L are
+  // still "forming" until the cash open; after the open they go live.
+  const rthNow = (() => {
+    const p = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+    const wd = get("weekday");
+    if (wd === "Sat" || wd === "Sun") return false;
+    const mins = Number(get("hour")) * 60 + Number(get("minute"));
+    return mins >= 9 * 60 + 30 && mins < 16 * 60;
+  })();
+
   return (
-    <Card accent="orange" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.orange }}>Levels & Fails</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
           {hasLiveSpot ? "live · ES" : connected ? "ES · closed" : "loading…"}
         </span>
@@ -871,26 +993,28 @@ function LevelsCard() {
         <CardState loading={!candles.length && grace} error={null} empty="No ES candles yet — levels populate when the feed streams." />
       ) : (
         <>
-          <Stat
-            label={hasLiveSpot ? "Spot (ES)" : "Last (ES)"}
-            value={spot != null ? spot.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
-            color={T.cyan}
-          />
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {statuses.map((s) => {
+            {[...statuses].sort((a, b) => b.level.price - a.level.price).map((s) => {
               const dist = spot != null ? spot - s.level.price : null;
               const above = (dist ?? 0) >= 0;
               const inPlay = s.state === "testing" || s.state === "failed";
-              // In-play status only meaningful with a live session; closed = idle.
-              const lbl = hasLiveSpot ? stateLabel(s.state) : { text: "—", color: T.muted };
+              const isOn = s.level.kind === "onHigh" || s.level.kind === "onLow";
+              // ON High/Low keep building through the overnight session — show
+              // "forming" until the 9:30 ET cash open, regardless of live spot.
+              const lbl = isOn && !rthNow
+                ? { text: "forming", color: T.orange }
+                : hasLiveSpot
+                  ? stateLabel(s.state)
+                  : { text: "—", color: T.muted };
+              const showStrong = hasLiveSpot && (inPlay || s.state === "above" || s.state === "below");
               return (
                 <Row key={s.level.kind} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
                   <span style={{ fontSize: 13, flex: 1, textAlign: "left" }}>{s.level.label}</span>
-                  <Value size={12}>{s.level.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Value>
+                  <Value size={12}>{s.level.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Value>
                   <Value size={11} color={dist == null ? T.muted : above ? POS_GREEN : T.red}>
-                    {dist == null ? "—" : `${above ? "+" : ""}${dist.toFixed(1)}`}
+                    {dist == null ? "—" : `${above ? "+" : ""}${dist.toFixed(2)}`}
                   </Value>
-                  <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", color: lbl.color, opacity: hasLiveSpot && (inPlay || s.state === "above" || s.state === "below") ? 1 : 0.4, minWidth: 56, textAlign: "right" }}>
+                  <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", color: lbl.color, opacity: showStrong || (isOn && !rthNow) ? 1 : 0.4, minWidth: 56, textAlign: "right" }}>
                     {lbl.text}
                   </span>
                 </Row>
@@ -899,6 +1023,7 @@ function LevelsCard() {
           </div>
         </>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -945,6 +1070,7 @@ function ContractLookupCard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [expOpen, setExpOpen] = useState(false);
 
   // Real listed expirations for the active ticker.
@@ -989,6 +1115,7 @@ function ContractLookupCard() {
       }
       setResult(d.result as ProbeResult);
       setLoaded(`${ticker} ${exp} ${strike}${side}`);
+      setLastUpdated(Date.now());
     } catch (e) {
       setError(String(e));
       setResult(null);
@@ -1020,9 +1147,9 @@ function ContractLookupCard() {
   ];
 
   return (
-    <Card accent="red" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
+    <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
       <Row>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.red }}>Contract Lookup</span>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
         {loaded && <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
       </Row>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -1076,6 +1203,21 @@ function ContractLookupCard() {
           </div>
         </>
       )}
+      <UpdatedStamp at={lastUpdated} />
+    </Card>
+  );
+}
+
+// Empty placeholder card — reserved slot for an upcoming panel.
+function BlankCard() {
+  return (
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 140 }}>
+      <div
+        className="flex items-center justify-center"
+        style={{ flex: 1, minHeight: 100, borderRadius: 10, border: `1px dashed ${T.border}`, color: T.muted, fontSize: 11, fontStyle: "italic" }}
+      >
+        — to be built —
+      </div>
     </Card>
   );
 }
@@ -1084,6 +1226,40 @@ function ContractLookupCard() {
 export default function AnalyticsPage() {
   return (
     <PageShell>
+      {/* TEST: drop ONLY the colored accent strip (keep glass bg + top glow).
+          Scoped to this page; shared theme untouched. */}
+      <style>{`
+        .analytics-flat .card-hover {
+          border-top: 1px solid ${T.border} !important;
+          position: relative;
+        }
+        /* Cursor-follow cyan glow — CSS-var driven, no React re-render. */
+        .analytics-flat .card-hover::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          opacity: 0;
+          transition: opacity 0.2s ease;
+          background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 0%), rgba(33,158,188,0.16), transparent 70%);
+          z-index: 0;
+        }
+        .analytics-flat .card-hover:hover::after { opacity: 1; }
+        /* keep card content above the glow */
+        .analytics-flat .card-hover > * { position: relative; z-index: 1; }
+      `}</style>
+      <div
+        className="analytics-flat"
+        style={{ display: "contents" }}
+        onMouseMove={(e) => {
+          const card = (e.target as HTMLElement).closest(".card-hover") as HTMLElement | null;
+          if (!card) return;
+          const r = card.getBoundingClientRect();
+          card.style.setProperty("--mx", `${e.clientX - r.left}px`);
+          card.style.setProperty("--my", `${e.clientY - r.top}px`);
+        }}
+      >
       <Card
         accent="cyan"
         title="Analytics"
@@ -1101,23 +1277,15 @@ export default function AnalyticsPage() {
         <GreeksCard />
         <IbCard />
         <LevelsCard />
-        <ContractLookupCard />
 
-        {/* Combined output — where the strategy is assembled. */}
-        <Card accent="green" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 8 }}>
-          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: T.green }}>
-            Strategy Output
-          </span>
-          <p className="text-xs" style={{ color: T.text, opacity: 0.8, margin: 0 }}>
-            Synthesized signal / bias / plan assembled from the inputs above.
-          </p>
-          <div
-            className="flex items-center justify-center"
-            style={{ minHeight: 120, borderRadius: 10, border: `1px dashed ${T.border}`, color: T.muted, fontSize: 11, fontStyle: "italic" }}
-          >
-            — to be built —
-          </div>
-        </Card>
+        {/* 4 reserved slots above Contract Lookup. */}
+        <BlankCard />
+        <BlankCard />
+        <BlankCard />
+        <BlankCard />
+
+        <ContractLookupCard />
+      </div>
       </div>
     </PageShell>
   );
