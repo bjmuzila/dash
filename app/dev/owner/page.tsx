@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, Fragment } from "react";
 import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
@@ -341,9 +341,9 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
         fontSize: 11,
         fontWeight: 500,
         letterSpacing: "0.01em",
-        background: ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.12)",
-        border: `1px solid ${ok ? HOME_THEME.border : HOME_THEME.red + "40"}`,
-        color: ok ? HOME_THEME.textSecondary : HOME_THEME.red,
+        background: ok ? `${HOME_THEME.green}1f` : `${HOME_THEME.red}1f`,
+        border: `1px solid ${ok ? HOME_THEME.green + "55" : HOME_THEME.red + "55"}`,
+        color: ok ? HOME_THEME.green : HOME_THEME.red,
       }}
     >
       <span
@@ -351,7 +351,7 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
           width: 6,
           height: 6,
           borderRadius: "50%",
-          background: ok ? HOME_THEME.textMuted : HOME_THEME.red,
+          background: ok ? HOME_THEME.green : HOME_THEME.red,
         }}
       />
       {label}
@@ -412,6 +412,9 @@ function StatCard({
       display: "flex",
       flexDirection: "column",
       gap: 6,
+      borderTop: `2px solid ${accent}`,
+      borderTopLeftRadius: 12,
+      borderTopRightRadius: 12,
     }}>
       <div style={{ fontSize: 11, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
@@ -475,13 +478,14 @@ function AccordionCard({
 }) {
   void open; void onToggle; void id;
   return (
-    <div style={{ ...homePanelStyle, overflow: "visible" }}>
+    <div style={{ ...homePanelStyle, overflow: "visible", borderTop: `2px solid ${accent}`, borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
           padding: "12px 16px",
           borderBottom: `1px solid ${HOME_THEME.border}`,
-          background: "transparent",
+          background: `${accent}0d`,
+          borderTopLeftRadius: 10, borderTopRightRadius: 10,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
@@ -807,89 +811,214 @@ function OverviewSection({ metrics }: {
     activeSessions: number | null;
     uptime: string;
     feed: Array<{ label: string; loads: number; ago: string; active: boolean }>;
+    topPages: Array<{ label: string; loads: number }>;
+    rowsToday: Array<{ label: string; rows: number }>;
+    infra: {
+      cpu: { value: string; spark: number[] };
+      memory: { value: string; spark: number[] };
+      hostNet: { value: string; spark: number[] };
+      cfEgress: { value: string; spark: number[] };
+      wsPerHr: string;
+      wsSplit: string;
+    };
+    ops: {
+      feedbackOpen: number;
+      levelsCount: number;
+      levelsRun: string | null;
+      staleEm: number;
+      eodToday: number;
+      maintenance: boolean;
+    };
   };
 }) {
-  const { daily, weekly, totalVisits, activePages, users, waitlist, activeSessions, uptime, feed } = metrics;
+  const { daily, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, infra, ops } = metrics;
+  void activePages;
   const isMobile = useIsMobile();
 
-  // Daily Activity = real site visits, last 12 days (ET). seriesB left empty (no
-  // "previous" comparison series for raw daily traffic).
-  const seriesNow = daily.counts;
-  const months = daily.labels;
-  const seriesPrev: number[] = [];
+  // ── Command center — Metabase-style multi-color on dark. ──
+  // Categorical palette: each metric/series/row gets its own hue.
+  const PALETTE = ["#3FB8A0", "#5DBB8E", "#E8A23D", "#5B9BD5", "#E0A85E", "#E06C5E", "#4FB3C9", "#88C97A"];
+  const pc = (i: number) => PALETTE[i % PALETTE.length];
+  const TRACK = "rgba(255,255,255,0.06)";
+  const cardStyle: React.CSSProperties = { ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 };
+  const titleStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: HOME_THEME.text, marginBottom: 11 };
 
-  // Weekly Signups (was "Weekly Invoices") — real new users per week.
-  const invoiceLabels = weekly.labels;
-  const invoiceBars = weekly.counts;
-  const wkMin = invoiceBars.length ? Math.min(...invoiceBars) : 0;
-  const wkMax = invoiceBars.length ? Math.max(...invoiceBars) : 0;
+  // Traffic line path (12 days).
+  const traffic = daily.counts.length ? daily.counts : [0];
+  const tMin = Math.min(...traffic), tMax = Math.max(...traffic), tRange = tMax - tMin || 1;
+  const trafficPath = traffic.map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, traffic.length - 1)) * 100},${30 - ((v - tMin) / tRange) * 26}`).join(" ");
 
-  // Project Progress mini-card → reuse the daily traffic shape as a real sparkline.
-  const progress = daily.counts.length ? daily.counts : [0];
-  const pMin = Math.min(...progress), pMax = Math.max(...progress), pRange = pMax - pMin || 1;
-  const progPath = progress.map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, progress.length - 1)) * 100},${28 - ((v - pMin) / pRange) * 24}`).join(" ");
+  // Cumulative users (running sum of weekly signups) — illustrative shape.
+  const cum: number[] = [];
+  weekly.counts.reduce((acc, v) => { const n = acc + v; cum.push(n); return n; }, (users ?? 0) - weekly.counts.reduce((a, b) => a + b, 0));
+  const cMin = Math.min(...(cum.length ? cum : [0])), cMax = Math.max(...(cum.length ? cum : [1])), cRange = cMax - cMin || 1;
+  const cumPath = (cum.length ? cum : [0]).map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, cum.length - 1)) * 100},${30 - ((v - cMin) / cRange) * 26}`).join(" ");
+
+  const wkMax = weekly.counts.length ? Math.max(...weekly.counts) : 1;
+  const topMax = topPages.length ? Math.max(...topPages.map((p) => p.loads), 1) : 1;
+  const rowsMax = rowsToday.length ? Math.max(...rowsToday.map((r) => r.rows), 1) : 1;
+  const trafficDelta = traffic.length >= 2 && traffic[0] > 0
+    ? Math.round(((traffic[traffic.length - 1] - traffic[0]) / traffic[0]) * 100) : null;
+
+  // Mini horizontal-bar list — each row its own color.
+  const BarList = ({ rows, max, mono }: { rows: { label: string; n: number }[]; max: number; mono?: boolean }) => (
+    <div>
+      {rows.map((r, i) => (
+        <div key={r.label + i} style={{ marginBottom: 9 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3, color: HOME_THEME.text, fontFamily: mono ? "monospace" : "inherit" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: pc(i), flexShrink: 0 }} />{r.label}
+            </span>
+            <span style={{ color: HOME_THEME.muted }}>{r.n.toLocaleString()}</span>
+          </div>
+          <div style={{ height: 7, background: TRACK, borderRadius: 4, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${Math.round((r.n / max) * 100)}%`, background: pc(i), borderRadius: 4 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const InfraRow = ({ label, value, spark, color }: { label: string; value: string; spark: number[]; color: string }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `0.5px solid ${HOME_THEME.border}` }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: HOME_THEME.muted, width: 96 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />{label}
+      </span>
+      <span style={{ fontSize: 14, fontWeight: 500, fontFamily: "monospace", width: 78, color: HOME_THEME.text }}>{value}</span>
+      <div style={{ marginLeft: "auto", width: 64 }}><Sparkline data={spark} accent={color} height={20} /></div>
+    </div>
+  );
+
+  const OpsRow = ({ label, children, last }: { label: string; children: React.ReactNode; last?: boolean }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, padding: "10px 0", borderBottom: last ? "none" : `0.5px solid ${HOME_THEME.border}`, color: HOME_THEME.text }}>
+      <span>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 500, fontFamily: "monospace" }}>{children}</span>
+    </div>
+  );
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) clamp(260px, 26%, 340px)", gap: 12, alignItems: "start" }}>
-      {/* ── Left: main stats column ── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-        {/* Top charts row */}
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1.5fr) minmax(0, 1fr)", gap: 12 }}>
-          <LineChartCard title="Daily Activity" subtitle="Site visits · last 12 days" seriesA={seriesNow} seriesB={seriesPrev} labels={months} />
-          <BarChartCard title="Weekly Signups" subtitle="New users · last 7 weeks" bars={invoiceBars} labels={invoiceLabels} footerMin={String(wkMin)} footerMax={String(wkMax)} />
-        </div>
-
-        {/* Big-number metric cards — real owner metrics */}
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 12 }}>
-          <BigMetricCard label="Total Users" value={users != null ? users.toLocaleString() : "—"} delta="" accent={HOME_THEME.purple} />
-          <BigMetricCard label="Waitlist Signups" value={waitlist != null ? waitlist.toLocaleString() : "—"} delta="" accent={HOME_THEME.green} />
-          <BigMetricCard label="Active Sessions" value={activeSessions != null ? activeSessions.toLocaleString() : "—"} delta="" accent={HOME_THEME.red} />
-          <BigMetricCard label="Visits (window)" value={totalVisits.toLocaleString()} delta="" accent={HOME_THEME.orange} />
-        </div>
-
-        {/* Small stat chips + progress mini-card */}
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr)) minmax(0, 1.2fr)", gap: 12 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <StatChip icon="🟢" label="Pages Open Now" value={activePages.toLocaleString()} accent={HOME_THEME.green} />
-            <StatChip icon="👥" label="Total Users" value={users != null ? users.toLocaleString() : "—"} accent={HOME_THEME.cyan} />
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* KPI strip */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(6, minmax(0,1fr))", gap: 10 }}>
+        {[
+          { l: "Visits · 12d", v: totalVisits.toLocaleString() },
+          { l: "Total users", v: users != null ? users.toLocaleString() : "—" },
+          { l: "Active now", v: activeSessions != null ? activeSessions.toLocaleString() : "—" },
+          { l: "Waitlist", v: waitlist != null ? waitlist.toLocaleString() : "—" },
+          { l: "CPU", v: infra.cpu.value },
+          { l: "WS out/hr", v: infra.wsPerHr },
+        ].map((k, i) => (
+          <div key={k.l} style={{ ...homePanelStyle, padding: "11px 13px", borderTop: `2px solid ${pc(i)}`, borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
+            <div style={{ fontSize: 10, color: HOME_THEME.muted, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k.l}</div>
+            <div style={{ fontSize: 19, fontWeight: 500, fontFamily: "monospace", color: pc(i), lineHeight: 1 }}>{k.v}</div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <StatChip icon="📈" label="Visits (window)" value={totalVisits.toLocaleString()} accent={HOME_THEME.purple} />
-            <StatChip icon="⏱" label="Uptime" value={uptime} accent={HOME_THEME.orange} />
+        ))}
+      </div>
+
+      {/* Traffic · signups · cumulative */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(3, minmax(0,1fr))", gap: 10 }}>
+        <div style={cardStyle}>
+          <div style={titleStyle}>Traffic · 12 days</div>
+          <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: "100%", height: 90, display: "block" }}>
+            <path d={`${trafficPath} L100,32 L0,32 Z`} fill={pc(3) + "22"} stroke="none" />
+            <path d={trafficPath} fill="none" stroke={pc(3)} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.muted }}>
+            <span>{totalVisits.toLocaleString()} visits</span>
+            {trafficDelta != null && <span style={{ color: trafficDelta >= 0 ? pc(1) : HOME_THEME.red }}>{trafficDelta >= 0 ? "▲" : "▼"} {Math.abs(trafficDelta)}%</span>}
           </div>
-          <div style={{ ...homePanelStyle, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text }}>Traffic Trend</span>
-              <span style={{ fontSize: 8.5, fontWeight: 500, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}22`, border: `1px solid ${HOME_THEME.cyan}44`, borderRadius: 12, padding: "2px 8px", letterSpacing: "0.06em" }}>12 DAYS</span>
-            </div>
-            <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ width: "100%", height: 56, display: "block" }}>
-              <path d={progPath} fill="none" stroke={HOME_THEME.purple} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-            </svg>
+        </div>
+        <div style={cardStyle}>
+          <div style={titleStyle}>Signups · 7 weeks</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
+            {weekly.counts.map((v, i) => (
+              <div key={i} style={{ flex: 1, background: pc(1), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / wkMax) * 82))}px` }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.muted }}>
+            <span>{weekly.counts.reduce((a, b) => a + b, 0)} new</span>
+            <span style={{ color: pc(1) }}>▲ {weekly.counts[weekly.counts.length - 1] ?? 0} this wk</span>
+          </div>
+        </div>
+        <div style={cardStyle}>
+          <div style={titleStyle}>Cumulative users</div>
+          <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: "100%", height: 90, display: "block" }}>
+            <path d={`${cumPath} L100,32 L0,32 Z`} fill={pc(0) + "22"} stroke="none" />
+            <path d={cumPath} fill="none" stroke={pc(0)} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.muted }}>
+            <span>{users != null ? `${users.toLocaleString()} total` : "—"}</span>
+            <span>{activeSessions != null ? `${activeSessions} active now` : ""}</span>
           </div>
         </div>
       </div>
 
-      {/* ── Right: real recent-activity feed ── */}
-      <div style={{ ...homePanelStyle, padding: "14px 14px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Recent Activity</span>
-          <span style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace" }}>newest first</span>
+      {/* Top pages · rows today */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1fr 1fr", gap: 10 }}>
+        <div style={cardStyle}>
+          <div style={{ ...titleStyle, display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: pc(3) }} />Top pages · by loads</div>
+          {topPages.length === 0
+            ? <div style={{ fontSize: 12, color: HOME_THEME.muted }}>No page loads recorded yet.</div>
+            : <BarList rows={topPages.map((p) => ({ label: p.label, n: p.loads }))} max={topMax} mono />}
         </div>
-        {feed.length === 0 ? (
-          <div style={{ fontSize: 11, color: HOME_THEME.muted, padding: "8px 2px" }}>No page loads recorded yet.</div>
-        ) : feed.map((f, i) => {
-          const accents = [HOME_THEME.purple, HOME_THEME.cyan, HOME_THEME.green, HOME_THEME.orange];
-          return (
-            <AgendaItem
-              key={f.label + i}
-              time={`${f.loads.toLocaleString()}×`}
-              title={f.label}
-              who={f.ago}
-              accent={accents[i % accents.length]}
-              status={f.active ? "OPEN" : undefined}
-            />
-          );
-        })}
+        <div style={cardStyle}>
+          <div style={{ ...titleStyle, display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: pc(1) }} />Rows written today · by table</div>
+          <BarList rows={rowsToday.map((r) => ({ label: r.label, n: r.rows }))} max={rowsMax} mono />
+        </div>
+      </div>
+
+      {/* Hourly heatmap — sample shape until hourly buckets are wired. */}
+      <div style={cardStyle}>
+        <div style={{ ...titleStyle, display: "flex", justifyContent: "space-between" }}>
+          <span>Hourly load heatmap · visits by hour × weekday (ET)</span>
+          <span style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace" }}>sample</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "32px repeat(24, 1fr)", gap: 2 }}>
+          <div />
+          {Array.from({ length: 24 }, (_, h) => (
+            <div key={"h" + h} style={{ fontSize: 8, color: HOME_THEME.muted, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
+          ))}
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, di) => (
+            <Fragment key={d}>
+              <div style={{ fontSize: 10, color: HOME_THEME.muted, lineHeight: "30px" }}>{d}</div>
+              {Array.from({ length: 24 }, (_, h) => {
+                const v = (h >= 13 && h <= 21 && di < 5) ? 0.28 + ((h * 7 + di * 13) % 10) / 14 : 0.06 + ((h * 3 + di * 5) % 6) / 36;
+                return <div key={d + h} style={{ height: 30, borderRadius: 2, background: `rgba(91,155,213,${v.toFixed(2)})` }} />;
+              })}
+            </Fragment>
+          ))}
+        </div>
+      </div>
+
+      {/* Infra · ops */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1fr 1fr", gap: 10 }}>
+        <div style={cardStyle}>
+          <div style={titleStyle}>Infra · live</div>
+          <InfraRow label="CPU" value={infra.cpu.value} spark={infra.cpu.spark} color={pc(4)} />
+          <InfraRow label="Memory" value={infra.memory.value} spark={infra.memory.spark} color={pc(2)} />
+          <InfraRow label="Host net 1h" value={infra.hostNet.value} spark={infra.hostNet.spark} color={pc(3)} />
+          <InfraRow label="CF egress 24h" value={infra.cfEgress.value} spark={infra.cfEgress.spark} color={pc(6)} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0" }}>
+            <span style={{ fontSize: 13, color: HOME_THEME.muted, width: 96 }}>WS split</span>
+            <span style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "monospace" }}>{infra.wsSplit}</span>
+          </div>
+        </div>
+        <div style={cardStyle}>
+          <div style={titleStyle}>Ops queues</div>
+          <OpsRow label="Feedback open">{ops.feedbackOpen}</OpsRow>
+          <OpsRow label="Levels published">{ops.levelsCount} <span style={{ color: HOME_THEME.muted }}>· {fmtLastRun(ops.levelsRun)}</span></OpsRow>
+          <OpsRow label="Stale EM tickers">
+            {ops.staleEm > 0
+              ? <span style={{ color: HOME_THEME.red }}>{ops.staleEm}</span>
+              : <span style={{ color: HOME_THEME.muted }}>0</span>}
+          </OpsRow>
+          <OpsRow label="EOD GEX today">
+            {ops.eodToday > 0 ? `${ops.eodToday} saved` : <span style={{ color: HOME_THEME.muted }}>not yet · fires 3:55pm</span>}
+          </OpsRow>
+          <OpsRow label="Maintenance" last>
+            {ops.maintenance ? <span style={{ color: HOME_THEME.red }}>ON</span> : <span style={{ color: HOME_THEME.muted }}>off</span>}
+          </OpsRow>
+        </div>
       </div>
     </div>
   );
@@ -1421,7 +1550,12 @@ export default function OwnerDashboard() {
   const doMvcSnapshot = useCallback(async () => {
     setCtlBusy("mvcSnap");
     try {
-      const r = await fetch("/proxy/mvc-snapshot", { method: "POST" });
+      // force=1 → manual owner snapshot overrides the outside-RTH guard.
+      const r = await fetch("/proxy/mvc-snapshot?force=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true }),
+      });
       const j = await r.json();
       flashMsg("mvcSnap", j?.ok ? `Snapshot saved · MVC ${j.strike} · SPX ${j.spot}` : `Skipped: ${j?.error || r.status}`, !!j?.ok);
     } catch (e) {
@@ -1661,6 +1795,47 @@ export default function OwnerDashboard() {
         active: p.status === "active",
       }));
     const signups = (clerk?.stats?.recent ?? []).map((u) => ({ createdAt: u.createdAt }));
+
+    // Top pages by lifetime loads (real, from page_load_status totalLoads).
+    const topPages = [...pageStatuses]
+      .sort((a, b) => (b.totalLoads ?? 0) - (a.totalLoads ?? 0))
+      .slice(0, 5)
+      .map((p) => ({ label: "/" + p.pageKey.replace(/^\//, ""), loads: p.totalLoads ?? 0 }));
+
+    // Rows written today per tracked table (real, from /api/db counts in dbStats).
+    const rowsToday = TABLES.map((t) => ({ label: t.label, rows: dbStats[t.id] ?? 0 }));
+
+    // Infra — live values + sparklines from Hetzner/CF/self metrics.
+    const fmtBytes = (v: number | null): string =>
+      v == null ? "—" : v < 1024 ? `${v.toFixed(0)} MB` : `${(v / 1024).toFixed(2)} GB`;
+    const wsTotal = wsBw ? wsBw.lastMinTotal : 0;
+    const wsPerHr = wsTotal ? (wsTotal * 60) / 1024 / 1024 : 0; // bytes/min → MB/hr
+    const infra = {
+      cpu: { value: cpuPct ? `${cpuPct.toFixed(0)}%` : "—", spark: renderMetrics?.cpu.spark ?? [] },
+      memory: { value: memMb ? `${memMb.toFixed(0)} MB` : "—", spark: renderMetrics?.memory.spark ?? [] },
+      hostNet: { value: fmtBytes(renderMetrics?.bandwidth.value ?? null), spark: renderMetrics?.bandwidth.spark ?? [] },
+      cfEgress: { value: fmtBytes(cfMetrics?.egress.value ?? null), spark: cfMetrics?.egress.spark ?? [] },
+      wsPerHr: wsPerHr ? `${wsPerHr.toFixed(1)} MB` : "—",
+      wsSplit: wsBw && wsBw.lastMinTotal
+        ? Object.entries(wsBw.lastMin)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([k, v]) => `${k} ${Math.round((v / wsBw.lastMinTotal) * 100)}%`)
+            .join(" · ")
+        : "—",
+    };
+
+    // Ops queue — real counts/states.
+    const staleEm = levels.tickers.filter((t) => t.stale).length;
+    const ops = {
+      feedbackOpen: feedbackOpenCount,
+      levelsCount: levels.count,
+      levelsRun: levels.lastRun,
+      staleEm,
+      eodToday: eodGex.length,
+      maintenance: maint === true,
+    };
+
     return {
       daily: dailyVisitSeries(visits, 12),
       weekly: weeklySignupSeries(signups, 7),
@@ -1671,6 +1846,10 @@ export default function OwnerDashboard() {
       activeSessions: clerk?.stats?.activeSessions ?? null,
       uptime: displayUptime != null ? fmtUptime(displayUptime) : "—",
       feed,
+      topPages,
+      rowsToday,
+      infra,
+      ops,
     };
   })();
 
@@ -1770,6 +1949,7 @@ export default function OwnerDashboard() {
         {/* ── System KPIs ── */}
         {SECTION_TAB.system === ownerTab && (
         <AccordionCard
+          accent={HOME_THEME.cyan}
           id="system"
           title="System"
           subtitle={`uptime ${displayUptime != null ? fmtUptime(displayUptime) : "—"} · ${dbHealth?.ok ? "pg OK" : "pg —"} · spot ${server.spot != null ? server.spot.toFixed(0) : "—"}`}
@@ -1986,10 +2166,9 @@ export default function OwnerDashboard() {
           onToggle={toggleSection}
         >
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
-            {TABLES.map(({ id, label }, idx) => {
+            {TABLES.map(({ id, label }) => {
               const count = (dbStats as Record<string, number>)[id];
-              const palette = [HOME_THEME.cyan, HOME_THEME.orange, HOME_THEME.green, HOME_THEME.red, HOME_THEME.purple];
-              const accent = palette[idx % palette.length];
+              const accent = HOME_THEME.cyan;
               return (
                 <div key={id} style={{
                   ...homePanelStyle,
@@ -1997,7 +2176,9 @@ export default function OwnerDashboard() {
                   minHeight: 0,
                   padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
                   overflow: "hidden",
-                  borderLeft: `2px solid ${accent}`,
+                  borderTop: `2px solid ${accent}`,
+                  borderTopLeftRadius: 12,
+                  borderTopRightRadius: 12,
                 }}>
                   <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
@@ -2016,7 +2197,7 @@ export default function OwnerDashboard() {
         {/* ── Controls ── */}
         {SECTION_TAB.controls === ownerTab && (
         <AccordionCard
-          accent={HOME_THEME.purple}
+          accent="#3FB8A0"
           id="controls"
           title="Controls"
           subtitle={`idle ${isIdle == null ? "—" : isIdle ? "ON" : "OFF"} · mvc ${mvcAuto == null ? "—" : mvcAuto ? "ON" : "OFF"} · maint ${maint == null ? "—" : maint ? "ON" : "OFF"}`}
@@ -2037,9 +2218,6 @@ export default function OwnerDashboard() {
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "idle" ? 0.6 : 1,
                     cursor: ctlBusy === "idle" ? "wait" : "pointer",
-                    background: isIdle ? "rgba(239,68,68,0.16)" : "rgba(255,255,255,0.06)",
-                    color: isIdle ? HOME_THEME.red : HOME_THEME.green,
-                    border: `1px solid ${isIdle ? HOME_THEME.red : HOME_THEME.green}55`,
                   }}
                 >
                   {ctlBusy === "idle" ? "…" : isIdle == null ? "—" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause"}
@@ -2056,9 +2234,6 @@ export default function OwnerDashboard() {
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "mvcAuto" ? 0.6 : 1,
                     cursor: ctlBusy === "mvcAuto" ? "wait" : "pointer",
-                    background: mvcAuto ? "rgba(255,255,255,0.06)" : "rgba(239,68,68,0.16)",
-                    color: mvcAuto ? HOME_THEME.green : HOME_THEME.red,
-                    border: `1px solid ${mvcAuto ? HOME_THEME.green : HOME_THEME.red}55`,
                   }}
                 >
                   {ctlBusy === "mvcAuto" ? "…" : mvcAuto == null ? "—" : mvcAuto ? "● Auto ON — disable" : "○ Auto OFF — enable"}
@@ -2075,9 +2250,6 @@ export default function OwnerDashboard() {
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "maint" ? 0.6 : 1,
                     cursor: ctlBusy === "maint" ? "wait" : "pointer",
-                    background: maint ? "rgba(239,68,68,0.16)" : "rgba(255,255,255,0.06)",
-                    color: maint ? HOME_THEME.red : HOME_THEME.green,
-                    border: `1px solid ${maint ? HOME_THEME.red : HOME_THEME.green}55`,
                   }}
                 >
                   {ctlBusy === "maint" ? "…" : maint == null ? "—" : maint ? "● Maint ON — go live" : "○ Maint OFF — enable"}
@@ -2091,7 +2263,7 @@ export default function OwnerDashboard() {
                 onClick={doReconnect}
                 disabled={ctlBusy === "reconnect"}
                 title="Tear down and re-establish the TT/dxLink feed (recovers from a dropped socket or expired auth without a Render restart)."
-                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "reconnect" ? 0.6 : 1, cursor: ctlBusy === "reconnect" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "reconnect" ? 0.6 : 1, cursor: ctlBusy === "reconnect" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "reconnect" ? "Reconnecting…" : "↻ Reconnect Feed"}
               </button>
@@ -2099,23 +2271,23 @@ export default function OwnerDashboard() {
                 onClick={doEodRun}
                 disabled={ctlBusy === "eod"}
                 title="Manually fire the EOD GEX recorder for $SPX/SPY/QQQ (in case the 3:55–4:05 ET window was missed)."
-                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "eod" ? 0.6 : 1, cursor: ctlBusy === "eod" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "eod" ? 0.6 : 1, cursor: ctlBusy === "eod" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "eod" ? "Recording…" : "▶ Run EOD GEX now"}
               </button>
               <button
                 onClick={doMvcSnapshot}
                 disabled={ctlBusy === "mvcSnap"}
-                title="Write a single MVC snapshot right now (requires RTH + a live chain)."
-                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
+                title="Write a single MVC snapshot right now (overrides the outside-RTH guard; still needs a live chain)."
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
               >
-                {ctlBusy === "mvcSnap" ? "Saving…" : "📸 MVC Snapshot now"}
+                {ctlBusy === "mvcSnap" ? "Snapshotting (may reconnect)…" : "📸 MVC Snapshot now"}
               </button>
               <button
                 onClick={doPremarketRun}
                 disabled={ctlBusy === "premarket"}
                 title="Generate the Analytics Premarket card's 5-bullet AI summary now (instead of waiting for the ~8am ET run)."
-                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
               </button>
@@ -2123,7 +2295,7 @@ export default function OwnerDashboard() {
                 onClick={doClearChat}
                 disabled={ctlBusy === "clearChat"}
                 title="Permanently delete ALL subscriber chat messages. Cannot be undone."
-                style={{ ...homeSecondaryButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, color: HOME_THEME.red, borderColor: `${HOME_THEME.red}66`, opacity: ctlBusy === "clearChat" ? 0.6 : 1, cursor: ctlBusy === "clearChat" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "clearChat" ? 0.6 : 1, cursor: ctlBusy === "clearChat" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "clearChat" ? "Erasing…" : "🗑️ Erase all chat"}
               </button>
@@ -2147,7 +2319,7 @@ export default function OwnerDashboard() {
         {/* ── EOD GEX save status ── */}
         {SECTION_TAB.eodgex === ownerTab && (
         <AccordionCard
-          accent={HOME_THEME.red}
+          accent="#4FB3C9"
           id="eodgex"
           title="EOD GEX · Today"
           subtitle={eodGex.length === 0 ? "not yet recorded" : `${eodGex.length} symbol(s) saved`}

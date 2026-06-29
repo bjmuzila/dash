@@ -92,11 +92,13 @@ function highestRow(chain, field) {
 
 async function collectOnce(base, opts = {}) {
   const manual = !!opts.manual;
+  const force = !!opts.force; // owner override: snapshot even outside RTH
   if (!manual && !autoEnabled) { console.log('[auto-mvc] skip — auto-collector PAUSED'); return; }
-  if (!isRTH()) {
+  if (!isRTH() && !force) {
     if (!manual) console.log('[auto-mvc] skip — outside RTH');
     return manual ? { ok: false, error: 'outside RTH' } : undefined;
   }
+  if (force && !isRTH()) console.log('[auto-mvc] FORCE — snapshot outside RTH (owner override)');
 
   let data;
   try {

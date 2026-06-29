@@ -498,7 +498,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 onDragEnd={clearDrag}
                 onClick={(e) => { if (didDragRef.current) { e.preventDefault(); return; } closeMenu(); }}
                 className={`nav-row${active ? " nav-active" : ""}${dragging ? " nav-dragging" : ""}`}
-                style={{ ...rowLink(item, active), flex: 1, paddingRight: 30, cursor: "grab", color: active ? rowLink(item, active).color : "#ffb300", background: active ? rowLink(item, active).background : "rgba(255,179,0,.08)" }}
+                style={{ ...rowLink(item, active), flex: 1, paddingRight: 30, cursor: "grab", color: active ? rowLink(item, active).color : "#ffb300" }}
               >
                 <NavGlyph href={item.href} />
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>

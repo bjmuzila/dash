@@ -59,7 +59,9 @@ export default function FitScale({
       <div
         ref={boxRef}
         style={{
-          width: "100%",
+          // Counter-scale the width so the post-transform box always fills the
+          // host edge-to-edge (no short right edge when scaled below 1).
+          width: `${100 / scale}%`,
           transformOrigin: align === "center" ? "top center" : "top left",
           transform: `scale(${scale})`,
           marginBottom: boxH ? -(boxH * (1 - scale)) : 0,

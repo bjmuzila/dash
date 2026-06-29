@@ -33,18 +33,16 @@ export const OWNER_THEME = {
   text: "#E7E9ED",           // primary text
   textSecondary: "#9AA1AC",  // supporting text
   textMuted: "#6B7280",      // hints / labels / mono stamps
-  // ── Accents NEUTRALIZED ──
-  // Per design rule: NO color accents anywhere except error states. Every former
-  // accent (cyan/purple/orange/green) now resolves to neutral slate, so values,
-  // ticks, left-borders, chart strokes, badges and "ok/up" states render in the
-  // calm neutral palette. RED is the ONLY color, reserved for error/down/fail.
-  // (Call sites still read `green` for an "ok" state — pointing it at neutral
-  // makes ok render neutral and only the red branch shows color.)
-  cyan: "#C2C7D0",      // was accent → neutral light slate (primary "value" tone)
-  purple: "#C2C7D0",    // neutral
-  orange: "#C2C7D0",    // neutral
-  green: "#C2C7D0",     // ok/up → neutral (NOT green)
-  red: HOME_THEME.red,  // errors only — the one real color
+  // ── Metabase-style multi-color palette ──
+  // Tokens map to the same categorical hues the command center uses, so the whole
+  // owner dashboard (Overview command center + FE/BE StatCards + section cards)
+  // shares one color language. green = ok/healthy, red = error/down; the rest are
+  // categorical accents.
+  cyan: "#5B9BD5",      // blue — category / informational values
+  purple: "#3FB8A0",    // teal — category (no purple)
+  orange: "#E8A23D",    // amber — category / counts
+  green: "#5DBB8E",     // green — ok / healthy / positive
+  red: "#E06C5E",       // coral-red — error / down / fail
   // ── Drop-in aliases so OWNER_THEME can stand in for HOME_THEME ──
   muted: "#9AA1AC",                  // alias of textSecondary (was bright #FFF)
   panelBg: "#14171D",                // flat slate (no rgba translucency)
@@ -85,9 +83,9 @@ export const homeHeaderStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-// ── Panel (drop-in for homePanelStyle) — flat slate card, hairline border ────
+// ── Panel (drop-in for homePanelStyle) — transparent card, hairline border ────
 export const homePanelStyle: CSSProperties = {
-  background: OWNER_THEME.panel,
+  background: "transparent",
   borderRadius: 12,
   border: `1px solid ${OWNER_THEME.border}`,
 };

@@ -35,6 +35,7 @@ const marketState = require('./state/market-state');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
+const { startGreeksTsWriter } = require('./greeks-ts-writer');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -341,13 +342,40 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Manually fire a greeks_ts write now (ignores RTH gate). Feeds the
+      // Analytics "Net Greeks" card. POST /proxy/greeks-ts-run
+      if (pathname === '/proxy/greeks-ts-run' && req.method === 'POST') {
+        const { collectGreeksTs } = require('./greeks-ts-writer');
+        collectGreeksTs(`http://localhost:${PORT}`, { force: true })
+          .then(() => sendJson(res, 200, { ok: true }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
       if (pathname === '/proxy/mvc-snapshot' && req.method === 'POST') {
         const { collectOnce } = require('./mvc-auto-snapshot');
-        collectOnce(`http://localhost:${PORT}`, { manual: true })
-          .then((r) => sendJson(res, 200, r ?? { ok: false, error: 'no result' }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        // ?force=1 (manual owner button) overrides the outside-RTH guard.
+        const force = /[?&]force=1\b/.test(req.url || '');
+        const base = `http://localhost:${PORT}`;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        (async () => {
+          let r = await collectOnce(base, { manual: true, force });
+          // On force, an empty chain usually means the feed isn't subscribed
+          // (outside RTH). Reconnect to rebuild the chain, wait, then retry once.
+          if (force && r && r.ok === false && r.error === 'empty chain'
+              && proxy && typeof proxy.reconnect === 'function') {
+            console.log('[mvc-snapshot] empty chain on force — reconnecting feed and retrying');
+            try { await proxy.reconnect(); } catch (e) { console.log('[mvc-snapshot] reconnect failed:', e?.message || e); }
+            // Give the feed time to resubscribe + the chain to populate.
+            for (let i = 0; i < 8; i++) {
+              await sleep(2000);
+              r = await collectOnce(base, { manual: true, force });
+              if (!r || r.ok !== false || r.error !== 'empty chain') break;
+            }
+          }
+          sendJson(res, 200, r ?? { ok: false, error: 'no result' });
+        })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
       // Generate the pre-market AI summary now (ignores the 8am schedule).
@@ -570,6 +598,9 @@ async function main() {
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);
+    // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
+    // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
+    startGreeksTsWriter(PORT);
     // In-process weekly publisher for the customer /em page: computes EM + zones
     // server-side and POSTs each ticker to /api/levels (Sat ~09:00 ET, then
     // auto-retries unpriced tickers on a backoff). No startup publish by design.

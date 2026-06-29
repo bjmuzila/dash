@@ -251,7 +251,7 @@ function KpiCard({ label, value, delta, prefix = "" }: { label: string; value: s
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 500, color: HOME_THEME.text, lineHeight: 1 }}>{prefix}{value}</div>
-      <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: HOME_THEME.textSecondary }}>
         <span>{up ? "▲" : "▼"}</span>
         <span>{Math.abs(delta)}% vs prior period</span>
       </div>
@@ -645,7 +645,7 @@ function FinancialAnalytics({ period }: { period: Period }) {
               <div style={{ fontSize: 10, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{row.label}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
                 <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.text }}>{fmtMoney(row.value)}</div>
-                <span style={{ fontSize: 10, fontWeight: 700, color: row.up ? HOME_THEME.green : HOME_THEME.red }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.textSecondary }}>
                   {row.up ? "▲" : "▼"} {Math.abs(row.delta)}%
                 </span>
               </div>

@@ -237,15 +237,25 @@ if barstate.isfirst
 // Resolve index: explicit dropdown, else Auto-match the chart symbol.
 f_idx() =>
     int idx = -1
+    sym = str.upper(syminfo.ticker)
     if sel != "Auto"
         for i = 0 to ${n - 1}
             if array.get(NAMES, i) == sel
                 idx := i
     else
+        // Exact match first (chart symbol == ticker name).
         for i = 0 to ${n - 1}
-            nm = array.get(NAMES, i)
-            if str.contains(str.upper(syminfo.ticker), nm)
+            if idx < 0 and array.get(NAMES, i) == sym
                 idx := i
+        // Fallback: prefer the LONGEST name contained in the symbol, so e.g.
+        // an NVDA chart can't get hijacked by short names like "V" or "MA".
+        if idx < 0
+            int best = -1
+            for i = 0 to ${n - 1}
+                nm = array.get(NAMES, i)
+                if str.contains(sym, nm) and str.length(nm) > best
+                    best := str.length(nm)
+                    idx := i
     idx
 idx = f_idx()
 

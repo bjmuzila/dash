@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-28 — Options Chain ATM/MVC + ICT chart overhaul
+
+Options Chain (`app/options-chain/page.tsx`): recolored the MVC blink (`mvcGlow` keyframe + cell borders) from white to gold, clipped the box-shadow so no divider shows between the strike/value cells (`.mvc-peak-left`/`.mvc-peak-right`), and added a white border + "ATM" gold sticker on the ATM strike row. NavMenu (`components/shared/NavMenu.tsx`): Quick Pages font now gold (no highlight) and removed Feedback from the GEX group. ICT page (`app/ict/page.tsx`): gray current-price line, live cards sorted to top, Hover Info on/off toggle, 7-day historical window (`weekCandles` from hook `historical`+session), 5m/15m/30m/1h timeframe switcher (`tfCandles` aggregation), all overlays default off, FVG button relabeled, and restyled the whole toggle bar into the toolbar pill theme with theme-token buttons.
+
+## 2026-06-28 — Net Greeks card writer (Analytics page)
+
+Fixed the Analytics page "Net Greeks" card (`app/analytics/page.tsx`) showing "No greeks series for today yet" — root cause was that nothing wrote the `greeks_ts` table during the session (only manual /dev and /database POSTs). Added `server-v2/greeks-ts-writer.js`, a 5-minute RTH writer (modeled on `eod-gex-recorder.js`) that reads `$SPX` gexRows from `/proxy/gex`, sums net GEX/DEX/CHEX/VEX on the OI+Vol basis, and writes gex/dex in $B + chex/vex in $M to match the card's scale; self-creates the table, guards on <20 populated strikes, and fires once ~20s after boot. Wired into `server-v2/server-with-proxy.js` next to `startEodGexRecorder` plus a manual `POST /proxy/greeks-ts-run`.
+
 ## 2026-06-28 — Home Econ Calendar card collapsible
 
 Made the Economic Calendar / Signals card on `app/home/page.tsx` collapsible via a chevron toggle in its existing tab bar (no toolbar added; expanded by default). Added `econCollapsed` state, a chevron button with `marginLeft:auto` in the tab header, and the card's `flex` now drops to `0 0 auto` when collapsed. Fix: initial implementation conditionally unmounted the panel, wiping its loaded events and forcing a refetch each toggle — switched to a `display:none` hide on the body wrapper so `EconCalendarPanel`/`SignalsPanel` stay mounted and retain data + filter state.

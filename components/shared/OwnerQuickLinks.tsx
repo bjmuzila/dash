@@ -11,6 +11,7 @@ import { HOME_THEME } from "./homeTheme";
 export const OWNER_LINKS: { label: string; href: string }[] = [
   { label: "Owner", href: "/dev/owner" },
   { label: "Admin", href: "/dev/admin" },
+  { label: "Emails", href: "/admin/emails" },
   { label: "Database", href: "/database" },
   { label: "Dev", href: "/dev" },
   { label: "Est. Moves BE", href: "/estimated-move" },

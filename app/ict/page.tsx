@@ -110,7 +110,43 @@ const WIN_COLOR: Record<TimeWindow["kind"], string> = {
 };
 
 export default function IctPage() {
-  const { sessionCandles, connected } = useEsCandles();
+  const { sessionCandles, historical, connected } = useEsCandles();
+
+  // Timeframe switcher — base feed is 5m; higher TFs are aggregated from it.
+  const [tf, setTf] = useState<5 | 15 | 30 | 60>(5);
+
+  // 7 calendar days of 5m bars: DB history merged with the live rolling session
+  // (live wins on slotKey). Replaces the hook's 30h sessionCandles window.
+  const weekCandles = useMemo(() => {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const map = new Map<string, (typeof sessionCandles)[number]>();
+    for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
+    for (const c of sessionCandles) if (c.timestamp >= cutoff) map.set(c.slotKey, c);
+    return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
+  }, [historical, sessionCandles]);
+
+  // Aggregate the 5m base bars up to the selected timeframe. Buckets are aligned
+  // to the ET wall clock via timestamp flooring (each bucket = tf minutes).
+  const tfCandles = useMemo(() => {
+    if (tf === 5) return weekCandles;
+    const bucketMs = tf * 60 * 1000;
+    const buckets = new Map<number, (typeof weekCandles)[number]>();
+    const order: number[] = [];
+    for (const c of weekCandles) {
+      const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
+      const b = buckets.get(key);
+      if (!b) {
+        buckets.set(key, { ...c, timestamp: key });
+        order.push(key);
+      } else {
+        b.high = Math.max(b.high, c.high);
+        b.low = Math.min(b.low, c.low);
+        b.close = c.close;
+        b.volume = (b.volume || 0) + (c.volume || 0);
+      }
+    }
+    return order.map((k) => buckets.get(k)!);
+  }, [weekCandles, tf]);
   const captureRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -127,14 +163,15 @@ export default function IctPage() {
   type HitRegion = { x: number; y: number; w: number; h: number; conceptId: string; title: string; detail?: string };
   const hitsRef = useRef<HitRegion[]>([]);
   const [hover, setHover] = useState<{ x: number; y: number; concept: Concept; detail?: string } | null>(null);
+  const [hoverEnabled, setHoverEnabled] = useState(true);
 
   // Overlay toggles.
-  const [showFvg, setShowFvg] = useState(true);
-  const [showOb, setShowOb] = useState(true);
-  const [showLiq, setShowLiq] = useState(true);
-  const [showStruct, setShowStruct] = useState(true);
-  const [showKz, setShowKz] = useState(true);
-  const [showPd, setShowPd] = useState(true);
+  const [showFvg, setShowFvg] = useState(false);
+  const [showOb, setShowOb] = useState(false);
+  const [showLiq, setShowLiq] = useState(false);
+  const [showStruct, setShowStruct] = useState(false);
+  const [showKz, setShowKz] = useState(false);
+  const [showPd, setShowPd] = useState(false);
 
   // Which glossary cards are expanded (collapsed by default → icon + title only).
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -183,11 +220,11 @@ export default function IctPage() {
   useEffect(() => { const id = setInterval(() => setClockTick((n) => n + 1), 30_000); return () => clearInterval(id); }, []);
 
   const candles: IctCandle[] = useMemo(
-    () => sessionCandles.map((c) => ({
+    () => tfCandles.map((c) => ({
       timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close,
       volume: c.volume, date: c.date,
     })),
-    [sessionCandles]
+    [tfCandles]
   );
 
   const ict: IctAnalysis = useMemo(() => analyzeICT(candles), [candles]);
@@ -234,6 +271,7 @@ export default function IctPage() {
     });
     const series = chart.addSeries(CandlestickSeries, {
       wickUpColor: "#30d158", upColor: "#30d158", wickDownColor: "#ff5b5b", downColor: "#ff5b5b", borderVisible: false,
+      priceLineColor: "#8a8f98",
     });
     chartApiRef.current = chart;
     seriesRef.current = series;
@@ -605,24 +643,72 @@ export default function IctPage() {
       <div ref={captureRef} className="grid grid-cols-1 gap-4 rounded-xl bg-[#080b10] p-1">
         {/* Chart + overlays */}
         <div className="self-start rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-2">
-          {/* Overlay toggles */}
-          <div className="mb-2 flex flex-wrap items-center gap-1.5 px-1">
+          {/* Overlay toggles — toolbar-themed pill (blue→teal gradient border) */}
+          <div
+            className="mb-2"
+            style={{
+              borderRadius: 999,
+              padding: 1.5,
+              background: "linear-gradient(110deg, rgba(33,158,188,0.55), rgba(59,130,246,0.4) 35%, rgba(33,158,188,0.15) 60%, rgba(33,158,188,0.55))",
+              boxShadow: "0 14px 34px -14px rgba(0,0,0,0.8), 0 0 18px -6px rgba(33,158,188,0.4)",
+            }}
+          >
+          <div
+            className="flex flex-wrap items-center gap-1.5"
+            style={{
+              borderRadius: 998,
+              padding: "8px 14px",
+              background: "rgba(10,13,20,0.96)",
+              backdropFilter: "blur(16px)",
+            }}
+          >
             {([
-              ["FVG (5m)", showFvg, setShowFvg, C.fvg], ["Order Blocks", showOb, setShowOb, C.ob],
+              ["FVG", showFvg, setShowFvg, C.fvg], ["Order Blocks", showOb, setShowOb, C.ob],
               ["Liquidity", showLiq, setShowLiq, C.liq], ["Structure", showStruct, setShowStruct, C.struct],
               ["Kill Zones", showKz, setShowKz, "41,182,246"], ["Premium/Discount", showPd, setShowPd, "255,255,255"],
             ] as [string, boolean, (v: boolean) => void, string][]).map(([lbl, on, set, rgb]) => (
               <button key={lbl} onClick={() => set(!on)}
-                className="rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition"
-                style={{ color: on ? `rgb(${rgb})` : "#ffffff", background: on ? `rgba(${rgb},.16)` : "transparent", border: `1px solid ${on ? `rgba(${rgb},.7)` : "rgba(255,255,255,.3)"}` }}>
+                className="rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] transition"
+                style={{
+                  color: on ? `rgb(${rgb})` : "rgba(255,255,255,0.55)",
+                  background: on ? `linear-gradient(180deg, rgba(${rgb},.16), rgba(${rgb},.04))` : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${on ? `rgba(${rgb},.3)` : "rgba(255,255,255,0.10)"}`,
+                  boxShadow: on ? `0 0 14px rgba(${rgb},.22)` : "none",
+                }}>
                 {lbl}
               </button>
             ))}
+            <div className="ml-auto flex items-center gap-1">
+              {([5, 15, 30, 60] as const).map((m) => (
+                <button key={m} onClick={() => setTf(m)}
+                  className="rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] transition"
+                  style={{
+                    color: tf === m ? "#219EBC" : "rgba(255,255,255,0.55)",
+                    background: tf === m ? "linear-gradient(180deg, rgba(33,158,188,.16), rgba(33,158,188,.04))" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${tf === m ? "rgba(33,158,188,.3)" : "rgba(255,255,255,0.10)"}`,
+                    boxShadow: tf === m ? "0 0 14px rgba(33,158,188,.22)" : "none",
+                  }}>
+                  {m === 60 ? "1h" : `${m}m`}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setHoverEnabled((v) => !v)}
+              className="rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] transition"
+              style={{
+                color: hoverEnabled ? "#FB8501" : "rgba(255,255,255,0.55)",
+                background: hoverEnabled ? "linear-gradient(180deg, rgba(251,133,1,.16), rgba(251,133,1,.04))" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${hoverEnabled ? "rgba(251,133,1,.3)" : "rgba(255,255,255,0.10)"}`,
+                boxShadow: hoverEnabled ? "0 0 14px rgba(251,133,1,.22)" : "none",
+              }}>
+              Hover Info {hoverEnabled ? "On" : "Off"}
+            </button>
+          </div>
           </div>
           <div
             className="relative"
             style={{ height: "68vh", minHeight: 480 }}
             onMouseMove={(e) => {
+              if (!hoverEnabled) { if (hover) setHover(null); return; }
               const rect = e.currentTarget.getBoundingClientRect();
               const mx = e.clientX - rect.left, my = e.clientY - rect.top;
               let best: HitRegion | null = null, bestArea = Infinity;
@@ -645,7 +731,7 @@ export default function IctPage() {
           >
             <div ref={chartRef} className="absolute inset-0" />
             <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
-            {hover && (
+            {hoverEnabled && hover && (
               <div
                 className="pointer-events-none absolute z-20 w-[260px] rounded-lg border border-cyan-400/40 bg-[#0b0f15]/95 p-2.5 shadow-xl backdrop-blur"
                 style={{
@@ -848,7 +934,10 @@ export default function IctPage() {
         )}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {CONCEPTS.filter((c) => !hiddenCards.has(c.id)).map((c) => {
+          {CONCEPTS.filter((c) => !hiddenCards.has(c.id))
+            .map((c, i) => ({ c, i }))
+            .sort((a, b) => (Number(!!active[b.c.id]) - Number(!!active[a.c.id])) || (a.i - b.i))
+            .map(({ c }) => {
             const isOpen = !!expanded[c.id];
             const liveBadge = c.live && (active[c.id]
               ? <span className="ict-live-badge rounded bg-emerald-500/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-emerald-300">live</span>

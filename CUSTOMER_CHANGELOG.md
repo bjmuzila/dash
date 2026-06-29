@@ -10,6 +10,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Refreshed the pricing page styling so it's easier to read and on-theme
 * You can now collapse the Economic Calendar section on the home page to save space — it stays open by default and remembers your events when reopened
 * Launch-update emails now include a one-click unsubscribe link
+* The Analytics page now shows live Net Greeks (GEX/DEX/CHEX/VEX) with 15- and 30-minute changes during market hours
 * Gave the whole dashboard a consistent look — matching dropdowns, calendars, toolbars, and cards on every page
 * Dropdowns and date pickers now always open on top of cards instead of getting hidden behind them
 * Options Chain now shows each expiration as its own clean card with the strikes lined up across all of them
@@ -18,6 +19,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Fixed cut-off cards and cleaned up the colors on the owner dashboard for easier scanning
 * ES Candles page now shows Call/Put walls, flip, MVC and net greek totals in a tidy stat row
 * Refreshed the Help & Docs page styling to match the rest of the app
+* Options Chain now marks the at-the-money strike with a clear "ATM" tag and white outline, and the key MVC level glows gold without a line splitting it
+* The ICT chart now shows a full week of history with switchable 1h / 30m / 15m / 5m timeframes
+* ICT concepts that are live right now jump to the top of the list, and you can turn the chart hover info box on or off
+* The ICT chart now opens clean with all overlays off so you can add only what you want
 
 ## Saturday 6/27/2026
 

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
+import { BoxSnapBtn } from "@/components/shared/DataBox";
 
 interface TickerEmStats {
   recentAvg: number | null;
@@ -68,6 +69,7 @@ export default function EmCustomer() {
   const [emStats, setEmStats] = useState<TickerEmStats | null>(null);
   const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
   const [winRate, setWinRate] = useState<{ hits: number; evaluated: number; hit_rate: number } | null>(null);
+  const snapRef = useRef<HTMLDivElement>(null);
 
   const lookup = useCallback(async (raw: string) => {
     const sym = raw.trim().toUpperCase();
@@ -208,11 +210,14 @@ export default function EmCustomer() {
         {error && <div style={S.error}>{error}</div>}
 
         {data && !loading && (
-          <>
+          <div ref={snapRef} style={S.snapWrap}>
             <div style={S.resultHead}>
               <span style={S.resultTicker}>{data.label || data.ticker}</span>
               {data.exp_label && <span style={S.resultExp}>Week of {data.exp_label}</span>}
               {data.updated_at && <span style={S.resultUpdated}>Updated {fmtUpdated(data.updated_at)}</span>}
+              <span style={{ marginLeft: data.updated_at ? 8 : "auto" }} data-html2canvas-ignore="true">
+                <BoxSnapBtn targetRef={snapRef} title={`${data.label || data.ticker} • EM & Zones`} />
+              </span>
             </div>
 
             {/* Estimated Move */}
@@ -319,7 +324,7 @@ export default function EmCustomer() {
             <p style={S.disclaimer}>
               Levels are published weekly and are informational only — not financial advice.
             </p>
-          </>
+          </div>
         )}
 
         {!data && !error && !loading && (
@@ -448,6 +453,7 @@ const S = {
     fontSize: 14,
     padding: "40px 0",
   },
+  snapWrap: { padding: 2 },
   resultHead: {
     display: "flex",
     alignItems: "baseline" as const,
