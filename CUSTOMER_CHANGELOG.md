@@ -2,6 +2,16 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Monday 6/29/2026
+
+* You can now click any ICT setup card on the Results page to see the full log of individual plays that make up its win rate
+* The Confidence Score page now stays useful on weekends and before the open — it falls back to the last session's data and shows when the MVC was captured
+* Added a new Confidence tab on the Results page that tracks the 9:45, 10:30, and noon MVC levels each day — how close the market got and whether it was hit
+* Fixed the Fails page so a fade that's still running now shows "OPEN" instead of being wrongly counted as a loss
+* A level that's been faded today now stays marked "Failed" for the rest of the session instead of flipping back to idle
+* Live Status on the Fails page is now ordered by price — highest level on the left, lowest on the right
+* The Fails page now loads noticeably faster, and the fail-rate history moved to its own tab on the Results page
+
 ## Sunday 6/28/2026
 
 * Added a live subscriber chat to the notes panel so members can talk in real time

@@ -1012,7 +1012,7 @@ export default function OptionsChainPage() {
                             ...(isATM ? { borderRight: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
                           }}
                         >
-                          {isMvc && <span title="MVC — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
+                          {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
                           {value == null ? "·" : fmtMoney(value)}
                         </div>
                       </div>

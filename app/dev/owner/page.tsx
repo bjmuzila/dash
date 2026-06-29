@@ -236,7 +236,7 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
 ];
 
 const TABLES: { id: string; label: string }[] = [
-  { id: "mvc_snapshots",      label: "MVC Snaps" },
+  { id: "mvc_snapshots",      label: "CB Snaps" },
   { id: "premium_flow",       label: "Prem Flow" },
   { id: "greeks_ts",          label: "Greeks TS" },
   { id: "playbook_feed",      label: "Playbook" },
@@ -1499,7 +1499,7 @@ export default function OwnerDashboard() {
       });
       const j = await r.json();
       setMvcAuto(typeof j.enabled === "boolean" ? j.enabled : next);
-      flashMsg("mvcAuto", next ? "MVC auto-snapshot ON" : "MVC auto-snapshot OFF", true);
+      flashMsg("mvcAuto", next ? "CB - Core Bullseye auto-snapshot ON" : "CB - Core Bullseye auto-snapshot OFF", true);
     } catch (e) {
       flashMsg("mvcAuto", `Failed: ${String((e as Error)?.message || e)}`, false);
     } finally { setCtlBusy(null); }
@@ -2225,11 +2225,11 @@ export default function OwnerDashboard() {
               </div>
               {/* MVC auto */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>MVC Auto (5m)</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>CB Auto (5m)</span>
                 <button
                   onClick={toggleMvcAuto}
                   disabled={ctlBusy === "mvcAuto"}
-                  title="Enable/disable the in-process MVC auto-collector (writes mvc_snapshots every 5m during RTH)."
+                  title="Enable/disable the in-process CB - Core Bullseye auto-collector (writes mvc_snapshots every 5m during RTH)."
                   style={{
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "mvcAuto" ? 0.6 : 1,
@@ -2278,10 +2278,10 @@ export default function OwnerDashboard() {
               <button
                 onClick={doMvcSnapshot}
                 disabled={ctlBusy === "mvcSnap"}
-                title="Write a single MVC snapshot right now (overrides the outside-RTH guard; still needs a live chain)."
+                title="Write a single CB - Core Bullseye snapshot right now (overrides the outside-RTH guard; still needs a live chain)."
                 style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
               >
-                {ctlBusy === "mvcSnap" ? "Snapshotting (may reconnect)…" : "📸 MVC Snapshot now"}
+                {ctlBusy === "mvcSnap" ? "Snapshotting (may reconnect)…" : "📸 CB Snapshot now"}
               </button>
               <button
                 onClick={doPremarketRun}

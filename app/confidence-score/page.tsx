@@ -364,7 +364,7 @@ function MvcHero({
       <div style={{ display: "flex", alignItems: "flex-end", gap: 24, flexWrap: "wrap" }}>
         {/* MVC level */}
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: HOME_THEME.muted }}>MVC · {wallLabel}</span>
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: HOME_THEME.muted }}>CB · {wallLabel}</span>
           <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, fontFamily: "monospace", color: HOME_THEME.text, textShadow: `0 0 24px ${rgba(leanColor, 0.3)}` }}>{fmt(level)}</span>
           <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7, fontFamily: "monospace" }}>
             SPX {fmt(spx)}{dist != null && <> · <strong style={{ color: leanColor }}>{dist} pts</strong> away</>}
@@ -374,7 +374,7 @@ function MvcHero({
         {/* REACH */}
         <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: "auto", alignItems: "flex-end" }}>
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: reachColor }}>
-            <Tip text="Reach = probability price gets to / interacts with the MVC level today (the Hit score).">Reach</Tip>
+            <Tip text="Reach = probability price gets to / interacts with the CB - Core Bullseye level today (the Hit score).">Reach</Tip>
           </span>
           <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, color: reachColor, textShadow: `0 0 22px ${rgba(reachColor, 0.4)}` }}>{reach}<span style={{ fontSize: 18, opacity: 0.7 }}>%</span></span>
           <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>{reach >= 70 ? "likely to get there" : reach >= 45 ? "could get there" : "out of range for now"}</span>
@@ -401,7 +401,7 @@ function MvcHero({
           <span><span style={{ color: METRIC.pivot }}>■</span> Reject {reject}%</span>
           <span><span style={{ color: METRIC.chop }}>■</span> Chop {chopP}%</span>
           <span><span style={{ color: METRIC.break }}>■</span> Break {breakP}%</span>
-          <span style={{ marginLeft: "auto", opacity: 0.7 }} title="MVC study base rates: $SPX 0DTE, assumes intraday IV 16–45%.">
+          <span style={{ marginLeft: "auto", opacity: 0.7 }} title="CB - Core Bullseye study base rates: $SPX 0DTE, assumes intraday IV 16–45%.">
             study base: 55 / 26 / 17
           </span>
         </div>
@@ -460,7 +460,7 @@ function SoFarRollup({ timeline }: { timeline: MvcSegment[] }) {
       gap: 12, flexWrap: "wrap", background: "rgba(255,255,255,0.02)", borderLeft: `2px solid ${rgba(SCENARIO[cur.kind].color, 0.5)}` }}>
       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>So far</span>
       <span style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
-        <strong style={{ color: SCENARIO[cur.kind].color }}>{fmt(cur.strike)}</strong> is the live MVC
+        <strong style={{ color: SCENARIO[cur.kind].color }}>{fmt(cur.strike)}</strong> is the live CB - Core Bullseye
         {cur.distAtStart != null && <> — SPX <strong>{cur.distAtStart} pts</strong> away</>}, {curVerb}.
         {" "}{timeline.length} strike{timeline.length === 1 ? "" : "s"} have anchored today:
       </span>
@@ -546,18 +546,18 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
             ? `${part(startPx, seg.distAtStart)} → ${part(endPx, distAtEnd)}`
             : part(startPx, seg.distAtStart);
           return (
-            <span title="SPX price (distance from strike): start of reign → handoff to next MVC"
+            <span title="SPX price (distance from strike): start of reign → handoff to next CB - Core Bullseye"
               style={{ fontFamily: "monospace", fontSize: 11, color: HOME_THEME.text, whiteSpace: "nowrap" }}>
               {text}
             </span>
           );
         })()}
         {!seg.current && !seg.touched && (
-          <span title="This MVC strike was never touched before the magnet migrated to a new strike"
+          <span title="This CB - Core Bullseye strike was never touched before the magnet migrated to a new strike"
             style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
               textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
               color: HOME_THEME.muted, background: rgba(HOME_THEME.muted, 0.12), border: `1px dashed ${rgba(HOME_THEME.muted, 0.4)}` }}>
-            → new MVC
+            → new CB
           </span>
         )}
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>
@@ -611,15 +611,15 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
 }
 
 const GAUGE_TIP = {
-  Hit: "Hit (Reach) = probability price gets to / interacts with the MVC level today. Stage 1 — stands alone.",
+  Hit: "Hit (Reach) = probability price gets to / interacts with the CB - Core Bullseye level today. Stage 1 — stands alone.",
   Pivot: "Pivot = GIVEN a touch, probability the level rejects price (reversal / defended wall). Conditional — Pivot + Chop + Break sum to 100%.",
   Chop: "Chop = GIVEN a touch, probability of range-bound / sticky action at the level. Conditional — Pivot + Chop + Break sum to 100%.",
   Break: "Break = GIVEN a touch, probability price slices THROUGH instead of holding. Conditional — Pivot + Chop + Break sum to 100%. Highest in negative-gamma at a dominant level.",
 };
 const FACTOR_TIP = {
-  proximity: "Proximity: how close price is to the MVC level, scaled by the Estimated Move. On the level = 100.",
-  gexMagnitude: "GEX dominance: how concentrated the day's gamma is at this MVC level. 100 = the dominant peak (strong magnet).",
-  gexRank: "GEX rank: where this level ranks among today's MVC strikes. 100 = the day's #1 magnet, 80 = 2nd, 60 = 3rd… Discounts strong-but-secondary walls.",
+  proximity: "Proximity: how close price is to the CB - Core Bullseye level, scaled by the Estimated Move. On the level = 100.",
+  gexMagnitude: "GEX dominance: how concentrated the day's gamma is at this CB - Core Bullseye level. 100 = the dominant peak (strong magnet).",
+  gexRank: "GEX rank: where this level ranks among today's CB - Core Bullseye strikes. 100 = the day's #1 magnet, 80 = 2nd, 60 = 3rd… Discounts strong-but-secondary walls.",
   rejectionRate: "Rejection rate: share of prior same-cluster touches that REVERSED price (defended) vs broke through. History of real rejections, time-decayed. Boosts Pivot, lowers Break.",
   flipProximity: "Flip proximity: how close price sits to the gamma flip — the volatility pivot zone.",
   dexBias: "DEX bias: signed directional pull from net delta exposure. Green = upward pull, red = downward.",
@@ -742,7 +742,7 @@ function CalibrationPanel() {
             <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{loading ? "Loading…" : "—"}</span>
           ) : data.gradedDays === 0 ? (
             <span style={{ fontSize: 12, color: HOME_THEME.text }}>
-              No graded history yet. Click <strong>Re-grade history</strong> to score &amp; grade past MVC days.
+              No graded history yet. Click <strong>Re-grade history</strong> to score &amp; grade past CB - Core Bullseye days.
             </span>
           ) : (
             <>
@@ -842,12 +842,12 @@ export default function ConfidenceScorePage() {
             {updatedAt && <span style={{ opacity: 0.6, fontFamily: "monospace" }}>· {updatedAt.toLocaleTimeString("en-US", { hour12: false })}</span>}
           </span>
           <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
-            {loading ? "Computing…" : data ? `MVC ${fmt(data.level)} · SPX ${fmt(data.spx)}` : ""}
+            {loading ? "Computing…" : data ? `CB ${fmt(data.level)} · SPX ${fmt(data.spx)}` : ""}
           </span>
           {data?.mvcTimestamp != null && (
             <span style={{ opacity: 0.6, fontSize: 10, fontFamily: "monospace" }}
-              title="When the latest MVC snapshot was captured">
-              MVC found {new Date(typeof data.mvcTimestamp === "string" ? Number(data.mvcTimestamp) : data.mvcTimestamp)
+              title="When the latest CB - Core Bullseye snapshot was captured">
+              CB found {new Date(typeof data.mvcTimestamp === "string" ? Number(data.mvcTimestamp) : data.mvcTimestamp)
                 .toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} ET
             </span>
           )}
@@ -911,7 +911,7 @@ export default function ConfidenceScorePage() {
                 background: `radial-gradient(circle at 0% 0%, ${rgba(HOME_THEME.green, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
                 <span style={{ fontSize: 22, color: HOME_THEME.green }}>⤞</span>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Opened AT the MVC — 85% pivot setup</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Opened AT the CB - Core Bullseye — 85% pivot setup</span>
                   <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.85 }}>
                     Study: price pivots within the first 15 min and closes the overnight gap ~85% of the time.
                   </span>
@@ -1021,7 +1021,7 @@ export default function ConfidenceScorePage() {
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
-                          MVC Timeline
+                          CB Timeline
                         </span>
                         {data.mvcSummary && (
                           <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>

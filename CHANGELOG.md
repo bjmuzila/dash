@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-29 — Fails page: OPEN state, sticky Failed status, sorted Live Status, fail-rate moved + perf
+
+`lib/failLevels.ts`: `FailEvent` gained a `stopped` flag (true only when price actually traded through the stop) so in-progress fades aren't mislabeled; Live Status `state` made sticky-"failed" for the rest of the session once a level is faded (was reverting to "idle" after ~10 min). `app/fails/page.tsx`: result label now WIN / OPEN / LOSS (open = not yet 1R and not stopped) in both the tally and table; Live Status cards sorted by price (highest left → lowest right); removed the Fail Rate card, Recent Fail Log, and the heavy 20-day `computeStats` rebuild, and cut the candle fetch from 20→8 days. `hooks/useEsCandles.ts`: added `historyDays` param (default 20) to size the initial candle pull. `app/dev/results/page.tsx`: added "Fail Rate" tab (per-level fail rate + Recent Fail Log, full 20-day window) alongside ICT/Confidence.
+
+## 2026-06-29 — Diagnosis: /whats-new blank in prod
+
+Diagnosed `app/whats-new/page.tsx` rendering empty in deployment: it reads `CUSTOMER_CHANGELOG.md` via `path.join(process.cwd(), ...)`, which isn't traced into the Next.js `output: "standalone"` Docker bundle, so `readFile` throws → `catch` returns `[]` → "No updates yet." Works in `next dev` only. No code changed; fix is to add the file to `outputFileTracingIncludes` or inline/import the data.
+
+## 2026-06-29 — Confidence Score fallbacks + MVC checkpoint tracking
+
+`/api/confidence` (`app/api/confidence/route.ts`): when no MVC snapshot exists for the requested date (weekend/pre-market/holiday) the route now resolves to the most recent prior day with data via `effDate` (all queries — SPX series, session progress, analogs, ES candles, isFinal — keyed off it), plus a prior-day SPX fallback for `cur.spx`; response gained `requestedDate`, `stale`, and `mvcTimestamp`. `/confidence-score` (`app/confidence-score/page.tsx`): header now shows when the MVC was captured + a STALE badge, and the toggle was relabeled "0DTE / OPEX" → "OPEX". Added new `/api/confidence/checkpoints` route and a "Confidence" tab on `/dev/results` (`app/dev/results/page.tsx`) tracking the 9:45/10:30/12:00 MVCs per day — strike, closest SPX approach, and hit (within 8 pts) with per-checkpoint hit-rate roll-ups.
+
+## 2026-06-29 — ICT Results clickable play log + build fix
+
+`/dev/results` (`app/dev/results/page.tsx`): made each ICT setup StatCard clickable, opening a new `SetupLogModal` that lists the individual logged plays for that kind (date, time, dir, entry/target/inval, MFE, R, outcome, note) from the `setups` array the API already returns. Fixed an `Invalid time value` crash on click by coercing pg string fields to numbers and guarding `etDate`/`etClock`. Also added `export const dynamic = "force-dynamic"` to `app/api/quote-symbols/route.ts` to fix a `next build` export failure (auth route was being statically prerendered).
+
 ## 2026-06-28 — Options Chain ATM/MVC + ICT chart overhaul
 
 Options Chain (`app/options-chain/page.tsx`): recolored the MVC blink (`mvcGlow` keyframe + cell borders) from white to gold, clipped the box-shadow so no divider shows between the strike/value cells (`.mvc-peak-left`/`.mvc-peak-right`), and added a white border + "ATM" gold sticker on the ATM strike row. NavMenu (`components/shared/NavMenu.tsx`): Quick Pages font now gold (no highlight) and removed Feedback from the GEX group. ICT page (`app/ict/page.tsx`): gray current-price line, live cards sorted to top, Hover Info on/off toggle, 7-day historical window (`weekCandles` from hook `historical`+session), 5m/15m/30m/1h timeframe switcher (`tfCandles` aggregation), all overlays default off, FVG button relabeled, and restyled the whole toggle bar into the toolbar pill theme with theme-token buttons.

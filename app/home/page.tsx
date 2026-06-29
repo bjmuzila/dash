@@ -995,7 +995,7 @@ export default function HomePage() {
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MVC</span>
+                    <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CB</span>
                     <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>
               </div>
@@ -1168,7 +1168,7 @@ export default function HomePage() {
                                   </span>
                                   <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.strikeNum === mvcStrikeHeatmap && (
-                                      <span title="MVC — highest |net GEX|" style={{ color: "#ffd600", fontSize: 12, lineHeight: 1, textShadow: "0 0 3px rgba(0,0,0,.8)" }}>★</span>
+                                      <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", fontSize: 12, lineHeight: 1, textShadow: "0 0 3px rgba(0,0,0,.8)" }}>★</span>
                                     )}
                                     {row.netGex}
                                   </span>

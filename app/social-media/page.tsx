@@ -5,6 +5,8 @@ import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
 import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
 import { SegGroup } from "@/components/shared/DockToolbar";
+import GexChart from "@/components/dashboard/GexChart";
+import type { ChainRow } from "@/lib/calculations/calculations";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Social Media (admin) — turns the daily pre-market GEX read into a shareable
@@ -467,7 +469,7 @@ interface CardFields { a: string; b: string; bSmall: string; c: string; cSmall: 
 const CHART_DEFAULTS: CardFields = { a: "7,346.55", b: "7,330", bSmall: "", c: "−$1.0B", cSmall: "peak", d: "7,250–7,450" };
 const HEAT_DEFAULTS: CardFields = { a: "7,345", b: "−$1.26B", bSmall: "7,330", c: "+ below 7,330", cSmall: "", d: "Neg thru body" };
 
-const CHART_LABELS = { a: "SPX SPOT", b: "MVC", c: "NET GEX", d: "RANGE" };
+const CHART_LABELS = { a: "SPX SPOT", b: "CB", c: "NET GEX", d: "RANGE" };
 const HEAT_LABELS = { a: "ATM STRIKE", b: "LARGEST NEG GEX", c: "NET VEX FLIP", d: "DEX" };
 
 // Seed card fields from the live Daily-Input form so the card is correct WITHOUT
@@ -1409,6 +1411,278 @@ function ExplainerMockup({
   );
 }
 
+const STORED_POSTS_KEY = "cb-edge-generated-posts-v1";
+
+interface GeneratedPost {
+  id: string;
+  ts: string;
+  tweet: string;
+}
+
+function PostGenerator({ form }: { form: FormState }) {
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState<string>("");
+  const [posts, setPosts] = useState<GeneratedPost[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(STORED_POSTS_KEY);
+      return raw ? (JSON.parse(raw) as GeneratedPost[]) : [];
+    } catch { return []; }
+  });
+
+  const savePosts = (next: GeneratedPost[]) => {
+    setPosts(next);
+    try { window.localStorage.setItem(STORED_POSTS_KEY, JSON.stringify(next)); } catch { /* storage full */ }
+  };
+
+  // Live GEX profile for the snapshot. Pulled from /api/gex (same source the
+  // dashboard SnapButton uses) and rendered into an off-card GexChart canvas so
+  // each post can attach the actual profile image.
+  const [gexChain, setGexChain] = useState<ChainRow[]>([]);
+  const [gexSpot, setGexSpot] = useState<number>(0);
+  const [gexFlip, setGexFlip] = useState<number | null>(null);
+  const [gexLoading, setGexLoading] = useState(false);
+  const [snapState, setSnapState] = useState<"" | "saved" | "copied" | "err">("");
+  const chartCaptureRef = useRef<HTMLDivElement>(null);
+
+  const loadGex = useCallback(async () => {
+    setGexLoading(true);
+    try {
+      const res = await fetch("/api/gex", { cache: "no-store" });
+      if (!res.ok) throw new Error(`gex ${res.status}`);
+      const data = await res.json();
+      setGexChain(Array.isArray(data.chain) ? data.chain : []);
+      setGexSpot(Number(data.spotPrice ?? 0));
+      setGexFlip(data.gexFlip ?? null);
+    } catch (e) {
+      console.error("[post-gen gex]", e);
+    } finally {
+      setGexLoading(false);
+    }
+  }, []);
+
+  // Capture the mounted GexChart canvas to a PNG and either copy it to the
+  // clipboard or download it. Mirrors SnapButton.captureGexCanvas but scoped to
+  // this component's chart node so it never grabs an unrelated canvas.
+  const snapProfile = useCallback(async (action: "copy" | "download") => {
+    const host = chartCaptureRef.current;
+    const canvas = host?.querySelector<HTMLCanvasElement>("canvas");
+    if (!canvas) { setSnapState("err"); setTimeout(() => setSnapState(""), 1800); return; }
+    canvas.toBlob(async (blob) => {
+      if (!blob) { setSnapState("err"); setTimeout(() => setSnapState(""), 1800); return; }
+      if (action === "copy") {
+        try {
+          const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+          if (ClipItem && navigator.clipboard?.write) {
+            await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
+            setSnapState("copied"); setTimeout(() => setSnapState(""), 1800); return;
+          }
+        } catch { /* fall through to download */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `cb-edge-gex-profile-${todayETStr()}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setSnapState("saved"); setTimeout(() => setSnapState(""), 1800);
+    }, "image/png");
+  }, []);
+
+  const band = emBand(form);
+  const regime = regimeOf(form);
+
+  // Parse a form string field to a number (or null). The form stores everything
+  // as strings; the /api/social-media/generate route expects numbers.
+  const n = (v: string | undefined): number | null => {
+    if (!v) return null;
+    const parsed = Number(String(v).replace(/[, ]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const generate = async () => {
+    setGenerating(true);
+    setError("");
+    try {
+      const res = await fetch("/api/social-media/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spxSpot: n(form.spot),
+          spxPrevClose: n(form.prevClose),
+          gammaFlip: n(form.flip),
+          callWall: n(form.call),
+          putWall: n(form.put),
+          expectedMove: n(form.em),
+          emUpper: band ? band.upper : null,
+          emLower: band ? band.lower : null,
+          netGex: n(form.gex),
+          gammaRegime: regime.label,
+          bias: form.bias || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.data) {
+        throw new Error(json.error || `request failed (${res.status})`);
+      }
+      const { xPost } = json.data as { xPost: string };
+
+      const newPost: GeneratedPost = {
+        id: Date.now().toString(),
+        ts: new Date().toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+        tweet: xPost,
+      };
+      savePosts([newPost, ...posts.slice(0, 9)]); // keep last 10
+    } catch (e) {
+      setError("Generation failed — check data fields and try again.");
+      console.error("[post-gen]", e);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const copyText = (text: string, id: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(id);
+      setTimeout(() => setCopied(""), 1500);
+    });
+  };
+
+  const deletePost = (id: string) => savePosts(posts.filter((p) => p.id !== id));
+
+  return (
+    <div style={{ maxWidth: 820, margin: "0 auto" }}>
+      <style>{`
+        .pg-wrap { display: flex; flex-direction: column; gap: 20px; }
+        .pg-controls { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+        .pg-type-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .pg-type-label { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); }
+        .pg-type-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 14px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--sm-muted); transition: all 0.12s; }
+        .pg-type-btn:hover { color: var(--text1); border-color: var(--cyan); }
+        .pg-type-btn.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(33,158,188,0.35); }
+        .pg-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.5; }
+        .pg-hint b { color: var(--text1); }
+        .pg-missing { font-family: var(--sm-mono); font-size: 11px; color: var(--amber); }
+        .pg-gen-btn { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 11px 20px; border-radius: 6px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all 0.12s; align-self: flex-start; }
+        .pg-gen-btn:hover { opacity: 0.9; }
+        .pg-gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .pg-error { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-red); padding: 10px 14px; border: 1px solid rgba(239,68,68,0.4); border-radius: 6px; background: rgba(239,68,68,0.07); }
+
+        .pg-post { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
+        .pg-post-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); }
+        .pg-post-type { font-family: var(--sm-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan); }
+        .pg-post-ts { font-family: var(--sm-mono); font-size: 10px; color: var(--sm-muted); }
+        .pg-post-del { margin-left: auto; font-family: var(--sm-mono); font-size: 10px; cursor: pointer; padding: 3px 8px; border-radius: 4px; border: 1px solid rgba(239,68,68,0.4); background: transparent; color: var(--sm-red); transition: all 0.12s; }
+        .pg-post-del:hover { background: rgba(239,68,68,0.1); }
+        .pg-post-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+        .pg-tweet-block { background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 14px; }
+        .pg-tweet-label { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+        .pg-tweet-text { font-size: 14px; color: var(--text1); line-height: 1.55; white-space: pre-wrap; }
+        .pg-char-count { font-family: var(--sm-mono); font-size: 10px; color: var(--sm-muted); }
+        .pg-copy-btn { font-family: var(--sm-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
+        .pg-copy-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+        .pg-copy-btn.ok { border-color: var(--sm-green); color: var(--sm-green); }
+        .pg-thread-label { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); margin-bottom: 8px; }
+        .pg-thread-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--sm-border); border-radius: 6px; background: var(--bg0); margin-bottom: 6px; }
+        .pg-thread-num { font-family: var(--sm-mono); font-size: 10px; font-weight: 700; color: var(--cyan); min-width: 18px; }
+        .pg-thread-text { font-size: 13px; color: var(--text1); line-height: 1.5; white-space: pre-wrap; flex: 1; }
+        .pg-open-x { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 8px 14px; border-radius: 5px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all 0.12s; text-decoration: none; display: inline-block; }
+        .pg-open-x:hover { opacity: 0.9; }
+        .pg-empty { text-align: center; padding: 40px 20px; font-size: 13px; color: var(--sm-muted); background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; }
+        .pg-empty b { color: var(--text1); display: block; margin-bottom: 6px; font-size: 15px; }
+      `}</style>
+
+      <div className="pg-wrap">
+        {/* Controls */}
+        <div className="pg-controls">
+          {/* Data status */}
+          <div className="pg-hint">
+            {!form.spot
+              ? <span className="pg-missing">⚠ No data loaded — hit "Load data" first, then generate.</span>
+              : <span>Using: <b>Spot {form.spot}</b> · Flip {form.flip || "—"} · Call {form.call || "—"} · Put {form.put || "—"} · EM ±{form.em || "—"} · GEX {form.gex || "—"}</span>
+            }
+          </div>
+
+          <button type="button" className="pg-gen-btn" onClick={generate} disabled={generating || !form.spot}>
+            {generating ? "Generating…" : "✨ Generate Post"}
+          </button>
+
+          {error && <div className="pg-error">{error}</div>}
+        </div>
+
+        {/* GEX profile snapshot — live chart pulled from /api/gex, captured to PNG */}
+        <div className="pg-controls">
+          <div className="pg-type-row" style={{ justifyContent: "space-between" }}>
+            <span className="pg-type-label">GEX Profile · attach to your post</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="pg-type-btn" onClick={loadGex} disabled={gexLoading}>
+                {gexLoading ? "Loading…" : gexChain.length ? "↻ Refresh" : "⤓ Load profile"}
+              </button>
+              <button type="button" className="pg-type-btn" onClick={() => snapProfile("copy")} disabled={!gexChain.length}>
+                {snapState === "copied" ? "✓ Copied" : "Copy image"}
+              </button>
+              <button type="button" className="pg-type-btn on" onClick={() => snapProfile("download")} disabled={!gexChain.length}>
+                {snapState === "saved" ? "✓ Saved" : snapState === "err" ? "Failed" : "Download PNG"}
+              </button>
+            </div>
+          </div>
+          {gexChain.length > 0 ? (
+            <div ref={chartCaptureRef} style={{ width: "100%", height: 360, background: "var(--bg0)", borderRadius: 8, overflow: "hidden" }}>
+              <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
+            </div>
+          ) : (
+            <div className="pg-hint">Hit <b>Load profile</b> to pull the live GEX profile, then Copy or Download the image to attach to your post.</div>
+          )}
+        </div>
+
+        {/* Generated posts history */}
+        {posts.length === 0 && !generating && (
+          <div className="pg-empty">
+            <b>No posts yet</b>
+            Load your data and hit Generate.
+          </div>
+        )}
+
+        {posts.map((post) => (
+          <div key={post.id} className="pg-post">
+            <div className="pg-post-head">
+              <span className="pg-post-type">GEX Data</span>
+              <span className="pg-post-ts">{post.ts}</span>
+              <button type="button" className="pg-post-del" onClick={() => deletePost(post.id)}>✕</button>
+            </div>
+            <div className="pg-post-body">
+              {/* Main tweet */}
+              <div className="pg-tweet-block">
+                <div className="pg-tweet-label">
+                  <span>TWEET <span className="pg-char-count">({post.tweet.length}/280)</span></span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      className={`pg-copy-btn${copied === `t-${post.id}` ? " ok" : ""}`}
+                      onClick={() => copyText(post.tweet, `t-${post.id}`)}
+                    >
+                      {copied === `t-${post.id}` ? "Copied ✓" : "Copy"}
+                    </button>
+                    <a
+                      className="pg-open-x"
+                      href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(post.tweet)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open X
+                    </a>
+                  </div>
+                </div>
+                <div className="pg-tweet-text">{post.tweet}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function GexImageCards({ updated, today, form }: { updated: string; today: string; form: FormState }) {
   const reg = regimeOf(form);
   const neg = reg.neg;
@@ -1433,7 +1707,7 @@ function GexImageCards({ updated, today, form }: { updated: string; today: strin
     <div className="gx-wrap">
       <style>{GX_CSS}</style>
       <p className="gx-help">
-        The level strip is filled <b>live from the dashboard</b> (Daily Input) — spot, MVC, net GEX and range. Drop a NET GEX chart / heatmap
+        The level strip is filled <b>live from the dashboard</b> (Daily Input) — spot, CB - Core Bullseye, net GEX and range. Drop a NET GEX chart / heatmap
         screenshot into a card only for the <b>visual</b> (optional). Every value is click-to-edit. Then <b>Download</b> for a clean 1600×900 image.
       </p>
       <div className="gx-stage" ref={stageRef}>
@@ -1445,7 +1719,7 @@ function GexImageCards({ updated, today, form }: { updated: string; today: strin
 }
 
 export default function SocialMediaPage() {
-  const [tab, setTab] = useState<"levels" | "cards" | "explainer">("levels");
+  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen">("levels");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   // Live per-strike GEX ladder (netGex in $millions) for the Explainer tab.
   // Kept out of FormState (which is string-only) and refreshed alongside it.
@@ -1912,9 +2186,10 @@ export default function SocialMediaPage() {
             { label: "Daily Levels", value: "levels" },
             { label: "GEX Image Cards", value: "cards" },
             { label: "Explainer Mockup", value: "explainer" },
+            { label: "GEX Data", value: "postgen" },
           ]}
           active={tab}
-          onChange={(v) => setTab(v as "levels" | "cards" | "explainer")}
+          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen")}
         />
         <span className="sm-live"><i />{refreshing ? "Loading…" : hydrated ? "Loaded" : "Not loaded · on demand"}</span>
         <span className="sm-date">{today}</span>
@@ -1966,8 +2241,9 @@ export default function SocialMediaPage() {
           onToggleCandles={() => setCandlesOn((v) => !v)}
         />
       )}
+      {tab === "postgen" && <PostGenerator form={form} />}
 
-      <div className="sm-grid" style={tab === "cards" || tab === "explainer" ? { display: "none" } : undefined}>
+      <div className="sm-grid" style={tab !== "levels" ? { display: "none" } : undefined}>
         {/* LEFT: dashboard-derived input */}
         <div className="sm-panel">
           <div className="sm-panel-h">Daily Input · from dashboard state</div>

@@ -1392,7 +1392,7 @@ export default function EstimatedMoves() {
                       background: confidenceScore >= 70 ? "rgba(0,230,118,.1)" : confidenceScore >= 45 ? "rgba(255,193,7,.1)" : "rgba(255,71,87,.1)",
                       color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#ff4757",
                     }}>
-                      MVC CONF {confidenceScore}%
+                      CB CONF {confidenceScore}%
                     </span>
                   )}
                 </div>

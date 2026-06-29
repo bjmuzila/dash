@@ -125,7 +125,7 @@ function genProducts(): ProductEarning[] {
     { name: "Options Flow Pro", revenue: 28900 },
     { name: "ES Candles Suite", revenue: 18700 },
     { name: "Confidence Score", revenue: 12100 },
-    { name: "MVC Analytics", revenue: 7400 },
+    { name: "CB - Core Bullseye Analytics", revenue: 7400 },
   ];
   const total = items.reduce((s, i) => s + i.revenue, 0);
   return items.map((item, i) => ({
@@ -147,7 +147,7 @@ function genCountries(): CountryUser[] {
 }
 
 const NAMES = ["Alex M.", "Sarah K.", "James T.", "Emma R.", "Liam N.", "Olivia P.", "Noah C.", "Ava S.", "Chris W.", "Maya B."];
-const PRODUCTS = ["SPX GEX Premium", "Flow Pro", "ES Candles", "Confidence+", "MVC Suite"];
+const PRODUCTS = ["SPX GEX Premium", "Flow Pro", "ES Candles", "Confidence+", "CB - Core Bullseye Suite"];
 
 function genTransaction(): Transaction {
   const r = Math.random;

@@ -484,7 +484,7 @@ function CheckpointsView() {
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Confidence</span>
-        <span style={{ fontSize: 12, color: C.label }}>MVC at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
+        <span style={{ fontSize: 12, color: C.label }}>CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button onClick={() => setRange("7d")} style={rangeBtn("7d", "7d")}>7d</button>
           <button onClick={() => setRange("20d")} style={rangeBtn("20d", "20d")}>20d</button>
@@ -534,7 +534,7 @@ function CheckpointsView() {
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                   <th style={th}>Date</th>
                   {["9:45", "10:30", "12:00"].map((l) => (
-                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={3}>{l} MVC</th>
+                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={3}>{l} CB</th>
                   ))}
                 </tr>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>

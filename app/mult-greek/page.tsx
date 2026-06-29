@@ -430,7 +430,7 @@ function TickerPanel({
                       }}>★</span>
                     )}
                     {c === "gex" && r.strike === computed.mvcStrike && (
-                      <span title="MVC — highest |net GEX|" style={{
+                      <span title="CB - Core Bullseye — highest |net GEX|" style={{
                         position: "absolute", top: 1, right: 2, fontSize: 12, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
                       }}>★</span>

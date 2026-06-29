@@ -16,7 +16,7 @@ import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 const TABLES = [
   { id: "eod_gex", label: "EOD GEX" },
-  { id: "mvc_snapshots", label: "MVC Snapshots" },
+  { id: "mvc_snapshots", label: "CB - Core Bullseye Snapshots" },
   { id: "premium_flow", label: "Premium Flow" },
   { id: "greeks_ts", label: "Greeks TS" },
   { id: "playbook_feed", label: "Playbook Feed" },

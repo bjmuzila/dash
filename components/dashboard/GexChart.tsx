@@ -594,7 +594,7 @@ export default function GexChart({
       const col = pv >= 0 ? "#29b6f6" : "#ffb300";
       ctx.save();
       ctx.font = "bold 10px Arial";
-      const lbl = `${isVol ? "MVC·Vol" : "MVC"} ${peak.strike.toLocaleString()}`;
+      const lbl = `${isVol ? "CB·Vol" : "CB"} ${peak.strike.toLocaleString()}`;
       const tw  = ctx.measureText(lbl).width;
       const bw  = tw + 10, bh = 15;
       const bx  = clamp(xAt(pi) - bw / 2, 2, W - bw - 2);

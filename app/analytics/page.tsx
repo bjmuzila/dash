@@ -653,7 +653,7 @@ function ConfidenceCard() {
         )}
       </Row>
       {loading || error || score == null ? (
-        <CardState loading={loading} error={error} empty="No MVC snapshot yet for scoring." />
+        <CardState loading={loading} error={error} empty="No CB - Core Bullseye snapshot yet for scoring." />
       ) : (
         <>
           <Row>
@@ -667,16 +667,16 @@ function ConfidenceCard() {
             <div style={{ width: `${score}%`, height: "100%", background: bandColor }} />
           </div>
           <Row>
-            <Stat label="Current SPX MVC" value={mvc != null ? Math.round(mvc).toLocaleString() : "—"} color={T.cyan} />
+            <Stat label="Current SPX CB" value={mvc != null ? Math.round(mvc).toLocaleString() : "—"} color={T.cyan} />
             <Stat
-              label="Distance to MVC"
+              label="Distance to CB"
               value={distToMvc != null ? `${distToMvc >= 0 ? "+" : ""}${distToMvc.toFixed(1)}` : "—"}
               color={distToMvc == null ? T.muted : Math.abs(distToMvc) <= (data?.thresholds?.hitPts ?? 8) ? POS_GREEN : T.text}
             />
           </Row>
           {showChange && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, paddingTop: 2 }}>
-              <span style={{ fontWeight: 800, letterSpacing: "0.06em", color: T.orange }}>MVC CHANGED</span>
+              <span style={{ fontWeight: 800, letterSpacing: "0.06em", color: T.orange }}>CB CHANGED</span>
               {hitAfterChange ? (
                 <span style={{ color: POS_GREEN, fontWeight: 700 }}>hit ✓</span>
               ) : (
@@ -708,11 +708,12 @@ const GREEK_SCALE: Record<"gex" | "dex" | "chex" | "vex", number> = {
 
 // Find the row whose timestamp is closest to (latestTs - minsAgo), within ±tol.
 function rowNearestAgo(rows: GreeksTsRow[], latestTs: number, minsAgo: number, tolMin = 6): GreeksTsRow | null {
-  const target = latestTs - minsAgo * 60_000;
+  // pg BIGINT timestamps can arrive as strings — coerce so subtraction is numeric.
+  const target = Number(latestTs) - minsAgo * 60_000;
   let best: GreeksTsRow | null = null;
   let bestDiff = Infinity;
   for (const r of rows) {
-    const diff = Math.abs(r.timestamp - target);
+    const diff = Math.abs(Number(r.timestamp) - target);
     if (diff < bestDiff) { bestDiff = diff; best = r; }
   }
   return best && bestDiff <= tolMin * 60_000 ? best : null;
@@ -827,14 +828,17 @@ function IbCard() {
   const grace = useGrace();
   const today = etDateISO();
   const [, tick] = useState(0);
+  const [mounted, setMounted] = useState(false);
 
-  // 1s clock so the countdown ticks.
+  // 1s clock so the countdown ticks. setMounted gates the time-dependent
+  // countdown to client-only render (fixes SSR hydration mismatch).
   useEffect(() => {
+    setMounted(true);
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const cd = ibCountdown();
+  const cd = mounted ? ibCountdown() : { phase: "pre" as const, text: "" };
   // Newest candle ts = the feed's last update.
   const lastUpdated = candles.length ? Number(candles[candles.length - 1].timestamp) : null;
 

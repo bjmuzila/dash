@@ -11,14 +11,19 @@ async function loadCustomerChangelog(): Promise<Entry[]> {
   try {
     const filePath = path.join(process.cwd(), "CUSTOMER_CHANGELOG.md");
     raw = await readFile(filePath, "utf8");
-  } catch {
+  } catch (err) {
+    console.error("[whats-new] failed to read CUSTOMER_CHANGELOG.md at", path.join(process.cwd(), "CUSTOMER_CHANGELOG.md"), err);
     return [];
   }
 
   const entries: Entry[] = [];
   let current: Entry | null = null;
 
-  for (const line of raw.split("\n")) {
+  // Strip UTF-8 BOM and normalize CRLF so heading/item regexes match.
+  raw = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n");
+
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
     const dateMatch = line.match(/^##\s+(.*)$/);
     if (dateMatch) {
       current = { date: dateMatch[1].trim(), items: [] };

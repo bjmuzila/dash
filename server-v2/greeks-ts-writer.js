@@ -23,9 +23,10 @@
 
 const MIN_POPULATED_STRIKES = 20;
 
-// RTH window: 09:30–16:00 ET (minutes-since-midnight)
-const RTH_OPEN_MINS  = 9 * 60 + 30;  // 570
-const RTH_CLOSE_MINS = 16 * 60;      // 960
+// Writer runs ~24/7 (every 5m) except: weekends, market holidays, and the daily
+// maintenance window 16:00–18:00 ET. (Previously RTH-only 09:30–16:00.)
+const MAINT_OPEN_MINS  = 16 * 60;      // 960  — 4:00 PM ET
+const MAINT_CLOSE_MINS = 18 * 60;      // 1080 — 6:00 PM ET
 const INTERVAL_MS = 5 * 60_000;
 
 // Market holidays (ET) — keep in sync with eod-gex-recorder.js / mvc-auto-snapshot.js
@@ -107,12 +108,15 @@ function etDateStr(d = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function isRth() {
+// True when the writer should be running: any time except weekends, market
+// holidays, and the 16:00–18:00 ET maintenance window.
+function isCollectionWindow() {
   const { hour, minute, weekday } = etParts();
   if (weekday === 'Sat' || weekday === 'Sun') return false;
   if (MARKET_HOLIDAYS.has(etDateStr())) return false;
   const mins = hour * 60 + minute;
-  return mins >= RTH_OPEN_MINS && mins <= RTH_CLOSE_MINS;
+  if (mins >= MAINT_OPEN_MINS && mins < MAINT_CLOSE_MINS) return false; // maintenance
+  return true;
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -180,7 +184,7 @@ async function writeRow(base) {
 
 /** One collection pass; honours RTH gate unless { force }. */
 async function collectGreeksTs(base, opts = {}) {
-  if (!opts.force && !isRth()) return;
+  if (!opts.force && !isCollectionWindow()) return;
   try {
     await writeRow(base);
   } catch (e) {
@@ -194,7 +198,7 @@ let _timer = null;
 
 function startGreeksTsWriter(port) {
   const base = `http://localhost:${port}`;
-  console.log('[greeks-ts] enabled — writing $SPX net greeks every 5m during RTH');
+  console.log('[greeks-ts] enabled — writing $SPX net greeks every 5m 24/7 (skip weekends, holidays, 16:00–18:00 ET maintenance)');
   _timer = setInterval(() => { void collectGreeksTs(base); }, INTERVAL_MS);
   _timer.unref?.();
   // Fire one shortly after boot so a freshly-started session backfills "now".

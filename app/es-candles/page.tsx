@@ -1445,7 +1445,7 @@ export default function EsCandlesPage() {
           {/* overlay toggles — each keeps its accent color */}
           <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
           <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
-          <ToggleTile label="MVC"     on={showMvcLine}   onClick={() => setShowMvcLine((v) => !v)}  accent="#ffffff" />
+          <ToggleTile label="CB"     on={showMvcLine}   onClick={() => setShowMvcLine((v) => !v)}  accent="#ffffff" />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
           <ToggleTile label="Flow"    on={showFlow}      onClick={() => setShowFlow((v) => !v)}     accent="#cbd5e1" />
@@ -1494,7 +1494,7 @@ export default function EsCandlesPage() {
               <StatBox c="#30d158" label="Call Wall" v={levels.callWall} />
               <StatBox c="#ff5b5b" label="Put Wall" v={levels.putWall} />
               <StatBox c="#f5c518" label="Flip" v={levels.gexFlip} />
-              <StatBox c="#4aa3ff" label="MVC" v={levels.mvc} />
+              <StatBox c="#4aa3ff" label="CB" v={levels.mvc} />
 
               {/* Net greek totals — latest value of each live flow series. */}
               {(() => {

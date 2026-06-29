@@ -302,7 +302,7 @@ function GexChartExample() {
       {/* MVC tag */}
       <g>
         <rect x={padL + mvcIdx * bw - 6} y={padT - 4} width="48" height="15" rx="3" fill="rgba(33,158,188,0.14)" stroke={C.cyan} strokeWidth="0.8" />
-        <text x={padL + mvcIdx * bw + 18} y={padT + 6.5} textAnchor="middle" fontSize="8.5" fontWeight="800" fill={C.cyan}>MVC</text>
+        <text x={padL + mvcIdx * bw + 18} y={padT + 6.5} textAnchor="middle" fontSize="8.5" fontWeight="800" fill={C.cyan}>CB</text>
       </g>
       {/* SPX spot dashed line */}
       <line x1={spotX} y1={padT - 6} x2={spotX} y2={padT + innerH} stroke="#dcdcdc" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.85" />
@@ -807,7 +807,7 @@ const ARTICLES: Article[] = [
           comes in.
         </Lead>
 
-        <Figure caption={<>Blue bars = positive gamma (above the zero line), gold = negative (below). The <strong style={{ color: C.text }}>MVC</strong> tag marks the biggest wall, the dashed white line is live <strong style={{ color: C.text }}>SPX</strong>, and the orange <strong style={{ color: C.orange }}>FLIP</strong> line is where gamma crosses zero.</>}>
+        <Figure caption={<>Blue bars = positive gamma (above the zero line), gold = negative (below). The <strong style={{ color: C.text }}>CB</strong> tag marks the biggest wall, the dashed white line is live <strong style={{ color: C.text }}>SPX</strong>, and the orange <strong style={{ color: C.orange }}>FLIP</strong> line is where gamma crosses zero.</>}>
           <GexChartExample />
         </Figure>
 
@@ -830,7 +830,7 @@ const ARTICLES: Article[] = [
 
         <H3>The labels on the chart</H3>
         <Card accent={C.orange}>
-          <LegendRow color={C.text} name="MVC tag">
+          <LegendRow color={C.text} name="CB tag">
             Sits over the single largest bar by absolute net GEX — the <Term>Most Valuable Contract</Term>, the strike with
             the most dealer gamma. This is your headline magnet / wall level. Colored cyan if positive, gold if negative.
           </LegendRow>
@@ -926,7 +926,7 @@ const ARTICLES: Article[] = [
         <H2>Reading it in practice</H2>
         <Steps
           items={[
-            <>Find the <Term>MVC</Term> tag — that&rsquo;s the dominant level for the day.</>,
+            <>Find the <Term>CB</Term> tag — that&rsquo;s the dominant level for the day.</>,
             <>Check where the dashed <Term>SPX</Term> line sits relative to the big bars and the flip line.</>,
             <>Above the flip with tall positive bars overhead → expect chop / pinning into that strike.</>,
             <>Below the flip in negative gamma → expect faster, trendier moves; levels are weaker.</>,
@@ -1126,14 +1126,14 @@ const ARTICLES: Article[] = [
   },
   {
     id: "mvc",
-    title: "MVC — Most Valuable Contract",
+    title: "CB — Core Bullseye",
     group: "Concepts",
     blurb: "The single biggest gamma strike, and how it's used across the app.",
     status: "complete",
     body: () => (
       <>
         <Lead>
-          The <Term>MVC — Most Valuable Contract</Term> is the strike carrying the largest absolute net GEX: the single
+          The <Term>CB — Core Bullseye</Term> is the strike carrying the largest absolute net GEX: the single
           heaviest concentration of dealer gamma on the board. It&rsquo;s the headline level for the day, tagged right on the
           chart and threaded through the top bar, snapshots, and the Confidence score.
         </Lead>
@@ -1167,19 +1167,19 @@ const ARTICLES: Article[] = [
 
         <H2>Where it shows up</H2>
         <Card>
-          <DefRow term="GEX Chart">The <UI>MVC</UI> tag sits over the tallest bar by absolute net GEX.</DefRow>
+          <DefRow term="GEX Chart">The <UI>CB</UI> tag sits over the tallest bar by absolute net GEX.</DefRow>
           <DefRow term="Top bar">The MVC strike is surfaced in the header stat row as the day&rsquo;s key level.</DefRow>
           <DefRow term="Confidence">The Confidence score grades the MVC live as Hit / Pivot / Chop (see below).</DefRow>
         </Card>
 
-        <H2>MVC and the Confidence score</H2>
+        <H2>CB - Core Bullseye and the Confidence score</H2>
         <P>
           The Confidence page scores how the MVC is behaving in real time and classifies the session&rsquo;s likely outcome
           relative to that level:
         </P>
         <Card accent={C.green}>
           <LegendRow color={C.posBar} name="Hit">
-            Price reaches and respects the MVC — the magnet read played out. Most common when the MVC is a strong positive
+            Price reaches and respects the CB - Core Bullseye — the magnet read played out. Most common when the CB - Core Bullseye is a strong positive
             wall and price is in positive gamma.
           </LegendRow>
           <LegendRow color={C.cyan} name="Pivot">
@@ -1192,14 +1192,14 @@ const ARTICLES: Article[] = [
 
         <H2>When the MVC shifts mid-session</H2>
         <P>
-          The MVC isn&rsquo;t fixed — as volume builds and positioning changes, a different strike can overtake it. A{" "}
-          <Term>migrating MVC</Term> is information: if it climbs toward higher strikes through the morning, the dominant wall
+          The CB - Core Bullseye isn&rsquo;t fixed — as volume builds and positioning changes, a different strike can overtake it. A{" "}
+          <Term>migrating CB</Term> is information: if it climbs toward higher strikes through the morning, the dominant wall
           (and likely magnet) is moving up; if it jumps to a brand-new strike on heavy volume, fresh positioning is being laid
           down right where you should expect price to react.
         </P>
         <Steps
           items={[
-            <>Find the <UI>MVC</UI> tag — that&rsquo;s the day&rsquo;s primary level.</>,
+            <>Find the <UI>CB</UI> tag — that&rsquo;s the day&rsquo;s primary level.</>,
             <>Note its sign: positive = magnet, negative = pivot.</>,
             <>Check where <Term>SPX</Term> sits relative to it and to the flip line.</>,
             <>Watch whether it holds the same strike or migrates as volume comes in.</>,
@@ -1394,7 +1394,7 @@ const ARTICLES: Article[] = [
           <DefRow term="OI">Open interest — contracts currently outstanding.</DefRow>
           <DefRow term="Vol Only">Uses just today&rsquo;s traded volume, ignoring standing OI.</DefRow>
           <DefRow term="ATM">At-the-money — the strike nearest current price.</DefRow>
-          <DefRow term="MVC">Most Valuable Contract — the strike with the largest absolute net GEX.</DefRow>
+          <DefRow term="CB">Core Bullseye — the strike with the largest absolute net GEX.</DefRow>
           <DefRow term="Gamma Flip">Price where total dealer gamma crosses from negative to positive.</DefRow>
           <DefRow term="Long gamma">Dealers dampen moves (chop / pin). Positive GEX.</DefRow>
           <DefRow term="Short gamma">Dealers amplify moves (trend / vol). Negative GEX.</DefRow>

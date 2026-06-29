@@ -233,7 +233,7 @@ export default function EmCustomer() {
                 <div style={{ display: "grid", gridTemplateColumns: winRate != null && confidenceScore != null ? "1fr 1fr" : "1fr", gap: 10, marginTop: 10 }}>
                   {confidenceScore != null && (
                     <div style={{ ...S.avgStat, border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.3)" : confidenceScore >= 45 ? "rgba(255,193,7,.3)" : "rgba(255,71,87,.3)"}` }}>
-                      <div style={S.statLabel}>MVC Confidence</div>
+                      <div style={S.statLabel}>CB Confidence</div>
                       <div style={{ ...S.statValue, fontSize: 20, color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#ff4757" }}>
                         {confidenceScore}%
                       </div>
