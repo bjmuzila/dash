@@ -27,3 +27,14 @@ build_spx_ohlc_5m/
 *credentials*.json
 _ARCHIVED_DO_NOT_EDIT/
 .env
+ThetaTerminalv3.jar
+config.toml
+lib/*.jar
+oi.csv
+strikes.csv
+ThetaTerminalv3.jar
+config.toml
+lib/*.jar
+oi.csv
+strikes.csv
+server-v2/.cash-basis.json

@@ -21,12 +21,20 @@ import { HOME_THEME, homeShellStyle } from "@/components/shared/homeTheme";
 
 interface GreekPoint {
   ts: number;
-  gex: number;       // billions — net GEX at the active basis (defaults OI+Vol)
+  // Each greek carries its active-basis value plus OI+Vol and Vol-only variants,
+  // so the single basis toggle can remap EVERY greek the way GEX already does.
+  gex: number;       // billions — net GEX at active basis (defaults OI+Vol)
   gexOiVol?: number; // billions — OI+Vol net GEX (heatmap / mult-greek basis)
   gexVol?: number;   // billions — Vol-only net GEX
-  dex: number;       // billions
-  chex: number;      // millions
-  vex: number;       // millions
+  dex: number;       // billions — at active basis
+  dexOiVol?: number; // billions — OI+Vol net DEX
+  dexVol?: number;   // billions — Vol-only net DEX
+  chex: number;      // millions — at active basis
+  chexOiVol?: number;// millions — OI+Vol net CHEX
+  chexVol?: number;  // millions — Vol-only net CHEX
+  vex: number;       // millions — at active basis
+  vexOiVol?: number; // millions — OI+Vol net VEX
+  vexVol?: number;   // millions — Vol-only net VEX
   spot: number;
 }
 
@@ -872,8 +880,18 @@ export default function GreeksPage() {
       const payload = (json?.data ?? json) as Record<string, unknown>;
       const t = payload?.totals as Record<string, number> | null | undefined;
       if (!t) { setStale(true); return; }
-      // totalDeltaPut already stored negative → net = call + put.
-      const netDEX = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
+      // DEX three bases. OI net = call + put (put stored negative).
+      const dexOi    = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
+      const dexOiVol = Number(t.totalDeltaOiVol ?? dexOi);
+      const dexVol   = Number(t.totalDeltaVol ?? 0);
+      // VEX (vanna) three bases.
+      const vexOi    = Number(t.totalVEX ?? 0);
+      const vexOiVol = Number(t.totalVEXOiVol ?? vexOi);
+      const vexVol   = Number(t.totalVEXVol ?? 0);
+      // CHEX (charm) three bases.
+      const chexOi    = Number(t.totalCHEX ?? 0);
+      const chexOiVol = Number(t.totalCHEXOiVol ?? chexOi);
+      const chexVol   = Number(t.totalCHEXVol ?? 0);
       // Normalize updatedAt: may be ms, seconds, or absent. Anything not in a
       // sane recent range falls back to now so the tooltip never shows a bad date.
       let ts = Number(payload?.updatedAt);
@@ -883,12 +901,19 @@ export default function GreeksPage() {
       const gexVolB = Number(t.totalGEXVol ?? 0) / 1e9;
       const snap: GreekPoint = {
         ts,
-        gex: gexOiVolB, // default basis = OI+Vol (matches heatmap / mult-greek)
+        // Default basis = OI+Vol (matches heatmap / mult-greek) for every greek.
+        gex: gexOiVolB,
         gexOiVol: gexOiVolB,
         gexVol: gexVolB,
-        dex: netDEX / 1e9,
-        chex: Number(t.totalCHEX ?? 0) / 1e6,
-        vex: Number(t.totalVEX ?? 0) / 1e6,
+        dex: dexOiVol / 1e9,
+        dexOiVol: dexOiVol / 1e9,
+        dexVol: dexVol / 1e9,
+        chex: chexOiVol / 1e6,
+        chexOiVol: chexOiVol / 1e6,
+        chexVol: chexVol / 1e6,
+        vex: vexOiVol / 1e6,
+        vexOiVol: vexOiVol / 1e6,
+        vexVol: vexVol / 1e6,
         spot: Number(payload?.spot ?? 0) || 0,
       };
       // Only accept if at least one greek is non-zero (avoids wiping the cards
@@ -909,16 +934,29 @@ export default function GreeksPage() {
     return () => clearInterval(t);
   }, [doRefresh]);
 
-  // GEX basis toggle: OI+Vol (heatmap / mult-greek) by default, or Volume-only.
-  // `gex` already holds the OI+Vol value; remap to gexVol when Vol-only is chosen
-  // so ALL downstream consumers (cards, velocity, chart, signals) stay consistent.
+  // Basis toggle: OI+Vol (heatmap / mult-greek) by default, or Volume-only.
+  // Each greek already holds the OI+Vol value in its base field; when Vol-only is
+  // chosen we remap EVERY greek to its *Vol variant so ALL downstream consumers
+  // (cards, velocity, chart, signals) switch basis together — same as GEX.
   const applyBasis = useCallback(
     (p: GreekPoint): GreekPoint =>
-      gexBasis === "vol" && p.gexVol != null ? { ...p, gex: p.gexVol } : p,
+      gexBasis === "vol"
+        ? {
+            ...p,
+            gex: p.gexVol ?? p.gex,
+            dex: p.dexVol ?? p.dex,
+            chex: p.chexVol ?? p.chex,
+            vex: p.vexVol ?? p.vex,
+          }
+        : p,
     [gexBasis],
   );
   const historyView = history.map(applyBasis);
   const latestView = latest ? applyBasis(latest) : null;
+
+  // Card subtitle suffix reflecting the active basis (applies to every greek).
+  const basisSub = (name: string) =>
+    `${name} · ${gexBasis === "oivol" ? "OI+Vol" : "Vol Only"}`;
 
   // Display values (fall back to last historical point if no live snap yet).
   const history2 = historyView;
@@ -995,25 +1033,25 @@ export default function GreeksPage() {
       {/* Cards */}
       <div className="greeks-cards" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
         <GreekCard
-          icon="■" label="GEX" subtitle={gexBasis === "oivol" ? "Gamma Exposure · OI+Vol" : "Gamma Exposure · Vol Only"} mode={mode} fmt={fmtB} accent="#22d3ee"
+          icon="■" label="GEX" subtitle={basisSub("Gamma Exposure")} mode={mode} fmt={fmtB} accent="#22d3ee"
           valueStr={fmtB(gexVal)} value={gexVal} velocity={gexVelStr} data={gexData}
           positiveMsg="Dealers long gamma — they trade against moves (buy dips, sell rips). Volatility suppressed, ranges compressed."
           negativeMsg="Dealers short gamma — they chase moves in both directions. Volatility amplified; small pushes can cascade."
           neutralMsg="Waiting for the first reading." />
         <GreekCard
-          icon="▲" label="DEX" subtitle="Delta Exposure" mode={mode} fmt={fmtB} accent="#a78bfa"
+          icon="▲" label="DEX" subtitle={basisSub("Delta Exposure")} mode={mode} fmt={fmtB} accent="#a78bfa"
           valueStr={fmtB(dexVal)} value={dexVal} velocity={dexVelStr} data={dexData}
           positiveMsg="Dealers net long underlying — directional bias to the upside in hedging flows."
           negativeMsg="Dealers net short underlying — protective put positioning active, bias to the downside."
           neutralMsg="Waiting for the first reading." />
         <GreekCard
-          icon="◆" label="CHEX" subtitle="Charm Exposure" mode={mode} fmt={fmtM} accent="#2dd4bf"
+          icon="◆" label="CHEX" subtitle={basisSub("Charm Exposure")} mode={mode} fmt={fmtM} accent="#2dd4bf"
           valueStr={fmtM(chexVal)} value={chexVal} velocity={chexVelStr} data={chexData}
           positiveMsg="Charm decay adding to dealer long-delta — drift-supportive hedging into expiry."
           negativeMsg="Charm decay driving dynamic delta hedging — time decay pulls hedges, often pinning toward expiry."
           neutralMsg="Waiting for the first reading." />
         <GreekCard
-          icon="◈" label="VEX" subtitle="Vanna Exposure" mode={mode} fmt={fmtM} accent="#e879f9"
+          icon="◈" label="VEX" subtitle={basisSub("Vanna Exposure")} mode={mode} fmt={fmtM} accent="#e879f9"
           valueStr={fmtM(vexVal)} value={vexVal} velocity={vexVelStr} data={vexData}
           positiveMsg="Positive vanna — rising IV fuels dealer buying momentum; IV crush supports upside."
           negativeMsg="Negative vanna — rising IV pressures dealers to sell; falling IV is supportive."

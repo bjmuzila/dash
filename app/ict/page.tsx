@@ -456,6 +456,7 @@ export default function IctPage() {
     // draw solid; weak/unconfirmed blocks draw faint + dashed.
     if (t.showOb) {
       for (const o of a.orderBlocks) {
+        if (o.violated) continue; // price closed through it → block is spent, drop it
         const x = xOf(o.ts), yT = yOf(o.top), yB = yOf(o.bottom);
         if (x == null || yT == null || yB == null) continue;
         const yy = Math.min(yT, yB), hh = Math.abs(yB - yT), ww = Math.max(2, rightEdge - x);
@@ -590,7 +591,7 @@ export default function IctPage() {
       // (Don't gate on `mitigated`: an OB flips to mitigated the instant price
       //  re-enters it, which would suppress the very "price in zone" state we
       //  want to flag.)
-      ob:     ict.orderBlocks.some((o) => inZone(o.top, o.bottom)),
+      ob:     ict.orderBlocks.some((o) => !o.violated && inZone(o.top, o.bottom)),
       breaker: ict.breakers.some((s) => fresh(s.ts)),
       irlerl: ict.rangeLiquidity.internal.some((z) => inZone(z.top, z.bottom)),
       // Flash only on the candle that BREAKS (sweeps) the level and the next one.

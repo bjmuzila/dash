@@ -861,11 +861,13 @@ function GreeksCard() {
                 <Label>{g}</Label>
                 <Value color={nowVal > 0 ? POS_GREEN : nowVal < 0 ? T.red : T.text} size={28}>{fmtBig(nowVal)}</Value>
                 <div style={{ display: "flex", gap: 10, fontFamily: "monospace", fontSize: 13 }}>
-                  <span style={{ color: d15 == null ? T.muted : signColor(d15), opacity: d15 == null ? 0.5 : 1 }}>
-                    15m {d15 == null ? "—" : fmtBig(d15)}
+                  <span style={{ opacity: d15 == null ? 0.5 : 1 }}>
+                    <span style={{ color: T.text }}>15m</span>{" "}
+                    <span style={{ color: d15 == null ? T.muted : signColor(d15) }}>{d15 == null ? "—" : fmtBig(d15)}</span>
                   </span>
-                  <span style={{ color: d30 == null ? T.muted : signColor(d30), opacity: d30 == null ? 0.5 : 1 }}>
-                    30m {d30 == null ? "—" : fmtBig(d30)}
+                  <span style={{ opacity: d30 == null ? 0.5 : 1 }}>
+                    <span style={{ color: T.text }}>30m</span>{" "}
+                    <span style={{ color: d30 == null ? T.muted : signColor(d30) }}>{d30 == null ? "—" : fmtBig(d30)}</span>
                   </span>
                 </div>
               </div>
@@ -1361,6 +1363,15 @@ function biasColor(b?: string): string {
   return T.muted;
 }
 
+// Colored section header for the Strategy Builder card.
+function SectionTitle({ children, color }: { children: ReactNode; color: string }) {
+  return (
+    <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color }}>
+      {children}
+    </span>
+  );
+}
+
 function StrategyBuilderCard() {
   // 5-min poll — the plan only changes once a day, but this keeps a freshly
   // generated plan showing up without a manual reload.
@@ -1419,15 +1430,15 @@ function StrategyBuilderCard() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             {/* Levels */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <Label>Key levels</Label>
+              <SectionTitle color={T.cyan}>Key levels</SectionTitle>
               {(plan!.levels?.length ?? 0) === 0 ? (
                 <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
               ) : (
                 plan!.levels!.map((lv, i) => (
                   <div key={i} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6, display: "flex", flexDirection: "column", gap: 2 }}>
                     <Row>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{lv.label ?? "—"}</span>
-                      <Value size={15} color={T.cyan}>{lv.price != null ? String(lv.price) : "—"}</Value>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>{lv.label ?? "—"}</span>
+                      <Value size={15} color={T.text}>{lv.price != null ? String(lv.price) : "—"}</Value>
                     </Row>
                     {lv.note && <span style={{ fontSize: 13, color: T.muted, lineHeight: 1.45 }}>{lv.note}</span>}
                   </div>
@@ -1437,7 +1448,7 @@ function StrategyBuilderCard() {
 
             {/* Trade idea + triggers + risk */}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <Label>Primary idea</Label>
+              <SectionTitle color={T.orange}>Primary idea</SectionTitle>
               {plan!.idea ? (
                 <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                   <Row>
@@ -1458,7 +1469,7 @@ function StrategyBuilderCard() {
                 <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
               )}
 
-              <Label>Confirmation triggers</Label>
+              <SectionTitle color={T.green}>Confirmation triggers</SectionTitle>
               {(plan!.triggers?.length ?? 0) === 0 ? (
                 <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
               ) : (

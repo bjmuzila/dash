@@ -194,6 +194,7 @@ export interface OrderBlock {
   bottom: number;
   ts: number;        // timestamp of the OB candle
   mitigated: boolean;
+  violated: boolean;     // price CLOSED through the far side → OB is spent, drop it
   swept: boolean;        // OB candle took liquidity (broke prior candle's extreme)
   hasImbalance: boolean; // an FVG/imbalance followed the OB (validates it)
   valid: boolean;        // swept AND hasImbalance — a textbook ICT order block
@@ -239,6 +240,11 @@ export function detectOrderBlocks(candles: IctCandle[], disp: Displacement[]): O
       ts: ob.timestamp,
       mitigated: candles.slice(obIdx + 2).some((c) =>
         d.dir === "bull" ? c.low <= ob.high && c.low >= ob.low : c.high >= ob.low && c.high <= ob.high),
+      // Price traded fully THROUGH the block: a later candle CLOSED beyond its
+      // far side (bull OB violated on a close below its low; bear OB on a close
+      // above its high). Spent blocks are dropped from the chart.
+      violated: candles.slice(obIdx + 2).some((c) =>
+        d.dir === "bull" ? c.close < ob.low : c.close > ob.high),
       swept,
       hasImbalance,
       valid: swept && hasImbalance,
@@ -686,7 +692,7 @@ export function detectRangeLiquidity(range: DealingRange | null, fvgs: FVG[], ob
   const inRange = (top: number, bottom: number) => bottom >= range.low && top <= range.high;
   const internal: RangeLiquidity["internal"] = [];
   for (const f of fvgs) if (!f.spent && inRange(f.top, f.bottom)) internal.push({ top: f.top, bottom: f.bottom, kind: "fvg" });
-  for (const o of obs) if (!o.mitigated && inRange(o.top, o.bottom)) internal.push({ top: o.top, bottom: o.bottom, kind: "ob" });
+  for (const o of obs) if (!o.mitigated && !o.violated && inRange(o.top, o.bottom)) internal.push({ top: o.top, bottom: o.bottom, kind: "ob" });
   return { erlHigh: range.high, erlLow: range.low, internal };
 }
 

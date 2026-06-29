@@ -56,22 +56,47 @@ function accumulateExposureTotals({
     totals.totalGEX += Math.abs(gamma) * contracts * gexMult;
     totals.totalGEXOiVol += Math.abs(gamma) * oiVol * gexMult;
     totals.totalGEXVol += Math.abs(gamma) * volOnly * gexMult;
+    // Delta (calls add). Three bases: OI (legacy call/put split), OI+Vol, Vol-only.
     totals.totalDeltaCall += Math.abs(delta) * contracts * mult;
+    totals.totalDeltaOiVol += Math.abs(delta) * oiVol * mult;
+    totals.totalDeltaVol += Math.abs(delta) * volOnly * mult;
+    // Charm (CHEX): calls add. Note totalCharmCall keeps the legacy -theta basis;
+    // totalCHEX* are the true charm-exposure totals matching per-strike chex.
     totals.totalCharmCall += -theta * contracts * mult;
-    totals.totalVegaCall += vega * contracts * mult;
-    totals.totalVEX += vanna * contracts * mult;
     totals.totalCHEX += charm * contracts * mult;
+    totals.totalCHEXOiVol += charm * oiVol * mult;
+    totals.totalCHEXVol += charm * volOnly * mult;
+    // Vega: calls add.
+    totals.totalVegaCall += vega * contracts * mult;
+    totals.totalVegaOiVol += vega * oiVol * mult;
+    totals.totalVegaVol += vega * volOnly * mult;
+    // Vanna (VEX): calls add.
+    totals.totalVEX += vanna * contracts * mult;
+    totals.totalVEXOiVol += vanna * oiVol * mult;
+    totals.totalVEXVol += vanna * volOnly * mult;
     return;
   }
 
   totals.totalGEX -= Math.abs(gamma) * contracts * gexMult;
   totals.totalGEXOiVol -= Math.abs(gamma) * oiVol * gexMult;
   totals.totalGEXVol -= Math.abs(gamma) * volOnly * gexMult;
+  // Delta (puts subtract).
   totals.totalDeltaPut -= Math.abs(delta) * contracts * mult;
+  totals.totalDeltaOiVol -= Math.abs(delta) * oiVol * mult;
+  totals.totalDeltaVol -= Math.abs(delta) * volOnly * mult;
+  // Charm (CHEX): puts subtract (matches per-strike chex sign).
   totals.totalCharmPut += theta * contracts * mult;
-  totals.totalVegaPut -= vega * contracts * mult;
-  totals.totalVEX -= vanna * contracts * mult;
   totals.totalCHEX -= charm * contracts * mult;
+  totals.totalCHEXOiVol -= charm * oiVol * mult;
+  totals.totalCHEXVol -= charm * volOnly * mult;
+  // Vega: puts subtract.
+  totals.totalVegaPut -= vega * contracts * mult;
+  totals.totalVegaOiVol -= vega * oiVol * mult;
+  totals.totalVegaVol -= vega * volOnly * mult;
+  // Vanna (VEX): puts subtract.
+  totals.totalVEX -= vanna * contracts * mult;
+  totals.totalVEXOiVol -= vanna * oiVol * mult;
+  totals.totalVEXVol -= vanna * volOnly * mult;
 }
 
 /** Fresh zeroed totals object. */
@@ -80,14 +105,27 @@ function emptyTotals() {
     totalGEX: 0,
     totalGEXOiVol: 0,
     totalGEXVol: 0,
+    // Delta (DEX): OI split + OI+Vol + Vol-only
     totalDeltaCall: 0,
     totalDeltaPut: 0,
+    totalDeltaOiVol: 0,
+    totalDeltaVol: 0,
+    // Charm legacy split (theta-based) kept for back-compat
     totalCharmCall: 0,
     totalCharmPut: 0,
+    // Vega: OI split + OI+Vol + Vol-only
     totalVegaCall: 0,
     totalVegaPut: 0,
+    totalVegaOiVol: 0,
+    totalVegaVol: 0,
+    // Vanna (VEX): OI net + OI+Vol + Vol-only
     totalVEX: 0,
+    totalVEXOiVol: 0,
+    totalVEXVol: 0,
+    // Charm (CHEX): OI net + OI+Vol + Vol-only
     totalCHEX: 0,
+    totalCHEXOiVol: 0,
+    totalCHEXVol: 0,
   };
 }
 
@@ -119,18 +157,24 @@ function computeVexChexRow({ call, put, spot }) {
   const netVolVanna = callVanna * callVol * mult - putVanna * putVol * mult;
   // Charm exposure (OI-weighted)
   const chex = callCharm * callOI * mult - putCharm * putOI * mult;
-  return { netVanna, netVolVanna, chex, vex: netVanna };
+  // Charm exposure (volume-weighted) — Vol twin of chex
+  const volChex = callCharm * callVol * mult - putCharm * putVol * mult;
+  return { netVanna, netVolVanna, chex, volChex, vex: netVanna };
 }
 
 /** Sum VEX / CHEX across already-computed GEX rows. */
 function totalVexChex(gexRows) {
   let vex = 0;
+  let volVex = 0;
   let chex = 0;
+  let volChex = 0;
   for (const r of gexRows) {
-    vex += r.vex ?? 0;
+    vex += r.vex ?? r.netVanna ?? 0;
+    volVex += r.netVolVanna ?? 0;
     chex += r.chex ?? 0;
+    volChex += r.volChex ?? 0;
   }
-  return { totalVEX: vex, totalCHEX: chex };
+  return { totalVEX: vex, totalVEXVol: volVex, totalCHEX: chex, totalCHEXVol: volChex };
 }
 
 module.exports = {

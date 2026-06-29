@@ -75,7 +75,7 @@ function computeGexRows(rows, spot) {
 
     // Vanna / charm exposure computed by sibling module.
     // Field names match the dashboard's ChainRow: netVanna, netVolVanna.
-    const { netVanna, netVolVanna, chex } = computeVexChexRow({ call, put, spot });
+    const { netVanna, netVolVanna, chex, volChex } = computeVexChexRow({ call, put, spot });
 
     result.push({
       strike,
@@ -97,6 +97,7 @@ function computeGexRows(rows, spot) {
       netVanna,
       netVolVanna,
       chex,
+      volChex,
       callIV,
       putIV,
       callMark,

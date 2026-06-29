@@ -814,11 +814,13 @@ function ExplainerMockup({
       const json = await r.json();
       const t = (json?.data?.totals ?? json?.totals) as Record<string, number> | null;
       if (!t) throw new Error("no totals");
+      // Default basis = OI+Vol, matching /greeks. Fall back to legacy OI fields.
+      const dexOi = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
       const g: Greeks = {
-        gex: Number(t.totalGEX ?? 0) / 1e9,
-        dex: (Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0)) / 1e9,
-        chex: Number(t.totalCHEX ?? 0) / 1e6,
-        vex: Number(t.totalVEX ?? 0) / 1e6,
+        gex: Number(t.totalGEXOiVol ?? t.totalGEX ?? 0) / 1e9,
+        dex: Number(t.totalDeltaOiVol ?? dexOi) / 1e9,
+        chex: Number(t.totalCHEXOiVol ?? t.totalCHEX ?? 0) / 1e6,
+        vex: Number(t.totalVEXOiVol ?? t.totalVEX ?? 0) / 1e6,
       };
       setGreeks(g);
       setBehState("idle");

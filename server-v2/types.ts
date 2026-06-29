@@ -92,24 +92,45 @@ export interface GexStrikeRow {
   netVolGEX: number;
   netDEX: number;
   volNetDEX: number;
-  vex: number;
+  netVanna: number;
+  netVolVanna: number;
+  vex?: number;
   chex: number;
+  volChex: number;
   callIV: number;
   putIV: number;
+  callMark?: number;
+  putMark?: number;
   dte: number;
 }
 
 /** Aggregate exposure totals across the chain. */
 export interface ExposureTotals {
+  // GEX: OI, OI+Vol, Vol-only
   totalGEX: number;
+  totalGEXOiVol: number;
+  totalGEXVol: number;
+  // DEX (delta): OI split + OI+Vol + Vol-only. OI net = call + put.
   totalDeltaCall: number;
   totalDeltaPut: number;
+  totalDeltaOiVol: number;
+  totalDeltaVol: number;
+  // Charm legacy theta split (back-compat)
   totalCharmCall: number;
   totalCharmPut: number;
+  // Vega: OI split + OI+Vol + Vol-only
   totalVegaCall: number;
   totalVegaPut: number;
+  totalVegaOiVol: number;
+  totalVegaVol: number;
+  // Vanna (VEX): OI net + OI+Vol + Vol-only
   totalVEX: number;
+  totalVEXOiVol: number;
+  totalVEXVol: number;
+  // Charm (CHEX): OI net + OI+Vol + Vol-only
   totalCHEX: number;
+  totalCHEXOiVol: number;
+  totalCHEXVol: number;
 }
 
 /** Aggregated flow over a rolling window. */

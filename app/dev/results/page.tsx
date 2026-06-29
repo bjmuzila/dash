@@ -435,6 +435,7 @@ type CpCell = {
   strike: number | null; spxAt: number | null; distAt: number | null;
   closest: number | null; hit: boolean; matched: boolean;
   tiers?: Record<number, boolean | null>;
+  changed?: boolean;
 };
 type CpDay = { date: string; checkpoints: CpCell[] };
 type CpSummary = {
@@ -580,6 +581,9 @@ function CheckpointsView() {
                       <React.Fragment key={c.key}>
                         <td style={{ ...td, textAlign: "right", color: "#fff", borderLeft: `1px solid ${C.border}` }}>
                           {c.strike != null ? c.strike.toFixed(0) : "—"}
+                          {c.changed && (
+                            <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 11, color: AMBER, fontWeight: 700 }}>↻</span>
+                          )}
                         </td>
                         <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
                           {c.closest != null ? `${c.closest.toFixed(1)}` : "—"}

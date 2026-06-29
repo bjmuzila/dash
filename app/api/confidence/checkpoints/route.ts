@@ -55,6 +55,7 @@ type CheckpointResult = {
   hit: boolean;            // closest <= HIT_PTS
   matched: boolean;        // a snapshot was found near this checkpoint
   tiers: Record<number, boolean | null>; // touched within 5/10/15 pts
+  changed: boolean;        // CB strike changed at a later checkpoint (window closed early)
 };
 
 type DayRow = {
@@ -94,8 +95,8 @@ export async function GET(req: NextRequest) {
       // Skip a day entirely if it never had a single valid SPX print.
       if (!timed.some((t) => t.spx != null)) continue;
 
-      const checkpoints: CheckpointResult[] = CHECKPOINTS.map((cp) => {
-        // Nearest snapshot to the checkpoint, within the match window.
+      // Pass 1: resolve each checkpoint's CB strike (nearest snapshot within window).
+      const resolved = CHECKPOINTS.map((cp) => {
         let best: typeof timed[number] | null = null;
         let bestGap = Infinity;
         for (const t of timed) {
@@ -103,31 +104,52 @@ export async function GET(req: NextRequest) {
           if (gap < bestGap) { bestGap = gap; best = t; }
         }
         const matched = best != null && bestGap <= MATCH_WINDOW;
-        const strike = matched ? best!.strike : null;
-        const spxAt = matched ? best!.spx : null;
+        return {
+          cp, matched,
+          strike: matched ? best!.strike : null,
+          spxAt: matched ? best!.spx : null,
+        };
+      });
+
+      // Pass 2: score each checkpoint over its OWN window. A checkpoint's CB is
+      // live from its time until the NEXT checkpoint's CB strike DIFFERS (the CB
+      // changed) — at which point the window closes. If the next strike is the
+      // same (or there is no next), the window runs to end of day.
+      const checkpoints: CheckpointResult[] = resolved.map((r, idx) => {
+        const { cp, matched, strike, spxAt } = r;
         const distAt = strike != null && spxAt != null ? Math.abs(spxAt - strike) : null;
 
-        // Closest SPX got to that strike from the checkpoint onward.
-        // Ignore bad snapshots where SPX is missing/zero (feed defaulted), which
-        // otherwise produce an absurd closest (~strike) and poison avg-closest.
+        // Find where this CB's window ends: the first later checkpoint whose
+        // resolved strike differs from this one. null ⇒ runs to EOD.
+        let windowEndMin: number | null = null;
+        let changed = false;
+        for (let j = idx + 1; j < resolved.length; j++) {
+          const nxt = resolved[j];
+          if (nxt.matched && nxt.strike != null && strike != null && nxt.strike !== strike) {
+            windowEndMin = nxt.cp.min;
+            changed = true;
+            break;
+          }
+        }
+
+        // Closest SPX got to the strike within [checkpoint, windowEnd].
         let closest: number | null = null;
         if (strike != null) {
           for (const t of timed) {
             if (t.min < cp.min - MATCH_WINDOW) continue;
+            if (windowEndMin != null && t.min > windowEndMin) continue;
             if (t.spx == null || t.spx <= 0) continue;
             const d = Math.abs(t.spx - strike);
             if (closest == null || d < closest) closest = d;
           }
         }
-        // A closest on the order of the strike itself means no valid SPX print
-        // was found — treat as no data rather than a giant miss.
         if (closest != null && strike != null && closest > strike * 0.5) closest = null;
-        // Tiered touches: did SPX get within 5 / 10 / 15 pts of the strike?
+
         const tiers: Record<number, boolean | null> = {};
         for (const t of TIERS) tiers[t] = closest != null ? closest <= t : null;
         return {
           key: cp.key, label: cp.label, strike, spxAt, distAt, closest,
-          hit: closest != null && closest <= HIT_PTS, matched, tiers,
+          hit: closest != null && closest <= HIT_PTS, matched, tiers, changed,
         };
       });
 
