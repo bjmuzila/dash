@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 // signed-in user.
 const isPublicRoute = createRouteMatcher([
   "/",
+  "/coming-soon",
   "/explore(.*)",
   "/pricing",
   "/sign-in(.*)",
@@ -107,6 +108,7 @@ export default clerkMiddleware(async (auth, req) => {
   const path = req.nextUrl.pathname;
   const exemptFromMaint =
     path === "/maintenance" ||
+    path === "/coming-soon" ||
     path.startsWith("/sign-in") ||
     path.startsWith("/sign-up") ||
     path.startsWith("/api/waitlist") ||

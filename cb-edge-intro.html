@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CB EDGE — Coming Soon</title>
+<style>
+  :root{
+    --bg:#0a0e14;
+    --cyan:#3fa9d4;
+    --red:#e63946;
+    --blue:#4f7cff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Arial Black',Arial,Helvetica,sans-serif}
+  #fx{position:fixed;inset:0;z-index:1}
+  .wrap{
+    position:relative;z-index:2;height:100%;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:24px;gap:34px;
+  }
+  .logo{
+    font-size:clamp(60px,13vw,150px);
+    font-weight:900;letter-spacing:.06em;color:#fff;line-height:1;
+    text-shadow:0 0 18px rgba(63,169,212,.85),0 0 46px rgba(63,169,212,.55),0 0 90px rgba(63,169,212,.35);
+    animation:logoPulse 3.2s ease-in-out infinite;
+  }
+  @keyframes logoPulse{50%{text-shadow:0 0 26px rgba(63,169,212,1),0 0 70px rgba(63,169,212,.7),0 0 120px rgba(63,169,212,.45)}}
+  .soon{
+    font-size:clamp(14px,2.6vw,26px);letter-spacing:.55em;color:var(--cyan);font-weight:700;
+    text-shadow:0 0 14px rgba(63,169,212,.6);
+  }
+
+  /* glowing signup box */
+  .box-glow{position:relative;display:inline-block}
+  .box-glow::before{
+    content:"";position:absolute;inset:-14px;border-radius:60px;z-index:-1;
+    background:radial-gradient(ellipse at center,rgba(255,255,255,.45),rgba(255,255,255,.12) 55%,transparent 75%);
+    filter:blur(14px);animation:boxGlow 2.6s ease-in-out infinite;
+  }
+  @keyframes boxGlow{50%{filter:blur(22px);opacity:.9}}
+  .signup{
+    display:flex;align-items:center;gap:14px;
+    background:rgba(18,22,30,.78);border:1px solid rgba(255,255,255,.22);
+    border-radius:54px;padding:18px 34px;backdrop-filter:blur(4px);
+    box-shadow:0 0 30px rgba(255,255,255,.25);
+  }
+  .signup .label{
+    font-size:clamp(15px,2.4vw,24px);font-weight:900;letter-spacing:.04em;color:#fff;
+    text-shadow:0 0 10px rgba(255,255,255,.7);white-space:nowrap;
+  }
+  .dot{display:inline-block;width:34px;height:34px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#fff,var(--cyan));
+    box-shadow:0 0 16px var(--cyan);animation:spin 4s linear infinite;flex:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* countdown */
+  .countdown{display:flex;gap:clamp(10px,2.2vw,26px);margin-top:4px}
+  .unit{display:flex;flex-direction:column;align-items:center;min-width:60px}
+  .num{
+    font-size:clamp(30px,6vw,58px);font-weight:900;color:#fff;line-height:1;
+    text-shadow:0 0 16px rgba(255,255,255,.85),0 0 40px rgba(63,169,212,.55);
+    font-variant-numeric:tabular-nums;
+  }
+  .ulabel{font-size:clamp(9px,1.4vw,13px);letter-spacing:.3em;color:var(--cyan);margin-top:8px;font-weight:700}
+
+  /* full launch line */
+  .launch{
+    font-size:clamp(16px,3vw,34px);font-weight:900;letter-spacing:.08em;color:#fff;margin-top:6px;
+    text-shadow:0 0 18px rgba(79,124,255,.8),0 0 42px rgba(230,57,70,.5);
+    animation:launchPulse 2.4s ease-in-out infinite;
+  }
+  .launch .jul{color:var(--blue);text-shadow:0 0 18px rgba(79,124,255,.9)}
+  @keyframes launchPulse{50%{transform:scale(1.04)}}
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div class="wrap">
+  <div class="logo">CB EDGE</div>
+  <div class="soon">C O M I N G &nbsp; S O O N . . .</div>
+
+  <div class="box-glow">
+    <div class="signup">
+      <span class="dot"></span>
+      <span class="label">BETA SIGNUPS &nbsp;MONDAY JUNE 30 &nbsp;9:30 AM ET</span>
+    </div>
+  </div>
+
+  <div class="countdown" id="cd">
+    <div class="unit"><span class="num" id="d">00</span><span class="ulabel">DAYS</span></div>
+    <div class="unit"><span class="num" id="h">00</span><span class="ulabel">HOURS</span></div>
+    <div class="unit"><span class="num" id="m">00</span><span class="ulabel">MINUTES</span></div>
+    <div class="unit"><span class="num" id="s">00</span><span class="ulabel">SECONDS</span></div>
+  </div>
+
+  <div class="launch">🎆 FULL LAUNCH <span class="jul">JULY 4TH WEEKEND</span> 🎆</div>
+</div>
+
+<script>
+/* ---- Countdown to Jun 30 2026, 9:30 AM ET (UTC-4 EDT = 13:30 UTC) ---- */
+const TARGET = Date.parse('2026-06-30T13:30:00Z');
+const pad = n => String(Math.max(0,n)).padStart(2,'0');
+function tick(){
+  let diff = TARGET - Date.now();
+  if(diff < 0) diff = 0;
+  const s = Math.floor(diff/1000);
+  document.getElementById('d').textContent = pad(Math.floor(s/86400));
+  document.getElementById('h').textContent = pad(Math.floor(s%86400/3600));
+  document.getElementById('m').textContent = pad(Math.floor(s%3600/60));
+  document.getElementById('s').textContent = pad(s%60);
+}
+tick(); setInterval(tick,1000);
+
+/* ---- Fireworks ---- */
+const cv = document.getElementById('fx'), cx = cv.getContext('2d');
+let W,H;
+function resize(){W=cv.width=innerWidth;H=cv.height=innerHeight}
+resize(); addEventListener('resize',resize);
+
+const COLORS=['#3fa9d4','#4f7cff','#e63946','#ffffff','#ffd166','#7be0ff'];
+let parts=[];
+function burst(x,y){
+  const n=70+Math.random()*40, hue=COLORS[Math.floor(Math.random()*COLORS.length)];
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=Math.random()*5+1.5;
+    parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,
+      col:Math.random()<.3?'#ffffff':hue,size:Math.random()*2+1.2});
+  }
+}
+function loop(){
+  cx.globalCompositeOperation='source-over';
+  cx.fillStyle='rgba(10,14,20,.22)';
+  cx.fillRect(0,0,W,H);
+  cx.globalCompositeOperation='lighter';
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.045; p.vx*=0.99; p.life-=0.012;
+    if(p.life<=0){parts.splice(i,1);continue}
+    cx.globalAlpha=Math.max(0,p.life);
+    cx.fillStyle=p.col;
+    cx.beginPath();cx.arc(p.x,p.y,p.size,0,Math.PI*2);cx.fill();
+  }
+  cx.globalAlpha=1;
+  requestAnimationFrame(loop);
+}
+loop();
+setInterval(()=>burst(Math.random()*W*0.8+W*0.1, Math.random()*H*0.45+H*0.08), 900);
+burst(W*0.3,H*0.3); burst(W*0.7,H*0.25);
+</script>
+</body>
+</html>
