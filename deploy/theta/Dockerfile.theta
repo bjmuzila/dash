@@ -16,7 +16,8 @@ ADD https://download-unstable.thetadata.us/ThetaTerminalv3.jar /opt/theta/ThetaT
 # v3 REST binds 25503, streaming WS binds 25520. Expose both on the compose net.
 EXPOSE 25503 25520
 
-# API key comes from the environment var THETA_DATA_API_KEY (the Terminal reads it
-# natively — priority CLI > env > .env), injected by compose from
-# /opt/dashboard/.env.local. NEVER baked into the image. No --api-key flag needed.
-ENTRYPOINT ["java", "-jar", "ThetaTerminalv3.jar"]
+# API key from env var THETA_DATA_API_KEY (compose env_file: .env.local), passed
+# explicitly via the --api-key FLAG. The bootstrap build doesn't reliably read the
+# env var on its own (it falls back to creds.txt), but the CLI flag always works —
+# same as the local launch. sh -c so ${...} expands at runtime, never baked in.
+ENTRYPOINT ["sh", "-c", "exec java -jar ThetaTerminalv3.jar --api-key \"$THETA_DATA_API_KEY\""]

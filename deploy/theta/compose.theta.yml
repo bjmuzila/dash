@@ -19,9 +19,11 @@ services:
       dockerfile: deploy/theta/Dockerfile.theta
     container_name: theta-terminal
     restart: unless-stopped
-    environment:
-      # injected from /opt/dashboard/.env.local (gitignored, never via git pull)
-      THETA_DATA_API_KEY: ${THETA_DATA_API_KEY}
+    # Read the key from .env.local directly (same as the dashboard service). The
+    # `environment:` interpolation form pulls from Compose's .env / shell, NOT
+    # .env.local, so env_file is required for the Terminal to actually see the key.
+    env_file:
+      - .env.local
     # No host port publish needed — only the dashboard container talks to it over
     # the compose network. Publish 25503 to the host only if you want to curl it
     # from the box directly (uncomment):
