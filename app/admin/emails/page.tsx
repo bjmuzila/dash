@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton, type SegOption } from "@/components/shared/DockToolbar";
@@ -44,13 +45,17 @@ export default function AdminEmailsPage() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SendRecord[]>([]);
 
-  async function loadHistory() {
+  async function loadHistory(throwOnError = false) {
     try {
       const res = await fetch("/api/admin/send-email?history=1");
       const j = await res.json().catch(() => ({}));
-      if (res.ok) setHistory(j.history ?? []);
-    } catch { /* history is optional */ }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setHistory(j.history ?? []);
+    } catch (e) { if (throwOnError) throw e; /* else history is optional */ }
   }
+
+  const { trigger: historyRefresh, label: historyRefreshLabel, style: historyRefreshStyle } =
+    useRefreshButton(() => loadHistory(true));
 
   // Load a server-rendered template into the composer.
   async function loadPreset(id: string) {
@@ -275,10 +280,10 @@ export default function AdminEmailsPage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.02em" }}>📜 Sent history</div>
           <button
-            onClick={loadHistory}
-            style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}
+            onClick={historyRefresh}
+            style={{ background: "none", border: "none", color: (historyRefreshStyle.color as string) ?? HOME_THEME.cyan, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}
           >
-            Refresh
+            {historyRefreshLabel}
           </button>
         </div>
 

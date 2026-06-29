@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { LiveIb } from "@/components/insights/IbLogic";
 import { NqIbLive } from "@/components/insights/NqIbLive";
 import {
@@ -91,6 +92,7 @@ export default function FailsPage() {
   // weekend. The 20-day fail-rate history now lives on /dev/results, which pulls
   // its own full window — so this page no longer drags a 10k-row payload on load.
   const { candles: liveCandles, historical, connected, refresh } = useEsCandles(true, 8);
+  const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
   // useEsCandles returns ONLY today's bars in `candles`; `historical` holds the
   // prior ~20 trading days. The fail-rate stats and historical fail log need
@@ -204,7 +206,7 @@ export default function FailsPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <DockButton onClick={() => void refresh()} title="Refresh" style={{ color: HOME_THEME.cyan }}>↻ Refresh</DockButton>
+          <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
         </div>
       </div>
 

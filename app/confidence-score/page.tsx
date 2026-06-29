@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import {
   HOME_THEME,
   homeContentStyle,
@@ -781,7 +782,7 @@ export default function ConfidenceScorePage() {
   const prevHit = useRef<number | null>(null);
   const [shifted, setShifted] = useState(false);
 
-  const load = useCallback(async (d: string, isOpex: boolean) => {
+  const load = useCallback(async (d: string, isOpex: boolean, throwOnError = false) => {
     setLoading(true);
     setError(null);
     try {
@@ -801,10 +802,14 @@ export default function ConfidenceScorePage() {
     } catch (e) {
       setError(String(e));
       setData(null);
+      if (throwOnError) throw e;
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } =
+    useRefreshButton(useCallback(async () => { await load(date, opex, true); }, [load, date, opex]));
 
   useEffect(() => {
     void load(date, opex);
@@ -862,7 +867,7 @@ export default function ConfidenceScorePage() {
           <DockButton onClick={() => setDate(todayET())} title="Jump to today">Today</DockButton>
           <ToggleTile label="OPEX" on={opex} onClick={() => setOpex((v) => !v)} />
         </div>
-        <DockButton onClick={() => void load(date, opex)} title="Refresh" style={{ color: HOME_THEME.cyan }}>↻ Refresh</DockButton>
+        <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
       </div>
 
       <div style={{ ...homeContentStyle, overflow: "auto" }}>

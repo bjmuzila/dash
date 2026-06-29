@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -421,6 +422,7 @@ export default function EsCandlesPage() {
   // session regardless of ET date, so the chart includes the overnight and
   // follows into a new day (today-only `candles` is for IB / RelVol elsewhere).
   const { sessionCandles: rows, historical, connected, refresh } = useEsCandles();
+  const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
   const chartRef = useRef<HTMLDivElement>(null);
   // Capture target for the Snap / Discord buttons (chart + lanes panel).
@@ -1478,7 +1480,7 @@ export default function EsCandlesPage() {
           {/* intensity slider */}
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />
 
-          <DockButton onClick={() => void refresh()} title="Refresh" style={{ color: "#ffb4b4" }}>↻ Refresh</DockButton>
+          <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
           <BoxSnapBtn targetRef={captureRef} label="ES Candles" />
           <BoxDiscordBtn targetRef={captureRef} label="ES Candles" />
         </Dock>

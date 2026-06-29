@@ -148,7 +148,7 @@ const DATA_MODE_LABEL: Record<DataMode, string> = {
 };
 
 // Number of expirations shown side-by-side across the matrix.
-const EXP_COLUMNS = 7;
+const EXP_COLUMNS = 14;
 
 // Per-strike, per-expiration greek values.
 type GreekCell = {
@@ -272,8 +272,8 @@ function buildExpiries() {
   // Day abbreviations
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-  // Find next 12 trading days
-  while (daysAdded < 12 && offset < 30) {
+  // Find next 14 trading days
+  while (daysAdded < 14 && offset < 40) {
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
 

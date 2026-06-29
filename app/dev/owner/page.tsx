@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, Fragment } from "react";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
@@ -1132,16 +1133,17 @@ export default function OwnerDashboard() {
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
   const [feedbackOpenCount, setFeedbackOpenCount] = useState(0);
   const [feedbackShowResolved, setFeedbackShowResolved] = useState(false);
-  const loadFeedback = useCallback(async () => {
+  const loadFeedback = useCallback(async (throwOnError = false) => {
     try {
       const r = await fetch("/api/feedback", { cache: "no-store" });
-      if (r.ok) {
-        const j = await r.json();
-        setFeedback(Array.isArray(j.items) ? j.items : []);
-        setFeedbackOpenCount(Number(j.openCount ?? 0));
-      }
-    } catch { /* ignore */ }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      setFeedback(Array.isArray(j.items) ? j.items : []);
+      setFeedbackOpenCount(Number(j.openCount ?? 0));
+    } catch (e) { if (throwOnError) throw e; /* else ignore */ }
   }, []);
+  const { trigger: feedbackRefresh, label: feedbackRefreshLabel, style: feedbackRefreshStyle } =
+    useRefreshButton(useCallback(async () => { await loadFeedback(true); }, [loadFeedback]));
   const resolveFeedback = useCallback(async (id: number, status: "open" | "resolved") => {
     try {
       await fetch("/api/feedback", {
@@ -2975,10 +2977,10 @@ export default function OwnerDashboard() {
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button
-                style={{ ...homeSecondaryButtonStyle }}
-                onClick={() => loadFeedback()}
+                style={{ ...homeSecondaryButtonStyle, color: (feedbackRefreshStyle.color as string) ?? (homeSecondaryButtonStyle as { color?: string }).color }}
+                onClick={feedbackRefresh}
               >
-                Refresh
+                {feedbackRefreshLabel}
               </button>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: HOME_THEME.text, cursor: "pointer" }}>
                 <input

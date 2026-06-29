@@ -207,7 +207,7 @@ function startStrategyGenerator(port) {
   const base = `http://localhost:${port}`;
   let lastRunHour = null; // `${date}:${hour}` of the last generation
   const CHECK_MS = 3 * 60 * 1000;
-  const START_HOUR = 7;  // first hourly run (ET)
+  const START_HOUR = 8;  // first hourly run (ET)
   const END_HOUR = 16;   // last hourly run (ET), inclusive
 
   async function check() {

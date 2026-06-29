@@ -8,6 +8,7 @@ import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import SignalsPanel from "@/components/dashboard/SignalsPanel";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
@@ -696,6 +697,10 @@ export default function HomePage() {
     if (selectedExpiry) await loadChain(selectedExpiry);
   }, [loadChain, selectedExpiry]);
 
+  // Heatmap icon-button refresh with press feedback (idle ↻ / refreshing / ✓ / ✗).
+  const { trigger: heatmapRefresh, label: heatmapRefreshLabel, style: heatmapRefreshStyle } =
+    useRefreshButton(handleRefresh);
+
   // Live WS-rebuilt chain — only accurate once symbols are subscribed and WS events arrive
   const wsChainRows = useMemo(() => {
     void renderTick;
@@ -1043,8 +1048,8 @@ export default function HomePage() {
                       ))}
                     </div>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
-                    <button onClick={handleRefresh} title="Refresh heatmap"
-                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>↻</button>
+                    <button onClick={heatmapRefresh} title="Refresh heatmap"
+                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                   </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import {
   HOME_THEME,
   homeButtonStyle,
@@ -133,6 +134,11 @@ export default function DatabasePage() {
     }
   }, []);
 
+  const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } =
+    useRefreshButton(useCallback(async () => {
+      await load(tab, dateFilter, limit);
+    }, [load, tab, dateFilter, limit]));
+
   useEffect(() => {
     void load(tab, dateFilter, limit);
   }, [tab, dateFilter, limit, load]);
@@ -191,8 +197,8 @@ export default function DatabasePage() {
         </div>
         <div className="flex items-center gap-2">
           <OwnerQuickLinks current="/database" />
-          <button onClick={() => void load(tab, dateFilter, limit)} style={homeButtonStyle}>
-            Refresh
+          <button onClick={refreshTrigger} style={{ ...homeButtonStyle, color: (refreshStyle.color as string) ?? (homeButtonStyle as { color?: string }).color }}>
+            {refreshLabel}
           </button>
         </div>
       </div>

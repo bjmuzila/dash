@@ -1796,7 +1796,12 @@ class TastytradeProxy {
     if (!active.length) return;
     const exp = this.expiry;
     const gMap = await thetaAdapter.fetchGreeksTheta(SYMBOL, exp).catch(() => new Map());
-    if (gMap.size === 0) { console.log('[GREEKS][theta] empty snapshot'); return; }
+    if (gMap.size === 0) {
+      // Theta has no live greeks snapshot outside the cash session — expected,
+      // not an error. Stay quiet outside RTH; only log if empty DURING RTH.
+      if (isRthEt()) console.log('[GREEKS][theta] empty snapshot');
+      return;
+    }
     let filled = 0;
     for (const c of active) {
       const g = gMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
