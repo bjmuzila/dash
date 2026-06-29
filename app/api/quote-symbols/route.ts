@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getQuoteSymbols, upsertQuoteSymbols, type QuoteSymPref } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 // Per-user customized Quotes list for the toolbar dropdown. Keyed on the Clerk
 // userId — never a client-supplied identity. Empty list => client falls back to
 // the built-in defaults.
