@@ -17,6 +17,7 @@ export const dynamic = "force-dynamic";
  */
 
 const HIT_PTS = 8;                       // SPX pts within strike = a touch
+const TIERS = [5, 10, 15] as const;      // additional touch thresholds (pts)
 const CHECKPOINTS = [
   { key: "0945", label: "9:45", min: 9 * 60 + 45 },
   { key: "1030", label: "10:30", min: 10 * 60 + 30 },
@@ -53,6 +54,7 @@ type CheckpointResult = {
   closest: number | null;  // min |spx - strike| after the checkpoint (incl. checkpoint)
   hit: boolean;            // closest <= HIT_PTS
   matched: boolean;        // a snapshot was found near this checkpoint
+  tiers: Record<number, boolean | null>; // touched within 5/10/15 pts
 };
 
 type DayRow = {
@@ -80,9 +82,17 @@ export async function GET(req: NextRequest) {
         [date]
       );
       const timed = rows
-        .map((r) => ({ min: rowMinutesET(r), strike: strikeOf(r), spx: num(r.spxPrice) }))
+        .map((r) => {
+          // SPX must be a plausible index print; 0/null/garbage (feed not yet
+          // populated) is treated as missing so it can't poison closest.
+          const rawSpx = num(r.spxPrice);
+          const spx = rawSpx != null && rawSpx > 1000 ? rawSpx : null;
+          return { min: rowMinutesET(r), strike: strikeOf(r), spx };
+        })
         .filter((x): x is { min: number; strike: number | null; spx: number | null } => x.min != null);
       if (!timed.length) continue;
+      // Skip a day entirely if it never had a single valid SPX print.
+      if (!timed.some((t) => t.spx != null)) continue;
 
       const checkpoints: CheckpointResult[] = CHECKPOINTS.map((cp) => {
         // Nearest snapshot to the checkpoint, within the match window.
@@ -98,18 +108,26 @@ export async function GET(req: NextRequest) {
         const distAt = strike != null && spxAt != null ? Math.abs(spxAt - strike) : null;
 
         // Closest SPX got to that strike from the checkpoint onward.
+        // Ignore bad snapshots where SPX is missing/zero (feed defaulted), which
+        // otherwise produce an absurd closest (~strike) and poison avg-closest.
         let closest: number | null = null;
         if (strike != null) {
           for (const t of timed) {
             if (t.min < cp.min - MATCH_WINDOW) continue;
-            if (t.spx == null) continue;
+            if (t.spx == null || t.spx <= 0) continue;
             const d = Math.abs(t.spx - strike);
             if (closest == null || d < closest) closest = d;
           }
         }
+        // A closest on the order of the strike itself means no valid SPX print
+        // was found — treat as no data rather than a giant miss.
+        if (closest != null && strike != null && closest > strike * 0.5) closest = null;
+        // Tiered touches: did SPX get within 5 / 10 / 15 pts of the strike?
+        const tiers: Record<number, boolean | null> = {};
+        for (const t of TIERS) tiers[t] = closest != null ? closest <= t : null;
         return {
           key: cp.key, label: cp.label, strike, spxAt, distAt, closest,
-          hit: closest != null && closest <= HIT_PTS, matched,
+          hit: closest != null && closest <= HIT_PTS, matched, tiers,
         };
       });
 
@@ -124,15 +142,21 @@ export async function GET(req: NextRequest) {
       const hits = cells.filter((c) => c.hit).length;
       const dists = cells.map((c) => c.closest).filter((v): v is number => v != null);
       const avgClosest = dists.length ? dists.reduce((s, v) => s + v, 0) / dists.length : null;
+      // Per-tier hit counts + rates across the same valid days.
+      const tierStats: Record<number, { hits: number; rate: number | null }> = {};
+      for (const t of TIERS) {
+        const h = cells.filter((c) => c.tiers?.[t]).length;
+        tierStats[t] = { hits: h, rate: cells.length ? h / cells.length : null };
+      }
       return {
         key: cp.key, label: cp.label,
         samples: cells.length, hits,
         hitRate: cells.length ? hits / cells.length : null,
-        avgClosest,
+        avgClosest, tiers: tierStats,
       };
     });
 
-    return NextResponse.json({ days, summary, hitPts: HIT_PTS });
+    return NextResponse.json({ days, summary, hitPts: HIT_PTS, tiers: TIERS });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import Link from "next/link";
 import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useEsCandles } from "@/hooks/useEsCandles";
-import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance } from "@/lib/failLevels";
-import { NqIbLive } from "@/components/insights/NqIbLive";
+import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance, type AmtResult } from "@/lib/failLevels";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Analytics — strategy builder. UI-only scaffold with MOCK data.
@@ -318,7 +318,19 @@ function EstimatedMoveCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>weekly</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>weekly</span>
+          <Link
+            href="/em"
+            style={{
+              fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
+              color: T.cyan, textDecoration: "none", border: `1px solid ${T.border}`,
+              borderRadius: 6, padding: "3px 9px", whiteSpace: "nowrap",
+            }}
+          >
+            More →
+          </Link>
+        </div>
       </Row>
       <PillSelect value={tk} options={EM_TICKERS} onChange={setTk} />
       {lvLoading || lvError || !ready ? (
@@ -538,6 +550,13 @@ function EconCalendarCard() {
 }
 
 // ── 5. CONFIDENCE SCORE ───────────────────────────────────────────────────────
+interface MvcSegment {
+  strike: number;
+  from: string;            // "HH:MM" ET when this strike became the MVC
+  to: string;              // "HH:MM" ET of its last snapshot
+  touched: boolean;
+  outcome: "hit" | "pivot" | "chop" | "miss";
+}
 interface ConfidenceResp {
   level?: number;          // current MVC price level
   price?: number;          // SPX price at the snapshot
@@ -545,7 +564,46 @@ interface ConfidenceResp {
   thresholds?: { hitPts?: number };
   // score.hit/pivot/chop/break are 0..100 (NOT fractions).
   score?: { hit?: number; pivot?: number; chop?: number; break?: number };
+  mvcTimeline?: MvcSegment[];
   error?: string;
+}
+
+// "H:MM"/"HH:MM" ET → minutes-of-day.
+function hhmmToMin(t: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(t || "");
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+// The MVC segment active at a target ET minute (the last one whose window had
+// started by then). If the target is before the first snapshot of the day but
+// the session has data, fall back to the earliest segment — that's the CB that
+// was in force at/around the open, which is what the early checkpoints want.
+function segmentAt(timeline: MvcSegment[] | undefined, targetMin: number): MvcSegment | null {
+  if (!timeline?.length) return null;
+  let best: MvcSegment | null = null;
+  for (const seg of timeline) {
+    const from = hhmmToMin(seg.from);
+    if (from != null && from <= targetMin) best = seg;
+  }
+  // Target earlier than the first segment's start → use the first segment.
+  if (best == null) best = timeline[0];
+  return best;
+}
+
+// MVC checkpoints the card pins hit/miss against.
+const MVC_CHECKPOINTS: Array<{ label: string; min: number }> = [
+  { label: "9:35", min: 9 * 60 + 35 },
+  { label: "10:30", min: 10 * 60 + 30 },
+  { label: "12:00", min: 12 * 60 },
+];
+
+// outcome → short label + color. hit/pivot/chop all "engaged" the level; miss = never reached.
+function outcomeChip(o: MvcSegment["outcome"] | null): { text: string; color: string } {
+  if (o == null) return { text: "—", color: T.muted };
+  if (o === "miss") return { text: "MISS", color: T.red };
+  if (o === "hit") return { text: "HIT", color: POS_GREEN };
+  if (o === "pivot") return { text: "HIT · PIVOT", color: POS_GREEN };
+  return { text: "HIT · CHOP", color: T.orange }; // chop
 }
 
 // "Xm Ys" elapsed formatter.
@@ -674,6 +732,35 @@ function ConfidenceCard() {
               color={distToMvc == null ? T.muted : Math.abs(distToMvc) <= (data?.thresholds?.hitPts ?? 8) ? POS_GREEN : T.text}
             />
           </Row>
+
+          {/* CB at the 9:35 / 10:30 / 12:00 ET checkpoints + hit/miss. */}
+          <div style={divider} />
+          <Label>CB checkpoints</Label>
+          {(() => {
+            const nowMin = nowEtMinutesSec().min;
+            const isToday = !isStale;
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {MVC_CHECKPOINTS.map((cp) => {
+                  const seg = segmentAt(data?.mvcTimeline, cp.min);
+                  // On today's live session a checkpoint in the future hasn't happened yet.
+                  const future = isToday && nowMin < cp.min;
+                  const chip = future
+                    ? { text: "pending", color: T.muted }
+                    : outcomeChip(seg?.outcome ?? null);
+                  return (
+                    <Row key={cp.label} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontFamily: "monospace", color: T.muted, minWidth: 46 }}>{cp.label}</span>
+                      <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
+                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: chip.color, minWidth: 78, textAlign: "right" }}>
+                        {chip.text}
+                      </span>
+                    </Row>
+                  );
+                })}
+              </div>
+            );
+          })()}
           {showChange && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, paddingTop: 2 }}>
               <span style={{ fontWeight: 800, letterSpacing: "0.06em", color: T.orange }}>CB CHANGED</span>
@@ -770,10 +857,10 @@ function GreeksCard() {
             const d15 = ago15 ? (cur[k] - ago15[k]) * scale : null;
             const d30 = ago30 ? (cur[k] - ago30[k]) * scale : null;
             return (
-              <div key={g} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+              <div key={g} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 5 }}>
                 <Label>{g}</Label>
-                <Value color={nowVal > 0 ? POS_GREEN : nowVal < 0 ? T.red : T.text} size={22}>{fmtBig(nowVal)}</Value>
-                <div style={{ display: "flex", gap: 10, fontFamily: "monospace", fontSize: 11 }}>
+                <Value color={nowVal > 0 ? POS_GREEN : nowVal < 0 ? T.red : T.text} size={28}>{fmtBig(nowVal)}</Value>
+                <div style={{ display: "flex", gap: 10, fontFamily: "monospace", fontSize: 13 }}>
                   <span style={{ color: d15 == null ? T.muted : signColor(d15), opacity: d15 == null ? 0.5 : 1 }}>
                     15m {d15 == null ? "—" : fmtBig(d15)}
                   </span>
@@ -823,7 +910,6 @@ function ibCountdown(): { phase: "pre" | "forming" | "done"; text: string } {
 }
 
 function IbCard() {
-  const [tab, setTab] = useState<"ESU" | "NQU">("ESU");
   const { candles } = useEsCandles(true);
   const grace = useGrace();
   const today = etDateISO();
@@ -842,14 +928,13 @@ function IbCard() {
   // Newest candle ts = the feed's last update.
   const lastUpdated = candles.length ? Number(candles[candles.length - 1].timestamp) : null;
 
-  // ESU IB + setups from the shared ES candle feed (filter to ESU contract).
-  const { ib, setups } = (() => {
-    if (tab !== "ESU" || !candles.length) return { ib: null as InitialBalance | null, setups: [] as Trigger[] };
+  // ES IB + the day-type / bias read from the shared ES candle feed.
+  const { ib, amt } = (() => {
+    if (!candles.length) return { ib: null as InitialBalance | null, amt: null as AmtResult | null };
     const esu = candles.filter((c) => (c.symbol ?? "").toUpperCase().includes("ESU"));
     const src = esu.length ? esu : candles;
     const amt = computeAmt(src, today);
-    const triggers = detectTriggers(src, today, amt).filter((t) => t.active);
-    return { ib: amt.ib, setups: triggers };
+    return { ib: amt.ib, amt };
   })();
 
   const fmt = (n: number | null | undefined) => (n != null ? Math.round(n).toLocaleString() : "—");
@@ -859,19 +944,15 @@ function IbCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
-        <PillSelect value={tab} options={["ESU", "NQU"] as const} onChange={setTab} />
+        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>ES</span>
       </Row>
 
-      {/* Countdown bar (both tabs share the 9:30–10:30 ET window). */}
+      {/* Countdown bar (9:30–10:30 ET IB window). */}
       <div style={{ fontSize: 12, fontFamily: "monospace", color: cd.phase === "forming" ? T.orange : cd.phase === "done" ? POS_GREEN : T.muted }}>
         {cd.text}
       </div>
 
-      {tab === "NQU" ? (
-        <div style={{ maxHeight: 320, overflowY: "auto" }}>
-          <NqIbLive />
-        </div>
-      ) : ib == null ? (
+      {ib == null ? (
         <CardState
           loading={candles.length === 0 && grace}
           error={null}
@@ -881,35 +962,41 @@ function IbCard() {
         <>
           <Row>
             <Stat label="IB High" value={fmt(ib.high)} color={POS_GREEN} />
+            <Stat label="IB Mid" value={fmt(ib.mid)} color={T.cyan} />
             <Stat label="IB Low" value={fmt(ib.low)} color={T.red} />
             <Stat label="Range" value={cd.phase === "forming" ? "forming" : rangePts != null ? `${Math.round(rangePts)} pts` : "—"} />
           </Row>
           <div style={divider} />
-          <Label>Active setups</Label>
-          {setups.length === 0 ? (
-            <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>
-              {cd.phase === "pre" ? "Waiting for the open." : "No active setups."}
-            </span>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-              {setups.map((s, i) => {
-                const long = s.direction === "long";
-                return (
-                  <div key={`${s.kind}-${s.ts}-${i}`} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-                    <Row>
-                      <span style={{ fontSize: 12, fontWeight: 700 }}>
-                        <span style={{ color: long ? POS_GREEN : T.red }}>{long ? "▲" : "▼"}</span> {s.title}
-                      </span>
-                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
-                    </Row>
-                    <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted }}>
-                      entry {fmt(s.entry)} · stop {fmt(s.stop)} · tgt {fmt(s.target)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {/* IB logic — day-type classification + directional read from the IB. */}
+          <Label>IB read</Label>
+          {(() => {
+            const leanColor = amt?.bias.lean === "long" ? POS_GREEN : amt?.bias.lean === "short" ? T.red : T.muted;
+            // Where is price relative to the IB right now?
+            const breakState = !ib.locked && cd.phase !== "done"
+              ? "IB still forming"
+              : ib.brokeHigh && ib.brokeLow
+                ? "Probed both extremes — two-sided"
+                : ib.brokeHigh
+                  ? "Range extension ↑ above IB high"
+                  : ib.brokeLow
+                    ? "Range extension ↓ below IB low"
+                    : "Holding inside IB";
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <Row>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: leanColor }}>{amt?.dayTypeLabel ?? "—"}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: leanColor }}>
+                    {amt?.bias.lean ?? "neutral"}
+                  </span>
+                </Row>
+                <span style={{ fontSize: 13, color: T.muted, lineHeight: 1.5 }}>{amt?.dayTypeDetail}</span>
+                <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>{breakState}</span>
+                  <span style={{ fontSize: 14, color: T.text, lineHeight: 1.5 }}>{amt?.bias.text}</span>
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
       <UpdatedStamp at={lastUpdated} />

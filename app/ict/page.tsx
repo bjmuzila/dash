@@ -475,6 +475,21 @@ export default function IctPage() {
 
     // Liquidity pools = ORANGE.
     if (t.showLiq) {
+      // Prior-day high/low — the headline liquidity draws (PDH = buy-side,
+      // PDL = sell-side). Drawn full-width, brighter + thicker than swing pools.
+      const pdLevels: { label: string; price: number; side: "BSL" | "SSL" }[] = [];
+      if (a.bias.prevHigh != null) pdLevels.push({ label: "PDH", price: a.bias.prevHigh, side: "BSL" });
+      if (a.bias.prevLow != null) pdLevels.push({ label: "PDL", price: a.bias.prevLow, side: "SSL" });
+      for (const lv of pdLevels) {
+        const y = yOf(lv.price);
+        if (y == null) continue;
+        ctx.strokeStyle = `rgba(${C.liq},0.95)`; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        label(ctx, 6, y - 3, `${lv.label} ${lv.price.toFixed(2)}`, `rgba(${C.liq},1)`);
+        addLine(0, y, W, "liquidity",
+          `${lv.label} · ${lv.side === "BSL" ? "Buy-side liquidity" : "Sell-side liquidity"}`,
+          lv.price.toFixed(2));
+      }
       for (const p of a.liquidity.slice(0, 10)) {
         const y = yOf(p.price); const x = xOf(p.ts);
         if (y == null) continue;
@@ -634,7 +649,7 @@ export default function IctPage() {
           ● {status}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          <CopyshotBtn targetRef={captureRef} />
+          <CopyshotBtn targetRef={captureRef} overlayRef={overlayRef} chartRef={chartRef} />
           <BoxDiscordBtn targetRef={captureRef} label="ICT — live ES" />
         </div>
       </div>
@@ -997,21 +1012,49 @@ export default function IctPage() {
  * panels) and writes a PNG to the clipboard. Self-contained (lazy-loads
  * html2canvas) so it doesn't depend on DataBox internals.
  */
-function CopyshotBtn({ targetRef }: { targetRef: RefObject<HTMLElement | null> }) {
+function CopyshotBtn({ targetRef, overlayRef, chartRef }: {
+  targetRef: RefObject<HTMLElement | null>;
+  overlayRef?: RefObject<HTMLCanvasElement | null>;
+  chartRef?: RefObject<HTMLDivElement | null>;
+}) {
   const [s, set] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
       const { default: html2canvas } = await import("html2canvas");
-      const canvas = await html2canvas(targetRef.current, { backgroundColor: "#080b10", scale: 2, logging: false });
+      const scale = 2;
+      const canvas = await html2canvas(targetRef.current, { backgroundColor: "#080b10", scale, logging: false });
+
+      // html2canvas does not capture the bitmaps of live <canvas> elements
+      // (the lightweight-charts chart + our ICT overlay), so it grabs a blank
+      // chart with no drawings. Composite the LIVE chart canvas(es) and the
+      // ICT overlay canvas onto the screenshot manually, positioned by their
+      // offset relative to the capture root.
+      const ctx = canvas.getContext("2d");
+      const root = targetRef.current.getBoundingClientRect();
+      const paint = (src: HTMLCanvasElement | null | undefined) => {
+        if (!ctx || !src || !src.width || !src.height) return;
+        const r = src.getBoundingClientRect();
+        ctx.drawImage(
+          src,
+          (r.left - root.left) * scale, (r.top - root.top) * scale,
+          r.width * scale, r.height * scale,
+        );
+      };
+      // The lightweight-charts internal canvases live inside chartRef.
+      if (chartRef?.current) {
+        chartRef.current.querySelectorAll("canvas").forEach((c) => paint(c as HTMLCanvasElement));
+      }
+      paint(overlayRef?.current);
+
       const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/png"));
       if (!blob) throw new Error("no blob");
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       set("ok");
     } catch { set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef]);
+  }, [s, targetRef, overlayRef, chartRef]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const text = s === "busy" ? "Copying…" : s === "ok" ? "✓ Copied" : s === "err" ? "✕ Failed" : "📸 Copyshot";

@@ -434,9 +434,15 @@ type CpCell = {
   key: string; label: string;
   strike: number | null; spxAt: number | null; distAt: number | null;
   closest: number | null; hit: boolean; matched: boolean;
+  tiers?: Record<number, boolean | null>;
 };
 type CpDay = { date: string; checkpoints: CpCell[] };
-type CpSummary = { key: string; label: string; samples: number; hits: number; hitRate: number | null; avgClosest: number | null };
+type CpSummary = {
+  key: string; label: string; samples: number; hits: number;
+  hitRate: number | null; avgClosest: number | null;
+  tiers?: Record<number, { hits: number; rate: number | null }>;
+};
+const TIERS = [5, 10, 15] as const;
 
 function CheckpointsView() {
   const [days, setDays] = useState<CpDay[]>([]);
@@ -477,14 +483,14 @@ function CheckpointsView() {
     return RED;
   };
 
-  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
-  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 13, whiteSpace: "nowrap", fontFamily: "monospace" };
+  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 12.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "monospace" };
 
   return (
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Confidence</span>
-        <span style={{ fontSize: 12, color: C.label }}>CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
+        <span style={{ fontSize: 22, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Confidence</span>
+        <span style={{ fontSize: 14, color: C.label }}>CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button onClick={() => setRange("7d")} style={rangeBtn("7d", "7d")}>7d</button>
           <button onClick={() => setRange("20d")} style={rangeBtn("20d", "20d")}>20d</button>
@@ -499,19 +505,35 @@ function CheckpointsView() {
           return (
             <div key={s.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 15, fontWeight: 800, color: "#fff" }}>{s.label}</span>
-                <span style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color: "#fff" }}>{s.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 28, fontWeight: 800, color: accent, fontFamily: "monospace", lineHeight: 1 }}>
+                <span style={{ fontSize: 34, fontWeight: 800, color: accent, fontFamily: "monospace", lineHeight: 1 }}>
                   {s.hitRate != null ? `${Math.round(s.hitRate * 100)}%` : "—"}
                 </span>
-                <span style={{ fontSize: 11, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                <span style={{ fontSize: 13, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   hit rate{s.samples > 0 ? ` · ${s.hits}/${s.samples}` : ""}
                 </span>
               </div>
-              <div style={{ fontSize: 12, color: C.label, fontFamily: "monospace" }}>
+              <div style={{ fontSize: 14, color: C.label, fontFamily: "monospace" }}>
                 avg closest: <span style={{ color: distColor(s.avgClosest), fontWeight: 700 }}>{s.avgClosest != null ? `${s.avgClosest.toFixed(1)} pt` : "—"}</span>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                {TIERS.map((t) => {
+                  const ts = s.tiers?.[t];
+                  const rate = ts?.rate ?? null;
+                  const ac = wrColor(rate);
+                  return (
+                    <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "monospace", lineHeight: 1.2 }}>
+                        {rate != null ? `${Math.round(rate * 100)}%` : "—"}
+                      </div>
+                      <div style={{ fontSize: 10, color: C.label, fontFamily: "monospace" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -534,7 +556,7 @@ function CheckpointsView() {
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                   <th style={th}>Date</th>
                   {["9:45", "10:30", "12:00"].map((l) => (
-                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={3}>{l} CB</th>
+                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={5}>{l} CB</th>
                   ))}
                 </tr>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -543,7 +565,9 @@ function CheckpointsView() {
                     <React.Fragment key={i}>
                       <th style={{ ...th, textAlign: "right", borderLeft: `1px solid ${C.border}` }}>Strike</th>
                       <th style={{ ...th, textAlign: "right" }}>Closest</th>
-                      <th style={{ ...th, textAlign: "center" }}>Hit</th>
+                      {TIERS.map((t) => (
+                        <th key={t} style={{ ...th, textAlign: "center" }}>≤{t}</th>
+                      ))}
                     </React.Fragment>
                   ))}
                 </tr>
@@ -560,11 +584,16 @@ function CheckpointsView() {
                         <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
                           {c.closest != null ? `${c.closest.toFixed(1)}` : "—"}
                         </td>
-                        <td style={{ ...td, textAlign: "center" }}>
-                          {!c.matched ? <span style={{ color: MUTED }}>·</span>
-                            : c.hit ? <span style={{ color: GREEN, fontWeight: 800 }}>✓</span>
-                            : <span style={{ color: RED, fontWeight: 800 }}>✗</span>}
-                        </td>
+                        {TIERS.map((t) => {
+                          const v = c.tiers?.[t];
+                          return (
+                            <td key={t} style={{ ...td, textAlign: "center" }}>
+                              {!c.matched || v == null ? <span style={{ color: MUTED }}>·</span>
+                                : v ? <span style={{ color: GREEN, fontWeight: 800 }}>✓</span>
+                                : <span style={{ color: RED, fontWeight: 800 }}>✗</span>}
+                            </td>
+                          );
+                        })}
                       </React.Fragment>
                     ))}
                   </tr>
