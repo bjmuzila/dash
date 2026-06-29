@@ -1212,16 +1212,157 @@ function ContractLookupCard() {
   );
 }
 
-// Empty placeholder card — reserved slot for an upcoming panel.
-function BlankCard() {
+// ── 10. STRATEGY BUILDER ──────────────────────────────────────────────────────
+// Reads the daily AI strategy written by the VPS cron (strategy-generator.js →
+// daily_strategy). The page never calls Claude — it just renders the stored
+// structured plan for the latest session. Full-width, spans the grid.
+interface StrategyLevel { label?: string; price?: string | number; note?: string }
+interface StrategyIdea {
+  direction?: "long" | "short";
+  entry?: string; stop?: string; target?: string; rationale?: string;
+}
+interface StrategyPlan {
+  bias?: "long" | "short" | "neutral";
+  headline?: string;
+  summary?: string;
+  levels?: StrategyLevel[];
+  idea?: StrategyIdea;
+  triggers?: string[];
+  risk?: string;
+}
+interface StrategyResp {
+  strategy?: { date?: string; plan?: StrategyPlan; generated_at?: number } | null;
+  error?: string;
+}
+
+function biasColor(b?: string): string {
+  if (b === "long") return POS_GREEN;
+  if (b === "short") return T.red;
+  return T.muted;
+}
+
+function StrategyBuilderCard() {
+  // 5-min poll — the plan only changes once a day, but this keeps a freshly
+  // generated plan showing up without a manual reload.
+  const { data, loading, error, lastUpdated } = useLiveData<StrategyResp>("/api/strategy", 5 * 60_000);
+  const s = data?.strategy ?? null;
+  const plan = s?.plan ?? null;
+  const planDate = s?.date ?? null;
+  const today = etDateISO();
+  const isStale = planDate != null && planDate !== today;
+
+  const ready = !!plan && (!!plan.summary || !!plan.headline);
+
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 140 }}>
-      <div
-        className="flex items-center justify-center"
-        style={{ flex: 1, minHeight: 100, borderRadius: 10, border: `1px dashed ${T.border}`, color: T.muted, fontSize: 11, fontStyle: "italic" }}
-      >
-        — to be built —
-      </div>
+    <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
+      <Row>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+          Strategy Builder
+          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>AI · BETA</span>
+        </span>
+        {planDate && (
+          <span style={{ fontSize: 11, fontFamily: "monospace", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
+            {isStale ? `last · ${planDate}` : planDate}
+          </span>
+        )}
+      </Row>
+
+      {loading || error || !ready ? (
+        <CardState
+          loading={loading}
+          error={error ?? data?.error ?? null}
+          empty="No strategy yet — regenerates hourly on weekdays (~7am–4pm ET)."
+        />
+      ) : (
+        <>
+          {/* Bias + headline */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span style={{
+              fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+              color: biasColor(plan!.bias), border: `1px solid ${biasColor(plan!.bias)}`,
+              borderRadius: 8, padding: "3px 10px",
+            }}>
+              {plan!.bias ?? "neutral"}
+            </span>
+            {plan!.headline && (
+              <span style={{ fontSize: 15, fontWeight: 700, color: T.text, flex: 1 }}>{plan!.headline}</span>
+            )}
+          </div>
+
+          {plan!.summary && (
+            <p style={{ fontSize: 13, lineHeight: 1.6, color: T.text, margin: 0, opacity: 0.92 }}>{plan!.summary}</p>
+          )}
+
+          <div style={divider} />
+
+          {/* Two columns: levels | trade idea + triggers */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {/* Levels */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <Label>Key levels</Label>
+              {(plan!.levels?.length ?? 0) === 0 ? (
+                <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
+              ) : (
+                plan!.levels!.map((lv, i) => (
+                  <div key={i} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                    <Row>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{lv.label ?? "—"}</span>
+                      <Value size={13} color={T.cyan}>{lv.price != null ? String(lv.price) : "—"}</Value>
+                    </Row>
+                    {lv.note && <span style={{ fontSize: 11, color: T.muted, lineHeight: 1.4 }}>{lv.note}</span>}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Trade idea + triggers + risk */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Label>Primary idea</Label>
+              {plan!.idea ? (
+                <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <Row>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: biasColor(plan!.idea.direction) }}>
+                      {plan!.idea.direction === "long" ? "▲ LONG" : plan!.idea.direction === "short" ? "▼ SHORT" : "—"}
+                    </span>
+                  </Row>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                    <Stat label="Entry" value={plan!.idea.entry ?? "—"} size={13} />
+                    <Stat label="Stop" value={plan!.idea.stop ?? "—"} color={T.red} size={13} />
+                    <Stat label="Target" value={plan!.idea.target ?? "—"} color={POS_GREEN} size={13} />
+                  </div>
+                  {plan!.idea.rationale && (
+                    <span style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>{plan!.idea.rationale}</span>
+                  )}
+                </div>
+              ) : (
+                <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
+              )}
+
+              <Label>Confirmation triggers</Label>
+              {(plan!.triggers?.length ?? 0) === 0 ? (
+                <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
+                  {plan!.triggers!.map((t, i) => (
+                    <li key={i} style={{ fontSize: 12, lineHeight: 1.45, color: T.text }}>{t}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          {plan!.risk && (
+            <>
+              <div style={divider} />
+              <span style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 800, color: T.orange, letterSpacing: "0.06em" }}>RISK · </span>
+                {plan!.risk}
+              </span>
+            </>
+          )}
+        </>
+      )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -1264,14 +1405,6 @@ export default function AnalyticsPage() {
           card.style.setProperty("--my", `${e.clientY - r.top}px`);
         }}
       >
-      <Card
-        accent="cyan"
-        title="Analytics"
-        subtitle="Strategy builder — all cards wired to live data."
-        padding="14px 16px"
-        style={{ fontSize: 12 }}
-      />
-
       <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
@@ -1282,11 +1415,8 @@ export default function AnalyticsPage() {
         <IbCard />
         <LevelsCard />
 
-        {/* 4 reserved slots above Contract Lookup. */}
-        <BlankCard />
-        <BlankCard />
-        <BlankCard />
-        <BlankCard />
+        {/* Full-width AI daily strategy, synthesized from all cards above. */}
+        <StrategyBuilderCard />
 
         <ContractLookupCard />
       </div>

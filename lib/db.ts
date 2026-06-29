@@ -507,6 +507,15 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       generated_at BIGINT NOT NULL
     );
 
+    -- Daily AI trade strategy for the Analytics strategy-builder card, written
+    -- weekday mornings by the cron (strategy-generator.js). plan is a JSON object
+    -- (bias, levels, idea, risk, triggers); read by the StrategyBuilder card.
+    CREATE TABLE IF NOT EXISTS daily_strategy (
+      date       TEXT PRIMARY KEY,
+      plan       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      generated_at BIGINT NOT NULL
+    );
+
     -- /ict glossary card visibility, per Clerk user. hidden_cards is a JSON array
     -- of concept ids (from CONCEPTS in app/ict/page.tsx) the user has toggled OFF.
     -- Empty array = all cards shown (the default). One row per user.
@@ -675,6 +684,35 @@ export async function upsertPremarketSummary(date: string, bullets: string[]): P
      ON CONFLICT (date) DO UPDATE SET
        bullets = EXCLUDED.bullets, generated_at = EXCLUDED.generated_at`,
     [date, JSON.stringify(bullets), Date.now()]
+  );
+}
+
+// ── Daily AI trade strategy (Analytics strategy-builder) ────────────────────
+
+export interface DailyStrategy {
+  date: string;
+  plan: unknown;
+  generated_at: number;
+}
+
+export async function getDailyStrategy(date: string): Promise<DailyStrategy | undefined> {
+  await getDb();
+  return queryOne<DailyStrategy>(`SELECT * FROM daily_strategy WHERE date = ?`, [date]);
+}
+
+export async function getLatestDailyStrategy(): Promise<DailyStrategy | undefined> {
+  await getDb();
+  return queryOne<DailyStrategy>(`SELECT * FROM daily_strategy ORDER BY date DESC LIMIT 1`);
+}
+
+export async function upsertDailyStrategy(date: string, plan: unknown): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO daily_strategy (date, plan, generated_at)
+     VALUES (?, ?::jsonb, ?)
+     ON CONFLICT (date) DO UPDATE SET
+       plan = EXCLUDED.plan, generated_at = EXCLUDED.generated_at`,
+    [date, JSON.stringify(plan), Date.now()]
   );
 }
 

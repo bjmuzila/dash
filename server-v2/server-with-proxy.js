@@ -387,6 +387,15 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Generate the daily AI strategy now (ignores the 08:20 schedule).
+      // POST /proxy/strategy-run
+      if (pathname === '/proxy/strategy-run' && req.method === 'POST') {
+        const { generate } = require('./strategy-generator');
+        generate(`http://localhost:${PORT}`)
+          .then(() => sendJson(res, 200, { ok: true }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Toggle the MVC auto-collector on/off at runtime, or read its state.
       //   GET  /proxy/mvc-auto            → { enabled }
       //   POST /proxy/mvc-auto { on: bool } → { enabled }
@@ -623,6 +632,11 @@ async function main() {
     // Analytics Premarket card: at ~08:00 ET (weekdays) Claude turns the global
     // overnight tape + SPX gap/fair-value into a 5-bullet read → premarket_summary.
     require('./premarket-summary-generator').startPremarketSummaryGenerator(PORT);
+
+    // Analytics strategy-builder card: at ~08:20 ET (weekdays) Claude turns the
+    // morning positioning/levels/calendar snapshot into a full daily SPX/ES
+    // strategy → daily_strategy.
+    require('./strategy-generator').startStrategyGenerator(PORT);
   });
 
   const shutdown = () => {

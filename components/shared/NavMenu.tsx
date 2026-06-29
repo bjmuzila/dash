@@ -55,6 +55,7 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: GridIcon,
     items: [
       { label: "Home", href: "/home" },
+      { label: "Multi Greek", href: "/mult-greek" },
       { label: "Traders Dashboard", href: "/traders-dashboard" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Estimated Moves", href: "/em" },
@@ -70,7 +71,6 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: WrenchIcon,
     devOnly: true,
     items: [
-      { label: "Multi Greek", href: "/mult-greek" },
       { label: "Greeks", href: "/greeks" },
       { label: "Confidence", href: "/confidence-score" },
       { label: "Fails", href: "/fails" },

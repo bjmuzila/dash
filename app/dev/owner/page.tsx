@@ -1574,6 +1574,17 @@ export default function OwnerDashboard() {
     } finally { setCtlBusy(null); void refresh(); }
   }, [flashMsg, refresh]);
 
+  const doStrategyRun = useCallback(async () => {
+    setCtlBusy("strategy");
+    try {
+      const r = await fetch("/proxy/strategy-run", { method: "POST" });
+      const j = await r.json();
+      flashMsg("strategy", j?.ok ? "Daily strategy generated" : `Failed: ${j?.error || r.status}`, !!j?.ok);
+    } catch (e) {
+      flashMsg("strategy", `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally { setCtlBusy(null); void refresh(); }
+  }, [flashMsg, refresh]);
+
   const doClearChat = useCallback(async () => {
     if (!window.confirm("Erase ALL subscriber chat messages? This cannot be undone.")) return;
     setCtlBusy("clearChat");
@@ -2290,6 +2301,14 @@ export default function OwnerDashboard() {
                 style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
+              </button>
+              <button
+                onClick={doStrategyRun}
+                disabled={ctlBusy === "strategy"}
+                title="Generate the Analytics Strategy Builder card's full daily AI plan now (instead of waiting for the hourly run)."
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "strategy" ? 0.6 : 1, cursor: ctlBusy === "strategy" ? "wait" : "pointer" }}
+              >
+                {ctlBusy === "strategy" ? "Generating…" : "🎯 Strategy now"}
               </button>
               <button
                 onClick={doClearChat}

@@ -28,8 +28,23 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
   const titleText = title && title.trim() ? title : "SPX GEX";
   // Measure the true content height of the scrollable body so the capture wraps
   // the data tightly (no empty space) without collapsing rows to zero.
+  // Prefer a <table>; otherwise (grid/card layouts like the options chain) find
+  // the scrollable body and measure its real content height so the capture wraps
+  // tightly instead of inheriting the page's full 100% height (blank bottom).
   const inner = el.querySelector("table") as HTMLElement | null;
-  const contentH = inner ? inner.scrollHeight : el.scrollHeight;
+  let contentH: number;
+  if (inner) {
+    contentH = inner.scrollHeight;
+  } else {
+    // Sum the height of every direct child up to (and including) the scroll body,
+    // measuring the scroll body by its scrollHeight not its clamped client height.
+    let h = 0;
+    Array.from(el.children).forEach((c) => {
+      const ch = c as HTMLElement;
+      h += ch.scrollHeight > ch.clientHeight ? ch.scrollHeight : ch.offsetHeight;
+    });
+    contentH = h || el.scrollHeight;
+  }
   const captureH = contentH + 48; // + title band
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
@@ -53,7 +68,22 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       clone.style.overflow = "visible";
       clone.style.paddingTop = "44px";
       const tbl = clone.querySelector("table") as HTMLElement | null;
-      if (tbl) tbl.style.height = `${contentH}px`;
+      if (tbl) {
+        tbl.style.height = `${contentH}px`;
+      } else {
+        // Grid/card layout (e.g. options chain): un-clamp the flex scroll body so
+        // every row renders and the clone collapses to its real content height
+        // — no blank space below the data box.
+        Array.from(clone.children).forEach((c) => {
+          const ch = c as HTMLElement;
+          ch.style.flex = "none";
+          ch.style.flexShrink = "0";
+          if (ch.scrollHeight > ch.clientHeight) {
+            ch.style.height = "auto";
+            ch.style.overflow = "visible";
+          }
+        });
+      }
       const inter = "var(--font-inter), Inter, Arial, sans-serif";
       // Solid title band across the top so it never collides with table headers
       // or chart legends behind it.
