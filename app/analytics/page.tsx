@@ -741,18 +741,31 @@ function ConfidenceCard() {
             const isToday = !isStale;
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {MVC_CHECKPOINTS.map((cp) => {
+                {MVC_CHECKPOINTS.map((cp, ci) => {
                   const seg = segmentAt(data?.mvcTimeline, cp.min);
+                  const prevSeg = ci > 0 ? segmentAt(data?.mvcTimeline, MVC_CHECKPOINTS[ci - 1].min) : null;
                   // On today's live session a checkpoint in the future hasn't happened yet.
                   const future = isToday && nowMin < cp.min;
+                  // Is this checkpoint's CB the one still LIVE right now? True when it's
+                  // today, the checkpoint has passed, and no later checkpoint that has
+                  // already occurred changed the strike (i.e. this is the active CB).
+                  const laterChanged = isToday && MVC_CHECKPOINTS.some((o, oi) =>
+                    oi > ci && nowMin >= o.min && segmentAt(data?.mvcTimeline, o.min)?.strike !== seg?.strike);
+                  const live = isToday && !future && !laterChanged;
+                  // Did the CB change from the previous checkpoint to this one?
+                  const cbChanged = seg != null && prevSeg != null && seg.strike !== prevSeg.strike;
                   const chip = future
                     ? { text: "pending", color: T.muted }
-                    : outcomeChip(seg?.outcome ?? null);
+                    : live
+                      ? (cbChanged
+                          ? { text: "CB CHANGED · PENDING", color: T.orange }
+                          : { text: "pending", color: T.muted })
+                      : outcomeChip(seg?.outcome ?? null);
                   return (
                     <Row key={cp.label} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
                       <span style={{ fontSize: 13, fontFamily: "monospace", color: T.muted, minWidth: 46 }}>{cp.label}</span>
                       <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
-                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: chip.color, minWidth: 78, textAlign: "right" }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: chip.color, minWidth: 78, textAlign: "right", whiteSpace: "nowrap" }}>
                         {chip.text}
                       </span>
                     </Row>

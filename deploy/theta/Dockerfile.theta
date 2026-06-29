@@ -1,0 +1,22 @@
+# Theta Terminal v3 — sibling service for the dashboard stack (doc §7).
+# Runs the Java terminal that server-v2 talks to over the compose network.
+#
+# The jar self-updates on startup and falls back to the prior version if an
+# update fails, so we bake in the bootstrap jar and let it manage its runtime.
+FROM eclipse-temurin:21-jre
+
+WORKDIR /opt/theta
+
+# The bootstrap jar is gitignored (large binary, self-updating) so we DON'T copy
+# it from the repo — we download it at build time from ThetaData's canonical URL.
+# The bootstrap then fetches the actual runtime jar on first launch, so the image
+# always runs the current terminal build.
+ADD https://download-unstable.thetadata.us/ThetaTerminalv3.jar /opt/theta/ThetaTerminalv3.jar
+
+# v3 REST binds 25503, streaming WS binds 25520. Expose both on the compose net.
+EXPOSE 25503 25520
+
+# API key comes from the environment var THETA_DATA_API_KEY (the Terminal reads it
+# natively — priority CLI > env > .env), injected by compose from
+# /opt/dashboard/.env.local. NEVER baked into the image. No --api-key flag needed.
+ENTRYPOINT ["java", "-jar", "ThetaTerminalv3.jar"]

@@ -1,0 +1,55 @@
+# Drop-in compose fragment for the Theta Terminal sibling service (doc §7).
+#
+# Merge this `theta-terminal` service into the existing /opt/dashboard compose
+# file (or include via `docker compose -f compose.yml -f compose.theta.yml ...`),
+# then add the env + depends_on lines (below) to the existing `dashboard` service.
+#
+# Apply on the VPS (per the deploy rule — edit on the box, no rebuild for
+# server-side env):
+#   1. put THETA_DATA_API_KEY + DATA_SOURCE=theta in /opt/dashboard/.env.local
+#   2. docker compose -f compose.yml -f compose.theta.yml up -d --build theta-terminal
+#   3. docker compose up -d --force-recreate dashboard
+#   4. verify: docker compose logs -f theta-terminal  → "Subscriptions: ... Options: PROFESSIONAL"
+#              and server-v2 logs show [DATA_SOURCE] options provider = THETA
+
+services:
+  theta-terminal:
+    build:
+      context: .
+      dockerfile: deploy/theta/Dockerfile.theta
+    container_name: theta-terminal
+    restart: unless-stopped
+    environment:
+      # injected from /opt/dashboard/.env.local (gitignored, never via git pull)
+      THETA_DATA_API_KEY: ${THETA_DATA_API_KEY}
+    # No host port publish needed — only the dashboard container talks to it over
+    # the compose network. Publish 25503 to the host only if you want to curl it
+    # from the box directly (uncomment):
+    # ports:
+    #   - "127.0.0.1:25503:25503"
+    healthcheck:
+      # REST 200 on the v3 root = terminal is up and serving.
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:25503/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s   # the runtime jar download + auth handshake takes a bit
+    networks:
+      - default
+
+# ── Add these to the EXISTING `dashboard` service (do not duplicate the service) ──
+#
+#   dashboard:
+#     environment:
+#       DATA_SOURCE: ${DATA_SOURCE:-tt}          # flip to theta in .env.local
+#       THETA_BASE_URL: http://theta-terminal:25503
+#       THETA_WS_URL: ws://theta-terminal:25520/v1/events
+#       THETA_DATA_API_KEY: ${THETA_DATA_API_KEY}
+#     depends_on:
+#       theta-terminal:
+#         condition: service_healthy
+#
+# server-v2 already degrades-don't-crash when the terminal is unreachable
+# (Theta REST/WS calls are .catch()'d; OI/greeks just go empty and the BS
+# fallback + prior-value guards hold), mirroring the lazy-pool pattern — so a
+# terminal restart won't take the dashboard down.
