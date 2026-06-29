@@ -242,7 +242,19 @@ export default function ResultsPage() {
       {selectedKind && (
         <SetupLogModal
           kind={selectedKind}
-          rows={setups.filter((s) => s.kind === selectedKind).sort((a, b) => b.trigger_ts - a.trigger_ts)}
+          rows={setups
+            .filter((s) => s.kind === selectedKind)
+            .map((s) => ({
+              ...s,
+              trigger_ts: Number(s.trigger_ts),
+              price: s.price != null ? Number(s.price) : null,
+              target: s.target != null ? Number(s.target) : null,
+              invalidation: s.invalidation != null ? Number(s.invalidation) : null,
+              mfe: Number(s.mfe),
+              mae: Number(s.mae),
+              r_multiple: s.r_multiple != null ? Number(s.r_multiple) : null,
+            }))
+            .sort((a, b) => b.trigger_ts - a.trigger_ts)}
           onClose={() => setSelectedKind(null)}
         />
       )}
@@ -568,10 +580,14 @@ function CheckpointsView() {
 
 // ── ET formatters (self-contained for this owner page) ──
 function etClock(ts: number) {
-  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(ts));
+  const t = Number(ts);
+  if (!Number.isFinite(t) || t <= 0) return "—";
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(t));
 }
 function etDate(ts: number) {
-  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(new Date(ts));
+  const t = Number(ts);
+  if (!Number.isFinite(t) || t <= 0) return "—";
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(new Date(t));
 }
 
 function FailLogTable({ rows }: { rows: FailEvent[] }) {
