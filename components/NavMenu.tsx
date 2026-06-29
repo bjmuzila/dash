@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useUser } from "@clerk/nextjs";
 
-import { HOME_THEME } from "./homeTheme";
-import { useMobileNav } from "./MobileNavContext";
+import { HOME_THEME } from "./shared/homeTheme";
+import { useMobileNav } from "./shared/MobileNavContext";
 
 // ─── icons (20px, stroke = currentColor) ─────────────────────────────────────
 type IconProps = { size?: number };

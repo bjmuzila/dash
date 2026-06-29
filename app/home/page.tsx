@@ -11,7 +11,7 @@ import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import SignalsPanel from "@/components/dashboard/SignalsPanel";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
-import { type ChainRow, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
+import { type ChainRow, type CalcMode, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
 
 type FeedType = "Quote" | "Trade" | "Summary" | "Greeks";
 type OptionSide = "call" | "put";

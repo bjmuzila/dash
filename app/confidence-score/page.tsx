@@ -852,8 +852,8 @@ export default function ConfidenceScorePage() {
             </span>
           )}
           {data?.stale && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.amber ?? "#f5a623",
-              border: `1px solid ${rgba(HOME_THEME.amber ?? "#f5a623", 0.5)}`, borderRadius: 4, padding: "1px 6px" }}
+            <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.orange,
+              border: `1px solid ${rgba(HOME_THEME.orange, 0.5)}`, borderRadius: 4, padding: "1px 6px" }}
               title={`No snapshot for ${data.requestedDate}; showing last session with data (${data.date}).`}>
               STALE · {data.date}
             </span>

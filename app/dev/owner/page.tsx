@@ -2473,7 +2473,7 @@ export default function OwnerDashboard() {
                         {pubRun.posted != null ? <> · {pubRun.posted} rows</> : null}
                       </span>
                     )}
-                    {pubRun.ms != null && <span style={{ color: HOME_THEME.muted }}>in {Math.round(pubRun.ms / 1000)}s</span>}
+                    {pubRun.ms != null && <span style={{ color: HOME_THEME.muted }}>in {Math.round((pubRun.ms ?? 0) / 1000)}s</span>}
                     {pubRun.at && <span style={{ color: HOME_THEME.muted }}>{fmtLastRun(pubRun.at)}</span>}
                     {pubRun.reason && <span style={{ color: HOME_THEME.muted }}>({pubRun.reason})</span>}
                     {pubRun.error && <span style={{ color: HOME_THEME.red }}>{pubRun.error}</span>}

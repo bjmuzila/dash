@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     // Fast path: real row count (no row payload). Used by the owner dashboard cards.
     if (countOnly) {
       const dateCol = table === "trades" ? "date(timestamp)" : meta.dateCol;
-      let row: { c?: number } | null;
+      let row: { c?: number } | null | undefined;
       if (date && dateCol) {
         row = await queryOne<{ c: number }>(
           `SELECT COUNT(*) AS c FROM "${table}" WHERE ${dateCol} = ?`,
