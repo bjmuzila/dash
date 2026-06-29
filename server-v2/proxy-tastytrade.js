@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { useTheta, useThetaIndex } = require('./config/data-source');
+const thetaAdapterQuotes = require('./proxy-thetadata'); // stock quotes when DATA_SOURCE=theta
 const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
@@ -746,9 +747,23 @@ async function fetchUnderlyingQuotes(symbols) {
     }
   };
 
-  // Equities pass through; indices map root→original (SPXW→SPX already collapsed).
+  // Equities: Theta when DATA_SOURCE=theta (per-symbol snapshot, TT fallback on
+  // miss); else the TT by-type batch. Indices + futures unchanged below.
   const eqBack = new Map(equities.map((e) => [e, e]));
-  await batchParam('equity', [...eqBack.keys()], (v) => v);
+  if (useTheta()) {
+    await Promise.all([...eqBack.keys()].map(async (e) => {
+      try {
+        const q = await thetaAdapterQuotes.fetchStockQuoteTheta(e);
+        if (q) { out.set(e, q); return; }
+      } catch (err) {
+        console.warn('[WATCH-QUOTES][theta]', e, String(err.message).slice(0, 120));
+      }
+      // Theta miss/gated → TT fallback for this one symbol.
+      await batchParam('equity', [e], (v) => v);
+    }));
+  } else {
+    await batchParam('equity', [...eqBack.keys()], (v) => v);
+  }
   // Build index original-symbol map (root → first original that produced it).
   const idxOriginals = new Map();
   for (const sym of list) {
@@ -1526,7 +1541,28 @@ class TastytradeProxy {
       console.warn('[FEED] prev-close fetch failed:', err.message.slice(0, 120));
     }
 
-    const { expirations, contracts } = await fetchChain();
+    // Options contract universe. DATA_SOURCE=theta builds the chain from Theta
+    // (expirations + strikes), synthesizing a dxLink-style streamerSymbol so the
+    // feed's streamerSymbol-keyed maps (this.contracts, _activeContracts, flow
+    // tape) work unchanged. OI/greeks already match on exp|strike|type. In theta
+    // mode the option contracts are NOT subscribed to dxLink (see _resubscribe);
+    // dxLink carries only spot + ES/NQ candles. TT chain is the default path.
+    let expirations; let contracts;
+    if (useTheta()) {
+      const tc = await thetaAdapterQuotes.fetchChainTheta(SYMBOL);
+      expirations = tc.expirations;
+      contracts = tc.contracts.map((c) => ({
+        ...c,
+        streamerSymbol: thetaAdapterQuotes.streamerSymbolFromContract({
+          root: tc.root, expiration: thetaAdapterQuotes.toThetaStreamExp(c.expiration),
+          strike: c.strike, right: c.type,
+        }),
+        occSymbol: null, // Theta has no OCC; OI/greeks match on exp|strike|type
+      }));
+      console.log(`[FEED][theta] chain built from Theta: ${contracts.length} contracts, ${expirations.length} expirations`);
+    } else {
+      ({ expirations, contracts } = await fetchChain());
+    }
     marketState.setState({ symbol: SYMBOL });
     marketState.setExpirations(expirations);
     console.log(`[FEED] ${SYMBOL}: ${contracts.length} contracts, ${expirations.length} expirations`);
@@ -1855,7 +1891,12 @@ class TastytradeProxy {
     const syms = new Set([this.spotSymbol]);
     if (this.vixSymbol) syms.add(this.vixSymbol);
     if (this.esSymbol) syms.add(this.esSymbol);
-    for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
+    // In theta mode the option streamerSymbols are SYNTHETIC (not real dxLink
+    // symbols) and option data comes from Theta — never subscribe them to dxLink.
+    // dxLink carries spot + ES/NQ candles only.
+    if (!useTheta()) {
+      for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
+    }
     this.client.subscribe([...syms]);
     marketState.setStatus({ contractsSubscribed: syms.size });
   }

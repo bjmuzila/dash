@@ -299,6 +299,30 @@ async function fetchIndexPriceTheta(symbol) {
   return price > 0 ? price : null;
 }
 
+/**
+ * Real-time stock quote snapshot (equities only — never indices/futures).
+ * v3 stock snapshot returns bid/ask + prev-close; mark = midpoint. Returns
+ * { last, mark, close, prevClose } shaped like fetchUnderlyingQuotes' assign(),
+ * or null if unavailable/gated so the caller can fall back to TT.
+ */
+async function fetchStockQuoteTheta(symbol) {
+  const json = await thetaGet(
+    `/v3/stock/snapshot/quote?symbol=${encodeURIComponent(String(symbol).toUpperCase())}`,
+  );
+  const r = rowsFromV3(json)[0] || {};
+  const bid = Number(r.bid), ask = Number(r.ask);
+  const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : Number(r.last ?? r.price);
+  const last = Number(r.last ?? r.price ?? mark);
+  const prevClose = Number(r.prev_close ?? r.prevClose);
+  if (!(last > 0) && !(mark > 0)) return null;
+  return {
+    last: last > 0 ? last : mark,
+    mark: mark > 0 ? mark : last,
+    close: Number(r.close) > 0 ? Number(r.close) : 0,
+    prevClose: prevClose > 0 ? prevClose : 0,
+  };
+}
+
 async function fetchIndexEodTheta(symbol, date) {
   const d = ymdCompact(date);
   const json = await thetaGet(
@@ -555,4 +579,5 @@ module.exports = {
   fetchIndexEodTheta,
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
+  fetchStockQuoteTheta,
 };

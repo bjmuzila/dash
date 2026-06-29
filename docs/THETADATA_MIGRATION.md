@@ -528,6 +528,30 @@ All three authored; the only steps left need Brandon's keyboard (running process
 - **Soak monitor** — `scripts/theta-soak-monitor.mjs`: polls /proxy/gex + /proxy/flow, logs to
   `theta-soak-YYYY-MM-DD.log`, flags wall-jumps / flow-stall / gex-sign-flip / route errors.
 
+## 9i. Spot/VIX on Theta — built behind INDEX_SOURCE flag (2026-06-29)
+
+Index tier upgraded to `Index: PROFESSIONAL` (banner confirmed after Terminal restart). Built the
+SPX/VIX-on-Theta path; **staged flag-off** — flip only after confirming real-time during RTH (probe
+after-hours showed frozen-at-close timestamps, expected since index ticks only on change + market shut).
+
+- `INDEX_SOURCE` flag (theta|dxlink, default **dxlink**) — SEPARATE from options DATA_SOURCE. ES
+  futures always dxLink regardless.
+- Adapter: `fetchIndexPriceTheta(SPX/VIX)` snapshot + `subscribeIndex(root)` on the FPSS WS
+  (`sec_type:INDEX, req_type:TRADE, contract:{root}`; msg `trade.price`; ticks ~1/s ONLY on change
+  → last-value cache is correct, no gap-fill).
+- Proxy: `_onThetaIndex` feeds Theta SPX → `this.spot`, VIX → aux (the SAME fields the dxLink Quote
+  branch sets, so GEX/cash-basis/display unchanged). dxLink SPX/VIX quote+trade branches gated off
+  when `useThetaIndex()` so sources don't fight. REST snapshot seeds spot on startup.
+- **Cash-basis seam** (`cashBasis = this.spot − esFut`, RTH): now Theta-SPX − dxLink-ES cross-provider.
+  Single-tick capture kept (matches current behavior); doc's median-of-N hardening is a TODO only if
+  15:59–16:00 skew poisons the overnight basis.
+- Also in this change: removed dead CBOE OI cross-check (`fetchCboeChain`/`fetchYahooContractOI`/
+  `oiCompare`) — Theta OPRA OI authoritative. `normalizeOcc` + TT OI path KEPT (rollback).
+
+**To flip live (after RTH real-time check):** `INDEX_SOURCE=theta` in `.env.local` + recreate
+dashboard. Verify `[INDEX_SOURCE] ... THETA` log + SPX timestamps tracking within seconds during RTH.
+Rollback: drop the flag.
+
 ## 9h. SHIPPED TO PROD (2026-06-29)
 
 Theta is **live in production** on the VPS, `DATA_SOURCE=theta`.
