@@ -435,9 +435,9 @@ function SalesCalendar({ year, month, days, onNav }: {
                 justifyContent: "center",
                 gap: 1,
                 background: day.inMonth && intensity > 0
-                  ? `rgba(33,158,188,${0.07 + intensity * 0.35})`
+                  ? `rgba(255,255,255,${0.04 + intensity * 0.22})`
                   : "rgba(255,255,255,0.02)",
-                border: isToday ? `1px solid ${HOME_THEME.cyan}88` : "1px solid transparent",
+                border: isToday ? `1px solid ${HOME_THEME.borderStrong}` : "1px solid transparent",
                 cursor: day.inMonth && day.revenue > 0 ? "crosshair" : "default",
                 opacity: day.inMonth ? 1 : 0.25,
                 transition: "background .15s, border-color .15s",

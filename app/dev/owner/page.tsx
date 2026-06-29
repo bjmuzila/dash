@@ -341,9 +341,9 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
         fontSize: 11,
         fontWeight: 500,
         letterSpacing: "0.01em",
-        background: ok ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
-        border: `1px solid ${ok ? HOME_THEME.green : HOME_THEME.red}40`,
-        color: ok ? HOME_THEME.green : HOME_THEME.red,
+        background: ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.12)",
+        border: `1px solid ${ok ? HOME_THEME.border : HOME_THEME.red + "40"}`,
+        color: ok ? HOME_THEME.textSecondary : HOME_THEME.red,
       }}
     >
       <span
@@ -351,7 +351,7 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
           width: 6,
           height: 6,
           borderRadius: "50%",
-          background: ok ? HOME_THEME.green : HOME_THEME.red,
+          background: ok ? HOME_THEME.textMuted : HOME_THEME.red,
         }}
       />
       {label}
@@ -685,7 +685,7 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
       <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <span style={{ fontSize: 30, fontWeight: 500, color: HOME_THEME.text, lineHeight: 1 }}>{value}</span>
-        {delta ? <span style={{ fontSize: 11, fontWeight: 500, color: up ? HOME_THEME.green : HOME_THEME.red }}>{delta}</span> : null}
+        {delta ? <span style={{ fontSize: 11, fontWeight: 500, color: HOME_THEME.textSecondary }}>{delta}</span> : null}
       </div>
     </div>
   );
@@ -716,7 +716,7 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
         <div style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
       </div>
       {status && (
-        <span style={{ fontSize: 8.5, fontWeight: 500, color: HOME_THEME.green, background: "rgba(16,185,129,0.14)", border: `1px solid ${HOME_THEME.green}44`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
+        <span style={{ fontSize: 8.5, fontWeight: 500, color: HOME_THEME.textSecondary, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
       )}
     </div>
   );
@@ -1725,9 +1725,9 @@ export default function OwnerDashboard() {
                 padding: "7px 18px", fontSize: 12, fontWeight: 500, borderRadius: 8,
                 letterSpacing: "0.01em",
                 cursor: "pointer",
-                background: active ? "rgba(33,158,188,0.15)" : "transparent",
-                color: active ? HOME_THEME.cyan : HOME_THEME.muted,
-                border: `1px solid ${active ? HOME_THEME.cyan + "66" : HOME_THEME.border}`,
+                background: active ? "rgba(255,255,255,0.07)" : "transparent",
+                color: active ? HOME_THEME.text : HOME_THEME.muted,
+                border: `1px solid ${active ? HOME_THEME.borderStrong : HOME_THEME.border}`,
               }}
             >
               {t.label}
@@ -1823,7 +1823,7 @@ export default function OwnerDashboard() {
                     cursor: renderLoading ? "wait" : "pointer",
                     textTransform: "uppercase",
                     letterSpacing: "0.08em",
-                    background: renderWindow === w ? "rgba(33,158,188,.15)" : "transparent",
+                    background: renderWindow === w ? "rgba(255,255,255,0.07)" : "transparent",
                     color: renderWindow === w ? HOME_THEME.cyan : HOME_THEME.muted,
                   }}
                 >
@@ -2037,7 +2037,7 @@ export default function OwnerDashboard() {
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "idle" ? 0.6 : 1,
                     cursor: ctlBusy === "idle" ? "wait" : "pointer",
-                    background: isIdle ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.14)",
+                    background: isIdle ? "rgba(239,68,68,0.16)" : "rgba(255,255,255,0.06)",
                     color: isIdle ? HOME_THEME.red : HOME_THEME.green,
                     border: `1px solid ${isIdle ? HOME_THEME.red : HOME_THEME.green}55`,
                   }}
@@ -2056,7 +2056,7 @@ export default function OwnerDashboard() {
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "mvcAuto" ? 0.6 : 1,
                     cursor: ctlBusy === "mvcAuto" ? "wait" : "pointer",
-                    background: mvcAuto ? "rgba(16,185,129,0.14)" : "rgba(239,68,68,0.16)",
+                    background: mvcAuto ? "rgba(255,255,255,0.06)" : "rgba(239,68,68,0.16)",
                     color: mvcAuto ? HOME_THEME.green : HOME_THEME.red,
                     border: `1px solid ${mvcAuto ? HOME_THEME.green : HOME_THEME.red}55`,
                   }}
@@ -2075,7 +2075,7 @@ export default function OwnerDashboard() {
                     ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 12,
                     opacity: ctlBusy === "maint" ? 0.6 : 1,
                     cursor: ctlBusy === "maint" ? "wait" : "pointer",
-                    background: maint ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.14)",
+                    background: maint ? "rgba(239,68,68,0.16)" : "rgba(255,255,255,0.06)",
                     color: maint ? HOME_THEME.red : HOME_THEME.green,
                     border: `1px solid ${maint ? HOME_THEME.red : HOME_THEME.green}55`,
                   }}
@@ -2133,7 +2133,7 @@ export default function OwnerDashboard() {
             {ctlMsg && (
               <div style={{
                 fontSize: 11, fontFamily: "monospace", padding: "8px 10px", borderRadius: 8,
-                background: ctlMsg.ok ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)",
+                background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.10)",
                 border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
                 color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
               }}>
@@ -2197,7 +2197,7 @@ export default function OwnerDashboard() {
                       </div>
                       {row ? (
                         <>
-                          <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "monospace", color: row.total_gex >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "monospace", color: HOME_THEME.text }}>
                             {fmtGex(row.total_gex)}
                           </div>
                           <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted }}>
@@ -2338,7 +2338,7 @@ export default function OwnerDashboard() {
                       fontWeight: 700,
                       cursor: copyingAll ? "wait" : "pointer",
                       color: copiedTicker === "__ALL__" ? HOME_THEME.green : HOME_THEME.cyan,
-                      background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(33,158,188,0.15)",
+                      background: copiedTicker === "__ALL__" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)",
                       border: `1px solid ${copiedTicker === "__ALL__" ? HOME_THEME.green + "66" : HOME_THEME.cyan + "66"}`,
                       padding: "3px 10px",
                       borderRadius: 6,
@@ -2359,9 +2359,9 @@ export default function OwnerDashboard() {
                         fontSize: 10,
                         fontWeight: 700,
                         cursor: "pointer",
-                        color: copied ? HOME_THEME.green : t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
-                        background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(33,158,188,0.08)",
-                        border: `1px solid ${copied ? HOME_THEME.green + "66" : t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
+                        color: copied ? HOME_THEME.text : HOME_THEME.textSecondary,
+                        background: copied ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
+                        border: `1px solid ${copied ? HOME_THEME.borderStrong : HOME_THEME.border}`,
                         padding: "3px 8px",
                         borderRadius: 6,
                         fontFamily: "monospace",

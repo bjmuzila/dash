@@ -795,7 +795,7 @@ export default function OptionsChainPage() {
         overflow: "hidden",
       }}
     >
-      <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,179,0,.35)}50%{box-shadow:0 0 10px rgba(255,179,0,.9)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
+      <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,179,0,.35)}50%{box-shadow:0 0 10px rgba(255,179,0,.9)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}.mvc-peak-left{clip-path:inset(-12px 0 -12px -12px)}.mvc-peak-right{clip-path:inset(-12px -12px -12px 0)}`}</style>
       {loadProgress > 0 && (
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: HT.bg, zIndex: 10 }}>
           <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
@@ -988,22 +988,25 @@ export default function OptionsChainPage() {
                     const isMvc = greekMode === "gex" && col != null && mvcByCol[i] === strike;
                     return (
                       <div key={strike} style={{ display: "contents" }}>
-                        <div style={{
+                        <div
+                          className={isMvc ? "mvc-peak-cell mvc-peak-left" : undefined}
+                          style={{
                           padding: "4px 8px", fontSize: 11, fontWeight: 700, fontFamily: "monospace", textAlign: "left",
-                          color: isATM ? "#ffb300" : "#e4e4e7",
-                          background: isATM ? "rgba(255,179,0,.12)" : value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
+                          color: "#e4e4e7",
+                          background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
                           borderTop: emBorder,
                           ...(isMvc ? { borderLeft: "2px solid #ffb300", borderTop: "2px solid #ffb300", borderBottom: "2px solid #ffb300" } : {}),
                           ...(isATM ? { borderLeft: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
                         }}>
                           {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
+                          {isATM && <span style={{ marginLeft: 5, fontSize: 8, fontWeight: 800, letterSpacing: "0.05em", color: "#0a0e14", background: "#ffb300", padding: "1px 4px", borderRadius: 3, verticalAlign: "middle" }}>ATM</span>}
                         </div>
                         <div
-                          className={isMvc ? "mvc-peak-cell" : undefined}
+                          className={isMvc ? "mvc-peak-cell mvc-peak-right" : undefined}
                           style={{
                             padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
                             color: value == null ? "#3a4a5e" : "#ffffff",
-                            background: isATM ? "rgba(255,179,0,.07)" : value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
+                            background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
                             borderTop: emBorder,
                             ...(isMvc ? { borderRight: "2px solid #ffb300", borderTop: "2px solid #ffb300", borderBottom: "2px solid #ffb300" } : {}),
                             ...(isATM ? { borderRight: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),

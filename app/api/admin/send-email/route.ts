@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { getSubscription, PAID_STATUSES, listWaitlist } from "@/lib/db";
+import { getSubscription, PAID_STATUSES, listWaitlist, addEmailSend, listEmailSends } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
@@ -82,11 +82,18 @@ async function listWaitlistEmails(): Promise<string[]> {
     .map((r) => r.email.trim().toLowerCase());
 }
 
-// GET — owner only. Returns recipient lists for the compose UI preview.
-export async function GET() {
+// GET — owner only.
+//   ?history=1 → returns the broadcast send history (summary rows).
+//   (default)  → returns recipient lists/counts for the compose UI preview.
+export async function GET(req: NextRequest) {
   try {
     const gate = await ownerGate();
     if (!gate.ok) return NextResponse.json({ error: "Forbidden" }, { status: gate.status });
+
+    if (req.nextUrl.searchParams.get("history")) {
+      const history = await listEmailSends(100);
+      return NextResponse.json({ ok: true, history });
+    }
 
     const recipients = await listRecipients();
     const all = recipients.map((r) => r.email);
@@ -184,6 +191,22 @@ export async function POST(req: NextRequest) {
         const detail = await r.text().catch(() => `HTTP ${r.status}`);
         failed.push({ batch: [recipient], error: detail.slice(0, 500) });
       }
+    }
+
+    // Record the send in the history log (summary only). Non-fatal — a logging
+    // failure must not fail the send response.
+    try {
+      const { userId } = await auth();
+      await addEmailSend({
+        subject,
+        audience,
+        sent_count: sent.length,
+        failed_count: to.length - sent.length,
+        recipients: sent,
+        sent_by: userId ?? null,
+      });
+    } catch (e) {
+      console.error("[send-email] history log failed:", e);
     }
 
     return NextResponse.json({

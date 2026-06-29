@@ -183,7 +183,7 @@ function ShareActions({ text }: { text: string }) {
   return (
     <div style={{ display: "flex", gap: 8 }}>
       <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? POS : VAL }}>{copied ? "✓ Copied" : "⧉ Copy"}</button>
-      <button onClick={share} disabled={sending} style={{ ...btn, background: "#5865F2", color: "#fff", borderColor: "#5865F2", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
+      <button onClick={share} disabled={sending} style={{ ...btn, background: "rgba(255,255,255,0.06)", color: HOME_THEME.text, borderColor: HOME_THEME.borderStrong, opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         {sending ? "Sending…" : sent === "ok" ? "✓ Sent" : sent === "err" ? "✗ Failed" : "↗ Discord"}
       </button>
     </div>

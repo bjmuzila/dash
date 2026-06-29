@@ -316,6 +316,20 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_feedback_created ON customer_feedback(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_feedback_status ON customer_feedback(status);
 
+    -- Email broadcast history. One row per send from /admin/emails. Summary only
+    -- (no per-recipient rows). recipients is a JSON array of the addresses sent.
+    CREATE TABLE IF NOT EXISTS email_sends (
+      id            SERIAL PRIMARY KEY,
+      subject       TEXT NOT NULL,
+      audience      TEXT NOT NULL,
+      sent_count    INTEGER NOT NULL DEFAULT 0,
+      failed_count  INTEGER NOT NULL DEFAULT 0,
+      recipients    JSONB,
+      sent_by       TEXT,
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_sends_created ON email_sends(created_at DESC);
+
     -- Per-ticker weekly Estimated Move tracking. One row per (ticker, week).
     -- week_label is the human label that matches the EstimatedMoves columns
     -- (e.g. "10/3"); week_start is the Monday ISO date for ordering. em is the
@@ -975,6 +989,50 @@ export async function listWaitlist(limit = 1000): Promise<WaitlistRecord[]> {
 export async function countWaitlist(): Promise<number> {
   const row = await queryOne<{ n: number }>("SELECT COUNT(*)::int AS n FROM waitlist", []);
   return Number(row?.n ?? 0);
+}
+
+// ── Email broadcast history ────────────────────────────────────────────────
+
+export interface EmailSendRecord {
+  id: number;
+  subject: string;
+  audience: string;
+  sent_count: number;
+  failed_count: number;
+  recipients: string[] | null;
+  sent_by: string | null;
+  created_at: string;
+}
+
+/** Record one broadcast send (summary). recipients is the list of addresses. */
+export async function addEmailSend(input: {
+  subject: string;
+  audience: string;
+  sent_count: number;
+  failed_count: number;
+  recipients: string[];
+  sent_by?: string | null;
+}): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO email_sends (subject, audience, sent_count, failed_count, recipients, sent_by)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      input.subject,
+      input.audience,
+      input.sent_count,
+      input.failed_count,
+      JSON.stringify(input.recipients ?? []),
+      input.sent_by ?? null,
+    ]
+  );
+}
+
+export async function listEmailSends(limit = 100): Promise<EmailSendRecord[]> {
+  return queryAll<EmailSendRecord>(
+    "SELECT * FROM email_sends ORDER BY created_at DESC LIMIT ?",
+    [limit]
+  );
 }
 
 // ── Customer feedback ──────────────────────────────────────────────────────

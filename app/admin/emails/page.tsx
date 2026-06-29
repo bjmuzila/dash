@@ -16,6 +16,14 @@ const AUDIENCE_OPTIONS: SegOption[] = [
 
 interface Counts { all: number; subscribers: number; waitlist: number }
 interface Lists { all: string[]; subscribers: string[]; waitlist: string[] }
+interface SendRecord {
+  id: number;
+  subject: string;
+  audience: string;
+  sent_count: number;
+  failed_count: number;
+  created_at: string;
+}
 
 export default function AdminEmailsPage() {
   const [audience, setAudience] = useState<Audience>("subscribers");
@@ -34,6 +42,15 @@ export default function AdminEmailsPage() {
   const [presets, setPresets] = useState<Array<{ id: string; label: string }>>([]);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<SendRecord[]>([]);
+
+  async function loadHistory() {
+    try {
+      const res = await fetch("/api/admin/send-email?history=1");
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) setHistory(j.history ?? []);
+    } catch { /* history is optional */ }
+  }
 
   // Load a server-rendered template into the composer.
   async function loadPreset(id: string) {
@@ -73,6 +90,7 @@ export default function AdminEmailsPage() {
         const tj = await tr.json().catch(() => ({}));
         if (alive && tr.ok) setPresets(tj.templates ?? []);
       } catch { /* presets are optional */ }
+      if (alive) loadHistory();
     })();
     return () => { alive = false; };
   }, []);
@@ -111,6 +129,7 @@ export default function AdminEmailsPage() {
       setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}.`);
       setSubject("");
       setBody("");
+      loadHistory();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -250,6 +269,53 @@ export default function AdminEmailsPage() {
             </DockButton>
           </div>
         </div>
+      </Card>
+
+      <Card accent="cyan" style={{ marginTop: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.02em" }}>📜 Sent history</div>
+          <button
+            onClick={loadHistory}
+            style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}
+          >
+            Refresh
+          </button>
+        </div>
+
+        {history.length === 0 ? (
+          <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>No emails sent yet.</div>
+        ) : (
+          <div style={{ maxHeight: 280, overflowY: "auto" }}>
+            {history.map((h) => (
+              <div
+                key={h.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 0",
+                  borderBottom: `1px solid ${HOME_THEME.border}`,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {h.subject}
+                  </div>
+                  <div style={{ fontSize: 11, color: HOME_THEME.green, marginTop: 2 }}>
+                    {new Date(h.created_at).toLocaleString()} · {h.audience}
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, whiteSpace: "nowrap", textAlign: "right" }}>
+                  <span style={{ color: HOME_THEME.cyan, fontWeight: 700 }}>{h.sent_count} sent</span>
+                  {h.failed_count > 0 && (
+                    <span style={{ color: HOME_THEME.red, marginLeft: 8 }}>{h.failed_count} failed</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
     </PageShell>
   );

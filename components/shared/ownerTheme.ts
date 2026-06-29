@@ -33,12 +33,18 @@ export const OWNER_THEME = {
   text: "#E7E9ED",           // primary text
   textSecondary: "#9AA1AC",  // supporting text
   textMuted: "#6B7280",      // hints / labels / mono stamps
-  // Accents (kept from HOME_THEME so values match the rest of the app).
-  cyan: HOME_THEME.cyan,
-  purple: HOME_THEME.purple,
-  orange: HOME_THEME.orange,
-  green: HOME_THEME.green,
-  red: HOME_THEME.red,
+  // ── Accents NEUTRALIZED ──
+  // Per design rule: NO color accents anywhere except error states. Every former
+  // accent (cyan/purple/orange/green) now resolves to neutral slate, so values,
+  // ticks, left-borders, chart strokes, badges and "ok/up" states render in the
+  // calm neutral palette. RED is the ONLY color, reserved for error/down/fail.
+  // (Call sites still read `green` for an "ok" state — pointing it at neutral
+  // makes ok render neutral and only the red branch shows color.)
+  cyan: "#C2C7D0",      // was accent → neutral light slate (primary "value" tone)
+  purple: "#C2C7D0",    // neutral
+  orange: "#C2C7D0",    // neutral
+  green: "#C2C7D0",     // ok/up → neutral (NOT green)
+  red: HOME_THEME.red,  // errors only — the one real color
   // ── Drop-in aliases so OWNER_THEME can stand in for HOME_THEME ──
   muted: "#9AA1AC",                  // alias of textSecondary (was bright #FFF)
   panelBg: "#14171D",                // flat slate (no rgba translucency)
