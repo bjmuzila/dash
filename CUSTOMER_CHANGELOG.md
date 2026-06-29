@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 6/29/2026
 
+* Upgraded the market data behind the dashboard to a new provider for faster, more accurate options, greeks, and index pricing
+* Loaded two years of historical gamma exposure data so the confidence and MVC tools can compare today against real past sessions
 * You can now click any ICT setup card on the Results page to see the full log of individual plays that make up its win rate
 * The Confidence Score page now stays useful on weekends and before the open — it falls back to the last session's data and shows when the MVC was captured
 * Added a new Confidence tab on the Results page that tracks the 9:45, 10:30, and noon MVC levels each day — how close the market got and whether it was hit

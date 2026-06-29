@@ -3,7 +3,7 @@
  * server-v2/greeks-ts-writer.js
  *
  * Records live net greeks ($SPX) into the `greeks_ts` Postgres table on a
- * 5-minute cadence during RTH. This is what feeds the Analytics page's
+ * 30-second cadence during RTH. This is what feeds the Analytics page's
  * "Net Greeks" card (now · Δ15m · Δ30m) — without this writer the table is
  * empty and the card shows "No greeks series for today yet."
  *
@@ -23,11 +23,11 @@
 
 const MIN_POPULATED_STRIKES = 20;
 
-// Writer runs ~24/7 (every 5m) except: weekends, market holidays, and the daily
+// Writer runs ~24/7 (every 1m) except: weekends, market holidays, and the daily
 // maintenance window 16:00–18:00 ET. (Previously RTH-only 09:30–16:00.)
 const MAINT_OPEN_MINS  = 16 * 60;      // 960  — 4:00 PM ET
 const MAINT_CLOSE_MINS = 18 * 60;      // 1080 — 6:00 PM ET
-const INTERVAL_MS = 5 * 60_000;
+const INTERVAL_MS = Number(process.env.GREEKS_TS_INTERVAL_MS || 30_000);
 
 // Market holidays (ET) — keep in sync with eod-gex-recorder.js / mvc-auto-snapshot.js
 const MARKET_HOLIDAYS = new Set([
@@ -198,7 +198,7 @@ let _timer = null;
 
 function startGreeksTsWriter(port) {
   const base = `http://localhost:${port}`;
-  console.log('[greeks-ts] enabled — writing $SPX net greeks every 5m 24/7 (skip weekends, holidays, 16:00–18:00 ET maintenance)');
+  console.log('[greeks-ts] enabled — writing $SPX net greeks every 30s 24/7 (skip weekends, holidays, 16:00–18:00 ET maintenance)');
   _timer = setInterval(() => { void collectGreeksTs(base); }, INTERVAL_MS);
   _timer.unref?.();
   // Fire one shortly after boot so a freshly-started session backfills "now".

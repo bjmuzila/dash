@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-29 — ThetaData hybrid cutover (Phase 0→5) + VPS deploy + spot/VIX staged
+
+Built the full ThetaData migration behind flags: `server-v2/config/data-source.js` (`DATA_SOURCE` + `INDEX_SOURCE` flags), `server-v2/proxy-thetadata.js` (REST chain/OI/greeks adapter, FPSS Trade+Quote flow stream, index price stream, EOD/OI/greeks history helpers), and wired into `server-v2/proxy-tastytrade.js` `_refreshOI`/`_refreshGreeksTheta`/`_onThetaIndex` with dxLink option-flow + SPX/VIX branches gated off in theta mode. Validated OI 178/178 vs TT and GEX walls matching; backfilled 2y EOD GEX into `eod_gex` (`server-v2/scripts/theta-backfill-eod.mjs`); deployed the Theta Terminal as a Docker sibling service (`deploy/theta/`); removed the dead CBOE OI cross-check; spot/VIX-on-Theta staged flag-off pending an RTH real-time check.
+
+## 2026-06-29 — ThetaData migration completed: options + stock + index fully on Theta
+
+`server-v2/proxy-tastytrade.js`: `start()` now builds the options chain from `thetaAdapter.fetchChainTheta(SYMBOL)` when `useTheta()` (synthesizing `streamerSymbol` via `streamerSymbolFromContract`) instead of TT's nested chain, and `_resubscribe()` no longer subscribes option contracts to dxLink in theta mode (dxLink carries spot + ES/NQ candles only); added `fetchUnderlyingQuotes` equity branch → `fetchStockQuoteTheta` with per-symbol TT fallback. `server-v2/proxy-thetadata.js`: added + exported `fetchStockQuoteTheta` (v3 `/stock/snapshot/quote`). `.env.local`: set `DATA_SOURCE=theta` + `INDEX_SOURCE=theta`. Deployed to prod (`v6.29.x`); verified `/proxy/gex` rows 185 + walls populated on Theta, incl. next-day expiry on BS-gamma fallback. OPEN: confirm live SPX spot + greeks coverage at market open; verify v3 stock field keys.
+
 ## 2026-06-29 — Fails page: OPEN state, sticky Failed status, sorted Live Status, fail-rate moved + perf
 
 `lib/failLevels.ts`: `FailEvent` gained a `stopped` flag (true only when price actually traded through the stop) so in-progress fades aren't mislabeled; Live Status `state` made sticky-"failed" for the rest of the session once a level is faded (was reverting to "idle" after ~10 min). `app/fails/page.tsx`: result label now WIN / OPEN / LOSS (open = not yet 1R and not stopped) in both the tally and table; Live Status cards sorted by price (highest left → lowest right); removed the Fail Rate card, Recent Fail Log, and the heavy 20-day `computeStats` rebuild, and cut the candle fetch from 20→8 days. `hooks/useEsCandles.ts`: added `historyDays` param (default 20) to size the initial candle pull. `app/dev/results/page.tsx`: added "Fail Rate" tab (per-level fail rate + Recent Fail Log, full 20-day window) alongside ICT/Confidence.

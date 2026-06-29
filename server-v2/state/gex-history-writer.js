@@ -13,7 +13,7 @@
  * No-ops cleanly when DATABASE_URL is unset, so the feed runs fine without a DB.
  */
 
-const PG_WRITE_INTERVAL_MS = Number(process.env.GEX_PG_WRITE_INTERVAL_MS || 30_000);
+const PG_WRITE_INTERVAL_MS = Number(process.env.GEX_PG_WRITE_INTERVAL_MS || 60_000);
 
 let pool = null;
 let pgUnavailable = false;

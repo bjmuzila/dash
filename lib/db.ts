@@ -2079,7 +2079,7 @@ export async function getOptionStrikeRollingNetGex(
  * (strike, 5-minute slot) — the latest snapshot within each slot. Powers the
  * ES Candles heatmap backfill: each distinct slot becomes a heatmap column.
  *
- * `slot_ts` is the floor of `timestamp` to the 5-minute grid (ms), so it lines
+ * `slot_ts` is the floor of `timestamp` to the 1-minute grid (ms), so it lines
  * up with the candle grid the overlay draws against. Ordered by slot then
  * strike for easy client-side bucketing.
  */
@@ -2089,15 +2089,15 @@ export async function getOptionStrikeGexSlots(
 ): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
   const pool = await getDb();
   const result = await pool.query(
-    `SELECT DISTINCT ON ((FLOOR(timestamp / 300000) * 300000), strike)
-            (FLOOR(timestamp / 300000) * 300000)::bigint AS slot_ts,
+    `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
+            (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
             strike,
             net_gex,
             net_vol_gex
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
-      ORDER BY (FLOOR(timestamp / 300000) * 300000) ASC, strike ASC, timestamp DESC`,
+      ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
     [date, expiry]
   );
   return result.rows.map((row) => ({
@@ -2120,15 +2120,15 @@ export async function getOptionStrikeGexSlotsWindow(
 ): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
   const pool = await getDb();
   const result = await pool.query(
-    `SELECT DISTINCT ON ((FLOOR(timestamp / 300000) * 300000), strike)
-            (FLOOR(timestamp / 300000) * 300000)::bigint AS slot_ts,
+    `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
+            (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
             strike,
             net_gex,
             net_vol_gex
        FROM option_strike_gex_history
       WHERE timestamp >= $1
         AND expiry = $2
-      ORDER BY (FLOOR(timestamp / 300000) * 300000) ASC, strike ASC, timestamp DESC`,
+      ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
     [sinceTs, expiry]
   );
   return result.rows.map((row) => ({
