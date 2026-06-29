@@ -32,9 +32,15 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
   // the scrollable body and measure its real content height so the capture wraps
   // tightly instead of inheriting the page's full 100% height (blank bottom).
   const inner = el.querySelector("table") as HTMLElement | null;
+  // A canvas chart (e.g. GEX chart) is a fixed-pixel bitmap that won't re-flow,
+  // so we must NOT add height for the title band — that leaves blank space at the
+  // bottom. Instead the band overlays the top of the chart at its true height.
+  const isCanvas = !inner && !!el.querySelector("canvas");
   let contentH: number;
   if (inner) {
     contentH = inner.scrollHeight;
+  } else if (isCanvas) {
+    contentH = el.scrollHeight;
   } else {
     // Sum the height of every direct child up to (and including) the scroll body,
     // measuring the scroll body by its scrollHeight not its clamped client height.
@@ -45,7 +51,8 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     });
     contentH = h || el.scrollHeight;
   }
-  const captureH = contentH + 48; // + title band
+  // Canvas: band overlays, no extra height. Otherwise reserve the title band.
+  const captureH = isCanvas ? contentH : contentH + 48;
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
@@ -66,11 +73,12 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       clone.style.height = `${captureH}px`;
       clone.style.maxHeight = "none";
       clone.style.overflow = "visible";
-      clone.style.paddingTop = "44px";
+      // Canvas charts: band overlays, so no top padding (would create blank space).
+      clone.style.paddingTop = isCanvas ? "0" : "44px";
       const tbl = clone.querySelector("table") as HTMLElement | null;
       if (tbl) {
         tbl.style.height = `${contentH}px`;
-      } else {
+      } else if (!isCanvas) {
         // Grid/card layout (e.g. options chain): un-clamp the flex scroll body so
         // every row renders and the clone collapses to its real content height
         // — no blank space below the data box.
@@ -104,6 +112,28 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       clone.appendChild(band);
     },
   });
+
+  // lightweight-charts (ES candles) renders candles into internal canvases that
+  // html2canvas copies blank. If the target exposes __ltScreenshot, composite the
+  // library's own screenshot over the chart layer's position so candles appear.
+  const ltProvider = (el as unknown as {
+    __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
+  }).__ltScreenshot;
+  const lt = ltProvider?.();
+  if (lt) {
+    const scale = window.devicePixelRatio || 1;
+    const elRect = el.getBoundingClientRect();
+    const tRect = lt.target.getBoundingClientRect();
+    // Offset of the chart layer within the captured element, in canvas px. Add
+    // the title-band reserve (captureH − contentH) so it lands below the band.
+    const bandReserve = captureH - contentH;
+    const dx = (tRect.left - elRect.left) * scale;
+    const dy = (tRect.top - elRect.top + bandReserve) * scale;
+    const dw = tRect.width * scale;
+    const dh = tRect.height * scale;
+    const ctx = base.getContext("2d");
+    if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
+  }
 
   return base.toDataURL("image/png");
 }

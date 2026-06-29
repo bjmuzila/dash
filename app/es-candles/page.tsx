@@ -930,6 +930,22 @@ export default function EsCandlesPage() {
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
 
+      // lightweight-charts v5 renders candles into internal canvases that
+      // html2canvas copies blank. Expose the library's own takeScreenshot()
+      // so the snap/Discord capture can composite the real candle bitmap over
+      // the chart layer. captureElement (DataBox) looks for __ltScreenshot.
+      if (captureRef.current) {
+        (captureRef.current as unknown as {
+          __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
+        }).__ltScreenshot = () => {
+          try {
+            const c = chartApiRef.current?.takeScreenshot();
+            if (!c || !chartRef.current) return null;
+            return { canvas: c, target: chartRef.current };
+          } catch { return null; }
+        };
+      }
+
       // Only re-apply when the integer size actually changes. Sub-pixel layout
       // churn (scrollbar/flex reflow) was firing the observer with effectively
       // identical sizes, and each applyOptions nudged the time scale → the
