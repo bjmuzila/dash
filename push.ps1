@@ -20,6 +20,14 @@ $packageJson.version = $version
 ($packageJson | ConvertTo-Json -Depth 100) | Set-Content $packageJsonPath
 Write-Host "Version: $version" -ForegroundColor Cyan
 
+# Keep package-lock.json synced so VPS `npm ci` never drifts (picomatch etc.)
+Write-Host "Syncing package-lock.json (npm install)..." -ForegroundColor Yellow
+npm install
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "npm install FAILED - nothing committed or pushed." -ForegroundColor Red
+    exit 1
+}
+
 # Gate: build must pass before anything is committed or pushed.
 Write-Host "Running build gate (npm run build)..." -ForegroundColor Yellow
 npm run build
@@ -44,10 +52,11 @@ git checkout main
 Write-Host "Pushed $version to GitHub (main + prod). Deploying on VPS..." -ForegroundColor Cyan
 
 # --- VPS deploy over SSH (key auth, no password) ---
-# NOTE: PowerShell here-strings carry Windows CRLF line endings. Sending those to
-# a remote POSIX shell appends a literal \r to every command (git pull\r, docker
-# compose ... build\r), which breaks each line. We strip CR and pipe the script
-# in over stdin (`bash -s`) rather than passing it as an argv string.
+# Quoting deploy commands as a single ssh argument is fragile on Windows:
+# PowerShell strings carry CRLF and quoting can reintroduce \r, breaking the
+# remote shell (e.g. "unknown docker command: \"compose ps\r\"").
+# Fix: build the command list as a LF-only here-string and pipe it to the
+# remote `bash -s` over stdin — no argv quoting involved, so no CR can sneak in.
 $deployScript = @"
 set -e
 cd /opt/dashboard
@@ -55,7 +64,8 @@ git pull
 docker compose $composeFiles build
 docker compose $composeFiles up -d
 docker compose $composeFiles ps
-"@ -replace "`r", ""
+"@
+$deployScript = $deployScript -replace "`r`n", "`n"
 
 $deployScript | ssh -i $vpsKey -o StrictHostKeyChecking=accept-new $vpsHost "bash -s"
 if ($LASTEXITCODE -ne 0) {
