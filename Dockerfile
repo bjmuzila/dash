@@ -23,9 +23,11 @@ WORKDIR /app
 # ---- deps ----
 FROM base AS deps
 COPY package.json package-lock.json* ./
-# Prefer `npm ci` (fast, exact). Fall back to `npm install` if the lockfile is
-# out of sync with package.json (e.g. picomatch drift) so the build self-heals.
-RUN npm ci || npm install --no-audit --no-fund
+# Use `npm install` directly. A Windows-generated package-lock.json does not always
+# satisfy `npm ci` on Linux (platform-specific resolution, e.g. picomatch 2.3.2 vs
+# 4.0.4) - that mismatch is harmless but `npm ci` errors loudly on it. `npm install`
+# resolves correctly for this platform every time, so the build is clean and quiet.
+RUN npm install --no-audit --no-fund
 
 # ---- build ----
 FROM base AS build

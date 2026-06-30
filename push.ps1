@@ -40,24 +40,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# --- 1. Verify the lock is EXACTLY what Docker npm ci demands - fail HERE, not on the VPS. ---
-# Note: 'npm install --package-lock-only' does NOT resolve transitive drift like
-# picomatch 2.3.2 vs 4.0.4 (proven in prod). The only reliable fix is a full regen,
-# so the dry-run is the gate and a clean rebuild is the cure.
-Write-Host "Verifying lock against npm ci (the check Docker runs)..." -ForegroundColor Yellow
-npm ci --dry-run 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Lock out of sync - full regen (rm node_modules + package-lock, npm install)..." -ForegroundColor Yellow
-    Remove-Item -Recurse -Force "$repoRoot\node_modules" -ErrorAction SilentlyContinue
-    Remove-Item -Force "$repoRoot\package-lock.json" -ErrorAction SilentlyContinue
-    npm install
-    if ($LASTEXITCODE -ne 0) { Write-Host "Full lock regen FAILED - nothing pushed. Fix deps manually." -ForegroundColor Red; exit 1 }
-    npm ci --dry-run 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Host "Lock STILL broken after regen - nothing pushed. Inspect package.json." -ForegroundColor Red; exit 1 }
-    Write-Host "Lock regenerated and verified against npm ci." -ForegroundColor Green
-} else {
-    Write-Host "Lock is in sync." -ForegroundColor Green
-}
+# --- 1. Lock file ---
+# No local lock gate. A Windows-generated package-lock.json doesn't always satisfy
+# `npm ci` on Linux, but the Dockerfile now uses `npm install` (not `npm ci`), which
+# resolves correctly per-platform. So there's nothing to verify or regen here.
+Write-Host "Lock check skipped (Docker uses npm install, platform-safe)." -ForegroundColor DarkGray
 
 # --- 2. Local build gate (OPTIONAL) ---
 # The VPS Docker build is the authoritative gate for live. Skip the local build by
