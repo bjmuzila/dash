@@ -1,0 +1,45 @@
+# Staging Theta Terminal — OPT-IN overlay, never part of the default `up`.
+#
+# Brings up a SECOND Theta Terminal on its own connection slot (mdds_type=STAGE)
+# so dev/test work is isolated from the prod terminal feeding the live site. You
+# can restart / abuse heap / change subscriptions here without touching prod.
+#
+# Run alongside prod:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d theta-terminal-staging
+# Stop just staging:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml stop theta-terminal-staging
+#
+# Point LOCAL dev .env.local at it (via SSH tunnel -L 25513 / -L 25530):
+#   THETA_BASE=http://theta-terminal-staging:25513   # on-box
+#   THETA_BASE=http://127.0.0.1:25513                 # tunneled from your laptop
+#
+# NOTE: consumes a second Theta connection slot. Confirm your Options Pro plan
+# allows two concurrent connections or staging requests will be rejected.
+
+services:
+  theta-terminal-staging:
+    build:
+      context: .
+      dockerfile: deploy/theta/Dockerfile.theta
+    image: dashboard-theta-terminal
+    container_name: theta-terminal-staging
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx1500m
+    mem_limit: 2g
+    volumes:
+      - ./deploy/theta/config-staging.toml:/opt/theta/config-staging.toml:ro
+    # Override the image entrypoint to launch with the STAGE config (REST 25513,
+    # WS 25530, mdds_type=STAGE). Key still passed via --api-key from .env.local.
+    entrypoint: ["sh", "-c", "exec java -jar ThetaTerminalv3.jar --api-key \"$THETA_DATA_API_KEY\" --config config-staging.toml"]
+    ports:
+      - "127.0.0.1:25513:25513"
+      - "127.0.0.1:25530:25530"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -S -qO- http://127.0.0.1:25513/ 2>&1 | grep -q 'HTTP/' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

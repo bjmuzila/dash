@@ -1,0 +1,35 @@
+# Theta Terminal 3 — STAGING instance config.
+# Second INDEPENDENT live connection (separate slot) so dev/test never competes
+# with the prod terminal feeding the live site. Same real data, isolated conn.
+# REST 25513 / WS 25530 to avoid colliding with prod's 25503 / 25520.
+
+host = "0.0.0.0"
+port = 25513
+log_directory = "/tmp"
+
+[env]
+mdds_type = "STAGE"
+
+[auth]
+base_url = "https://nexus-api.thetadata.us/identity/terminal/auth_user"
+
+[mdds_server]
+host = "mdds-01.thetadata.us"
+port = 443
+tls = true
+
+[mdds_stage]
+host = "mdds-stage.thetadata.us"
+port = 443
+tls = true
+
+[fpss]
+enable = true
+reconnect_wait = 1000
+fpss_queue_depth = 1000000
+# WebSocket server port — bumped off prod's 25520.
+ws_port = 25530
+fpss_region = "fpss_nj_hosts"
+fpss_nj_hosts = "nj-a.thetadata.us:20000,nj-a.thetadata.us:20001,nj-b.thetadata.us:20000,nj-b.thetadata.us:20001"
+fpss_stage_hosts = "nj-a.thetadata.us:20100,test-server.thetadata.us:20100,test-server.thetadata.us:20101"
+fpss_dev_hosts = "nj-a.thetadata.us:20200,test-server.thetadata.us:20200,test-server.thetadata.us:20201"
