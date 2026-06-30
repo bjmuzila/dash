@@ -596,6 +596,61 @@ async function main() {
         })();
         return;
       }
+      // Cross-ticker SCANNER: top movers by Δ over a window, stocks-only, with a
+      // vs-today z-score so abnormally-large moves surface (not just big numbers).
+      //   GET /proxy/strike-growth/scanner?window=15&limit=10&sort=z&minZ=0
+      //   window=15|30|60  sort=z|abs  (z = anomaly rank, abs = raw size)
+      if (pathname === '/proxy/strike-growth/scanner' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const win = [15, 30, 60].includes(Number(u.searchParams.get('window'))) ? Number(u.searchParams.get('window')) : 15;
+            const limit = Math.min(100, Number(u.searchParams.get('limit') || 10));
+            const sort = (u.searchParams.get('sort') || 'z').toLowerCase(); // z | abs
+            const minZ = Number(u.searchParams.get('minZ') || 0);
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            // Indices/ETFs excluded — stocks only.
+            const EXCLUDE = ['SPX','NDX','VIX','RUT','XSP','SPY','QQQ','IWM','DIA'];
+            // changes: every snapshot's Δ-vs-(window)-min-ago, per symbol/expiry/strike.
+            // Then per strike: latest Δ + mean/stddev of today's Δ series → z-score.
+            const orderCol = sort === 'abs' ? 'ABS(s.latest_chg)' : 'ABS(s.z)';
+            const sql = `
+              WITH changes AS (
+                SELECT sg.symbol, sg.expiry, sg.strike, sg.ts,
+                       (sg.gex_now - b.gex_now) AS chg
+                FROM strike_growth sg
+                JOIN LATERAL (
+                  SELECT gex_now FROM strike_growth h
+                  WHERE h.date = sg.date AND h.symbol = sg.symbol AND h.expiry = sg.expiry
+                    AND h.strike = sg.strike AND h.ts <= sg.ts - INTERVAL '${win} minutes'
+                  ORDER BY h.ts DESC LIMIT 1
+                ) b ON TRUE
+                WHERE sg.date = $1 AND sg.symbol <> ALL($2)
+              ),
+              stats AS (
+                SELECT symbol, expiry, strike,
+                       avg(chg) AS mean_chg, stddev_pop(chg) AS sd_chg,
+                       count(*) AS n,
+                       (array_agg(chg ORDER BY ts DESC))[1] AS latest_chg,
+                       (array_agg(ts  ORDER BY ts DESC))[1] AS latest_ts
+                FROM changes GROUP BY symbol, expiry, strike
+              )
+              SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.mean_chg, s.sd_chg, s.n,
+                     CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE NULL END AS z
+              FROM stats s
+              WHERE s.n >= 3 AND s.latest_chg IS NOT NULL
+                AND (CASE WHEN s.sd_chg > 0 THEN ABS((s.latest_chg - s.mean_chg)/s.sd_chg) ELSE 0 END) >= $3
+              ORDER BY ${orderCol} DESC NULLS LAST
+              LIMIT $4`;
+            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit]);
+            sendJson(res, 200, { ok: true, window: win, sort, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Watchlist read.  GET /proxy/strike-growth/watchlist
       if (pathname === '/proxy/strike-growth/watchlist' && req.method === 'GET') {
         (async () => {

@@ -477,6 +477,9 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sub ON subscriptions(stripe_subscription_id);
+    -- Set once when the founder thank-you auto-welcome has been emailed to this
+    -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
@@ -796,6 +799,29 @@ export async function upsertSubscription(r: {
       r.cancel_at_period_end ? 1 : 0,
     ]
   );
+}
+
+/**
+ * Atomically claim the one-time founder welcome email for a paid user.
+ * Returns true only on the FIRST successful claim (welcome_email_sent_at was
+ * NULL); subsequent calls return false. The conditional UPDATE makes this safe
+ * against concurrent/duplicate Stripe webhook deliveries — only one caller can
+ * flip NULL → now(), so the email is sent exactly once. Any DB error returns
+ * false so a failure never blocks the webhook (it just skips the email).
+ */
+export async function claimWelcomeEmail(clerkUserId: string): Promise<boolean> {
+  try {
+    const res = await pgQuery(
+      `UPDATE subscriptions
+         SET welcome_email_sent_at = CURRENT_TIMESTAMP
+       WHERE clerk_user_id = $1 AND welcome_email_sent_at IS NULL`,
+      [clerkUserId]
+    );
+    return (res?.rowCount ?? 0) > 0;
+  } catch (err) {
+    console.error("[db] claimWelcomeEmail failed:", err);
+    return false;
+  }
 }
 
 // ── EM Tracker (per-ticker weekly Estimated Move hit/miss record) ───────────

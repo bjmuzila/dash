@@ -583,7 +583,7 @@ export default function OptionsChainPage() {
 
   // Manual load via GO button (no auto-load)
   const doGo = useCallback(() => {
-    if (!tickerInput || !selectedExpiry) return;
+    if (!tickerInput) return; // expiry auto-snaps to the front listing; no picker needed
     const ticker = (tickerInput || "SPX").toUpperCase();
     setRecentTickers((list) => pushRecentTicker(list, ticker));
     const tickerChanged = ticker !== activeTicker;
@@ -914,6 +914,25 @@ export default function OptionsChainPage() {
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
+  // Toolbar button styled to match the right-side SegGroup tiles (height 34,
+  // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
+  const segBtnStyle = (on: boolean): React.CSSProperties => ({
+    height: 34,
+    padding: "0 14px",
+    fontSize: 12,
+    fontWeight: 700,
+    border: on ? `1px solid ${rgba(HT.cyan, 0.35)}` : "1px solid rgba(255,255,255,0.06)",
+    borderRadius: 8,
+    background: on ? `linear-gradient(180deg,${rgba(HT.cyan, 0.18)},${rgba(HT.cyan, 0.05)})` : "rgba(255,255,255,0.04)",
+    color: on ? HT.cyan : HT.text,
+    cursor: "pointer",
+    outline: "none",
+    whiteSpace: "nowrap",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    boxSizing: "border-box",
+  });
+
   return (
     <div
       ref={pageRef}
@@ -963,13 +982,6 @@ export default function OptionsChainPage() {
         </datalist>
 
         <CustomDropdown
-          value={selectedExpiry}
-          options={expiries.map(e => e.value) as string[]}
-          onChange={setSelectedExpiry}
-          formatLabel={v => expiries.find(e => e.value === v)?.label ?? v}
-        />
-
-        <CustomDropdown
           value={displayPercent}
           options={DISPLAY_PERCENTS}
           onChange={setDisplayPercent}
@@ -978,48 +990,20 @@ export default function OptionsChainPage() {
 
         <button
           onClick={doGo}
-          disabled={!tickerInput || !selectedExpiry}
-          style={{
-            fontSize: 10,
-            fontWeight: 800,
-            padding: "4px 12px",
-            border: "1px solid rgba(33,158,188,.5)",
-            borderRadius: 4,
-            background: tickerInput && selectedExpiry ? "rgba(33,158,188,.12)" : "rgba(33,158,188,.04)",
-            color: tickerInput && selectedExpiry ? HT.cyan : "#4a6a88",
-            cursor: tickerInput && selectedExpiry ? "pointer" : "not-allowed",
-            outline: "none",
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-          }}
+          disabled={!tickerInput}
+          style={{ ...segBtnStyle(false), opacity: tickerInput ? 1 : 0.45, cursor: tickerInput ? "pointer" : "not-allowed" }}
         >
           GO
         </button>
 
         {recentTickers.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
             <span style={{ fontSize: 8, fontWeight: 800, color: HT.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>Recent</span>
-            {recentTickers.map((t) => {
-              const active = t === activeTicker;
-              return (
-                <button
-                  key={t}
-                  onClick={() => selectTicker(t)}
-                  title={`Load ${t}`}
-                  style={{
-                    fontSize: 10, fontWeight: 800, padding: "4px 8px",
-                    border: `1px solid ${active ? rgba(HT.cyan, 0.6) : HT.border}`,
-                    borderRadius: 4,
-                    background: active ? rgba(HT.cyan, 0.14) : "rgba(0,0,0,0.4)",
-                    color: active ? HT.cyan : HT.text,
-                    cursor: "pointer", outline: "none", textTransform: "uppercase",
-                    letterSpacing: "0.04em",
-                  }}
-                >
-                  {t}
-                </button>
-              );
-            })}
+            {recentTickers.map((t) => (
+              <button key={t} onClick={() => selectTicker(t)} title={`Load ${t}`} style={segBtnStyle(t === activeTicker)}>
+                {t}
+              </button>
+            ))}
           </div>
         )}
 
@@ -1164,10 +1148,22 @@ export default function OptionsChainPage() {
               const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
               const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
               const rowEmBorder = is1x ? "2px solid rgba(255,255,255,.92)" : is2x ? "2px dashed rgba(255,255,255,.85)" : undefined;
+              // Small label + hover tooltip for the marked rows (ATM / EM bands).
+              let emTag: string | null = null, emTip = "";
+              if (isATM) { emTag = "ATM"; emTip = `At-the-money — nearest strike to spot (${spot ? spot.toFixed(2) : "—"})`; }
+              else if (is1x) {
+                const up = emStrikes != null && strike === emStrikes.u1;
+                emTag = up ? "+1σ" : "−1σ";
+                emTip = `1× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${emLevels.em})` : ""}`;
+              } else if (is2x) {
+                const up = emStrikes != null && strike === emStrikes.u2;
+                emTag = up ? "+2σ" : "−2σ";
+                emTip = `2× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${2 * emLevels.em})` : ""}`;
+              }
               return (
                 <div key={strike} style={{ display: "contents" }}>
                   {/* Shared strike label (sticky left) */}
-                  <div style={{
+                  <div title={emTip || undefined} style={{
                     position: "sticky", left: 0, zIndex: 2,
                     padding: "4px 8px", fontSize: 11, fontWeight: 800, fontFamily: "monospace", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
@@ -1175,7 +1171,16 @@ export default function OptionsChainPage() {
                     borderRight: `1px solid ${HT.border}`,
                     borderTop: rowEmBorder,
                     display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
+                    cursor: emTag ? "help" : undefined,
                   }}>
+                    {emTag && (
+                      <span style={{
+                        fontSize: 8, fontWeight: 800, letterSpacing: "0.04em",
+                        padding: "1px 4px", borderRadius: 4, marginRight: "auto",
+                        background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
+                        color: isATM ? "#0a0e14" : "#ffffff",
+                      }}>{emTag}</span>
+                    )}
                     {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
                   </div>
                   {/* One value cell per expiration */}

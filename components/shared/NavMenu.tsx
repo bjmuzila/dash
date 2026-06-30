@@ -62,7 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Flow", href: "/flow" },
       { label: "Analytics", href: "/analytics" },
       { label: "ES Candles", href: "/es-candles" },
-      { label: "Strike Growth", href: "/strike-growth" },
+      { label: "Scanner", href: "/scanner" },
       { label: "ICT", href: "/ict" },
       { label: "Journal", href: "/trading" },
       { label: "Order Flow", href: "/order-flow" },

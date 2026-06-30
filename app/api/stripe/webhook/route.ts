@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { getSubscriptionByCustomer, upsertSubscription } from "@/lib/db";
+import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, PAID_STATUSES } from "@/lib/db";
+import { lookupUser, sendTransactional } from "@/lib/emails/send";
+import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 
 // Stripe needs the raw, unparsed body to verify the signature, so this route must
 // not run through any body parsing. App-router routes already hand us the raw
@@ -44,6 +46,37 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     price_id: item?.price?.id ?? null,
     current_period_end: item?.current_period_end ?? null,
     cancel_at_period_end: sub.cancel_at_period_end,
+  });
+
+  // Fire the one-time founder thank-you the first time this user becomes paid.
+  // Non-blocking: any failure is logged but never fails the webhook (Stripe
+  // would otherwise retry and we'd risk a double-charge of side effects). The
+  // claim is atomic, so duplicate/overlapping events send exactly one email.
+  if (PAID_STATUSES.has(sub.status)) {
+    try {
+      await maybeSendWelcome(clerkUserId);
+    } catch (err) {
+      console.error("[stripe/webhook] welcome email error:", err);
+    }
+  }
+}
+
+// Send the founder thank-you exactly once per paid user. claimWelcomeEmail
+// atomically flips the not-yet-sent flag; only the first caller proceeds.
+async function maybeSendWelcome(clerkUserId: string): Promise<void> {
+  const claimed = await claimWelcomeEmail(clerkUserId);
+  if (!claimed) return; // already sent (or never-null) — nothing to do
+
+  const user = await lookupUser(clerkUserId);
+  if (!user?.email) {
+    console.warn("[stripe/webhook] welcome: no email for", clerkUserId);
+    return;
+  }
+  await sendTransactional({
+    to: user.email,
+    subject: FOUNDER_THANKYOU_SUBJECT,
+    html: founderThankYouEmail({ firstName: user.firstName, email: user.email }),
+    text: founderThankYouText({ firstName: user.firstName, email: user.email }),
   });
 }
 
