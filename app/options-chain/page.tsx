@@ -941,80 +941,79 @@ export default function OptionsChainPage() {
               if (!c) return true; // keep empty placeholder slots
               return isTradingDay(new Date(c.expiration + "T00:00:00"));
             });
+          // Shared strike axis: ONE strike column on the left, then one
+          // value-only column per expiration. Row N = same strike everywhere.
+          const STRIKE_COL = 64;
           return (
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${renderIdx.length}, minmax(120px, 1fr))`, gap: 10, alignItems: "start" }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
+            borderRadius: 12,
+            overflow: "hidden",
+            border: `1px solid ${HT.border}`,
+            borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
+            background: HT.panelBg,
+          }}>
+            {/* ── Header row: empty strike corner + one expiry header per column ── */}
+            <div style={{ position: "sticky", left: 0, zIndex: 3, padding: "7px 8px", background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
+              Strike
+            </div>
             {renderIdx.map((i) => {
               const col = columns[i];
-              const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
-              // Column total of the active greek across visible strikes.
               const colTotal = col
                 ? visibleStrikes.reduce((s, k) => { const v = valueAt(col, k); return s + (v ?? 0); }, 0)
                 : null;
               return (
-                <div
-                  key={col?.expiration ?? `card-${i}`}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    borderRadius: 12,
-                    overflow: "hidden",
-                    border: `1px solid ${HT.border}`,
-                    borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
-                    background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.08)} 0%, transparent 70%), ${HT.panelBg}`,
-                  }}
-                >
-                  {/* Card header — expiry */}
-                  <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: "7px 8px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}</div>
-                  </div>
-
-                  {/* Total — sits right under the header, before the strikes */}
-                  <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: HT.muted, padding: "6px 8px", borderBottom: `1px solid ${HT.border}`, background: rgba(HT.cyan, 0.04) }}>Total {greekMode.toUpperCase()}</div>
-                  <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", textAlign: "right", padding: "6px 8px", borderBottom: `1px solid ${HT.border}`, background: rgba(HT.cyan, 0.04), color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+                <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}</div>
+                  <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "monospace", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
                   </div>
+                </div>
+              );
+            })}
 
-                  {/* Column sub-headers */}
-                  <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: HT.muted, padding: "4px 8px", borderBottom: `1px solid ${HT.border}` }}>Strike</div>
-                  <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: HT.cyan, textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${HT.border}` }}>{greekMode.toUpperCase()}</div>
-
-                  {/* One pair of cells per shared strike (row N = same strike in every card) */}
-                  {visibleStrikes.map((strike) => {
-                    const isATM = strike === nearestStrike;
-                    const is1x = anyCurrentWeek && colIsCurrentWeek[i] && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
-                    const is2x = anyCurrentWeek && colIsCurrentWeek[i] && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
-                    const emBorder = is1x ? "2px solid rgba(255,255,255,.92)" : is2x ? "2px dashed rgba(255,255,255,.85)" : undefined;
+            {/* ── One row per shared strike ── */}
+            {visibleStrikes.map((strike) => {
+              const isATM = strike === nearestStrike;
+              const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
+              const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
+              const rowEmBorder = is1x ? "2px solid rgba(255,255,255,.92)" : is2x ? "2px dashed rgba(255,255,255,.85)" : undefined;
+              return (
+                <div key={strike} style={{ display: "contents" }}>
+                  {/* Shared strike label (sticky left) */}
+                  <div style={{
+                    position: "sticky", left: 0, zIndex: 2,
+                    padding: "4px 8px", fontSize: 11, fontWeight: 800, fontFamily: "monospace", textAlign: "right",
+                    color: isATM ? "#0a0e14" : "#e4e4e7",
+                    background: isATM ? "#ffb300" : HT.panelBgStrong,
+                    borderRight: `1px solid ${HT.border}`,
+                    borderTop: rowEmBorder,
+                    display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
+                  }}>
+                    {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
+                  </div>
+                  {/* One value cell per expiration */}
+                  {renderIdx.map((i) => {
+                    const col = columns[i];
+                    const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
                     const value = col ? valueAt(col, strike) : null;
                     const isMvc = greekMode === "gex" && col != null && mvcByCol[i] === strike;
                     return (
-                      <div key={strike} style={{ display: "contents" }}>
-                        <div
-                          className={isMvc ? "mvc-peak-cell mvc-peak-left" : undefined}
-                          style={{
-                          padding: "4px 8px", fontSize: 11, fontWeight: 700, fontFamily: "monospace", textAlign: "left",
-                          color: "#e4e4e7",
+                      <div
+                        key={`${strike}-${i}`}
+                        className={isMvc ? "mvc-peak-cell" : undefined}
+                        style={{
+                          padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
+                          color: value == null ? "#3a4a5e" : "#ffffff",
                           background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
-                          borderTop: emBorder,
-                          ...(isMvc ? { borderLeft: "2px solid #ffb300", borderTop: "2px solid #ffb300", borderBottom: "2px solid #ffb300" } : {}),
-                          ...(isATM ? { borderLeft: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
-                        }}>
-                          {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
-                          {isATM && <span style={{ marginLeft: 5, fontSize: 8, fontWeight: 800, letterSpacing: "0.05em", color: "#0a0e14", background: "#ffb300", padding: "1px 4px", borderRadius: 3, verticalAlign: "middle" }}>ATM</span>}
-                        </div>
-                        <div
-                          className={isMvc ? "mvc-peak-cell mvc-peak-right" : undefined}
-                          style={{
-                            padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
-                            color: value == null ? "#3a4a5e" : "#ffffff",
-                            background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
-                            borderTop: emBorder,
-                            ...(isMvc ? { borderRight: "2px solid #ffb300", borderTop: "2px solid #ffb300", borderBottom: "2px solid #ffb300" } : {}),
-                            ...(isATM ? { borderRight: "2px solid #ffffff", borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
-                          }}
-                        >
-                          {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
-                          {value == null ? "·" : fmtMoney(value)}
-                        </div>
+                          borderTop: rowEmBorder,
+                          ...(isMvc ? { border: "2px solid #ffb300" } : {}),
+                          ...(isATM ? { borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
+                        }}
+                      >
+                        {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
+                        {value == null ? "·" : fmtMoney(value)}
                       </div>
                     );
                   })}

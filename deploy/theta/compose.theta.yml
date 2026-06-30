@@ -24,11 +24,14 @@ services:
     # .env.local, so env_file is required for the Terminal to actually see the key.
     env_file:
       - .env.local
-    # No host port publish needed — only the dashboard container talks to it over
-    # the compose network. Publish 25503 to the host only if you want to curl it
-    # from the box directly (uncomment):
-    # ports:
-    #   - "127.0.0.1:25503:25503"
+    # Publish Theta to the VPS host loopback so an SSH tunnel (local dev) and
+    # host curl can reach it at a STABLE address — without this, 25503/25520 are
+    # only reachable on the compose network (container IP changes on recreate).
+    # 25503 = REST, 25520 = live event stream (greeks/quotes). Loopback-only:
+    # not exposed publicly; tunnel in over SSH for local dev.
+    ports:
+      - "127.0.0.1:25503:25503"
+      - "127.0.0.1:25520:25520"
     healthcheck:
       # REST 200 on the v3 root = terminal is up and serving.
       test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:25503/ >/dev/null 2>&1 || exit 1"]
