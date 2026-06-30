@@ -143,7 +143,7 @@ export default function AdminEmailsPage() {
   }
 
   const label = (t: string) => (
-    <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8 }}>
+    <div style={{ fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8 }}>
       {t}
     </div>
   );
@@ -225,7 +225,7 @@ export default function AdminEmailsPage() {
                 onChange={(e) => setCustomTo(e.target.value)}
                 placeholder="email@example.com, another@example.com"
                 rows={3}
-                style={{ ...homeInputStyle, width: "100%", resize: "vertical", fontFamily: "inherit" }}
+                style={{ ...homeInputStyle, fontSize: 15, width: "100%", resize: "vertical", fontFamily: "inherit" }}
               />
             </div>
           )}
@@ -237,7 +237,7 @@ export default function AdminEmailsPage() {
               onChange={(e) => setSubject(e.target.value)}
               placeholder="Subject line"
               maxLength={200}
-              style={{ ...homeInputStyle, width: "100%", fontFamily: "inherit" }}
+              style={{ ...homeInputStyle, fontSize: 15, width: "100%", fontFamily: "inherit" }}
             />
           </div>
 
@@ -249,7 +249,7 @@ export default function AdminEmailsPage() {
               placeholder="<p>Hello…</p>"
               rows={10}
               maxLength={50000}
-              style={{ ...homeInputStyle, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
+              style={{ ...homeInputStyle, fontSize: 15, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
             />
           </div>
 

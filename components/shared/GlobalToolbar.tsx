@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import UserMenu from "./UserMenu";
@@ -73,13 +73,74 @@ function EtClock() {
   );
 }
 
-// ── CB Edge logo → small dropdown (Feedback, etc.) ──
-// Matches the frosted-dock visual language used by NavMenu.
-const LOGO_MENU_ITEMS: { label: string; href: string; emoji: string }[] = [];
+// ── CB Edge logo → Quick Pages dropdown ──
+// Matches the frosted-dock visual language used by NavMenu. The dropdown mirrors
+// the user's pinned Quick Pages (max 4) from localStorage `sidebar-quick-pages-v1`.
+const QUICK_STORAGE_KEY = "sidebar-quick-pages-v1";
+const QUICK_MAX = 4;
+
+// Label + monochrome glyph per route (kept in sync with NavMenu's NAV_ITEM_BY_HREF
+// + ROUTE_SYMBOL). Only routes that can be pinned need an entry here.
+const QUICK_META: Record<string, { label: string; emoji: string }> = {
+  "/home": { label: "Home", emoji: "⌂" },
+  "/mult-greek": { label: "Multi Greek", emoji: "∇" },
+  "/traders-dashboard": { label: "Traders Dashboard", emoji: "⊞" },
+  "/options-chain": { label: "Options Chain", emoji: "⛓" },
+  "/greeks": { label: "Greeks", emoji: "Δ" },
+  "/confidence-score": { label: "Confidence Score", emoji: "✓" },
+  "/fails": { label: "Fails", emoji: "✕" },
+  "/social-media": { label: "Social Media", emoji: "🗨︎" },
+  "/es-candles": { label: "ES Candles", emoji: "⑊" },
+  "/ict": { label: "ICT", emoji: "⌖" },
+  "/economic-calendar": { label: "Economic Calendar", emoji: "◷" },
+  "/em": { label: "Estimated Moves", emoji: "↔" },
+  "/estimated-move": { label: "Estimated Move", emoji: "⇄" },
+  "/analytics": { label: "Analytics", emoji: "▦" },
+  "/premarket": { label: "Premarket", emoji: "☀" },
+  "/trading": { label: "Trading", emoji: "✎" },
+  "/docs": { label: "Help & Docs", emoji: "☰" },
+  "/database": { label: "Database", emoji: "⛁" },
+  "/pricing": { label: "Pricing", emoji: "$" },
+  "/changelog": { label: "Changelog", emoji: "↻" },
+  "/whats-new": { label: "What's New", emoji: "✦" },
+  "/budget": { label: "Budget", emoji: "⚖" },
+  "/dev": { label: "Dev", emoji: "⚙" },
+  "/dev/owner": { label: "Owner", emoji: "★" },
+  "/personal": { label: "Personal", emoji: "☺" },
+  "/personal/todo": { label: "To-Do", emoji: "☑" },
+  "/feedback": { label: "Feedback", emoji: "✉" },
+};
+
+/** Read the user's pinned Quick Pages from localStorage, resolving label + glyph. */
+function useQuickPages() {
+  const [items, setItems] = useState<{ href: string; label: string; emoji: string }[]>([]);
+  const refresh = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(QUICK_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return setItems([]);
+      setItems(
+        parsed
+          .filter((h: unknown): h is string => typeof h === "string" && !!QUICK_META[h])
+          .slice(0, QUICK_MAX)
+          .map((href: string) => ({ href, ...QUICK_META[href] }))
+      );
+    } catch { setItems([]); }
+  }, []);
+  useEffect(() => {
+    refresh();
+    // Re-read when another tab repins (storage only fires cross-tab).
+    const onStorage = (e: StorageEvent) => { if (e.key === QUICK_STORAGE_KEY) refresh(); };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [refresh]);
+  return { items, refresh };
+}
 
 function LogoMenu() {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const { items: quickItems, refresh: refreshQuick } = useQuickPages();
 
   // Close on outside-click and Escape.
   useEffect(() => {
@@ -99,8 +160,8 @@ function LogoMenu() {
   return (
     <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
       <button
-        onClick={() => setOpen((v) => !v)}
-        title="CB Edge"
+        onClick={() => { if (!open) refreshQuick(); setOpen((v) => !v); }}
+        title="CB Edge — Quick Pages"
         aria-haspopup="menu"
         aria-expanded={open}
         style={{
@@ -121,7 +182,7 @@ function LogoMenu() {
         />
       </button>
 
-      {open && LOGO_MENU_ITEMS.length > 0 && (
+      {open && quickItems.length > 0 && (
         <div
           role="menu"
           style={{
@@ -139,7 +200,7 @@ function LogoMenu() {
             zIndex: 60,
           }}
         >
-          {LOGO_MENU_ITEMS.map((item) => (
+          {quickItems.map((item) => (
             <Link
               key={item.href}
               href={item.href}

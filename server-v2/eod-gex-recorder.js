@@ -13,9 +13,9 @@
  * GEX computation:
  *   - $SPX  — reads totalNetGex + spot from in-process market-state via
  *             /proxy/gex (no re-computation; the live header value).
- *   - SPY / QQQ — fetches chain from /api/gex?ticker=<sym> which calls the
- *                 TT proxy, then runs computeGexRows (same gex-calculator.js
- *                 used everywhere) to produce totalNetGex.
+ *   - SPY / QQQ — fetches chain + greeks + OI + volume directly from ThetaData
+ *                 (TT is futures-only: NQU/ESU), then runs computeGexRows (same
+ *                 gex-calculator.js used everywhere) to produce totalNetGex.
  *
  * Guard: if Greeks/OI are missing for most strikes (< MIN_POPULATED_STRIKES
  * strikes with non-zero gamma AND non-zero OI), SKIP the write and log.
@@ -23,6 +23,22 @@
  */
 
 const { computeGexRows, totalNetGex } = require('./computation/gex-calculator');
+const {
+  fetchChainTheta,
+  fetchGreeksTheta,
+  fetchOpenInterestTheta,
+  fetchVolumeTheta,
+  fetchStockQuoteTheta,
+  fetchOiHistoryTheta,
+  fetchGreeksEodHistoryTheta,
+  fetchEodHistoryTheta,
+  fetchIndexEodTheta,
+  fetchStockEodTheta,
+} = require('./proxy-thetadata');
+const { bsGreeks, impliedVol, yearsToExpiry } = require('./computation/utils');
+
+// `exp|strike|type` key matching proxy-thetadata's keyOf()
+const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
 
 // Symbol → /proxy/gex ticker key used in the API.
 // $SPX uses the live market-state (no re-fetch needed).
@@ -39,6 +55,14 @@ const MIN_POPULATED_STRIKES = 20;
 // EOD window: 15:55–16:05 ET (minutes-since-midnight)
 const WINDOW_OPEN_MINS  = 15 * 60 + 55; // 955
 const WINDOW_CLOSE_MINS = 16 * 60 +  5; // 965
+
+// Morning settled-OI window: OPRA settled OI posts ~06:30 ET. We re-run the
+// PRIOR trading day every 30 min from 06:30 until 09:30 ET, overwriting that
+// date's row with settled-OI GEX. At/after 09:30, if the value matches the
+// previous poll (OI stopped moving), we "bake it in" and stop re-running.
+const AM_OPEN_MINS    =  6 * 60 + 30; // 390  (06:30)
+const AM_BAKE_MINS    =  9 * 60 + 30; // 570  (09:30 — bake-in checkpoint)
+const AM_POLL_EVERY_MS = 30 * 60 * 1000; // 30 min
 
 // Market holidays (ET dates) — keep in sync with mvc-auto-snapshot.js
 const MARKET_HOLIDAYS = new Set([
@@ -110,6 +134,33 @@ function isEodWindow() {
   return mins >= WINDOW_OPEN_MINS && mins <= WINDOW_CLOSE_MINS;
 }
 
+function isTradingDay(dateStr, weekday) {
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  return !MARKET_HOLIDAYS.has(dateStr);
+}
+
+// Previous trading day for a YYYY-MM-DD (skips weekends + holidays).
+function prevTradingDay(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  for (let i = 0; i < 10; i++) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    const iso = d.toISOString().slice(0, 10);
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(d);
+    if (isTradingDay(iso, wd)) return iso;
+  }
+  return null;
+}
+
+// True only inside the morning settled-OI poll window (06:30–09:30 ET) on a
+// trading day. The 09:30 tick is the bake-in checkpoint (still returns true).
+function isAmWindow() {
+  const { hour, minute, weekday } = etParts();
+  const today = etDateStr();
+  if (!isTradingDay(today, weekday)) return false;
+  const mins = hour * 60 + minute;
+  return mins >= AM_OPEN_MINS && mins <= AM_BAKE_MINS;
+}
+
 // ── Data fetchers ─────────────────────────────────────────────────────────────
 
 /**
@@ -139,76 +190,49 @@ async function fetchSpxState(base) {
 }
 
 /**
- * Fetch chain for SPY/QQQ via /api/gex?ticker=<sym>, compute GEX with
- * gex-calculator.js (same function as the dashboard header uses).
- * Returns null if the chain is not ready.
+ * Fetch chain for SPY/QQQ directly from ThetaData (TT is futures-only now),
+ * compute GEX with gex-calculator.js (same function the dashboard header uses).
+ * Pulls the nearest expiry's chain + greeks (gamma/delta) + OPRA OI + day
+ * volume, then runs computeGexRows. Returns null if the chain is not ready.
  */
-async function fetchChainGex(base, chainTicker) {
-  // /api/gex routes to /proxy/gex (market-state), but we need the chain for
-  // SPY/QQQ. Use /api/chains which proxies to TT and returns the raw chain.
-  // Get the first available expiration first.
-  const expRes = await fetch(`${base}/api/expirations?ticker=${encodeURIComponent(chainTicker)}`, {
-    cache: 'no-store',
-    headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
-  });
-  if (!expRes.ok) throw new Error(`expirations for ${chainTicker} returned ${expRes.status}`);
-  const expJson = await expRes.json();
+async function fetchChainGex(_base, chainTicker) {
+  // 1) Spot from Theta stock snapshot.
+  const quote = await fetchStockQuoteTheta(chainTicker);
+  const spot = Number(quote?.last ?? quote?.mark ?? 0);
+  if (!(spot > 0)) throw new Error(`spot is 0 for ${chainTicker} (Theta quote)`);
 
-  // expirations may be at top-level array or nested
-  const expirations = Array.isArray(expJson) ? expJson
-    : Array.isArray(expJson.expirations) ? expJson.expirations
-    : Array.isArray(expJson.data) ? expJson.data
-    : [];
-  if (!expirations.length) throw new Error(`no expirations for ${chainTicker}`);
+  // 2) Chain → nearest future-or-today expiry.
+  const { contracts, expirations } = await fetchChainTheta(chainTicker);
+  if (!expirations?.length) throw new Error(`no expirations for ${chainTicker}`);
+  const expiry = expirations[0]; // sorted ascending in fetchChainTheta
+  const expContracts = contracts.filter((c) => c.expiration === expiry);
+  if (!expContracts.length) throw new Error(`empty chain for ${chainTicker} ${expiry}`);
 
-  // Use the nearest expiry (first in list, assumed sorted ascending)
-  const expiry = typeof expirations[0] === 'string' ? expirations[0] : expirations[0].expirationDate ?? expirations[0];
+  // 3) Greeks + OI + volume snapshots for that expiry (parallel).
+  const [greekMap, oiMap, volMap] = await Promise.all([
+    fetchGreeksTheta(chainTicker, expiry).catch(() => new Map()),
+    fetchOpenInterestTheta(chainTicker, expiry).catch(() => new Map()),
+    fetchVolumeTheta(chainTicker, expiry).catch(() => new Map()),
+  ]);
 
-  const chainRes = await fetch(
-    `${base}/api/chains?ticker=${encodeURIComponent(chainTicker)}&expiration=${encodeURIComponent(expiry)}&range=all`,
-    {
-      cache: 'no-store',
-      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
-    }
-  );
-  if (!chainRes.ok) throw new Error(`chains for ${chainTicker} returned ${chainRes.status}`);
-  const chainJson = await chainRes.json();
-
-  // The chain endpoint returns { data: { items: [...], underlyingPrice } }
-  const items = chainJson?.data?.items ?? chainJson?.items ?? [];
-  const spot = Number(chainJson?.data?.underlyingPrice ?? chainJson?.underlyingPrice ?? 0);
-
-  if (!items.length) throw new Error(`empty chain for ${chainTicker}`);
-  if (!(spot > 0)) throw new Error(`spot is 0 for ${chainTicker}`);
-
-  // Flatten into { strike, side, oi, volume, gamma, delta } rows (same shape
-  // gex-calculator.js expects from the market-data event pipeline).
+  // 4) Flatten into { strike, side, oi, volume, gamma, delta } rows.
   const flatRows = [];
-  for (const item of items) {
-    const strike = Number(item.strikePrice ?? item.strike ?? 0);
-    if (!(strike > 0)) continue;
-
-    // Calls
-    const call = item.call ?? item;
-    const cOI    = Number(call.openInterest ?? 0);
-    const cVol   = Number(call.volume       ?? 0);
-    const cGamma = Math.abs(Number(call.gamma ?? 0));
-    const cDelta = Number(call.delta ?? 0);
-    if (cGamma > 0 || cOI > 0) {
-      flatRows.push({ strike, side: 'call', oi: cOI, volume: cVol, gamma: cGamma, delta: cDelta });
-    }
-
-    // Puts
-    const put = item.put ?? null;
-    if (put) {
-      const pOI    = Number(put.openInterest ?? 0);
-      const pVol   = Number(put.volume       ?? 0);
-      const pGamma = Math.abs(Number(put.gamma ?? 0));
-      const pDelta = Math.abs(Number(put.delta ?? 0));
-      if (pGamma > 0 || pOI > 0) {
-        flatRows.push({ strike, side: 'put', oi: pOI, volume: pVol, gamma: pGamma, delta: pDelta });
-      }
-    }
+  for (const c of expContracts) {
+    const k = keyOf(c.expiration, c.strike, c.type);
+    const g = greekMap.get(k) || {};
+    const oi = Number(oiMap.get(k)?.oi ?? 0);
+    const vol = Number(volMap.get(k) ?? 0);
+    const gamma = Math.abs(Number(g.gamma ?? 0));
+    const delta = Math.abs(Number(g.delta ?? 0));
+    if (!(gamma > 0) && !(oi > 0)) continue;
+    flatRows.push({
+      strike: c.strike,
+      side: c.type === 'C' ? 'call' : 'put',
+      oi,
+      volume: vol,
+      gamma,
+      delta,
+    });
   }
 
   if (!flatRows.length) throw new Error(`no valid option rows for ${chainTicker}`);
@@ -283,6 +307,152 @@ async function collectEodGex(base, opts = {}) {
   return { date, saved };
 }
 
+// ── Morning settled-OI recompute (historical, all from Theta) ───────────────────
+
+// Resolve the EOD spot for a symbol on a past date.
+async function fetchSettleSpot(symbol, date) {
+  if (symbol === '$SPX') return fetchIndexEodTheta('SPX', date);
+  return fetchStockEodTheta(symbol, date); // SPY / QQQ
+}
+
+// Recompute total net GEX for ONE symbol on a PAST date entirely from Theta
+// history: settled OPRA OI + EOD greeks + EOD volume + settle spot. Returns
+// { totalNetGex, spot } or throws if data is incomplete.
+async function computeHistoricalEodGex(symbol, date) {
+  const root = symbol === '$SPX' ? '$SPX' : symbol; // thetaRoot handles $SPX→SPXW
+  // Wide strike band so the EOD TOTAL isn't truncated to ±40 around spot.
+  const SR = { strikeRange: 500 };
+  const [spot, oiMap, greekMap, eodRows] = await Promise.all([
+    fetchSettleSpot(symbol, date),
+    fetchOiHistoryTheta(root, date, SR).catch(() => new Map()),
+    fetchGreeksEodHistoryTheta(root, date, SR).catch(() => new Map()),
+    fetchEodHistoryTheta(root, date, SR).catch(() => []),
+  ]);
+
+  if (!(Number(spot) > 0)) throw new Error(`${symbol}: no settle spot for ${date}`);
+
+  // EOD price+volume map keyed exp|strike|type from EOD history rows.
+  // Price (mid, falling back to close) lets us back out IV for the BS fallback
+  // when Theta has no historical greek for a strike.
+  const eodMap = new Map();
+  for (const r of eodRows) {
+    const bid = Number(r.bid), ask = Number(r.ask), close = Number(r.close);
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : (close > 0 ? close : 0);
+    eodMap.set(keyOf(r.expiration, r.strike, r.type), { volume: Number(r.volume) || 0, price: mid });
+  }
+
+  // Anchor T to the settle instant of `date` (~16:00 ET ≈ 20:00 UTC), NOT now,
+  // so historical BS greeks use the correct time-to-expiry.
+  const asOf = new Date(`${date}T20:00:00Z`).getTime();
+
+  let bsFilled = 0;
+  const flatRows = [];
+  for (const [k, oi] of oiMap) {
+    const [expiration, strikeStr, type] = k.split('|');
+    const strike = Number(strikeStr);
+    if (!(strike > 0)) continue;
+
+    const g = greekMap.get(k) || {};
+    const eod = eodMap.get(k) || {};
+    let gamma = Math.abs(Number(g.gamma ?? 0));
+    let delta = Math.abs(Number(g.delta ?? 0));
+
+    // BS fallback: Theta had no historical greek for this strike. Back out IV
+    // from the EOD price and compute gamma/delta with the same bsGreeks the
+    // live feed uses. T from expiry; r default inside bsGreeks.
+    if (!(gamma > 0) && Number(eod.price) > 0) {
+      const T = yearsToExpiry(expiration, asOf);
+      if (T > 0) {
+        const sigma = impliedVol({ price: eod.price, S: Number(spot), K: strike, T, type });
+        if (sigma > 0) {
+          const bg = bsGreeks({ S: Number(spot), K: strike, T, sigma, type });
+          gamma = Math.abs(bg.gamma);
+          delta = Math.abs(bg.delta);
+          if (gamma > 0) bsFilled++;
+        }
+      }
+    }
+
+    const oiN = Number(oi) || 0;
+    if (!(gamma > 0) && !(oiN > 0)) continue;
+    flatRows.push({
+      strike,
+      side: type === 'C' ? 'call' : 'put',
+      oi: oiN,
+      volume: Number(eod.volume ?? 0),
+      gamma,
+      delta,
+    });
+  }
+  if (bsFilled > 0) console.log(`[eod-gex/am] ${symbol} ${date} — BS-filled gamma for ${bsFilled} strikes`);
+
+  if (!flatRows.length) throw new Error(`${symbol}: no historical rows for ${date}`);
+
+  const gexRows = computeGexRows(flatRows, Number(spot));
+  const populated = gexRows.filter(
+    (r) => (r.callGamma > 0 || r.putGamma > 0) && (r.callOI > 0 || r.putOI > 0)
+  ).length;
+  if (populated < MIN_POPULATED_STRIKES) {
+    throw new Error(`${symbol}: only ${populated} populated strikes for ${date} — skip`);
+  }
+  return { totalNetGex: totalNetGex(gexRows), spot: Number(spot) };
+}
+
+// Per-(date|symbol) bake-in state. Once baked, the symbol is skipped for that
+// date. `last` holds the previous poll's total so we can detect "no change".
+const _amState = new Map(); // key `date|symbol` -> { last:number, baked:boolean }
+
+// Run the morning settled-OI pass for the prior trading day. Overwrites each
+// symbol's row; at/after 09:30 ET, if a symbol's total matches the previous
+// poll, marks it baked (stops re-running it for that date).
+async function collectMorningEodGex(opts = {}) {
+  const force = !!opts.force;
+  if (!force && !isAmWindow()) return;
+
+  const today = etDateStr();
+  const date = opts.date || prevTradingDay(today);
+  if (!date) { console.warn('[eod-gex/am] no prior trading day resolved'); return; }
+
+  const { hour, minute } = etParts();
+  const atBakeCheckpoint = (hour * 60 + minute) >= AM_BAKE_MINS;
+  const computedAt = new Date().toISOString();
+
+  const done = [];
+  for (const { symbol } of EOD_SYMBOLS) {
+    const sk = `${date}|${symbol}`;
+    const st = _amState.get(sk) || { last: null, baked: false };
+    if (st.baked) { done.push(`${symbol}(baked)`); continue; }
+
+    try {
+      const { totalNetGex: tng, spot } = await computeHistoricalEodGex(symbol, date);
+      if (!Number.isFinite(tng) || !(spot > 0)) {
+        console.warn(`[eod-gex/am] ${symbol} ${date}: invalid tng=${tng} spot=${spot} — skip`);
+        continue;
+      }
+
+      await upsertEodGex(date, symbol, tng, spot, computedAt);
+
+      // Bake-in: at/after 09:30, if unchanged from the previous poll, freeze it.
+      const unchanged = st.last != null && Math.abs(st.last - tng) < 1; // ~$1 of GEX
+      const baked = atBakeCheckpoint && unchanged;
+      _amState.set(sk, { last: tng, baked });
+
+      done.push(`${symbol}${baked ? '(baked)' : ''}`);
+      console.log(
+        `[eod-gex/am] ${symbol} ${date} — settled GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}${baked ? '  [BAKED]' : ''}`
+      );
+    } catch (e) {
+      console.warn(`[eod-gex/am] ${symbol} ${date} — ${e.message}`);
+    }
+  }
+
+  // Memory hygiene: drop state for dates older than the one we just processed.
+  for (const k of _amState.keys()) {
+    if (k.split('|')[0] < date) _amState.delete(k);
+  }
+  return { date, done };
+}
+
 // ── Scheduler ────────────────────────────────────────────────────────────────
 // Polls every minute. When inside the 3:55–4:05 ET window on a trading day,
 // records once per symbol. A second tick inside the window upserts (overwrites),
@@ -292,25 +462,35 @@ async function collectEodGex(base, opts = {}) {
 // an upsert so the latest reading wins. The guard in isEodWindow() gates it.
 
 let _pollTimer = null;
+let _amTimer = null;
 
 function startEodGexRecorder(port) {
   const base = `http://localhost:${port}`;
 
-  console.log('[eod-gex] enabled — polling every 60s, fires in 3:55–4:05 ET window');
+  console.log('[eod-gex] enabled — PM: 60s poll in 3:55–4:05 ET (provisional OI); AM: 30min poll 6:30–9:30 ET recomputes prior day w/ settled OI, bakes in at 9:30');
 
-  const tick = async () => {
+  // PM provisional pass (live intraday OI at the close).
+  const pmTick = async () => {
     if (!isEodWindow()) return;
-    try {
-      await collectEodGex(base);
-    } catch (e) {
-      console.warn('[eod-gex] tick error:', e.message);
-    }
+    try { await collectEodGex(base); }
+    catch (e) { console.warn('[eod-gex] pm tick error:', e.message); }
   };
-
-  _pollTimer = setInterval(() => { void tick(); }, 60_000);
+  _pollTimer = setInterval(() => { void pmTick(); }, 60_000);
   _pollTimer.unref?.();
 
-  return () => { if (_pollTimer) clearInterval(_pollTimer); };
+  // AM settled pass (overwrite prior day with settled OPRA OI; bake-in at 9:30).
+  const amTick = async () => {
+    if (!isAmWindow()) return;
+    try { await collectMorningEodGex(); }
+    catch (e) { console.warn('[eod-gex] am tick error:', e.message); }
+  };
+  _amTimer = setInterval(() => { void amTick(); }, AM_POLL_EVERY_MS);
+  _amTimer.unref?.();
+
+  return () => {
+    if (_pollTimer) clearInterval(_pollTimer);
+    if (_amTimer) clearInterval(_amTimer);
+  };
 }
 
-module.exports = { startEodGexRecorder, collectEodGex };
+module.exports = { startEodGexRecorder, collectEodGex, collectMorningEodGex, computeHistoricalEodGex };

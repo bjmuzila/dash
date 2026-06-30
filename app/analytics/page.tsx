@@ -762,13 +762,25 @@ function ConfidenceCard() {
                           : { text: "pending", color: T.muted })
                       : outcomeChip(seg?.outcome ?? null);
                   return (
-                    <Row key={cp.label} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
-                      <span style={{ fontSize: 13, fontFamily: "monospace", color: T.muted, minWidth: 46 }}>{cp.label}</span>
-                      <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
-                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: chip.color, minWidth: 78, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <div
+                      key={cp.label}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "46px 64px 1fr",
+                        alignItems: "center",
+                        columnGap: 8,
+                        borderBottom: `1px solid ${T.border}`,
+                        paddingBottom: 6,
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontFamily: "monospace", color: T.muted }}>{cp.label}</span>
+                      <span style={{ textAlign: "right" }}>
+                        <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
+                      </span>
+                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: chip.color, textAlign: "right", whiteSpace: "nowrap" }}>
                         {chip.text}
                       </span>
-                    </Row>
+                    </div>
                   );
                 })}
               </div>

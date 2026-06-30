@@ -41,3 +41,42 @@ services:
     depends_on:
       theta-terminal:
         condition: service_healthy
+
+  # Theta Terminal (options/index data source). Previously run standalone via
+  # `docker run` on the VPS, which left it with NO JVM heap cap → it OOM'd on the
+  # default heap mid-session and greeks coverage collapsed (see
+  # theta-terminal-oom-heap). Defined here so a single `docker compose up -d`
+  # brings it up WITH the heap cap + memory backstop every time.
+  theta-terminal:
+    build:
+      context: .
+      dockerfile: deploy/theta/Dockerfile.theta
+    image: dashboard-theta-terminal
+    container_name: theta-terminal
+    restart: unless-stopped
+    # Read the Theta key (and the rest) from .env.local directly — the
+    # `environment:` interpolation form pulls from compose's .env/shell, NOT
+    # .env.local, so env_file is required for the Terminal to see the key.
+    env_file:
+      - .env.local
+    environment:
+      # Cap the JVM heap so the Terminal garbage-collects instead of OOM-ing.
+      # ~1.5g heap under a 2g container limit leaves headroom for non-heap/JVM
+      # overhead. Drop to -Xmx1024m if the box is RAM-tight (check `free -m`).
+      JAVA_TOOL_OPTIONS: -Xmx1500m
+    # Hard memory backstop. If the JVM ever blows past the heap cap, the kernel
+    # OOM-kills just this container (restart: unless-stopped brings it back)
+    # instead of the whole box going into swap-death.
+    mem_limit: 2g
+    # Publish to host loopback so an SSH tunnel (local dev) and host curl reach a
+    # STABLE address. 25503 = REST, 25520 = live event stream. Loopback-only.
+    ports:
+      - "127.0.0.1:25503:25503"
+      - "127.0.0.1:25520:25520"
+    healthcheck:
+      # REST 200 on the v3 root = terminal is up and serving.
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:25503/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s   # runtime jar download + auth handshake takes a bit

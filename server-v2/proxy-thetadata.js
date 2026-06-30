@@ -363,6 +363,18 @@ async function fetchIndexEodTheta(symbol, date) {
   return close > 0 ? close : null;
 }
 
+// EOD close for an equity (SPY/QQQ) on a past date. Mirrors fetchIndexEodTheta
+// but on the stock history route. Returns the close, or null if unavailable.
+async function fetchStockEodTheta(symbol, date) {
+  const d = ymdCompact(date);
+  const json = await thetaGet(
+    `/v3/stock/history/eod?symbol=${encodeURIComponent(String(symbol).toUpperCase())}&start_date=${d}&end_date=${d}`,
+  );
+  const rows = rowsFromV3(json);
+  const close = Number(rows[0]?.close);
+  return close > 0 ? close : null;
+}
+
 // ---------------------------------------------------------------------------
 // Streaming symbology helpers
 // ---------------------------------------------------------------------------
@@ -608,6 +620,7 @@ module.exports = {
   fetchEodHistoryTheta,
   fetchOiHistoryTheta,
   fetchIndexEodTheta,
+  fetchStockEodTheta,
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,
