@@ -111,9 +111,8 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
         <span style={{ fontSize: 10, fontWeight: 500, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 100px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 9, fontWeight: 500, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 9, fontWeight: 500, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
-        <span>Plan</span>
         <span>Amount</span>
         <span>Status</span>
         <span>Renews</span>
@@ -128,7 +127,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
             key={s.id}
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 120px 100px 90px 90px",
+              gridTemplateColumns: "1fr 80px 90px 90px",
               gap: 8,
               padding: "8px 16px",
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
@@ -136,9 +135,15 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
               alignItems: "center",
             }}
           >
-            <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</span>
-            <span style={{ color: T.muted, fontSize: 11 }}>{s.plan_name}</span>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "monospace" }}>{fmtMoney(s.amount)}/mo</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</div>
+              {s.plan_name && s.plan_name !== "—" && (
+                <div style={{ fontSize: 10, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
+                  {s.plan_name.startsWith("price_") ? s.plan_name.slice(0, 18) + "…" : s.plan_name}
+                </div>
+              )}
+            </div>
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "monospace", fontSize: 12 }}>{fmtMoney(s.amount)}/mo</span>
             <span>
               <span style={{
                 fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
@@ -149,7 +154,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 {s.status}
               </span>
             </span>
-            <span style={{ color: T.muted, fontSize: 11 }}>{fmtDateShort(s.current_period_end)}</span>
+            <span style={{ color: T.text, fontSize: 11 }}>{fmtDateShort(s.current_period_end)}</span>
           </div>
         ))}
       </div>

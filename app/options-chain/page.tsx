@@ -169,6 +169,19 @@ const DATA_MODE_LABEL: Record<DataMode, string> = {
   "vol-only": "Vol Only",
 };
 
+// Change-mode: "live" = normal greek values; 15/30/60 = Δ in front-expiry
+// volume-GEX vs N minutes ago, sourced from the strike_growth table (same logic
+// as the /strike-growth tracker). Only the FRONT-expiry column carries history;
+// other expiry columns fall back to live values with a muted look.
+const CHANGE_MODES = ["live", "15", "30", "60"] as const;
+type ChangeMode = typeof CHANGE_MODES[number];
+const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
+  live: "Live",
+  "15": "15m Δ",
+  "30": "30m Δ",
+  "60": "60m Δ",
+};
+
 // Number of expirations shown side-by-side across the matrix.
 const EXP_COLUMNS = 14;
 
@@ -440,6 +453,12 @@ export default function OptionsChainPage() {
   const [loadProgress, setLoadProgress] = useState(0); // 0-100
   const [greekMode, setGreekMode] = useState<GreekMode>("gex");
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  // Change-mode (Live / 15 / 30 / 60). When not "live", the front-expiry column
+  // shows Δ-vs-N-min-ago from strike_growth instead of the live greek.
+  const [changeMode, setChangeMode] = useState<ChangeMode>("live");
+  // strike → chg$ map for the active ticker's front expiry (from /proxy/strike-growth).
+  const [changeMap, setChangeMap] = useState<Map<number, number>>(new Map());
+  const [changeMeta, setChangeMeta] = useState<{ expiry: string | null; hasData: boolean }>({ expiry: null, hasData: false });
   // Live mirror so loadChain (recreated each render) reads the current toggle.
   const dataModeRef = useRef<DataMode>("oi-vol");
   useEffect(() => { dataModeRef.current = dataMode; }, [dataMode]);
@@ -810,6 +829,53 @@ export default function OptionsChainPage() {
     return () => { cancelled = true; };
   }, [activeTicker, refreshSeed]);
 
+  // Load the strike→change map for the active ticker when a change mode is on.
+  // Reuses /proxy/strike-growth which returns chg15/chg30/chg60 per (front-expiry)
+  // strike. Refetched on ticker change, mode change, and each refresh.
+  useEffect(() => {
+    if (changeMode === "live") { setChangeMap(new Map()); setChangeMeta({ expiry: null, hasData: false }); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/proxy/strike-growth?symbol=${encodeURIComponent(activeTicker)}&limit=1000`, { cache: "no-store" });
+        const text = await res.text();
+        let j: any;
+        try { j = JSON.parse(text); } catch { j = null; }
+        if (cancelled) return;
+        if (!j?.ok || !Array.isArray(j.rows) || !j.rows.length) {
+          setChangeMap(new Map()); setChangeMeta({ expiry: null, hasData: false });
+          return;
+        }
+        const key = changeMode === "15" ? "chg15" : changeMode === "30" ? "chg30" : "chg60";
+        const m = new Map<number, number>();
+        let exp: string | null = null;
+        for (const r of j.rows) {
+          if (exp == null) exp = r.expiry ?? null;
+          const v = r[key];
+          if (v != null) m.set(Number(r.strike), Number(v));
+        }
+        setChangeMap(m);
+        setChangeMeta({ expiry: exp, hasData: m.size > 0 });
+      } catch {
+        if (!cancelled) { setChangeMap(new Map()); setChangeMeta({ expiry: null, hasData: false }); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [changeMode, activeTicker, refreshSeed]);
+
+  // Heatmap scale for the change column (its own min/max so Δ colors read well).
+  const changeColScale = useMemo(() => {
+    if (changeMode === "live" || !changeMeta.hasData) return { max: 1, top3: [] as number[] };
+    const vals: number[] = [];
+    visibleStrikes.forEach(s => {
+      if (s == null) return;
+      const v = changeMap.get(s);
+      if (v != null && v !== 0) vals.push(Math.abs(v));
+    });
+    const sorted = [...vals].sort((a, b) => b - a);
+    return { max: sorted[0] ?? 1, top3: sorted.slice(0, 3) };
+  }, [changeMode, changeMeta.hasData, changeMap, visibleStrikes]);
+
   // The 4 EM band strikes (snapped to visible strikes): 1× down/up, 2× down/up.
   // Null when no EM is available.
   const emStrikes = useMemo(() => {
@@ -985,6 +1051,20 @@ export default function OptionsChainPage() {
           onChange={(v) => setGreekMode(v as GreekMode)}
         />
 
+        <span style={{ color: HT.border }}>|</span>
+
+        <SegGroup
+          options={CHANGE_MODES.map(m => ({ label: CHANGE_MODE_LABEL[m], value: m }))}
+          active={changeMode}
+          onChange={(v) => setChangeMode(v as ChangeMode)}
+        />
+        {changeMode !== "live" && (
+          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+            color: changeMeta.hasData ? HT.orange : HT.muted }}>
+            {changeMeta.hasData ? `Δ front exp ${changeMeta.expiry ?? ""}` : "no history (not on watchlist)"}
+          </span>
+        )}
+
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: HT.green }} />
           <span style={{ fontSize: 9, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
@@ -1042,12 +1122,16 @@ export default function OptionsChainPage() {
             </div>
             {renderIdx.map((i) => {
               const col = columns[i];
+              const isChangeCol = changeMode !== "live" && changeMeta.hasData && col != null &&
+                changeMeta.expiry != null && col.expiration === changeMeta.expiry;
               const colTotal = col
-                ? visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0)
+                ? (isChangeCol
+                    ? visibleStrikes.reduce((s, k) => s + (k == null ? 0 : (changeMap.get(k) ?? 0)), 0)
+                    : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
                 : null;
               return (
-                <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}</div>
+                <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
                   <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "monospace", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
                   </div>
@@ -1091,8 +1175,16 @@ export default function OptionsChainPage() {
                   {renderIdx.map((i) => {
                     const col = columns[i];
                     const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
-                    const value = col ? valueAt(col, strike) : null;
-                    const isMvc = greekMode === "gex" && col != null && mvcByCol[i] === strike;
+                    // Change-mode: override the FRONT-expiry column with Δ-vs-N-min
+                    // from strike_growth; leave other columns on their live value.
+                    const isChangeCol =
+                      changeMode !== "live" && changeMeta.hasData && col != null &&
+                      changeMeta.expiry != null && col.expiration === changeMeta.expiry;
+                    const value = isChangeCol
+                      ? (changeMap.has(strike) ? changeMap.get(strike)! : null)
+                      : (col ? valueAt(col, strike) : null);
+                    const cellScale = isChangeCol ? changeColScale : scale;
+                    const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[i] === strike;
                     return (
                       <div
                         key={`${strike}-${i}`}
@@ -1100,7 +1192,7 @@ export default function OptionsChainPage() {
                         style={{
                           padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
                           color: value == null ? "#3a4a5e" : "#ffffff",
-                          background: value != null ? metricBg(value, scale.max, intensity, scale.top3) : "transparent",
+                          background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
                           ...(isMvc ? { border: "2px solid #ffb300" } : {}),
                           ...(isATM ? { borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
