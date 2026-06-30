@@ -298,6 +298,27 @@ function isSessionLive(): boolean {
   return mins >= 9 * 60 + 30 && mins < 16 * 60;
 }
 
+// SPX-only extended feed: SPX keeps updating ~24/7 across the trading WEEK
+// (Sunday 8pm ET → Friday 4pm ET), EXCEPT a daily 4–6pm ET maintenance window
+// where nothing refreshes. Other tickers freeze outside RTH (isSessionLive).
+// Used to gate the chain poll so SPX stays live after hours but equities don't.
+function isSpxFeedLive(): boolean {
+  const et = etToday();
+  const dow = et.getDay();              // 0=Sun .. 6=Sat
+  const mins = et.getHours() * 60 + et.getMinutes();
+  // Daily maintenance break 16:00–18:00 ET — no updates any day.
+  if (mins >= 16 * 60 && mins < 18 * 60) return false;
+  // Saturday: closed all day.
+  if (dow === 6) return false;
+  // Sunday: only open from 20:00 ET onward (futures/Globex reopen).
+  if (dow === 0) return mins >= 20 * 60;
+  // Friday: closes at 16:00 ET (the 16:00 break above already blocks 16–18;
+  // after 18:00 Fri it stays closed for the weekend).
+  if (dow === 5) return mins < 16 * 60;
+  // Mon–Thu: open all day except the 16–18 break handled above.
+  return true;
+}
+
 function buildExpiries() {
   const today = etToday();
   const list: Array<{ value: string; label: string }> = [];
@@ -635,15 +656,22 @@ export default function OptionsChainPage() {
     }
   }, []);
 
-  // Poll the active matrix every 60s during the live session so the 7-expiration
-  // GEX values track intraday OI/volume + greek drift instead of staying frozen.
+  // Poll the active matrix every 60s so the 14-expiration GEX values track
+  // intraday OI/volume + greek drift. Gating differs by ticker:
+  //   • SPX  → isSpxFeedLive(): keeps updating ~24/7 across the trading week
+  //            (Sun 8pm–Fri 4pm ET, minus the 4–6pm daily maintenance break).
+  //   • all other tickers → isSessionLive(): RTH only. After the close their
+  //            greeks just stay STALE (we stop polling — no overwrite) until the
+  //            next session brings fresh OI. No point re-fetching frozen books.
   useEffect(() => {
     const id = setInterval(() => {
       const exp = selectedExpiryRef.current;
-      // Poll WITHOUT noCache so the server chain cache can absorb repeats across
-      // clients; the cache TTL still refreshes intraday OI/greek drift. Bypassing
-      // the cache every 60s per open tab was hammering TT upstream.
-      if (exp && activeTicker && isSessionLive()) loadChain(activeTicker, exp, false);
+      if (!exp || !activeTicker) return;
+      const isSpx = activeTicker.toUpperCase() === "SPX";
+      const live = isSpx ? isSpxFeedLive() : isSessionLive();
+      // Poll WITHOUT noCache so the server chain cache absorbs repeats across
+      // clients; the cache TTL still refreshes intraday OI/greek drift.
+      if (live) loadChain(activeTicker, exp, false);
     }, 60000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -890,6 +918,7 @@ export default function OptionsChainPage() {
     const { close, em } = emLevels;
     const vs = visibleStrikes.filter((s): s is number => s != null);
     return {
+      close: nearestStrikeTo(close, vs), // last week's published close (band center)
       d1: nearestStrikeTo(close - em, vs),
       u1: nearestStrikeTo(close + em, vs),
       d2: nearestStrikeTo(close - 2 * em, vs),
@@ -1145,12 +1174,18 @@ export default function OptionsChainPage() {
                 );
               }
               const isATM = strike === nearestStrike;
+              const isClose = anyCurrentWeek && emStrikes != null && strike === emStrikes.close;
               const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
               const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
-              const rowEmBorder = is1x ? "2px solid rgba(255,255,255,.92)" : is2x ? "2px dashed rgba(255,255,255,.85)" : undefined;
-              // Small label + hover tooltip for the marked rows (ATM / EM bands).
+              // All marker lines are DOTTED now. Close = brighter, EM bands dimmer.
+              const rowEmBorder = isClose ? "2px dotted rgba(255,255,255,.95)"
+                : is1x ? "2px dotted rgba(255,255,255,.85)"
+                : is2x ? "2px dotted rgba(255,255,255,.7)"
+                : undefined;
+              // Small label + hover tooltip for the marked rows.
               let emTag: string | null = null, emTip = "";
               if (isATM) { emTag = "ATM"; emTip = `At-the-money — nearest strike to spot (${spot ? spot.toFixed(2) : "—"})`; }
+              else if (isClose) { emTag = "CLOSE"; emTip = `Last week's close${emLevels ? ` (${emLevels.close})` : ""} — the EM band center`; }
               else if (is1x) {
                 const up = emStrikes != null && strike === emStrikes.u1;
                 emTag = up ? "+1σ" : "−1σ";

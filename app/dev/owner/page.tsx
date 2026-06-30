@@ -1676,7 +1676,7 @@ export default function OwnerDashboard() {
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(() => void refresh(), 30_000);
+    const t = setInterval(() => void refresh(), 60_000);
     return () => clearInterval(t);
   }, [refresh]);
 

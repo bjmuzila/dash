@@ -412,9 +412,10 @@ class ThetaStreamClient {
    * @param {(print:{streamerSymbol:string,price:number,size:number,quote:object|null,spot:number})=>void} opts.onTrade
    * @param {() => number} [opts.getSpot] supplies current spot for each print
    */
-  constructor({ onTrade, onIndex, getSpot = () => 0 } = {}) {
+  constructor({ onTrade, onIndex, onGreeks, getSpot = () => 0 } = {}) {
     this.onTrade = onTrade;
-    this.onIndex = onIndex; // (root, price) => void  — index price ticks (SPX/VIX)
+    this.onIndex = onIndex;   // (root, price) => void  — index price ticks (SPX/VIX)
+    this.onGreeks = onGreeks; // (streamerSymbol, {gamma,delta,theta,vega,iv}) => void
     this.getSpot = getSpot;
     // Per-root spot overrides for non-SPX flow (MultiFlowManager fills these so
     // isOtm is computed against the correct underlying, not SPX). thetaRoot key.
@@ -471,13 +472,15 @@ class ThetaStreamClient {
   }
 
   /**
-   * Subscribe TRADE + QUOTE for one contract.
+   * Subscribe TRADE + QUOTE + GREEKS for one contract.
+   * GREEKS replaces the 5s REST poll (_refreshGreeksTheta) — the stream pushes
+   * gamma/delta/theta/vega/iv on every change so _recompute always has fresh data.
    * @param {{root,expInt,strikeTenthCents,right}} c
    */
   subscribeContract(c, record = true) {
     if (record) this.subs.push(c);
     if (!this.connected) return; // will flush on open
-    for (const req_type of ['TRADE', 'QUOTE']) {
+    for (const req_type of ['TRADE', 'QUOTE', 'GREEKS']) {
       this._send({
         msg_type: 'STREAM',
         sec_type: 'OPTION',
@@ -600,6 +603,30 @@ class ThetaStreamClient {
           spot: (rootSpot > 0 ? rootSpot : this.getSpot()) || 0,
         });
       } catch { /* never let one bad print kill the socket */ }
+    }
+
+    // Greeks tick: pushed by Theta on every change. All five greeks arrive together
+    // in msg.greeks. Only store fields that are finite & non-zero — a 4dp-zeroed
+    // gamma must not clobber the BS fallback path in _recompute (same guard as the
+    // REST snapshot path). iv field names vary by Theta version; accept all aliases.
+    if (type === 'GREEKS' && msg.greeks && this.onGreeks) {
+      const g = msg.greeks;
+      const gamma = Number(g.gamma);
+      const delta = Number(g.delta);
+      const theta = Number(g.theta);
+      const vega  = Number(g.vega);
+      const iv    = Number(g.implied_vol ?? g.implied_volatility ?? g.iv ?? g.impliedVol);
+      const entry = {
+        gamma: Number.isFinite(gamma) && gamma !== 0 ? gamma : undefined,
+        delta: Number.isFinite(delta)               ? delta : undefined,
+        theta: Number.isFinite(theta)               ? theta : undefined,
+        vega:  Number.isFinite(vega)                ? vega  : undefined,
+        iv:    Number.isFinite(iv)    && iv > 0     ? iv    : undefined,
+      };
+      // Only fire callback if at least gamma or iv is present (same guard as REST).
+      if (entry.gamma !== undefined || entry.iv !== undefined) {
+        try { this.onGreeks(cache.streamerSymbol, entry); } catch { /* never kill the socket */ }
+      }
     }
   }
 

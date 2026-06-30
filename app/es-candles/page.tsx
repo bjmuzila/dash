@@ -1422,8 +1422,9 @@ export default function EsCandlesPage() {
   }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
-  // change AND a low-rate interval, so the lanes/overlay never get stranded on
-  // a stale frame after a live tick or autoscale. Cheap: only repaints on change.
+  // change AND a low-rate interval. Data events already call drawOverlayRef
+  // directly, so this interval is just a backstop — bumped from 1s to 5s to
+  // stop the 1Hz canvas churn that was burning CPU even when nothing changed.
   useEffect(() => {
     const chart = chartApiRef.current;
     if (!chart) return;
@@ -1438,7 +1439,7 @@ export default function EsCandlesPage() {
     };
     const tsApi = chart.timeScale();
     tsApi.subscribeVisibleTimeRangeChange(repaint);
-    const id = setInterval(repaint, 1000);
+    const id = setInterval(repaint, 5_000);
     return () => {
       cancelAnimationFrame(raf);
       clearInterval(id);

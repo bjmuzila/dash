@@ -74,6 +74,10 @@ const CASH_BASIS_FILE = path.join(__dirname, '.cash-basis.json');
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
+// Volume-only refresh cadence (Theta mode). OI is once-daily (OPRA ~06:30 ET)
+// and never needs re-polling after coverage is ready. Volume builds intraday, so
+// we refresh it separately at a slower rate — no need for every-60s full chain.
+const VOL_REFRESH_MS = Number(process.env.VOL_REFRESH_MS || 2 * 60 * 1000); // 2 min
 // Hold the first GEX broadcast until OI backfill covers this fraction of active
 // strikes — avoids rendering a half-filled chart while REST backfill completes.
 const OI_READY_RATIO = Number(process.env.OI_READY_RATIO || 0.85);
@@ -1420,6 +1424,7 @@ class TastytradeProxy {
     this.greeksPlateauHits = 0;  // consecutive recomputes with negligible coverage gain
     this.firstSubAt = 0;      // ms timestamp of first subscribe (grace-period anchor)
     this.oiTimer = null;
+    this.volTimer = null;
     this.flowTimer = null;
     this.idle = (() => {
       try { return !!JSON.parse(fs.readFileSync(IDLE_STATE_FILE, 'utf8')).idle; }
@@ -1616,41 +1621,41 @@ class TastytradeProxy {
       this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
     }
 
-    // Backfill OI/volume from REST now, then refresh periodically (OI only
-    // changes once per day, but volume drifts — refresh every 60s once ready).
-    // Until coverage is ready, poll fast (every RECOMPUTE_MS) so a partial first
-    // backfill fills in within seconds instead of waiting a full 60s cycle.
+    // Backfill OI + volume from REST now. OI is once-daily (OPRA ~06:30 ET) and
+    // latches once coverage is ready — _scheduleOiRefresh stops polling at that
+    // point. Volume builds intraday so a separate _scheduleVolRefresh keeps it
+    // current every VOL_REFRESH_MS (default 2 min) during RTH without re-hitting OI.
     await this._refreshOI();
     this._scheduleOiRefresh();
+    this._scheduleVolRefresh(); // volume-only refresh, independent of OI gate
 
     // Seed the SPX session key now, then watch for the ~6PM ET rollover so OI +
     // volume self-refresh across the session boundary without a restart.
     this.optSessionKey = this._sessionKey();
     this._scheduleSessionRoll();
 
-    // Theta greeks poll (DATA_SOURCE=theta only). Unlike OI (static for the
-    // session), greeks move with spot intraday, so this runs continuously and
-    // does NOT latch off. No-op in TT mode (greeks arrive via the dxLink stream).
+    // Theta greeks: streamed via FPSS GREEKS subscription (one push per change)
+    // instead of the old 5s REST poll. The REST poll (_refreshGreeksTheta) and its
+    // self-rescheduling timer are REMOVED — streaming is fresher and eliminates
+    // 12 REST calls/min during RTH. Seed once from REST on startup so _recompute
+    // has data before the first stream tick arrives (~1-2s after subscribe).
     if (useTheta()) {
-      await this._refreshGreeksTheta().catch(() => {});
-      // Self-rescheduling: 5s during RTH, 60s off-hours.
-      const scheduleGreeks = () => {
-        const ms = isRthEt() ? THETA_GREEKS_MS : THETA_GREEKS_MS_OFFHOURS;
-        this.thetaGreeksTimer = setTimeout(() => {
-          if (!this.idle) this._refreshGreeksTheta().catch(() => {});
-          scheduleGreeks();
-        }, ms);
-      };
-      scheduleGreeks();
+      await this._refreshGreeksTheta().catch(() => {}); // one-time seed only
 
-      // FPSS option Trade stream → FlowProcessor (replaces the dxLink Trade tape
-      // for options flow). One WS; trades route into the SAME this.flow.addPrint
-      // the dxLink path used, so premium_flow / sparkline / FlowTape are unchanged.
+      // FPSS option Trade+Quote+Greeks stream. Trades → FlowProcessor (unchanged).
+      // Greeks → this.greeks map directly, replacing the REST poll entirely.
       if (!this.thetaStream) {
         this.thetaStream = new thetaAdapter.ThetaStreamClient({
           getSpot: () => this.spot || marketState.getSpot(),
           onTrade: (print) => { try { this.flow.addPrint(print); } catch {} },
           onIndex: (root, price) => this._onThetaIndex(root, price),
+          onGreeks: (streamerSymbol, entry) => {
+            // Write streamed greeks directly into the same map _recompute reads.
+            // Merge with any existing entry so a partial tick (e.g. missing vega)
+            // doesn't wipe fields that arrived on an earlier tick.
+            const prev = this.greeks.get(streamerSymbol) || {};
+            this.greeks.set(streamerSymbol, { ...prev, ...entry });
+          },
         });
         this.thetaStream.connect();
       }
@@ -1923,6 +1928,42 @@ class TastytradeProxy {
       try { await this._refreshOI(); } catch {}
       this._scheduleOiRefresh();
     }, RECOMPUTE_MS);
+  }
+
+  /**
+   * Volume-only refresh (Theta mode). OI is once-daily and latched after the
+   * initial backfill — no need to re-fetch it. Volume builds intraday, so we
+   * refresh it on a separate, slower timer without touching OI at all.
+   * Only runs in Theta mode; TT mode gets volume from the dxLink Trade stream.
+   */
+  async _refreshVolume() {
+    if (!useTheta()) return;
+    const active = this._activeContracts();
+    if (!active.length) return;
+    const exp = this.expiry;
+    const volMap = await thetaAdapter.fetchVolumeTheta(SYMBOL, exp).catch(() => new Map());
+    if (!volMap.size) return; // pre-open / empty — leave existing volume untouched
+    let updated = 0;
+    for (const c of active) {
+      const vol = volMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
+      if (Number.isFinite(vol)) {
+        const prev = this.restOI.get(c.streamerSymbol) || {};
+        this.restOI.set(c.streamerSymbol, { ...prev, volume: vol });
+        updated++;
+      }
+    }
+    if (updated) console.log(`[VOL][theta] refreshed volume for ${updated}/${active.length} strikes`);
+  }
+
+  /** Self-rescheduling volume refresh. Runs during RTH only; pauses when idle. */
+  _scheduleVolRefresh() {
+    if (this.volTimer) { clearTimeout(this.volTimer); this.volTimer = null; }
+    this.volTimer = setTimeout(async () => {
+      if (!this.idle && isRthEt()) {
+        try { await this._refreshVolume(); } catch {}
+      }
+      this._scheduleVolRefresh();
+    }, VOL_REFRESH_MS);
   }
 
   /** Pick contracts for the active expiry within the strike window of spot. */
@@ -2882,10 +2923,12 @@ class TastytradeProxy {
     this.probeSubs.clear();
     if (this.recomputeTimer) clearInterval(this.recomputeTimer);
     if (this.oiTimer) clearTimeout(this.oiTimer);
+    if (this.volTimer) clearTimeout(this.volTimer);
     if (this.flowTimer) clearInterval(this.flowTimer);
     if (this.thetaGreeksTimer) clearInterval(this.thetaGreeksTimer);
     this.recomputeTimer = null;
     this.oiTimer = null;
+    this.volTimer = null;
     this.flowTimer = null;
     this.thetaGreeksTimer = null;
     if (this.thetaStream) { this.thetaStream.close(); this.thetaStream = null; }

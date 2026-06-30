@@ -72,7 +72,7 @@ function PillSelect<T extends string>({ value, options, onChange }: { value: T; 
 const divider: CSSProperties = { height: 1, background: T.border, margin: "10px 0" };
 
 // Small generic JSON-fetch hook with loading/error + 30s auto-refresh.
-function useLiveData<R>(url: string | null, refreshMs = 30_000) {
+function useLiveData<R>(url: string | null, refreshMs = 120_000) {
   const [data, setData] = useState<R | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -673,7 +673,7 @@ function ConfidenceCard() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 30_000);
+    const id = setInterval(load, 120_000);
     return () => clearInterval(id);
   }, [load]);
 

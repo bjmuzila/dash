@@ -15,6 +15,7 @@ export const OWNER_LINKS: { label: string; href: string }[] = [
   { label: "Database", href: "/database" },
   { label: "Dev", href: "/dev" },
   { label: "Est. Moves BE", href: "/estimated-move" },
+  { label: "Strike Query", href: "/dev/strike-query" },
   { label: "Logs", href: "/logs" },
   { label: "Changelog", href: "/changelog" },
 ];

@@ -1031,9 +1031,8 @@ async function main() {
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
     require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
-    // Overnight ES gap tracker: posts the 9:30 gap (vs prior 16:00 print) once the
-    // 09:30 candle lands, then updates fill % every 5m during RTH → /api/es-gap.
-    require('./es-gap-tracker').startEsGapTracker(PORT);
+    // Overnight ES gap tracker: DISABLED — CPU cost not worth it (5-min RTH cron).
+    // Re-enable by uncommenting: require('./es-gap-tracker').startEsGapTracker(PORT);
     // In-process ICT setup recorder: every 5m during RTH detects every live ICT
     // setup (same analyzeICT the /ict page renders), records new ones, and grades
     // pending ones by follow-through → /api/ict-setups.

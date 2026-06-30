@@ -930,7 +930,7 @@ export default function GreeksPage() {
   // Poll every 30s.
   useEffect(() => {
     doRefresh();
-    const t = setInterval(() => { if (mountedRef.current) doRefresh(); }, 30_000);
+    const t = setInterval(() => { if (mountedRef.current) doRefresh(); }, 60_000);
     return () => clearInterval(t);
   }, [doRefresh]);
 
