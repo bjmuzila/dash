@@ -41,15 +41,27 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- 1. Keep package-lock.json in sync deterministically, only when package files changed ---
-# --package-lock-only updates the lock without a full reinstall and stays in step with `npm ci` in Docker.
-$pkgChanged = git status --porcelain package.json package-lock.json
-if ($pkgChanged) {
-    Write-Host "package.json/lock changed - syncing lock (npm install --package-lock-only)..." -ForegroundColor Yellow
-    npm install --package-lock-only
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "lock sync FAILED - nothing committed or pushed." -ForegroundColor Red
-        exit 1
-    }
+# Always reconcile the lock — transitive drift (e.g. picomatch 2.3.2 -> 4.0.4) happens
+# with NO change to package.json, so a "did package.json change?" gate misses it and the
+# VPS `npm ci` then fails. `--package-lock-only` is cheap (no node_modules install).
+Write-Host "Reconciling package-lock.json (npm install --package-lock-only)..." -ForegroundColor Yellow
+npm install --package-lock-only
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "lock reconcile FAILED - nothing committed or pushed." -ForegroundColor Red
+    exit 1
+}
+
+# Verify the lock is exactly what Docker's `npm ci` will demand — fail HERE, not on the VPS.
+npm ci --dry-run 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Lock still out of sync (npm ci would fail in Docker). Doing a full lock regen..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force "$repoRoot\node_modules" -ErrorAction SilentlyContinue
+    Remove-Item -Force "$repoRoot\package-lock.json" -ErrorAction SilentlyContinue
+    npm install
+    if ($LASTEXITCODE -ne 0) { Write-Host "Full lock regen FAILED - nothing pushed. Fix deps manually." -ForegroundColor Red; exit 1 }
+    npm ci --dry-run 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Host "Lock STILL broken after regen - nothing pushed. Inspect package.json." -ForegroundColor Red; exit 1 }
+    Write-Host "Lock regenerated and verified." -ForegroundColor Green
 }
 
 # --- 2. Local build gate (OPTIONAL) ---

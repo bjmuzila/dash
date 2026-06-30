@@ -281,6 +281,9 @@ export default function StrikeGrowthPage() {
                     <td style={{ ...td, color: col }}>
                       {r.delta_pct != null ? `${r.delta_pct >= 0 ? "+" : ""}${r.delta_pct.toFixed(0)}%` : "—"}
                     </td>
+                    <ChgCell v={r.chg15} />
+                    <ChgCell v={r.chg30} />
+                    <ChgCell v={r.chg60} />
                     <td style={tdBar}>
                       <div style={{ height: 8, borderRadius: 4, width: `${w}%`, minWidth: 2, background: col, opacity: 0.85 }} />
                     </td>
@@ -288,8 +291,8 @@ export default function StrikeGrowthPage() {
                 );
               })}
               {!rows.length && !loading && (
-                <tr><td colSpan={10} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
-                  No snapshots yet today. The recorder writes during RTH every 30m — or fire <code>POST /proxy/strike-growth-run</code>.
+                <tr><td colSpan={13} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                  No snapshots yet today. The recorder sweeps during RTH every 5m — or fire <code>POST /proxy/strike-growth-run</code>.
                 </td></tr>
               )}
             </tbody>
@@ -383,6 +386,19 @@ function SortTh({
       {children}{active ? (dir === "desc" ? " ▼" : " ▲") : ""}
     </th>
   );
+}
+
+// Trailing-window change cell: green if building, red if fading, "—" if no
+// history that far back yet (early in the session).
+function ChgCell({ v }: { v: number | null }) {
+  if (v == null) return <td style={{ ...td, color: "rgba(255,255,255,0.3)" }}>—</td>;
+  const col = v >= 0 ? HOME_THEME.green : HOME_THEME.red;
+  const sign = v > 0 ? "+" : v < 0 ? "−" : "";
+  const a = Math.abs(v);
+  const s = a >= 1e9 ? `${(a / 1e9).toFixed(2)}B`
+    : a >= 1e6 ? `${(a / 1e6).toFixed(1)}M`
+    : a >= 1e3 ? `${(a / 1e3).toFixed(1)}K` : a.toFixed(0);
+  return <td style={{ ...td, color: col }}>{sign}{s}</td>;
 }
 
 // ── inline style helpers ───────────────────────────────────────────────────

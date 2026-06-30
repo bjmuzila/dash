@@ -81,9 +81,21 @@ docker compose -f docker-compose.yml -f deploy/theta/compose.theta.yml ps
 
 If `git pull` says "Already up to date," the push steps didn't run — stop and check.
 
-## Fallback — if `npm ci` fails in the VPS Docker build (picomatch / lock drift)
+## RECURRING ISSUE — `npm ci` fails in VPS Docker build (picomatch / lock drift)
 
-Means the committed lock file is stale. On Windows:
+Signature in the VPS build log:
+
+```
+npm error `npm ci` can only install packages when your package.json and package-lock.json ... are in sync.
+npm error Invalid: lock file's picomatch@2.3.2 does not satisfy picomatch@4.0.4
+```
+
+This is **transitive drift**: a sub-dependency moved even though package.json didn't,
+so `npm ci` refuses. push.ps1 now auto-heals this BEFORE pushing — it always runs
+`npm install --package-lock-only`, then `npm ci --dry-run`, and if that still fails it
+does a full lock regen automatically. So a normal `.\push.ps1` should fix it on its own.
+
+If you ever need to do it by hand on Windows:
 
 ```powershell
 cd C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed

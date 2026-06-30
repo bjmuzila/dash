@@ -137,6 +137,9 @@ async function ensureSchema() {
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_latest
                  ON strike_growth (date, symbol, ts DESC);`);
+  // Supports the 15/30/60-min lateral lookbacks (per symbol+strike, by ts).
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
+                 ON strike_growth (date, symbol, strike, ts DESC);`);
 
   // Seed watchlist once from the EM roster. Index/ETF core defaults ACTIVE; the
   // long tail is seeded inactive so the 30m sweep stays bounded until the user
