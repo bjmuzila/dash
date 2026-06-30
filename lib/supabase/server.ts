@@ -54,3 +54,39 @@ export async function getServerUserId(): Promise<string | null> {
   } = await supabase.auth.getUser();
   return user?.id ?? null;
 }
+
+const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
+
+/**
+ * Whether the current request is the owner. Prefers the JWT `is_owner` claim
+ * (from the custom_access_token_hook); falls back to matching OWNER_USER_ID
+ * while the hook is being rolled out. getUser() revalidates the token first,
+ * so reading the claim from the local session here is trustworthy.
+ */
+export async function getServerIsOwner(): Promise<boolean> {
+  const supabase = await getSupabaseServer();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (token) {
+    try {
+      const payload = token.split(".")[1];
+      if (payload) {
+        const json = Buffer.from(
+          payload.replace(/-/g, "+").replace(/_/g, "/"),
+          "base64",
+        ).toString("utf8");
+        if (JSON.parse(json)?.is_owner === true) return true;
+      }
+    } catch {
+      /* fall through to env match */
+    }
+  }
+  return OWNER_USER_ID ? user.id.trim() === OWNER_USER_ID : false;
+}

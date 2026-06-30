@@ -103,6 +103,10 @@ function plateauFloor(dte) {
 // far/near-OTM strikes compute with fallback gamma and produce inflated bars —
 // this gate prevents that half-warmed frame from ever reaching the chart.
 const GREEKS_READY_RATIO = Number(process.env.GREEKS_READY_RATIO || 0.85);
+// Kill switch: when set, broadcast the GEX chart on the first recompute frame
+// instead of waiting for the OI/greeks readiness gate. Fast load; the cold-start
+// frame may briefly show BS-fallback gamma before backfill lands (self-corrects).
+const GEX_GATE_DISABLED = /^(1|true|yes)$/i.test(process.env.GEX_GATE_DISABLED || '');
 // Plateau release: on thin expiries greeks coverage may never reach the ratio
 // above. Once coverage stops climbing meaningfully (gain < PLATEAU_EPS) for
 // PLATEAU_HITS consecutive recomputes AND a minimum floor is met, release the
@@ -2444,7 +2448,15 @@ class TastytradeProxy {
 
     // Gate: don't broadcast the GEX chart until BOTH OI backfill AND broker
     // greeks have substantially filled in (avoids the half-rendered / inflated
-    // chart on connect).
+    // chart on connect). Set GEX_GATE_DISABLED=1 to paint the first frame
+    // immediately (fast load; first frame or two may show cold BS-fallback gamma
+    // until OI backfill + first greeks poll land, self-corrects on next recompute).
+    if (GEX_GATE_DISABLED && !this.chartReady) {
+      this.chartReady = true;
+      this.warmedExpiries.add(this.expiry);
+      marketState.setStatus({ chartReady: true });
+    }
+
     if (!this.chartReady) {
       // Plateau detection: thin expiries (e.g. far-dated, illiquid) may never
       // reach GREEKS_READY_RATIO. Count consecutive recomputes where coverage

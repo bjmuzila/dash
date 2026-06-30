@@ -1,4 +1,4 @@
-import { getServerUserId } from "@/lib/supabase/server";
+import { getServerIsOwner, getServerUserId } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 
 // Server-side owner gate used by owner-only route layouts (defense-in-depth on
@@ -12,9 +12,14 @@ import { notFound } from "next/navigation";
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
 export default async function OwnerGuard({ children }: { children: React.ReactNode }) {
+  // Prefer the JWT `is_owner` claim; fall back to allowing any signed-in user
+  // only when no owner id is configured (so the owner can't lock themselves out
+  // before the env var / hook is set up).
+  if (OWNER_USER_ID) {
+    if (!(await getServerIsOwner())) notFound();
+    return <>{children}</>;
+  }
   const userId = await getServerUserId();
-  const id = (userId || "").trim();
-  const allowed = id !== "" && (OWNER_USER_ID ? id === OWNER_USER_ID : true);
-  if (!allowed) notFound();
+  if ((userId || "").trim() === "") notFound();
   return <>{children}</>;
 }

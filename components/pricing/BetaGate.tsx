@@ -5,9 +5,9 @@ import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 // Beta / prelaunch gate for the pricing page (signed-out visitors).
-// Beta signups open 6/30 at market open (9:30am ET). Official launch 7/3 12:00am ET.
+// Beta signups open 7/1 at market open (9:30am ET). Official launch 7/3 12:00am ET.
 // Before beta open: locked CTA + live countdown. After: normal join CTAs.
-const BETA_OPEN_MS = Date.parse("2026-06-30T09:30:00-04:00"); // 9:30am ET market open
+const BETA_OPEN_MS = Date.parse("2026-07-01T09:30:00-04:00"); // 9:30am ET market open
 const LAUNCH_LABEL = "July 3, 12:00 AM ET";
 
 function fmt(ms: number) {
@@ -44,7 +44,7 @@ export default function BetaGate({ serverNow }: { serverNow: number }) {
 
       <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.62)", lineHeight: 1.6 }}>
         <div>
-          <strong style={{ color: T.text }}>Beta signups open</strong> June 30, 9:30 AM ET (market open)
+          <strong style={{ color: T.text }}>Beta signups open</strong> July 1, 9:30 AM ET (market open)
         </div>
         <div>
           <strong style={{ color: T.text }}>Official launch</strong> {LAUNCH_LABEL}
@@ -79,7 +79,7 @@ export default function BetaGate({ serverNow }: { serverNow: number }) {
             </div>
           )}
           <button style={lockedBtn} disabled>
-            Signups open June 30 · 9:30 AM ET
+            Signups open July 1 · 9:30 AM ET
           </button>
         </div>
       )}

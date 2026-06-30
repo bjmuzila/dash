@@ -16,6 +16,7 @@ type CookieToSet = { name: string; value: string; options?: CookieOptions };
 export async function getUserFromMiddleware(req: NextRequest): Promise<{
   res: NextResponse;
   userId: string | null;
+  isOwner: boolean;
 }> {
   let res = NextResponse.next({ request: req });
 
@@ -41,5 +42,35 @@ export async function getUserFromMiddleware(req: NextRequest): Promise<{
     data: { user },
   } = await supabase.auth.getUser();
 
-  return { res, userId: user?.id ?? null };
+  // The `is_owner` claim is injected by the custom_access_token_hook and lives
+  // in the signed JWT, not on the user object. getUser() above already
+  // revalidated the token against the auth server, so trusting the claim here
+  // is sound — we read it from the (local) session access token rather than
+  // making another round-trip. Falls back to false when the hook isn't enabled.
+  let isOwner = false;
+  if (user) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    isOwner = readIsOwnerClaim(session?.access_token);
+  }
+
+  return { res, userId: user?.id ?? null, isOwner };
+}
+
+/** Decode a JWT payload and read the boolean `is_owner` claim. No verification
+ *  needed here — the caller has already revalidated the token via getUser(). */
+function readIsOwnerClaim(accessToken?: string | null): boolean {
+  if (!accessToken) return false;
+  try {
+    const payload = accessToken.split(".")[1];
+    if (!payload) return false;
+    const json = Buffer.from(
+      payload.replace(/-/g, "+").replace(/_/g, "/"),
+      "base64",
+    ).toString("utf8");
+    return JSON.parse(json)?.is_owner === true;
+  } catch {
+    return false;
+  }
 }

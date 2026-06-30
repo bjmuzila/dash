@@ -92,7 +92,12 @@ export async function middleware(req: NextRequest) {
 
   // Resolve the Supabase session ONCE. `res` carries any refreshed-session
   // cookies and must be the object we return on the pass-through paths.
-  const { res, userId } = await getUserFromMiddleware(req);
+  const { res, userId, isOwner: ownerClaim } = await getUserFromMiddleware(req);
+
+  // Owner = the JWT `is_owner` claim (from the custom access-token hook) OR,
+  // as a fallback while the hook is being rolled out, the env id match.
+  const ownerById = OWNER_USER_ID ? (userId || "").trim() === OWNER_USER_ID : false;
+  const isOwner = ownerClaim || ownerById;
 
   // ── Maintenance gate ───────────────────────────────────────────────────────
   const exemptFromMaint =
@@ -110,8 +115,10 @@ export async function middleware(req: NextRequest) {
     path === "/privacy" ||
     path === "/disclaimer";
   if (!exemptFromMaint && (await isMaintenanceOn(req))) {
-    const isOwner = OWNER_USER_ID ? (userId || "").trim() === OWNER_USER_ID : !!userId;
-    if (!isOwner) {
+    // During maintenance, owners pass; if no owner is configured, any signed-in
+    // user passes (preserves prior fail-safe behavior).
+    const maintOwnerOk = OWNER_USER_ID ? isOwner : !!userId;
+    if (!maintOwnerOk) {
       const url = req.nextUrl.clone();
       url.pathname = "/maintenance";
       url.search = "";
@@ -130,7 +137,7 @@ export async function middleware(req: NextRequest) {
   }
 
   // ── Owner-only route gate ────────────────────────────────────────────────────
-  if (OWNER_USER_ID && isOwnerRoute(path) && userId.trim() !== OWNER_USER_ID) {
+  if (OWNER_USER_ID && isOwnerRoute(path) && !isOwner) {
     const url = req.nextUrl.clone();
     url.pathname = "/home";
     url.search = "";

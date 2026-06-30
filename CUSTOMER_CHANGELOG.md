@@ -2,6 +2,12 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 6/30/2026
+
+* New sign-in experience — sign in with Google or email and password, with a cleaner, on-brand login screen.
+* Home page loads faster — quotes now appear without an extra delay on startup.
+* Fixed a visual glitch on the ES Candles gamma heatmap where unchanged levels left blank gaps between columns.
+
 ## Monday 6/29/2026
 
 * Fixed Volume Net GEX showing blank on the Home page — volume-based gamma exposure is populating again.

@@ -41,6 +41,16 @@ npm install
 3. **RLS**: run `supabase/migrations/supabase-auth-rls.sql` in the SQL editor
    (rewrites `chat_messages` policies to `auth.uid()` and re-adds the table to
    the realtime publication).
+4. **Owner JWT claim (optional, perf)**: run
+   `supabase/migrations/0002_owner_claim_hook.sql` — edit the seeded UUID to your
+   `OWNER_USER_ID` first. Then **Authentication → Hooks → Customize Access Token
+   (JWT)** → select `public.custom_access_token_hook`. This bakes an `is_owner`
+   boolean into the signed JWT so owner-route gating reads the token instead of
+   resolving the user. Code falls back to the `OWNER_USER_ID` env match until the
+   hook is enabled, so this can ship before or after the auth cutover. Users must
+   get a **new token** for the claim to appear — sign out/in, or wait one
+   refresh cycle. Sensitive owner actions still call `getUser()` (full
+   revalidation); the claim is used only for route visibility.
 
 > Email-confirmation note: if confirmation is **ON**, sign-up shows a
 > "check your email" notice and the user clicks a link that hits

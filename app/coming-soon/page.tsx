@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 
-// Beta signups open Mon Jun 30 2026, 9:30 AM ET (EDT = UTC-4 → 13:30 UTC).
-const TARGET = Date.parse("2026-06-30T13:30:00Z");
+// Beta signups open Wed Jul 1 2026, 9:30 AM ET (EDT = UTC-4 → 13:30 UTC).
+const TARGET = Date.parse("2026-07-01T13:30:00Z");
 const pad = (n: number) => String(Math.max(0, n)).padStart(2, "0");
 
 function useCountdown() {
@@ -141,7 +141,7 @@ export default function ComingSoonPage() {
             <span style={{
               fontSize: "clamp(15px,2.4vw,24px)", fontWeight: 900, letterSpacing: ".04em",
               color: HOME_THEME.text, textShadow: "0 0 10px rgba(255,255,255,.7)", whiteSpace: "nowrap",
-            }}>BETA SIGNUPS&nbsp;&nbsp;MONDAY JUNE 30&nbsp;&nbsp;9:30 AM ET</span>
+            }}>BETA SIGNUPS&nbsp;&nbsp;WEDNESDAY JULY 1&nbsp;&nbsp;9:30 AM ET</span>
           </div>
         </div>
 
