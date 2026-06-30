@@ -102,15 +102,6 @@ export default function GexToolbar({
         <ToggleTile label="DEX"  on={showDex}       onClick={onToggleDex} />
         <ToggleTile label="Flip" on={showFlipCurve} onClick={onToggleFlip} />
 
-        {ghostEnabled && (
-          <>
-            <DockGap />
-            <ToggleTile label="5m"  on={showGhost5}  onClick={onToggleGhost5} />
-            <ToggleTile label="15m" on={showGhost15} onClick={onToggleGhost15} />
-            <ToggleTile label="30m" on={showGhost30} onClick={onToggleGhost30} />
-          </>
-        )}
-
         {/* Actions */}
         <DockSpacer />
         <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>

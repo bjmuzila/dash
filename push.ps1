@@ -1,3 +1,13 @@
+# --- flags ---
+#   -SkipBuild   : skip the local build gate (VPS Docker build still gates live)
+#   -LocalBuild  : force the local build gate ON
+#   -NoCache     : force a clean VPS image rebuild (use after dependency changes)
+param(
+    [switch]$SkipBuild,
+    [switch]$LocalBuild,
+    [switch]$NoCache
+)
+
 $repoRoot = "C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed"
 $packageJsonPath = "$repoRoot\package.json"
 
@@ -6,8 +16,9 @@ $vpsHost = "root@178.156.137.36"
 $vpsKey  = "$env:USERPROFILE\.ssh\cbedge"
 $composeFiles = "-f docker-compose.yml -f deploy/theta/compose.theta.yml"
 
+$ErrorActionPreference = "Stop"
 $now = Get-Date
-cd $repoRoot
+Set-Location $repoRoot
 git checkout main
 
 # Auto-version vMonth.Day.N — Nth deploy of the day
@@ -20,60 +31,76 @@ $packageJson.version = $version
 ($packageJson | ConvertTo-Json -Depth 100) | Set-Content $packageJsonPath
 Write-Host "Version: $version" -ForegroundColor Cyan
 
-# Keep package-lock.json synced, but only when needed (skip on most pushes)
+# --- 0. Fail fast on SSH before doing any work (no hanging password prompts) ---
+$sshOpts = @("-i", $vpsKey, "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
+& ssh @sshOpts $vpsHost "echo ok" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "SSH to VPS failed (key not loaded / host unreachable). Nothing pushed." -ForegroundColor Red
+    Write-Host "Check: ssh-add $vpsKey   and that $vpsHost is up." -ForegroundColor Yellow
+    exit 1
+}
+
+# --- 1. Keep package-lock.json in sync deterministically, only when package files changed ---
+# --package-lock-only updates the lock without a full reinstall and stays in step with `npm ci` in Docker.
 $pkgChanged = git status --porcelain package.json package-lock.json
 if ($pkgChanged) {
-    Write-Host "package.json/lock changed - syncing (npm install)..." -ForegroundColor Yellow
-    npm install
+    Write-Host "package.json/lock changed - syncing lock (npm install --package-lock-only)..." -ForegroundColor Yellow
+    npm install --package-lock-only
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "npm install FAILED - nothing committed or pushed." -ForegroundColor Red
+        Write-Host "lock sync FAILED - nothing committed or pushed." -ForegroundColor Red
         exit 1
     }
 }
 
-# Gate: build must pass before anything is committed or pushed.
-Write-Host "Running build gate (npm run build)..." -ForegroundColor Yellow
-npm run build
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "BUILD FAILED - nothing committed or pushed. Fix the error above, then re-run." -ForegroundColor Red
-    exit 1
+# --- 2. Local build gate (OPTIONAL) ---
+# The VPS Docker build is the authoritative gate for "live". Skip the local build by
+# default to avoid building twice; turn it on with -LocalBuild for a fast pre-flight.
+$doLocalBuild = $LocalBuild -and -not $SkipBuild
+if ($doLocalBuild) {
+    Write-Host "Local build gate (npm run build)..." -ForegroundColor Yellow
+    npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "LOCAL BUILD FAILED - nothing committed or pushed. Fix above, then re-run." -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "Skipping local build (VPS Docker build will gate). Use -LocalBuild to enable." -ForegroundColor DarkGray
 }
 
-# Stage everything, commit, push main
+# --- 3. Commit + push main ---
 git add -A
 git commit -m "$version"
+if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit (or commit failed) - stopping." -ForegroundColor Red; exit 1 }
 git push origin main
 if ($LASTEXITCODE -ne 0) { Write-Host "git push main FAILED - stopping." -ForegroundColor Red; exit 1 }
 
-# Promote main -> prod
+# --- 4. Promote main -> prod ---
 git checkout prod
-git merge main
+git merge main --no-edit
 git push origin prod
 if ($LASTEXITCODE -ne 0) { Write-Host "git push prod FAILED - stopping." -ForegroundColor Red; git checkout main; exit 1 }
 git checkout main
 
 Write-Host "Pushed $version to GitHub (main + prod). Deploying on VPS..." -ForegroundColor Cyan
 
-# --- VPS deploy over SSH (key auth, no password) ---
-# Quoting deploy commands as a single ssh argument is fragile on Windows:
-# PowerShell strings carry CRLF and quoting can reintroduce \r, breaking the
-# remote shell (e.g. "unknown docker command: \"compose ps\r\"").
-# Fix: build the command list as a LF-only here-string and pipe it to the
-# remote `bash -s` over stdin — no argv quoting involved, so no CR can sneak in.
+# --- 5. VPS deploy over SSH ---
+# LF-only here-string piped to remote `bash -s` (no argv quoting -> no CR bug).
+# Docker layer cache makes the build incremental; --no-cache only when -NoCache passed.
+$buildFlags = if ($NoCache) { "--no-cache" } else { "" }
 $deployScript = @"
 set -e
 cd /opt/dashboard
 git pull
-docker compose $composeFiles build
+docker compose $composeFiles build $buildFlags
 docker compose $composeFiles up -d
 docker compose $composeFiles ps
 "@
 $deployScript = $deployScript -replace "`r`n", "`n"
 
-$deployScript | ssh -i $vpsKey -o StrictHostKeyChecking=accept-new $vpsHost "bash -s"
+$deployScript | & ssh @sshOpts $vpsHost "bash -s"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "VPS deploy FAILED. Code is on GitHub - SSH in and rerun, or rollback with: git reset --hard HEAD~1" -ForegroundColor Red
+    Write-Host "VPS deploy FAILED. Code is on GitHub - SSH in and rerun, or rollback: git reset --hard HEAD~1" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "Done! $version is live. Watch logs: ssh $vpsHost 'cd /opt/dashboard; docker compose $composeFiles logs -f'" -ForegroundColor Green
+Write-Host "Done! $version is live. Logs: ssh $vpsHost 'cd /opt/dashboard; docker compose $composeFiles logs -f'" -ForegroundColor Green

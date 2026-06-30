@@ -493,15 +493,32 @@ async function main() {
             if (symbol) { params.push(symbol); symFilter = `AND symbol = $${params.length}`; }
             params.push(minAbs); const minIdx = params.length;
             params.push(limit); const limIdx = params.length;
+            // chg15/30/60 = Δ in volume-only Now GEX over the trailing window.
+            // For each latest strike row we find the snapshot for that same
+            // (symbol,strike) whose ts is closest to (latest.ts − N min) and
+            // subtract its gex_now. LATERAL keeps it per-row and indexed.
+            const lookback = (mins, alias) => `
+              LEFT JOIN LATERAL (
+                SELECT h.gex_now FROM strike_growth h
+                WHERE h.date = $1 AND h.symbol = sg.symbol AND h.strike = sg.strike
+                  AND h.ts <= sg.ts - INTERVAL '${mins} minutes'
+                ORDER BY h.ts DESC LIMIT 1
+              ) ${alias} ON TRUE`;
             const sql = `
               WITH latest AS (
                 SELECT symbol, MAX(ts) AS ts FROM strike_growth
                 WHERE date = $1 GROUP BY symbol
               )
               SELECT sg.symbol, sg.strike, sg.expiry, sg.gex_now, sg.gex_open,
-                     sg.delta_abs, sg.delta_pct, sg.spot, sg.ts
+                     sg.delta_abs, sg.delta_pct, sg.spot, sg.ts,
+                     (sg.gex_now - b15.gex_now) AS chg15,
+                     (sg.gex_now - b30.gex_now) AS chg30,
+                     (sg.gex_now - b60.gex_now) AS chg60
               FROM strike_growth sg
               JOIN latest l ON l.symbol = sg.symbol AND l.ts = sg.ts
+              ${lookback(15, 'b15')}
+              ${lookback(30, 'b30')}
+              ${lookback(60, 'b60')}
               WHERE sg.date = $1 ${symFilter} ${sideFilter}
                 AND ABS(sg.delta_abs) >= $${minIdx}
               ORDER BY ABS(sg.delta_abs) DESC

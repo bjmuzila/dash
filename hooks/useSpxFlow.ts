@@ -26,6 +26,7 @@ export interface FlowOrder {
   size: number;
   premium: number;
   isOtm: boolean;
+  fills?: number; // # of raw prints rolled into this aggregated order (sweep size)
 }
 
 interface FlowAggregateEntry {

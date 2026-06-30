@@ -24,11 +24,14 @@ type Row = {
   delta_pct: number | null;
   spot: number | null;
   ts: string;
+  chg15: number | null;
+  chg30: number | null;
+  chg60: number | null;
 };
 
 type WatchRow = { symbol: string; active: boolean; sort_idx: number };
 type Side = "all" | "call" | "put";
-type SortKey = "symbol" | "strike" | "spot" | "expiry" | "gex_open" | "gex_now" | "delta_abs" | "delta_pct";
+type SortKey = "symbol" | "strike" | "spot" | "expiry" | "gex_open" | "gex_now" | "delta_abs" | "delta_pct" | "chg15" | "chg30" | "chg60";
 
 // Neutral grey accent → card has no color tint on the strip/glow.
 const NEUTRAL = "#6B7280";
@@ -162,7 +165,8 @@ export default function StrikeGrowthPage() {
   }
 
   const sortedRows = useMemo(() => {
-    const useAbs = sortKey === "delta_abs" || sortKey === "delta_pct";
+    const useAbs = sortKey === "delta_abs" || sortKey === "delta_pct"
+      || sortKey === "chg15" || sortKey === "chg30" || sortKey === "chg60";
     const val = (r: Row): number | string => {
       const v = (r as any)[sortKey];
       if (sortKey === "symbol" || sortKey === "expiry") return String(v ?? "");
@@ -244,9 +248,12 @@ export default function StrikeGrowthPage() {
                 <SortTh k="spot"      style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Spot</SortTh>
                 <SortTh k="expiry"    style={thL2} cur={sortKey} dir={sortDir} on={clickSort}>Expiry</SortTh>
                 <SortTh k="gex_open"  style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Open GEX (OI)</SortTh>
-                <SortTh k="gex_now"   style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Now GEX (OI+Vol)</SortTh>
+                <SortTh k="gex_now"   style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Now GEX (Vol)</SortTh>
                 <SortTh k="delta_abs" style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Δ$</SortTh>
                 <SortTh k="delta_pct" style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Δ%</SortTh>
+                <SortTh k="chg15"     style={th}   cur={sortKey} dir={sortDir} on={clickSort}>15m</SortTh>
+                <SortTh k="chg30"     style={th}   cur={sortKey} dir={sortDir} on={clickSort}>30m</SortTh>
+                <SortTh k="chg60"     style={th}   cur={sortKey} dir={sortDir} on={clickSort}>60m</SortTh>
                 <th style={thBar}>Growth</th>
               </tr>
             </thead>

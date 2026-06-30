@@ -39,19 +39,20 @@ const { SPECIAL_TICKERS, EQUITY_TICKERS } = require('./em-tickers');
 // `exp|strike|type` key matching proxy-thetadata's keyOf()
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
 
-// Per-strike OI+Vol net GEX — MUST match gex-calculator.oiVolNet so the page
-// agrees with every other GEX surface in the app.
-const oiVolNet = (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
-// OI-only net GEX = the "open" baseline. OI is yesterday's carried-over open
-// interest (options don't trade until the open), so this is the positioning the
-// day STARTED with, before any of today's volume. delta = (OI+Vol) − (OI-only).
+// "Open" baseline = OI-only net GEX (netGEX). OI is yesterday's carried-over
+// open interest (options don't trade until the open), so this is the positioning
+// the day STARTED with, before any of today's volume.
 const oiOnlyNet = (r) => Number(r.netGEX ?? 0);
+// "Now" = volume-only net GEX (netVolGEX) — purely today's traded volume at the
+// strike, no OI. This is the live build/decay we rank on.
+const volOnlyNet = (r) => Number(r.netVolGEX ?? 0);
 
 // ── Tunables (env-overridable) ───────────────────────────────────────────────
 
-// Minutes between full watchlist sweeps. 30 keeps Theta load survivable across
-// the whole EM universe (per the user's "all EM, slow cadence" choice).
-const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 30);
+// Minutes between full watchlist sweeps. 5m gives exact 15/30/60-min lookbacks
+// (3/6/12 sweeps back) but is the heaviest on the standalone theta-terminal —
+// keep the ACTIVE watchlist tight at 5m to avoid OOM. Raise via env if needed.
+const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
 // Strikes to keep each side of spot per ticker (28 total at 14). Caps Theta work.
 const STRIKES_EACH_SIDE = Number(process.env.STRIKE_GROWTH_STRIKES_SIDE || 14);
 // Delay between tickers in a sweep (ms) — paces the standalone theta-terminal.
@@ -242,10 +243,10 @@ async function snapshotTicker(chainTicker) {
   if (!flatRows.length) throw new Error(`no option rows ${chainTicker}`);
 
   const gexRows = computeGexRows(flatRows, spot);
-  // gex = today's live OI+Vol; open = OI-only (yesterday's carried OI, pre-open).
+  // gex = volume-only (today's traded volume); open = OI-only (carried OI, pre-open).
   const rows = gexRows.map((r) => ({
     strike: r.strike,
-    gex: oiVolNet(r),
+    gex: volOnlyNet(r),
     open: oiOnlyNet(r),
   }));
   return { spot, expiry, rows };

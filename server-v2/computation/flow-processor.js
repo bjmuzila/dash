@@ -92,7 +92,12 @@ class FlowProcessor {
     // equity-option blocks (much smaller premium than SPX index blocks) survive
     // long enough for the client's per-ticker premium filter to see them.
     tapeFloorPremium = Number(process.env.FLOW_TAPE_FLOOR || 2500),
+    // Rolling coalescing window (ms): same-contract+side fills within this many ms
+    // of the order's first fill merge into one aggregated order. "All trades under
+    // 1 second add up." Overridable via FLOW_COALESCE_MS.
+    coalesceMs = Number(process.env.FLOW_COALESCE_MS || 1000),
   } = {}) {
+    this.coalesceMs = coalesceMs;
     this.windowMs = windowMs;
     this.maxPrints = maxPrints;
     this.tapeCap = tapeCap;
@@ -154,29 +159,35 @@ class FlowProcessor {
       bucket = bullish ? 'bull' : 'bear';
     }
     const tapeSide = side === 'buy' || side === 'sell' ? side : 'buy';
-    // Coalesce prints on the same contract + side into 500ms aggregate orders.
-    // The tape is oldest-first, so the candidate to merge into is the last entry;
-    // merge when it shares symbol+side+action and falls in the same 500ms slot.
-    const slot = Math.floor(time / 500);
+    // Coalesce prints on the same contract + side into ONE aggregate order using a
+    // ROLLING window: all fills within FLOW_COALESCE_MS of the order's FIRST fill
+    // (anchorTs) merge together (sweep/block consolidation — "all trades under 1s
+    // add up"). Unlike fixed slots, two fills 600ms apart can't be split by a slot
+    // boundary. The tape is oldest-first, so the merge candidate is the last entry.
     const last = this.tape[this.tape.length - 1];
     if (
       last &&
       last.symbol === streamerSymbol &&
       last.side === tapeSide &&
       last.action === action &&
-      Math.floor(last.ts / 500) === slot
+      time - last.anchorTs <= this.coalesceMs
     ) {
       const newSize = last.size + size;
       // Size-weighted average fill price across the aggregated prints.
       last.price = newSize > 0 ? (last.price * last.size + price * size) / newSize : price;
       last.size = newSize;
       last.premium += premium;
+      last.fills = (last.fills || 1) + 1; // how many prints rolled into this order
+      // ts tracks the order's start; anchorTs stays the first fill so the rolling
+      // window measures from order open (a steady stream won't extend forever).
     } else {
-      // Always open the slot so small prints in the window coalesce into it
+      // Always open a new order so small prints in the window coalesce into it
       // (premium accumulates). The noise floor is applied at read time in
       // bucket(), so a sweep that starts small can still grow into a real block.
       this.tape.push({
-        ts: slot * 500, // pin to the 500ms slot start so later prints coalesce
+        ts: time, // order start = first fill time
+        anchorTs: time, // rolling-window anchor (first fill)
+        fills: 1,
         symbol: streamerSymbol,
         underlying: displayUnderlying(parsed.root),
         expiration: parsed.expiration,

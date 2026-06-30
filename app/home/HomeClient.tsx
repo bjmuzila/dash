@@ -9,7 +9,6 @@ import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/Strik
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import SignalsPanel from "@/components/dashboard/SignalsPanel";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, type CalcMode, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
@@ -975,7 +974,6 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
               <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
-                  { id: "signals", label: "Signals", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
@@ -989,11 +987,6 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel />
-                  </div>
-                )}
-                {activeTab === "signals" && (
-                  <div className="tab-panel-embed" style={{ margin: -24, height: "calc(100% + 48px)" }}>
-                    <SignalsPanel orders={flowOrders} bucket={flowBucket} esPrice={esFut} />
                   </div>
                 )}
               </div>

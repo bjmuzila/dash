@@ -500,7 +500,10 @@ export default function FlowPage() {
                   <span style={{ color: C.text }}>{o.underlying ? normTicker(o.underlying) : "—"}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
                   <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
-                  <span style={{ textAlign: "right", color: C.text }}>{o.size.toLocaleString()}</span>
+                  <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
+                    {o.size.toLocaleString()}
+                    {o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 11 }}> ×{o.fills}</span> : null}
+                  </span>
                   <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
                   <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
                 </div>
