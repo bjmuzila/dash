@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getSupabaseServer } from "@/lib/supabase/server";
 import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
 
@@ -24,7 +24,9 @@ function publicOrigin(req: NextRequest): string {
 // map the resulting subscription back to this user.
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await auth();
+    const supabase = await getSupabaseServer();
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id ?? null;
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const stripe = getStripe();
@@ -38,11 +40,10 @@ export async function POST(req: NextRequest) {
     // create one stamped with the Clerk id. Never trust a client-supplied id.
     let customerId = (await getSubscription(userId))?.stripe_customer_id ?? null;
     if (!customerId) {
-      const user = await currentUser();
-      const email = user?.emailAddresses?.[0]?.emailAddress;
+      const email = user?.email ?? undefined;
       const customer = await stripe.customers.create({
         email,
-        metadata: { clerk_user_id: userId },
+        metadata: { app_user_id: userId },
       });
       customerId = customer.id;
       await linkStripeCustomer(userId, customerId);

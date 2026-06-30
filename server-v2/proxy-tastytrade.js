@@ -28,6 +28,7 @@ const thetaAdapterQuotes = require('./proxy-thetadata'); // stock quotes when DA
 const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
+const { writeFlowTape } = require('./state/flow-history-writer');
 const { writeEsCandles } = require('./state/es-candle-writer');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
@@ -103,6 +104,10 @@ function plateauFloor(dte) {
 // far/near-OTM strikes compute with fallback gamma and produce inflated bars —
 // this gate prevents that half-warmed frame from ever reaching the chart.
 const GREEKS_READY_RATIO = Number(process.env.GREEKS_READY_RATIO || 0.85);
+// Kill switch: when set, broadcast the GEX chart on the first recompute frame
+// instead of waiting for the OI/greeks readiness gate. Fast load; the cold-start
+// frame may briefly show BS-fallback gamma before backfill lands (self-corrects).
+const GEX_GATE_DISABLED = /^(1|true|yes)$/i.test(process.env.GEX_GATE_DISABLED || '');
 // Plateau release: on thin expiries greeks coverage may never reach the ratio
 // above. Once coverage stops climbing meaningfully (gain < PLATEAU_EPS) for
 // PLATEAU_HITS consecutive recomputes AND a minimum floor is met, release the
@@ -1654,7 +1659,11 @@ class TastytradeProxy {
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
     // Aggregate + broadcast the SPX flow tape every 500ms (independent of GEX).
     this.flowTimer = setInterval(() => {
-      marketState.setFlow(this.flow.bucket(SYMBOL));
+      const bucket = this.flow.bucket(SYMBOL);
+      marketState.setFlow(bucket);
+      // Persist the (coalesced, floor-filtered) tape so /flow can backfill today.
+      // Fire-and-forget; no-ops without DATABASE_URL.
+      writeFlowTape(bucket.tape);
     }, FLOW_AGGREGATE_MS);
 
     // start() is the resume path for idle-OFF, and also runs on cold boot. Either
@@ -2329,7 +2338,17 @@ class TastytradeProxy {
     let atmIV = 0;
     let atmDist = Infinity;
 
-    for (const c of this._activeContracts()) {
+    const _dbgActive = this._activeContracts();
+    if (process.env.GEX_DEBUG) {
+      let _oiHits = 0, _gkHits = 0;
+      for (const c of _dbgActive) {
+        if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) _oiHits++;
+        if (this.greeks.get(c.streamerSymbol)) _gkHits++;
+      }
+      console.log(`[GEX_DEBUG] _recompute: spot=${this.spot} expiry=${this.expiry} active=${_dbgActive.length} oiHits=${_oiHits} gkHits=${_gkHits} contractsMap=${this.contracts.size}`);
+    }
+
+    for (const c of _dbgActive) {
       const q = this.quotes.get(c.streamerSymbol);
       const s = this.summaries.get(c.streamerSymbol);
       const rest = this.restOI.get(c.streamerSymbol);
@@ -2362,6 +2381,10 @@ class TastytradeProxy {
         }
       }
       staged.push({ c, oi, vol, T, iv, gk, mark: mid });
+    }
+
+    if (process.env.GEX_DEBUG && !staged.length) {
+      console.log(`[GEX_DEBUG] BAIL: staged.length=0 (active=${_dbgActive.length}) — every active contract skipped at the mid/oi/vol/gk filter`);
     }
 
     if (!staged.length) return;
@@ -2444,7 +2467,15 @@ class TastytradeProxy {
 
     // Gate: don't broadcast the GEX chart until BOTH OI backfill AND broker
     // greeks have substantially filled in (avoids the half-rendered / inflated
-    // chart on connect).
+    // chart on connect). Set GEX_GATE_DISABLED=1 to paint the first frame
+    // immediately (fast load; first frame or two may show cold BS-fallback gamma
+    // until OI backfill + first greeks poll land, self-corrects on next recompute).
+    if (GEX_GATE_DISABLED && !this.chartReady) {
+      this.chartReady = true;
+      this.warmedExpiries.add(this.expiry);
+      marketState.setStatus({ chartReady: true });
+    }
+
     if (!this.chartReady) {
       // Plateau detection: thin expiries (e.g. far-dated, illiquid) may never
       // reach GREEKS_READY_RATIO. Count consecutive recomputes where coverage

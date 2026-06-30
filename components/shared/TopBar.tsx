@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
 import SnapButton from "./SnapButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 
@@ -133,7 +133,7 @@ function saveTodayCloses(es: number, spx: number, date?: string) {
 // ─── component ───────────────────────────────────────────────────────────────
 export default function TopBar() {
   const router = useRouter();
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, user } = useAuth();
   // Owner-only nav items (Personal) hidden from non-owner accounts. Routes are
   // hard-gated in middleware; this just keeps the link out of the picker.
   const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();

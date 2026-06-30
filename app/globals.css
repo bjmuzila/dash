@@ -171,6 +171,62 @@ main.home-no-hover [style*="border-radius:16px"]:hover {
   border-color: rgba(30, 48, 80, 1) !important;
 }
 
+/* Dual-thumb range slider (e.g. /flow DTE range). Two overlaid <input
+   type=range> tracks: track ignores the mouse, thumbs stay grabbable. */
+input.dte-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: transparent;
+}
+input.dte-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #219EBC;
+  border: 2px solid #05060A;
+  box-shadow: 0 0 6px rgba(33, 158, 188, .5);
+  cursor: pointer;
+}
+input.dte-range::-moz-range-thumb {
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #219EBC;
+  border: 2px solid #05060A;
+  cursor: pointer;
+}
+input.dte-range::-moz-range-track {
+  background: transparent;
+}
+
+/* Opt-out wrapper: kill the auto card lift for every card inside it. Use on
+   pages (e.g. /flow) where the rise-on-hover feels wrong over dense data. */
+.no-card-lift .card-hover:hover,
+.no-card-lift [style*="border-radius: 16px"]:hover,
+.no-card-lift [style*="border-radius:16px"]:hover {
+  transform: none !important;
+  box-shadow: none !important;
+  border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* Filter chips/segmented buttons: hold their inline background on hover (inline
+   styles don't cover :hover, so the UA default flashed white). */
+.flow-chip:hover { filter: brightness(1.15); }
+
+/* /flow tape rows: highlight the hovered order row (inline styles can't do
+   :hover, so the row opts into this class). */
+.flow-tape-row {
+  transition: background-color .1s ease;
+}
+.flow-tape-row:hover {
+  background-color: rgba(33, 158, 188, 0.12);
+}
+
 /* Insights page cards (.greek-card) use 8/12px radius — give them the same lift. */
 .greek-card {
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;

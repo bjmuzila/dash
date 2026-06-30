@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import {
   getOrCreateBudgetProfile,
   adoptDefaultBudgetProfile,
@@ -32,7 +32,7 @@ const BUDGET_PROFILE_KEY = "owner";
 
 // Returns the profile key if access is allowed, or null to reject.
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (!userId) return { ok: false, status: 401 };
   if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };

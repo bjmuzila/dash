@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { SignInButton } from "@clerk/nextjs";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import SplashScreen from "@/components/landing/SplashScreen";
 
@@ -110,9 +109,9 @@ export default function LandingClient() {
 
       {/* Top-right sign-in for returning subscribers */}
       <div style={{ position: "absolute", top: 20, right: 24, zIndex: 3 }}>
-        <SignInButton forceRedirectUrl="/home">
-          <button style={topSignInBtn}>Sign in</button>
-        </SignInButton>
+        <Link href="/sign-in" style={{ ...topSignInBtn, display: "inline-block", textDecoration: "none" }}>
+          Sign in
+        </Link>
       </div>
 
       {/* Centered explainer card */}
@@ -172,7 +171,7 @@ export default function LandingClient() {
           {/* Waitlist form */}
           <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
             <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
-              Beta signups open June 30, 9:30 AM ET · official launch July 3. Sign up for the newsletter and get notified.
+              Beta signups open July 1, 9:30 AM ET · official launch July 3. Sign up for the newsletter and get notified.
             </label>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <input
@@ -232,9 +231,9 @@ export default function LandingClient() {
           </div>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <SignInButton forceRedirectUrl="/home">
-              <button style={primaryBtn}>Sign in to dashboard</button>
-            </SignInButton>
+            <Link href="/sign-in" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
+              Sign in to dashboard
+            </Link>
             <Link href="/pricing?from=landing" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
               Join the beta
             </Link>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { welcomeEmail, welcomeEmailText, WELCOME_SUBJECT } from "@/lib/emails/welcome";
 import {
   comingSoonEmail, comingSoonText, COMING_SOON_SUBJECT,
@@ -42,7 +42,7 @@ function buildTemplates(): Template[] {
 }
 
 export async function GET(req: NextRequest) {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (OWNER_USER_ID && userId !== OWNER_USER_ID) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

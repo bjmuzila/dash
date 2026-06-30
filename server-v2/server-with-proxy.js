@@ -134,6 +134,15 @@ function handleProxyRest(req, res) {
     return true;
   }
 
+  // /proxy/flow-history?date=YYYY-MM-DD&limit=2000
+  // Returns today's persisted flow tape as FlowOrder[] (oldest-first).
+  if (pathname === '/proxy/flow-history') {
+    handleFlowHistory(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'flow-history failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
   sendJson(res, 404, { error: 'unknown proxy route', path: pathname });
   return true;
 }
@@ -211,6 +220,51 @@ async function handleGexHistory(req, res) {
   }
 
   sendJson(res, 200, { mode: 'point', ages, baselines });
+}
+
+// ── /proxy/flow-history ────────────────────────────────────────────────────
+// Returns persisted flow prints for a date (default today ET), shaped as the
+// client FlowOrder[] so the /flow page can seed before the live WS takes over.
+async function handleFlowHistory(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const date = searchParams.get('date') || todayYmdET();
+  let limit = Number(searchParams.get('limit') || 5000);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 5000;
+  limit = Math.min(limit, 20000);
+
+  const pool = getHistPool();
+  if (!pool) return sendJson(res, 200, { date, tape: [] });
+
+  // Newest `limit` rows, then re-sorted oldest-first to match the live tape.
+  const { rows } = await pool.query(
+    `SELECT * FROM (
+       SELECT ts, symbol, underlying, expiration, strike, type, side, action,
+              bucket, price, size, premium, is_otm
+         FROM flow_prints
+        WHERE date = $1
+        ORDER BY ts DESC
+        LIMIT $2
+     ) t ORDER BY ts ASC`,
+    [date, limit]
+  );
+
+  const tape = rows.map((r) => ({
+    ts: Number(r.ts),
+    symbol: r.symbol,
+    underlying: r.underlying ?? undefined,
+    expiration: r.expiration ?? undefined,
+    strike: Number(r.strike),
+    type: r.type,
+    side: r.side,
+    action: r.action,
+    bucket: r.bucket,
+    price: Number(r.price),
+    size: Number(r.size),
+    premium: Number(r.premium),
+    isOtm: r.is_otm === true,
+  }));
+
+  sendJson(res, 200, { date, tape });
 }
 
 // ---------------------------------------------------------------------------

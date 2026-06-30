@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 import { HOME_THEME, DOCK_THEME } from "./homeTheme";
 import { useMobileNav } from "./MobileNavContext";
@@ -279,7 +279,7 @@ function useGroupOrder() {
 // hamburger button's bounding rect (so the panel lines up under it).
 export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   const pathname = usePathname();
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, user } = useAuth();
   // Owner-only nav groups (Owner/Backend) are hidden from non-owner accounts.
   // Baked at build via NEXT_PUBLIC_OWNER_USER_ID (same value the WS lifecycle
   // uses). If unset, fall back to any signed-in user so the owner isn't locked

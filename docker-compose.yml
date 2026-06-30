@@ -6,10 +6,7 @@ services:
         # NEXT_PUBLIC_* are inlined into the client bundle at BUILD time.
         # Set this in .env (compose reads it) so the owner-only UI works.
         NEXT_PUBLIC_OWNER_USER_ID: ${NEXT_PUBLIC_OWNER_USER_ID:-}
-        # Clerk key must be present at BUILD time too — prerendering pages that
-        # init Clerk (/budget, /_not-found) throws "Missing publishableKey" otherwise.
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
-        # Supabase client keys are also inlined at BUILD time (subscriber /chat).
+        # Supabase client keys are inlined at BUILD time (auth + subscriber /chat).
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
     image: bzila-dashboard:latest

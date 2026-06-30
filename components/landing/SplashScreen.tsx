@@ -5,8 +5,8 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 const APP_NAME = (process.env.NEXT_PUBLIC_APP_NAME || "CB Edge").toUpperCase();
 
-// Beta signups open Mon Jun 30 2026, 9:30 AM ET (EDT = UTC-4 → 13:30 UTC).
-const TARGET = Date.parse("2026-06-30T13:30:00Z");
+// Beta signups open Wed Jul 1 2026, 9:30 AM ET (EDT = UTC-4 → 13:30 UTC).
+const TARGET = Date.parse("2026-07-01T13:30:00Z");
 const FADE = 650; // fade-out duration (ms)
 const pad = (n: number) => String(Math.max(0, n)).padStart(2, "0");
 
@@ -193,7 +193,7 @@ export default function SplashScreen() {
             fontSize: "clamp(14px,2.2vw,22px)", fontWeight: 900, letterSpacing: ".03em",
             color: "#FFFFFF",
           }}>
-            BETA SIGNUPS&nbsp;&nbsp;MONDAY JUNE 30&nbsp;&nbsp;9:30 AM ET
+            BETA SIGNUPS&nbsp;&nbsp;WEDNESDAY JULY 1&nbsp;&nbsp;9:30 AM ET
           </span>
         </div>
       </div>

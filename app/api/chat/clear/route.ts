@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { createClient } from "@supabase/supabase-js";
 
 // Owner-only: wipe all subscriber-chat messages.
@@ -15,7 +15,7 @@ const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
 const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 export async function POST() {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (OWNER_USER_ID && userId !== OWNER_USER_ID) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

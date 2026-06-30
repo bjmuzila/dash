@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getPageLoadStatus, upsertPageLoadStatus, insertPageVisit } from "@/lib/db";
 
 // Pull the client IP from the proxy headers (Cloudflare / VPS set these). The
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     if (isLoaded) {
       try {
         let userId: string | null = null;
-        try { userId = (await auth()).userId ?? null; } catch { /* unauthenticated */ }
+        try { userId = await getServerUserId(); } catch { /* unauthenticated */ }
         await insertPageVisit({
           page_key: String(body.pageKey ?? body.page_key ?? ""),
           page_label: body.pageLabel == null ? null : String(body.pageLabel),

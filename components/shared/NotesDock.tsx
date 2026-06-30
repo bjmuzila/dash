@@ -1,6 +1,6 @@
 "use client";
 
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 import { useNotes, NotesBody } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
@@ -15,7 +15,7 @@ const PANEL_WIDTH = 320;
  * and no blur over the page. Toggled by the 🖍️ NOTES button in GlobalToolbar.
  */
 export default function NotesDock() {
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, user } = useAuth();
   const { open, closePanel } = useNotesPanel();
   const { notes, addNote, editNote, deleteNote } = useNotes(user?.id);
 

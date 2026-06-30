@@ -1,27 +1,23 @@
 /**
- * ws-auth.js — connection gate for the /ws/gex broadcaster.
+ * ws-auth.js — connection gate for the /ws/gex broadcaster (Supabase Auth).
  *
  * PURPOSE
  *   The WebSocket carries the paid product (live SPX GEX). Without this gate,
  *   anyone who knows the URL can stream it for free. This module verifies, at
- *   upgrade time, that the connecting user is (a) a real signed-in Clerk user
+ *   upgrade time, that the connecting user is (a) a real signed-in Supabase user
  *   and (b) either the owner or an active/trialing subscriber — the SAME rule
  *   the pages enforce via lib/subscription.getAccessForUser.
  *
  * HOW IT AUTHENTICATES (cookie-based — no client changes)
- *   The browser automatically sends the Clerk session cookie with the WS upgrade
- *   request (same-origin). We hand the upgrade request to Clerk's backend
- *   authenticateRequest(), which validates that cookie and returns the signed-in
- *   userId. No token needs to be threaded through the 7+ client call sites.
- *
- *   NOTE: cookie auth is reliable on a PRODUCTION Clerk instance (first-party
- *   cookie on your domain). On a dev instance (*.accounts.dev) the handshake
- *   cookie is less reliable for non-navigational requests, so enable
- *   WS_AUTH_REQUIRED only once you're on production Clerk.
+ *   The browser automatically sends the Supabase auth cookie with the WS upgrade
+ *   request (same-origin). @supabase/ssr stores the session as a cookie named
+ *   `sb-<ref>-auth-token` whose value is `base64-<base64(json)>`, possibly split
+ *   into `.0`, `.1` … chunks. We reassemble it, pull out the `access_token`
+ *   (a JWT), and verify it by calling supabase.auth.getUser(token) — which
+ *   revalidates against the auth server and returns the user id.
  *
  * SAFETY
- *   - Controlled by env WS_AUTH_REQUIRED (checked by the caller). This module
- *     never enables itself.
+ *   - Controlled by env WS_AUTH_REQUIRED (checked by the caller). Never self-enables.
  *   - Fail-closed when enabled: anything it can't positively verify → ok:false.
  *     The owner is allowed even if the subscription DB lookup fails, so a billing
  *     hiccup can't lock the owner out.
@@ -33,13 +29,17 @@
 const PAID_STATUSES = new Set(['active', 'trialing']); // sync with lib/db.ts
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || '').trim();
 
-// ── Clerk backend client ─────────────────────────────────────────────────────
-let _clerk = null;
-function getClerk() {
-  if (_clerk) return _clerk;
-  const { createClerkClient } = require('@clerk/backend');
-  _clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
-  return _clerk;
+// ── Supabase client (anon key; used only to verify tokens) ───────────────────
+let _supabase = null;
+function getSupabase() {
+  if (_supabase) return _supabase;
+  const { createClient } = require('@supabase/supabase-js');
+  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
+  const anon = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
+  _supabase = createClient(url, anon, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return _supabase;
 }
 
 // ── Subscription lookup (own small pool, mirrors server-with-proxy style) ────
@@ -72,6 +72,8 @@ function getAuthPool() {
 async function getStatusForUser(userId) {
   const pool = getAuthPool();
   if (!pool) return null;
+  // Column kept as `clerk_user_id` for schema continuity; it now holds the
+  // Supabase auth.users UUID (fresh-start migration — no rename needed).
   const r = await pool.query(
     'SELECT status FROM subscriptions WHERE clerk_user_id = $1 LIMIT 1',
     [userId]
@@ -88,49 +90,89 @@ async function getAccessForUser(userId) {
   return { ok: false, reason: 'inactive', status };
 }
 
-/**
- * Build a minimal Fetch-API Request that mirrors the WS upgrade request, so
- * Clerk's authenticateRequest() can read the cookie/headers from it. We only
- * need headers (cookie, authorization, origin, host) — there's no body.
- */
-function toFetchRequest(upgradeReq) {
-  const host = upgradeReq.headers.host || 'localhost';
-  // Scheme doesn't matter for cookie reading; use https so Clerk treats it as secure.
-  const url = `https://${host}${upgradeReq.url || '/'}`;
-  const headers = new Headers();
-  for (const [k, v] of Object.entries(upgradeReq.headers || {})) {
-    if (Array.isArray(v)) headers.set(k, v.join(', '));
-    else if (v != null) headers.set(k, String(v));
+// ── Cookie → Supabase access token ───────────────────────────────────────────
+function parseCookies(header) {
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx < 0) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
   }
-  return new Request(url, { method: 'GET', headers });
+  return out;
 }
 
 /**
- * Verify a WS upgrade request via the Clerk session cookie.
+ * Reassemble and decode the @supabase/ssr auth cookie into its session object,
+ * then return the access_token (JWT). Returns null if not present/parseable.
+ */
+function accessTokenFromCookies(cookies) {
+  // Find the base cookie name: sb-<ref>-auth-token (chunks add .0, .1, …).
+  const names = Object.keys(cookies);
+  const base = names.find((n) => /^sb-.*-auth-token$/.test(n));
+  if (!base) {
+    // Chunked-only case: sb-<ref>-auth-token.0 etc. with no bare base name.
+    const chunkBase = names
+      .map((n) => n.match(/^(sb-.*-auth-token)\.\d+$/))
+      .find(Boolean);
+    if (!chunkBase) return null;
+    return reassemble(cookies, chunkBase[1]);
+  }
+  // A bare base cookie may itself be the whole value, OR chunks may also exist.
+  if (names.some((n) => n.startsWith(base + '.'))) {
+    return reassemble(cookies, base);
+  }
+  return decodeSession(cookies[base]);
+}
+
+function reassemble(cookies, baseName) {
+  let raw = '';
+  for (let i = 0; ; i++) {
+    const chunk = cookies[`${baseName}.${i}`];
+    if (chunk == null) break;
+    raw += chunk;
+  }
+  return raw ? decodeSession(raw) : null;
+}
+
+function decodeSession(raw) {
+  if (!raw) return null;
+  try {
+    let json = raw;
+    if (raw.startsWith('base64-')) {
+      json = Buffer.from(raw.slice('base64-'.length), 'base64').toString('utf8');
+    }
+    const session = JSON.parse(json);
+    return session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify a WS upgrade request via the Supabase session cookie.
  * Returns { ok, userId?, reason }. Only call when WS_AUTH_REQUIRED === "1".
  */
 async function verifyWsRequest(upgradeReq) {
-  if (!process.env.CLERK_SECRET_KEY) {
-    console.error('[ws-auth] CLERK_SECRET_KEY missing — rejecting (auth required)');
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    console.error('[ws-auth] Supabase env missing — rejecting (auth required)');
     return { ok: false, reason: 'server-misconfig' };
   }
 
   let userId;
   try {
-    const clerk = getClerk();
-    const req = toFetchRequest(upgradeReq);
-    // authorizedParties guards against cookies minted for other origins; include
-    // your production origin(s). Falls back to permissive if env unset.
-    const authorizedParties = (process.env.CLERK_AUTHORIZED_PARTIES || '')
-      .split(',').map((s) => s.trim()).filter(Boolean);
-    const requestState = await clerk.authenticateRequest(req, {
-      ...(authorizedParties.length ? { authorizedParties } : {}),
-    });
-    if (!requestState.isSignedIn) {
-      return { ok: false, reason: requestState.reason || 'not-signed-in' };
+    const cookies = parseCookies(upgradeReq.headers && upgradeReq.headers.cookie);
+    const token = accessTokenFromCookies(cookies);
+    if (!token) return { ok: false, reason: 'no-token' };
+
+    const supabase = getSupabase();
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data?.user) {
+      return { ok: false, reason: error?.message || 'invalid-token' };
     }
-    const authData = requestState.toAuth();
-    userId = authData?.userId;
+    userId = data.user.id;
   } catch (e) {
     return { ok: false, reason: 'verify-error', detail: e?.message };
   }

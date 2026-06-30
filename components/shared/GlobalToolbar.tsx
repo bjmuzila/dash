@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
+import UserMenu from "./UserMenu";
 import { HOME_THEME, DOCK_THEME } from "./homeTheme";
 import { useNotes } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
@@ -183,7 +184,7 @@ function PencilIcon({ size = 18 }: { size?: number }) {
 }
 
 export default function GlobalToolbar() {
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, user } = useAuth();
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
   const { menuOpen, toggleMenu } = useMobileNav();
@@ -386,13 +387,10 @@ export default function GlobalToolbar() {
             </div>
           )}
 
-          {/* ── Clerk user button ── */}
+          {/* ── User menu (avatar + sign out) ── */}
           {isSignedIn && (
             <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
-              <UserButton
-                afterSignOutUrl="/"
-                appearance={{ elements: { avatarBox: { width: 38, height: 38 } } }}
-              />
+              <UserMenu />
             </div>
           )}
         </div>

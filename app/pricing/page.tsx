@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { auth } from "@clerk/nextjs/server";
-import { SignInButton } from "@clerk/nextjs";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getAccess } from "@/lib/subscription";
 import { getSubscription } from "@/lib/db";
 import PricingActions from "@/components/pricing/PricingActions";
@@ -35,7 +34,7 @@ export default async function PricingPage({
   searchParams: Promise<{ from?: string }>;
 }) {
   const { from } = await searchParams;
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   const access = userId ? await getAccess() : { ok: false, reason: "unauthenticated" as const };
   const sub = userId ? await getSubscription(userId) : undefined;
   const hasBilling = !!sub?.stripe_customer_id;
@@ -58,9 +57,9 @@ export default async function PricingPage({
           ← Back
         </Link>
         {!userId && (
-          <SignInButton forceRedirectUrl="/home">
-            <button style={topBtn}>Sign in</button>
-          </SignInButton>
+          <Link href="/sign-in" style={{ ...topBtn, display: "inline-block", textDecoration: "none" }}>
+            Sign in
+          </Link>
         )}
       </header>
 

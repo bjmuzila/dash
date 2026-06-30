@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getTdPrefs, upsertTdPrefs } from "@/lib/db";
 
 // Per-user Traders Dashboard prefs (schedule, tasks, weather zip). Keyed on the
@@ -7,7 +7,7 @@ import { getTdPrefs, upsertTdPrefs } from "@/lib/db";
 
 export async function GET() {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const prefs = await getTdPrefs(userId);
     return NextResponse.json({
@@ -22,7 +22,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = await req.json();
     const fields: { zip?: string | null; schedule?: unknown[]; tasks?: unknown[] } = {};

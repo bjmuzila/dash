@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { createClient } from "@supabase/supabase-js";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getSubscription, PAID_STATUSES, listWaitlist, addEmailSend, listEmailSends } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 
@@ -18,48 +19,38 @@ const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
 const FROM_EMAIL = (process.env.EMAIL_FROM || "CB Edge <hello@cbedge.net>").trim();
 
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (!userId) return { ok: false, status: 401 };
   if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };
 }
 
-// getUserList may return { data: User[] } (v5+) or a bare User[] (older). Normalize.
-function userArray(res: unknown): Record<string, unknown>[] {
-  if (Array.isArray(res)) return res as Record<string, unknown>[];
-  const r = res as { data?: unknown[] };
-  return Array.isArray(r?.data) ? (r.data as Record<string, unknown>[]) : [];
-}
-
-// Best-effort primary email for a Clerk user object across SDK shapes.
-function primaryEmail(u: Record<string, unknown>): string | null {
-  const addrs = (u.emailAddresses ?? u.email_addresses) as
-    | Array<{ id?: string; emailAddress?: string; email_address?: string }>
-    | undefined;
-  if (!Array.isArray(addrs) || addrs.length === 0) return null;
-  const primaryId = (u.primaryEmailAddressId ?? u.primary_email_address_id) as string | undefined;
-  const primary = primaryId ? addrs.find((a) => a.id === primaryId) : undefined;
-  const pick = primary ?? addrs[0];
-  return pick?.emailAddress ?? pick?.email_address ?? null;
-}
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 interface Recipient { userId: string; email: string; paid: boolean }
 
-// Page through every Clerk user and resolve {email, paid} for each. paid is
-// derived from the subscriptions table (active/trialing). Capped to avoid a
-// runaway loop on very large instances.
+// Page through every Supabase Auth user and resolve {email, paid} for each. paid
+// is derived from the subscriptions table (active/trialing). Uses the service-
+// role key (server-only) for the admin user list. Capped to avoid a runaway loop.
 async function listRecipients(): Promise<Recipient[]> {
-  const client = await clerkClient();
+  if (!SUPABASE_URL || !SERVICE_KEY) {
+    throw new Error("Supabase admin not configured (SUPABASE_SERVICE_ROLE_KEY)");
+  }
+  const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
   const out: Recipient[] = [];
-  const PAGE = 100;
-  for (let offset = 0; offset < 5000; offset += PAGE) {
-    const res = await client.users.getUserList({ orderBy: "-created_at", limit: PAGE, offset });
-    const batch = userArray(res);
+  const PER_PAGE = 200;
+  for (let page = 1; page <= 25; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+    if (error) throw new Error(error.message);
+    const batch = data?.users ?? [];
     if (batch.length === 0) break;
     for (const u of batch) {
-      const email = primaryEmail(u);
+      const email = u.email ?? null;
       if (!email) continue;
-      const id = String(u.id ?? "");
+      const id = u.id;
       let paid = false;
       try {
         const sub = id ? await getSubscription(id) : undefined;
@@ -67,7 +58,7 @@ async function listRecipients(): Promise<Recipient[]> {
       } catch { /* treat lookup failure as unpaid */ }
       out.push({ userId: id, email, paid });
     }
-    if (batch.length < PAGE) break;
+    if (batch.length < PER_PAGE) break;
   }
   return out;
 }
@@ -196,7 +187,7 @@ export async function POST(req: NextRequest) {
     // Record the send in the history log (summary only). Non-fatal — a logging
     // failure must not fail the send response.
     try {
-      const { userId } = await auth();
+      const userId = await getServerUserId();
       await addEmailSend({
         subject,
         audience,

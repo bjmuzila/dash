@@ -1,10 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
-import { ClerkProvider } from "@clerk/nextjs";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
-import { dark } from "@clerk/themes";
 import "./globals.css";
+import { AuthProvider } from "@/components/auth/AuthProvider";
 import LayoutShell from "@/components/shared/LayoutShell";
 
 export const metadata: Metadata = {
@@ -15,13 +14,11 @@ export const metadata: Metadata = {
     siteName: "CB Edge",
     title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
-    // image auto-injected from app/opengraph-image.tsx
   },
   twitter: {
     card: "summary_large_image",
     title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
-    // image auto-injected from app/opengraph-image.tsx
   },
 };
 
@@ -37,15 +34,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ClerkProvider
-      signUpUrl="/"
-      appearance={{ baseTheme: dark, variables: { colorPrimary: "#219EBC" } }}
-    >
-      <html lang="en" className={inter.variable} suppressHydrationWarning>
-        <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
+      <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
+        <AuthProvider>
           <LayoutShell>{children}</LayoutShell>
-        </body>
-      </html>
-    </ClerkProvider>
+        </AuthProvider>
+      </body>
+    </html>
   );
 }

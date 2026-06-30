@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 /**
  * Shared WebSocket lifecycle gate. Returns whether a live socket SHOULD be open,
@@ -23,7 +23,7 @@ const INACTIVITY_MS = Number(
 const OWNER_USER_ID = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
 
 export function useWsLifecycle(): boolean {
-  const { user } = useUser();
+  const { user } = useAuth();
   const isOwner = !!OWNER_USER_ID && (user?.id || "").trim() === OWNER_USER_ID;
 
   const [shouldConnect, setShouldConnect] = useState(true);

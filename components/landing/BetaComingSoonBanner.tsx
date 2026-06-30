@@ -4,7 +4,7 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 // "Beta signups coming soon" banner. Drop on the landing or pricing page.
 // Matches the app theme (dark + cyan accent strip + radial glow). Dates are
-// the beta open (6/30 9:30am ET) and official launch (7/3).
+// the beta open (7/1 9:30am ET) and official launch (7/3).
 export default function BetaComingSoonBanner({
   style,
 }: {
@@ -57,7 +57,7 @@ export default function BetaComingSoonBanner({
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <DateChip k="Beta opens" v="Jun 30 · 9:30 AM ET" accent={T.cyan} />
+        <DateChip k="Beta opens" v="Jul 1 · 9:30 AM ET" accent={T.cyan} />
         <DateChip k="Official launch" v="July 3" accent={T.orange} />
       </div>
     </div>

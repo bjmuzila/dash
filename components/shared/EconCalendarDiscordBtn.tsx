@@ -9,11 +9,11 @@
  */
 
 import { useState, useCallback } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 // ── Owner gate (cosmetic — matches DataBox/NavMenu) ───────────────────────────
 function useIsOwner(): boolean {
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, user } = useAuth();
   const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
   return ownerId ? user?.id === ownerId : !!isSignedIn;
 }
