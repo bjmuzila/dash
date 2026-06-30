@@ -477,20 +477,20 @@ function AccordionCard({
   children: React.ReactNode;
   accent?: string;
 }) {
-  void open; void onToggle; void id;
+  void open; void onToggle; void id; void accent;
   return (
-    <div style={{ ...homePanelStyle, overflow: "visible", borderTop: `2px solid ${accent}`, borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
+    <div style={{ ...homePanelStyle, overflow: "visible", background: "linear-gradient(180deg, #0a0a0a 0%, #000 100%)", borderTop: `1px solid ${HOME_THEME.border}`, borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
           padding: "12px 16px",
           borderBottom: `1px solid ${HOME_THEME.border}`,
-          background: `${accent}0d`,
+          background: "transparent",
           borderTopLeftRadius: 10, borderTopRightRadius: 10,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-          <span style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
+          <span style={{ width: 3, height: 14, borderRadius: 2, background: HOME_THEME.border, flexShrink: 0 }} />
           <span style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
             {title}
           </span>

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-29 — Fix: Volume Net GEX blank on /home (Theta migration dropped option volume)
+
+Volume Net GEX (`netVolGEX`, the Vol-Only column) was 0 chain-wide because the ThetaData options migration left `_refreshOI()` in `server-v2/proxy-tastytrade.js` pulling only the OI snapshot in `useTheta()` mode and hardcoding `volume: prev.volume || 0` (~L1741) — nothing ever sourced Theta day-volume, so every strike had `volume=0` and `netVolGEX` (computed in `app/home/page.tsx:164` from `callVolume`/`putVolume`) was always 0. Added `fetchVolumeTheta()` to `server-v2/proxy-thetadata.js` (whole-expiry `/v3/option/snapshot/ohlc`, keyed `exp|strike|type` → day volume), exported it, and wired it into `_refreshOI` via `Promise.all([fetchOpenInterestTheta, fetchVolumeTheta])`, merging `volMap` into `restOI` (prior-value fallback when the volume snapshot is empty pre-open). OPEN: confirm the v3 `ohlc` snapshot volume field key (`volume` vs `day_volume`) against a live response, then VPS rebuild + restart server-v2.
+
+## 2026-06-29 — Clerk prod-instance cutover attempt (REVERTED) + security false-alarm review
+
+No repo files changed; all work was in the Clerk dashboard and VPS `/opt/dashboard/.env.local` (gitignored). Reviewed a third-party "security audit" claim and confirmed it was a false alarm — the flagged `display_config`/Turnstile site key are public by design, no `sk_` secret was ever client-side (verified via repo grep + dashboard), and signup abuse was already blocked (Restricted mode + Bot/Turnstile + email verification all ON). Attempted to point cbedge.net auth at the Clerk **Production** instance by swapping `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY` to `pk_live`/`sk_live` and updating `OWNER_USER_ID`/`NEXT_PUBLIC_OWNER_USER_ID` to the prod user id, but the prod instance's Frontend API is misconfigured (key decoded to `clurk.cbedge.net`, host returns persistent **503** despite DNS Verified + SSL Issued), causing a sign-in outage; **reverted `.env.local` to the working dev `pk_test`/`sk_test` keys + original dev owner id and rebuilt** to restore login. OPEN: prod Clerk instance still broken — escalate to Clerk support (Frontend API 503 with correct base domain); rotate the dev `sk_test` key (exposed in chat during recovery); separate known issue = slow `/home` SPX-chain load (client-render waterfall; fix = `/home-fast` server-render refactor, still pending).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-06-29 — ThetaData hybrid cutover (Phase 0→5) + VPS deploy + spot/VIX staged
 
 Built the full ThetaData migration behind flags: `server-v2/config/data-source.js` (`DATA_SOURCE` + `INDEX_SOURCE` flags), `server-v2/proxy-thetadata.js` (REST chain/OI/greeks adapter, FPSS Trade+Quote flow stream, index price stream, EOD/OI/greeks history helpers), and wired into `server-v2/proxy-tastytrade.js` `_refreshOI`/`_refreshGreeksTheta`/`_onThetaIndex` with dxLink option-flow + SPX/VIX branches gated off in theta mode. Validated OI 178/178 vs TT and GEX walls matching; backfilled 2y EOD GEX into `eod_gex` (`server-v2/scripts/theta-backfill-eod.mjs`); deployed the Theta Terminal as a Docker sibling service (`deploy/theta/`); removed the dead CBOE OI cross-check; spot/VIX-on-Theta staged flag-off pending an RTH real-time check.

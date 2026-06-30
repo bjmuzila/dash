@@ -153,6 +153,29 @@ async function fetchOpenInterestTheta(underlying = SYMBOL, expiration) {
 }
 
 // ---------------------------------------------------------------------------
+// Whole-chain day-VOLUME snapshot for one expiration.
+//   returns Map keyed by `exp|strike|type` -> volume (number)
+// OHLC snapshot carries today's traded volume per contract. Like OI, an empty
+// response (pre-open / weekend) is "no update" — caller preserves prior volume.
+// Feeds netVolGEX (the Vol-Only column); without it Volume Net GEX is blank.
+// ---------------------------------------------------------------------------
+async function fetchVolumeTheta(underlying = SYMBOL, expiration) {
+  const root = thetaRoot(underlying);
+  const out = new Map();
+  const json = await thetaGet(
+    `/v3/option/snapshot/ohlc?symbol=${encodeURIComponent(root)}&expiration=${expiration}`,
+  );
+  for (const row of flatSnapshotRows(json)) {
+    const type = rightToType(row.right);
+    const strike = Number(row.strike);
+    if (!(strike > 0)) continue;
+    out.set(keyOf(row.expiration || expiration, strike, type),
+      Number(row.volume ?? row.day_volume) || 0);
+  }
+  return out; // may be empty pre-open — caller treats empty as "no update"
+}
+
+// ---------------------------------------------------------------------------
 // Whole-chain greeks snapshot (first-order + IV) for one expiration.
 //   returns Map keyed by `exp|strike|type` -> { gamma, delta, theta, vega, iv }
 // Theta primary for OPTIONS greeks (per user). Vanna/charm stay BS-derived
@@ -568,6 +591,7 @@ module.exports = {
   rowsFromV3,
   fetchChainTheta,
   fetchOpenInterestTheta,
+  fetchVolumeTheta,
   fetchGreeksTheta,
   buildExpiryRows,
   toThetaStreamStrike,

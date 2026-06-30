@@ -192,14 +192,22 @@ const TONE_COLOR: Record<Cell["tone"], string> = {
   mixed: "#facc15",
 };
 
+// HH:MM ET formatter for the Behavior Demonstration update stamp.
+function etMinute(ts: number): string {
+  return new Date(ts).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+
 export default function RegimeMatrix({
-  gex, dex, chex, vex, hasData,
+  gex, dex, chex, vex, hasData, updatedTs = null,
 }: {
   gex: number | null;
   dex: number | null;
   chex: number | null;   // CEX
   vex: number | null;
   hasData: boolean;
+  updatedTs?: number | null;
 }) {
   // Live signs → active row/col.
   const liveRow = useMemo(
@@ -344,9 +352,18 @@ export default function RegimeMatrix({
         {/* ── Behavior demonstration ── */}
         <div style={{ minWidth: 0 }}>
           <div style={{
-            fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
-            textTransform: "uppercase", marginBottom: 8,
-          }}>Behavior Demonstration</div>
+            display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 8,
+          }}>
+            <div style={{
+              fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+              textTransform: "uppercase",
+            }}>Behavior Demonstration</div>
+            {updatedTs != null && hasData && (
+              <div style={{ fontSize: 10, color: "#7e8ea0", fontWeight: 700, fontFamily: "monospace", letterSpacing: ".04em" }}>
+                updated {etMinute(updatedTs)} ET
+              </div>
+            )}
+          </div>
 
           {/* price-action sketch */}
           <div style={{

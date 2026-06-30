@@ -1007,7 +1007,7 @@ export default function GreeksPage() {
         <div>
           <div style={{ fontSize: 20, fontWeight: 900, color: HOME_THEME.text, letterSpacing: ".03em" }}>Greeks</div>
           <div style={{ fontSize: 11, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em" }}>
-            SPX dealer exposure · data {lastRefresh}{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
+            SPX dealer exposure · updated {lastRefresh} ET{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
           </div>
         </div>
         <Dock className="dock-noscroll">
@@ -1028,7 +1028,7 @@ export default function GreeksPage() {
       </div>
 
       {/* Regime matrix — live regime highlighted, one-flip neighbors dimly lit */}
-      <RegimeMatrix gex={gexVal} dex={dexVal} chex={chexVal} vex={vexVal} hasData={!!d} />
+      <RegimeMatrix gex={gexVal} dex={dexVal} chex={chexVal} vex={vexVal} hasData={!!d} updatedTs={d ? (latestView?.ts ?? null) : null} />
 
       {/* Cards */}
       <div className="greeks-cards" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>

@@ -1727,7 +1727,10 @@ class TastytradeProxy {
       // means "no update" — DON'T overwrite a known OI with empty (preserve the
       // existing dxFeed-era guard semantics).
       const exp = this.expiry; // YYYY-MM-DD
-      const oiMap = await thetaAdapter.fetchOpenInterestTheta(SYMBOL, exp).catch(() => new Map());
+      const [oiMap, volMap] = await Promise.all([
+        thetaAdapter.fetchOpenInterestTheta(SYMBOL, exp).catch(() => new Map()),
+        thetaAdapter.fetchVolumeTheta(SYMBOL, exp).catch(() => new Map()),
+      ]);
       if (oiMap.size === 0) {
         // legitimate empty — keep whatever restOI we already have, recount it
         for (const c of active) { if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) filled++; }
@@ -1736,9 +1739,15 @@ class TastytradeProxy {
         for (const c of active) {
           const row = oiMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
           if (row && Number.isFinite(row.oi)) {
-            // Volume isn't in the OI snapshot; keep any prior volume fallback.
+            // Volume comes from the OHLC snapshot (volMap); fall back to any prior
+            // value when this strike isn't in the (possibly empty) volume snapshot.
             const prev = this.restOI.get(c.streamerSymbol) || {};
-            this.restOI.set(c.streamerSymbol, { oi: row.oi, volume: prev.volume || 0, mark: prev.mark || 0 });
+            const vol = volMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
+            this.restOI.set(c.streamerSymbol, {
+              oi: row.oi,
+              volume: Number.isFinite(vol) ? vol : (prev.volume || 0),
+              mark: prev.mark || 0,
+            });
             if (row.oi > 0) filled++;
           } else if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) {
             filled++; // strike not in snapshot but we already had OI — keep it

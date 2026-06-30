@@ -468,6 +468,10 @@ export default function EsCandlesPage() {
   // Cached right price-axis gutter width (px). Updated only on >=1px change so
   // the heatmap's right edge doesn't shimmer with sub-pixel label wobble.
   const hmScaleWRef = useRef(0);
+  // Visible candle price band (ES) — min low / max high of the loaded bars.
+  // Heatmap cells fade with distance from this band so far-away GEX walls read
+  // as faint context instead of loud bars floating in the dead zone above price.
+  const candleBandRef = useRef<{ lo: number; hi: number } | null>(null);
   // Basis (esFut - spx) kept in a ref so the overlay draw reads it without
   // re-subscribing. Updated by the WS listener.
   const basisRef = useRef(0);
@@ -1017,6 +1021,15 @@ export default function EsCandlesPage() {
     }));
 
     candleSeries.setData(candleData);
+    // Track the price band the candles actually occupy so the heatmap can fade
+    // by distance from it.
+    if (candleData.length) {
+      let lo = Infinity, hi = -Infinity;
+      for (const r of rows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
+      candleBandRef.current = Number.isFinite(lo) ? { lo, hi } : null;
+    } else {
+      candleBandRef.current = null;
+    }
     // Fit on first data load AND whenever the latest bar's ET day advances past
     // the day we last fit for — so the chart follows the session into the new
     // day instead of staying parked on the prior one. Within the same day we
@@ -1218,6 +1231,19 @@ export default function EsCandlesPage() {
           // Active metric, read from the ref so live WS draws pick it up.
           const metric = gexMetricRef.current;
           const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
+          // Distance fade: cells inside the visible candle band paint at full
+          // weight; beyond it they fade out over `fadeSpan` ES points so far
+          // walls become faint context instead of loud floating bars. Returns a
+          // 0..1 multiplier applied to each cell's alpha.
+          const band = candleBandRef.current;
+          const fadeSpan = 30; // ES points to fade to ~floor past the band edge
+          const distFade = (esStrike: number): number => {
+            if (!band) return 1;
+            const d = esStrike < band.lo ? band.lo - esStrike
+                    : esStrike > band.hi ? esStrike - band.hi : 0;
+            if (d <= 0) return 1;
+            return Math.max(0.12, 1 - d / fadeSpan);
+          };
           for (const col of cols) {
             const sx = slotX(col.slotTs);
             if (!sx) continue;
@@ -1235,13 +1261,19 @@ export default function EsCandlesPage() {
               const cell = sorted[i];
               const color = gexColor(valOf(cell), colMax, intensity, colTop3);
               if (!color) continue;
+              const fade = distFade(cell.strike + basis);
+              if (fade <= 0) continue;
+              // Scale the rgba alpha by the distance fade.
+              const faded = fade >= 0.999
+                ? color
+                : color.replace(/,([0-9.]+)\)$/, (_m, a) => `,${(parseFloat(a) * fade).toFixed(3)})`);
               const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
               const pTop = series.priceToCoordinate(nextStrike + basis);
               const pBot = series.priceToCoordinate(cell.strike + basis);
               if (pTop == null || pBot == null) continue;
               const top = Math.min(pTop, pBot);
               const cellH = Math.max(1, Math.abs(pBot - pTop));
-              bctx.fillStyle = color;
+              bctx.fillStyle = faded;
               // Slight bleed (+1px each side) so neighbors overlap before blur.
               bctx.fillRect(sx.left - 0.5, top - 0.5, sx.w + 1, cellH + 1);
             }

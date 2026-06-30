@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 6/29/2026
 
+* Fixed Volume Net GEX showing blank on the Home page — volume-based gamma exposure is populating again.
+
 * Upgraded the market data behind the dashboard to a new provider for faster, more accurate options, greeks, and index pricing
 * Loaded two years of historical gamma exposure data so the confidence and MVC tools can compare today against real past sessions
 * You can now click any ICT setup card on the Results page to see the full log of individual plays that make up its win rate
