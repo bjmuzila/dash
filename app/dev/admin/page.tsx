@@ -27,6 +27,7 @@ interface StripeSubscription {
   status: string;
   plan_name: string;
   amount: number;
+  interval: "month" | "year";
   current_period_end: number;
   created: number;
 }
@@ -104,6 +105,89 @@ function SetupBanner() {
   );
 }
 
+// Build last-12-months signup buckets from real subscription created timestamps
+function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const now = new Date();
+
+  // Build 12 monthly buckets (oldest → newest)
+  const buckets = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
+    return { label: `${MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`, y: d.getFullYear(), m: d.getMonth(), mrr: 0, count: 0 };
+  });
+
+  for (const sub of subs) {
+    const d = new Date(sub.created * 1000);
+    const bucket = buckets.find(b => b.y === d.getFullYear() && b.m === d.getMonth());
+    if (!bucket) continue;
+    const monthlyAmount = sub.interval === "year" ? Math.round(sub.amount / 12) : sub.amount;
+    bucket.mrr += monthlyAmount;
+    bucket.count += 1;
+  }
+
+  const maxMrr = Math.max(...buckets.map(b => b.mrr), 1);
+
+  // Monthly vs yearly split
+  const monthly = subs.filter(s => s.interval === "month");
+  const yearly = subs.filter(s => s.interval === "year");
+  const monthlyMrr = monthly.reduce((a, s) => a + s.amount, 0);
+  const yearlyMrr = yearly.reduce((a, s) => a + Math.round(s.amount / 12), 0);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+      {/* Bar chart: new MRR by signup month */}
+      <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 2 }}>New Subscriptions by Month</div>
+        <div style={{ fontSize: 10, color: T.muted, marginBottom: 16 }}>Based on signup date · last 12 months</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 140 }}>
+          {buckets.map((b, i) => {
+            const barH = Math.max(4, (b.mrr / maxMrr) * 120);
+            return (
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR`} style={{
+                  width: "100%",
+                  height: barH,
+                  background: b.mrr > 0 ? `linear-gradient(180deg, ${T.cyan}cc, ${T.cyan}44)` : "rgba(255,255,255,0.06)",
+                  borderRadius: "3px 3px 0 0",
+                  cursor: "default",
+                }} />
+                <span style={{ fontSize: 8, color: T.muted, whiteSpace: "nowrap" }}>{b.label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Billing interval breakdown */}
+      <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Billing Intervals</div>
+        {[
+          { label: "Monthly", count: monthly.length, mrr: monthlyMrr, color: T.cyan },
+          { label: "Yearly", count: yearly.length, mrr: yearlyMrr, color: T.green, note: "(÷12)" },
+        ].map(row => (
+          <div key={row.label}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <div>
+                <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{row.label}</span>
+                {row.note && <span style={{ fontSize: 10, color: T.muted, marginLeft: 4 }}>{row.note}</span>}
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700, color: row.color, fontFamily: "monospace" }}>{fmtMoney(row.mrr)}/mo</span>
+            </div>
+            <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${Math.round((row.mrr / (monthlyMrr + yearlyMrr || 1)) * 100)}%`, background: row.color, borderRadius: 3 }} />
+            </div>
+            <div style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>{row.count} subscriber{row.count !== 1 ? "s" : ""}</div>
+          </div>
+        ))}
+        <div style={{ marginTop: "auto", paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 10, color: T.muted }}>COMBINED MRR</div>
+          <div style={{ fontSize: 22, fontWeight: 500, color: T.text }}>{fmtMoney(monthlyMrr + yearlyMrr)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -143,7 +227,9 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 </div>
               )}
             </div>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "monospace", fontSize: 12 }}>{fmtMoney(s.amount)}/mo</span>
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "monospace", fontSize: 12 }}>
+              {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
+            </span>
             <span>
               <span style={{
                 fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
@@ -276,6 +362,9 @@ export default function AdminDashboard() {
                 sub={data.summary.churnedThisMonth === 0 ? "No churn 🎉" : undefined}
               />
             </div>
+
+            {/* Revenue breakdown chart */}
+            <RevenueChart subs={data.subscriptions} />
 
             {/* Subscriptions + Recent Customers */}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>

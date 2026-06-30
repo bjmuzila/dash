@@ -456,9 +456,10 @@ export default function OptionsChainPage() {
   // Change-mode (Live / 15 / 30 / 60). When not "live", the front-expiry column
   // shows Δ-vs-N-min-ago from strike_growth instead of the live greek.
   const [changeMode, setChangeMode] = useState<ChangeMode>("live");
-  // strike → chg$ map for the active ticker's front expiry (from /proxy/strike-growth).
-  const [changeMap, setChangeMap] = useState<Map<number, number>>(new Map());
-  const [changeMeta, setChangeMeta] = useState<{ expiry: string | null; hasData: boolean }>({ expiry: null, hasData: false });
+  // "expiry|strike" → chg$ map across ALL recorded expiries (from
+  // /proxy/strike-growth/by-expiry). Lets every chain column show 15/30/60 Δ.
+  const [changeMap, setChangeMap] = useState<Map<string, number>>(new Map());
+  const [changeMeta, setChangeMeta] = useState<{ expiries: Set<string>; hasData: boolean }>({ expiries: new Set(), hasData: false });
   // Live mirror so loadChain (recreated each render) reads the current toggle.
   const dataModeRef = useRef<DataMode>("oi-vol");
   useEffect(() => { dataModeRef.current = dataMode; }, [dataMode]);
@@ -833,48 +834,54 @@ export default function OptionsChainPage() {
   // Reuses /proxy/strike-growth which returns chg15/chg30/chg60 per (front-expiry)
   // strike. Refetched on ticker change, mode change, and each refresh.
   useEffect(() => {
-    if (changeMode === "live") { setChangeMap(new Map()); setChangeMeta({ expiry: null, hasData: false }); return; }
+    if (changeMode === "live") { setChangeMap(new Map()); setChangeMeta({ expiries: new Set(), hasData: false }); return; }
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/proxy/strike-growth?symbol=${encodeURIComponent(activeTicker)}&limit=1000`, { cache: "no-store" });
+        const res = await fetch(`/proxy/strike-growth/by-expiry?symbol=${encodeURIComponent(activeTicker)}`, { cache: "no-store" });
         const text = await res.text();
         let j: any;
         try { j = JSON.parse(text); } catch { j = null; }
         if (cancelled) return;
         if (!j?.ok || !Array.isArray(j.rows) || !j.rows.length) {
-          setChangeMap(new Map()); setChangeMeta({ expiry: null, hasData: false });
+          setChangeMap(new Map()); setChangeMeta({ expiries: new Set(), hasData: false });
           return;
         }
         const key = changeMode === "15" ? "chg15" : changeMode === "30" ? "chg30" : "chg60";
-        const m = new Map<number, number>();
-        let exp: string | null = null;
+        const m = new Map<string, number>();
+        const exps = new Set<string>();
         for (const r of j.rows) {
-          if (exp == null) exp = r.expiry ?? null;
+          const exp = String(r.expiry ?? "");
+          if (exp) exps.add(exp);
           const v = r[key];
-          if (v != null) m.set(Number(r.strike), Number(v));
+          if (v != null) m.set(`${exp}|${Number(r.strike)}`, Number(v));
         }
         setChangeMap(m);
-        setChangeMeta({ expiry: exp, hasData: m.size > 0 });
+        setChangeMeta({ expiries: exps, hasData: m.size > 0 });
       } catch {
-        if (!cancelled) { setChangeMap(new Map()); setChangeMeta({ expiry: null, hasData: false }); }
+        if (!cancelled) { setChangeMap(new Map()); setChangeMeta({ expiries: new Set(), hasData: false }); }
       }
     })();
     return () => { cancelled = true; };
   }, [changeMode, activeTicker, refreshSeed]);
 
-  // Heatmap scale for the change column (its own min/max so Δ colors read well).
-  const changeColScale = useMemo(() => {
-    if (changeMode === "live" || !changeMeta.hasData) return { max: 1, top3: [] as number[] };
-    const vals: number[] = [];
-    visibleStrikes.forEach(s => {
-      if (s == null) return;
-      const v = changeMap.get(s);
-      if (v != null && v !== 0) vals.push(Math.abs(v));
+  // Per-expiry heatmap scale for change columns: each change column colors
+  // against its own |Δ| max over the visible strikes. Keyed by expiration.
+  const changeScaleByExp = useMemo(() => {
+    const map = new Map<string, { max: number; top3: number[] }>();
+    if (changeMode === "live" || !changeMeta.hasData) return map;
+    changeMeta.expiries.forEach(exp => {
+      const vals: number[] = [];
+      visibleStrikes.forEach(s => {
+        if (s == null) return;
+        const v = changeMap.get(`${exp}|${s}`);
+        if (v != null && v !== 0) vals.push(Math.abs(v));
+      });
+      const sorted = [...vals].sort((a, b) => b - a);
+      map.set(exp, { max: sorted[0] ?? 1, top3: sorted.slice(0, 3) });
     });
-    const sorted = [...vals].sort((a, b) => b - a);
-    return { max: sorted[0] ?? 1, top3: sorted.slice(0, 3) };
-  }, [changeMode, changeMeta.hasData, changeMap, visibleStrikes]);
+    return map;
+  }, [changeMode, changeMeta.hasData, changeMeta.expiries, changeMap, visibleStrikes]);
 
   // The 4 EM band strikes (snapped to visible strikes): 1× down/up, 2× down/up.
   // Null when no EM is available.
@@ -1061,7 +1068,7 @@ export default function OptionsChainPage() {
         {changeMode !== "live" && (
           <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
             color: changeMeta.hasData ? HT.orange : HT.muted }}>
-            {changeMeta.hasData ? `Δ front exp ${changeMeta.expiry ?? ""}` : "no history (not on watchlist)"}
+            {changeMeta.hasData ? `Δ ${changeMeta.expiries.size} exp` : "no history (not on watchlist)"}
           </span>
         )}
 
@@ -1123,10 +1130,10 @@ export default function OptionsChainPage() {
             {renderIdx.map((i) => {
               const col = columns[i];
               const isChangeCol = changeMode !== "live" && changeMeta.hasData && col != null &&
-                changeMeta.expiry != null && col.expiration === changeMeta.expiry;
+                changeMeta.expiries.has(col.expiration);
               const colTotal = col
                 ? (isChangeCol
-                    ? visibleStrikes.reduce((s, k) => s + (k == null ? 0 : (changeMap.get(k) ?? 0)), 0)
+                    ? visibleStrikes.reduce((s, k) => s + (k == null ? 0 : (changeMap.get(`${col.expiration}|${k}`) ?? 0)), 0)
                     : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
                 : null;
               return (
@@ -1175,15 +1182,18 @@ export default function OptionsChainPage() {
                   {renderIdx.map((i) => {
                     const col = columns[i];
                     const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
-                    // Change-mode: override the FRONT-expiry column with Δ-vs-N-min
-                    // from strike_growth; leave other columns on their live value.
+                    // Change-mode: override ANY column whose expiry has recorded
+                    // history with Δ-vs-N-min from strike_growth (keyed expiry|strike).
                     const isChangeCol =
                       changeMode !== "live" && changeMeta.hasData && col != null &&
-                      changeMeta.expiry != null && col.expiration === changeMeta.expiry;
+                      changeMeta.expiries.has(col.expiration);
+                    const chKey = isChangeCol ? `${col!.expiration}|${strike}` : "";
                     const value = isChangeCol
-                      ? (changeMap.has(strike) ? changeMap.get(strike)! : null)
+                      ? (changeMap.has(chKey) ? changeMap.get(chKey)! : null)
                       : (col ? valueAt(col, strike) : null);
-                    const cellScale = isChangeCol ? changeColScale : scale;
+                    const cellScale = isChangeCol
+                      ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
+                      : scale;
                     const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[i] === strike;
                     return (
                       <div

@@ -5,6 +5,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton, type SegOption } from "@/components/shared/DockToolbar";
+import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 type Audience = "all" | "subscribers" | "waitlist" | "custom";
 
@@ -151,6 +152,9 @@ export default function AdminEmailsPage() {
 
   return (
     <PageShell maxWidth={680} align="center">
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+        <OwnerQuickLinks current="/admin/emails" />
+      </div>
       <Card accent="cyan">
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.02em" }}>📧 Email Broadcast</div>

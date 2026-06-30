@@ -50,12 +50,14 @@ export async function GET() {
       const customer = sub.customer as import("stripe").Stripe.Customer;
       const item = sub.items.data[0];
       const price = item?.price;
+      const interval = price?.recurring?.interval ?? "month";
       return {
         id: sub.id,
         customer_email: customer.email ?? "—",
         status: sub.status,
         plan_name: price?.nickname ?? price?.lookup_key ?? price?.id ?? "—",
         amount: price?.unit_amount ?? 0,
+        interval, // "month" | "year"
         current_period_end: sub.current_period_end,
         created: sub.created,
       };

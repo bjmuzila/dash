@@ -553,6 +553,49 @@ async function main() {
         })();
         return;
       }
+      // All-expiry change map for the options-chain change-mode overlay.
+      //   GET /proxy/strike-growth/by-expiry?symbol=NVDA
+      // Returns latest snapshot per (expiry,strike) with chg15/30/60 (volume-GEX
+      // Δ over the trailing window). Lets the chain color every expiry column.
+      if (pathname === '/proxy/strike-growth/by-expiry' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            // Latest ts per (symbol,expiry) today, then per-strike chg lookbacks.
+            const lookback = (mins, alias) => `
+              LEFT JOIN LATERAL (
+                SELECT h.gex_now FROM strike_growth h
+                WHERE h.date = $1 AND h.symbol = sg.symbol AND h.expiry = sg.expiry
+                  AND h.strike = sg.strike AND h.ts <= sg.ts - INTERVAL '${mins} minutes'
+                ORDER BY h.ts DESC LIMIT 1
+              ) ${alias} ON TRUE`;
+            const sql = `
+              WITH latest AS (
+                SELECT symbol, expiry, MAX(ts) AS ts FROM strike_growth
+                WHERE date = $1 AND symbol = $2 GROUP BY symbol, expiry
+              )
+              SELECT sg.expiry, sg.strike, sg.gex_now, sg.delta_abs,
+                     (sg.gex_now - b15.gex_now) AS chg15,
+                     (sg.gex_now - b30.gex_now) AS chg30,
+                     (sg.gex_now - b60.gex_now) AS chg60
+              FROM strike_growth sg
+              JOIN latest l ON l.symbol = sg.symbol AND l.expiry = sg.expiry AND l.ts = sg.ts
+              ${lookback(15, 'b15')}
+              ${lookback(30, 'b30')}
+              ${lookback(60, 'b60')}
+              WHERE sg.date = $1 AND sg.symbol = $2`;
+            const { rows } = await p.query(sql, [today, symbol]);
+            sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Watchlist read.  GET /proxy/strike-growth/watchlist
       if (pathname === '/proxy/strike-growth/watchlist' && req.method === 'GET') {
         (async () => {

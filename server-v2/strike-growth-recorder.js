@@ -60,6 +60,13 @@ const volOnlyNet = (r) => Number(r.netVolGEX ?? 0);
 const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
 // Strikes to keep each side of spot per ticker (28 total at 14). Caps Theta work.
 const STRIKES_EACH_SIDE = Number(process.env.STRIKE_GROWTH_STRIKES_SIDE || 14);
+// How many front expiries to snapshot per ticker. 14 = the full options-chain
+// matrix so every column gets 15/30/60 change. THIS IS THE LOAD MULTIPLIER:
+// each expiry = a full greeks/OI/vol fetch from Theta, so 14 ≈ 14× the calls of
+// the original front-expiry-only recorder. Dial DOWN via env if Theta OOMs.
+const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 14);
+// Delay between expiry fetches within one ticker (ms) — extra pacing for Theta.
+const EXPIRY_DELAY_MS = Number(process.env.STRIKE_GROWTH_EXPIRY_DELAY_MS || 150);
 // Delay between tickers in a sweep (ms) — paces the standalone theta-terminal.
 const TICKER_DELAY_MS = Number(process.env.STRIKE_GROWTH_TICKER_DELAY_MS || 600);
 // Hard cap on active tickers fetched per sweep, belt-and-suspenders vs OOM.
@@ -137,14 +144,36 @@ async function ensureSchema() {
       delta_pct  DOUBLE PRECISION,
       spot       DOUBLE PRECISION,
       ts         TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (date, symbol, strike, ts)
+      PRIMARY KEY (date, symbol, strike, expiry, ts)
     );
   `);
+  // MIGRATION: the original table keyed (date,symbol,strike,ts) — no expiry — so
+  // it could only hold ONE expiry per strike. Multi-expiry needs expiry IN the
+  // PK. Rebuild the PK on existing tables (idempotent: only acts if the old key
+  // shape is present). Safe because a same-ts upsert just overwrites.
+  await p.query(`
+    DO $$
+    DECLARE pk_cols text;
+    BEGIN
+      SELECT string_agg(a.attname, ',' ORDER BY array_position(c.conkey, a.attnum))
+        INTO pk_cols
+      FROM pg_constraint c
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+      WHERE c.conrelid = 'strike_growth'::regclass AND c.contype = 'p';
+      IF pk_cols = 'date,symbol,strike,ts' THEN
+        ALTER TABLE strike_growth DROP CONSTRAINT strike_growth_pkey;
+        ALTER TABLE strike_growth
+          ADD CONSTRAINT strike_growth_pkey
+          PRIMARY KEY (date, symbol, strike, expiry, ts);
+        RAISE NOTICE 'strike_growth PK migrated to include expiry';
+      END IF;
+    END $$;
+  `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_latest
-                 ON strike_growth (date, symbol, ts DESC);`);
-  // Supports the 15/30/60-min lateral lookbacks (per symbol+strike, by ts).
+                 ON strike_growth (date, symbol, expiry, ts DESC);`);
+  // Supports the 15/30/60-min lateral lookbacks (per symbol+expiry+strike, by ts).
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
-                 ON strike_growth (date, symbol, strike, ts DESC);`);
+                 ON strike_growth (date, symbol, expiry, strike, ts DESC);`);
 
   // Seed watchlist once from the EM roster. Index/ETF core defaults ACTIVE; the
   // long tail is seeded inactive so the 30m sweep stays bounded until the user
@@ -199,38 +228,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Per-ticker snapshot ──────────────────────────────────────────────────────
 
-/**
- * Fetch per-strike OI+Vol net GEX for one ticker's front expiry, windowed to
- * STRIKES_EACH_SIDE strikes each side of spot. Returns { spot, expiry, rows }
- * where rows = [{ strike, gex }] (gex = oiVolNet dollars). Throws on bad data.
- */
-async function snapshotTicker(chainTicker) {
-  let spot;
-  if (INDEX_SYMBOLS.has(chainTicker.toUpperCase())) {
-    spot = Number(await fetchIndexPriceTheta(chainTicker));
-  } else {
-    const quote = await fetchStockQuoteTheta(chainTicker);
-    spot = Number(quote?.last ?? quote?.mark ?? 0);
-  }
-  if (!(spot > 0)) throw new Error(`spot 0 for ${chainTicker}`);
-
-  const { contracts, expirations } = await fetchChainTheta(chainTicker);
-  if (!expirations?.length) throw new Error(`no expirations ${chainTicker}`);
-  const expiry = expirations[0]; // ascending → front active expiry
-  const expContracts = contracts.filter((c) => c.expiration === expiry);
-  if (!expContracts.length) throw new Error(`empty chain ${chainTicker} ${expiry}`);
-
+// Build the per-strike rows for ONE expiry, windowed to ±STRIKES_EACH_SIDE
+// strikes around spot. Returns [{ strike, gex, open }] or [] if no usable data.
+async function snapshotOneExpiry(chainTicker, expiry, expContracts, spot) {
   // Window the chain to ±STRIKES_EACH_SIDE strikes around spot BEFORE fetching
-  // greeks/OI/vol — this is what keeps Theta load bounded.
+  // greeks/OI/vol — this is what keeps Theta load bounded per expiry.
   const uniqStrikes = [...new Set(expContracts.map((c) => Number(c.strike)))].sort((a, b) => a - b);
-  // index of first strike >= spot
   let pivot = uniqStrikes.findIndex((s) => s >= spot);
   if (pivot < 0) pivot = uniqStrikes.length - 1;
   const lo = Math.max(0, pivot - STRIKES_EACH_SIDE);
   const hi = Math.min(uniqStrikes.length, pivot + STRIKES_EACH_SIDE);
   const keepStrikes = new Set(uniqStrikes.slice(lo, hi));
   const windowed = expContracts.filter((c) => keepStrikes.has(Number(c.strike)));
-  if (!windowed.length) throw new Error(`no windowed strikes ${chainTicker}`);
+  if (!windowed.length) return [];
 
   const [greekMap, oiMap, volMap] = await Promise.all([
     fetchGreeksTheta(chainTicker, expiry).catch(() => new Map()),
@@ -247,22 +257,49 @@ async function snapshotTicker(chainTicker) {
     const gamma = Math.abs(Number(g.gamma ?? 0));
     const delta = Math.abs(Number(g.delta ?? 0));
     if (!(gamma > 0) && !(oi > 0) && !(vol > 0)) continue;
-    flatRows.push({
-      strike: c.strike,
-      side: c.type === 'C' ? 'call' : 'put',
-      oi, volume: vol, gamma, delta,
-    });
+    flatRows.push({ strike: c.strike, side: c.type === 'C' ? 'call' : 'put', oi, volume: vol, gamma, delta });
   }
-  if (!flatRows.length) throw new Error(`no option rows ${chainTicker}`);
+  if (!flatRows.length) return [];
 
   const gexRows = computeGexRows(flatRows, spot);
   // gex = volume-only (today's traded volume); open = OI-only (carried OI, pre-open).
-  const rows = gexRows.map((r) => ({
-    strike: r.strike,
-    gex: volOnlyNet(r),
-    open: oiOnlyNet(r),
-  }));
-  return { spot, expiry, rows };
+  return gexRows.map((r) => ({ strike: r.strike, gex: volOnlyNet(r), open: oiOnlyNet(r) }));
+}
+
+/**
+ * Snapshot the front EXPIRIES_PER_TICKER expiries for one ticker, each windowed
+ * to ±STRIKES_EACH_SIDE strikes around spot. Returns { spot, expiries:[{expiry,
+ * rows}] }. Expiries are fetched SEQUENTIALLY with EXPIRY_DELAY_MS pacing — this
+ * is the load multiplier vs the old front-only recorder, so it's paced hard.
+ */
+async function snapshotTicker(chainTicker) {
+  let spot;
+  if (INDEX_SYMBOLS.has(chainTicker.toUpperCase())) {
+    spot = Number(await fetchIndexPriceTheta(chainTicker));
+  } else {
+    const quote = await fetchStockQuoteTheta(chainTicker);
+    spot = Number(quote?.last ?? quote?.mark ?? 0);
+  }
+  if (!(spot > 0)) throw new Error(`spot 0 for ${chainTicker}`);
+
+  const { contracts, expirations } = await fetchChainTheta(chainTicker);
+  if (!expirations?.length) throw new Error(`no expirations ${chainTicker}`);
+  const targetExps = expirations.slice(0, EXPIRIES_PER_TICKER); // ascending → front N
+
+  const out = [];
+  for (const expiry of targetExps) {
+    const expContracts = contracts.filter((c) => c.expiration === expiry);
+    if (!expContracts.length) continue;
+    try {
+      const rows = await snapshotOneExpiry(chainTicker, expiry, expContracts, spot);
+      if (rows.length) out.push({ expiry, rows });
+    } catch (e) {
+      console.warn(`[strike-growth] ${chainTicker} ${expiry} — ${e.message}`);
+    }
+    await sleep(EXPIRY_DELAY_MS); // pace Theta between expiries
+  }
+  if (!out.length) throw new Error(`no usable expiries ${chainTicker}`);
+  return { spot, expiries: out };
 }
 
 // ── Sweep ────────────────────────────────────────────────────────────────────
@@ -286,7 +323,7 @@ async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
       `INSERT INTO strike_growth
          (date, symbol, strike, expiry, opt_type, gex_now, gex_open, delta_abs, delta_pct, spot, ts)
        VALUES ($1,$2,$3,$4,'NET',$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (date, symbol, strike, ts) DO UPDATE SET
+       ON CONFLICT (date, symbol, strike, expiry, ts) DO UPDATE SET
          gex_now = EXCLUDED.gex_now, delta_abs = EXCLUDED.delta_abs,
          delta_pct = EXCLUDED.delta_pct, spot = EXCLUDED.spot`,
       [date, symbol, strike, expiry, gex, open, deltaAbs, deltaPct, spot, ts]
@@ -313,9 +350,11 @@ async function runSweep(opts = {}) {
   console.log(`[strike-growth] sweep ${date} — ${symbols.length} active symbols`);
   for (const symbol of symbols) {
     try {
-      const { spot, expiry, rows } = await snapshotTicker(symbol);
-      await writeSnapshot(p, date, symbol, expiry, spot, ts, rows);
-      done.push(symbol);
+      const { spot, expiries } = await snapshotTicker(symbol);
+      for (const { expiry, rows } of expiries) {
+        await writeSnapshot(p, date, symbol, expiry, spot, ts, rows);
+      }
+      done.push(`${symbol}(${expiries.length}exp)`);
     } catch (e) {
       failed.push(`${symbol}:${e.message}`);
       console.warn(`[strike-growth] ${symbol} — ${e.message}`);
