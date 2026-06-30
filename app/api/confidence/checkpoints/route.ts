@@ -95,19 +95,26 @@ export async function GET(req: NextRequest) {
       // Skip a day entirely if it never had a single valid SPX print.
       if (!timed.some((t) => t.spx != null)) continue;
 
-      // Pass 1: resolve each checkpoint's CB strike (nearest snapshot within window).
+      // Pass 1: resolve each checkpoint's CB strike + SPX. We pick the nearest
+      // snapshot within the window for the strike, but resolve SPX from the
+      // nearest snapshot that actually HAS a valid SPX (a single spot:0 row at
+      // the checkpoint minute must not blank the whole checkpoint).
       const resolved = CHECKPOINTS.map((cp) => {
         let best: typeof timed[number] | null = null;
         let bestGap = Infinity;
+        let bestSpx: typeof timed[number] | null = null;
+        let bestSpxGap = Infinity;
         for (const t of timed) {
           const gap = Math.abs(t.min - cp.min);
           if (gap < bestGap) { bestGap = gap; best = t; }
+          if (t.spx != null && gap < bestSpxGap) { bestSpxGap = gap; bestSpx = t; }
         }
         const matched = best != null && bestGap <= MATCH_WINDOW;
+        const spxMatched = bestSpx != null && bestSpxGap <= MATCH_WINDOW;
         return {
           cp, matched,
           strike: matched ? best!.strike : null,
-          spxAt: matched ? best!.spx : null,
+          spxAt: spxMatched ? bestSpx!.spx : (matched ? best!.spx : null),
         };
       });
 

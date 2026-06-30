@@ -35,7 +35,9 @@ function pickLevel(r: MvcRecord) {
     level,
     netGex: strikeGex,
     netDex,
-    spx: num(r.spxPrice) ?? level,
+    // spot:0 / sub-1000 = feed not populated, not a real index print → treat as
+    // missing (matches /api/confidence) so it can't poison classify/refPrice.
+    spx: (() => { const v = num(r.spxPrice); return v != null && v > 1000 ? v : level; })(),
     totalAbsNetGEX,
     gexFlip: num(r.gexFlip),
   };
@@ -130,7 +132,7 @@ export async function GET(req: NextRequest) {
         // Score the FINAL snapshot's level (the day's settled MVC).
         const last = rows[rows.length - 1];
         const cur = pickLevel(last);
-        const spx = rows.map((r) => num(r.spxPrice)).filter((v): v is number => v != null);
+        const spx = rows.map((r) => num(r.spxPrice)).filter((v): v is number => v != null && v > 1000);
         const refPrice = cur.spx || spx[spx.length - 1] || cur.level || 0;
         const intradayRange = spx.length > 1 ? (Math.max(...spx) - Math.min(...spx)) / 2 : 0;
         const proxScale = Math.max(intradayRange, refPrice * 0.003);

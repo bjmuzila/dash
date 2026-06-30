@@ -4,9 +4,11 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Tuesday 6/30/2026
 
+* Fixed the dashboard taking a long time to load on a fresh start — the live market feed now warms up automatically and reconnects on its own if the data provider hiccups, so the home page comes up with live numbers instead of waiting.
 * New sign-in experience — sign in with Google or email and password, with a cleaner, on-brand login screen.
 * Home page loads faster — quotes now appear without an extra delay on startup.
-* Fixed a visual glitch on the ES Candles gamma heatmap where unchanged levels left blank gaps between columns.
+* The home GEX chart now appears the instant the page loads instead of waiting for the live connection — and live updates are noticeably snappier.
+* Fixed Volume Net GEX showing blank on 0DTE — volume-based gamma now populates correctly, so the Volume-Only view and the combined Net GEX read right again.
 
 ## Monday 6/29/2026
 

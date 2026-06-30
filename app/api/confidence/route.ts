@@ -126,7 +126,9 @@ function pickLevel(r: MvcRecord) {
     netGex: strikeGex,         // signed GEX at the level (regime + dominance numerator)
     netTotal,                  // chain net sum (kept for readouts)
     netDex,
-    spx: num(r.spxPrice) ?? level,
+    // spot:0 / sub-1000 prints are the feed not-yet-populated, not a real index
+    // level — treat as missing so the fallbacks (today series / prior day) apply.
+    spx: (() => { const v = num(r.spxPrice); return v != null && v > 1000 ? v : level; })(),
     es: num(r.esPrice) ?? num(r.spxPrice) ?? level, // display reference only
     totalAbsNetGEX,
     gexFlip: num(r.gexFlip),
@@ -392,20 +394,25 @@ export async function GET(req: NextRequest) {
       `SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`,
       [effDate]
     );
-    const todaySpx = todayRows.map((r) => num(r.spxPrice)).filter((v): v is number => v != null);
+    const todaySpx = todayRows
+      .map((r) => num(r.spxPrice))
+      .filter((v): v is number => v != null && v > 1000); // drop spot:0 garbage
 
     // Fallback: if today carries no SPX (pre-market, weekend, or null spxPrice),
     // use the most recent prior day's last SPX snapshot so the page renders a
     // sensible reference instead of collapsing to the strike level.
-    if (!(cur.spx != null && Number.isFinite(cur.spx) && cur.spx > 0) && !todaySpx.length) {
+    // Fires when today has NO valid SPX print at all (all rows null/spot:0).
+    // cur.spx now falls back to the strike level, so we can't test it here — key
+    // off todaySpx being empty, which is the true "no real index print" signal.
+    if (!todaySpx.length) {
       const prevSpxRow = await queryOne<MvcRecord>(
         `SELECT * FROM mvc_snapshots
-         WHERE date < ? AND spxPrice IS NOT NULL
+         WHERE date < ? AND spxPrice > 1000
          ORDER BY date DESC, timestamp DESC LIMIT 1`,
         [effDate]
       );
       const prevSpx = prevSpxRow ? num(prevSpxRow.spxPrice) : null;
-      if (prevSpx != null && Number.isFinite(prevSpx) && prevSpx > 0) {
+      if (prevSpx != null && Number.isFinite(prevSpx) && prevSpx > 1000) {
         cur.spx = prevSpx;
       }
     }
@@ -464,7 +471,7 @@ export async function GET(req: NextRequest) {
       if (pastRegime !== curRegime) { drop.regime++; continue; }
       if (Math.abs(pastGexMag - curGexMag) > ANALOG_GEX_TOL) { drop.dominance++; continue; }
 
-      const spxSeries = dayRows.map((r) => num(r.spxPrice)).filter((v): v is number => v != null);
+      const spxSeries = dayRows.map((r) => num(r.spxPrice)).filter((v): v is number => v != null && v > 1000);
       if (spxSeries.length < 2) { drop.noSeries++; continue; }
 
       const outcome = classifyFromSpxSeries(ref.level, spxSeries);
@@ -562,7 +569,9 @@ export async function GET(req: NextRequest) {
     // can be scored against their OWN window (from when a strike became the MVC).
     let spxTimed: TimedPx[] = todayRows
       .map((r) => ({ min: rowMinutesET(r), px: num(r.spxPrice) }))
-      .filter((s): s is TimedPx => s.min != null && s.px != null);
+      // Drop spot:0 / garbage prints (feed not yet populated). 0 is finite so it
+      // passes num(); left in, it poisons every segment's distance → all blank.
+      .filter((s): s is TimedPx => s.min != null && s.px != null && s.px > 1000);
     let seriesSource: "es5m" | "snapshots" = "snapshots";
     let basis: number | null = null;
     try {

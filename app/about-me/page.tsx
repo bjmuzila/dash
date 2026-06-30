@@ -169,10 +169,10 @@ export default function AboutMePage() {
             <p style={{ ...p, marginBottom: 0 }}>
               Reach me at{" "}
               <a
-                href="mailto:bjmuzila@gmail.com"
+                href="mailto:support@cbedge.net"
                 style={{ color: HOME_THEME.cyan, textDecoration: "none" }}
               >
-                bjmuzila@gmail.com
+                support@cbedge.net
               </a>{" "}
               or through the Bzila Trades Discord community.
             </p>

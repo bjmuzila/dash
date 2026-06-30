@@ -139,11 +139,6 @@ class FlowProcessor {
       bucket = bullish ? 'bull' : 'bear';
     }
     const tapeSide = side === 'buy' || side === 'sell' ? side : 'buy';
-    // The tape is an SPX-only flow view; non-SPX underlyings never belong on it
-    // and must not consume cap slots (previously filtered only at read time,
-    // after the cap had already evicted real SPX blocks).
-    const isSpx = parsed.root === 'SPX' || parsed.root === 'SPXW';
-    if (!isSpx) return;
     // Coalesce prints on the same contract + side into 500ms aggregate orders.
     // The tape is oldest-first, so the candidate to merge into is the last entry;
     // merge when it shares symbol+side+action and falls in the same 500ms slot.

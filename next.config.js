@@ -8,6 +8,7 @@ const withBundleAnalyzer = require('@next/bundle-analyzer')({
 
 const nextConfig = {
   compress: true,
+  poweredByHeader: false,
   productionBrowserSourceMaps: false,
   reactStrictMode: true,
   typescript: { ignoreBuildErrors: true },

@@ -49,6 +49,32 @@ let maintenanceMode = process.env.MAINTENANCE_MODE === '1' || process.env.MAINTE
 // REST snapshot router (/proxy/*)
 // ---------------------------------------------------------------------------
 
+// Security headers applied to EVERY response (Next pages + proxy routes).
+// Set before any routing/writeHead so they ride along on all responses.
+function applySecurityHeaders(req, res) {
+  // Only assert HSTS on HTTPS (behind the TLS-terminating proxy: x-forwarded-proto).
+  const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  if (proto === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob: https:; " +
+      "font-src 'self' data:; " +
+      "connect-src 'self' https: wss:; " +
+      "frame-ancestors 'self'; " +
+      "base-uri 'self'; " +
+      "form-action 'self'"
+  );
+  // Don't advertise the stack.
+  res.removeHeader('X-Powered-By');
+}
+
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, {
@@ -280,6 +306,7 @@ async function main() {
   let proxy = null;
 
   const server = createServer(async (req, res) => {
+    applySecurityHeaders(req, res);
     try {
       // Idle control (POST /proxy/idle { idle: true|false }) — toggles the feed.
       const { pathname } = new URL(req.url || '/', 'http://localhost');

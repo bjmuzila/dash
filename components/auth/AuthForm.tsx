@@ -124,7 +124,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
         <div style={{ flex: 1, height: 1, background: T.border }} />
       </div>
 
-      <form onSubmit={withEmail} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <form method="post" onSubmit={withEmail} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input
           type="email"
           required
