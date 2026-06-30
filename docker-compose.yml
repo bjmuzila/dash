@@ -74,9 +74,16 @@ services:
       - "127.0.0.1:25503:25503"
       - "127.0.0.1:25520:25520"
     healthcheck:
-      # REST 200 on the v3 root = terminal is up and serving.
-      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:25503/ >/dev/null 2>&1 || exit 1"]
+      # The bare REST root returns 410 Gone (v3 endpoints live under /v3/...), so
+      # a 200-only check marks the container unhealthy FOREVER even while it
+      # serves data — which deadlocks the dashboard's depends_on gate and takes
+      # the site down. Instead just confirm the REST port ANSWERS http (any
+      # status code = the terminal process is up and listening). wget returns 0
+      # on 2xx; on 4xx/410 it exits non-zero but still PRINTS the status line to
+      # stderr ("HTTP request sent, awaiting response... 410"), so grep that as
+      # proof of a live HTTP responder.
+      test: ["CMD", "sh", "-c", "wget -S -qO- http://127.0.0.1:25503/ 2>&1 | grep -q 'HTTP/' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 40s   # runtime jar download + auth handshake takes a bit
+      start_period: 60s   # runtime jar download + auth handshake takes a bit
