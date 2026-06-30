@@ -33,8 +33,13 @@ const {
   fetchOpenInterestTheta,
   fetchVolumeTheta,
   fetchStockQuoteTheta,
+  fetchIndexPriceTheta,
 } = require('./proxy-thetadata');
 const { SPECIAL_TICKERS, EQUITY_TICKERS } = require('./em-tickers');
+
+// Cash indices price off the index snapshot endpoint, NOT the stock-quote one
+// (which returns "no data" for them). Equities/ETFs use the stock quote.
+const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 
 // `exp|strike|type` key matching proxy-thetadata's keyOf()
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
@@ -200,8 +205,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * where rows = [{ strike, gex }] (gex = oiVolNet dollars). Throws on bad data.
  */
 async function snapshotTicker(chainTicker) {
-  const quote = await fetchStockQuoteTheta(chainTicker);
-  const spot = Number(quote?.last ?? quote?.mark ?? 0);
+  let spot;
+  if (INDEX_SYMBOLS.has(chainTicker.toUpperCase())) {
+    spot = Number(await fetchIndexPriceTheta(chainTicker));
+  } else {
+    const quote = await fetchStockQuoteTheta(chainTicker);
+    spot = Number(quote?.last ?? quote?.mark ?? 0);
+  }
   if (!(spot > 0)) throw new Error(`spot 0 for ${chainTicker}`);
 
   const { contracts, expirations } = await fetchChainTheta(chainTicker);

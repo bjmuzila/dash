@@ -237,6 +237,47 @@ export default function StrikeGrowthPage() {
 
         {err && <div style={{ color: HOME_THEME.red, marginBottom: 12 }}>{err}</div>}
 
+        {/* Top movers strip — biggest 4 by current sort */}
+        {sortedRows.length > 0 && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+              gap: 10,
+              marginBottom: 18,
+            }}
+          >
+            {sortedRows.slice(0, 4).map((r) => {
+              const up = r.delta_abs >= 0;
+              const col = up ? HOME_THEME.green : HOME_THEME.red;
+              const chg = r.chg15;
+              return (
+                <div
+                  key={`top-${r.symbol}-${r.strike}`}
+                  onClick={() => openSeries(r)}
+                  style={{
+                    cursor: "pointer",
+                    background: "rgba(255,255,255,0.03)",
+                    border: `1px solid rgba(255,255,255,0.08)`,
+                    borderLeft: `3px solid ${col}`,
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.75, display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontWeight: 700, opacity: 1 }}>{r.symbol}</span>
+                    <span>{r.strike}{r.spot != null && r.strike >= r.spot ? "C" : "P"}</span>
+                  </div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: col, margin: "4px 0 2px" }}>{fmtB(r.delta_abs)}</div>
+                  <div style={{ fontSize: 11, color: chg == null ? "rgba(255,255,255,0.4)" : (chg >= 0 ? HOME_THEME.green : HOME_THEME.red) }}>
+                    {chg == null ? "15m —" : `15m ${fmtB(chg)}`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Table */}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -266,16 +307,20 @@ export default function StrikeGrowthPage() {
                   <tr
                     key={`${r.symbol}-${r.strike}`}
                     onClick={() => openSeries(r)}
-                    style={{ cursor: "pointer", borderTop: "1px solid rgba(255,255,255,0.06)" }}
+                    style={{
+                      cursor: "pointer",
+                      borderTop: "1px solid rgba(255,255,255,0.06)",
+                      background: i % 2 === 1 ? "rgba(255,255,255,0.02)" : "transparent",
+                    }}
                   >
-                    <td style={{ ...tdL, color: "rgba(255,255,255,0.4)" }}>{i + 1}</td>
+                    <td style={{ ...tdL, color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
                     <td style={{ ...tdL, fontWeight: 700 }}>{r.symbol}</td>
                     <td style={td}>{r.strike}</td>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.55)" }}>
+                    <td style={td}>
                       {r.spot != null ? r.spot.toFixed(2) : "—"}
                     </td>
                     <td style={tdL2}>{r.expiry}</td>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.55)" }}>{fmtB(r.gex_open)}</td>
+                    <td style={td}>{fmtB(r.gex_open)}</td>
                     <td style={td}>{fmtB(r.gex_now)}</td>
                     <td style={{ ...td, color: col, fontWeight: 800 }}>{fmtB(r.delta_abs)}</td>
                     <td style={{ ...td, color: col }}>

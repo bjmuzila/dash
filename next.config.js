@@ -24,7 +24,15 @@ const nextConfig = {
     maxInactiveAge: 5 * 60 * 1000,
     pagesBufferLength: 25,
   },
-  webpack: (config, { dev }) => {
+  webpack: (config, { dev, webpack }) => {
+    // @sentry/nextjs is an OPTIONAL dependency: instrumentation.ts only imports
+    // it (dynamically, guarded) when a DSN is set and the package is installed.
+    // It isn't in package.json, so webpack floods the log with "Can't resolve
+    // '@sentry/nextjs'". Ignore the module so the dynamic import stays a no-op
+    // until the SDK is actually added. Remove this once @sentry/nextjs is a dep.
+    config.plugins.push(
+      new webpack.IgnorePlugin({ resourceRegExp: /^@sentry\/nextjs$/ })
+    );
     if (dev) {
       // Persistent filesystem cache: after the first cold compile, webpack
       // restores modules from disk on restart instead of rebuilding from zero.
