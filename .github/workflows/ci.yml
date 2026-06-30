@@ -1,12 +1,14 @@
 name: CI
 
-# Gate every push/PR: typecheck, calc tests, and a security audit. The deploy
-# (push.ps1 → VPS) is manual; keep it gated behind a green run here.
+# Gate PRs into main with typecheck, calc tests, and a security audit. The deploy
+# (push.ps1 → VPS) is manual and independent of this run. Push triggers were
+# removed 2026-06-30: direct pushes to main fired a failing run on every deploy
+# (CI runs tsc directly, bypassing next.config's ignoreBuildErrors) and spammed
+# failure emails. Runs on PRs only now; trigger manually via workflow_dispatch.
 on:
-  push:
-    branches: [main, hardening-prelaunch]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -21,7 +23,11 @@ jobs:
           cache: "npm"
 
       - name: Install deps
-        run: npm ci
+        # npm install (not npm ci): the lock file is generated on Windows and
+        # does not satisfy `npm ci` on Linux (per-OS resolution of picomatch et
+        # al.) — same reason the Dockerfile uses npm install. npm ci fails every
+        # run here otherwise.
+        run: npm install --no-audit --no-fund
 
       - name: Typecheck
         run: npx tsc --noEmit
