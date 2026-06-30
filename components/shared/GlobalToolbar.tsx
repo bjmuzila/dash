@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import UserMenu from "./UserMenu";
-import { HOME_THEME, DOCK_THEME } from "./homeTheme";
+import { HOME_THEME } from "./homeTheme";
 import { useNotes } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
 import { useMobileNav } from "./MobileNavContext";
@@ -138,94 +138,68 @@ function useQuickPages() {
 }
 
 function LogoMenu() {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const { items: quickItems, refresh: refreshQuick } = useQuickPages();
-
-  // Close on outside-click and Escape.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   return (
-    <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
-      <button
-        onClick={() => { if (!open) refreshQuick(); setOpen((v) => !v); }}
-        title="CB Edge — Quick Pages"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          padding: 0,
-          border: "none",
-          background: "transparent",
-          cursor: "pointer",
-          borderRadius: 8,
-        }}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/cb-edge-logo.png"
-          alt="CB Edge"
-          style={{ height: 48, width: "auto", display: "block" }}
-        />
-      </button>
+    <div style={{ position: "relative", flexShrink: 0, display: "flex" }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/cb-edge-logo.png"
+        alt="CB Edge"
+        style={{ height: 48, width: "auto", display: "block" }}
+      />
+    </div>
+  );
+}
 
-      {open && quickItems.length > 0 && (
-        <div
-          role="menu"
+/**
+ * QuickPagesBar — inline emoji-only shortcut buttons for the user's pinned Quick
+ * Pages (max 4), sourced from the same store the sidebar uses
+ * (`sidebar-quick-pages-v1`). No labels — just the route glyph. Renders nothing
+ * until at least one page is pinned.
+ */
+function QuickPagesBar() {
+  const { items } = useQuickPages();
+  if (items.length === 0) return null;
+  return (
+    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      {items.map((item) => (
+        <Link
+          key={item.href}
+          href={item.href}
+          title={item.label}
+          aria-label={item.label}
           style={{
-            position: "absolute",
-            top: "calc(100% + 8px)",
-            left: 0,
-            minWidth: 200,
-            padding: 6,
-            borderRadius: 12,
-            border: `1px solid ${HOME_THEME.border}`,
-            borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
-            background: DOCK_THEME.bg,
-            boxShadow: DOCK_THEME.shadow,
-            backdropFilter: "blur(16px)",
-            zIndex: 60,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 34,
+            height: 34,
+            flexShrink: 0,
+            borderRadius: "50%",
+            border: `1px solid ${cyanA(0.3)}`,
+            background: "rgba(255,255,255,0.04)",
+            color: HOME_THEME.text,
+            fontSize: 16,
+            lineHeight: 1,
+            textDecoration: "none",
+            fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
+            transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = cyanA(0.14);
+            e.currentTarget.style.borderColor = cyanA(0.55);
+            e.currentTarget.style.transform = "translateY(-1px)";
+            e.currentTarget.style.boxShadow = `0 4px 12px -2px ${cyanA(0.45)}`;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+            e.currentTarget.style.borderColor = cyanA(0.3);
+            e.currentTarget.style.transform = "none";
+            e.currentTarget.style.boxShadow = "none";
           }}
         >
-          {quickItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setOpen(false)}
-              role="menuitem"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "9px 12px",
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                color: HOME_THEME.text,
-                textDecoration: "none",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-            >
-              <span style={{ fontSize: 15, lineHeight: 1 }} aria-hidden>{item.emoji}</span>
-              {item.label}
-            </Link>
-          ))}
-        </div>
-      )}
+          <span aria-hidden>{item.emoji}</span>
+        </Link>
+      ))}
     </div>
   );
 }
@@ -377,6 +351,9 @@ export default function GlobalToolbar() {
           <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
             <LogoMenu />
           </div>
+
+          {/* ── Quick Pages — inline emoji shortcuts (user-pinned, max 4) ── */}
+          <QuickPagesBar />
 
           <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />
 
