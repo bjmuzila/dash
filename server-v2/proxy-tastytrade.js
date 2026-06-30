@@ -59,6 +59,8 @@ const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
 const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
 const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
+// Off-hours recompute cadence — SPX options barely move, no need for 2s grind.
+const RECOMPUTE_MS_OFFHOURS = Number(process.env.RECOMPUTE_MS_OFFHOURS || 15000);
 // SPX/SPXW reopen for the next ~23h session at 6PM ET. At that boundary the prior
 // session's per-strike dayVolume + OI are stale; we force a re-pull rather than
 // depend on dxFeed reliably pushing the reset (it does so only sometimes).
@@ -132,6 +134,7 @@ const CANDLE_FLUSH_MS = Number(process.env.CANDLE_FLUSH_MS || 10000);
 // REST call per poll; 5s keeps gamma fresh against spot drift without burning the
 // concurrency budget. No effect in TT mode.
 const THETA_GREEKS_MS = Number(process.env.THETA_GREEKS_MS || 5000);
+const THETA_GREEKS_MS_OFFHOURS = Number(process.env.THETA_GREEKS_MS_OFFHOURS || 60000);
 
 // ---------------------------------------------------------------------------
 // OAuth
@@ -1630,10 +1633,15 @@ class TastytradeProxy {
     // does NOT latch off. No-op in TT mode (greeks arrive via the dxLink stream).
     if (useTheta()) {
       await this._refreshGreeksTheta().catch(() => {});
-      this.thetaGreeksTimer = setInterval(() => {
-        if (this.idle) return;
-        this._refreshGreeksTheta().catch(() => {});
-      }, THETA_GREEKS_MS);
+      // Self-rescheduling: 5s during RTH, 60s off-hours.
+      const scheduleGreeks = () => {
+        const ms = isRthEt() ? THETA_GREEKS_MS : THETA_GREEKS_MS_OFFHOURS;
+        this.thetaGreeksTimer = setTimeout(() => {
+          if (!this.idle) this._refreshGreeksTheta().catch(() => {});
+          scheduleGreeks();
+        }, ms);
+      };
+      scheduleGreeks();
 
       // FPSS option Trade stream → FlowProcessor (replaces the dxLink Trade tape
       // for options flow). One WS; trades route into the SAME this.flow.addPrint
@@ -1665,7 +1673,16 @@ class TastytradeProxy {
       }
     }
 
-    this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
+    // Self-rescheduling recompute: 2s during RTH, 15s off-hours.
+    // A fixed setInterval at 2s burned ~80% CPU overnight on a 1-vCPU host.
+    const scheduleRecompute = () => {
+      const ms = isRthEt() ? RECOMPUTE_MS : RECOMPUTE_MS_OFFHOURS;
+      this.recomputeTimer = setTimeout(() => {
+        if (!this.idle) this._recompute();
+        scheduleRecompute();
+      }, ms);
+    };
+    scheduleRecompute();
     // Aggregate + broadcast the flow tape every 500ms (independent of GEX).
     // Tape is multi-ticker (SPX engine + FLOW_TICKERS via MultiFlowManager);
     // SYMBOL here only labels the bucket, it does not filter the tape.

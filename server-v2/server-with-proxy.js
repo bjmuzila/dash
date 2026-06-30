@@ -486,11 +486,13 @@ async function main() {
             // Latest ts per (date,symbol) today; rank by |delta_abs| desc.
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
             const params = [today];
+            // Qualify with sg.* — the LATERAL joins below add tables that also
+            // have symbol/strike/spot, so unqualified refs are ambiguous (502).
             let sideFilter = '';
-            if (side === 'call') sideFilter = 'AND strike >= spot';
-            else if (side === 'put') sideFilter = 'AND strike < spot';
+            if (side === 'call') sideFilter = 'AND sg.strike >= sg.spot';
+            else if (side === 'put') sideFilter = 'AND sg.strike < sg.spot';
             let symFilter = '';
-            if (symbol) { params.push(symbol); symFilter = `AND symbol = $${params.length}`; }
+            if (symbol) { params.push(symbol); symFilter = `AND sg.symbol = $${params.length}`; }
             params.push(minAbs); const minIdx = params.length;
             params.push(limit); const limIdx = params.length;
             // chg15/30/60 = Δ in volume-only Now GEX over the trailing window.
