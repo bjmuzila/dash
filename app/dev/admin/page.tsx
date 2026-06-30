@@ -170,14 +170,16 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
         <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 12 }}>No customers yet</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {customers.map((c) => (
-            <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{c.email}</div>
-                <div style={{ fontSize: 10, color: T.muted }}>Joined {fmtDate(c.created)}</div>
+          {customers.filter(c => c.email && c.email !== "—").map((c) => (
+            <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                <div style={{ fontSize: 10, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
               </div>
-              <div style={{ display: "flex", gap: 4 }}>
-                {c.subscriptions.map((s, i) => (
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                {c.subscriptions.length === 0 ? (
+                  <span style={{ fontSize: 9, color: T.muted }}>no sub</span>
+                ) : c.subscriptions.map((s, i) => (
                   <span key={i} style={{
                     fontSize: 9, padding: "2px 7px", borderRadius: 10,
                     background: `${STATUS_COLORS[s.status] || T.muted}18`,
