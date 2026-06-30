@@ -1244,13 +1244,19 @@ export default function EsCandlesPage() {
             if (d <= 0) return 1;
             return Math.max(0.12, 1 - d / fadeSpan);
           };
-          for (const col of cols) {
+          for (let ci = 0; ci < cols.length; ci++) {
+            const col = cols[ci];
             const sx = slotX(col.slotTs);
             if (!sx) continue;
-            // Stretch the latest column to the right axis so the band renders
-            // all the way to the last print instead of stopping a bar short.
+            // Carry each column forward to the NEXT stored column's left edge so
+            // slots with no GEX update (the WS skip-if-unchanged throttle stops
+            // re-sending unchanged frames) don't leave empty vertical gaps. The
+            // last column stretches all the way to the right axis instead.
             if (col.slotTs === lastSlotTs && hmPlotRight > sx.left) {
               sx.w = hmPlotRight - sx.left;
+            } else if (ci + 1 < cols.length) {
+              const nextX = slotX(cols[ci + 1].slotTs);
+              if (nextX && nextX.left > sx.left) sx.w = nextX.left - sx.left;
             }
             // Per-column max + top-3 magnitudes for THIS metric (drives color/rank).
             const absVals = col.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);

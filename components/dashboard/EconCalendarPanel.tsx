@@ -56,10 +56,27 @@ function etWeekDays(): string[] {
   });
 }
 
+// Current ET wall-clock as YYYY-MM-DD and minutes-since-midnight, so staleness
+// is judged in market time regardless of the viewer's local timezone.
+function etNowParts(nowMs: number): { date: string; minutes: number } {
+  const d = new Date(nowMs);
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+  const hm = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(d);
+  const [h, m] = hm.split(":").map(Number);
+  return { date, minutes: h * 60 + m };
+}
+
 function isStale(ev: CalEvent, nowMs: number): boolean {
-  if (!ev.time) return ev.date < etToday();
-  const t = new Date(`${ev.date}T${ev.time}:00`);
-  return nowMs - t.getTime() > 30 * 60 * 1000;
+  const { date: etDate, minutes: nowMin } = etNowParts(nowMs);
+  if (ev.date < etDate) return true;
+  if (ev.date > etDate) return false;
+  // same ET day
+  if (!ev.time) return false;
+  const [h, m] = ev.time.split(":").map(Number);
+  const evMin = h * 60 + m;
+  return nowMin - evMin > 30; // 30 min past event start
 }
 
 function dayLabel(dateStr: string, today: string): string {
