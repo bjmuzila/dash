@@ -81,29 +81,27 @@ docker compose -f docker-compose.yml -f deploy/theta/compose.theta.yml ps
 
 If `git pull` says "Already up to date," the push steps didn't run — stop and check.
 
-## RECURRING ISSUE — `npm ci` fails in VPS Docker build (picomatch / lock drift)
+## RESOLVED — the picomatch `npm ci` error (do NOT chase the lock file)
 
-Signature in the VPS build log:
+Old signature in the VPS build log:
 
 ```
-npm error `npm ci` can only install packages when your package.json and package-lock.json ... are in sync.
 npm error Invalid: lock file's picomatch@2.3.2 does not satisfy picomatch@4.0.4
 ```
 
-This is **transitive drift**: a sub-dependency moved even though package.json didn't,
-so `npm ci` refuses. push.ps1 now auto-heals this BEFORE pushing — it always runs
-`npm install --package-lock-only`, then `npm ci --dry-run`, and if that still fails it
-does a full lock regen automatically. So a normal `.\push.ps1` should fix it on its own.
+Root cause: a **Windows-generated** package-lock.json does not satisfy `npm ci` on
+**Linux** (npm resolves picomatch differently per-OS). It is NOT transitive drift and
+it CANNOT be fixed by regenerating the lock on Windows. It was also never fatal — the
+build completed anyway.
 
-If you ever need to do it by hand on Windows:
+Permanent fix (2026-06-30): the **Dockerfile** now runs `npm install --no-audit
+--no-fund` instead of `npm ci`, so it resolves correctly per-platform and the error is
+gone. push.ps1 no longer does any local lock check. **Nothing to do here anymore.**
 
-```powershell
-cd C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed
-rm -r -force node_modules
-rm package-lock.json
-npm install
-npm ci
-```
+If the error ever reappears, it means someone put `npm ci` back in the Dockerfile —
+change it back to `npm install`. Do not regenerate the lock on Windows; that never
+worked. (If exact-lock installs are ever required, regenerate the lock inside a Node 20
+Linux container so it matches Docker.)
 
 If that last `npm ci` succeeds locally, commit and re-run push.ps1:
 
