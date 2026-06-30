@@ -1,37 +1,62 @@
 $repoRoot = "C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed"
 $packageJsonPath = "$repoRoot\package.json"
 
-$now = Get-Date
-$month = $now.Month
-$day = $now.Day
-$hour = $now.Hour
-$version = "2026.$month.$day-v$hour"
+# --- VPS deploy target ---
+$vpsHost = "root@178.156.137.36"
+$vpsKey  = "$env:USERPROFILE\.ssh\cbedge"
+$composeFiles = "-f docker-compose.yml -f deploy/theta/compose.theta.yml"
 
-Write-Host "?? Generated version: $version"
+$now = Get-Date
+cd $repoRoot
+git checkout main
+
+# Auto-version vMonth.Day.N — Nth deploy of the day
+$prefix = "v$($now.Month).$($now.Day)."
+$deploysToday = (git log --since="$($now.ToString('yyyy-MM-dd')) 00:00:00" --grep="^$([regex]::Escape($prefix))" --oneline | Measure-Object -Line).Lines
+$version = "$prefix$($deploysToday + 1)"
 
 $packageJson = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
 $packageJson.version = $version
-$packageJson | ConvertTo-Json | Set-Content $packageJsonPath
-
-Write-Host "Updated package.json"
-
-cd $repoRoot
+($packageJson | ConvertTo-Json -Depth 100) | Set-Content $packageJsonPath
+Write-Host "Version: $version" -ForegroundColor Cyan
 
 # Gate: build must pass before anything is committed or pushed.
-# Catches errors like "showHpay is not defined" locally (~50s) instead of
-# discovering them on the VPS after a push + Docker rebuild.
-Write-Host "Running build gate (npm run build)..."
+Write-Host "Running build gate (npm run build)..." -ForegroundColor Yellow
 npm run build
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "BUILD FAILED - nothing committed or pushed. Fix the error above, then re-run /push." -ForegroundColor Red
+    Write-Host "BUILD FAILED - nothing committed or pushed. Fix the error above, then re-run." -ForegroundColor Red
     exit 1
 }
 
-# Stage EVERYTHING (-A), not just package.json. The old `git add package.json`
-# silently left every code change uncommitted, so version bumps shipped without
-# the actual edits (this is what froze app/budget/page.tsx on a broken version).
+# Stage everything, commit, push main
 git add -A
-git commit -m "Bump version to $version"
+git commit -m "$version"
 git push origin main
+if ($LASTEXITCODE -ne 0) { Write-Host "git push main FAILED - stopping." -ForegroundColor Red; exit 1 }
 
-Write-Host "Done! Version $version pushed to GitHub."
+# Promote main -> prod
+git checkout prod
+git merge main
+git push origin prod
+if ($LASTEXITCODE -ne 0) { Write-Host "git push prod FAILED - stopping." -ForegroundColor Red; git checkout main; exit 1 }
+git checkout main
+
+Write-Host "Pushed $version to GitHub (main + prod). Deploying on VPS..." -ForegroundColor Cyan
+
+# --- VPS deploy over SSH (key auth, no password) ---
+$deployScript = @"
+set -e
+cd /opt/dashboard
+git pull
+docker compose $composeFiles build
+docker compose $composeFiles up -d
+docker compose $composeFiles ps
+"@
+
+ssh -i $vpsKey -o StrictHostKeyChecking=accept-new $vpsHost $deployScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "VPS deploy FAILED. Code is on GitHub - SSH in and rerun, or rollback with: git reset --hard HEAD~1" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Done! $version is live. Watch logs: ssh $vpsHost 'cd /opt/dashboard; docker compose $composeFiles logs -f'" -ForegroundColor Green
