@@ -165,12 +165,19 @@ async function fetchVolumeTheta(underlying = SYMBOL, expiration) {
   const json = await thetaGet(
     `/v3/option/snapshot/ohlc?symbol=${encodeURIComponent(root)}&expiration=${expiration}`,
   );
+  // The OHLC snapshot returns each contract's LAST available bar. For strikes
+  // that traded today the bar is today's; for untraded strikes it's a stale bar
+  // from a prior session (e.g. last week). Counting that stale volume spikes
+  // vol-GEX on near-untraded expiries, so only keep volume whose bar timestamp
+  // is today's date — otherwise treat it as 0 (no volume this session).
+  const todayIso = new Date().toISOString().slice(0, 10);
   for (const row of flatSnapshotRows(json)) {
     const type = rightToType(row.right);
     const strike = Number(row.strike);
     if (!(strike > 0)) continue;
-    out.set(keyOf(row.expiration || expiration, strike, type),
-      Number(row.volume ?? row.day_volume) || 0);
+    const isToday = String(row.timestamp || '').slice(0, 10) === todayIso;
+    const vol = isToday ? (Number(row.volume ?? row.day_volume) || 0) : 0;
+    out.set(keyOf(row.expiration || expiration, strike, type), vol);
   }
   return out; // may be empty pre-open — caller treats empty as "no update"
 }

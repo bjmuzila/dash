@@ -628,20 +628,65 @@ async function main() {
   // Start the live feed — UNLESS idle was left ON. Idle is now a true bandwidth
   // kill-switch, so a restart while idle must stay paused (no dxLink, no quotes,
   // no broadcasts) until the owner toggles it back on from the dashboard.
-  try {
-    proxy = new TastytradeProxy();
-    if (TastytradeProxy.idlePersisted()) {
+  proxy = new TastytradeProxy();
+
+  // Start the feed with bounded retry. Theta (sibling container) may not be
+  // ready at boot even with compose `depends_on: service_healthy` — the v3 jar
+  // download + auth handshake can lag the healthcheck. Without retry, a single
+  // "fetch failed" left the feed dead (spot:0 / cold first load) until a manual
+  // restart. We now re-attempt with backoff until it starts, then a watchdog
+  // (below) keeps it warm. Respects the idle kill-switch: if the owner left idle
+  // ON, we never start — that's a deliberate pause, not a failure.
+  async function startFeedWithRetry() {
+    if (proxy.idle || TastytradeProxy.idlePersisted()) {
       proxy.idle = true;
       marketState.setStatus({ idle: true });
       console.log('[SERVER-V2] idle persisted ON — feed left paused (toggle off to start)');
-    } else {
-      await proxy.start();
-      console.log('[SERVER-V2] Tastytrade/dxLink feed started');
+      return;
     }
-  } catch (err) {
-    console.error('[SERVER-V2] Feed failed to start:', err.message);
-    marketState.setError(`feed: ${err.message}`);
+    let attempt = 0;
+    // backoff: 2s, 4s, 8s … capped at 30s, retry forever (Theta will come up)
+    for (;;) {
+      try {
+        await proxy.start();
+        console.log(`[SERVER-V2] Tastytrade/dxLink feed started${attempt ? ` (after ${attempt} retr${attempt === 1 ? 'y' : 'ies'})` : ''}`);
+        marketState.setError(null);
+        return;
+      } catch (err) {
+        attempt++;
+        const waitMs = Math.min(2000 * 2 ** (attempt - 1), 30000);
+        console.error(`[SERVER-V2] Feed failed to start (attempt ${attempt}): ${err.message} — retrying in ${waitMs / 1000}s`);
+        marketState.setError(`feed: ${err.message} (retrying)`);
+        if (proxy.idle) { console.log('[SERVER-V2] idle toggled ON during retry — stopping feed start'); return; }
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+    }
   }
+  await startFeedWithRetry();
+
+  // Keep-warm watchdog: every 30s, if the feed is NOT idle-paused but has gone
+  // unhealthy (Theta blip, dropped dxLink, no recent frames), kick it back to
+  // life so the dashboard is always warm — no cold load waiting for the next
+  // page visit. Idle stays sacred: when the owner pauses, we leave it paused.
+  const FEED_WARM_INTERVAL_MS = 30000;
+  setInterval(async () => {
+    if (!proxy || proxy.idle) return;            // paused on purpose — don't touch
+    let healthy = false;
+    try {
+      // Prefer an explicit health signal if the proxy exposes one; otherwise
+      // fall back to "do we have a live spot". spot:0 == feed is cold.
+      if (typeof proxy.isHealthy === 'function') healthy = !!proxy.isHealthy();
+      else healthy = ((proxy.spot || marketState.getSpot?.() || 0) > 0);
+    } catch { healthy = false; }
+    if (healthy) return;
+    console.warn('[SERVER-V2] keep-warm: feed looks cold (no live spot) — restarting feed');
+    try {
+      if (typeof proxy.stop === 'function') { try { await proxy.stop(); } catch {} }
+      await startFeedWithRetry();
+    } catch (err) {
+      console.error('[SERVER-V2] keep-warm restart failed:', err.message);
+    }
+  }, FEED_WARM_INTERVAL_MS).unref();
 
   // Route client commands (e.g. expiry switch) to the live proxy.
   // Dashboard sends { type:'SET_EXPIRY', expiry }; also accept 'setExpiry'.

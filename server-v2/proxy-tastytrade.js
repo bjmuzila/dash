@@ -2354,14 +2354,20 @@ class TastytradeProxy {
       const rest = this.restOI.get(c.streamerSymbol);
       const gk = this.greeks.get(c.streamerSymbol); // raw broker greeks (if any)
       const oi = (rest?.oi ?? 0) || (s?.oi ?? 0);
-      // Current-session volume = live dayVolume from the Trade stream. SPX trades
-      // ~23h/day, so this is the authoritative source. The REST `volume` field
-      // carries PRIOR-session cumulative volume that hasn't reset for the new
-      // session (esp. on near-untraded future expiries), which previously made
-      // stale strikes spike vol-GEX and wrongly rank as MVC — only fall back to
-      // it when the live stream has genuinely never delivered a print.
-      const liveVol = this.volumes.get(c.streamerSymbol);
-      const vol = liveVol != null ? liveVol : (rest?.volume || 0);
+      // Current-session day-volume. Two sources, both cumulative-for-the-session:
+      //   • liveVol  — dayVolume from the Trade stream (dxLink legacy path)
+      //   • restVol  — Theta OHLC snapshot day-volume (the authoritative source
+      //                under DATA_SOURCE=theta; see fetchVolumeTheta)
+      // Day-volume only grows within a session, so take the MAX. This fixes 0DTE
+      // showing blank Volume Net GEX: under Theta the live stream often holds a
+      // small/zero partial that previously SHADOWED the accurate REST cumulative
+      // (the old `liveVol != null ? liveVol : rest` preferred a 0 live print over
+      // a real REST value). Max also avoids stale prior-session REST spikes on
+      // untraded future expiries, since the live stream there is 0/absent and the
+      // REST value for an untraded current-session strike is also 0.
+      const liveVol = Number(this.volumes.get(c.streamerSymbol) ?? 0);
+      const restVol = Number(rest?.volume ?? 0);
+      const vol = Math.max(liveVol, restVol);
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.

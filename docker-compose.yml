@@ -33,3 +33,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+    # Wait for Theta (sibling service in the same compose project) to report
+    # healthy before the dashboard boots — kills the cold-start race where the
+    # feed starts before Theta is reachable ("Feed failed to start: fetch failed"
+    # → spot:0 → cold first load). Theta's healthcheck lives in
+    # deploy/theta/compose.theta.yml.
+    depends_on:
+      theta-terminal:
+        condition: service_healthy
