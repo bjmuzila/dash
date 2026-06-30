@@ -20,12 +20,15 @@ $packageJson.version = $version
 ($packageJson | ConvertTo-Json -Depth 100) | Set-Content $packageJsonPath
 Write-Host "Version: $version" -ForegroundColor Cyan
 
-# Keep package-lock.json synced so VPS `npm ci` never drifts (picomatch etc.)
-Write-Host "Syncing package-lock.json (npm install)..." -ForegroundColor Yellow
-npm install
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "npm install FAILED - nothing committed or pushed." -ForegroundColor Red
-    exit 1
+# Keep package-lock.json synced, but only when needed (skip on most pushes)
+$pkgChanged = git status --porcelain package.json package-lock.json
+if ($pkgChanged) {
+    Write-Host "package.json/lock changed - syncing (npm install)..." -ForegroundColor Yellow
+    npm install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "npm install FAILED - nothing committed or pushed." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Gate: build must pass before anything is committed or pushed.

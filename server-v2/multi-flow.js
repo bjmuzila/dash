@@ -77,12 +77,22 @@ class MultiFlowManager {
     if (!chain || !Array.isArray(chain.contracts) || !chain.contracts.length) return [];
     const expiry = (chain.expirations || [])[0];
     if (!expiry) return [];
-    const band = spot > 0 ? spot * FLOW_STRIKE_WINDOW_PCT : Infinity;
-    const legs = chain.contracts
-      .filter((c) => c.expiration === expiry)
-      .filter((c) => spot <= 0 || Math.abs(c.strike - spot) <= band)
+    const expContracts = chain.contracts.filter((c) => c.expiration === expiry);
+    if (!expContracts.length) return [];
+    // If spot is unknown (stock snapshot gated/empty), DON'T center on 0 — that
+    // grabs the lowest strikes (deep ITM calls / far OTM puts) which never trade.
+    // Fall back to the chain's MEDIAN strike, which is near the money for a
+    // symmetric chain, so we still subscribe the liquid strikes.
+    let center = spot;
+    if (!(center > 0)) {
+      const strikes = [...new Set(expContracts.map((c) => c.strike))].sort((a, b) => a - b);
+      center = strikes[Math.floor(strikes.length / 2)] || 0;
+    }
+    const band = center > 0 ? center * FLOW_STRIKE_WINDOW_PCT : Infinity;
+    const legs = expContracts
+      .filter((c) => center <= 0 || Math.abs(c.strike - center) <= band)
       // nearest-the-money first so the cap keeps the most relevant strikes
-      .sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))
+      .sort((a, b) => Math.abs(a.strike - center) - Math.abs(b.strike - center))
       .slice(0, FLOW_MAX_CONTRACTS)
       .map((c) => ({ strike: c.strike, type: c.type, expiration: c.expiration }));
     return legs;

@@ -5,6 +5,7 @@ import {
   comingSoonEmail, comingSoonText, COMING_SOON_SUBJECT,
   betaLiveEmail, betaLiveText, BETA_LIVE_SUBJECT,
 } from "@/lib/emails/announce";
+import { betaLaunchEmail, betaLaunchEmailText, BETA_LAUNCH_SUBJECT } from "@/lib/emails/beta-launch";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -37,6 +38,13 @@ function buildTemplates(): Template[] {
       subject: BETA_LIVE_SUBJECT,
       html: betaLiveEmail(),
       text: betaLiveText(),
+    },
+    {
+      id: "beta-launch",
+      label: "Launch update — pushed to July 1",
+      subject: BETA_LAUNCH_SUBJECT,
+      html: betaLaunchEmail(),
+      text: betaLaunchEmailText(),
     },
   ];
 }
