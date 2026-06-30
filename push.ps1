@@ -91,6 +91,9 @@ $deployLines = @(
     "docker compose $composeFiles ps"
 )
 $deployScript = ($deployLines -join $LF) + $LF
+# Strip ANY carriage return that crept in (vars, encoding) - a stray \r makes the
+# remote bash throw "$'\r': command not found" and falsely fail the deploy.
+$deployScript = $deployScript -replace "[\r]", ""
 
 $deployScript | & ssh @sshOpts $vpsHost "bash -s"
 if ($LASTEXITCODE -ne 0) {

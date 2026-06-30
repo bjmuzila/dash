@@ -32,10 +32,16 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
   // the scrollable body and measure its real content height so the capture wraps
   // tightly instead of inheriting the page's full 100% height (blank bottom).
   const inner = el.querySelector("table") as HTMLElement | null;
+  // A lightweight-charts target (ES Candles) is a FLEX COLUMN (chart card +
+  // lanes), not a bare bitmap. It happens to contain a <canvas> (the heatmap
+  // overlay), but it must take the flex-summation path below — not the bare-
+  // canvas fast-path — or html2canvas clips to the clamped flex height and only
+  // the bottom of the chart is captured. Detect it via the __ltScreenshot hook.
+  const isLtChart = !!(el as unknown as { __ltScreenshot?: unknown }).__ltScreenshot;
   // A canvas chart (e.g. GEX chart) is a fixed-pixel bitmap that won't re-flow,
   // so we must NOT add height for the title band — that leaves blank space at the
   // bottom. Instead the band overlays the top of the chart at its true height.
-  const isCanvas = !inner && !!el.querySelector("canvas");
+  const isCanvas = !inner && !isLtChart && !!el.querySelector("canvas");
   let contentH: number;
   if (inner) {
     contentH = inner.scrollHeight;
@@ -82,14 +88,19 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
         // Grid/card layout (e.g. options chain): un-clamp the flex scroll body so
         // every row renders and the clone collapses to its real content height
         // — no blank space below the data box.
-        Array.from(clone.children).forEach((c) => {
+        // Pair clone children with the LIVE element's children so we can read
+        // their real rendered height (the clone isn't laid out yet).
+        const liveKids = Array.from(el.children) as HTMLElement[];
+        Array.from(clone.children).forEach((c, i) => {
           const ch = c as HTMLElement;
+          const live = liveKids[i];
           ch.style.flex = "none";
           ch.style.flexShrink = "0";
-          if (ch.scrollHeight > ch.clientHeight) {
-            ch.style.height = "auto";
-            ch.style.overflow = "visible";
-          }
+          // A flex-1 chart card holds its chart via absolute inset-0 children, so
+          // height:auto collapses it to 0. Pin it to the real rendered height.
+          const liveH = live ? live.offsetHeight : ch.offsetHeight;
+          if (liveH > 0) ch.style.height = `${liveH}px`;
+          ch.style.overflow = "visible";
         });
       }
       const inter = "var(--font-inter), Inter, Arial, sans-serif";
@@ -125,8 +136,11 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     const elRect = el.getBoundingClientRect();
     const tRect = lt.target.getBoundingClientRect();
     // Offset of the chart layer within the captured element, in canvas px. Add
-    // the title-band reserve (captureH − contentH) so it lands below the band.
-    const bandReserve = captureH - contentH;
+    // the title-band reserve so the candle bitmap lands below the band. The clone
+    // reserves 44px of paddingTop (non-canvas path); the bare-canvas path adds
+    // none. Match that exactly so the composited candles aren't pushed off by the
+    // band/padding mismatch.
+    const bandReserve = isCanvas ? 0 : 44;
     const dx = (tRect.left - elRect.left) * scale;
     const dy = (tRect.top - elRect.top + bandReserve) * scale;
     const dw = tRect.width * scale;
