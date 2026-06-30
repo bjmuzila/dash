@@ -23,7 +23,7 @@ create table if not exists public.app_owner (
 
 -- Seed / update the owner id. REPLACE the UUID below with your OWNER_USER_ID.
 insert into public.app_owner (id, owner_id)
-values (true, '00000000-0000-0000-0000-000000000000')
+values (true, '73393031-53f5-447c-a42b-381a8adbf8de')
 on conflict (id) do update set owner_id = excluded.owner_id;
 
 -- 2) The hook. Receives the pending token event, returns it with claims merged.

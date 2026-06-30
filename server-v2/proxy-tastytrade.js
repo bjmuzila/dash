@@ -2333,7 +2333,17 @@ class TastytradeProxy {
     let atmIV = 0;
     let atmDist = Infinity;
 
-    for (const c of this._activeContracts()) {
+    const _dbgActive = this._activeContracts();
+    if (process.env.GEX_DEBUG) {
+      let _oiHits = 0, _gkHits = 0;
+      for (const c of _dbgActive) {
+        if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) _oiHits++;
+        if (this.greeks.get(c.streamerSymbol)) _gkHits++;
+      }
+      console.log(`[GEX_DEBUG] _recompute: spot=${this.spot} expiry=${this.expiry} active=${_dbgActive.length} oiHits=${_oiHits} gkHits=${_gkHits} contractsMap=${this.contracts.size}`);
+    }
+
+    for (const c of _dbgActive) {
       const q = this.quotes.get(c.streamerSymbol);
       const s = this.summaries.get(c.streamerSymbol);
       const rest = this.restOI.get(c.streamerSymbol);
@@ -2366,6 +2376,10 @@ class TastytradeProxy {
         }
       }
       staged.push({ c, oi, vol, T, iv, gk, mark: mid });
+    }
+
+    if (process.env.GEX_DEBUG && !staged.length) {
+      console.log(`[GEX_DEBUG] BAIL: staged.length=0 (active=${_dbgActive.length}) — every active contract skipped at the mid/oi/vol/gk filter`);
     }
 
     if (!staged.length) return;
