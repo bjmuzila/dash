@@ -47,16 +47,20 @@ export function PageShell({
   align = "stretch",
   maxWidth,
   style,
+  className,
 }: {
   children: ReactNode;
   align?: "stretch" | "center";
   /** Optional cap on the content column width (e.g. 620 for a form page). */
   maxWidth?: number;
   style?: CSSProperties;
+  /** Extra class on the <main> (e.g. "no-card-lift" to disable hover lift). */
+  className?: string;
 }) {
   return (
     <div style={homeShellStyle}>
       <main
+        className={className}
         style={{
           ...homeContentStyle,
           overflow: "auto",

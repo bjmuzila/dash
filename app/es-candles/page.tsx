@@ -106,10 +106,15 @@ function buildVolumeProfile(
   };
 }
 
-// Floor a ms timestamp to its 1-minute ET slot, returned as a UTC ms boundary
+// Floor a ms timestamp to its 5-minute candle slot, returned as a UTC ms boundary
 // aligned to the candle grid (candles use raw ms flooring of /ES bars).
+// Snap snapshot timestamps to the chart's 5-minute candle grid. Snapshots
+// arrive every ~30s, but the candles are 5m — bucketing to 1m left each column
+// only a sliver wide (and gaps between candles) because timeToCoordinate only
+// resolves at candle times. 5m buckets align one column per candle, full width.
+const SLOT_MS = 300_000;
 function slotFloorMs(ts: number): number {
-  return Math.floor(ts / 60_000) * 60_000;
+  return Math.floor(ts / SLOT_MS) * SLOT_MS;
 }
 
 /**
@@ -771,12 +776,16 @@ export default function EsCandlesPage() {
         const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
         if (cancelled || !raw.length) return;
         const map = columnsRef.current;
-        for (const col of raw) {
-          if (map.has(col.slotTs)) continue; // live wins on collisions
+        // DB rows are 1-min granular; snap to the 5-min candle grid. Sort
+        // descending so the newest snapshot within each bucket wins (first seen).
+        const sortedRaw = [...raw].sort((a, b) => b.slotTs - a.slotTs);
+        for (const col of sortedRaw) {
+          const slotTs = slotFloorMs(col.slotTs);
+          if (map.has(slotTs)) continue; // live wins on collisions
           const cells: GexCell[] = col.cells
             .filter((c) => c.strike > 0 && Number.isFinite(c.net))
             .map((c) => ({ strike: c.strike, netOiVol: c.net, netVol: Number(c.netVol ?? 0) }));
-          map.set(col.slotTs, { slotTs: col.slotTs, cells });
+          map.set(slotTs, { slotTs, cells });
         }
         drawOverlayRef.current();
       } catch { /* live feed still populates the front expiry going forward */ }
@@ -1192,7 +1201,6 @@ export default function EsCandlesPage() {
 
       const ts = chart.timeScale();
       const basis = basisRef.current;
-      const SLOT_MS = 60_000;
       // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
       const slotX = (slotTs: number): { left: number; w: number } | null => {
         const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);

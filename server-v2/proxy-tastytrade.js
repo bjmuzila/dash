@@ -28,6 +28,7 @@ const thetaAdapterQuotes = require('./proxy-thetadata'); // stock quotes when DA
 const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
+const { writeFlowTape } = require('./state/flow-history-writer');
 const { writeEsCandles } = require('./state/es-candle-writer');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
@@ -1658,7 +1659,11 @@ class TastytradeProxy {
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
     // Aggregate + broadcast the SPX flow tape every 500ms (independent of GEX).
     this.flowTimer = setInterval(() => {
-      marketState.setFlow(this.flow.bucket(SYMBOL));
+      const bucket = this.flow.bucket(SYMBOL);
+      marketState.setFlow(bucket);
+      // Persist the (coalesced, floor-filtered) tape so /flow can backfill today.
+      // Fire-and-forget; no-ops without DATABASE_URL.
+      writeFlowTape(bucket.tape);
     }, FLOW_AGGREGATE_MS);
 
     // start() is the resume path for idle-OFF, and also runs on cold boot. Either

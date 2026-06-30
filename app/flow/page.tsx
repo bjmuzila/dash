@@ -19,13 +19,11 @@ import type { FlowOrder } from "@/hooks/useSpxFlow";
 
 // ── Sentiment colors keyed off side+type (matches FlowTape semantics) ──────────
 const C = HOME_THEME;
-const BULLISH = C.green; // call buy / put sell
-const BEARISH = C.red; //   put buy / call sell
-
-function actionColor(o: FlowOrder): string {
-  if (o.side === "buy") return o.type === "C" ? BULLISH : BEARISH;
-  return o.type === "C" ? BEARISH : BULLISH; // sell
-}
+// Buy = green, Sell = red. HOME_THEME.green is actually a light blue, so use a
+// true green for buys; red role is correct for sells.
+const BUY_GREEN = "#22c55e";
+const BULLISH = BUY_GREEN; // buy
+const BEARISH = C.red; //    sell
 
 function fmtPremium(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
@@ -52,13 +50,23 @@ type TypeFilter = "all" | "C" | "P";
 
 const PREMIUM_PRESETS = [0, 50_000, 100_000, 250_000, 500_000, 1_000_000] as const;
 
+// Default watchlist for the ticker toolbar. Users can add more at runtime.
+const DEFAULT_TICKERS = [
+  "SPX", "NDX", "SPY", "QQQ", "VIX", "AMD", "AAPL", "AMZN",
+  "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
+] as const;
+
 export default function FlowPage() {
   const shouldConnect = useWsLifecycle();
   const [orders, setOrders] = useState<FlowOrder[]>([]);
   const [status, setStatus] = useState<"LIVE" | "RECONNECTING" | "WAITING">("WAITING");
 
   // ── Filters ──
-  const [ticker, setTicker] = useState("");
+  // Ticker toolbar: a set of available chips + which are currently selected
+  // (empty selection = show all tickers). Users can append custom tickers.
+  const [tickerList, setTickerList] = useState<string[]>([...DEFAULT_TICKERS]);
+  const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+  const [tickerInput, setTickerInput] = useState("");
   const [side, setSide] = useState<SideFilter>("all");
   const [optType, setOptType] = useState<TypeFilter>("all");
   const [minPremium, setMinPremium] = useState<number>(0);
@@ -66,8 +74,26 @@ export default function FlowPage() {
   const [strikeMin, setStrikeMin] = useState<string>("");
   const [strikeMax, setStrikeMax] = useState<string>("");
   const [expiry, setExpiry] = useState<string>("all");
-  const [maxDte, setMaxDte] = useState<string>("");
+  const [dteMin, setDteMin] = useState<number>(0);
+  const [dteMax, setDteMax] = useState<number | null>(null); // null = no upper cap (uses data max)
   const [otmOnly, setOtmOnly] = useState(false);
+
+  // Persisted backfill of today's tape (from /proxy/flow-history). Merged with
+  // the live WS tape so the page shows the full session, not just the live cap.
+  const [history, setHistory] = useState<FlowOrder[]>([]);
+
+  // ── Backfill today's persisted flow once on mount. ──
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/proxy/flow-history")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j || !Array.isArray(j.tape)) return;
+        setHistory(j.tape as FlowOrder[]);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // ── WS: mirror the home-page /ws/gex pattern, but only keep the flow tape. ──
   const unmountedRef = useRef(false);
@@ -124,21 +150,31 @@ export default function FlowPage() {
   }, [shouldConnect]);
 
   // ── Distinct values for the dropdowns, derived from live data. ──
+  // History (persisted) ∪ live tape, deduped by the coalescing key (ts|symbol|
+  // side) so the live frame's final slot values win over the persisted copy.
+  // Oldest-first to match both sources.
+  const merged = useMemo(() => {
+    const byKey = new Map<string, FlowOrder>();
+    for (const o of history) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
+    for (const o of orders) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o); // live wins
+    return [...byKey.values()].sort((a, b) => a.ts - b.ts);
+  }, [history, orders]);
+
   const expiryOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const o of orders) if (o.expiration) set.add(o.expiration);
+    for (const o of merged) if (o.expiration) set.add(o.expiration);
     return [...set].sort();
-  }, [orders]);
+  }, [merged]);
 
   // ── Apply filters (newest-first). ──
   const filtered = useMemo(() => {
-    const tkr = ticker.trim().toUpperCase();
     const sMin = strikeMin === "" ? null : Number(strikeMin);
     const sMax = strikeMax === "" ? null : Number(strikeMax);
-    const dteCap = maxDte === "" ? null : Number(maxDte);
+    const dteLo = dteMin;
+    const dteHi = dteMax == null ? null : dteMax;
 
-    const rows = orders.filter((o) => {
-      if (tkr && !(o.underlying ?? "").toUpperCase().includes(tkr)) return false;
+    const rows = merged.filter((o) => {
+      if (selectedTickers.size > 0 && !selectedTickers.has((o.underlying ?? "").toUpperCase())) return false;
       if (side !== "all" && o.side !== side) return false;
       if (optType !== "all" && o.type !== optType) return false;
       if (otmOnly && !o.isOtm) return false;
@@ -147,14 +183,16 @@ export default function FlowPage() {
       if (sMin != null && o.strike < sMin) return false;
       if (sMax != null && o.strike > sMax) return false;
       if (expiry !== "all" && o.expiration !== expiry) return false;
-      if (dteCap != null) {
+      if (dteLo > 0 || dteHi != null) {
         const d = dteOf(o);
-        if (d == null || d > dteCap) return false;
+        if (d == null) return false;
+        if (d < dteLo) return false;
+        if (dteHi != null && d > dteHi) return false;
       }
       return true;
     });
     return rows.reverse();
-  }, [orders, ticker, side, optType, otmOnly, minPremium, minSize, strikeMin, strikeMax, expiry, maxDte]);
+  }, [merged, selectedTickers, side, optType, otmOnly, minPremium, minSize, strikeMin, strikeMax, expiry, dteMin, dteMax]);
 
   // ── Summary of the filtered set. ──
   const totals = useMemo(() => {
@@ -167,9 +205,25 @@ export default function FlowPage() {
   }, [filtered]);
 
   function resetFilters() {
-    setTicker(""); setSide("all"); setOptType("all"); setMinPremium(0);
+    setSelectedTickers(new Set()); setSide("all"); setOptType("all"); setMinPremium(0);
     setMinSize(0); setStrikeMin(""); setStrikeMax(""); setExpiry("all");
-    setMaxDte(""); setOtmOnly(false);
+    setDteMin(0); setDteMax(null); setOtmOnly(false);
+  }
+
+  function toggleTicker(t: string) {
+    setSelectedTickers((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t); else next.add(t);
+      return next;
+    });
+  }
+
+  function addTicker() {
+    const t = tickerInput.trim().toUpperCase();
+    if (!t) return;
+    setTickerList((prev) => (prev.includes(t) ? prev : [...prev, t]));
+    setSelectedTickers((prev) => new Set(prev).add(t));
+    setTickerInput("");
   }
 
   const labelStyle: React.CSSProperties = {
@@ -193,9 +247,55 @@ export default function FlowPage() {
   const GRID = "70px 56px 1fr 90px 90px 80px 90px 70px";
 
   return (
-    <PageShell>
+    <PageShell className="no-card-lift">
       {/* ── Filters ─────────────────────────────────────────────────── */}
       <Card accent="cyan" title="Options Flow — Filters" subtitle="Live order flow off the /ws/gex feed.">
+        {/* ── Ticker toolbar (multi-select) ── */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={labelStyle}>Tickers {selectedTickers.size > 0 ? `(${selectedTickers.size})` : "(all)"}</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            {tickerList.map((t) => {
+              const active = selectedTickers.has(t);
+              return (
+                <button
+                  key={t}
+                  className="flow-chip"
+                  onClick={() => toggleTicker(t)}
+                  style={{
+                    padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                    letterSpacing: "0.04em", borderRadius: 6,
+                    border: `1px solid ${active ? C.cyan : C.border}`,
+                    background: active ? C.cyan : "rgba(0,0,0,0.4)",
+                    color: active ? C.bg : C.text,
+                  }}
+                >
+                  {t}
+                </button>
+              );
+            })}
+            <input
+              style={{ ...homeInputStyle, width: 110 }}
+              placeholder="+ add"
+              value={tickerInput}
+              onChange={(e) => setTickerInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addTicker(); }}
+            />
+            {selectedTickers.size > 0 && (
+              <button
+                className="flow-chip"
+                onClick={() => setSelectedTickers(new Set())}
+                style={{
+                  padding: "6px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+                  textTransform: "uppercase", letterSpacing: "0.06em", borderRadius: 6,
+                  border: `1px solid ${C.border}`, background: "rgba(255,255,255,0.04)", color: C.muted,
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
         <div
           style={{
             display: "grid",
@@ -204,20 +304,10 @@ export default function FlowPage() {
           }}
         >
           <div>
-            <label style={labelStyle}>Ticker</label>
-            <input
-              style={fieldStyle}
-              placeholder="e.g. SPX"
-              value={ticker}
-              onChange={(e) => setTicker(e.target.value)}
-            />
-          </div>
-
-          <div>
             <label style={labelStyle}>Side</label>
             <div style={segWrapStyle}>
               {(["all", "buy", "sell"] as SideFilter[]).map((s) => (
-                <button key={s} style={segBtn(side === s)} onClick={() => setSide(s)}>{s}</button>
+                <button key={s} className="flow-chip" style={segBtn(side === s)} onClick={() => setSide(s)}>{s}</button>
               ))}
             </div>
           </div>
@@ -226,7 +316,7 @@ export default function FlowPage() {
             <label style={labelStyle}>Type</label>
             <div style={segWrapStyle}>
               {([["all", "All"], ["C", "Call"], ["P", "Put"]] as [TypeFilter, string][]).map(([v, lbl]) => (
-                <button key={v} style={segBtn(optType === v)} onClick={() => setOptType(v)}>{lbl}</button>
+                <button key={v} className="flow-chip" style={segBtn(optType === v)} onClick={() => setOptType(v)}>{lbl}</button>
               ))}
             </div>
           </div>
@@ -271,20 +361,40 @@ export default function FlowPage() {
           </div>
 
           <div>
+            <label style={labelStyle}>Min DTE</label>
+            <input
+              style={fieldStyle}
+              type="number"
+              min={0}
+              placeholder="days"
+              value={dteMin || ""}
+              onChange={(e) => setDteMin(Number(e.target.value) || 0)}
+            />
+          </div>
+
+          <div>
             <label style={labelStyle}>Max DTE</label>
-            <input style={fieldStyle} type="number" min={0} placeholder="days" value={maxDte} onChange={(e) => setMaxDte(e.target.value)} />
+            <input
+              style={fieldStyle}
+              type="number"
+              min={0}
+              placeholder="days"
+              value={dteMax ?? ""}
+              onChange={(e) => setDteMax(e.target.value === "" ? null : Number(e.target.value))}
+            />
           </div>
 
           <div>
             <label style={labelStyle}>Moneyness</label>
             <div style={segWrapStyle}>
-              <button style={segBtn(!otmOnly)} onClick={() => setOtmOnly(false)}>All</button>
-              <button style={segBtn(otmOnly)} onClick={() => setOtmOnly(true)}>OTM</button>
+              <button className="flow-chip" style={segBtn(!otmOnly)} onClick={() => setOtmOnly(false)}>All</button>
+              <button className="flow-chip" style={segBtn(otmOnly)} onClick={() => setOtmOnly(true)}>OTM</button>
             </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <button
+              className="flow-chip"
               onClick={resetFilters}
               style={{
                 width: "100%", padding: "8px 6px", fontSize: 11, fontWeight: 700,
@@ -341,7 +451,7 @@ export default function FlowPage() {
           style={{
             display: "grid", gridTemplateColumns: GRID, gap: 8,
             padding: "8px 20px", borderBottom: `1px solid ${C.border}`,
-            fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+            fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
             color: C.muted, flexShrink: 0,
           }}
         >
@@ -363,25 +473,26 @@ export default function FlowPage() {
             </p>
           ) : (
             filtered.map((o, i) => {
-              const col = actionColor(o);
+              // Buys green, sells red — keyed strictly off the aggressor side.
+              const sideColor = o.side === "buy" ? BULLISH : BEARISH;
               return (
                 <div
                   key={`${o.ts}-${o.symbol}-${i}`}
                   style={{
                     display: "grid", gridTemplateColumns: GRID, gap: 8,
-                    padding: "6px 20px", borderBottom: `1px solid ${C.border}`,
-                    fontSize: 12, fontFamily: "monospace", alignItems: "center",
+                    padding: "8px 20px", borderBottom: `1px solid ${C.border}`,
+                    fontSize: 15, fontFamily: "monospace", alignItems: "center",
                   }}
                 >
                   <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
-                  <span style={{ color: o.side === "buy" ? BULLISH : BEARISH, fontWeight: 700 }}>
+                  <span style={{ color: sideColor, fontWeight: 700 }}>
                     {o.side.toUpperCase()}
                   </span>
                   <span style={{ color: C.text }}>{o.underlying ?? "—"}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
-                  <span style={{ textAlign: "center", color: col, fontWeight: 700 }}>{o.type}</span>
+                  <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.size.toLocaleString()}</span>
-                  <span style={{ textAlign: "right", color: col, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
+                  <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
                   <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
                 </div>
               );

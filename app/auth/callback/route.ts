@@ -14,6 +14,15 @@ export const dynamic = "force-dynamic";
 // after OAuth. Resolve the real public origin from forwarded headers / an
 // explicit base URL first, mirroring the Stripe routes' publicOrigin().
 function publicOrigin(req: NextRequest, fallback: string): string {
+  // Local dev: trust the actual request host so OAuth returns to localhost:PORT
+  // instead of the configured prod URL. There's no Cloudflare/proxy locally, so
+  // host is the real origin and the configured-URL override would wrongly send
+  // dev sign-ins to prod.
+  if (process.env.NODE_ENV !== "production") {
+    const devHost = req.headers.get("host");
+    const devProto = req.headers.get("x-forwarded-proto") || "http";
+    if (devHost) return `${devProto}://${devHost}`;
+  }
   const configured = process.env.NEXT_PUBLIC_SITE_URL || process.env.APP_URL;
   if (configured) return configured.replace(/\/+$/, "");
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
