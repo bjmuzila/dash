@@ -21,7 +21,7 @@ $now = Get-Date
 Set-Location $repoRoot
 git checkout main
 
-# Auto-version vMonth.Day.N — Nth deploy of the day
+# Auto-version vMonth.Day.N - Nth deploy of the day
 $prefix = "v$($now.Month).$($now.Day)."
 $deploysToday = (git log --since="$($now.ToString('yyyy-MM-dd')) 00:00:00" --grep="^$([regex]::Escape($prefix))" --oneline | Measure-Object -Line).Lines
 $version = "$prefix$($deploysToday + 1)"
@@ -40,32 +40,27 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# --- 1. Keep package-lock.json in sync deterministically, only when package files changed ---
-# Always reconcile the lock — transitive drift (e.g. picomatch 2.3.2 -> 4.0.4) happens
-# with NO change to package.json, so a "did package.json change?" gate misses it and the
-# VPS `npm ci` then fails. `--package-lock-only` is cheap (no node_modules install).
-Write-Host "Reconciling package-lock.json (npm install --package-lock-only)..." -ForegroundColor Yellow
-npm install --package-lock-only
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "lock reconcile FAILED - nothing committed or pushed." -ForegroundColor Red
-    exit 1
-}
-
-# Verify the lock is exactly what Docker's `npm ci` will demand — fail HERE, not on the VPS.
+# --- 1. Verify the lock is EXACTLY what Docker npm ci demands - fail HERE, not on the VPS. ---
+# Note: 'npm install --package-lock-only' does NOT resolve transitive drift like
+# picomatch 2.3.2 vs 4.0.4 (proven in prod). The only reliable fix is a full regen,
+# so the dry-run is the gate and a clean rebuild is the cure.
+Write-Host "Verifying lock against npm ci (the check Docker runs)..." -ForegroundColor Yellow
 npm ci --dry-run 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Lock still out of sync (npm ci would fail in Docker). Doing a full lock regen..." -ForegroundColor Yellow
+    Write-Host "Lock out of sync - full regen (rm node_modules + package-lock, npm install)..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force "$repoRoot\node_modules" -ErrorAction SilentlyContinue
     Remove-Item -Force "$repoRoot\package-lock.json" -ErrorAction SilentlyContinue
     npm install
     if ($LASTEXITCODE -ne 0) { Write-Host "Full lock regen FAILED - nothing pushed. Fix deps manually." -ForegroundColor Red; exit 1 }
     npm ci --dry-run 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "Lock STILL broken after regen - nothing pushed. Inspect package.json." -ForegroundColor Red; exit 1 }
-    Write-Host "Lock regenerated and verified." -ForegroundColor Green
+    Write-Host "Lock regenerated and verified against npm ci." -ForegroundColor Green
+} else {
+    Write-Host "Lock is in sync." -ForegroundColor Green
 }
 
 # --- 2. Local build gate (OPTIONAL) ---
-# The VPS Docker build is the authoritative gate for "live". Skip the local build by
+# The VPS Docker build is the authoritative gate for live. Skip the local build by
 # default to avoid building twice; turn it on with -LocalBuild for a fast pre-flight.
 $doLocalBuild = $LocalBuild -and -not $SkipBuild
 if ($doLocalBuild) {
@@ -96,18 +91,19 @@ git checkout main
 Write-Host "Pushed $version to GitHub (main + prod). Deploying on VPS..." -ForegroundColor Cyan
 
 # --- 5. VPS deploy over SSH ---
-# LF-only here-string piped to remote `bash -s` (no argv quoting -> no CR bug).
+# LF-only command list piped to remote bash -s (no argv quoting -> no CR bug).
 # Docker layer cache makes the build incremental; --no-cache only when -NoCache passed.
 $buildFlags = if ($NoCache) { "--no-cache" } else { "" }
-$deployScript = @"
-set -e
-cd /opt/dashboard
-git pull
-docker compose $composeFiles build $buildFlags
-docker compose $composeFiles up -d
-docker compose $composeFiles ps
-"@
-$deployScript = $deployScript -replace "`r`n", "`n"
+$LF = [char]10
+$deployLines = @(
+    "set -e",
+    "cd /opt/dashboard",
+    "git pull",
+    "docker compose $composeFiles build $buildFlags",
+    "docker compose $composeFiles up -d",
+    "docker compose $composeFiles ps"
+)
+$deployScript = ($deployLines -join $LF) + $LF
 
 $deployScript | & ssh @sshOpts $vpsHost "bash -s"
 if ($LASTEXITCODE -ne 0) {
@@ -115,4 +111,6 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "Done! $version is live. Logs: ssh $vpsHost 'cd /opt/dashboard; docker compose $composeFiles logs -f'" -ForegroundColor Green
+Write-Host "Done! $version is live." -ForegroundColor Green
+Write-Host "Watch logs with:" -ForegroundColor DarkGray
+Write-Host "  ssh -i $vpsKey $vpsHost 'cd /opt/dashboard; docker compose $composeFiles logs -f'" -ForegroundColor DarkGray

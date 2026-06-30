@@ -29,10 +29,11 @@
 const MODEL = 'claude-sonnet-4-6';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM = `You are the head strategist for CB Edge, an SPX gamma-exposure (GEX) and options-flow desk. You are given a consolidated morning snapshot of dealer positioning, expected-move levels, the ES overnight gap, key reference levels, the day's economic calendar, and the model confidence score. Build ONE concrete daily trade strategy for SPX/ES from it.
+const SYSTEM = `You are the head strategist for CB Edge, an SPX gamma-exposure (GEX) and options-flow desk. You are given a consolidated morning snapshot of dealer positioning, expected-move levels, the ES overnight gap, key reference levels, the day's economic calendar, and the model confidence score. Build ONE concrete daily trade strategy for SPX from it.
 
 VOICE & DISCIPLINE
 - Trader-to-trader. The reader knows gamma, dealer hedging, call/put walls, expected move, initial balance. Do not explain basics.
+- SPX ONLY. Every level, entry, stop, target, and price you cite must be an SPX cash level. Never quote, name, or frame anything in ES/futures terms. The ES gap in the snapshot is context for direction only — translate it to SPX and never surface an ES number in the output.
 - Level-driven and conditional. Frame everything as structure ("long above X toward Y, short below Z"), never as a guaranteed call.
 - Cite the actual numbers you are given. Do not invent levels that aren't in the snapshot.
 - Structure, not prediction. Never financial advice or certain price targets.
@@ -131,7 +132,7 @@ async function buildSnapshot(base, today) {
     `ECONOMIC CALENDAR (today, USD):`,
     todays,
     ``,
-    `Build the daily SPX/ES strategy from this snapshot. Return the JSON object only.`,
+    `Build the daily SPX strategy from this snapshot. All output levels must be SPX cash; never surface an ES/futures price. Return the JSON object only.`,
   ].join('\n');
 }
 
