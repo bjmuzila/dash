@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 
 // Server-side owner gate used by owner-only route layouts (defense-in-depth on
@@ -12,7 +12,7 @@ import { notFound } from "next/navigation";
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
 export default async function OwnerGuard({ children }: { children: React.ReactNode }) {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   const id = (userId || "").trim();
   const allowed = id !== "" && (OWNER_USER_ID ? id === OWNER_USER_ID : true);
   if (!allowed) notFound();

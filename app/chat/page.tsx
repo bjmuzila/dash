@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useEffect, useRef, useState } from "react";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useChat } from "@/hooks/useChat";
@@ -11,11 +11,7 @@ function fmtTime(iso: string): string {
 }
 
 export default function ChatPage() {
-  const { user } = useUser();
-  const displayName = useMemo(
-    () => user?.firstName || user?.username || user?.primaryEmailAddress?.emailAddress?.split("@")[0] || "trader",
-    [user],
-  );
+  const { user, displayName } = useAuth();
 
   const { messages, loading, error, send } = useChat(displayName);
   const [draft, setDraft] = useState("");

@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import LandingClient from "@/components/landing/LandingClient";
+
+export const dynamic = "force-dynamic";
 
 // Public landing page. Signed-in users skip straight to the dashboard.
 export default async function RootPage() {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (userId) redirect("/home");
   return <LandingClient />;
 }

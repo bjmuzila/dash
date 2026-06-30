@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getSupabaseServer, getServerUserId } from "@/lib/supabase/server";
 import { addFeedback, listFeedback, setFeedbackStatus } from "@/lib/db";
 
 // Customer feedback. Any signed-in user may POST a note. Reading the feed and
@@ -8,7 +8,7 @@ import { addFeedback, listFeedback, setFeedbackStatus } from "@/lib/db";
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (!userId) return { ok: false, status: 401 };
   if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };
@@ -17,7 +17,9 @@ async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }
 // Submit feedback — any signed-in user.
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await auth();
+    const supabase = await getSupabaseServer();
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id ?? null;
     if (!userId) return NextResponse.json({ error: "Sign in to send feedback" }, { status: 401 });
 
     const body = await req.json();
@@ -27,8 +29,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Message too long" }, { status: 400 });
     }
 
-    const user = await currentUser();
-    const email = user?.emailAddresses?.[0]?.emailAddress ?? null;
+    const email = user?.email ?? null;
 
     const row = await addFeedback({
       clerk_user_id: userId,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getIctCardPrefs, upsertIctCardPrefs } from "@/lib/db";
 
 // Per-user /ict glossary card visibility. hiddenCards = concept ids toggled OFF.
@@ -7,7 +7,7 @@ import { getIctCardPrefs, upsertIctCardPrefs } from "@/lib/db";
 
 export async function GET() {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const hiddenCards = await getIctCardPrefs(userId);
     return NextResponse.json({ hiddenCards });
@@ -18,7 +18,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = await req.json();
     const hiddenCards = Array.isArray(body.hiddenCards)

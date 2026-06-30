@@ -148,7 +148,7 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch("/api/quote-symbols", { cache: "no-store" });
+        const r = await fetch("/api/quote-symbols", { cache: "default" });
         if (!r.ok) return;
         const j = await r.json();
         const saved: Array<{ sym: string; label: string }> = j?.symbols ?? [];
@@ -158,7 +158,15 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
           const def = DEFAULT_QUOTE_SYMBOLS.find((d) => d.sym === s.sym);
           return { sym: s.sym, label: s.label || def?.label || s.sym, name: def?.name || s.sym };
         });
-        setQuoteList(merged);
+        // Only swap state if the saved list actually differs from what we're
+        // already showing (defaults). Setting it unconditionally re-runs the
+        // quotes effect ([quoteList] dep), forcing a SECOND quotes wave ~480ms
+        // after mount — the home-page load tail. When prefs == defaults, the
+        // first (mount) wave already has the right symbols; skip the churn.
+        const sameAsCurrent =
+          merged.length === quoteList.length &&
+          merged.every((m, i) => m.sym === quoteList[i]?.sym && m.label === quoteList[i]?.label);
+        if (!sameAsCurrent) setQuoteList(merged);
       } catch { /* ignore — keep defaults */ }
     })();
     return () => { cancelled = true; };

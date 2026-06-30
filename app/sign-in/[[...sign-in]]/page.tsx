@@ -1,4 +1,6 @@
-import { SignIn } from "@clerk/nextjs";
+import AuthForm from "@/components/auth/AuthForm";
+
+export const dynamic = "force-dynamic";
 
 export default function SignInPage() {
   return (
@@ -10,9 +12,10 @@ export default function SignInPage() {
         alignItems: "center",
         justifyContent: "center",
         background: "#05060A",
+        padding: 20,
       }}
     >
-      <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/home" />
+      <AuthForm mode="signin" />
     </div>
   );
 }

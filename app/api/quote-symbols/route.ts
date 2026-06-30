@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getQuoteSymbols, upsertQuoteSymbols, type QuoteSymPref } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -28,10 +28,16 @@ function sanitize(input: unknown): QuoteSymPref[] {
 
 export async function GET() {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const symbols = await getQuoteSymbols(userId);
-    return NextResponse.json({ symbols });
+    // Private (per-user) short cache: prefs change rarely, so let the browser
+    // reuse them for 30s instead of a blocking DB round-trip on every load.
+    // POST below is the only mutation and the client refetches on edit.
+    return NextResponse.json(
+      { symbols },
+      { headers: { "Cache-Control": "private, max-age=30" } },
+    );
   } catch (err) {
     return NextResponse.json({ error: "Load failed", detail: String(err) }, { status: 500 });
   }
@@ -39,7 +45,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = await req.json();
     const symbols = sanitize(body?.symbols);

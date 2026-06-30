@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 
 // Server-side owner gate (defense-in-depth — the UI buttons are cosmetic and can
 // be bypassed by POSTing directly). Only the configured owner may push to the
@@ -9,7 +9,7 @@ const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
 export async function POST(request: Request) {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     const id = (userId || "").trim();
     const allowed = id !== "" && (OWNER_USER_ID ? id === OWNER_USER_ID : true);
     if (!allowed) {

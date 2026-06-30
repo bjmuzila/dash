@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { SignInButton } from "@clerk/nextjs";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
 
@@ -54,9 +53,9 @@ export default async function ExplorePage({
         <Link href="/" style={{ color: T.muted, textDecoration: "none", fontSize: 13, fontWeight: 700 }}>
           ← Back
         </Link>
-        <SignInButton forceRedirectUrl="/home">
-          <button style={topSignInBtn}>Sign in</button>
-        </SignInButton>
+        <Link href="/sign-in" style={{ ...topSignInBtn, display: "inline-block", textDecoration: "none" }}>
+          Sign in
+        </Link>
       </header>
 
       <main
@@ -130,9 +129,9 @@ export default async function ExplorePage({
             <Link href={`/pricing?from=${entry.slug}`} style={joinBtn}>
               Join now
             </Link>
-            <SignInButton forceRedirectUrl="/home">
-              <button style={memberBtn}>Already a member? Sign in</button>
-            </SignInButton>
+            <Link href="/sign-in" style={{ ...memberBtn, display: "inline-block", textDecoration: "none" }}>
+              Already a member? Sign in
+            </Link>
           </div>
         </div>
 

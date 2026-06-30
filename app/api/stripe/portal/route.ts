@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getStripe } from "@/lib/stripe";
 import { getSubscription } from "@/lib/db";
 
@@ -20,7 +20,7 @@ function publicOrigin(req: NextRequest): string {
 // user (manage / cancel / update payment method). Returns { url }.
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await auth();
+    const userId = await getServerUserId();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const sub = await getSubscription(userId);

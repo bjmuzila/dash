@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAuth } from "@clerk/nextjs";
-import { getSupabase } from "@/lib/supabase";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { getSupabaseBrowser } from "@/lib/supabase/client";
 
 export type ChatMessage = {
   id: number;
@@ -15,13 +15,18 @@ export type ChatMessage = {
 const PAGE = 50;
 
 /**
- * Single global subscriber-chat room.
+ * Single global subscriber-chat room (Supabase Auth + Realtime).
  * - Loads the latest PAGE messages on mount.
- * - Subscribes to realtime INSERTs and appends them live.
- * - send() inserts a row; RLS enforces user_id === jwt.sub.
+ * - Subscribes to realtime INSERT/DELETE and reflects them live.
+ * - send() inserts a row; RLS enforces user_id === auth.uid().
+ *
+ * The browser client manages its own session token (cookie-based), so there's
+ * no getToken bridge and no manual realtime.setAuth — the socket authenticates
+ * from the active Supabase session automatically.
  */
 export function useChat(displayName: string) {
-  const { getToken, userId } = useAuth();
+  const { userId } = useAuth();
+  const supabase = getSupabaseBrowser();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,21 +45,11 @@ export function useChat(displayName: string) {
 
   useEffect(() => {
     if (!userId) return;
-    const supabase = getSupabase(getToken);
     let active = true;
-    // Unique per mount so two tabs/components on the shared singleton client
-    // each get their own channel instead of colliding on one name.
     const channelName = `chat_messages_${Math.random().toString(36).slice(2)}`;
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     (async () => {
-      // Set the socket auth token BEFORE subscribing — the `accessToken`
-      // client option only covers REST, and subscribing before the token is
-      // set makes RLS silently drop the broadcast.
-      const token = await getToken();
-      if (!active) return;
-      if (token) supabase.realtime.setAuth(token);
-
       const { data, error } = await supabase
         .from("chat_messages")
         .select("*")
@@ -92,19 +87,18 @@ export function useChat(displayName: string) {
       active = false;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [userId, getToken, append, remove]);
+  }, [userId, supabase, append, remove]);
 
   const send = useCallback(
     async (raw: string) => {
       const body = raw.trim();
       if (!body || !userId) return;
-      const supabase = getSupabase(getToken);
       const { error } = await supabase
         .from("chat_messages")
         .insert({ user_id: userId, display_name: displayName, body });
       if (error) setError(error.message);
     },
-    [userId, getToken, displayName],
+    [userId, supabase, displayName],
   );
 
   return { messages, loading, error, send };

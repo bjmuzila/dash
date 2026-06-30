@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
 
 // ── Owner gate (cosmetic — matches NavMenu) ───────────────────────────────────
 function useIsOwner(): boolean {
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, user } = useAuth();
   const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
   return ownerId ? user?.id === ownerId : !!isSignedIn;
 }

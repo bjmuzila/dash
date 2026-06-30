@@ -1,7 +1,7 @@
 // Server-side subscription gating. Import in API routes / server components to
 // decide whether a Clerk user may access the paid product.
 
-import { auth } from "@clerk/nextjs/server";
+import { getServerUserId } from "@/lib/supabase/server";
 import { getSubscription, PAID_STATUSES } from "@/lib/db";
 
 // The owner always has access regardless of billing state.
@@ -29,7 +29,7 @@ export async function getAccessForUser(userId: string): Promise<AccessResult> {
 
 /** Resolve access for the current request's signed-in user. */
 export async function getAccess(): Promise<AccessResult> {
-  const { userId } = await auth();
+  const userId = await getServerUserId();
   if (!userId) return { ok: false, reason: "unauthenticated" };
   return getAccessForUser(userId);
 }
