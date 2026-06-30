@@ -42,6 +42,10 @@ const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
 // Per-strike OI+Vol net GEX — MUST match gex-calculator.oiVolNet so the page
 // agrees with every other GEX surface in the app.
 const oiVolNet = (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
+// OI-only net GEX = the "open" baseline. OI is yesterday's carried-over open
+// interest (options don't trade until the open), so this is the positioning the
+// day STARTED with, before any of today's volume. delta = (OI+Vol) − (OI-only).
+const oiOnlyNet = (r) => Number(r.netGEX ?? 0);
 
 // ── Tunables (env-overridable) ───────────────────────────────────────────────
 
@@ -238,7 +242,12 @@ async function snapshotTicker(chainTicker) {
   if (!flatRows.length) throw new Error(`no option rows ${chainTicker}`);
 
   const gexRows = computeGexRows(flatRows, spot);
-  const rows = gexRows.map((r) => ({ strike: r.strike, gex: oiVolNet(r) }));
+  // gex = today's live OI+Vol; open = OI-only (yesterday's carried OI, pre-open).
+  const rows = gexRows.map((r) => ({
+    strike: r.strike,
+    gex: oiVolNet(r),
+    open: oiOnlyNet(r),
+  }));
   return { spot, expiry, rows };
 }
 
@@ -253,25 +262,10 @@ async function getActiveSymbols(p) {
   return rows.map((r) => r.symbol);
 }
 
-// Load today's per-symbol "open" baseline: the earliest snapshot's gex_now per
-// strike, from the first ts recorded for (date, symbol). Returns Map<strike,gex>.
-async function loadOpenBaseline(p, date, symbol) {
-  const { rows } = await p.query(
-    `SELECT strike, gex_open FROM strike_growth
-     WHERE date = $1 AND symbol = $2
-     AND ts = (SELECT MIN(ts) FROM strike_growth WHERE date = $1 AND symbol = $2)`,
-    [date, symbol]
-  );
-  const m = new Map();
-  for (const r of rows) m.set(Number(r.strike), Number(r.gex_open));
-  return m;
-}
-
-async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows, baseline) {
-  // rows: [{ strike, gex }]; baseline: Map<strike, openGex> (empty on day's first run)
-  const isOpen = baseline.size === 0;
-  for (const { strike, gex } of rows) {
-    const open = isOpen ? gex : (baseline.has(strike) ? baseline.get(strike) : gex);
+async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
+  // rows: [{ strike, gex (OI+Vol now), open (OI-only baseline) }].
+  // delta = today's volume contribution on top of carried-over OI positioning.
+  for (const { strike, gex, open } of rows) {
     const deltaAbs = gex - open;
     const deltaPct = Math.abs(open) > 1 ? (deltaAbs / Math.abs(open)) * 100 : null;
     await p.query(
@@ -306,8 +300,7 @@ async function runSweep(opts = {}) {
   for (const symbol of symbols) {
     try {
       const { spot, expiry, rows } = await snapshotTicker(symbol);
-      const baseline = await loadOpenBaseline(p, date, symbol);
-      await writeSnapshot(p, date, symbol, expiry, spot, ts, rows, baseline);
+      await writeSnapshot(p, date, symbol, expiry, spot, ts, rows);
       done.push(symbol);
     } catch (e) {
       failed.push(`${symbol}:${e.message}`);

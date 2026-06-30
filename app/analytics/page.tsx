@@ -19,13 +19,13 @@ const T = HOME_THEME;
 
 function Label({ children }: { children: ReactNode }) {
   return (
-    <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
+    <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
       {children}
     </span>
   );
 }
 
-function Value({ children, color = T.text, size = 18 }: { children: ReactNode; color?: string; size?: number }) {
+function Value({ children, color = T.text, size = 21 }: { children: ReactNode; color?: string; size?: number }) {
   return <span style={{ fontFamily: "monospace", fontSize: size, fontWeight: 800, color }}>{children}</span>;
 }
 
@@ -39,7 +39,7 @@ function signColor(n: number): string {
   if (n < 0) return T.red;
   return T.muted;
 }
-function Stat({ label, value, color, size = 18 }: { label: ReactNode; value: ReactNode; color?: string; size?: number }) {
+function Stat({ label, value, color, size = 21 }: { label: ReactNode; value: ReactNode; color?: string; size?: number }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <Label>{label}</Label>
@@ -236,7 +236,7 @@ function MultiGreekCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>peak strike</span>
       </Row>
       <PillSelect value={tk} options={["SPX", "QQQ", "SPY"] as const} onChange={setTk} />
@@ -317,7 +317,7 @@ function EstimatedMoveCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>weekly</span>
           <Link
@@ -441,7 +441,7 @@ function PremarketCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
       </Row>
       {loading || error || bullets.length === 0 || isStale ? (
@@ -449,7 +449,7 @@ function PremarketCard() {
       ) : (
         <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
           {bullets.map((b, i) => (
-            <li key={i} style={{ fontSize: 14, lineHeight: 1.45, color: T.text }}>{b}</li>
+            <li key={i} style={{ fontSize: 16, lineHeight: 1.45, color: T.text }}>{b}</li>
           ))}
         </ul>
       )}
@@ -528,7 +528,7 @@ function EconCalendarCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Economic Calendar</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Economic Calendar</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{today}</span>
       </Row>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
@@ -702,7 +702,7 @@ function ConfidenceCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Confidence Score
           <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
         </span>
@@ -867,7 +867,7 @@ function GreeksCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
         <span style={{ fontSize: 10, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>
           {usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
         </span>
@@ -970,7 +970,7 @@ function IbCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>ES</span>
       </Row>
 
@@ -1106,7 +1106,7 @@ function LevelsCard() {
   return (
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
           {hasLiveSpot ? "live · ES" : connected ? "ES · closed" : "loading…"}
         </span>
@@ -1300,7 +1300,7 @@ function ContractLookupCard() {
   return (
     <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
         {loaded && <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
       </Row>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -1412,9 +1412,9 @@ function StrategyBuilderCard() {
   return (
     <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
       <Row>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Strategy Builder
-          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>AI · BETA</span>
+          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
         </span>
         {planDate && (
           <span style={{ fontSize: 11, fontFamily: "monospace", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>

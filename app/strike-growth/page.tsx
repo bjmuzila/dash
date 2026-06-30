@@ -28,6 +28,10 @@ type Row = {
 
 type WatchRow = { symbol: string; active: boolean; sort_idx: number };
 type Side = "all" | "call" | "put";
+type SortKey = "symbol" | "strike" | "spot" | "expiry" | "gex_open" | "gex_now" | "delta_abs" | "delta_pct";
+
+// Neutral grey accent → card has no color tint on the strip/glow.
+const NEUTRAL = "#6B7280";
 
 const fmtB = (n: number) => {
   const a = Math.abs(n);
@@ -49,6 +53,10 @@ export default function StrikeGrowthPage() {
   const [side, setSide] = useState<Side>("all");
   const [minB, setMinB] = useState(0); // min |Δ$| in $B
 
+  // client-side sort. default: |Δ$| desc (matches server ranking).
+  const [sortKey, setSortKey] = useState<SortKey>("delta_abs");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
   // watchlist editor
   const [watch, setWatch] = useState<WatchRow[]>([]);
   const [newSym, setNewSym] = useState("");
@@ -68,7 +76,18 @@ export default function StrikeGrowthPage() {
       u.searchParams.set("min", String(minB * 1e9));
       u.searchParams.set("limit", "300");
       const res = await fetch(u.toString(), { cache: "no-store" });
-      const j = await res.json();
+      const text = await res.text();
+      let j: any;
+      try { j = JSON.parse(text); }
+      catch {
+        // Non-JSON (usually an HTML 404/500 page) — surface a clean message
+        // instead of "Unexpected token '<'".
+        throw new Error(
+          res.status === 404
+            ? "Route not found — is server-v2 running and proxying /proxy/* ?"
+            : `Server returned ${res.status} (non-JSON). Recorder may not have run yet.`
+        );
+      }
       if (!j.ok) throw new Error(j.error || "load failed");
       setRows(j.rows || []);
       setDate(j.date || "");
@@ -134,6 +153,32 @@ export default function StrikeGrowthPage() {
     [rows]
   );
 
+  // Click a header to sort by it; click again to flip direction. Δ$ and Δ%
+  // sort by ABSOLUTE value (biggest mover, either direction); everything else
+  // sorts by raw value. Strings (symbol/expiry) sort lexically.
+  function clickSort(k: SortKey) {
+    if (k === sortKey) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    else { setSortKey(k); setSortDir("desc"); }
+  }
+
+  const sortedRows = useMemo(() => {
+    const useAbs = sortKey === "delta_abs" || sortKey === "delta_pct";
+    const val = (r: Row): number | string => {
+      const v = (r as any)[sortKey];
+      if (sortKey === "symbol" || sortKey === "expiry") return String(v ?? "");
+      const n = Number(v ?? 0);
+      return useAbs ? Math.abs(n) : n;
+    };
+    const dir = sortDir === "desc" ? -1 : 1;
+    return [...rows].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (typeof va === "string" || typeof vb === "string") {
+        return String(va).localeCompare(String(vb)) * dir;
+      }
+      return (va - vb) * dir;
+    });
+  }, [rows, sortKey, sortDir]);
+
   const SEG: { v: Side; label: string }[] = [
     { v: "all", label: "All" },
     { v: "call", label: "Calls (≥ spot)" },
@@ -143,7 +188,7 @@ export default function StrikeGrowthPage() {
   return (
     <PageShell>
       <Card
-        accent="orange"
+        accent={NEUTRAL}
         title="Strike Growth Tracker"
         subtitle={date ? `Ranked by Δ$ vs open — ${date}${loading ? " · refreshing…" : ""}` : "Loading…"}
       >
@@ -194,19 +239,19 @@ export default function StrikeGrowthPage() {
             <thead>
               <tr style={{ color: HOME_THEME.green, textAlign: "right" }}>
                 <th style={thL}>#</th>
-                <th style={thL}>Symbol</th>
-                <th style={th}>Strike</th>
-                <th style={th}>Spot</th>
-                <th style={thL2}>Expiry</th>
-                <th style={th}>Open GEX</th>
-                <th style={th}>Now GEX</th>
-                <th style={th}>Δ$</th>
-                <th style={th}>Δ%</th>
+                <SortTh k="symbol"    style={thL}  cur={sortKey} dir={sortDir} on={clickSort}>Symbol</SortTh>
+                <SortTh k="strike"    style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Strike</SortTh>
+                <SortTh k="spot"      style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Spot</SortTh>
+                <SortTh k="expiry"    style={thL2} cur={sortKey} dir={sortDir} on={clickSort}>Expiry</SortTh>
+                <SortTh k="gex_open"  style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Open GEX (OI)</SortTh>
+                <SortTh k="gex_now"   style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Now GEX (OI+Vol)</SortTh>
+                <SortTh k="delta_abs" style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Δ$</SortTh>
+                <SortTh k="delta_pct" style={th}   cur={sortKey} dir={sortDir} on={clickSort}>Δ%</SortTh>
                 <th style={thBar}>Growth</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
+              {sortedRows.map((r, i) => {
                 const up = r.delta_abs >= 0;
                 const col = up ? HOME_THEME.green : HOME_THEME.red;
                 const w = (Math.abs(r.delta_abs) / maxAbs) * 100;
@@ -247,7 +292,7 @@ export default function StrikeGrowthPage() {
 
       {/* Selected strike intraday path */}
       {sel && (
-        <Card accent="cyan" title={`${sel.symbol} ${sel.strike} — intraday GEX`} style={{ marginTop: 16 }}>
+        <Card accent={NEUTRAL} title={`${sel.symbol} ${sel.strike} — intraday GEX`} style={{ marginTop: 16 }}>
           <Sparkline series={series} />
           <div style={{ marginTop: 8, fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
             open {fmtB(sel.gex_open)} → now {fmtB(sel.gex_now)} ({fmtB(sel.delta_abs)})
@@ -257,7 +302,7 @@ export default function StrikeGrowthPage() {
 
       {/* Watchlist editor */}
       {showWatch && (
-        <Card accent="purple" title="Watchlist" subtitle="Active symbols are swept every 30m. Toggle to control Theta load." style={{ marginTop: 16 }}>
+        <Card accent={NEUTRAL} title="Watchlist" subtitle="Active symbols are swept every 30m. Toggle to control Theta load." style={{ marginTop: 16 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input
               value={newSym}
@@ -311,6 +356,25 @@ function Sparkline({ series }: { series: { ts: string; gex_now: number }[] }) {
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 90 }}>
       <polyline points={pts} fill="none" stroke={up ? HOME_THEME.green : HOME_THEME.red} strokeWidth={2} />
     </svg>
+  );
+}
+
+// Clickable sortable header cell. Shows a ▲/▼ caret on the active column.
+function SortTh({
+  k, cur, dir, on, style, children,
+}: {
+  k: SortKey; cur: SortKey; dir: "asc" | "desc";
+  on: (k: SortKey) => void; style: React.CSSProperties; children: React.ReactNode;
+}) {
+  const active = cur === k;
+  return (
+    <th
+      onClick={() => on(k)}
+      style={{ ...style, cursor: "pointer", userSelect: "none", color: active ? HOME_THEME.cyan : undefined }}
+      title="Click to sort"
+    >
+      {children}{active ? (dir === "desc" ? " ▼" : " ▲") : ""}
+    </th>
   );
 }
 

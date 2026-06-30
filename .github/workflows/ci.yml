@@ -1,0 +1,36 @@
+name: CI
+
+# Gate every push/PR: typecheck, calc tests, and a security audit. The deploy
+# (push.ps1 → VPS) is manual; keep it gated behind a green run here.
+on:
+  push:
+    branches: [main, hardening-prelaunch]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests (calculations, flow, esGapMath, server-v2)
+        run: npm test
+
+      # Fail the build on high/critical advisories. Does NOT block on
+      # low/moderate (review those separately) to avoid noisy red builds.
+      - name: Dependency audit (high+)
+        run: npm audit --audit-level=high --omit=dev
+        continue-on-error: false

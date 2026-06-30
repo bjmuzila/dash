@@ -123,7 +123,11 @@ function isCollectionWindow() {
 
 /** Read $SPX gexRows from market-state and sum the four net greeks. */
 async function fetchSpxGreeks(base) {
-  const res = await fetch(`${base}/proxy/gex`, { cache: 'no-store' });
+  const res = await fetch(`${base}/proxy/gex`, {
+    cache: 'no-store',
+    headers: process.env.INTERNAL_API_TOKEN
+      ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+  });
   if (!res.ok) throw new Error(`/proxy/gex returned ${res.status}`);
   const v2 = await res.json();
 

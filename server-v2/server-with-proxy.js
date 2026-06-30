@@ -37,6 +37,8 @@ const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptio
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
+const { checkProxyAccess } = require('./proxy-auth');
+const { initObservability, captureError } = require('./observability');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -60,29 +62,56 @@ function applySecurityHeaders(req, res) {
   }
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  // CSP. 'unsafe-eval' removed — no first-party code needs eval()/new Function();
+  // it only widened the XSS blast radius. 'unsafe-inline' is retained for now
+  // because Next 15's inline bootstrap/hydration scripts require either a
+  // per-request nonce (needs HTML-stream interception in this custom server —
+  // tracked as a P1 follow-up) or 'unsafe-inline'. If a dependency breaks
+  // without eval, prefer fixing/replacing that dependency over re-adding it.
+  // CSP_REPORT_ONLY=1 emits the header in report-only mode for safe rollout.
+  const cspHeader = process.env.CSP_REPORT_ONLY === '1'
+    ? 'Content-Security-Policy-Report-Only'
+    : 'Content-Security-Policy';
   res.setHeader(
-    'Content-Security-Policy',
+    cspHeader,
     "default-src 'self'; " +
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+      "script-src 'self' 'unsafe-inline'; " +
       "style-src 'self' 'unsafe-inline'; " +
       "img-src 'self' data: blob: https:; " +
       "font-src 'self' data:; " +
       "connect-src 'self' https: wss:; " +
       "frame-ancestors 'self'; " +
       "base-uri 'self'; " +
-      "form-action 'self'"
+      "form-action 'self'; " +
+      "object-src 'none'"
   );
   // Don't advertise the stack.
   res.removeHeader('X-Powered-By');
 }
 
-function sendJson(res, code, obj) {
+// Optional comma-separated allowlist (e.g. "https://cbedge.net,https://www.cbedge.net").
+// The /proxy surface is same-origin (browser → same host) and now auth-gated, so
+// no CORS header is needed by default. We ONLY emit Access-Control-Allow-Origin
+// when the request's Origin is explicitly allowlisted — never the "*" wildcard,
+// which both leaks data cross-site and is invalid alongside cookie auth.
+const CORS_ALLOWLIST = new Set(
+  (process.env.PROXY_CORS_ORIGINS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean)
+);
+
+function sendJson(res, code, obj, req) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, {
+  const headers = {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
-  });
+  };
+  const origin = req?.headers?.origin;
+  if (origin && CORS_ALLOWLIST.has(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Vary'] = 'Origin';
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  }
+  res.writeHead(code, headers);
   res.end(body);
 }
 
@@ -299,6 +328,9 @@ async function handleFlowHistory(req, res) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Error monitoring + crash guards first, so anything during boot is captured.
+  initObservability();
+
   const app = next({ dev: DEV, dir: ROOT_DIR });
   const handle = app.getRequestHandler();
   await app.prepare();
@@ -311,6 +343,19 @@ async function main() {
     try {
       // Idle control (POST /proxy/idle { idle: true|false }) — toggles the feed.
       const { pathname } = new URL(req.url || '/', 'http://localhost');
+
+      // ── /proxy/* access gate ────────────────────────────────────────────────
+      // middleware.ts excludes /proxy from the Next matcher, so this is the ONLY
+      // place these routes get authenticated. Reads → subscriber, writes → owner,
+      // a tiny allowlist → public, cron → x-internal-token. No-op unless
+      // PROXY_AUTH_REQUIRED=1. Must run before any /proxy/* handling below.
+      if (pathname.startsWith('/proxy/')) {
+        const verdict = await checkProxyAccess(req, pathname, req.method || 'GET');
+        if (!verdict.ok) {
+          sendJson(res, verdict.code, { error: verdict.reason });
+          return;
+        }
+      }
       if (pathname === '/proxy/idle' && req.method === 'POST') {
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
@@ -764,6 +809,7 @@ async function main() {
 
       if (handleProxyRest(req, res)) return;
     } catch (err) {
+      captureError(err, { route: req.url, method: req.method });
       sendJson(res, 500, { error: String(err?.message || err) });
       return;
     }
@@ -902,5 +948,6 @@ async function main() {
 
 main().catch((err) => {
   console.error('[SERVER-V2] fatal:', err);
+  try { captureError(err, { kind: 'boot-fatal' }); } catch {}
   process.exit(1);
 });
