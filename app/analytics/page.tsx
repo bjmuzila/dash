@@ -19,7 +19,7 @@ const T = HOME_THEME;
 
 function Label({ children }: { children: ReactNode }) {
   return (
-    <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
+    <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
       {children}
     </span>
   );
@@ -250,7 +250,7 @@ function MultiGreekCard() {
               <div key={k} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 3 }}>
                 <Label>{k} · peak strike</Label>
                 <Value color={pk ? signColor(pk.value) : T.muted} size={20}>{pk ? pk.strike.toLocaleString() : "—"}</Value>
-                <span style={{ fontSize: 14, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "monospace" }}>
+                <span style={{ fontSize: 16, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "monospace" }}>
                   {pk ? fmtBig(pk.value) : "—"}
                 </span>
               </div>
@@ -456,7 +456,7 @@ function PremarketCard() {
       {gapPts != null && (
         <>
           <div style={divider} />
-          <span style={{ fontSize: 12, color: T.muted, opacity: 0.8, fontFamily: "monospace" }}>
+          <span style={{ fontSize: 14, color: T.muted, opacity: 0.8, fontFamily: "monospace" }}>
             /ES gap: <span style={{ color: up ? POS_GREEN : T.red }}>{up ? "+" : ""}{gapPts.toFixed(2)} pts</span>
             {g?.prior_close ? ` (${((gapPts / g.prior_close) * 100).toFixed(2)}%)` : ""}
           </span>
@@ -537,8 +537,8 @@ function EconCalendarCard() {
         ) : (
           todays.map((e, i) => (
             <Row key={`${e.title}-${i}`} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
-              <span style={{ fontFamily: "monospace", fontSize: 14, color: T.muted }}>{e.time_formatted || e.time || "—"}</span>
-              <span style={{ fontSize: 14, flex: 1, textAlign: "left", marginLeft: 10 }}>{e.title}</span>
+              <span style={{ fontFamily: "monospace", fontSize: 16, color: T.muted }}>{e.time_formatted || e.time || "—"}</span>
+              <span style={{ fontSize: 16, flex: 1, textAlign: "left", marginLeft: 10 }}>{e.title}</span>
               <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", color: impColor(e.impact) }}>{e.impact || ""}</span>
             </Row>
           ))
@@ -717,9 +717,9 @@ function ConfidenceCard() {
           <Row>
             <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
               <Value color={bandColor} size={34}>{score}</Value>
-              <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>/100</span>
+              <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>/100</span>
             </div>
-            <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", color: bandColor }}>{band}</span>
+            <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", color: bandColor }}>{band}</span>
           </Row>
           <div style={{ height: 6, borderRadius: 3, background: T.border, overflow: "hidden" }}>
             <div style={{ width: `${score}%`, height: "100%", background: bandColor }} />
@@ -773,7 +773,7 @@ function ConfidenceCard() {
                         paddingBottom: 6,
                       }}
                     >
-                      <span style={{ fontSize: 13, fontFamily: "monospace", color: T.muted }}>{cp.label}</span>
+                      <span style={{ fontSize: 15, fontFamily: "monospace", color: T.muted }}>{cp.label}</span>
                       <span style={{ textAlign: "right" }}>
                         <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
                       </span>
@@ -1016,10 +1016,10 @@ function IbCard() {
                     {amt?.bias.lean ?? "neutral"}
                   </span>
                 </Row>
-                <span style={{ fontSize: 13, color: T.muted, lineHeight: 1.5 }}>{amt?.dayTypeDetail}</span>
+                <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.5 }}>{amt?.dayTypeDetail}</span>
                 <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
                   <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>{breakState}</span>
-                  <span style={{ fontSize: 14, color: T.text, lineHeight: 1.5 }}>{amt?.bias.text}</span>
+                  <span style={{ fontSize: 16, color: T.text, lineHeight: 1.5 }}>{amt?.bias.text}</span>
                 </div>
               </div>
             );
@@ -1131,7 +1131,7 @@ function LevelsCard() {
               const showStrong = hasLiveSpot && (inPlay || s.state === "above" || s.state === "below");
               return (
                 <Row key={s.level.kind} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
-                  <span style={{ fontSize: 14, flex: 1, textAlign: "left" }}>{s.level.label}</span>
+                  <span style={{ fontSize: 16, flex: 1, textAlign: "left" }}>{s.level.label}</span>
                   <Value size={12}>{s.level.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Value>
                   <Value size={11} color={dist == null ? T.muted : above ? POS_GREEN : T.red}>
                     {dist == null ? "—" : `${above ? "+" : ""}${dist.toFixed(2)}`}
@@ -1148,7 +1148,7 @@ function LevelsCard() {
           <div style={divider} />
           <Label>Active setups</Label>
           {setups.length === 0 ? (
-            <span style={{ fontSize: 13, color: T.muted, opacity: 0.6 }}>
+            <span style={{ fontSize: 15, color: T.muted, opacity: 0.6 }}>
               {rthNow ? "No active setups." : "Waiting for the open."}
             </span>
           ) : (
@@ -1159,7 +1159,7 @@ function LevelsCard() {
                 return (
                   <div key={`${s.kind}-${s.ts}-${i}`} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
                     <Row>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>
+                      <span style={{ fontSize: 15, fontWeight: 700 }}>
                         <span style={{ color: long ? POS_GREEN : T.red }}>{long ? "▲" : "▼"}</span> {s.title}
                       </span>
                       <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
@@ -1434,7 +1434,7 @@ function StrategyBuilderCard() {
           {/* Bias + headline */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{
-              fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+              fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
               color: biasColor(plan!.bias), border: `1px solid ${biasColor(plan!.bias)}`,
               borderRadius: 8, padding: "4px 12px",
             }}>
@@ -1457,7 +1457,7 @@ function StrategyBuilderCard() {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <SectionTitle color={T.cyan}>Key levels</SectionTitle>
               {(plan!.levels?.length ?? 0) === 0 ? (
-                <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
+                <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
               ) : (
                 plan!.levels!.map((lv, i) => (
                   <div key={i} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -1465,7 +1465,7 @@ function StrategyBuilderCard() {
                       <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>{lv.label ?? "—"}</span>
                       <Value size={15} color={T.text}>{lv.price != null ? String(lv.price) : "—"}</Value>
                     </Row>
-                    {lv.note && <span style={{ fontSize: 13, color: T.muted, lineHeight: 1.45 }}>{lv.note}</span>}
+                    {lv.note && <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.45 }}>{lv.note}</span>}
                   </div>
                 ))
               )}
@@ -1487,20 +1487,20 @@ function StrategyBuilderCard() {
                     <Stat label="Target" value={plan!.idea.target ?? "—"} color={POS_GREEN} size={16} />
                   </div>
                   {plan!.idea.rationale && (
-                    <span style={{ fontSize: 13, color: T.muted, lineHeight: 1.5 }}>{plan!.idea.rationale}</span>
+                    <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.5 }}>{plan!.idea.rationale}</span>
                   )}
                 </div>
               ) : (
-                <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
+                <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
               )}
 
               <SectionTitle color={T.green}>Confirmation triggers</SectionTitle>
               {(plan!.triggers?.length ?? 0) === 0 ? (
-                <span style={{ fontSize: 12, color: T.muted, opacity: 0.6 }}>—</span>
+                <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
                   {plan!.triggers!.map((t, i) => (
-                    <li key={i} style={{ fontSize: 14, lineHeight: 1.5, color: T.text }}>{t}</li>
+                    <li key={i} style={{ fontSize: 16, lineHeight: 1.5, color: T.text }}>{t}</li>
                   ))}
                 </ul>
               )}
@@ -1510,7 +1510,7 @@ function StrategyBuilderCard() {
           {plan!.risk && (
             <>
               <div style={divider} />
-              <span style={{ fontSize: 14, color: T.muted, lineHeight: 1.55 }}>
+              <span style={{ fontSize: 16, color: T.muted, lineHeight: 1.55 }}>
                 <span style={{ fontWeight: 800, color: T.orange, letterSpacing: "0.06em" }}>RISK · </span>
                 {plan!.risk}
               </span>
