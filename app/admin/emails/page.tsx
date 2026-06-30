@@ -35,6 +35,7 @@ export default function AdminEmailsPage() {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [lists, setLists] = useState<Lists | null>(null);
   const [showList, setShowList] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const [from, setFrom] = useState("");
   const [configured, setConfigured] = useState<boolean | null>(null);
 
@@ -251,6 +252,24 @@ export default function AdminEmailsPage() {
               maxLength={50000}
               style={{ ...homeInputStyle, fontSize: 15, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
             />
+            {body.trim() && (
+              <div style={{ marginTop: 10 }}>
+                <button
+                  onClick={() => setShowPreview((s) => !s)}
+                  style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 12, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                >
+                  {showPreview ? "Hide preview" : "Show rendered preview"}
+                </button>
+                {showPreview && (
+                  <iframe
+                    title="Email preview"
+                    srcDoc={body}
+                    sandbox=""
+                    style={{ width: "100%", height: 600, marginTop: 8, border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, background: "#05060A" }}
+                  />
+                )}
+              </div>
+            )}
           </div>
 
           {error && <div style={{ fontSize: 12, color: HOME_THEME.red, fontWeight: 600 }}>{error}</div>}

@@ -14,6 +14,14 @@
 
 const { parseOptionSymbol } = require('./utils');
 
+// Streamer-symbol roots differ from the display ticker the /flow page chips use
+// (e.g. SPX options stream under root "SPXW", NDX under "NDXP"). Normalize so a
+// row's `underlying` matches the intuitive ticker. Equities pass through.
+const ROOT_TO_TICKER = { SPXW: 'SPX', NDXP: 'NDX', RUTW: 'RUT', XSPW: 'XSP' };
+function displayUnderlying(root) {
+  return ROOT_TO_TICKER[root] || root;
+}
+
 /** Latest buy/sell percentage from a record series (ported). */
 function getLatestBuySellPct(records) {
   if (!Array.isArray(records) || !records.length) return 0;
@@ -74,13 +82,20 @@ class FlowProcessor {
    * @param {number} [opts.maxPrints] hard cap on retained prints
    * @param {number} [opts.tapeCap] hard cap on the per-order tape (default 200)
    */
-  constructor({ windowMs = 5 * 60 * 1000, maxPrints = 50000, tapeCap = 500, tapeFloorPremium = 10000 } = {}) {
+  constructor({
+    windowMs = 5 * 60 * 1000,
+    maxPrints = 50000,
+    // Shared across all streamed underlyings (SPX + FLOW_TICKERS), so the cap is
+    // larger than the old SPX-only 500 and overridable via FLOW_TAPE_CAP.
+    tapeCap = Number(process.env.FLOW_TAPE_CAP || 1500),
+    // Server-side noise floor ($). Lowered/overridable via FLOW_TAPE_FLOOR so
+    // equity-option blocks (much smaller premium than SPX index blocks) survive
+    // long enough for the client's per-ticker premium filter to see them.
+    tapeFloorPremium = Number(process.env.FLOW_TAPE_FLOOR || 2500),
+  } = {}) {
     this.windowMs = windowMs;
     this.maxPrints = maxPrints;
     this.tapeCap = tapeCap;
-    // Server-side noise floor: prints below this premium ($) never enter the
-    // tape, so the cap isn't consumed by tiny prints that evict real blocks
-    // before the client's ≥$100k filter can ever see them (flow logic §5.3).
     this.tapeFloorPremium = tapeFloorPremium;
     /** @type {Array<{time,side,type,size,price,premium}>} */
     this.prints = [];
@@ -163,7 +178,7 @@ class FlowProcessor {
       this.tape.push({
         ts: slot * 500, // pin to the 500ms slot start so later prints coalesce
         symbol: streamerSymbol,
-        underlying: parsed.root,
+        underlying: displayUnderlying(parsed.root),
         expiration: parsed.expiration,
         strike: parsed.strike,
         type: parsed.type,
@@ -253,7 +268,9 @@ class FlowProcessor {
       buyPct,
       prints: this.prints.length,
       // Per-order tape (capped, oldest-first) for the dashboard FlowTape.
-      // SPX-only (see addPrint); noise floor applied here so coalesced sweeps
+      // Multi-underlying: SPX (engine) + FLOW_TICKERS roots (MultiFlowManager)
+      // all feed addPrint; each entry carries its own `underlying`. Noise floor
+      // applied here so coalesced sweeps
       // that grew past the floor are kept, while never-grew slots are dropped.
       // isOtm is frozen at print time (moneyness at the moment the order printed).
       tape: this.tape.filter((o) => o.premium >= this.tapeFloorPremium),

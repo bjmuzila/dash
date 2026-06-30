@@ -44,6 +44,10 @@ git checkout main
 Write-Host "Pushed $version to GitHub (main + prod). Deploying on VPS..." -ForegroundColor Cyan
 
 # --- VPS deploy over SSH (key auth, no password) ---
+# NOTE: PowerShell here-strings carry Windows CRLF line endings. Sending those to
+# a remote POSIX shell appends a literal \r to every command (git pull\r, docker
+# compose ... build\r), which breaks each line. We strip CR and pipe the script
+# in over stdin (`bash -s`) rather than passing it as an argv string.
 $deployScript = @"
 set -e
 cd /opt/dashboard
@@ -51,9 +55,9 @@ git pull
 docker compose $composeFiles build
 docker compose $composeFiles up -d
 docker compose $composeFiles ps
-"@
+"@ -replace "`r", ""
 
-ssh -i $vpsKey -o StrictHostKeyChecking=accept-new $vpsHost $deployScript
+$deployScript | ssh -i $vpsKey -o StrictHostKeyChecking=accept-new $vpsHost "bash -s"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "VPS deploy FAILED. Code is on GitHub - SSH in and rerun, or rollback with: git reset --hard HEAD~1" -ForegroundColor Red
     exit 1

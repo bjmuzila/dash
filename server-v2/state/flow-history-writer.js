@@ -2,7 +2,8 @@
 /**
  * server-v2/state/flow-history-writer.js
  *
- * Persists the SPX flow tape (per-order, coalesced 500ms slots) to Postgres so
+ * Persists the flow tape (per-order, coalesced 500ms slots; SPX + any
+ * FLOW_TICKERS roots, each row tagged with its `underlying`) to Postgres so
  * the /flow page can backfill today's history on load instead of seeing only the
  * live in-memory buffer. Mirrors the pool/error handling in gex-history-writer.js.
  *

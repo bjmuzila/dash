@@ -36,6 +36,7 @@ const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocke
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
+const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
@@ -423,6 +424,127 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // ── Strike-growth tracker ────────────────────────────────────────────
+      // Ranked latest snapshot: which strikes grew most vs today's open.
+      //   GET /proxy/strike-growth?min=0&type=all&symbol=NVDA&limit=200
+      if (pathname === '/proxy/strike-growth' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            const side = (u.searchParams.get('type') || 'all').toLowerCase(); // all|call|put
+            const minAbs = Number(u.searchParams.get('min') || 0);
+            const limit = Math.min(1000, Number(u.searchParams.get('limit') || 200));
+            // Latest ts per (date,symbol) today; rank by |delta_abs| desc.
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            const params = [today];
+            let sideFilter = '';
+            if (side === 'call') sideFilter = 'AND strike >= spot';
+            else if (side === 'put') sideFilter = 'AND strike < spot';
+            let symFilter = '';
+            if (symbol) { params.push(symbol); symFilter = `AND symbol = $${params.length}`; }
+            params.push(minAbs); const minIdx = params.length;
+            params.push(limit); const limIdx = params.length;
+            const sql = `
+              WITH latest AS (
+                SELECT symbol, MAX(ts) AS ts FROM strike_growth
+                WHERE date = $1 GROUP BY symbol
+              )
+              SELECT sg.symbol, sg.strike, sg.expiry, sg.gex_now, sg.gex_open,
+                     sg.delta_abs, sg.delta_pct, sg.spot, sg.ts
+              FROM strike_growth sg
+              JOIN latest l ON l.symbol = sg.symbol AND l.ts = sg.ts
+              WHERE sg.date = $1 ${symFilter} ${sideFilter}
+                AND ABS(sg.delta_abs) >= $${minIdx}
+              ORDER BY ABS(sg.delta_abs) DESC
+              LIMIT $${limIdx}`;
+            const { rows } = await p.query(sql, params);
+            sendJson(res, 200, { ok: true, date: today, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Intraday series for one strike (sparkline).
+      //   GET /proxy/strike-growth/series?symbol=NVDA&strike=180
+      if (pathname === '/proxy/strike-growth/series' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            const strike = Number(u.searchParams.get('strike') || 0);
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            const { rows } = await p.query(
+              `SELECT ts, gex_now, delta_abs FROM strike_growth
+               WHERE date = $1 AND symbol = $2 AND strike = $3 ORDER BY ts ASC`,
+              [today, symbol, strike]
+            );
+            sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Watchlist read.  GET /proxy/strike-growth/watchlist
+      if (pathname === '/proxy/strike-growth/watchlist' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const { rows } = await p.query(
+              `SELECT symbol, active, sort_idx FROM strike_growth_watchlist
+               ORDER BY active DESC, sort_idx ASC, symbol ASC`
+            );
+            sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Watchlist edit.  POST /proxy/strike-growth/watchlist
+      //   { symbol:"NVDA", active:true }            → toggle/add
+      //   { symbol:"NVDA", remove:true }            → delete row
+      if (pathname === '/proxy/strike-growth/watchlist' && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          (async () => {
+            try {
+              const { ensureSchema, getPool } = require('./strike-growth-recorder');
+              if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+              const p = getPool();
+              const j = JSON.parse(body || '{}');
+              const symbol = String(j.symbol || '').toUpperCase().trim();
+              if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+              if (j.remove) {
+                await p.query(`DELETE FROM strike_growth_watchlist WHERE symbol = $1`, [symbol]);
+              } else {
+                const active = j.active !== false;
+                await p.query(
+                  `INSERT INTO strike_growth_watchlist (symbol, active, sort_idx)
+                   VALUES ($1, $2, 0) ON CONFLICT (symbol) DO UPDATE SET active = EXCLUDED.active`,
+                  [symbol, active]
+                );
+              }
+              sendJson(res, 200, { ok: true });
+            } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+          })();
+        });
+        return;
+      }
+      // Manually fire a watchlist sweep now (ignores RTH gate).
+      //   POST /proxy/strike-growth-run
+      if (pathname === '/proxy/strike-growth-run' && req.method === 'POST') {
+        const { runSweep } = require('./strike-growth-recorder');
+        runSweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Manually fire a greeks_ts write now (ignores RTH gate). Feeds the
       // Analytics "Net Greeks" card. POST /proxy/greeks-ts-run
       if (pathname === '/proxy/greeks-ts-run' && req.method === 'POST') {
@@ -733,6 +855,9 @@ async function main() {
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);
+    // Per-strike GEX growth recorder: sweeps the watchlist every 30m during RTH
+    // and stores delta-vs-open per strike (feeds /strike-growth tracker page).
+    startStrikeGrowthRecorder(PORT);
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
     startGreeksTsWriter(PORT);

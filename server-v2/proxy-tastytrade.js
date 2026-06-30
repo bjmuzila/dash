@@ -34,6 +34,7 @@ const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
 const { FlowProcessor } = require('./computation/flow-processor');
+const { MultiFlowManager } = require('./multi-flow');
 const {
   parseOptionSymbol,
   yearsToExpiry,
@@ -1646,6 +1647,14 @@ class TastytradeProxy {
         this.thetaStream.connect();
       }
       this._subscribeThetaFlow();
+      // Multi-ticker flow (FLOW_TICKERS): stream extra roots' near-spot option
+      // trades into the SAME this.flow tape so the /flow page's non-SPX chips
+      // populate. Flow-only — does NOT touch GEX/greeks (single-SYMBOL engine).
+      if (!this.multiFlow) {
+        this.multiFlow = new MultiFlowManager({ thetaStream: this.thetaStream });
+        this.multiFlow.start().catch((e) =>
+          console.warn('[MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));
+      }
       // SPX/VIX spot from Theta's index price stream (separate INDEX_SOURCE flag).
       if (useThetaIndex()) {
         this.thetaStream.subscribeIndex('SPX');
@@ -1657,7 +1666,9 @@ class TastytradeProxy {
     }
 
     this.recomputeTimer = setInterval(() => this._recompute(), RECOMPUTE_MS);
-    // Aggregate + broadcast the SPX flow tape every 500ms (independent of GEX).
+    // Aggregate + broadcast the flow tape every 500ms (independent of GEX).
+    // Tape is multi-ticker (SPX engine + FLOW_TICKERS via MultiFlowManager);
+    // SYMBOL here only labels the bucket, it does not filter the tape.
     this.flowTimer = setInterval(() => {
       const bucket = this.flow.bucket(SYMBOL);
       marketState.setFlow(bucket);

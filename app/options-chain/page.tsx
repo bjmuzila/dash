@@ -136,6 +136,28 @@ const QUOTE_PANEL_TICKERS = [
   "TSLA",
 ];
 
+// Recent tickers (most-recent-first, max 7) persisted in the browser.
+const RECENT_TICKERS_KEY = "options-chain-recent-tickers-v1";
+const RECENT_TICKERS_MAX = 7;
+
+function loadRecentTickers(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(RECENT_TICKERS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((t): t is string => typeof t === "string").slice(0, RECENT_TICKERS_MAX) : [];
+  } catch { return []; }
+}
+
+function pushRecentTicker(list: string[], ticker: string): string[] {
+  const t = ticker.toUpperCase();
+  const next = [t, ...list.filter((x) => x !== t)].slice(0, RECENT_TICKERS_MAX);
+  if (typeof window !== "undefined") {
+    try { window.localStorage.setItem(RECENT_TICKERS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
+  return next;
+}
+
 const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
 type GreekMode = typeof GREEK_MODES[number];
@@ -407,6 +429,9 @@ export default function OptionsChainPage() {
   const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>(fallbackExpiries);
   const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
+  const [recentTickers, setRecentTickers] = useState<string[]>([]);
+  // Hydrate recents from browser cache after mount (avoids SSR mismatch).
+  useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
   const [selectedExpiry, setSelectedExpiry] = useState(fallbackExpiries[0]?.value ?? "");
   const [displayPercent, setDisplayPercent] = useState<number>(10);
   const [refreshSeed, setRefreshSeed] = useState(0);
@@ -540,6 +565,7 @@ export default function OptionsChainPage() {
   const doGo = useCallback(() => {
     if (!tickerInput || !selectedExpiry) return;
     const ticker = (tickerInput || "SPX").toUpperCase();
+    setRecentTickers((list) => pushRecentTicker(list, ticker));
     const tickerChanged = ticker !== activeTicker;
     setActiveTicker(ticker);
     // If the ticker changed, the expirations effect will refetch this ticker's
@@ -553,6 +579,20 @@ export default function OptionsChainPage() {
       loadChain(ticker, selectedExpiry, true, true); // force: user GO
     }
   }, [tickerInput, selectedExpiry, activeTicker, loadChain]);
+
+  // Quick-button select: set the input + active ticker and load (same path as
+  // a ticker-change GO, which snaps to a valid expiry before loading).
+  const selectTicker = useCallback((raw: string) => {
+    const ticker = raw.toUpperCase();
+    setTickerInput(ticker);
+    setRecentTickers((list) => pushRecentTicker(list, ticker));
+    if (ticker !== activeTicker) {
+      pendingGoRef.current = true;
+      setActiveTicker(ticker);
+    } else if (selectedExpiryRef.current) {
+      loadChain(ticker, selectedExpiryRef.current, true, true);
+    }
+  }, [activeTicker, loadChain]);
 
   // Re-fetch + re-parse when the OI+Vol / Vol-only toggle changes (skip mount).
   const dataModeMountRef = useRef(true);
@@ -682,22 +722,34 @@ export default function OptionsChainPage() {
     return displayPercent;
   }, [displayPercent, totalRows]);
 
-  // The strike window shown (centered on spot), high → low.
+  // The strike window shown (centered on spot), high → low. ATM is forced to the
+  // exact visual middle: we take an equal count of strikes above and below ATM
+  // (odd total so a true center row exists). If the chain runs out on one side,
+  // we pad that side with nulls so ATM stays centered no matter the window size.
   const visibleStrikes = useMemo(() => {
-    if (!allStrikes.length) return [] as number[];
-    if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a);
+    if (!allStrikes.length) return [] as (number | null)[];
+    if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a) as (number | null)[];
 
-    const targetCount = Math.min(
-      allStrikes.length,
-      Math.max(10, Math.round(allStrikes.length * (autoDisplayPercent / 100))),
-    );
-    const atmIndex = allStrikes.findIndex(s => s === nearestStrike);
-    const half = Math.floor(targetCount / 2);
-    let start = Math.max(0, atmIndex - half);
-    let end = Math.min(allStrikes.length, start + targetCount);
-    if (end - start < targetCount) start = Math.max(0, end - targetCount);
+    const ascending = [...allStrikes].sort((a, b) => a - b);
+    const atmIndex = ascending.findIndex(s => s === nearestStrike);
+    if (atmIndex < 0) return [...ascending].sort((a, b) => b - a) as (number | null)[];
 
-    return allStrikes.slice(start, end).sort((a, b) => b - a);
+    let targetCount = Math.max(11, Math.round(ascending.length * (autoDisplayPercent / 100)));
+    if (targetCount % 2 === 0) targetCount += 1; // force odd → real center row
+    const wing = (targetCount - 1) / 2; // strikes on each side of ATM
+
+    const out: (number | null)[] = [];
+    // High → low: above ATM (descending), then ATM, then below ATM.
+    for (let k = wing; k >= 1; k--) {
+      const idx = atmIndex + k;
+      out.push(idx < ascending.length ? ascending[idx] : null);
+    }
+    out.push(nearestStrike);
+    for (let k = 1; k <= wing; k++) {
+      const idx = atmIndex - k;
+      out.push(idx >= 0 ? ascending[idx] : null);
+    }
+    return out;
   }, [allStrikes, autoDisplayPercent, nearestStrike]);
 
   // Active-greek value lookup: column index → strike → number.
@@ -716,6 +768,7 @@ export default function OptionsChainPage() {
     return columns.map(col => {
       const vals: number[] = [];
       visibleStrikes.forEach(s => {
+        if (s == null) return;
         const v = valueAt(col, s);
         if (v != null && v !== 0) vals.push(Math.abs(v));
       });
@@ -731,6 +784,7 @@ export default function OptionsChainPage() {
       let best: number | null = null;
       let bestAbs = 0;
       visibleStrikes.forEach(s => {
+        if (s == null) return;
         const g = col.cells.get(s)?.gex;
         if (g == null) return;
         const a = Math.abs(g);
@@ -761,11 +815,12 @@ export default function OptionsChainPage() {
   const emStrikes = useMemo(() => {
     if (!emLevels) return null;
     const { close, em } = emLevels;
+    const vs = visibleStrikes.filter((s): s is number => s != null);
     return {
-      d1: nearestStrikeTo(close - em, visibleStrikes),
-      u1: nearestStrikeTo(close + em, visibleStrikes),
-      d2: nearestStrikeTo(close - 2 * em, visibleStrikes),
-      u2: nearestStrikeTo(close + 2 * em, visibleStrikes),
+      d1: nearestStrikeTo(close - em, vs),
+      u1: nearestStrikeTo(close + em, vs),
+      d2: nearestStrikeTo(close - 2 * em, vs),
+      u2: nearestStrikeTo(close + 2 * em, vs),
     };
   }, [emLevels, visibleStrikes]);
 
@@ -868,6 +923,33 @@ export default function OptionsChainPage() {
           GO
         </button>
 
+        {recentTickers.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 8, fontWeight: 800, color: HT.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>Recent</span>
+            {recentTickers.map((t) => {
+              const active = t === activeTicker;
+              return (
+                <button
+                  key={t}
+                  onClick={() => selectTicker(t)}
+                  title={`Load ${t}`}
+                  style={{
+                    fontSize: 10, fontWeight: 800, padding: "4px 8px",
+                    border: `1px solid ${active ? rgba(HT.cyan, 0.6) : HT.border}`,
+                    borderRadius: 4,
+                    background: active ? rgba(HT.cyan, 0.14) : "rgba(0,0,0,0.4)",
+                    color: active ? HT.cyan : HT.text,
+                    cursor: "pointer", outline: "none", textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {autoPercentNote ? (
           <span style={{ fontSize: 9, fontWeight: 800, color: HT.orange, letterSpacing: "0.08em", textTransform: "uppercase" }}>
             {autoPercentNote}
@@ -961,7 +1043,7 @@ export default function OptionsChainPage() {
             {renderIdx.map((i) => {
               const col = columns[i];
               const colTotal = col
-                ? visibleStrikes.reduce((s, k) => { const v = valueAt(col, k); return s + (v ?? 0); }, 0)
+                ? visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0)
                 : null;
               return (
                 <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
@@ -974,7 +1056,19 @@ export default function OptionsChainPage() {
             })}
 
             {/* ── One row per shared strike ── */}
-            {visibleStrikes.map((strike) => {
+            {visibleStrikes.map((strike, rowIdx) => {
+              // Padding row (chain ran out on this side of ATM): keep the row so
+              // ATM stays centered, but render it empty.
+              if (strike == null) {
+                return (
+                  <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
+                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "4px 8px", fontSize: 11, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
+                    {renderIdx.map((i) => (
+                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "4px 8px", fontSize: 11 }} />
+                    ))}
+                  </div>
+                );
+              }
               const isATM = strike === nearestStrike;
               const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
               const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);

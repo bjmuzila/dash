@@ -35,6 +35,15 @@ function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+// Streamer-symbol roots carry suffixes the chips don't (SPX options stream as
+// root "SPXW", NDX as "NDXP", etc.). Normalize so a "SPX" chip matches "SPXW"
+// rows. Server may already normalize (newer builds), so this is idempotent.
+const ROOT_TO_TICKER: Record<string, string> = { SPXW: "SPX", NDXP: "NDX", RUTW: "RUT", XSPW: "XSP" };
+function normTicker(u: string | null | undefined): string {
+  const up = (u ?? "").toUpperCase();
+  return ROOT_TO_TICKER[up] ?? up;
+}
+
 function dteOf(o: FlowOrder): number | null {
   if (!o.expiration) return null;
   const exp = new Date(`${o.expiration}T00:00:00`);
@@ -53,7 +62,7 @@ const PREMIUM_PRESETS = [0, 50_000, 100_000, 250_000, 500_000, 1_000_000] as con
 // Default watchlist for the ticker toolbar. Users can add more at runtime.
 const DEFAULT_TICKERS = [
   "SPX", "NDX", "SPY", "QQQ", "VIX", "AMD", "AAPL", "AMZN",
-  "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
+  "GOOGL", "META", "MSFT", "NVDA", "TSLA",
 ] as const;
 
 export default function FlowPage() {
@@ -174,7 +183,7 @@ export default function FlowPage() {
     const dteHi = dteMax == null ? null : dteMax;
 
     const rows = merged.filter((o) => {
-      if (selectedTickers.size > 0 && !selectedTickers.has((o.underlying ?? "").toUpperCase())) return false;
+      if (selectedTickers.size > 0 && !selectedTickers.has(normTicker(o.underlying))) return false;
       if (side !== "all" && o.side !== side) return false;
       if (optType !== "all" && o.type !== optType) return false;
       if (otmOnly && !o.isOtm) return false;
@@ -488,7 +497,7 @@ export default function FlowPage() {
                   <span style={{ color: sideColor, fontWeight: 700 }}>
                     {o.side.toUpperCase()}
                   </span>
-                  <span style={{ color: C.text }}>{o.underlying ?? "—"}</span>
+                  <span style={{ color: C.text }}>{o.underlying ? normTicker(o.underlying) : "—"}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
                   <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.size.toLocaleString()}</span>

@@ -416,6 +416,9 @@ class ThetaStreamClient {
     this.onTrade = onTrade;
     this.onIndex = onIndex; // (root, price) => void  — index price ticks (SPX/VIX)
     this.getSpot = getSpot;
+    // Per-root spot overrides for non-SPX flow (MultiFlowManager fills these so
+    // isOtm is computed against the correct underlying, not SPX). thetaRoot key.
+    this.rootSpot = new Map();
     this.ws = null;
     this.nextId = 1;
     this.connected = false;
@@ -502,14 +505,15 @@ class ThetaStreamClient {
       const strikeTenthCents = toThetaStreamStrike(k.strike);
       const right = k.type === 'C' ? 'C' : 'P';
       const ckey = this._ckey(root, expInt, strikeTenthCents, right);
+      // Already subscribed (seeded quote cache) — skip so repeated window-shift
+      // calls don't bloat this.subs with duplicates or re-send TRADE+QUOTE.
+      if (this.quotes.has(ckey)) continue;
       // seed the quote cache entry so trades before the first quote still resolve
-      if (!this.quotes.has(ckey)) {
-        this.quotes.set(ckey, {
-          bid: null, ask: null, t: 0,
-          streamerSymbol: streamerSymbolFromContract({ root, expiration: expInt, strike: k.strike, right }),
-          strikeDollars: k.strike, root,
-        });
-      }
+      this.quotes.set(ckey, {
+        bid: null, ask: null, t: 0,
+        streamerSymbol: streamerSymbolFromContract({ root, expiration: expInt, strike: k.strike, right }),
+        strikeDollars: k.strike, root,
+      });
       this.subscribeContract({ root, expInt, strikeTenthCents, right });
     }
     console.log(`[THETA-WS] subscribed ${contracts.length} contracts (TRADE+QUOTE) root=${root}`);
@@ -584,13 +588,16 @@ class ThetaStreamClient {
       const quote = (cache.bid != null && cache.ask != null)
         ? { bid: cache.bid, ask: cache.ask, t: cache.t }
         : null;
+      // Prefer a per-root spot (set by MultiFlowManager for non-SPX roots) so
+      // isOtm is correct; fall back to the SPX getSpot() for the core engine.
+      const rootSpot = this.rootSpot.get(root);
       try {
         this.onTrade({
           streamerSymbol: cache.streamerSymbol,
           price,
           size,
           quote,
-          spot: this.getSpot() || 0,
+          spot: (rootSpot > 0 ? rootSpot : this.getSpot()) || 0,
         });
       } catch { /* never let one bad print kill the socket */ }
     }
