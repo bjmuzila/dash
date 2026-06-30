@@ -65,6 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Strike Growth", href: "/strike-growth" },
       { label: "ICT", href: "/ict" },
       { label: "Journal", href: "/trading" },
+      { label: "Order Flow", href: "/order-flow" },
     ],
   },
   {
@@ -107,6 +108,9 @@ const NAV_ITEM_BY_HREF = new Map<string, NavItem>(
   NAV_GROUPS.flatMap((g) => g.items).map((i) => [i.href, i]),
 );
 
+// Routes that exist in the nav but are not yet live — rendered as disabled labels
+const COMING_SOON = new Set(["/ict", "/trading", "/order-flow"]);
+
 // Monochrome Unicode glyphs per route — flat black/white across all platforms
 // (no color-emoji fallback). Routes without an entry fall back to "•".
 const ROUTE_SYMBOL: Record<string, string> = {
@@ -136,6 +140,7 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/analytics": "▦",
   "/premarket": "☀",
   "/trading": "✎",
+  "/order-flow": "⇅",
   "/dev/owner": "★",
   "/dev/results": "▤",
   "/dev/admin": "⚿",
@@ -191,7 +196,7 @@ function useQuickPages() {
     return next;
   };
   const pin = (href: string) => {
-    if (!NAV_ITEM_BY_HREF.has(href)) return;
+    if (!NAV_ITEM_BY_HREF.has(href) || COMING_SOON.has(href)) return;
     setQuick((prev) => (prev.includes(href) || prev.length >= QUICK_MAX ? prev : persist([...prev, href])));
   };
   const unpin = (href: string) => setQuick((prev) => persist(prev.filter((h) => h !== href)));
@@ -566,41 +571,65 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 {orderedItems(group).map((item, idx) => {
                   const active = isActive(item.href);
                   const dragging = drag?.from === group.id && drag.href === item.href;
+                  const comingSoon = COMING_SOON.has(item.href);
                   return (
                     <div
                       key={item.href}
                       className={hintHere(group.id, idx) ? "nav-drophint" : undefined}
                       style={{ position: "relative", display: "flex", alignItems: "center", borderRadius: 9 }}
-                      onDragOver={drag ? overZone(group.id, idx) : undefined}
-                      onDrop={drag ? dropOnGroup(group, idx) : undefined}
+                      onDragOver={!comingSoon && drag ? overZone(group.id, idx) : undefined}
+                      onDrop={!comingSoon && drag ? dropOnGroup(group, idx) : undefined}
                     >
-                      <Link
-                        href={item.href}
-                        draggable
-                        onDragStart={onDragStart(item.href, group.id)}
-                        onDragEnd={clearDrag}
-                        onClick={(e) => { if (didDragRef.current) { e.preventDefault(); return; } closeMenu(); }}
-                        className={`nav-row${active ? " nav-active" : ""}${dragging ? " nav-dragging" : ""}`}
-                        style={{
-                          flex: 1,
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "8px 12px",
-                          borderRadius: 9,
-                          textDecoration: "none",
-                          fontSize: 14.5,
-                          fontWeight: active ? 700 : 500,
-                          color: active ? HOME_THEME.cyan : HOME_THEME.text,
-                          background: active ? ACTIVE_TILE : "transparent",
-                          border: active ? "1px solid rgba(33,158,188,0.30)" : "1px solid transparent",
-                          boxShadow: active ? "0 0 14px rgba(33,158,188,0.22)" : "none",
-                          cursor: "grab",
-                        }}
-                      >
-                        <NavGlyph href={item.href} />
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
-                      </Link>
+                      {comingSoon ? (
+                        <div
+                          style={{
+                            flex: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "8px 12px",
+                            borderRadius: 9,
+                            fontSize: 14.5,
+                            fontWeight: 500,
+                            color: HOME_THEME.muted,
+                            opacity: 0.5,
+                            cursor: "default",
+                            userSelect: "none",
+                          }}
+                        >
+                          <NavGlyph href={item.href} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                          <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", opacity: 0.7, flexShrink: 0 }}>Soon</span>
+                        </div>
+                      ) : (
+                        <Link
+                          href={item.href}
+                          draggable
+                          onDragStart={onDragStart(item.href, group.id)}
+                          onDragEnd={clearDrag}
+                          onClick={(e) => { if (didDragRef.current) { e.preventDefault(); return; } closeMenu(); }}
+                          className={`nav-row${active ? " nav-active" : ""}${dragging ? " nav-dragging" : ""}`}
+                          style={{
+                            flex: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "8px 12px",
+                            borderRadius: 9,
+                            textDecoration: "none",
+                            fontSize: 14.5,
+                            fontWeight: active ? 700 : 500,
+                            color: active ? HOME_THEME.cyan : HOME_THEME.text,
+                            background: active ? ACTIVE_TILE : "transparent",
+                            border: active ? "1px solid rgba(33,158,188,0.30)" : "1px solid transparent",
+                            boxShadow: active ? "0 0 14px rgba(33,158,188,0.22)" : "none",
+                            cursor: "grab",
+                          }}
+                        >
+                          <NavGlyph href={item.href} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                        </Link>
+                      )}
                     </div>
                   );
                 })}

@@ -427,7 +427,6 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
   const [spxChangePct, setSpxChangePct] = useState(0);
   const [sidebarQuotes, setSidebarQuotes] = useState<QuoteTile[]>(SIDEBAR_SYMBOLS.map((sym) => ({ sym, chg: "—", pos: true, active: sym === "SPX" })));
   const [quoteSnapshots, setQuoteSnapshots] = useState<Record<string, { last: number; prev: number }>>({});
-  const [renderTick, setRenderTick] = useState(0);
   const [status, setStatus] = useState("READY");
   // True once the server reports OI + greeks are warm. Until then the GEX chart
   // shows a loader so a half-warmed / inflated frame never renders.
@@ -443,10 +442,6 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
   // Prior closes for VIX / ESU from the proxy (Tastytrade) for day-change %.
   const [vixPrevClose, setVixPrevClose] = useState(0);
   const [esuPrevClose, setEsuPrevClose] = useState(0);
-  // Fallback prior-closes from /api/quotes-batch (Yahoo) when the server feed
-  // doesn't supply them — keeps VIX/ESU day-change % populated and sane.
-  const [vixPrevFallback, setVixPrevFallback] = useState(0);
-  const [esuPrevFallback, setEsuPrevFallback] = useState(0);
   // (VIX/ESU day-change % derivations moved to the toolbar ticker, which sources
   // its own quotes; the prev-close state above still feeds other readouts.)
   // SPX flow tape (per-order) pushed from the server `flow` WS message.
@@ -464,30 +459,6 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
     quoteSnapshotsRef.current = quoteSnapshots;
   }, [quoteSnapshots]);
 
-  // Poll Yahoo-backed quotes-batch for VIX/ESU prior closes as a fallback when
-  // the /ws/gex feed doesn't deliver them (keeps top-bar day-change % correct).
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const r = await fetch("/api/quotes-batch?symbols=VIX,/ESU26", { cache: "no-store" });
-        if (!r.ok) return;
-        const json = await r.json();
-        const items: Array<Record<string, unknown>> = json?.data?.items ?? [];
-        if (cancelled) return;
-        for (const it of items) {
-          const sym = String(it.symbol ?? "");
-          const prev = Number(it["prev-close"] ?? 0);
-          if (!(prev > 0)) continue;
-          if (sym === "VIX") setVixPrevFallback(prev);
-          else if (sym.startsWith("/ES")) setEsuPrevFallback(prev);
-        }
-      } catch { /* ignore */ }
-    };
-    load();
-    const id = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
 
   useEffect(() => {
     selectedExpiryRef.current = selectedExpiry;
@@ -495,9 +466,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
 
 
 
-  const scheduleRender = useCallback(() => {
-    setRenderTick((current) => current + 1);
-  }, []);
+  const scheduleRender = useCallback(() => {}, []);
 
   // ── GEX WebSocket: connect to /ws/gex, receive pushed GEX_UPDATE from server loop ──
   // When user picks a different expiry, tell the server to switch
@@ -728,11 +697,10 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
 
   // Live WS-rebuilt chain — only accurate once symbols are subscribed and WS events arrive
   const wsChainRows = useMemo(() => {
-    void renderTick;
     const liveSpot = spot > 0 ? spot : Number(quoteSnapshots.SPX?.last ?? 0);
     if (!(liveSpot > 0) || !strikeRows.length) return [] as ChainRow[];
     return buildChainRows(strikeRows, liveDataRef.current, liveSpot);
-  }, [quoteSnapshots.SPX?.last, renderTick, spot, strikeRows]);
+  }, [quoteSnapshots.SPX?.last, spot, strikeRows]);
 
   // Both chart and heatmap use the server-pushed GEX rows (from /ws/gex broadcaster).
   // WS chain kicks in once live data arrives and overrides at least a few strikes.
@@ -837,7 +805,10 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
   const netGexLiveRef = useRef(0);
   useEffect(() => { netGexLiveRef.current = netGexLive; }, [netGexLive]);
   useEffect(() => {
-    const id = setInterval(() => setNetGexDisplay(netGexLiveRef.current), 1000);
+    const id = setInterval(() => {
+      const next = netGexLiveRef.current;
+      setNetGexDisplay((prev) => (prev === next ? prev : next));
+    }, 1000);
     return () => clearInterval(id);
   }, []);
   // Point-in-time net GEX baselines (open / 5 / 15 / 30 min) for the popup's
@@ -909,7 +880,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
-            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
+            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
               {/* Full-featured toolbar — scales to fit instead of scrolling */}
               <FitScale min={0.6}>
               <GexToolbar
@@ -970,7 +941,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
               </div>
             </div>
 
-            <div style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: econCollapsed ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
+            <div style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, display: "flex", flexDirection: "column", flex: econCollapsed ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
               <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
@@ -1026,7 +997,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
              </div>
             </div>
 
-            <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.45)", backdropFilter: "blur(16px)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+            <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>

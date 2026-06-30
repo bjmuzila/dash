@@ -102,7 +102,7 @@ function msg(type, data, symbol) {
 // whole gexRows array (~100KB) to every client every 2s, 24/7, was ~4GB/hr of
 // outbound — most of it identical overnight. Coalesce sends to this cadence and
 // skip when the payload is byte-identical to the last one we sent.
-const GEX_BROADCAST_MS = Number(process.env.GEX_BROADCAST_MS || 6000);
+const GEX_BROADCAST_MS = Number(process.env.GEX_BROADCAST_MS || 15000);
 // Slower GEX broadcast cadence outside regular trading hours — SPX options
 // aren't trading, so the chain barely moves and clients don't need 6s freshness.
 const GEX_BROADCAST_MS_OFFHOURS = Number(process.env.GEX_BROADCAST_MS_OFFHOURS || 30000);
