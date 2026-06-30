@@ -1406,6 +1406,7 @@ class TastytradeProxy {
     this.oiPlateauHits = 0;   // consecutive backfills with negligible OI-coverage gain
     this.greeksCoverage = 0;  // 0..1 fraction of in-window legs with a real streamed gamma
     this.chartReady = false;  // true once OI + greeks are warm (or grace elapses) — gates broadcast
+    this.warmedExpiries = new Set(); // expiries already warmed once — switching back to them is instant (no re-gate)
     this.prevGreeksCoverage = 0; // greeks coverage at the previous recompute (plateau detection)
     this.greeksPlateauHits = 0;  // consecutive recomputes with negligible coverage gain
     this.firstSubAt = 0;      // ms timestamp of first subscribe (grace-period anchor)
@@ -1702,6 +1703,7 @@ class TastytradeProxy {
         if (this.optSessionKey && key !== this.optSessionKey) {
           console.log(`[SESSION] SPX rollover ${this.optSessionKey} → ${key}: clearing stale volume + re-arming OI`);
           this.volumes.clear();
+          this.warmedExpiries.clear(); // prior session's warm cache is now stale — force re-warm
           this.oiReady = false;
           this.oiPlateauHits = 0;
           this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
@@ -1910,13 +1912,18 @@ class TastytradeProxy {
     if (!expiry || expiry === this.expiry) return;
     this.expiry = expiry;
     marketState.setExpiry(expiry);
-    // Re-gate: the new expiry's OI + greeks must warm up before we broadcast its chart.
-    this.oiReady = false;
+    // If we've already warmed this expiry once, its OI/greeks are cached on the
+    // server — re-gating would force the user to wait out the grace timer again
+    // for data that's effectively static. Skip the gate and broadcast at once.
+    const alreadyWarm = this.warmedExpiries.has(expiry);
+    // Re-gate (only for a not-yet-warmed expiry): OI + greeks must warm up before
+    // we broadcast its chart, to avoid a half-rendered / inflated frame.
+    this.oiReady = alreadyWarm;
     this.oiPlateauHits = 0;
-    this.chartReady = false;
+    this.chartReady = alreadyWarm;
     this.prevGreeksCoverage = 0;
     this.greeksPlateauHits = 0;
-    marketState.setStatus({ chartReady: false });
+    marketState.setStatus({ chartReady: alreadyWarm });
     this.firstSubAt = Date.now();
     this._resubscribe();
     // Backfill the new expiry's OI immediately, and resume fast polling until the
@@ -2460,6 +2467,8 @@ class TastytradeProxy {
         marketState.setStatus({ chartReady: false, oiCoverage: this.oiCoverage, greeksCoverage: this.greeksCoverage });
         return; // hold the frame until both OI and greeks are ready
       }
+      // Remember this expiry as warmed so switching back to it is instant.
+      this.warmedExpiries.add(this.expiry);
       marketState.setStatus({ chartReady: true });
     }
 
