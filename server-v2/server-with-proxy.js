@@ -616,7 +616,7 @@ async function main() {
             const EXCLUDE = ['SPX','NDX','VIX','RUT','XSP','SPY','QQQ','IWM','DIA'];
             // changes: every snapshot's Δ-vs-(window)-min-ago, per symbol/expiry/strike.
             // Then per strike: latest Δ + mean/stddev of today's Δ series → z-score.
-            const orderCol = sort === 'abs' ? 'ABS(s.latest_chg)' : 'ABS(s.z)';
+            const orderCol = sort === 'abs' ? 'ABS(latest_chg)' : 'ABS(z_score)';
             const sql = `
               WITH changes AS (
                 SELECT sg.symbol, sg.expiry, sg.strike, sg.ts,
@@ -637,12 +637,15 @@ async function main() {
                        (array_agg(chg ORDER BY ts DESC))[1] AS latest_chg,
                        (array_agg(ts  ORDER BY ts DESC))[1] AS latest_ts
                 FROM changes GROUP BY symbol, expiry, strike
+              ),
+              scored AS (
+                SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.mean_chg, s.sd_chg, s.n,
+                       CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE NULL END AS z_score
+                FROM stats s
+                WHERE s.n >= 3 AND s.latest_chg IS NOT NULL
+                  AND (CASE WHEN s.sd_chg > 0 THEN ABS((s.latest_chg - s.mean_chg)/s.sd_chg) ELSE 0 END) >= $3
               )
-              SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.mean_chg, s.sd_chg, s.n,
-                     CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE NULL END AS z
-              FROM stats s
-              WHERE s.n >= 3 AND s.latest_chg IS NOT NULL
-                AND (CASE WHEN s.sd_chg > 0 THEN ABS((s.latest_chg - s.mean_chg)/s.sd_chg) ELSE 0 END) >= $3
+              SELECT * FROM scored
               ORDER BY ${orderCol} DESC NULLS LAST
               LIMIT $4`;
             const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit]);

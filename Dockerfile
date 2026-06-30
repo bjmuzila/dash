@@ -1,6 +1,6 @@
 # server-v2 (Next.js + WS feed engine) — single process, runs as-is on a VPS.
 # Multi-stage: build Next, then run the same node entrypoint package.json uses.
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 # System deps:

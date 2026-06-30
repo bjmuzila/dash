@@ -428,17 +428,15 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Which page tab each section lives on. Edit the values here to move sections
-// between the Front-end and Back-end tabs — no other change needed.
-const SECTION_TAB: Record<string, "frontend" | "backend"> = {
+// Which page tab each section lives on.
+const SECTION_TAB: Record<string, "backend"> = {
   system:    "backend",
   hosting:   "backend",
   database:  "backend",
   controls:  "backend",
   eodgex:    "backend",
-  auth:      "frontend",
-  activity:  "frontend",
-  feedback:  "frontend",
+  auth:      "backend",
+  activity:  "backend",
 };
 
 interface FeedbackItem {
@@ -1021,7 +1019,7 @@ function OverviewSection({ metrics }: {
 
 // FE / BE tab + accordion (one section open at a time). The `tab` of each
 // section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "frontend" | "backend";
+type OwnerTab = "overview" | "backend";
 
 export default function OwnerDashboard() {
   const isMobile = useIsMobile();
@@ -1032,13 +1030,13 @@ export default function OwnerDashboard() {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
       const param = new URLSearchParams(window.location.search).get("tab");
-      if (param === "overview" || param === "frontend" || param === "backend") {
+      if (param === "overview" || param === "backend") {
         setOwnerTab(param);
         localStorage.setItem("owner-tab", param);
         return;
       }
       const v = localStorage.getItem("owner-tab");
-      if (v === "overview" || v === "frontend" || v === "backend") setOwnerTab(v);
+      if (v === "overview" || v === "backend") setOwnerTab(v);
     } catch { /* ignore */ }
   }, []);
   const selectTab = useCallback((t: OwnerTab) => {
@@ -1897,7 +1895,6 @@ export default function OwnerDashboard() {
       <div style={{ display: "flex", gap: 6, padding: "10px clamp(14px,2vw,24px) 0", flexWrap: "wrap" }}>
         {([
           { id: "overview" as const, label: "Overview" },
-          { id: "frontend" as const, label: "Front-End" },
           { id: "backend" as const, label: "Back-End" },
         ]).map((t) => {
           const active = ownerTab === t.id;
@@ -1950,6 +1947,96 @@ export default function OwnerDashboard() {
       >
         {/* ── Overview dashboard (real front-end data) ── */}
         {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} />}
+
+        {/* ── Customer feedback feed (overview tab) ── */}
+        {ownerTab === "overview" && (
+        <AccordionCard
+          id="feedback"
+          title="Feedback"
+          subtitle={`${feedbackOpenCount} open · ${feedback.length} total`}
+          open={openSet.has("feedback")}
+          onToggle={toggleSection}
+          accent={HOME_THEME.orange}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                style={{ ...homeSecondaryButtonStyle, color: (feedbackRefreshStyle.color as string) ?? (homeSecondaryButtonStyle as { color?: string }).color }}
+                onClick={feedbackRefresh}
+              >
+                {feedbackRefreshLabel}
+              </button>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: HOME_THEME.text, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={feedbackShowResolved}
+                  onChange={(e) => setFeedbackShowResolved(e.target.checked)}
+                />
+                Show resolved
+              </label>
+            </div>
+
+            {(() => {
+              const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
+              if (visible.length === 0) {
+                return <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6 }}>No feedback yet.</span>;
+              }
+              const catColor: Record<string, string> = {
+                bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
+              };
+              return (
+                <div className="owner-scroll" style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
+              {visible.map((f) => {
+                const resolved = f.status === "resolved";
+                return (
+                  <div
+                    key={f.id}
+                    style={{
+                      display: "flex", gap: 12, padding: "12px 14px", borderRadius: 10,
+                      border: `1px solid ${HOME_THEME.border}`,
+                      background: resolved ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
+                      opacity: resolved ? 0.55 : 1,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
+                          padding: "2px 8px", borderRadius: 20,
+                          color: catColor[f.category] ?? HOME_THEME.cyan,
+                          background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
+                          border: `1px solid ${catColor[f.category] ?? HOME_THEME.cyan}44`,
+                        }}>
+                          {f.category}
+                        </span>
+                        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
+                          {f.email || f.clerk_user_id || "unknown"}
+                        </span>
+                        {f.created_at && (
+                          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.45 }}>
+                            {new Date(f.created_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 13, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {f.message}
+                      </div>
+                    </div>
+                    <button
+                      style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap" }}
+                      onClick={() => resolveFeedback(f.id, resolved ? "open" : "resolved")}
+                    >
+                      {resolved ? "Reopen" : "Resolve"}
+                    </button>
+                  </div>
+                );
+              })}
+                </div>
+              );
+            })()}
+          </div>
+        </AccordionCard>
+        )}
 
         {/* ── System KPIs ── */}
         {SECTION_TAB.system === ownerTab && (
@@ -2878,95 +2965,6 @@ export default function OwnerDashboard() {
           );
         })()}
 
-        {/* ── Customer feedback feed (rendered last on the Front-End tab) ── */}
-        {SECTION_TAB.feedback === ownerTab && (
-        <AccordionCard
-          id="feedback"
-          title="Feedback"
-          subtitle={`${feedbackOpenCount} open · ${feedback.length} total`}
-          open={openSet.has("feedback")}
-          onToggle={toggleSection}
-          accent={HOME_THEME.orange}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button
-                style={{ ...homeSecondaryButtonStyle, color: (feedbackRefreshStyle.color as string) ?? (homeSecondaryButtonStyle as { color?: string }).color }}
-                onClick={feedbackRefresh}
-              >
-                {feedbackRefreshLabel}
-              </button>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: HOME_THEME.text, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={feedbackShowResolved}
-                  onChange={(e) => setFeedbackShowResolved(e.target.checked)}
-                />
-                Show resolved
-              </label>
-            </div>
-
-            {(() => {
-              const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
-              if (visible.length === 0) {
-                return <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6 }}>No feedback yet.</span>;
-              }
-              const catColor: Record<string, string> = {
-                bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
-              };
-              return (
-                <div className="owner-scroll" style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
-              {visible.map((f) => {
-                const resolved = f.status === "resolved";
-                return (
-                  <div
-                    key={f.id}
-                    style={{
-                      display: "flex", gap: 12, padding: "12px 14px", borderRadius: 10,
-                      border: `1px solid ${HOME_THEME.border}`,
-                      background: resolved ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
-                      opacity: resolved ? 0.55 : 1,
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{
-                          fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
-                          padding: "2px 8px", borderRadius: 20,
-                          color: catColor[f.category] ?? HOME_THEME.cyan,
-                          background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
-                          border: `1px solid ${catColor[f.category] ?? HOME_THEME.cyan}44`,
-                        }}>
-                          {f.category}
-                        </span>
-                        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
-                          {f.email || f.clerk_user_id || "unknown"}
-                        </span>
-                        {f.created_at && (
-                          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.45 }}>
-                            {new Date(f.created_at).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 13, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {f.message}
-                      </div>
-                    </div>
-                    <button
-                      style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap" }}
-                      onClick={() => resolveFeedback(f.id, resolved ? "open" : "resolved")}
-                    >
-                      {resolved ? "Reopen" : "Resolve"}
-                    </button>
-                  </div>
-                );
-              })}
-                </div>
-              );
-            })()}
-          </div>
-        </AccordionCard>
-        )}
 
       </div>
     </div>
