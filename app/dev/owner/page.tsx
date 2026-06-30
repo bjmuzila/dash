@@ -147,32 +147,24 @@ interface EodGexRow {
   computed_at: string;
 }
 
-// Masked Clerk key status (from /api/clerk-status). Never carries the secret value.
-interface ClerkStatus {
-  ok?: boolean;
+// Auth status (from /api/clerk-status, now backed by Supabase Auth). The route
+// reports whether Supabase auth env is configured + read-only user stats via the
+// service-role admin API. Never carries secrets. (Clerk was removed; the
+// publishable/secret/roleSets fields are gone — Supabase has no equivalent
+// client/secret key pair surfaced here.)
+interface AuthStatus {
   configured: boolean;
+  provider?: string;
   environment: "test" | "live" | "unknown";
   mismatch?: boolean;
-  publishable: { present: boolean; masked: string };
-  secret: { present: boolean };
-  // Read-only Backend-API stats (null when unavailable).
+  // Read-only admin-API stats (null when unavailable).
   stats?: {
     userCount: number | null;
     activeSessions: number | null;
     recent: Array<{ id: string; email: string | null; name: string | null; createdAt: number | null }>;
-    error: string | null;
   };
-  // Read-only Clerk role sets (empty when Organizations aren't enabled).
-  roleSets?: Array<{
-    id: string;
-    name: string;
-    key: string;
-    type: string | null;
-    defaultRoleKey: string | null;
-    creatorRoleKey: string | null;
-    roles: Array<{ id: string; name: string; key: string; membersCount: number | null }>;
-  }>;
-  roleSetsError?: string | null;
+  // Top-level error string from the route when the admin API didn't answer.
+  statsError?: string | null;
 }
 
 // One logged page load (from /api/page-visits). Owner-only; includes client IP.
@@ -1126,8 +1118,8 @@ export default function OwnerDashboard() {
   // EOD GEX save status (today's rows from eod_gex table)
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
 
-  // Masked Clerk key status (auth provider). Null until first fetch.
-  const [clerk, setClerk] = useState<ClerkStatus | null>(null);
+  // Auth status (Supabase). Null until first fetch.
+  const [clerk, setClerk] = useState<AuthStatus | null>(null);
 
   // Customer feedback feed
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
@@ -1402,7 +1394,7 @@ export default function OwnerDashboard() {
       // Clerk key status (masked — never includes the secret value).
       try {
         const ck = await fetch("/api/clerk-status", { cache: "no-store" });
-        if (ck.ok) { setClerk((await ck.json()) as ClerkStatus); }
+        if (ck.ok) { setClerk((await ck.json()) as AuthStatus); }
       } catch { /* non-fatal */ }
 
       // Hetzner hosting metrics (live window on general refresh). Merge so a
@@ -2600,27 +2592,13 @@ export default function OwnerDashboard() {
                   {clerk.environment === "unknown" ? "env ?" : clerk.environment}
                 </span>
 
-                {/* Publishable key — masked (this key is public by design). */}
+                {/* Auth provider (Supabase). Secrets never leave the server. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Publishable</span>
-                  <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.publishable.present ? "#c8d8e8" : HOME_THEME.red }}>
-                    {clerk.publishable.present ? clerk.publishable.masked : "missing"}
+                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Provider</span>
+                  <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.configured ? HOME_THEME.green : HOME_THEME.red }}>
+                    {clerk.provider === "supabase" ? "Supabase Auth" : clerk.provider || "supabase"}
                   </span>
                 </div>
-
-                {/* Secret key — presence only, value never leaves the server. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>Secret</span>
-                  <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.secret.present ? HOME_THEME.green : HOME_THEME.red }}>
-                    {clerk.secret.present ? "set ✓ (hidden)" : "missing"}
-                  </span>
-                </div>
-
-                {clerk.mismatch && (
-                  <span style={{ fontSize: 10, color: HOME_THEME.red, fontWeight: 700 }}>
-                    ⚠ pk/sk environment mismatch
-                  </span>
-                )}
               </div>
 
               {/* Backend-API stats (read-only). Hidden if nothing came back. */}
@@ -2628,11 +2606,11 @@ export default function OwnerDashboard() {
                 const s = clerk.stats;
                 const hasStats = !!s && (s.userCount != null || s.activeSessions != null || s.recent.length > 0);
                 if (!hasStats) {
-                  // Only show an error hint if the secret is set but the API didn't answer.
-                  if (s?.error && clerk.secret.present) {
+                  // Show an error hint if the admin API was configured but didn't answer.
+                  if (clerk.statsError) {
                     return (
                       <div style={{ fontSize: 10, color: HOME_THEME.orange, fontFamily: "monospace" }}>
-                        Backend API unavailable: {s.error}
+                        Admin API unavailable: {clerk.statsError}
                       </div>
                     );
                   }
@@ -2689,70 +2667,6 @@ export default function OwnerDashboard() {
                 );
               })()}
 
-              {/* Role sets (read-only). Shows what roles exist in the instance. */}
-              {(() => {
-                const sets = clerk.roleSets ?? [];
-                return (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
-                        Role Sets
-                      </span>
-                      <span style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.muted }}>
-                        {sets.length} configured
-                      </span>
-                    </div>
-
-                    {sets.length === 0 ? (
-                      <span style={{ fontSize: 10, color: HOME_THEME.muted }}>
-                        No role sets configured{clerk.roleSetsError ? ` (${clerk.roleSetsError})` : ""} — Clerk Organizations may be disabled.
-                      </span>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {sets.map((rs) => (
-                          <div key={rs.id || rs.key} style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                              <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.text }}>{rs.name || rs.key}</span>
-                              <span style={{ fontSize: 9, fontFamily: "monospace", color: "#c8d8e8" }}>{rs.key}</span>
-                              {rs.type && (
-                                <span style={{ fontSize: 8, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", padding: "1px 6px", borderRadius: 10, color: HOME_THEME.cyan, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
-                                  {rs.type}
-                                </span>
-                              )}
-                            </div>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                              {rs.roles.map((role) => {
-                                const isDefault = role.key === rs.defaultRoleKey;
-                                const isCreator = role.key === rs.creatorRoleKey;
-                                const accent = isCreator ? HOME_THEME.orange : isDefault ? HOME_THEME.green : HOME_THEME.muted;
-                                return (
-                                  <span
-                                    key={role.id || role.key}
-                                    title={`${role.key}${role.membersCount != null ? ` · ${role.membersCount} members` : ""}`}
-                                    style={{
-                                      fontSize: 10, fontWeight: 600, color: HOME_THEME.text,
-                                      padding: "2px 8px", borderRadius: 6,
-                                      background: `${accent}14`, border: `1px solid ${accent}44`,
-                                      display: "inline-flex", alignItems: "center", gap: 5,
-                                    }}
-                                  >
-                                    {role.name || role.key}
-                                    {role.membersCount != null && (
-                                      <span style={{ fontFamily: "monospace", color: "#c8d8e8" }}>{role.membersCount}</span>
-                                    )}
-                                    {isDefault && <span style={{ fontSize: 8, color: HOME_THEME.green, fontWeight: 500 }}>DEFAULT</span>}
-                                    {isCreator && <span style={{ fontSize: 8, color: HOME_THEME.orange, fontWeight: 500 }}>CREATOR</span>}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
               </>
             )}
           </div>

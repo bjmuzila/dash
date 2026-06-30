@@ -177,9 +177,7 @@ export default function ChaseScene({ logoSrc = "/bzila-hero.png" }: { logoSrc?: 
           19%  { transform: scaleX(-1) translateY(0) rotate(0deg); }
           22%  { transform: scaleX(-1) translateY(18px) rotate(-78deg); } /* FACEPLANT */
           28%  { transform: scaleX(-1) translateY(18px) rotate(-82deg); } /* lying there */
-          32%  { transform: scaleX(-1) translateY(0) rotate(0deg); }      /* up again */
-          37%  { transform: scaleX(-1) translateY(-46px) rotate(-12deg); }/* JUMP apex */
-          43%  { transform: scaleX(-1) translateY(0) rotate(0deg); }      /* land */
+          32%  { transform: scaleX(-1) translateY(0) rotate(0deg); }      /* up again, keeps running */
           50%  { transform: scaleX(-1) translateY(0) rotate(0deg); }      /* turn moment */
           54%  { transform: scaleX(1)  translateY(0) rotate(0deg); }      /* now FACING RIGHT, hunting */
           84%  { transform: scaleX(1)  translateY(0) rotate(8deg); }      /* lunge/stab */
@@ -200,7 +198,6 @@ export default function ChaseScene({ logoSrc = "/bzila-hero.png" }: { logoSrc?: 
         @keyframes bzGreenHeld {
           0%,19%  { transform: rotate(35deg) translateY(0); }    /* tucked, pointing back while fleeing */
           22%,32% { transform: rotate(80deg) translateY(10px); } /* flops as he faceplants */
-          37%     { transform: rotate(20deg) translateY(-6px); } /* up during jump */
           50%     { transform: rotate(-20deg); }                 /* raise it on the turn */
           54%     { transform: rotate(-35deg); }                 /* brandished, hunting */
           84%     { transform: rotate(40deg); }                  /* thrust forward on stab */
@@ -300,7 +297,7 @@ export default function ChaseScene({ logoSrc = "/bzila-hero.png" }: { logoSrc?: 
           .bz-hero-inner { transform: scaleX(1); }
           .bz-green { transform: rotate(-30deg); }
           .bz-red { opacity: 0; }
-          .bz-obstacle, .bz-hidewall { display: none; }
+          .bz-hidewall { display: none; }
         }
       `}</style>
     </div>
