@@ -1,14 +1,10 @@
 "use client";
 
-import { useEffect, useState, useRef, type CSSProperties } from "react";
+import { useEffect, type CSSProperties } from "react";
 import { type ChainRow } from "@/lib/calculations/calculations";
 import type { GexBaselines } from "@/hooks/useStrikeGexHistory";
 
 export type PopupStyle = "card" | "drawer" | "modal";
-
-// Cache AI summaries by strike so repeated opens don't re-call the API.
-// Keyed by strike — cleared on page reload automatically (module-level Map).
-const summaryCache = new Map<number, string>();
 
 interface Props {
   row: ChainRow;
@@ -61,38 +57,6 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
   const otmSide = isOtmCall ? "CALL" : "PUT";
   const otmPrice = isOtmCall ? row.callMark : row.putMark;
 
-  // AI summary — fetch once per strike, cache result.
-  const [summary, setSummary] = useState<string | null>(summaryCache.get(row.strike) ?? null);
-  const [loading, setLoading] = useState(!summaryCache.has(row.strike));
-  const fetchedRef = useRef(false);
-
-  useEffect(() => {
-    if (fetchedRef.current || summaryCache.has(row.strike)) return;
-    fetchedRef.current = true;
-    (async () => {
-      try {
-        const res = await fetch("/api/strike-summary", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            strike: row.strike,
-            spotPrice,
-            oiVolGex: fmtGex(compositeNetGex),
-            volGex: fmtGex(row.netVolGEX),
-            otmSide,
-            otmPrice: otmPrice != null && Number.isFinite(otmPrice) ? `$${otmPrice.toFixed(2)}` : null,
-          }),
-        });
-        const data = await res.json();
-        if (data.summary) {
-          summaryCache.set(row.strike, data.summary);
-          setSummary(data.summary);
-        }
-      } catch { /* silent */ } finally {
-        setLoading(false);
-      }
-    })();
-  }, [row.strike]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ fontFamily: "monospace", color: "#fff" }}>
@@ -125,18 +89,6 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(33,158,188,0.05)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
         <span style={{ fontSize: 9, color: C.dim, letterSpacing: "0.1em" }}>OTM {otmSide} CONTRACT</span>
         <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan }}>{fmtPrice(otmPrice)}</span>
-      </div>
-
-      {/* AI summary */}
-      <div style={{ background: "rgba(33,158,188,0.04)", border: `1px solid rgba(33,158,188,0.15)`, borderRadius: 6, padding: "8px 10px", marginBottom: 12, minHeight: 44 }}>
-        <div style={{ fontSize: 8, color: C.cyan, letterSpacing: "0.1em", marginBottom: 4 }}>AI SUMMARY</div>
-        {loading ? (
-          <div style={{ fontSize: 10, color: C.dim, fontStyle: "italic" }}>Analyzing…</div>
-        ) : summary ? (
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.85)", lineHeight: 1.5, fontFamily: "system-ui, sans-serif" }}>{summary}</div>
-        ) : (
-          <div style={{ fontSize: 10, color: C.dim, fontStyle: "italic" }}>—</div>
-        )}
       </div>
 
       {/* GEX inputs */}

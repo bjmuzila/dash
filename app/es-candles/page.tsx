@@ -147,275 +147,6 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
   return pos ? `rgba(41,182,246,${alpha.toFixed(3)})` : `rgba(255,71,87,${alpha.toFixed(3)})`;
 }
 
-// ── Greek-flow time-series overlay ──────────────────────────────────────────
-// A net-exposure curve (net DEX / GEX / CHEX / VEX over the session) drawn on
-// its OWN notional axis, independent of the candle price scale — like the
-// "Delta Flow vs price" overlay. Because GEX/DEX run in the billions while
-// CHEX/VEX run in the millions, the line is scaled to its own min/max each frame
-// and the axis ticks use a magnitude-aware short formatter, so a $2B line and a
-// $40M line both fill the panel and read cleanly (no "0.04B" weirdness).
-type FlowMetric = "dex" | "gex" | "chex" | "vex";
-type FlowPoint = { ts: number; value: number };
-
-// Values are stored exactly as the /greeks page holds them: gex/dex already in
-// $billions, chex/vex already in $millions. `unit` is the metric's native unit
-// (for the value formatter); `mult` converts the stored value to raw $ so all
-// four can share ONE honest vertical scale (with a real shared zero line).
-const FLOW_META: Record<FlowMetric, { label: string; color: string; unit: "B" | "M"; mult: number }> = {
-  dex:  { label: "Delta Flow",  color: "#ff5b5b", unit: "B", mult: 1e9 },
-  gex:  { label: "Gamma Flow",  color: "#29b6f6", unit: "B", mult: 1e9 },
-  chex: { label: "Charm Flow",  color: "#a78bfa", unit: "M", mult: 1e6 },
-  vex:  { label: "Vanna Flow",  color: "#f5c518", unit: "M", mult: 1e6 },
-};
-
-// Catmull-Rom → cubic-bezier smoothing for a gentle curve through points. `t` is
-// the tension (0 = straight, ~0.2 = gentle). Operates on screen-space points.
-function smoothPath(pts: Array<{ x: number; y: number }>, t = 0.2): string {
-  const n = pts.length;
-  if (n === 0) return "";
-  if (n === 1) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
-  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
-  for (let i = 0; i < n - 1; i++) {
-    const p0 = pts[i - 1] ?? pts[i];
-    const p1 = pts[i];
-    const p2 = pts[i + 1];
-    const p3 = pts[i + 2] ?? p2;
-    const c1x = p1.x + ((p2.x - p0.x) / 6) * (t / 0.166667);
-    const c1y = p1.y + ((p2.y - p0.y) / 6) * (t / 0.166667);
-    const c2x = p2.x - ((p3.x - p1.x) / 6) * (t / 0.166667);
-    const c2y = p2.y - ((p3.y - p1.y) / 6) * (t / 0.166667);
-    d += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
-  }
-  return d;
-}
-
-// Format an already-scaled greek value in its native unit, matching the /greeks
-// cards: a value in $B (e.g. 2.78 → "+2.78B"; 0.42 → "+420M"), a value in $M
-// (e.g. -14.4 → "-14.4M"; 2200 → "+2.20B"). Carries up/down a tier when the
-// magnitude crosses 1000 so it never reads "0.42B" or "2200M".
-function fmtGreek(v: number, unit: "B" | "M"): string {
-  const s = v < 0 ? "-" : "+";
-  const a = Math.abs(v);
-  if (unit === "B") {
-    if (a >= 1e3) return `${s}${(a / 1e3).toFixed(2)}T`;
-    if (a >= 1)   return `${s}${a.toFixed(2)}B`;
-    return `${s}${(a * 1e3).toFixed(0)}M`;
-  }
-  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(2)}B`;
-  if (a >= 1)   return `${s}${a.toFixed(1)}M`;
-  return `${s}${(a * 1e3).toFixed(0)}K`;
-}
-
-// Greek-flow mini-chart pinned top-left of the candle chart: all four greek
-// lines on ONE small SVG, each normalized to its own min/max (so DEX/GEX in the
-// billions and CHEX/VEX in the millions all fill the box and you compare shape /
-// direction). Each line that straddles zero gets its own faint zero guide. A
-// compact legend with current values sits along the top.
-const WINDOW_MS = 60 * 60 * 1000; // visible span = last 1 hour by default
-
-function GreekFlowChart({
-  flowHistory, width = 460, chartH = 168,
-}: { flowHistory: Record<FlowMetric, FlowPoint[]>; width?: number; chartH?: number }) {
-  const order: FlowMetric[] = ["dex", "gex", "chex", "vex"];
-  const padX = 6, padY = 6;
-  const innerW = width - padX * 2;
-  const innerH = chartH - padY * 2;
-
-  // Newest point + full session bounds (the pan limits). Session is the ET day of
-  // the newest point, 9:30–6pm ET (same as /greeks) — used only to clamp how far
-  // back you can scroll, not as the visible span.
-  let newest = -Infinity;
-  for (const m of order) for (const p of flowHistory[m] ?? []) if (p.ts > newest) newest = p.ts;
-  const haveAny = Number.isFinite(newest);
-  const sessionFor = (at: number): { start: number; end: number } => {
-    const p = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-    }).formatToParts(new Date(at));
-    const g: Record<string, string> = {};
-    p.forEach((x) => { g[x.type] = x.value; });
-    const asUtc = Date.UTC(+g.year, +g.month - 1, +g.day, +g.hour % 24, +g.minute, +g.second);
-    const off = asUtc - at;
-    const mk = (hh: number, mm: number) => Date.UTC(+g.year, +g.month - 1, +g.day, hh, mm, 0) - off;
-    return { start: mk(9, 30), end: mk(18, 0) };
-  };
-  const session = haveAny ? sessionFor(newest) : { start: 0, end: 1 };
-
-  // Pan state. `anchorMs` = the ABSOLUTE right-edge timestamp of the visible 1hr
-  // window when scrolled back; null = follow live (right edge tracks the newest
-  // point). Using an absolute anchor (not a relative offset) is what makes the
-  // view "stay put" — new data extends `newest` but the frozen window doesn't
-  // move. Any manual pan sets the anchor; double-click / the LIVE chip clears it.
-  const [anchorMs, setAnchorMs] = useState<number | null>(null);
-  const followLive = anchorMs == null;
-  const anchorRef = useRef<number | null>(null); anchorRef.current = anchorMs;
-  const boundsRef = useRef({ min: 0, max: 1 });
-  const dragRef = useRef<{ x: number; anchor: number } | null>(null);
-
-  // Right edge can range from session-start+1hr (fully scrolled back) to newest.
-  const rightMin = haveAny ? session.start + WINDOW_MS : 1;
-  const rightMax = haveAny ? newest : 1;
-  boundsRef.current = { min: rightMin, max: rightMax };
-  const clampRight = (v: number) => Math.min(rightMax, Math.max(rightMin, v));
-  const rightEdge = followLive ? rightMax : clampRight(anchorMs as number);
-  const tMax = rightEdge;
-  const tMin = rightEdge - WINDOW_MS;
-  const inWin = (ts: number) => ts >= tMin - 1 && ts <= tMax + 1;
-  const haveData = haveAny && tMax > tMin;
-  const xOf = (ts: number) => padX + ((ts - tMin) / ((tMax - tMin) || 1)) * innerW;
-  const msPerPx = WINDOW_MS / (innerW || 1);
-
-  // Drag to pan: cursor RIGHT (+dx) reveals EARLIER data (right edge moves back).
-  const onDown = useCallback((e: React.MouseEvent) => {
-    dragRef.current = { x: e.clientX, anchor: anchorRef.current ?? boundsRef.current.max };
-  }, []);
-  const onMove = useCallback((e: React.MouseEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    const dxPx = e.clientX - d.x;
-    if (Math.abs(dxPx) < 2) return; // ignore micro-jitter / bare click
-    const b = boundsRef.current;
-    const next = Math.min(b.max, Math.max(b.min, d.anchor - dxPx * msPerPx));
-    setAnchorMs(next);
-  }, [msPerPx]);
-  const endDrag = useCallback(() => { dragRef.current = null; }, []);
-  // Wheel to pan: horizontal-ish delta shifts the window; +delta = forward in time.
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    if (!delta) return;
-    const b = boundsRef.current;
-    setAnchorMs((a) => Math.min(b.max, Math.max(b.min, (a ?? b.max) - delta * msPerPx)));
-  }, [msPerPx]);
-  const snapLive = useCallback(() => { setAnchorMs(null); }, []);
-
-  // Gap threshold: if consecutive points are farther apart than this, the line is
-  // BROKEN (no segment drawn across the gap) instead of a long diagonal run.
-  const GAP_MS = 4 * 60_000;
-
-  // Per-metric: legend value + the visible points converted to RAW $ (so all four
-  // share one honest vertical scale below).
-  const series = order.map((m) => {
-    const all = flowHistory[m] ?? [];
-    const meta = FLOW_META[m];
-    const last = all.length ? all[all.length - 1].value : null; // native unit, for legend
-    const byTs = new Map<number, number>();
-    for (const p of all) if (inWin(p.ts)) byTs.set(p.ts, p.value * meta.mult); // → raw $
-    const pts = [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, value]) => ({ ts, value }));
-    return { m, meta, last, pts };
-  });
-
-  // ONE shared $ scale across every visible point of all metrics, always
-  // including 0 so the zero line is meaningful. Symmetric padding (8%).
-  let vLo = Infinity, vHi = -Infinity;
-  for (const s of series) for (const p of s.pts) { if (p.value < vLo) vLo = p.value; if (p.value > vHi) vHi = p.value; }
-  if (!Number.isFinite(vLo) || !Number.isFinite(vHi)) { vLo = -1; vHi = 1; }
-  vLo = Math.min(vLo, 0); vHi = Math.max(vHi, 0);
-  if (vHi === vLo) { vHi = 1; vLo = -1; }
-  const padV = (vHi - vLo) * 0.08;
-  const yLo = vLo - padV, yHi = vHi + padV;
-  const yOf = (v: number) => padY + (1 - (v - yLo) / ((yHi - yLo) || 1)) * innerH;
-  const zeroY = yOf(0); // single shared zero line
-
-  const lines = series.map(({ m, meta, last, pts }) => {
-    if (pts.length < 1 || !haveData) return { m, meta, last, d: "" };
-    // Split into gap-free runs, smooth each, join (M moves lift the pen at gaps).
-    const runs: Array<Array<{ x: number; y: number }>> = [];
-    let cur: Array<{ x: number; y: number }> = [];
-    let prevTs = NaN;
-    for (const p of pts) {
-      if (!Number.isNaN(prevTs) && p.ts - prevTs > GAP_MS) { runs.push(cur); cur = []; }
-      cur.push({ x: xOf(p.ts), y: yOf(p.value) });
-      prevTs = p.ts;
-    }
-    if (cur.length) runs.push(cur);
-    const d = runs.map((r) => smoothPath(r, 0.2)).join(" ");
-    return { m, meta, last, d };
-  });
-
-  return (
-    <div
-      className="absolute z-10 select-none rounded-lg border"
-      style={{
-        top: 8, left: 8, width,
-        background: "rgba(8,12,18,.82)",
-        borderColor: "rgba(255,255,255,.10)",
-        backdropFilter: "blur(6px)",
-        boxShadow: "0 4px 18px rgba(0,0,0,.35)",
-      }}
-    >
-      {/* Legend row: metric + current value, colored by metric. */}
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 px-2 pt-1.5 pb-1">
-        <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/45">Greek Flow</span>
-        <button
-          onClick={snapLive}
-          className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
-          style={{
-            color: followLive ? "#00e676" : "#9fb3c8",
-            border: `1px solid ${followLive ? "rgba(0,230,118,.4)" : "rgba(255,255,255,.18)"}`,
-            background: followLive ? "rgba(0,230,118,.08)" : "transparent",
-          }}
-          title={followLive ? "Following live (last 1h)" : "Scrolled back — click to snap to live"}
-        >
-          {followLive ? "● LIVE" : "⟲ LIVE"}
-        </button>
-        {lines.map((l) => (
-          <span key={l.m} className="flex items-center gap-1 font-mono text-[9.5px]" title={l.meta.label}>
-            <span style={{ display: "inline-block", width: 9, height: 2, background: l.meta.color }} />
-            <span style={{ color: l.meta.color }} className="font-bold">{l.m.toUpperCase()}</span>
-            <span className="tabular-nums" style={{ color: "rgba(255,255,255,.7)" }}>
-              {l.last == null ? "—" : fmtGreek(l.last, l.meta.unit)}
-            </span>
-          </span>
-        ))}
-      </div>
-      {/* The four normalized lines on the movable 1-hour window. */}
-      <svg
-        width={width} height={chartH}
-        style={{ display: "block", cursor: dragRef.current ? "grabbing" : "grab", touchAction: "none" }}
-        onMouseDown={onDown}
-        onMouseMove={onMove}
-        onMouseUp={endDrag}
-        onMouseLeave={endDrag}
-        onWheel={onWheel}
-        onDoubleClick={snapLive}
-      >
-        {/* 15-min gridlines + labels (fits the 1-hour window). */}
-        {haveData ? (() => {
-          const ticks: React.ReactNode[] = [];
-          const STEP = 15 * 60_000;
-          const first = Math.ceil(tMin / STEP) * STEP;
-          for (let t = first; t <= tMax; t += STEP) {
-            const x = xOf(t);
-            const lbl = new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: false });
-            ticks.push(
-              <g key={`h${t}`}>
-                <line x1={x} y1={padY} x2={x} y2={chartH - padY} stroke="rgba(255,255,255,.05)" strokeWidth={1} />
-                <text x={x} y={chartH - 2} textAnchor="middle" fontSize={8} fill="rgba(159,179,200,.45)" fontFamily="monospace">{lbl}</text>
-              </g>
-            );
-          }
-          return ticks;
-        })() : null}
-        {/* Single shared zero line (all metrics on one $ scale). */}
-        {haveData ? (
-          <g>
-            <line x1={padX} y1={zeroY} x2={width - padX} y2={zeroY}
-              stroke="rgba(255,255,255,.28)" strokeWidth={1} strokeDasharray="3 3" />
-            <text x={padX + 2} y={zeroY - 2} fontSize={8} fill="rgba(255,255,255,.4)" fontFamily="monospace">0</text>
-          </g>
-        ) : null}
-        {lines.map((l) => l.d ? (
-          <path key={l.m} d={l.d} fill="none" stroke={l.meta.color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-        ) : null)}
-        {!haveData ? (
-          <text x={width / 2} y={chartH / 2} textAnchor="middle" fontSize={11} fill="rgba(159,179,200,.6)" fontFamily="monospace">
-            waiting for data…
-          </text>
-        ) : null}
-      </svg>
-    </div>
-  );
-}
 
 export default function EsCandlesPage() {
   const esShouldConnect = useWsLifecycle();
@@ -528,15 +259,48 @@ export default function EsCandlesPage() {
   };
 
   const [showProfile, setShowProfile] = useState(false);
+  const [showWeekGex, setShowWeekGex] = useState(true); // week's cumulative GEX per strike as horizontal bars
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
 
-  // Greek-flow overlay: all four exposure curves (net DEX/GEX/CHEX/VEX) drawn at
-  // once, each normalized to its own range and slot-aligned to the candles.
-  // flowHistory holds today's per-metric greek series (raw $); seeded from
-  // /api/snapshots/greeks, kept live from /api/insights/gex (same as /greeks).
-  const [showFlow, setShowFlow] = useState(false);
-  const [flowHistory, setFlowHistory] = useState<Record<FlowMetric, FlowPoint[]>>({ dex: [], gex: [], chex: [], vex: [] });
+  // Aggregate GEX for the current week: sum |net_gex| per strike across all
+  // snapshots from the past 5 trading days, for the front expiry. Displayed as
+  // horizontal bars on the left edge of the price chart so you can see at a
+  // glance where gamma has been concentrated all week (complementary to the
+  // intraday heatmap which shows how GEX evolved over time today).
+  const [weekGexBars, setWeekGexBars] = useState<Array<{ strike: number; net: number }>>([]);
+  const weekGexExpiry = selectedExpiry || feedExpiry;
+  useEffect(() => {
+    if (!showWeekGex || !weekGexExpiry) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=7200&expiry=${encodeURIComponent(weekGexExpiry)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }> };
+        const raw: RawCol[] = Array.isArray(json.columns) ? json.columns : [];
+        if (cancelled || !raw.length) return;
+        // Accumulate absolute net GEX per strike across all columns this week.
+        const acc = new Map<number, number>();
+        for (const col of raw) {
+          for (const c of col.cells) {
+            if (!(c.strike > 0) || !Number.isFinite(c.net)) continue;
+            acc.set(c.strike, (acc.get(c.strike) ?? 0) + c.net);
+          }
+        }
+        const bars = [...acc.entries()]
+          .map(([strike, net]) => ({ strike, net }))
+          .sort((a, b) => a.strike - b.strike);
+        if (!cancelled) setWeekGexBars(bars);
+      } catch { /* keep last */ }
+    })();
+    return () => { cancelled = true; };
+  }, [showWeekGex, weekGexExpiry]);
+
 
   // ── Embedded-card control channel ──────────────────────────────────────────
   // When this page is iframed as a HOME2 card (?embed=1), the parent can toggle
@@ -544,16 +308,16 @@ export default function EsCandlesPage() {
   // card's dropdown stays in sync. Same-origin only (parent is the same app).
   const OVERLAY_SETTERS: Record<string, (v: boolean) => void> = useMemo(() => ({
     heatmap: setShowHeatmap,
+    weekgex: setShowWeekGex,
     profile: setShowProfile,
     mvc: setShowMvcLine,
     levels: setShowLevels,
     pdhon: setShowSessions,
-    flow: setShowFlow,
   }), []);
   const overlayState = useMemo(() => ({
-    heatmap: showHeatmap, profile: showProfile, mvc: showMvcLine,
-    levels: showLevels, pdhon: showSessions, flow: showFlow,
-  }), [showHeatmap, showProfile, showMvcLine, showLevels, showSessions, showFlow]);
+    heatmap: showHeatmap, weekgex: showWeekGex, profile: showProfile, mvc: showMvcLine,
+    levels: showLevels, pdhon: showSessions,
+  }), [showHeatmap, showWeekGex, showProfile, showMvcLine, showLevels, showSessions]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
@@ -822,52 +586,6 @@ export default function EsCandlesPage() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Greek-flow data — pure reader of the SAME greeks_ts table the /greeks page
-  // plots, so the two can't disagree. Polls /api/snapshots/greeks for today's
-  // rows every 30s and replaces the series wholesale (the DB IS the source of
-  // truth; /greeks + the cron keep it written). Values are stored already-scaled
-  // (gex/dex in $B, chex/vex in $M) exactly as /greeks holds them — the chart
-  // normalizes per metric, and fmt picks the unit, so scale is consistent.
-  useEffect(() => {
-    let cancelled = false;
-
-    // Coerce a Postgres BIGINT timestamp (arrives as string) to ms. Reject
-    // anything that isn't a sane ms epoch — a 0, a seconds-epoch, or a stray
-    // far-future value is what was blowing out the x-axis (the giant left slab).
-    const toMs = (raw: unknown): number | null => {
-      let t = Number(raw);
-      if (!Number.isFinite(t) || t <= 0) return null;
-      if (t < 1e12) t = t * 1000;          // seconds → ms
-      if (t < 1e12 || t > 4e12) return null; // still implausible → drop
-      return t;
-    };
-
-    const load = async () => {
-      try {
-        const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-        const res = await fetch(`/api/snapshots/greeks?date=${today}&limit=5000`, { cache: "no-store" });
-        if (!res.ok) return;
-        const json = await res.json();
-        const raw = Array.isArray(json.rows) ? (json.rows as Array<Record<string, unknown>>) : [];
-        const next: Record<FlowMetric, FlowPoint[]> = { dex: [], gex: [], chex: [], vex: [] };
-        for (const r of raw) {
-          const ts = toMs(r.timestamp);
-          if (ts == null) continue; // drop bad-timestamp rows (no left slab)
-          next.gex.push({  ts, value: Number(r.gex  ?? 0) });
-          next.dex.push({  ts, value: Number(r.dex  ?? 0) });
-          next.chex.push({ ts, value: Number(r.chex ?? 0) });
-          next.vex.push({  ts, value: Number(r.vex  ?? 0) });
-        }
-        for (const k of ["dex", "gex", "chex", "vex"] as FlowMetric[]) {
-          next[k].sort((a, b) => a.ts - b.ts);
-        }
-        if (!cancelled && raw.length) setFlowHistory(next);
-      } catch { /* keep last */ }
-    };
-    void load();
-    const id = setInterval(load, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
 
   // Basis used to derive SPX from ES on the right axis.
   // The live feed's `spot` (broker SPX) is unreliable / mis-scaled — it can quote
@@ -1347,6 +1065,42 @@ export default function EsCandlesPage() {
         lvl(profile.lvn, "rgba(245,158,11,.9)", "LVN");
       }
 
+      // ── 2b) Weekly GEX bars — per-strike accumulated net GEX for this week ──
+      // Drawn on the LEFT edge of the plot, mirroring the volume profile on the
+      // right. Positive GEX (call-heavy) = cyan bars, negative (put-heavy) = red.
+      // Bar width scales to the largest magnitude so the dominant walls stand out.
+      if (showWeekGex && weekGexBars.length) {
+        let scaleWL = 0;
+        try { scaleWL = chart.priceScale("right").width(); } catch {}
+        const plotLeft = 0;
+        const maxBarW = Math.min(120, (w - scaleWL) * 0.12);
+        const maxMag = Math.max(...weekGexBars.map((b) => Math.abs(b.net)), 1);
+        for (const b of weekGexBars) {
+          if (!Number.isFinite(b.net) || b.net === 0) continue;
+          const yTop = series.priceToCoordinate(b.strike + 5 + basis);
+          const yBot = series.priceToCoordinate(b.strike + basis);
+          if (yTop == null || yBot == null) continue;
+          const top = Math.min(yTop, yBot);
+          const cellH = Math.max(1, Math.abs(yBot - yTop) - 0.5);
+          const barW = (Math.abs(b.net) / maxMag) * maxBarW;
+          const pos = b.net >= 0;
+          ctx.fillStyle = pos ? "rgba(41,182,246,0.28)" : "rgba(255,71,87,0.28)";
+          ctx.fillRect(plotLeft, top, barW, cellH);
+        }
+        // Label the top-3 dominant strikes
+        const top3 = [...weekGexBars]
+          .sort((a, b2) => Math.abs(b2.net) - Math.abs(a.net))
+          .slice(0, 3);
+        ctx.font = "bold 9px Inter, system-ui, sans-serif";
+        for (const b of top3) {
+          const y = series.priceToCoordinate(b.strike + basis);
+          if (y == null) continue;
+          const pos = b.net >= 0;
+          ctx.fillStyle = pos ? "rgba(41,182,246,0.85)" : "rgba(255,71,87,0.85)";
+          ctx.fillText(`${b.strike}`, 4, y - 2);
+        }
+      }
+
       // ── 3) MVC history as horizontal step segments (no vertical connectors) ──
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
@@ -1388,7 +1142,6 @@ export default function EsCandlesPage() {
       }
 
       // (Greek-flow is now rendered as an HTML mini-chart, top-left of the chart
-      // — see the GreekFlowChart component above — not painted on this canvas.)
 
     };
 
@@ -1419,7 +1172,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showWeekGex, weekGexBars, showMvcLine, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1509,11 +1262,11 @@ export default function EsCandlesPage() {
 
           {/* overlay toggles — each keeps its accent color */}
           <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
+          <ToggleTile label="W-GEX"   on={showWeekGex}  onClick={() => setShowWeekGex((v) => !v)}   accent="#29b6f6" title="Week's cumulative GEX per strike" />
           <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
           <ToggleTile label="CB"     on={showMvcLine}   onClick={() => setShowMvcLine((v) => !v)}  accent="#ffffff" />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
-          <ToggleTile label="Flow"    on={showFlow}      onClick={() => setShowFlow((v) => !v)}     accent="#cbd5e1" />
 
           <DockGap />
 
@@ -1534,6 +1287,7 @@ export default function EsCandlesPage() {
       </div>
 
 
+      <div ref={captureRef} className="flex flex-col" style={{ flex: 1, minHeight: 0 }}>
       <div className="flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
           const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
@@ -1561,60 +1315,18 @@ export default function EsCandlesPage() {
               <StatBox c="#f5c518" label="Flip" v={levels.gexFlip} />
               <StatBox c="#4aa3ff" label="CB" v={levels.mvc} />
 
-              {/* Net greek totals — latest value of each live flow series. */}
-              {(() => {
-                // Series units: gex/dex are already in $B, chex/vex in $M.
-                const UNIT: Record<FlowMetric, "B" | "M"> = { gex: "B", dex: "B", chex: "M", vex: "M" };
-                const fmtNet = (val: number | null, unit: "B" | "M"): string => {
-                  if (val == null || !isFinite(val)) return "—";
-                  const s = val < 0 ? "-" : "+";
-                  return `${s}$${Math.abs(val).toFixed(2)}${unit}`;
-                };
-                const lastOf = (m: FlowMetric): number | null => {
-                  const arr = flowHistory[m];
-                  return arr.length ? arr[arr.length - 1].value : null;
-                };
-                const GreekStat = ({ c, label, m }: { c: string; label: string; m: FlowMetric }) => {
-                  const v = lastOf(m);
-                  const col = v == null ? HOME_THEME.muted : v >= 0 ? "#30d158" : "#ff5b5b";
-                  return (
-                    <div style={{
-                      flex: "1 1 110px", minWidth: 100,
-                      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                      padding: "7px 12px", borderRadius: 12,
-                      border: `1px solid ${HOME_THEME.border}`,
-                      borderTop: `2px solid ${c}d9`,
-                      background: `radial-gradient(circle at 50% 0%, ${c}1f 0%, transparent 70%), ${HOME_THEME.panelBg}`,
-                      backdropFilter: "blur(16px)",
-                    }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: c, whiteSpace: "nowrap" }}>{label}</span>
-                      <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "monospace", color: col, whiteSpace: "nowrap" }}>{fmtNet(v, UNIT[m])}</span>
-                    </div>
-                  );
-                };
-                return (
-                  <>
-                    <GreekStat c="#22d3ee" label="Net GEX" m="gex" />
-                    <GreekStat c="#f59e0b" label="Net DEX" m="dex" />
-                    <GreekStat c="#2dd4bf" label="Net CHEX" m="chex" />
-                    <GreekStat c="#60a5fa" label="Net VEX" m="vex" />
-                  </>
-                );
-              })()}
             </>
           );
         })()}
       </div>
 
-      <div ref={captureRef} className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+      <div className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
           {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
               candlesticks always render on the top visible layer. */}
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
           <div ref={chartRef} className="absolute inset-0" style={{ zIndex: 2 }} />
-          {/* Greek-flow mini-chart (all 4 lines), top-left, above the chart. */}
-          {showFlow ? <GreekFlowChart flowHistory={flowHistory} /> : null}
           {/* SPX equivalent of the live ES price, pinned at the right gutter. */}
           {liveSpx ? (
             <div
@@ -1653,6 +1365,7 @@ export default function EsCandlesPage() {
         </div>
 
       </div>
+      </div>{/* end captureRef wrapper */}
     </div>
   );
 }

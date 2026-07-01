@@ -7,6 +7,7 @@ import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance, type AmtResult } from "@/lib/failLevels";
+import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Analytics — strategy builder. UI-only scaffold with MOCK data.
@@ -468,83 +469,13 @@ function PremarketCard() {
 }
 
 // ── 4. ECONOMIC CALENDAR ──────────────────────────────────────────────────────
-// Live calendar event shape (from /api/calendar — same source the full
-// Economic Calendar page uses).
-interface CalEvent {
-  date: string;
-  time?: string;
-  time_formatted?: string;
-  title: string;
-  country?: string;
-  impact?: string;
-}
-
-const IMPACT_COLOR: Record<string, string> = {
-  High: T.red,
-  Medium: T.orange,
-  Low: T.muted,
-  Holiday: T.muted,
-  President: T.purple,
-};
-const impColor = (i?: string) => IMPACT_COLOR[i ?? ""] ?? T.muted;
-
-function etToday() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-}
-
+// Delegates to the full EconCalendarPanel (same component the home page uses).
+// It includes: colored left-border event rows, A:/F:/P: data, day separators,
+// stale-event fading, filter dropdown, and the earnings logo strip at the bottom.
 function EconCalendarCard() {
-  const [events, setEvents] = useState<CalEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/calendar", { cache: "no-store" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
-      const list: CalEvent[] = Array.isArray(json?.events) ? json.events : Array.isArray(json) ? json : [];
-      setEvents(list);
-      setLastUpdated(Date.now());
-    } catch (e) {
-      setError(String(e));
-      setEvents([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const today = etToday();
-  // USD only — this also includes the President (Trump) schedule, which the feed
-  // tags country "USD" with impact "President". Foreign-currency events excluded.
-  const todays = events
-    .filter((e) => e.date === today && (e.country ?? "").toUpperCase() === "USD")
-    .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
-
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Economic Calendar</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{today}</span>
-      </Row>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
-        {loading || error || todays.length === 0 ? (
-          <CardState loading={loading} error={error} empty="No economic events today." />
-        ) : (
-          todays.map((e, i) => (
-            <Row key={`${e.title}-${i}`} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
-              <span style={{ fontFamily: "monospace", fontSize: 16, color: T.muted }}>{e.time_formatted || e.time || "—"}</span>
-              <span style={{ fontSize: 16, flex: 1, textAlign: "left", marginLeft: 10 }}>{e.title}</span>
-              <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", color: impColor(e.impact) }}>{e.impact || ""}</span>
-            </Row>
-          ))
-        )}
-      </div>
-      <UpdatedStamp at={lastUpdated} />
+    <Card accent="cyan" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 320 }}>
+      <EconCalendarPanel />
     </Card>
   );
 }
