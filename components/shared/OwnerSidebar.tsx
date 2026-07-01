@@ -33,7 +33,6 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙" },
       { label: "Strike Query", href: "/owner/dev/strike-query", glyph: "≡" },
-      { label: "Market Scanner", href: "/owner/market-scanner", glyph: "⌕" },
       { label: "Database", href: "/database", glyph: "⛁" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄" },
       { label: "Logs", href: "/logs", glyph: "❏" },
