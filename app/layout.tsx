@@ -20,6 +20,9 @@ export const metadata: Metadata = {
     title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
     description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
   },
+  verification: {
+    google: "QcoYk0isEwvk7zC8sMlcBCFqZpI24vvukYjBRmTGmd0",
+  },
 };
 
 export const viewport: Viewport = {

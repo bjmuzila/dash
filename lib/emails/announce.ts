@@ -179,12 +179,28 @@ export function betaLiveEmail(opts: AnnounceOpts = {}): string {
                 <span style="color:#8ECAE6;">›</span> ES candle heatmaps &amp; net-premium flow<br>
                 <span style="color:#8ECAE6;">›</span> A morning Traders Dashboard with AI overview
               </p>`);
+  const coupon = `
+          <tr>
+            <td style="padding:8px 32px 4px 32px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(33,158,188,0.30);border-radius:12px;background:linear-gradient(180deg,rgba(33,158,188,0.10),rgba(33,158,188,0.02));">
+                <tr>
+                  <td align="center" style="padding:18px 20px;">
+                    <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;color:#8ECAE6;">Beta launch offer — 50% off</div>
+                    <div style="font:800 24px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;letter-spacing:0.04em;">
+                      <span style="display:inline-block;border:1px dashed rgba(33,158,188,0.6);border-radius:8px;padding:8px 18px;background:rgba(33,158,188,0.08);color:#219EBC;">CB-BETA</span>
+                    </div>
+                    <div style="font:400 13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#aeb9c4;margin-top:10px;">Apply <strong style="color:#8ECAE6;">CB-BETA</strong> at checkout for <strong style="color:#ffffff;">50% off</strong> your subscription.</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>`;
   return shell({
     title: BETA_LIVE_SUBJECT,
-    preheader: "Beta signups are live — create your account and get in.",
+    preheader: "Beta signups are live — join and take 50% off with code CB-BETA.",
     heading: "Beta signups are LIVE 🚀",
     subheading: "Your seat is ready — claim it.",
-    bodyRows: body,
+    bodyRows: body + coupon,
     ctaRow: ctaRow("Join the beta →", cta),
     email: opts.email,
   });
@@ -200,6 +216,8 @@ export function betaLiveText(opts: AnnounceOpts = {}): string {
     "  • Estimated Moves and weekly customer levels",
     "  • ES candle heatmaps and net-premium flow",
     "  • A morning Traders Dashboard with AI overview",
+    "",
+    "BETA LAUNCH OFFER: Use code CB-BETA at checkout for 50% off your subscription.",
     "",
     `Join the beta: ${cta}`,
     "",
