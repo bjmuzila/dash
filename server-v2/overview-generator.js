@@ -66,6 +66,39 @@ function extractJson(text) {
   try { return JSON.parse(cleaned.slice(start, end + 1)); } catch { return null; }
 }
 
+async function fetchTopMovers() {
+  try {
+    const url =
+      'https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved' +
+      '?scrIds=day_gainers&count=25&fields=symbol,shortName,regularMarketPrice,' +
+      'regularMarketChange,regularMarketChangePercent,preMarketPrice,preMarketChangePercent,regularMarketVolume';
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Origin': 'https://finance.yahoo.com',
+        'Referer': 'https://finance.yahoo.com/',
+      },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const quotes = data?.finance?.result?.[0]?.quotes ?? data?.finance?.result?.[0]?.results ?? [];
+    return quotes.slice(0, 10).map((q) => ({
+      symbol: String(q.symbol ?? ''),
+      name: String(q.shortName ?? q.longName ?? q.symbol ?? ''),
+      price: typeof q.regularMarketPrice === 'number' ? q.regularMarketPrice : null,
+      pct: typeof q.regularMarketChangePercent === 'number' ? q.regularMarketChangePercent : null,
+      preMarketPrice: typeof q.preMarketPrice === 'number' ? q.preMarketPrice : null,
+      preMarketPct: typeof q.preMarketChangePercent === 'number' ? q.preMarketChangePercent : null,
+    }));
+  } catch (e) {
+    console.warn('[overview] movers fetch failed:', e.message);
+    return [];
+  }
+}
+
 async function generate(base) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) { console.warn('[overview] ANTHROPIC_API_KEY not set — skipping'); return; }
@@ -110,11 +143,12 @@ async function generate(base) {
   }
 
   const drivers = Array.isArray(parsed.drivers) ? parsed.drivers.slice(0, 4) : [];
+  const movers = await fetchTopMovers();
   try {
     const post = await fetch(`${base}/api/traders-dashboard/overview`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ date: today, summary: String(parsed.summary), drivers }),
+      body: JSON.stringify({ date: today, summary: String(parsed.summary), drivers, movers }),
     });
     if (!post.ok) { console.warn('[overview] save failed:', post.status); return; }
     console.log(`[overview] ${today} written — ${drivers.length} drivers`);

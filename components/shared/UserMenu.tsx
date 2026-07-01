@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { HOME_THEME } from "./homeTheme";
+
+const STRIPE_PORTAL = "https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg";
 
 /**
  * Replacement for Clerk's <UserButton>: a round avatar (Google photo if present,
@@ -12,7 +15,18 @@ import { HOME_THEME } from "./homeTheme";
 export default function UserMenu() {
   const { user, displayName, signOut } = useAuth();
   const [open, setOpen] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  const handleResetPassword = async () => {
+    if (!user?.email) return;
+    const supabase = getSupabaseBrowser();
+    await supabase.auth.resetPasswordForEmail(user.email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    });
+    setResetSent(true);
+    setTimeout(() => setResetSent(false), 4000);
+  };
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -77,6 +91,45 @@ export default function UserMenu() {
               </div>
             )}
           </div>
+          <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
+
+          <button
+            onClick={() => void handleResetPassword()}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              padding: "8px 10px",
+              borderRadius: 6,
+              border: "none",
+              background: "transparent",
+              color: resetSent ? HOME_THEME.cyan : HOME_THEME.text,
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            {resetSent ? "✓ Reset email sent" : "Change password"}
+          </button>
+
+          <a
+            href={STRIPE_PORTAL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "block",
+              padding: "8px 10px",
+              borderRadius: 6,
+              color: HOME_THEME.text,
+              fontSize: 13,
+              fontWeight: 500,
+              textDecoration: "none",
+            }}
+          >
+            Manage subscription ↗
+          </a>
+
+          <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
+
           <button
             onClick={() => void signOut()}
             style={{

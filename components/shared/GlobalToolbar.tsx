@@ -140,12 +140,14 @@ function useQuickPages() {
 function LogoMenu() {
   return (
     <div style={{ position: "relative", flexShrink: 0, display: "flex" }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/cb-edge-logo.png"
-        alt="CB Edge"
-        style={{ height: 48, width: "auto", display: "block" }}
-      />
+      <Link href="/feedback" title="Send feedback" aria-label="Send feedback">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/cb-edge-logo.png"
+          alt="CB Edge"
+          style={{ height: 48, width: "auto", display: "block", cursor: "pointer" }}
+        />
+      </Link>
     </div>
   );
 }

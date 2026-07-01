@@ -100,7 +100,7 @@ const EXPOSURE_ROWS: { key: string; label: string }[] = [
 // 5th panel: net-greek exposures for the single contract.
 function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> | undefined; accent?: string }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>Greeks</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && (
@@ -238,7 +238,7 @@ function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> 
   const aPct = typeof pct === "number" ? Math.abs(pct) : null;
   const diffColor = aPct == null ? NA : aPct <= 2 ? POS : aPct <= 10 ? WARN : NEG;
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       {data && !ok && (
@@ -274,7 +274,7 @@ function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> 
 function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record<string, unknown> | undefined; accent?: string }) {
   const entries = data ? Object.entries(data) : [];
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `2px solid ${accent}`, borderRadius: 12, padding: "14px 18px" }}>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>{name}</div>
       {entries.length === 0 && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

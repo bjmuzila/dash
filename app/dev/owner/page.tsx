@@ -405,14 +405,12 @@ function StatCard({
       display: "flex",
       flexDirection: "column",
       gap: 6,
-      borderTop: `2px solid ${accent}`,
-      borderTopLeftRadius: 12,
-      borderTopRightRadius: 12,
+      borderRadius: 12,
     }}>
       <div style={{ fontSize: 11, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: 18, fontWeight: 500, color: accent, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}

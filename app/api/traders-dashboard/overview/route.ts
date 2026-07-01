@@ -38,8 +38,9 @@ export async function POST(req: NextRequest) {
     const date = String(body?.date || etDateStr());
     const summary = String(body?.summary || "").trim();
     const drivers = Array.isArray(body?.drivers) ? body.drivers : [];
+    const movers = Array.isArray(body?.movers) ? body.movers : [];
     if (!summary) return NextResponse.json({ error: "summary required" }, { status: 400 });
-    await upsertTdOverview(date, summary, drivers);
+    await upsertTdOverview(date, summary, drivers, movers);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: "Save failed", detail: String(err) }, { status: 500 });

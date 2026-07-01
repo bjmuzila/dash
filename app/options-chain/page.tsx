@@ -358,12 +358,13 @@ function fmtMoney(value: number) {
 
 // Compact column header for an expiration: "Mon 06-23".
 function fmtExpHeader(iso: string): string {
-  const dt = new Date(iso + "T12:00:00");
+  // Parse as UTC to avoid local-TZ date shift (e.g. "2026-07-01" → Jun 30 in UTC-N).
+  const dt = new Date(iso + "T00:00:00Z");
   if (Number.isNaN(dt.getTime())) return iso;
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const dd = String(dt.getDate()).padStart(2, "0");
-  return `${days[dt.getDay()]} ${mm}-${dd}`;
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${days[dt.getUTCDay()]} ${mm}-${dd}`;
 }
 
 // True when `iso` (YYYY-MM-DD) falls in the CURRENT trading week (Mon–Fri of the
@@ -977,8 +978,8 @@ export default function OptionsChainPage() {
           <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
         </div>
       )}
-      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50 }}>
-      <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0 }}>
+      <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
         </span>
@@ -1026,7 +1027,7 @@ export default function OptionsChainPage() {
         </button>
 
         {recentTickers.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "nowrap" }}>
             <span style={{ fontSize: 8, fontWeight: 800, color: HT.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>Recent</span>
             {recentTickers.map((t) => (
               <button key={t} onClick={() => selectTicker(t)} title={`Load ${t}`} style={segBtnStyle(t === activeTicker)}>
@@ -1204,7 +1205,8 @@ export default function OptionsChainPage() {
                     color: isATM ? "#0a0e14" : "#e4e4e7",
                     background: isATM ? "#ffb300" : HT.panelBgStrong,
                     borderRight: `1px solid ${HT.border}`,
-                    borderTop: rowEmBorder,
+                    borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
+                    borderBottom: isATM ? "2px solid #ffffff" : undefined,
                     display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
                     cursor: emTag ? "help" : undefined,
                   }}>
@@ -1219,11 +1221,9 @@ export default function OptionsChainPage() {
                     {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
                   </div>
                   {/* One value cell per expiration */}
-                  {renderIdx.map((i) => {
-                    const col = columns[i];
-                    const scale = colScales[i] ?? { max: 1, top3: [] as number[] };
-                    // Change-mode: override ANY column whose expiry has recorded
-                    // history with Δ-vs-N-min from strike_growth (keyed expiry|strike).
+                  {renderIdx.map((colIdx, posInRow) => {
+                    const col = columns[colIdx];
+                    const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] };
                     const isChangeCol =
                       changeMode !== "live" && changeMeta.hasData && col != null &&
                       changeMeta.expiries.has(col.expiration);
@@ -1234,18 +1234,30 @@ export default function OptionsChainPage() {
                     const cellScale = isChangeCol
                       ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
                       : scale;
-                    const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[i] === strike;
+                    const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
+                    const isFirst = posInRow === 0;
+                    const isLast = posInRow === renderIdx.length - 1;
+                    // ATM box: use box-shadow so it overlays without shifting layout.
+                    // Top+bottom on every cell; left edge on first col; right edge on last col.
+                    const atmShadow = isATM
+                      ? [
+                          "inset 0 2px 0 #ffffff",
+                          "inset 0 -2px 0 #ffffff",
+                          ...(isFirst ? ["inset 2px 0 0 #ffffff"] : []),
+                          ...(isLast ? ["inset -2px 0 0 #ffffff"] : []),
+                        ].join(", ")
+                      : undefined;
                     return (
                       <div
-                        key={`${strike}-${i}`}
+                        key={`${strike}-${colIdx}`}
                         className={isMvc ? "mvc-peak-cell" : undefined}
                         style={{
                           padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
                           color: value == null ? "#3a4a5e" : "#ffffff",
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
-                          ...(isMvc ? { border: "2px solid #ffb300" } : {}),
-                          ...(isATM ? { borderTop: "2px solid #ffffff", borderBottom: "2px solid #ffffff" } : {}),
+                          boxShadow: atmShadow,
+                          ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                         }}
                       >
                         {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}

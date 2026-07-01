@@ -480,6 +480,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Set once when the founder thank-you auto-welcome has been emailed to this
     -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
+    ALTER TABLE td_overview ADD COLUMN IF NOT EXISTS movers JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
@@ -649,15 +650,17 @@ export async function getLatestTdOverview(): Promise<TdOverview | undefined> {
 export async function upsertTdOverview(
   date: string,
   summary: string,
-  drivers: unknown[]
+  drivers: unknown[],
+  movers: unknown[] = []
 ): Promise<void> {
   await getDb();
   await queryAll(
-    `INSERT INTO td_overview (date, summary, drivers, generated_at)
-     VALUES (?, ?, ?::jsonb, ?)
+    `INSERT INTO td_overview (date, summary, drivers, movers, generated_at)
+     VALUES (?, ?, ?::jsonb, ?::jsonb, ?)
      ON CONFLICT (date) DO UPDATE SET
-       summary = EXCLUDED.summary, drivers = EXCLUDED.drivers, generated_at = EXCLUDED.generated_at`,
-    [date, summary, JSON.stringify(drivers), Date.now()]
+       summary = EXCLUDED.summary, drivers = EXCLUDED.drivers,
+       movers = EXCLUDED.movers, generated_at = EXCLUDED.generated_at`,
+    [date, summary, JSON.stringify(drivers), JSON.stringify(movers), Date.now()]
   );
 }
 

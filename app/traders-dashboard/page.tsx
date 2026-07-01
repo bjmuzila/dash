@@ -16,8 +16,9 @@ interface ScheduleItem { id: string; time: string; label: string; }
 interface TaskItem { id: string; label: string; done: boolean; }
 interface CalEvent { date: string; time_formatted: string; title: string; country: string; impact: string; }
 interface Driver { when: string; title: string; body: string; }
-interface OverviewRow { date: string; summary: string; drivers: Driver[]; generated_at: number; }
+interface OverviewRow { date: string; summary: string; drivers: Driver[]; movers?: Mover[]; generated_at: number; }
 interface QuoteRow { price: number | null; change: number | null; pct: number | null; }
+interface Mover { symbol: string; name: string; price: number | null; pct: number | null; preMarketPrice: number | null; preMarketPct: number | null; }
 
 const FUTURES = [
   { sym: "ES", yahoo: "ES=F" },
@@ -282,9 +283,31 @@ export default function TradersDashboardPage() {
                   </div>
 
                   <div style={{ ...sectionLabel, marginBottom: 10 }}>⚡ Pre-Market Movers</div>
-                  <div style={{ padding: "14px 12px", borderRadius: 8, border: `1px dashed ${HT.border}`, background: "rgba(0,0,0,0.2)", color: HT.muted, fontSize: 12, textAlign: "center" }}>
-                    Movers feed goes live Monday.
-                  </div>
+                  {overview?.movers?.length ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {overview.movers.map((m) => {
+                        const displayPct = m.preMarketPct ?? m.pct;
+                        const pos = (displayPct ?? 0) >= 0;
+                        const color = displayPct == null ? HT.muted : pos ? HT.green : HT.red;
+                        return (
+                          <div key={m.symbol} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.2)", border: `1px solid ${HT.border}` }}>
+                            <div>
+                              <span style={{ fontWeight: 700, fontSize: 12, color: HT.cyan }}>{m.symbol}</span>
+                              <span style={{ fontSize: 10, color: HT.muted, marginLeft: 6 }}>{m.name.length > 18 ? m.name.slice(0, 18) + "…" : m.name}</span>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color }}>{displayPct == null ? "—" : `${pos ? "+" : ""}${displayPct.toFixed(2)}%`}</span>
+                              {m.preMarketPct != null && <span style={{ fontSize: 9, color: HT.muted, marginLeft: 4 }}>PM</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "14px 12px", borderRadius: 8, border: `1px dashed ${HT.border}`, background: "rgba(0,0,0,0.2)", color: HT.muted, fontSize: 12, textAlign: "center" }}>
+                      Available after 7 AM ET overview generates.
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ minWidth: 0 }}>
