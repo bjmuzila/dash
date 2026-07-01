@@ -1,8 +1,6 @@
 import { notFound } from "next/navigation";
 export default function MarketScannerPage() { notFound(); }
-/* page removed */
-function _removed() {
-"use client";
+/*
 
 import { useState, useEffect, useCallback } from "react";
 import { HOME_THEME, homeButtonStyle, homeRefreshButtonStyle } from "@/components/shared/homeTheme";
@@ -505,3 +503,4 @@ export default function MarketScannerPage() {
     </PageShell>
   );
 }
+*/
