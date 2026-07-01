@@ -14,6 +14,7 @@ function rgba(hex: string, a: number): string {
 
 interface ScheduleItem { id: string; time: string; label: string; }
 interface TaskItem { id: string; label: string; done: boolean; }
+interface LinkItem { id: string; label: string; href: string; }
 interface CalEvent { date: string; time_formatted: string; title: string; country: string; impact: string; }
 interface Driver { when: string; title: string; body: string; }
 interface OverviewRow { date: string; summary: string; drivers: Driver[]; movers?: Mover[]; generated_at: number; }
@@ -31,6 +32,12 @@ const DEFAULT_SCHEDULE: ScheduleItem[] = [
   { id: "s2", time: "08:30 AM", label: "Daily Planning" },
   { id: "s3", time: "09:00 AM", label: "Pre-Market Analysis" },
   { id: "s4", time: "09:30 AM", label: "Market Open" },
+];
+
+const DEFAULT_LINKS: LinkItem[] = [
+  { id: "l1", label: "Home", href: "/home" },
+  { id: "l2", label: "Multi Greek", href: "/mult-greek" },
+  { id: "l3", label: "Analytics", href: "/analytics" },
 ];
 
 const DEFAULT_TASKS: TaskItem[] = [
@@ -70,8 +77,10 @@ export default function TradersDashboardPage() {
   const [quotes, setQuotes] = useState<Record<string, QuoteRow>>({});
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [overview, setOverview] = useState<OverviewRow | null>(null);
+  const [links, setLinks] = useState<LinkItem[]>(DEFAULT_LINKS);
   const [editSched, setEditSched] = useState(false);
   const [editTasks, setEditTasks] = useState(false);
+  const [editLinks, setEditLinks] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   // ── Clock ──
@@ -90,6 +99,7 @@ export default function TradersDashboardPage() {
           const j = await r.json();
           if (Array.isArray(j.schedule) && j.schedule.length) setSchedule(j.schedule);
           if (Array.isArray(j.tasks) && j.tasks.length) setTasks(j.tasks);
+          if (Array.isArray(j.links) && j.links.length) setLinks(j.links);
           if (j.zip) { setZip(j.zip); setZipInput(j.zip); }
         }
       } catch { /* keep defaults */ }
@@ -201,6 +211,7 @@ export default function TradersDashboardPage() {
   // ── Mutators ──
   const updSchedule = (next: ScheduleItem[]) => { setSchedule(next); if (loaded) savePrefs({ schedule: next }); };
   const updTasks = (next: TaskItem[]) => { setTasks(next); if (loaded) savePrefs({ tasks: next }); };
+  const updLinks = (next: LinkItem[]) => { setLinks(next); if (loaded) savePrefs({ links: next }); };
 
   return (
     <PageShell maxWidth={1200}>
@@ -336,15 +347,20 @@ export default function TradersDashboardPage() {
 
             {/* Quick Links */}
             <Card accent="cyan" padding={20}>
-              <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 16 }}>🔗 Quick Links</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>🔗 Quick Links</div>
+                <button onClick={() => setEditLinks((v) => !v)} style={miniBtn}>{editLinks ? "Done" : "Edit"}</button>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {[
-                  { label: "Home", href: "/home" },
-                  { label: "Multi Greek", href: "/mult-greek" },
-                  { label: "Analytics", href: "/analytics" },
-                ].map((l) => (
+                {links.map((l) => editLinks ? (
+                  <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input value={l.label} onChange={(e) => updLinks(links.map((x) => x.id === l.id ? { ...x, label: e.target.value } : x))} placeholder="Label" style={{ ...inputStyle, width: 90 }} />
+                    <input value={l.href} onChange={(e) => updLinks(links.map((x) => x.id === l.id ? { ...x, href: e.target.value } : x))} placeholder="/path or https://…" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+                    <button onClick={() => updLinks(links.filter((x) => x.id !== l.id))} style={{ ...miniBtn, color: HT.red }}>✕</button>
+                  </div>
+                ) : (
                   <a
-                    key={l.href}
+                    key={l.id}
                     href={l.href}
                     style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.25)", color: HT.text, textDecoration: "none", fontWeight: 600, fontSize: 14, transition: "background .15s, border-color .15s" }}
                     onMouseEnter={(e) => { e.currentTarget.style.background = rgba(HT.cyan, 0.12); e.currentTarget.style.borderColor = HT.cyan; }}
@@ -355,6 +371,9 @@ export default function TradersDashboardPage() {
                   </a>
                 ))}
               </div>
+              {editLinks && (
+                <button onClick={() => updLinks([...links, { id: uid(), label: "New link", href: "/" }])} style={{ ...miniBtn, marginTop: 12 }}>+ Add</button>
+              )}
             </Card>
 
             {/* Schedule */}

@@ -426,16 +426,16 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Which page tab each section lives on.
-const SECTION_TAB: Record<string, "backend"> = {
-  system:    "backend",
-  hosting:   "backend",
-  database:  "backend",
-  controls:  "backend",
-  eodgex:    "backend",
-  auth:      "backend",
-  activity:  "backend",
-};
+// Maps each accordion section to its sidebar nav key.
+const SECTION_TAB = {
+  system:   "infra",
+  hosting:  "infra",
+  database: "database",
+  controls: "controls",
+  eodgex:   "eodgex",
+  auth:     "auth",
+  activity: "activity",
+} as const;
 
 interface FeedbackItem {
   id: number;
@@ -678,7 +678,7 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
       <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <span style={{ fontSize: 30, fontWeight: 500, color: HOME_THEME.text, lineHeight: 1 }}>{value}</span>
-        {delta ? <span style={{ fontSize: 11, fontWeight: 500, color: HOME_THEME.textSecondary }}>{delta}</span> : null}
+        {delta ? <span style={{ fontSize: 11, fontWeight: 500, color: `${HOME_THEME.muted}99` }}>{delta}</span> : null}
       </div>
     </div>
   );
@@ -709,7 +709,7 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
         <div style={{ fontSize: 10, color: HOME_THEME.muted, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
       </div>
       {status && (
-        <span style={{ fontSize: 8.5, fontWeight: 500, color: HOME_THEME.textSecondary, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
+        <span style={{ fontSize: 8.5, fontWeight: 500, color: `${HOME_THEME.muted}99`, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
       )}
     </div>
   );
@@ -1017,7 +1017,7 @@ function OverviewSection({ metrics }: {
 
 // FE / BE tab + accordion (one section open at a time). The `tab` of each
 // section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "backend";
+type OwnerTab = "overview" | "infra" | "database" | "controls" | "eodgex" | "auth" | "activity";
 
 export default function OwnerDashboard() {
   const isMobile = useIsMobile();
@@ -1027,14 +1027,15 @@ export default function OwnerDashboard() {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
-      const param = new URLSearchParams(window.location.search).get("tab");
-      if (param === "overview" || param === "backend") {
+      const VALID_TABS: OwnerTab[] = ["overview","infra","database","controls","eodgex","auth","activity"];
+      const param = new URLSearchParams(window.location.search).get("tab") as OwnerTab | null;
+      if (param && VALID_TABS.includes(param)) {
         setOwnerTab(param);
         localStorage.setItem("owner-tab", param);
         return;
       }
-      const v = localStorage.getItem("owner-tab");
-      if (v === "overview" || v === "backend") setOwnerTab(v);
+      const v = localStorage.getItem("owner-tab") as OwnerTab | null;
+      if (v && VALID_TABS.includes(v)) setOwnerTab(v);
     } catch { /* ignore */ }
   }, []);
   const selectTab = useCallback((t: OwnerTab) => {
@@ -1854,95 +1855,197 @@ export default function OwnerDashboard() {
     };
   })();
 
+  // ── Sidebar nav items ──────────────────────────────────────────────────────
+  const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
+    { id: "overview",  label: "Overview" },
+    { id: "infra",     label: "Infra" },
+    { id: "database",  label: "Database" },
+    { id: "controls",  label: "Controls" },
+    { id: "eodgex",    label: "EOD GEX" },
+    { id: "auth",      label: "Auth / Users", badge: clerk?.stats?.userCount ?? undefined },
+    { id: "activity",  label: "Activity" },
+  ];
+  // Inject feedback badge on overview
+  const feedbackBadge = feedbackOpenCount > 0 ? feedbackOpenCount : undefined;
+
+  // Status dot rows for the sidebar
+  const STATUS_ROWS: { label: string; ok: boolean; sub?: string }[] = [
+    { label: "Server",   ok: isServerUp,       sub: isServerUp ? (displayUptime != null ? fmtUptime(displayUptime) : undefined) : "idle" },
+    { label: "Postgres", ok: !!dbHealth?.ok,   sub: dbHealth?.ok ? `${dbHealth.latencyMs}ms` : "down" },
+    { label: "Theta",    ok: isServerUp,        sub: server.spot != null ? `spot ${server.spot.toFixed(0)}` : undefined },
+    { label: "WS proxy", ok: wsConnected,       sub: wsConnected ? `${server.wsClients ?? 0} clients` : "offline" },
+    { label: "dxLink",   ok: dxOk,             sub: server.dxLinkState ?? "—" },
+  ];
+
   return (
-    <div style={{ ...homeShellStyle, height: "100dvh", maxHeight: "100dvh" }}>
+    <div style={{ ...homeShellStyle, height: "100dvh", maxHeight: "100dvh", flexDirection: "row" }}>
       <style>{`
-        .owner-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+        .owner-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
         .owner-scroll::-webkit-scrollbar-track { background: transparent; }
         .owner-scroll::-webkit-scrollbar-thumb { background: ${HOME_THEME.cyan}40; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
         .owner-scroll::-webkit-scrollbar-thumb:hover { background: ${HOME_THEME.cyan}80; background-clip: padding-box; }
         .owner-scroll { scrollbar-width: thin; scrollbar-color: ${HOME_THEME.cyan}40 transparent; }
+        .owner-nav-item { transition: background 0.12s, color 0.12s; }
+        .owner-nav-item:hover { background: rgba(255,255,255,0.05) !important; }
+        .owner-ctrl-btn:hover { background: rgba(255,255,255,0.07) !important; color: ${HOME_THEME.text} !important; }
       `}</style>
-      {/* Header */}
-      <div style={homeHeaderStyle}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: "0.01em", color: HOME_THEME.text }}>
-            Owner dashboard
-          </span>
-          <StatusBadge ok={isServerUp} label={isServerUp ? "Server Live" : "Idle"} />
-          <StatusBadge ok={wsConnected} label={wsConnected ? "Proxy WS" : "Proxy WS Offline"} />
-          <StatusBadge ok={dxOk} label={`dxLink Feed ${server.dxLinkState || "—"}`} />
-          <StatusBadge ok={ttOk} label={`TT ${ttOk ? "Auth" : "Unauth"}`} />
-          <StatusBadge ok={!!dbHealth?.ok} label={dbHealth == null ? "Postgres —" : dbHealth.ok ? "Postgres OK" : "Postgres DOWN"} />
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          {/* Owner-group quick links */}
-          <OwnerQuickLinks current="/dev/owner" />
-          {lastRefresh && (
-            <span style={{ fontSize: 10, color: HOME_THEME.text, fontFamily: "monospace" }}>
-              {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
-            </span>
-          )}
-          <button onClick={refresh} disabled={loading} style={homeButtonStyle}>
-            {loading ? "…" : "Refresh"}
-          </button>
-        </div>
-      </div>
 
-      {/* FE / BE tab toggle */}
-      <div style={{ display: "flex", gap: 6, padding: "10px clamp(14px,2vw,24px) 0", flexWrap: "wrap" }}>
-        {([
-          { id: "overview" as const, label: "Overview" },
-          { id: "backend" as const, label: "Back-End" },
-        ]).map((t) => {
-          const active = ownerTab === t.id;
-          return (
+      {/* ── LEFT SIDEBAR ─────────────────────────────────────────────────────── */}
+      <div style={{
+        width: 248, flexShrink: 0,
+        borderRight: `1px solid ${HOME_THEME.border}`,
+        background: HOME_THEME.panelBg,
+        display: "flex", flexDirection: "column",
+        height: "100%", overflow: "hidden",
+      }}>
+        {/* Logo row */}
+        <div style={{
+          padding: "14px 16px 12px",
+          borderBottom: `1px solid ${HOME_THEME.border}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.02em" }}>CB Edge</div>
+            <div style={{ fontSize: 10, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 1 }}>OWNER DASHBOARD</div>
+          </div>
+          <OwnerQuickLinks current="/dev/owner" />
+        </div>
+
+        {/* Status dots */}
+        <div style={{ padding: "10px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+          {STATUS_ROWS.map((row) => (
+            <div key={row.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                  background: row.ok ? HOME_THEME.green : HOME_THEME.red,
+                  boxShadow: row.ok ? `0 0 4px ${HOME_THEME.green}88` : `0 0 4px ${HOME_THEME.red}88`,
+                }} />
+                <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.75 }}>{row.label}</span>
+              </div>
+              {row.sub && <span style={{ fontSize: 9.5, color: HOME_THEME.muted, opacity: 0.45, fontFamily: "monospace" }}>{row.sub}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* Nav */}
+        <nav style={{ flex: 1, overflowY: "auto", padding: "8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ fontSize: 9, color: `${HOME_THEME.muted}55`, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
+          {NAV_ITEMS.map((item) => {
+            const active = ownerTab === item.id;
+            const badge = item.id === "overview" ? feedbackBadge : item.badge;
+            return (
+              <button
+                key={item.id}
+                className="owner-nav-item"
+                onClick={() => selectTab(item.id)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  width: "100%", textAlign: "left",
+                  padding: "7px 10px", borderRadius: 7,
+                  border: active ? `1px solid ${HOME_THEME.cyan}44` : "1px solid transparent",
+                  background: active ? `linear-gradient(135deg, ${HOME_THEME.cyan}18, ${HOME_THEME.cyan}08)` : "transparent",
+                  color: active ? HOME_THEME.cyan : `${HOME_THEME.text}99`,
+                  fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                }}
+              >
+                <span>{item.label}</span>
+                {badge != null && (
+                  <span style={{
+                    fontSize: 9, padding: "1px 6px", borderRadius: 10, fontWeight: 600,
+                    background: item.badgeRed ? `${HOME_THEME.red}22` : `${HOME_THEME.cyan}22`,
+                    color: item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan,
+                    border: `1px solid ${item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan}44`,
+                  }}>{badge}</span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Quick controls */}
+        <div style={{ padding: "10px 8px 14px", borderTop: `1px solid ${HOME_THEME.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 9, color: `${HOME_THEME.muted}55`, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
+          {[
+            { key: "idle",    label: isIdle == null ? "Idle mode: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
+            { key: "mvcAuto", label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
+            { key: "maint",   label: maint == null ? "Maintenance: —" : maint ? "● Maint ON — go live" : "○ Maint OFF",   action: toggleMaint },
+            { key: "reconnect", label: "↻ Reconnect feed", action: doReconnect },
+          ].map(({ key, label, action }) => (
             <button
-              key={t.id}
-              onClick={() => selectTab(t.id)}
+              key={key}
+              className="owner-ctrl-btn"
+              onClick={action}
+              disabled={ctlBusy === key}
               style={{
-                padding: "7px 18px", fontSize: 12, fontWeight: 500, borderRadius: 8,
-                letterSpacing: "0.01em",
-                cursor: "pointer",
-                background: active ? "rgba(255,255,255,0.07)" : "transparent",
-                color: active ? HOME_THEME.text : HOME_THEME.muted,
-                border: `1px solid ${active ? HOME_THEME.borderStrong : HOME_THEME.border}`,
+                width: "100%", textAlign: "left", padding: "6px 10px", borderRadius: 6,
+                fontSize: 10.5, cursor: ctlBusy === key ? "wait" : "pointer",
+                fontFamily: "inherit",
+                border: `1px solid ${HOME_THEME.border}`,
+                background: "transparent",
+                color: `${HOME_THEME.text}77`,
+                opacity: ctlBusy === key ? 0.5 : 1,
               }}
             >
-              {t.label}
+              {ctlBusy === key ? "…" : label}
             </button>
-          );
-        })}
-        {/* Admin — navigates to the separate /dev/admin page (not a tab). */}
-        <a
-          href="/dev/admin"
-          style={{
-            padding: "7px 18px", fontSize: 12, fontWeight: 500, borderRadius: 8,
-            letterSpacing: "0.01em",
-            cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6,
-            marginLeft: "auto",
-            background: "transparent",
-            color: HOME_THEME.purple,
-            border: `1px solid ${HOME_THEME.purple}66`,
-          }}
-        >
-          Admin <span style={{ fontSize: 12 }}>↗</span>
-        </a>
+          ))}
+          {ctlMsg && (
+            <div style={{
+              fontSize: 10, fontFamily: "monospace", padding: "5px 8px", borderRadius: 6, marginTop: 2,
+              background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
+              border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
+              color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
+            }}>
+              {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Scrollable body */}
-      <div
-        className="owner-scroll"
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          padding: "clamp(14px,2vw,24px)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
+      {/* ── RIGHT MAIN ───────────────────────────────────────────────────────── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        {/* Slim top bar */}
+        <div style={{ ...homeHeaderStyle, padding: "10px 18px" }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text }}>
+            {NAV_ITEMS.find(n => n.id === ownerTab)?.label ?? "Overview"}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {lastRefresh && (
+              <span style={{ fontSize: 10, color: `${HOME_THEME.text}55`, fontFamily: "monospace" }}>
+                {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
+              </span>
+            )}
+            <button onClick={refresh} disabled={loading} style={homeButtonStyle}>
+              {loading ? "…" : "Refresh"}
+            </button>
+            <a
+              href="/dev/admin"
+              style={{
+                padding: "5px 10px", fontSize: 10, fontWeight: 700, borderRadius: 6, letterSpacing: "0.08em",
+                cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4,
+                background: "transparent", color: HOME_THEME.purple,
+                border: `1px solid ${HOME_THEME.purple}66`,
+              }}
+            >
+              Admin ↗
+            </a>
+          </div>
+        </div>
+
+        {/* Scrollable body */}
+        <div
+          className="owner-scroll"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "clamp(14px,2vw,24px)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          }}
+        >
         {/* ── Overview dashboard (real front-end data) ── */}
         {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} />}
 
@@ -2629,9 +2732,9 @@ export default function OwnerDashboard() {
                         fontSize: 10,
                         fontWeight: 700,
                         cursor: "pointer",
-                        color: copied ? HOME_THEME.text : HOME_THEME.textSecondary,
+                        color: copied ? HOME_THEME.text : `${HOME_THEME.muted}99`,
                         background: copied ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
-                        border: `1px solid ${copied ? HOME_THEME.borderStrong : HOME_THEME.border}`,
+                        border: `1px solid ${copied ? HOME_THEME.cyan + "88" : HOME_THEME.border}`,
                         padding: "3px 8px",
                         borderRadius: 6,
                         fontFamily: "monospace",
@@ -2964,7 +3067,8 @@ export default function OwnerDashboard() {
         })()}
 
 
-      </div>
-    </div>
+      </div>{/* /owner-scroll */}
+      </div>{/* /right-main */}
+    </div>{/* /outer shell */}
   );
 }

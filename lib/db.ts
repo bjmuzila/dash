@@ -481,6 +481,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
     ALTER TABLE td_overview ADD COLUMN IF NOT EXISTS movers JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE td_user_prefs ADD COLUMN IF NOT EXISTS links JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
@@ -611,20 +612,21 @@ export async function getTdPrefs(clerkUserId: string): Promise<TdPrefs | undefin
 
 export async function upsertTdPrefs(
   clerkUserId: string,
-  fields: { zip?: string | null; schedule?: unknown[]; tasks?: unknown[] }
+  fields: { zip?: string | null; schedule?: unknown[]; tasks?: unknown[]; links?: unknown[] }
 ): Promise<void> {
   await getDb();
   const existing = await getTdPrefs(clerkUserId);
   const zip = fields.zip !== undefined ? fields.zip : existing?.zip ?? null;
   const schedule = fields.schedule !== undefined ? fields.schedule : existing?.schedule ?? [];
   const tasks = fields.tasks !== undefined ? fields.tasks : existing?.tasks ?? [];
+  const links = fields.links !== undefined ? fields.links : (existing as Record<string, unknown>)?.links ?? [];
   await queryAll(
-    `INSERT INTO td_user_prefs (clerk_user_id, zip, schedule, tasks, updated_at)
-     VALUES (?, ?, ?::jsonb, ?::jsonb, CURRENT_TIMESTAMP)
+    `INSERT INTO td_user_prefs (clerk_user_id, zip, schedule, tasks, links, updated_at)
+     VALUES (?, ?, ?::jsonb, ?::jsonb, ?::jsonb, CURRENT_TIMESTAMP)
      ON CONFLICT (clerk_user_id) DO UPDATE SET
        zip = EXCLUDED.zip, schedule = EXCLUDED.schedule, tasks = EXCLUDED.tasks,
-       updated_at = CURRENT_TIMESTAMP`,
-    [clerkUserId, zip, JSON.stringify(schedule), JSON.stringify(tasks)]
+       links = EXCLUDED.links, updated_at = CURRENT_TIMESTAMP`,
+    [clerkUserId, zip, JSON.stringify(schedule), JSON.stringify(tasks), JSON.stringify(links)]
   );
 }
 

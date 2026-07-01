@@ -7,6 +7,6 @@ export const dynamic = "force-dynamic";
 // Public landing page. Signed-in users skip straight to the dashboard.
 export default async function RootPage() {
   const userId = await getServerUserId();
-  if (userId) redirect("/home");
+  if (userId) redirect("/traders-dashboard");
   return <LandingClient />;
 }
