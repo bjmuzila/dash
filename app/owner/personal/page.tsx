@@ -44,7 +44,7 @@ export default function PersonalPage() {
   const delDigit = () => { setPin((p) => p.slice(0, -1)); setError(false); };
 
   const openSection = (section: string) => {
-    if (section === "todo") router.push("/personal/todo");
+    if (section === "todo") router.push("/owner/personal/todo");
   };
 
   const keyStyle: React.CSSProperties = {

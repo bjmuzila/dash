@@ -457,7 +457,7 @@ export default function DevPage() {
         <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Dev · Symbol probe</span>
         <span style={{ fontSize: 12, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
         <span style={{ fontSize: 11, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
-        <div style={{ marginLeft: "auto" }}><OwnerQuickLinks current="/dev" /></div>
+        <div style={{ marginLeft: "auto" }}><OwnerQuickLinks current="/owner/dev" /></div>
       </div>
 
       {/* Controls */}

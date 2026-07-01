@@ -153,7 +153,7 @@ export default function AdminEmailsPage() {
   return (
     <PageShell maxWidth={680} align="center">
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
-        <OwnerQuickLinks current="/admin/emails" />
+        <OwnerQuickLinks current="/owner/admin/emails" />
       </div>
       <Card accent="cyan">
         <div style={{ marginBottom: 20 }}>

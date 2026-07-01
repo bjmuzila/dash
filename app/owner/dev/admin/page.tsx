@@ -334,7 +334,7 @@ export default function AdminDashboard() {
           >
             {loading ? "Loading…" : "↻ Refresh"}
           </button>
-          <OwnerQuickLinks current="/dev/admin" />
+          <OwnerQuickLinks current="/owner/dev/admin" />
         </div>
       </div>
 

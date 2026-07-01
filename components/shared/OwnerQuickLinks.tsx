@@ -9,13 +9,14 @@
 import { HOME_THEME } from "./homeTheme";
 
 export const OWNER_LINKS: { label: string; href: string }[] = [
-  { label: "Owner", href: "/dev/owner" },
-  { label: "Admin", href: "/dev/admin" },
-  { label: "Emails", href: "/admin/emails" },
+  { label: "Hub", href: "/owner" },
+  { label: "Owner", href: "/owner/dev/owner" },
+  { label: "Admin", href: "/owner/dev/admin" },
+  { label: "Emails", href: "/owner/admin/emails" },
   { label: "Database", href: "/database" },
-  { label: "Dev", href: "/dev" },
+  { label: "Dev", href: "/owner/dev" },
   { label: "Est. Moves BE", href: "/estimated-move" },
-  { label: "Strike Query", href: "/dev/strike-query" },
+  { label: "Strike Query", href: "/owner/dev/strike-query" },
   { label: "Logs", href: "/logs" },
   { label: "Changelog", href: "/changelog" },
 ];

@@ -15,7 +15,7 @@ const NAV_ITEMS = [
   { label: "Multi Greek",   href: "/mult-greek" },
   { label: "Trading",       href: "/trading" },
   { label: "Logs",          href: "/logs" },
-  { label: "Personal",      href: "/personal", ownerOnly: true },
+  { label: "Personal",      href: "/owner/personal", ownerOnly: true },
   { label: "Econ Calendar", href: "/economic-calendar" },
 ];
 

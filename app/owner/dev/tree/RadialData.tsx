@@ -47,8 +47,8 @@ const SOURCES: Src[] = [
   {
     id: "misc", label: "api/db · budget · proxy", color: "#818cf8",
     pages: [
-      { label: "Budget", href: "/budget" }, { label: "Database", href: "/database" },
-      { label: "Owner", href: "/dev/owner" },
+      { label: "Budget", href: "/owner/budget" }, { label: "Database", href: "/database" },
+      { label: "Owner", href: "/owner/dev/owner" },
     ],
   },
 ];

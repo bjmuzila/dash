@@ -26,16 +26,16 @@ const GROUPS: Group[] = [
   {
     label: "Personal", color: "#60a5fa", // blue
     pages: [
-      { label: "Journal", href: "/trading" }, { label: "Budget", href: "/budget" },
-      { label: "To-Do", href: "/personal/todo" },
+      { label: "Journal", href: "/trading" }, { label: "Budget", href: "/owner/budget" },
+      { label: "To-Do", href: "/owner/personal/todo" },
     ],
   },
   {
     label: "Admin", color: "#0ea5e9", // sky-600 blue
     pages: [
-      { label: "Owner", href: "/dev/owner" }, { label: "Admin", href: "/dev/admin" },
-      { label: "Tree", href: "/dev/tree" }, { label: "Database", href: "/database" },
-      { label: "Dev", href: "/dev" }, { label: "EM BE", href: "/estimated-move" },
+      { label: "Owner", href: "/owner/dev/owner" }, { label: "Admin", href: "/owner/dev/admin" },
+      { label: "Tree", href: "/owner/dev/tree" }, { label: "Database", href: "/database" },
+      { label: "Dev", href: "/owner/dev" }, { label: "EM BE", href: "/estimated-move" },
       { label: "Social", href: "/social-media" }, { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
     ],

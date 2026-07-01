@@ -103,11 +103,12 @@ const QUICK_META: Record<string, { label: string; emoji: string }> = {
   "/pricing": { label: "Pricing", emoji: "$" },
   "/changelog": { label: "Changelog", emoji: "↻" },
   "/whats-new": { label: "What's New", emoji: "✦" },
-  "/budget": { label: "Budget", emoji: "⚖" },
-  "/dev": { label: "Dev", emoji: "⚙" },
-  "/dev/owner": { label: "Owner", emoji: "★" },
-  "/personal": { label: "Personal", emoji: "☺" },
-  "/personal/todo": { label: "To-Do", emoji: "☑" },
+  "/owner": { label: "Owner Hub", emoji: "✪" },
+  "/owner/budget": { label: "Budget", emoji: "⚖" },
+  "/owner/dev": { label: "Dev", emoji: "⚙" },
+  "/owner/dev/owner": { label: "Owner", emoji: "★" },
+  "/owner/personal": { label: "Personal", emoji: "☺" },
+  "/owner/personal/todo": { label: "To-Do", emoji: "☑" },
   "/feedback": { label: "Feedback", emoji: "✉" },
 };
 
@@ -280,9 +281,7 @@ function MaintenanceAlert() {
               <span style={{ fontWeight: 700, color: "#f87171", fontSize: 14 }}>Scheduled Maintenance</span>
             </div>
             <p style={{ margin: 0, color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
-              Hardware upgrade in progress.<br />
-              <strong style={{ color: "#e8edf5" }}>4:00 – 6:00 PM ET today.</strong><br />
-              The site may be briefly unavailable.
+              Tonight major updates incoming. If a <strong style={{ color: "#f87171" }}>502</strong> page is shown, refresh in a few minutes.
             </p>
           </div>
         </>

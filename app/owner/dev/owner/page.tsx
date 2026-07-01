@@ -210,17 +210,17 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
     id: "personal", label: "Personal", emoji: "🧑",
     items: [
       { label: "Journal", href: "/trading" },
-      { label: "Budget", href: "/budget" },
-      { label: "To-Do", href: "/personal/todo" },
+      { label: "Budget", href: "/owner/budget" },
+      { label: "To-Do", href: "/owner/personal/todo" },
     ],
   },
   {
     id: "admin", label: "Admin", emoji: "🛠️",
     items: [
-      { label: "Owner", href: "/dev/owner" },
-      { label: "Admin", href: "/dev/admin" },
+      { label: "Owner", href: "/owner/dev/owner" },
+      { label: "Admin", href: "/owner/dev/admin" },
       { label: "Database", href: "/database" },
-      { label: "Dev", href: "/dev" },
+      { label: "Dev", href: "/owner/dev" },
       { label: "Est. Moves BE", href: "/estimated-move" },
       { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
@@ -2077,7 +2077,7 @@ export default function OwnerDashboard() {
             <button onClick={refresh} disabled={loading} style={homeButtonStyle}>
               {loading ? "…" : "↻"}
             </button>
-            {!isMobile && <OwnerQuickLinks current="/dev/owner" />}
+            {!isMobile && <OwnerQuickLinks current="/owner/dev/owner" />}
           </div>
         </div>
         {/* Mobile tab strip */}

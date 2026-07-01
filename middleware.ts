@@ -31,14 +31,29 @@ const PUBLIC_PATTERNS: RegExp[] = [
 ];
 const isPublicRoute = (path: string) => PUBLIC_PATTERNS.some((re) => re.test(path));
 
-// Owner-only pages: the dev/admin dashboards and the personal/budget tools.
+// Owner-only pages: everything lives under /owner/* now, so ONE pattern gates
+// the whole group (plus the app/owner/layout.tsx OwnerGuard as defense-in-depth).
+// New owner pages under app/owner/ need no extra gating anywhere.
 const OWNER_PATTERNS: RegExp[] = [
-  /^\/dev(\/.*)?$/,
-  /^\/admin(\/.*)?$/,
-  /^\/budget(\/.*)?$/,
-  /^\/personal(\/.*)?$/,
+  /^\/owner(\/.*)?$/,
 ];
 const isOwnerRoute = (path: string) => OWNER_PATTERNS.some((re) => re.test(path));
+
+// Old owner-route prefixes → new /owner/* locations. Page routes only — these
+// anchored patterns never match /api/* (e.g. /api/admin/*).
+const OWNER_MOVED_PREFIXES: [RegExp, string][] = [
+  [/^\/dev(?=\/|$)/, "/owner/dev"],
+  [/^\/admin(?=\/|$)/, "/owner/admin"],
+  [/^\/budget(?=\/|$)/, "/owner/budget"],
+  [/^\/personal(?=\/|$)/, "/owner/personal"],
+  [/^\/market-scanner(?=\/|$)/, "/owner/market-scanner"],
+];
+function ownerMovedTarget(path: string): string | null {
+  for (const [re, to] of OWNER_MOVED_PREFIXES) {
+    if (re.test(path)) return path.replace(re, to);
+  }
+  return null;
+}
 
 // Owner Supabase user UUID that bypasses maintenance + reaches owner routes.
 // Set OWNER_USER_ID in env to the Supabase auth.users.id of the owner account.
@@ -127,6 +142,14 @@ export async function middleware(req: NextRequest) {
   }
 
   if (isPublicRoute(path)) return res;
+
+  // Old owner URLs (bookmarks, pinned quick-pages) → permanent new /owner/* home.
+  const moved = ownerMovedTarget(path);
+  if (moved) {
+    const url = req.nextUrl.clone();
+    url.pathname = moved;
+    return NextResponse.redirect(url, 308);
+  }
 
   // Signed-out users hitting a protected page get sent to the landing page.
   if (!userId) {
