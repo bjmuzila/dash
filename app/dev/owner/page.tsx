@@ -3067,8 +3067,8 @@ export default function OwnerDashboard() {
         })()}
 
 
-      </div>{/* /owner-scroll */}
-      </div>{/* /right-main */}
-    </div>{/* /outer shell */}
+      </div>
+      </div>
+    </div>
   );
 }

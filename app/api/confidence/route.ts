@@ -697,6 +697,12 @@ export async function GET(req: NextRequest) {
         : null;
       const segScore = scoreConfidence(segCtx, segHistory);
 
+      // Was the strike touched at ANY point during the full day (even after this
+      // segment ended / a new MVC became active)? Only meaningful for non-current
+      // segments that registered as "untouched" during their own window.
+      const fullDayTouched = spxTimed.some((s) => Math.abs(s.px - seg.strike) <= HIT_PTS);
+      const touchedLater = !stats.touched && fullDayTouched;
+
       return {
         strike: seg.strike,
         from: seg.from,
@@ -710,6 +716,7 @@ export async function GET(req: NextRequest) {
         detail: sc.detail,
         forward: sc.forward,
         touched: stats.touched,
+        touchedLater,              // true when untouched during window but hit later
         outcome: stats.outcome,
         maxAway: Math.round(stats.maxAway),
         maxBand: Math.round(stats.maxBand),

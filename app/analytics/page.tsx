@@ -1359,7 +1359,194 @@ function ContractLookupCard() {
   );
 }
 
-// ── 10. STRATEGY BUILDER ──────────────────────────────────────────────────────
+// ── 10. SPX PREMIUM SPARKLINE ─────────────────────────────────────────────────
+// Reads from /api/snapshots/premium — rows written by the server-v2 premium-flow
+// writer every ~30s during RTH. Each row: {timestamp, callPremium, putPremium,
+// netPremium, spxPrice}. Displays a session sparkline of netPremium (calls−puts)
+// plus current call/put/net totals.
+//
+// NOTE: The server-side writer uses `state.spxPrice` to classify OTM strikes.
+// The attached logic fix requires that assignment to be dynamic (every ES tick),
+// not frozen on first tick, so OTM detection stays accurate as the market moves.
+// That fix lives in server-v2 (spxPrice assignment) — this card just reads the
+// stored series.
+interface PremiumRow {
+  timestamp: number;
+  callPremium: number;
+  putPremium: number;
+  netPremium: number;
+  spxPrice: number;
+}
+interface PremiumResp { rows?: PremiumRow[] }
+
+// SVG sparkline — renders a path from a series of (x, y) points.
+function Sparkline({
+  rows, width = 320, height = 72,
+}: {
+  rows: PremiumRow[]; width?: number; height?: number;
+}) {
+  if (rows.length < 2) return (
+    <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <span style={{ fontSize: 12, color: T.muted, opacity: 0.5 }}>Not enough data points yet.</span>
+    </div>
+  );
+
+  const vals = rows.map((r) => r.netPremium);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const PAD = 4;
+  const W = width - PAD * 2;
+  const H = height - PAD * 2;
+
+  // Map to SVG coords; Y inverted (SVG 0,0 top-left).
+  const pts = rows.map((r, i) => {
+    const x = PAD + (i / (rows.length - 1)) * W;
+    const y = PAD + H - ((r.netPremium - min) / range) * H;
+    return `${x},${y}`;
+  });
+
+  // Zero line (if it's in range).
+  const zeroY = PAD + H - ((0 - min) / range) * H;
+  const showZero = zeroY >= PAD && zeroY <= PAD + H;
+  const lastVal = vals[vals.length - 1];
+  const lineColor = lastVal >= 0 ? POS_GREEN : T.red;
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height }}>
+      {showZero && (
+        <line
+          x1={PAD} y1={zeroY} x2={PAD + W} y2={zeroY}
+          stroke={T.border} strokeWidth={1} strokeDasharray="3,3"
+        />
+      )}
+      {/* Fill under the line */}
+      <defs>
+        <linearGradient id="pf-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={lineColor} stopOpacity={0.18} />
+          <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <polygon
+        points={`${PAD},${PAD + H} ${pts.join(" ")} ${PAD + W},${PAD + H}`}
+        fill="url(#pf-fill)"
+      />
+      <polyline
+        points={pts.join(" ")}
+        fill="none"
+        stroke={lineColor}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      {/* Dot at latest value */}
+      {(() => {
+        const [lx, ly] = (pts[pts.length - 1] ?? "0,0").split(",").map(Number);
+        return <circle cx={lx} cy={ly} r={3} fill={lineColor} />;
+      })()}
+    </svg>
+  );
+}
+
+// Format premium dollar values ($1.2M / $840K / etc.).
+function fmtPrem(n: number): string {
+  const sign = n >= 0 ? "+" : "-";
+  const a = Math.abs(n);
+  if (a >= 1_000_000) return `${sign}$${(a / 1_000_000).toFixed(2)}M`;
+  if (a >= 1_000) return `${sign}$${(a / 1_000).toFixed(1)}K`;
+  return `${sign}$${a.toFixed(0)}`;
+}
+function fmtPremAbs(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1_000_000) return `$${(a / 1_000_000).toFixed(2)}M`;
+  if (a >= 1_000) return `$${(a / 1_000).toFixed(1)}K`;
+  return `$${a.toFixed(0)}`;
+}
+
+function SpxPremiumSparklineCard() {
+  const today = etDateISO();
+  const { data, loading, error, lastUpdated, reload } =
+    useLiveData<PremiumResp>(`/api/snapshots/premium?date=${today}&limit=2000`, 30_000);
+
+  const rows = (data?.rows ?? []).map((r) => ({
+    ...r,
+    timestamp: Number(r.timestamp),
+    callPremium: Number(r.callPremium),
+    putPremium: Number(r.putPremium),
+    netPremium: Number(r.netPremium),
+    spxPrice: Number(r.spxPrice),
+  }));
+
+  const cur = rows.length ? rows[rows.length - 1] : null;
+  const net = cur?.netPremium ?? null;
+  const call = cur?.callPremium ?? null;
+  const put = cur?.putPremium ?? null;
+  const spx = cur?.spxPrice ?? null;
+  const netColor = net == null ? T.muted : net >= 0 ? POS_GREEN : T.red;
+
+  // Session high / low net.
+  const netVals = rows.map((r) => r.netPremium);
+  const sessionHigh = netVals.length ? Math.max(...netVals) : null;
+  const sessionLow  = netVals.length ? Math.min(...netVals) : null;
+
+  return (
+    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Row>
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+          SPX Premium Flow
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {spx != null && (
+            <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>
+              SPX {spx.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+            </span>
+          )}
+          <button
+            onClick={reload}
+            style={{ fontSize: 9, padding: "2px 8px", border: `1px solid ${T.border}`, borderRadius: 4, background: "transparent", color: T.muted, cursor: "pointer" }}
+          >↺</button>
+        </div>
+      </Row>
+
+      {/* Net premium headline */}
+      {net != null ? (
+        <Row>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <Label>Net (Calls − Puts)</Label>
+            <Value color={netColor} size={30}>{fmtPrem(net)}</Value>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+            <span style={{ fontSize: 12, fontFamily: "monospace", color: POS_GREEN }}>▲ calls {fmtPremAbs(call ?? 0)}</span>
+            <span style={{ fontSize: 12, fontFamily: "monospace", color: T.red }}>▼ puts {fmtPremAbs(put ?? 0)}</span>
+          </div>
+        </Row>
+      ) : null}
+
+      {/* Sparkline */}
+      {loading || error || rows.length === 0 ? (
+        <CardState loading={loading} error={error} empty="No SPX premium data yet — populates during RTH." />
+      ) : (
+        <Sparkline rows={rows} height={72} />
+      )}
+
+      {/* Session range */}
+      {sessionHigh != null && sessionLow != null && (
+        <>
+          <div style={divider} />
+          <Row>
+            <Stat label="Session High" value={fmtPrem(sessionHigh)} color={POS_GREEN} size={14} />
+            <Stat label="Session Low" value={fmtPrem(sessionLow)} color={T.red} size={14} />
+            <Stat label="Ticks" value={rows.length.toString()} size={14} />
+          </Row>
+        </>
+      )}
+
+      <UpdatedStamp at={lastUpdated} />
+    </Card>
+  );
+}
+
+// ── 11. STRATEGY BUILDER (full-width) ────────────────────────────────────────
 // Reads the daily AI strategy written by the VPS cron (strategy-generator.js →
 // daily_strategy). The page never calls Claude — it just renders the stored
 // structured plan for the latest session. Full-width, spans the grid.
@@ -1570,6 +1757,7 @@ export default function AnalyticsPage() {
         <GreeksCard />
         <IbCard />
         <LevelsCard />
+        <SpxPremiumSparklineCard />
 
         {/* Full-width AI daily strategy, synthesized from all cards above. */}
         <StrategyBuilderCard />

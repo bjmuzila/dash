@@ -84,6 +84,7 @@ interface MvcSegment {
   closestApproach: number | null;
   minToTouch: number | null;
   distAtStart: number | null;
+  touchedLater?: boolean;
   score: { hit: number; pivot: number; chop: number; break: number; netWallBias: number };
   gexRank: number;
   rejectionRate: number;
@@ -553,12 +554,20 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
             </span>
           );
         })()}
-        {!seg.current && !seg.touched && (
+        {!seg.current && !seg.touched && !seg.touchedLater && (
           <span title="This CB - Core Bullseye strike was never touched before the magnet migrated to a new strike"
             style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
               textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
               color: HOME_THEME.muted, background: rgba(HOME_THEME.muted, 0.12), border: `1px dashed ${rgba(HOME_THEME.muted, 0.4)}` }}>
             → new CB
+          </span>
+        )}
+        {!seg.current && seg.touchedLater && (
+          <span title="Strike was not hit while it was the active CB, but price reached it later in the session"
+            style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
+              textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
+              color: HOME_THEME.cyan, background: rgba(HOME_THEME.cyan, 0.1), border: `1px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>
+            ✓ Hit later
           </span>
         )}
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>
