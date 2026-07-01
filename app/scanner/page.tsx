@@ -61,6 +61,7 @@ type GexRow = {
 };
 type Win = 15 | 30 | 60;
 type GexSort = "z" | "abs";
+type ColSort = { col: "latest_chg" | "mean_chg" | "z"; dir: "desc" | "asc" } | null;
 
 function GexScanner() {
   const [rows, setRows] = useState<GexRow[]>([]);
@@ -69,6 +70,23 @@ function GexScanner() {
   const [win, setWin] = useState<Win>(15);
   const [sort, setSort] = useState<GexSort>("z");
   const [minZ, setMinZ] = useState(0);
+  const [colSort, setColSort] = useState<ColSort>(null);
+
+  const toggleColSort = (col: "latest_chg" | "mean_chg" | "z") => {
+    setColSort(prev =>
+      prev?.col === col
+        ? { col, dir: prev.dir === "desc" ? "asc" : "desc" }
+        : { col, dir: "desc" }
+    );
+  };
+
+  const displayRows = colSort
+    ? [...rows].sort((a, b) => {
+        const av = colSort.col === "z" ? (a.z ?? 0) : (colSort.col === "latest_chg" ? a.latest_chg : a.mean_chg);
+        const bv = colSort.col === "z" ? (b.z ?? 0) : (colSort.col === "latest_chg" ? b.latest_chg : b.mean_chg);
+        return colSort.dir === "desc" ? bv - av : av - bv;
+      })
+    : rows;
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -129,13 +147,26 @@ function GexScanner() {
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
               <th style={th}>Strike</th>
               <th style={{ ...th, textAlign: "left" }}>Expiry</th>
-              <th style={th}>{win}m Δ</th>
-              <th style={th}>Avg Δ</th>
-              <th style={th}>z-score</th>
+              {(["latest_chg", "mean_chg", "z"] as const).map((col, idx) => {
+                const label = col === "latest_chg" ? `${win}m Δ` : col === "mean_chg" ? "Avg Δ" : "z-score";
+                const active = colSort?.col === col;
+                const arrow = active ? (colSort!.dir === "desc" ? " ↓" : " ↑") : " ⇅";
+                return (
+                  <th key={col} onClick={() => toggleColSort(col)} style={{
+                    ...th,
+                    cursor: "pointer",
+                    color: active ? HOME_THEME.cyan : HOME_THEME.green,
+                    userSelect: "none",
+                    whiteSpace: "nowrap",
+                  }}>
+                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 10 }}>{arrow}</span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => {
+            {displayRows.map((r, i) => {
               const up = r.latest_chg >= 0;
               const col = up ? HOME_THEME.green : HOME_THEME.red;
               return (

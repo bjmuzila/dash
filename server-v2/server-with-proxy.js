@@ -643,9 +643,9 @@ async function main() {
               ),
               scored AS (
                 SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.mean_chg, s.sd_chg, s.n,
-                       CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE NULL END AS z_score
+                       CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE 0.0 END AS z_score
                 FROM stats s
-                WHERE s.n >= 3 AND s.latest_chg IS NOT NULL
+                WHERE s.n >= 2 AND s.latest_chg IS NOT NULL
                   AND (CASE WHEN s.sd_chg > 0 THEN ABS((s.latest_chg - s.mean_chg)/s.sd_chg) ELSE 0 END) >= $3
               )
               SELECT * FROM scored
