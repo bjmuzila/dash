@@ -1679,6 +1679,12 @@ class TastytradeProxy {
                   const prem = print.price * print.size * 100;
                   if (parsed.type === 'C') this.sessionCallPremium += prem;
                   else this.sessionPutPremium += prem;
+                } else {
+                  // Log first few parse failures to catch symbol format issues
+                  if (!this._premiumParseWarnCount) this._premiumParseWarnCount = 0;
+                  if (this._premiumParseWarnCount++ < 3) {
+                    console.warn('[premium-flow] parseOptionSymbol returned null for:', print.streamerSymbol);
+                  }
                 }
               }
             } catch {}
@@ -1737,26 +1743,40 @@ class TastytradeProxy {
     // Post cumulative session call/put premium to /api/snapshots/premium every 30s
     // during RTH so the Analytics "SPX Premium Flow" sparkline card has data.
     this.premiumTimer = setInterval(async () => {
-      if (this.sessionCallPremium === 0 && this.sessionPutPremium === 0) return;
+      const callAcc = this.sessionCallPremium;
+      const putAcc  = this.sessionPutPremium;
+      if (callAcc === 0 && putAcc === 0) {
+        console.log('[premium-flow] skipping — no trades accumulated yet');
+        return;
+      }
       const now = Date.now();
       if (now - this.premiumLastPost < 29_000) return;
       this.premiumLastPost = now;
       const spot = this.spot || marketState.getSpot() || 0;
-      const netPremium = this.sessionCallPremium - this.sessionPutPremium;
+      const netPremium = callAcc - putAcc;
+      const port = process.env.PORT || 3001;
+      console.log(`[premium-flow] posting → call=$${(callAcc/1e6).toFixed(2)}M put=$${(putAcc/1e6).toFixed(2)}M net=$${(netPremium/1e6).toFixed(2)}M spot=${spot} port=${port}`);
       try {
-        const port = process.env.PORT || 3001;
-        await fetch(`http://localhost:${port}/api/snapshots/premium`, {
+        const r = await fetch(`http://localhost:${port}/api/snapshots/premium`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             timestamp: now,
-            callPremium: this.sessionCallPremium,
-            putPremium:  this.sessionPutPremium,
+            callPremium: callAcc,
+            putPremium:  putAcc,
             netPremium,
             spxPrice:    spot,
           }),
         });
-      } catch { /* fire-and-forget */ }
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          console.warn(`[premium-flow] POST failed ${r.status}: ${txt.slice(0, 200)}`);
+        } else {
+          console.log('[premium-flow] POST ok');
+        }
+      } catch (e) {
+        console.warn('[premium-flow] POST error:', e.message);
+      }
     }, 30_000);
 
     // start() is the resume path for idle-OFF, and also runs on cold boot. Either
@@ -1877,6 +1897,7 @@ class TastytradeProxy {
       this.oiReady = true;
       this.oiPlateauHits = 0;
       console.log(`[OI] coverage ${(this.oiCoverage * 100).toFixed(0)}% ≥ ${(OI_READY_RATIO * 100).toFixed(0)}% — GEX broadcast enabled`);
+      this._subscribeThetaFlow(); // subscribe now that active contracts are loaded
     } else if (!this.oiReady) {
       // Plateau: some expiries (esp. thinner ones) never reach the ratio because
       // far-OTM strikes legitimately carry no OI. Once coverage stops climbing
@@ -1891,6 +1912,7 @@ class TastytradeProxy {
       if (this.oiPlateauHits >= OI_PLATEAU_HITS) {
         this.oiReady = true;
         console.log(`[OI] coverage plateaued at ${(this.oiCoverage * 100).toFixed(0)}% (floor ${(floor * 100).toFixed(0)}% @ ${dteFromIso(this.expiry)}DTE) — GEX broadcast enabled`);
+        this._subscribeThetaFlow(); // subscribe now that active contracts are loaded
       }
     }
     console.log(`[OI] REST backfill: ${filled}/${active.length} strikes with OI`);

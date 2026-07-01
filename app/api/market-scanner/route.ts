@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { proxyBase } from "@/lib/proxyForward";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -180,7 +181,7 @@ interface GexSnap {
   callSpec: number | null;
 }
 
-async function fetchGexSnap(origin: string): Promise<GexSnap> {
+async function fetchGexSnap(): Promise<GexSnap> {
   const empty: GexSnap = {
     gexFlip: null, gexPer1pct: null, maxGexStrike: null,
     gexExpiringPct: null, gexExpiringDate: null,
@@ -188,34 +189,43 @@ async function fetchGexSnap(origin: string): Promise<GexSnap> {
     pcrOI: null, callSpec: null,
   };
   try {
-    const res = await fetch(`${origin}/api/gex`, { cache: "no-store" });
+    // Call proxy/gex directly (same loopback as other server-side routes — avoids
+    // round-tripping through the public domain like the old `${origin}/api/gex` did).
+    const res = await fetch(`${proxyBase()}/proxy/gex`, { cache: "no-store" });
     if (!res.ok) return empty;
     const v = await res.json();
-    const chain: { strike: number; callOI?: number; putOI?: number; netGex?: number }[] = v.chain ?? [];
+    // proxy/gex returns { gexRows, spot, expiry, callWall, putWall, gexFlip, totalNetGex, totals }
+    const chain: { strike: number; callOI?: number; callVolume?: number; putOI?: number; putVolume?: number; netGEX?: number }[] = v.gexRows ?? [];
 
     // Compute PCR & call spec from chain
-    let callsOI = 0, putsOI = 0;
-    chain.forEach(r => { callsOI += r.callOI ?? 0; putsOI += r.putOI ?? 0; });
-    const totalOI = callsOI + putsOI;
-    const pcrOI = putsOI > 0 && callsOI > 0 ? Math.round((putsOI / callsOI) * 100) / 100 : null;
-    const callSpec = totalOI > 0 ? Math.round((callsOI / totalOI) * 100) : null;
+    let callsOI = 0, putsOI = 0, callsVol = 0, putsVol = 0;
+    chain.forEach(r => {
+      callsOI  += r.callOI     ?? 0;
+      putsOI   += r.putOI      ?? 0;
+      callsVol += r.callVolume ?? 0;
+      putsVol  += r.putVolume  ?? 0;
+    });
+    const totalOI  = callsOI  + putsOI;
+    const totalVol = callsVol + putsVol;
+    const pcrOI   = putsOI  > 0 && callsOI  > 0 ? Math.round((putsOI  / callsOI)  * 100) / 100 : null;
+    const callSpec = totalVol > 0 ? Math.round((callsVol / totalVol) * 100) : totalOI > 0 ? Math.round((callsOI / totalOI) * 100) : null;
 
     // Max GEX strike
     let maxGexStrike: number | null = null;
     let maxGex = -Infinity;
     chain.forEach(r => {
-      const g = Math.abs(r.netGex ?? 0);
+      const g = Math.abs(r.netGEX ?? 0);
       if (g > maxGex) { maxGex = g; maxGexStrike = r.strike; }
     });
 
-    // GEX/1% move — approximate: totalNetGex * spot * 0.01
-    const spot = v.spotPrice ?? null;
-    const gexPer1pct = v.totalNetGex != null && spot
-      ? Math.round(v.totalNetGex * spot * 0.01 / 1e9 * 100) / 100
+    // GEX/1% move — approximate: totalNetGex / (spot * 0.01)
+    const spot = v.spot ?? null;
+    const gexPer1pct = v.totalNetGex != null && spot && spot > 0
+      ? Math.round((v.totalNetGex / (spot * 0.01)) / 1e9 * 100) / 100
       : null;
 
-    // Expiring — parse from expiration field if available
-    const gexExpiringDate: string | null = v.expiration ?? null;
+    // Expiry field from proxy
+    const gexExpiringDate: string | null = v.expiry ?? null;
 
     return {
       gexFlip: v.gexFlip ?? null,
@@ -391,9 +401,7 @@ function pcrLookup(ivr: number, trend: "up" | "down" | "sideways"): number {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 
-export async function GET(req: Request) {
-  const origin = new URL(req.url).origin;
-
+export async function GET() {
   // 1. Fetch all Yahoo series in parallel
   const [spxS, spyS, qqqS, vixS, vxnS, vvixS] = await Promise.all([
     fetchYahoo("^GSPC"),
@@ -405,7 +413,7 @@ export async function GET(req: Request) {
   ]);
 
   // 2. Fetch live GEX for SPX
-  const gexSnap = await fetchGexSnap(origin);
+  const gexSnap = await fetchGexSnap();
 
   // 3. Compute IV rank for each (VIX as proxy for SPX/SPY; VXN for QQQ; VVIX for VIX)
   const vixCurrent = vixS.last ?? 20;
