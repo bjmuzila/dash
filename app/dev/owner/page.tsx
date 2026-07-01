@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, Fragment } from "react";
+import React, { useEffect, useRef, useState, useCallback, Fragment } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import {
   OWNER_THEME as HOME_THEME,
@@ -2127,12 +2127,15 @@ export default function OwnerDashboard() {
           style={{
             flex: 1,
             minHeight: 0,
+            height: 0,           // force flex child to shrink so overflowY kicks in
             overflowY: "auto",
+            overflowX: "hidden",
             padding: isMobile ? "12px" : "clamp(14px,2vw,24px)",
             display: "flex",
             flexDirection: "column",
             gap: 12,
-          }}
+            WebkitOverflowScrolling: "touch",
+          } as React.CSSProperties}
         >
         {/* ── Overview dashboard (real front-end data) ── */}
         {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} />}

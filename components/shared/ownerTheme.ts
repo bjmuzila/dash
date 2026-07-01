@@ -24,12 +24,12 @@ import { HOME_THEME } from "./homeTheme";
 
 // Muted slate surface ramp — the calm replacement for the glow panels.
 export const OWNER_THEME = {
-  bg: "#0B0D11",              // page background, near-black slate
-  panel: "#14171D",          // resting card surface
-  panelHover: "#181C23",     // card hover surface
-  panelInset: "#10131A",     // inset rows / sub-surfaces
-  border: "rgba(255,255,255,0.07)",       // default hairline
-  borderStrong: "rgba(255,255,255,0.12)", // hover / emphasis hairline
+  bg: "#0d0d0f",              // page background, near-black slate
+  panel: "#111217",          // resting card surface
+  panelHover: "#16181f",     // card hover surface
+  panelInset: "#0e0f14",     // inset rows / sub-surfaces
+  border: "#2a2b32",                      // default hairline
+  borderStrong: "rgba(255,255,255,0.18)", // hover / emphasis hairline
   text: "#E7E9ED",           // primary text
   textSecondary: "#9AA1AC",  // supporting text
   textMuted: "#6B7280",      // hints / labels / mono stamps
@@ -45,8 +45,8 @@ export const OWNER_THEME = {
   red: "#E06C5E",       // coral-red — error / down / fail
   // ── Drop-in aliases so OWNER_THEME can stand in for HOME_THEME ──
   muted: "#9AA1AC",                  // alias of textSecondary (was bright #FFF)
-  panelBg: "#14171D",                // flat slate (no rgba translucency)
-  panelBgStrong: "#181C23",
+  panelBg: "#111217",                // flat slate (no rgba translucency)
+  panelBgStrong: "#16181f",
 } as const;
 
 function rgba(hex: string, a: number): string {
@@ -63,7 +63,7 @@ export const homeShellStyle: CSSProperties = {
   height: "100%",
   width: "100%",
   overflow: "hidden",
-  background: OWNER_THEME.bg,
+  background: "#0a0a0d",
   fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif",
   color: OWNER_THEME.text,
   display: "flex",
@@ -83,11 +83,11 @@ export const homeHeaderStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-// ── Panel (drop-in for homePanelStyle) — transparent card, hairline border ────
+// ── Panel (drop-in for homePanelStyle) — solid dark card, hairline border ────
 export const homePanelStyle: CSSProperties = {
-  background: "transparent",
-  borderRadius: 12,
-  border: `1px solid ${OWNER_THEME.border}`,
+  background: OWNER_THEME.panel,
+  borderRadius: 8,
+  border: `0.5px solid ${OWNER_THEME.border}`,
 };
 
 // ── Gloss panel (drop-in for homeGlossPanelStyle) — same calm card; the accent

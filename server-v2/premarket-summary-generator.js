@@ -38,7 +38,7 @@ const MARKETS = [
   { sym: 'BTC-USD', label: 'Bitcoin' },
 ];
 
-const SYSTEM = `You are the pre-market desk analyst for CB Edge, an SPX gamma/options-flow desk. Given a snapshot of overnight global markets plus the computed SPX gap-to-open and fair value, write a tight pre-market read.
+const SYSTEM = `You are the pre-market desk analyst for CB Edge, an SPX gamma/options-flow desk. Given a snapshot of overnight global markets, the computed SPX gap-to-open and fair value, AND the latest overnight news headlines, write a tight pre-market read that explains WHAT IS DRIVING the market this morning.
 
 RULES
 - Output EXACTLY 5 bullet points. No preamble, no heading, no closing line.
@@ -47,8 +47,9 @@ RULES
   * "Tech and Asia Plunging: The Nasdaq 100 is taking a massive 4.19% hit, mirroring sell-offs in Asia where the Hang Seng (-5.24%) and Nikkei 225 (-4.14%) are bleeding."
   * "Volatility Spiking: Fear is entering the market as VIX jumps 6.54%, while Treasury yields climb."
   * "Isolated Pockets of Green: Despite the carnage, the Dow (+0.17%) and FTSE 100 (+1.40%) show rare relative strength."
-- Across the 5 bullets cover: (1) overall open lean using SPX gap %/points/fair value, (2) tech + Asia, (3) commodities, (4) volatility + rates/dollar, (5) pockets of strength/divergence. Cite the actual numbers given.
-- Structure, not prediction. Never financial advice or certain price targets.
+- Across the 5 bullets cover: (1) overall open lean using SPX gap %/points/fair value, (2) the KEY CATALYST or news driver from the headlines that explains the move, (3) tech + Asia or sector divergence, (4) commodities + volatility + rates/dollar, (5) pockets of strength/divergence or risk to watch.
+- If a headline explains a market move, REFERENCE IT specifically (e.g. "after the Fed signaled..." or "following stronger-than-expected jobs data...").
+- Cite the actual numbers given. Structure, not prediction. Never financial advice.
 - Return ONLY a JSON object: { "bullets": string[] } with exactly 5 strings. No markdown, no code fences.`;
 
 function internalHeaders(extra = {}) {
@@ -103,6 +104,35 @@ function fmtLine(label, q) {
   return `${label}: ${p}${pct}`;
 }
 
+// Fetch overnight financial news headlines from Yahoo Finance RSS + Seeking Alpha RSS.
+// Returns a plain-text block of up to 15 headlines for Claude to reason about.
+async function fetchOvernightNews() {
+  const FEEDS = [
+    'https://finance.yahoo.com/rss/topfinstories',
+    'https://feeds.a.dj.com/rss/RSSMarketsMain.xml',
+    'https://feeds.reuters.com/reuters/businessNews',
+  ];
+  const headlines = [];
+  for (const url of FEEDS) {
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/rss+xml, application/xml, text/xml' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) continue;
+      const xml = await res.text();
+      // Extract <title> tags (skip the first which is the feed title)
+      const matches = [...xml.matchAll(/<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>(.*?)<\/title>/gs)];
+      for (const m of matches.slice(1, 8)) {
+        const h = (m[1] || m[2] || '').replace(/<[^>]+>/g, '').trim();
+        if (h && h.length > 15 && !headlines.includes(h)) headlines.push(h);
+      }
+    } catch { /* skip failed feed */ }
+  }
+  if (!headlines.length) return null;
+  return headlines.slice(0, 15).map((h, i) => `${i + 1}. ${h}`).join('\n');
+}
+
 function extractBullets(text) {
   if (!text) return null;
   const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -124,7 +154,10 @@ async function generate(base) {
   if (!apiKey) { console.warn('[premarket-summary] ANTHROPIC_API_KEY not set — skipping'); return; }
   const today = etDateStr();
 
-  const quotes = await Promise.all(MARKETS.map((m) => fetchYahoo(m.sym).then((q) => ({ ...m, q }))));
+  const [quotes, newsBlock] = await Promise.all([
+    Promise.all(MARKETS.map((m) => fetchYahoo(m.sym).then((q) => ({ ...m, q })))),
+    fetchOvernightNews(),
+  ]);
   const block = quotes.map(({ label, q }) => fmtLine(label, q)).join('\n');
 
   const spxClose = quotes.find((x) => x.sym === '^GSPC')?.q.price ?? null;
@@ -139,7 +172,10 @@ async function generate(base) {
       `implied fair-value open: ${fv.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
   }
 
-  const userMessage = `Global pre-market tape for ${today} (overnight / pre-US-open):\n\n${gapLine}\n\n${block}\n\nWrite the 5-bullet pre-market read. Return the JSON object only.`;
+  const newsSection = newsBlock
+    ? `\n\nOVERNIGHT NEWS HEADLINES (use to explain what is driving moves):\n${newsBlock}`
+    : '';
+  const userMessage = `Global pre-market tape for ${today} (overnight / pre-US-open):\n\n${gapLine}\n\n${block}${newsSection}\n\nWrite the 5-bullet pre-market read. Return the JSON object only.`;
 
   let res;
   try {

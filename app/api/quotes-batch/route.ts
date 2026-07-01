@@ -25,7 +25,7 @@ function toYahoo(sym: string): string {
   return s; // equities/ETFs pass through (SPY, QQQ, NVDA, …)
 }
 
-type YahooQuote = { price: number | null; prevClose: number | null; change: number | null; pct: number | null; spark?: number[]; session?: "REG" | "EXT" };
+type YahooQuote = { price: number | null; prevClose: number | null; change: number | null; pct: number | null; sparkPre?: number[]; sparkRth?: number[]; session?: "REG" | "EXT" };
 
 // Offset (minutes) from UTC for America/New_York at a given instant — handles DST.
 function nyOffsetMinutes(d: Date): number {
@@ -80,46 +80,52 @@ const YH_HEADERS = {
 // 20:00 ET: only candles at/after the most recent boundary are kept, so the
 // line starts fresh each session. Includes pre/post candles so the overnight
 // (EXT) window has data. Downsamples to ~24 points to keep the payload tiny.
-async function fetchSpark(yahooSym: string): Promise<{ spark: number[]; session: "REG" | "EXT" }> {
-  const { startSec, session } = sessionBoundary(new Date());
+async function fetchSpark(yahooSym: string): Promise<{ sparkPre: number[]; sparkRth: number[]; session: "REG" | "EXT" }> {
+  const now = new Date();
+  const off = nyOffsetMinutes(now);
+  const etMs = now.getTime() + off * 60_000;
+  const etDate = new Date(etMs);
+  const etMin = etDate.getUTCHours() * 60 + etDate.getUTCMinutes();
+  const OPEN = 9 * 60 + 30;
+  const CLOSE = 16 * 60;
+  const session: "REG" | "EXT" = etMin >= OPEN && etMin < CLOSE ? "REG" : "EXT";
+  const etMidnightUtcMs = Date.UTC(etDate.getUTCFullYear(), etDate.getUTCMonth(), etDate.getUTCDate()) - off * 60_000;
+  const at = (mins: number) => Math.floor((etMidnightUtcMs + mins * 60_000) / 1000);
+  // Pre-market window: 8pm yesterday ET → 9:30am today ET
+  const preStart = at(20 * 60) - 86_400;
+  const rthStart = at(OPEN);
+
   try {
     const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=5m&range=2d&includePrePost=true&_=${Date.now()}`;
     const res = await fetch(url, { headers: YH_HEADERS, cache: "no-store" });
-    if (!res.ok) return { spark: [], session };
+    if (!res.ok) return { sparkPre: [], sparkRth: [], session };
     const data = await res.json();
     const result = data?.chart?.result?.[0];
     const ts: number[] = result?.timestamp ?? [];
     const closes: Array<number | null> = result?.indicators?.quote?.[0]?.close ?? [];
-    // Keep only points at/after the current session boundary, in order.
-    const valid: number[] = [];
-    // Also keep every finite close (any session) as a closed-market fallback.
-    const allValid: number[] = [];
+
+    const sparkPre: number[] = [];
+    const sparkRth: number[] = [];
     for (let i = 0; i < closes.length; i++) {
       const c = closes[i];
       const t = ts[i];
-      if (typeof c === "number" && Number.isFinite(c)) {
-        allValid.push(c);
-        if (typeof t === "number" && t >= startSec) valid.push(c);
-      }
+      if (typeof c !== "number" || !Number.isFinite(c) || typeof t !== "number") continue;
+      if (t >= preStart && t < rthStart) sparkPre.push(c);
+      else if (t >= rthStart) sparkRth.push(c);
     }
-    // Market closed → current session has no fresh candles. Fall back to the
-    // last session's curve (the tail of the 2-day series) so the line still
-    // shows shape instead of collapsing to the "—" placeholder.
-    let series = valid;
-    if (series.length < 2) {
-      if (allValid.length < 2) return { spark: [], session };
-      series = allValid.slice(-78); // ~ last full RTH session of 5m bars
-    }
-    // Downsample to at most 24 evenly-spaced points.
-    const MAX = 24;
-    if (series.length <= MAX) return { spark: series, session };
-    const step = series.length / MAX;
-    const out: number[] = [];
-    for (let i = 0; i < MAX; i++) out.push(series[Math.floor(i * step)]);
-    out.push(series[series.length - 1]);
-    return { spark: out, session };
+
+    const ds = (arr: number[], max = 24): number[] => {
+      if (arr.length <= max) return arr;
+      const step = arr.length / max;
+      const out: number[] = [];
+      for (let i = 0; i < max; i++) out.push(arr[Math.floor(i * step)]);
+      out.push(arr[arr.length - 1]);
+      return out;
+    };
+
+    return { sparkPre: ds(sparkPre), sparkRth: ds(sparkRth), session };
   } catch {
-    return { spark: [], session };
+    return { sparkPre: [], sparkRth: [], session };
   }
 }
 
@@ -161,7 +167,7 @@ async function fetchOne(yahooSym: string, withSpark = false): Promise<YahooQuote
     const change = price != null && prevClose != null ? price - prevClose : null;
     const pct = change != null && prevClose ? (change / prevClose) * 100 : null;
     const sp = withSpark ? await fetchSpark(yahooSym) : undefined;
-    return { price, prevClose, change, pct, spark: sp?.spark, session: sp?.session };
+    return { price, prevClose, change, pct, sparkPre: sp?.sparkPre, sparkRth: sp?.sparkRth, session: sp?.session };
   } catch {
     return { price: null, prevClose: null, change: null, pct: null };
   }
@@ -189,7 +195,7 @@ export async function GET(req: NextRequest) {
       "prev-close": q.prevClose,
       change: q.change,
       "percent-change": q.pct,
-      ...(withSpark ? { spark: q.spark ?? [], session: q.session ?? "REG" } : {}),
+      ...(withSpark ? { sparkPre: q.sparkPre ?? [], sparkRth: q.sparkRth ?? [], session: q.session ?? "REG" } : {}),
     };
   });
 

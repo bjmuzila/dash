@@ -474,8 +474,8 @@ function PremarketCard() {
 // stale-event fading, filter dropdown, and the earnings logo strip at the bottom.
 function EconCalendarCard() {
   return (
-    <Card accent="cyan" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 320 }}>
-      <EconCalendarPanel />
+    <Card accent="cyan" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 420 }}>
+      <EconCalendarPanel todayOnly />
     </Card>
   );
 }

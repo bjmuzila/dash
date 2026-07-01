@@ -116,7 +116,7 @@ function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   return false;
 }
 
-export default function EconCalendarPanel() {
+export default function EconCalendarPanel({ todayOnly = false }: { todayOnly?: boolean }) {
   const [events,        setEvents]        = useState<CalEvent[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState<string | null>(null);
@@ -210,8 +210,10 @@ export default function EconCalendarPanel() {
     });
   }
 
+  const activeDays = todayOnly ? [today] : weekDays;
+
   const weekEvents = events
-    .filter(e => weekDays.includes(e.date) && passes(e, activeFilters))
+    .filter(e => activeDays.includes(e.date) && passes(e, activeFilters))
     .sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time));
 
   const activeEvents = weekEvents.filter(e => !isStale(e, now));
