@@ -224,16 +224,16 @@ function PencilIcon({ size = 18 }: { size?: number }) {
 // ── Maintenance alert (hardcoded window: 2026-07-01 16:00–18:00 ET) ──
 function MaintenanceAlert() {
   const [open, setOpen] = useState(false);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(true);
   const [flash, setFlash] = useState(true);
 
   useEffect(() => {
     const check = () => {
-      const now = new Date();
-      const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const start = new Date(2026, 6, 1, 0, 0, 0);   // start of day — show now
-      const end   = new Date(2026, 6, 1, 18, 0, 0); // 6:00 PM ET
-      setVisible(et >= start && et <= end);
+      // Hide after 6 PM ET on 2026-07-01
+      const etStr = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+      const et = new Date(etStr);
+      const end = new Date(2026, 6, 1, 18, 0, 0); // month 6 = July
+      if (et > end) setVisible(false);
     };
     check();
     const id = setInterval(check, 30_000);
