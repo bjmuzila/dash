@@ -450,7 +450,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
         }
       `}</style>
       {/* Home */}
-      <Link href="/home" className={`nav-row${isActive("/home") ? " nav-active" : ""}`} style={rowLink({ label: "Home", href: "/home" }, isActive("/home"))} onClick={closeMenu}>
+      <Link href="/home" prefetch={false} className={`nav-row${isActive("/home") ? " nav-active" : ""}`} style={rowLink({ label: "Home", href: "/home" }, isActive("/home"))} onClick={closeMenu}>
         <HomeIcon size={18} />
         <span>Home</span>
       </Link>
@@ -501,6 +501,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
             >
               <Link
                 href={item.href}
+                prefetch={false}
                 draggable
                 onDragStart={onDragStart(href, "quick")}
                 onDragEnd={clearDrag}
@@ -605,6 +606,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                       ) : (
                         <Link
                           href={item.href}
+                          prefetch={false}
                           draggable
                           onDragStart={onDragStart(item.href, group.id)}
                           onDragEnd={clearDrag}
@@ -645,6 +647,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
       <div style={{ padding: "2px 2px 2px" }}>
         <Link
           href="/whats-new"
+          prefetch={false}
           onClick={closeMenu}
           style={{
             width: "100%",
@@ -704,6 +707,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 <Link
                   key={l.href}
                   href={l.href}
+                  prefetch={false}
                   onClick={closeMenu}
                   style={{
                     padding: "7px 10px",

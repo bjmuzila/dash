@@ -90,12 +90,13 @@ async function getJson(base, path) {
 // Build the labeled snapshot block the model reasons over. Each source is
 // best-effort; missing feeds render as "n/a" rather than failing the run.
 async function buildSnapshot(base, today) {
-  const [greeks, emSpx, gap, cal, conf] = await Promise.all([
+  const [greeks, emSpx, gap, cal, conf, spxQuote] = await Promise.all([
     getJson(base, `/api/snapshots/greeks?date=${today}&limit=1`),
     getJson(base, `/api/levels?ticker=SPX`),
     getJson(base, `/api/es-gap?date=${today}`),
     getJson(base, `/api/calendar`),
     getJson(base, `/api/confidence?date=${today}`),
+    getJson(base, `/proxy/quotes?symbols=%24SPX`),   // live SPX spot
   ]);
 
   const g = greeks?.rows?.[greeks.rows.length - 1] ?? greeks?.rows?.[0] ?? null;
@@ -111,8 +112,22 @@ async function buildSnapshot(base, today) {
 
   const score = conf?.score?.hit != null ? Math.round(conf.score.hit) : null;
 
+  // Extract live SPX spot from the quote response (try multiple field names).
+  const qi = spxQuote?.data?.items?.[0] ?? spxQuote?.items?.[0] ?? spxQuote?.[0] ?? null;
+  const liveSpx = qi
+    ? (Number(qi.last) || Number(qi['last-price']) || Number(qi.mark) || Number(qi['mark-price']) || null)
+    : null;
+  // Fall back to confidence snapshot price if the quote is unavailable.
+  const spxSpot = liveSpx ?? conf?.price ?? conf?.spx;
+  // Flag stale EM levels: if the stored close differs from live spot by more than 5%,
+  // tell the model so it doesn't reason off a months-old weekly band.
+  const emClose = Number(em.close) || null;
+  const emStale = emClose && spxSpot && Math.abs(spxSpot - emClose) / spxSpot > 0.05;
+
   return [
     `CB Edge — SPX morning strategy snapshot for ${today} (US Eastern).`,
+    ``,
+    `LIVE SPX SPOT: ${spxSpot != null ? num(spxSpot, 1) : 'n/a'}  ← use this as the current market price for ALL level calculations`,
     ``,
     `NET GREEKS (latest snapshot):`,
     `  Net GEX: ${g ? `${g.gex >= 0 ? '+' : ''}${num(g.gex)}B` : 'n/a'}`,
@@ -120,19 +135,21 @@ async function buildSnapshot(base, today) {
     `  Net CHEX: ${g ? `${num(g.chex)}M` : 'n/a'}  Net VEX: ${g ? `${num(g.vex)}M` : 'n/a'}`,
     ``,
     `EXPECTED MOVE (SPX weekly):`,
-    `  EM Up: ${num(em.up)}  EM Down: ${num(em.down)}  Weekly close basis: ${num(em.close)}`,
+    emStale
+      ? `  EM LEVELS STALE — stored close ${num(emClose)} does not match live SPX ${num(spxSpot, 1)}; treat EM bands as approximate context only.`
+      : `  EM Up: ${num(em.up)}  EM Down: ${num(em.down)}  Weekly close basis: ${num(em.close)}`,
     ``,
     `ES OVERNIGHT GAP:`,
     `  Prior RTH close: ${num(ga.prior_close)}  09:30 open: ${num(ga.open_0930)}`,
     `  Gap: ${ga.gap_pts != null ? `${ga.gap_pts >= 0 ? '+' : ''}${num(ga.gap_pts)} pts (${ga.gap_dir || '—'})` : 'n/a'}`,
     `  Filled: ${ga.pct_filled != null ? `${num(ga.pct_filled)}%` : 'n/a'}`,
     ``,
-    `CONFIDENCE SCORE (model): ${score != null ? `${score}/100 hit` : 'n/a'}  Current CB level: ${num(conf?.level)}  SPX: ${num(conf?.price ?? conf?.spx)}`,
+    `CONFIDENCE SCORE (model): ${score != null ? `${score}/100 hit` : 'n/a'}  Current CB level: ${num(conf?.level)}`,
     ``,
     `ECONOMIC CALENDAR (today, USD):`,
     todays,
     ``,
-    `Build the daily SPX strategy from this snapshot. All output levels must be SPX cash; never surface an ES/futures price. Return the JSON object only.`,
+    `Build the daily SPX strategy from this snapshot. LIVE SPX SPOT is the authoritative current price — anchor all levels to it. All output levels must be SPX cash; never surface an ES/futures price. Return the JSON object only.`,
   ].join('\n');
 }
 

@@ -1441,9 +1441,13 @@ class TastytradeProxy {
     this.prevGreeksCoverage = 0; // greeks coverage at the previous recompute (plateau detection)
     this.greeksPlateauHits = 0;  // consecutive recomputes with negligible coverage gain
     this.firstSubAt = 0;      // ms timestamp of first subscribe (grace-period anchor)
+    this.sessionCallPremium = 0;   // cumulative call premium for today's RTH session
+    this.sessionPutPremium  = 0;   // cumulative put  premium for today's RTH session
+    this.premiumLastPost = 0;      // epoch ms of last /api/snapshots/premium POST
     this.oiTimer = null;
     this.volTimer = null;
     this.flowTimer = null;
+    this.premiumTimer = null;
     this.idle = (() => {
       try { return !!JSON.parse(fs.readFileSync(IDLE_STATE_FILE, 'utf8')).idle; }
       catch { return false; }
@@ -1665,7 +1669,20 @@ class TastytradeProxy {
       if (!this.thetaStream) {
         this.thetaStream = new thetaAdapter.ThetaStreamClient({
           getSpot: () => this.spot || marketState.getSpot(),
-          onTrade: (print) => { try { this.flow.addPrint(print); } catch {} },
+          onTrade: (print) => {
+            try {
+              this.flow.addPrint(print);
+              // Accumulate session-level call/put premium for the sparkline card.
+              if (print.price > 0 && print.size > 0) {
+                const parsed = parseOptionSymbol(print.streamerSymbol);
+                if (parsed) {
+                  const prem = print.price * print.size * 100;
+                  if (parsed.type === 'C') this.sessionCallPremium += prem;
+                  else this.sessionPutPremium += prem;
+                }
+              }
+            } catch {}
+          },
           onIndex: (root, price) => this._onThetaIndex(root, price),
           onGreeks: (streamerSymbol, entry) => {
             // Write streamed greeks directly into the same map _recompute reads.
@@ -1717,6 +1734,31 @@ class TastytradeProxy {
       writeFlowTape(bucket.tape);
     }, FLOW_AGGREGATE_MS);
 
+    // Post cumulative session call/put premium to /api/snapshots/premium every 30s
+    // during RTH so the Analytics "SPX Premium Flow" sparkline card has data.
+    this.premiumTimer = setInterval(async () => {
+      if (this.sessionCallPremium === 0 && this.sessionPutPremium === 0) return;
+      const now = Date.now();
+      if (now - this.premiumLastPost < 29_000) return;
+      this.premiumLastPost = now;
+      const spot = this.spot || marketState.getSpot() || 0;
+      const netPremium = this.sessionCallPremium - this.sessionPutPremium;
+      try {
+        const port = process.env.PORT || 3001;
+        await fetch(`http://localhost:${port}/api/snapshots/premium`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            timestamp: now,
+            callPremium: this.sessionCallPremium,
+            putPremium:  this.sessionPutPremium,
+            netPremium,
+            spxPrice:    spot,
+          }),
+        });
+      } catch { /* fire-and-forget */ }
+    }, 30_000);
+
     // start() is the resume path for idle-OFF, and also runs on cold boot. Either
     // way the feed is now live, so the in-memory flag is OFF. (setIdle persists
     // the flag itself; we don't tear down here — a persisted-idle cold boot is
@@ -1763,6 +1805,8 @@ class TastytradeProxy {
         if (this.optSessionKey && key !== this.optSessionKey) {
           console.log(`[SESSION] SPX rollover ${this.optSessionKey} → ${key}: clearing stale volume + re-arming OI`);
           this.volumes.clear();
+          this.sessionCallPremium = 0;
+          this.sessionPutPremium  = 0;
           thetaAdapter.resetCalendarCache(); // force re-check tomorrow's market open status
           this.warmedExpiries.clear(); // prior session's warm cache is now stale — force re-warm
           this.oiReady = false;
@@ -2944,11 +2988,13 @@ class TastytradeProxy {
     if (this.oiTimer) clearTimeout(this.oiTimer);
     if (this.volTimer) clearTimeout(this.volTimer);
     if (this.flowTimer) clearInterval(this.flowTimer);
+    if (this.premiumTimer) clearInterval(this.premiumTimer);
     if (this.thetaGreeksTimer) clearInterval(this.thetaGreeksTimer);
     this.recomputeTimer = null;
     this.oiTimer = null;
     this.volTimer = null;
     this.flowTimer = null;
+    this.premiumTimer = null;
     this.thetaGreeksTimer = null;
     if (this.thetaStream) { this.thetaStream.close(); this.thetaStream = null; }
     this.client?.close();

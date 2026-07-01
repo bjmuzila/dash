@@ -37,6 +37,7 @@ const OWNER_PATTERNS: RegExp[] = [
   /^\/admin(\/.*)?$/,
   /^\/budget(\/.*)?$/,
   /^\/personal(\/.*)?$/,
+  /^\/market-scanner(\/.*)?$/,
 ];
 const isOwnerRoute = (path: string) => OWNER_PATTERNS.some((re) => re.test(path));
 

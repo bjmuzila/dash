@@ -140,7 +140,7 @@ function useQuickPages() {
 function LogoMenu() {
   return (
     <div style={{ position: "relative", flexShrink: 0, display: "flex" }}>
-      <Link href="/feedback" title="Send feedback" aria-label="Send feedback">
+      <Link href="/feedback" prefetch={false} title="Send feedback" aria-label="Send feedback">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/cb-edge-logo.png"
@@ -167,6 +167,7 @@ function QuickPagesBar() {
         <Link
           key={item.href}
           href={item.href}
+          prefetch={false}
           title={item.label}
           aria-label={item.label}
           style={{
