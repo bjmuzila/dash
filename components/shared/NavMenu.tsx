@@ -299,7 +299,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   const { orderedItems, reorderInGroup } = useGroupOrder();
 
   const [mounted, setMounted] = useState(false);
-  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [openGroup, setOpenGroup] = useState<string | null>("gex");
   const [legalOpen, setLegalOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
 

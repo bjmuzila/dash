@@ -153,11 +153,20 @@ export default function EsCandlesPage() {
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
 
-  // Single source of truth: rolling ~24h session (overnight + today) from the
-  // SQL load + live /ws/gex merge. sessionCandles spans the continuous ES
-  // session regardless of ET date, so the chart includes the overnight and
-  // follows into a new day (today-only `candles` is for IB / RelVol elsewhere).
-  const { sessionCandles: rows, historical, connected, refresh } = useEsCandles();
+  const { sessionCandles: liveRows, historical, connected, refresh } = useEsCandles();
+
+  // Chart candles: full 5-day rolling window so the heatmap's historical columns
+  // resolve via timeToCoordinate (which only works for timestamps on the chart's
+  // time scale). historical already holds 20 days from SQLite; merge with the
+  // live session so the most-recent bars always win on slotKey collision.
+  const rows = useMemo(() => {
+    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - FIVE_DAYS_MS;
+    const map = new Map<string, typeof liveRows[0]>();
+    for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
+    for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
+    return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
+  }, [historical, liveRows]);
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
   const chartRef = useRef<HTMLDivElement>(null);
@@ -187,7 +196,7 @@ export default function EsCandlesPage() {
   // DRAW time using the live ESU basis (same as the other levels), so the line
   // tracks the current /ESU price — not the stale per-row esPrice.
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
-  const [showMvcLine, setShowMvcLine] = useState(true);
+  const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [intensity, setIntensity] = useState(0.65); // page-local default; tuned with gexColor so light zones read clearly
   // Heatmap metric: "voloi" = gamma×(OI+vol), "vol" = gamma×vol only. Mirrored
@@ -270,14 +279,13 @@ export default function EsCandlesPage() {
   const OVERLAY_SETTERS: Record<string, (v: boolean) => void> = useMemo(() => ({
     heatmap: setShowHeatmap,
     profile: setShowProfile,
-    mvc: setShowMvcLine,
     levels: setShowLevels,
     pdhon: setShowSessions,
   }), []);
   const overlayState = useMemo(() => ({
-    heatmap: showHeatmap, profile: showProfile, mvc: showMvcLine,
+    heatmap: showHeatmap, profile: showProfile,
     levels: showLevels, pdhon: showSessions,
-  }), [showHeatmap, showProfile, showMvcLine, showLevels, showSessions]);
+  }), [showHeatmap, showProfile, showLevels, showSessions]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
@@ -848,7 +856,7 @@ export default function EsCandlesPage() {
       });
       priceLinesRef.current.push(pl);
     }
-  }, [levels, showLevels, showMvcLine, showSessions, sessionLevels]);
+  }, [levels, showLevels, showSessions, sessionLevels]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
@@ -1096,7 +1104,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1187,7 +1195,6 @@ export default function EsCandlesPage() {
           {/* overlay toggles — each keeps its accent color */}
           <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
 <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
-          <ToggleTile label="CB"     on={showMvcLine}   onClick={() => setShowMvcLine((v) => !v)}  accent="#ffffff" />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
 

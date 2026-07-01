@@ -43,6 +43,9 @@ const DXLINK_WS_URL    = process.env.DXFEED_WS_URL || 'wss://tasty-openapi-ws.dx
 const DAYS_BACK        = Number(process.env.BACKFILL_DAYS_BACK || 730);
 const DRY_RUN          = process.env.BACKFILL_DRY_RUN === '1';
 const DEBUG            = process.env.GEX_DEBUG === '1';
+// Continuous contract symbol override — dxFeed serves the rolling front-month
+// under /ES:XCME (no contract month code). Set ES_CANDLE_SYMBOL to override.
+const ES_CANDLE_SYMBOL = process.env.ES_CANDLE_SYMBOL || null;
 
 // ---------------------------------------------------------------------------
 // DB pool (skip if DRY_RUN or no DATABASE_URL)
@@ -201,8 +204,8 @@ async function main() {
   const { token: quoteToken, url: wsUrl } = await getQuoteToken(accessToken);
   console.log(`[backfill] Quote token ok, WS=${wsUrl}`);
 
-  const esStreamer = await resolveFrontEs(accessToken);
-  const candleSymbol = `${esStreamer}{=1m}`;
+  const esStreamer = ES_CANDLE_SYMBOL || await resolveFrontEs(accessToken);
+  const candleSymbol = ES_CANDLE_SYMBOL ? `${ES_CANDLE_SYMBOL}{=1m}` : `${esStreamer}{=1m}`;
   const fromTime = Date.now() - DAYS_BACK * 86_400_000;
   console.log(`[backfill] ES symbol: ${esStreamer}  candle: ${candleSymbol}`);
   console.log(`[backfill] fromTime: ${new Date(fromTime).toISOString()}  (${DAYS_BACK} days back)`);
