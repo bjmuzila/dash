@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import SplashScreen from "@/components/landing/SplashScreen";
@@ -14,11 +14,31 @@ const FEATURES = [
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 
+// Launch: Saturday July 4, 2026 at 12:00 PM ET (UTC-4 in summer)
+const LAUNCH_UTC = new Date("2026-07-04T16:00:00Z");
+
+function useCountdown() {
+  const [parts, setParts] = useState({ d: 0, h: 0, m: 0, s: 0, done: false });
+  useEffect(() => {
+    function tick() {
+      const diff = LAUNCH_UTC.getTime() - Date.now();
+      if (diff <= 0) { setParts({ d: 0, h: 0, m: 0, s: 0, done: true }); return; }
+      const s = Math.floor(diff / 1000);
+      setParts({ d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600), m: Math.floor((s % 3600) / 60), s: s % 60, done: false });
+    }
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return parts;
+}
+
 export default function LandingClient() {
   const [email, setEmail] = useState("");
   const [xHover, setXHover] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
   const [msg, setMsg] = useState("");
+  const countdown = useCountdown();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -51,7 +71,7 @@ export default function LandingClient() {
       style={{
         position: "absolute",
         inset: 0,
-        overflow: "hidden",
+        overflowY: "auto",
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
         color: T.text,
       }}
@@ -89,26 +109,27 @@ export default function LandingClient() {
           .landing-card .landing-logo { max-height: 80px !important; }
         }
       `}</style>
-      {/* Blurred dashboard behind glass */}
-      <div style={{ position: "absolute", inset: 0, filter: "blur(7px)", transform: "scale(1.04)" }}>
+      {/* Blurred dashboard behind glass — fixed so it stays put when card scrolls */}
+      <div style={{ position: "fixed", inset: 0, filter: "blur(7px)", transform: "scale(1.04)", zIndex: 0 }}>
         <img
           src="/landing-bg.png"
           alt=""
           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
         />
       </div>
-      {/* Dark scrim so the mock is unreadable + focuses the modal */}
+      {/* Dark scrim */}
       <div
         style={{
-          position: "absolute",
+          position: "fixed",
           inset: 0,
+          zIndex: 0,
           background:
             "radial-gradient(circle at 50% 40%, rgba(5,6,10,0.55) 0%, rgba(5,6,10,0.82) 70%, rgba(5,6,10,0.92) 100%)",
         }}
       />
 
       {/* Top-right sign-in for returning subscribers */}
-      <div style={{ position: "absolute", top: 20, right: 24, zIndex: 3 }}>
+      <div style={{ position: "fixed", top: 20, right: 24, zIndex: 3 }}>
         <Link href="/sign-in" style={{ ...topSignInBtn, display: "inline-block", textDecoration: "none" }}>
           Sign in
         </Link>
@@ -143,6 +164,29 @@ export default function LandingClient() {
               <span className="fw fw3" />
             </span>
           </div>
+
+          {/* Countdown to full launch */}
+          {!countdown.done ? (
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", margin: "14px 0 4px", flexWrap: "wrap" }}>
+              {[
+                { v: countdown.d, label: "days" },
+                { v: countdown.h, label: "hrs" },
+                { v: countdown.m, label: "min" },
+                { v: countdown.s, label: "sec" },
+              ].map(({ v, label }) => (
+                <div key={label} style={{ textAlign: "center", minWidth: 52, background: "rgba(33,158,188,0.08)", border: "1px solid rgba(33,158,188,0.2)", borderRadius: 10, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: T.cyan, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+                    {String(v).padStart(2, "0")}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.muted, marginTop: 3, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ textAlign: "center", margin: "14px 0 4px", fontSize: 14, fontWeight: 800, color: T.green }}>
+              🚀 Full launch is LIVE!
+            </div>
+          )}
 
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
@@ -269,7 +313,7 @@ export default function LandingClient() {
 /* ── styles ───────────────────────────────────────────────────────────── */
 
 const legalFooter: React.CSSProperties = {
-  position: "absolute",
+  position: "fixed",
   bottom: 0,
   left: 0,
   right: 0,

@@ -80,7 +80,7 @@ $deployLines = @(
     "set -e",
     "cd /opt/dashboard",
     "git pull",
-    "export \$(grep -v '^#' .env.local | xargs)",
+    "export `$(grep -v '^#' .env.local | xargs)",
     "docker compose $composeFiles build $buildFlags ``",
     "  --build-arg NEXT_PUBLIC_SUPABASE_URL=\$NEXT_PUBLIC_SUPABASE_URL ``",
     "  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=\$NEXT_PUBLIC_SUPABASE_ANON_KEY ``",

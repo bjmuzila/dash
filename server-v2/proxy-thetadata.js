@@ -358,7 +358,10 @@ async function fetchStockQuoteTheta(symbol) {
   const json = await thetaGet(
     `/v3/stock/snapshot/quote?symbol=${encodeURIComponent(String(symbol).toUpperCase())}`,
   );
-  const r = rowsFromV3(json)[0] || {};
+  // Stock snapshot uses nested shape { response:[{contract,data}] } — use flatSnapshotRows.
+  // Fall back to rowsFromV3 for any endpoint variant that returns columnar format.
+  const rows = flatSnapshotRows(json);
+  const r = (rows.length ? rows : rowsFromV3(json))[0] || {};
   const bid = Number(r.bid), ask = Number(r.ask);
   const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : Number(r.last ?? r.price);
   const last = Number(r.last ?? r.price ?? mark);

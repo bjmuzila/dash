@@ -3,9 +3,10 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
-import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
+import dynamic from "next/dynamic";
 import { SegGroup } from "@/components/shared/DockToolbar";
-import GexChart from "@/components/dashboard/GexChart";
+const BehaviorDemo = dynamic(() => import("@/components/greeks/RegimeMatrix").then(m => ({ default: m.BehaviorDemo })), { ssr: false });
+const GexChart = dynamic(() => import("@/components/dashboard/GexChart"), { ssr: false });
 import type { ChainRow } from "@/lib/calculations/calculations";
 
 /* ────────────────────────────────────────────────────────────────────────────

@@ -391,8 +391,18 @@ async function resolveFrontEsSymbol() {
     .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
   const front = active[0] || items.find((it) => it['streamer-symbol']);
   if (!front?.['streamer-symbol']) throw new Error('No active ES future found');
-  // streamer-symbol (e.g. /ESU26:XCME) is for dxLink; ttSymbol (the instrument's
-  // own `symbol`, e.g. /ESU6) is what /market-data/by-type?future= expects.
+  return { streamerSymbol: front['streamer-symbol'], ttSymbol: front['symbol'] || front['streamer-symbol'] };
+}
+
+async function resolveFrontNqSymbol() {
+  const json = await ttGet(`/instruments/futures?product-code[]=NQ`);
+  const items = json?.data?.items || [];
+  const today = todayYmd().ymd;
+  const active = items
+    .filter((it) => it['streamer-symbol'] && (it['expiration-date'] || '') >= today)
+    .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
+  const front = active[0] || items.find((it) => it['streamer-symbol']);
+  if (!front?.['streamer-symbol']) throw new Error('No active NQ future found');
   return { streamerSymbol: front['streamer-symbol'], ttSymbol: front['symbol'] || front['streamer-symbol'] };
 }
 
@@ -806,34 +816,26 @@ async function fetchUnderlyingQuotes(symbols) {
   }
   await batchParam('index', [...new Set(indices)], (root) => idxOriginals.get(root) || root);
 
-  // Futures: the watchlist uses synthetic symbols like /NQU26 that are NOT real
-  // Tastytrade symbols (TT uses /NQU6, single-digit year). Querying by symbol
-  // 404s ("No streamer-symbol"), so resolve the FRONT active contract by product
-  // code instead, then pull its by-type quote with the real TT symbol.
-  for (const fut of futures) {
-    const orig = list.find((s) => s.toUpperCase() === fut) || fut;
-    const product = futRoot(fut); // e.g. /NQU26 -> NQ
-    try {
-      const ttSymbol = await resolveFrontFutureTtSymbol(product);
-      if (!ttSymbol) { console.warn(`[WATCH-QUOTES] no front contract for ${product}`); continue; }
-      const json = await ttGet(`/market-data/by-type?future[]=${encodeURIComponent(ttSymbol)}`);
-      const it = json?.data?.items?.[0];
-      if (it) {
-        const override = FUT_PREVCLOSE_OVERRIDE[futRoot(orig)];
-        if (override != null && override > 0) {
-          assign(orig, { ...it, 'prev-close': override, close: override });
-        } else {
-          assign(orig, it);
-        }
-        // DIAGNOSTIC: dump every settle-ish field TT returns for the NQ front
-        // contract so we can pin which one is the 4pm RTH close (29747.25) vs the
-        // globex print. Remove once the right field is wired in.
-        if (futRoot(orig) === 'NQ') {
-          console.log(`[WATCH-QUOTES] ${orig} ttSym=${ttSymbol} last=${it.last} mark=${it.mark} close=${it.close} prev-close=${it['prev-close']} prev-close-date=${it['prev-close-date']} settlement=${it['settlement-price'] ?? it.settlement ?? 'n/a'} day-open=${it.open}`);
-        }
+  // Futures: read directly from market-state (dxLink Quote/Trade/Summary stream).
+  // ES and NQ are subscribed at startup; no TT REST call needed — avoids the
+  // pending/hang that occurred when the TT session was idle or expired.
+  if (futures.length) {
+    const ms = marketState.getState();
+    for (const fut of futures) {
+      const orig = list.find((s) => s.toUpperCase() === fut) || fut;
+      const product = futRoot(fut);
+      const override = FUT_PREVCLOSE_OVERRIDE[product];
+      if (product === 'ES') {
+        const last = ms.esFut || 0;
+        const pc = override != null ? override : (ms.esFutPrevClose || 0);
+        if (last > 0) out.set(orig, { last, mark: last, close: pc, prevClose: pc });
+      } else if (product === 'NQ') {
+        const last = ms.nqFut || 0;
+        const pc = override != null ? override : (ms.nqFutPrevClose || 0);
+        if (last > 0) out.set(orig, { last, mark: last, close: pc, prevClose: pc });
+      } else {
+        console.warn(`[WATCH-QUOTES] unsupported future product: ${product} (${orig})`);
       }
-    } catch (err) {
-      console.warn(`[WATCH-QUOTES] future ${fut} failed:`, String(err.message).slice(0, 120));
     }
   }
 
@@ -1465,15 +1467,17 @@ class TastytradeProxy {
     this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
     this.vixSymbol = null;  // resolved dxLink streamer symbol for VIX
     this.esSymbol = null;   // resolved dxLink streamer symbol for front ES future
+    this.nqSymbol = null;   // resolved dxLink streamer symbol for front NQ future
     this.esCandleSymbol = null; // candle stream symbol, e.g. "/ESU26:XCME{=5m}"
     this.esCandles = new Map(); // slotKey -> { timestamp, date, slotKey, time, open, high, low, close, volume }
     this.esCandlesDirty = false; // set when a candle slot changed since last flush
     this.esCandlesDirtySlots = new Set(); // slotKeys changed since last flush (delta broadcast)
     this.candleFlushTimer = null;
-    // Live front-ES quote, used by _publishEsFut to clamp the last trade into the
-    // current spread (TradingView-style last-price display). Set by the Quote
-    // handler; esLastTrade is set by the Trade handler.
+    // Live front-ES/NQ quotes, used by _publishEsFut/_publishNqFut to clamp the
+    // last trade into the current spread. Set by Quote handler; *LastTrade by Trade.
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
+    this.nqQuote = null;          // { bid, ask, mid } for the front NQ future
+    this.nqLastTrade = 0;
     this.expiry = '';
     this.recomputeTimer = null;
     // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
@@ -1561,6 +1565,13 @@ class TastytradeProxy {
       }
     } catch (err) {
       console.warn('[FEED] ES resolve failed:', err.message.slice(0, 120));
+    }
+    try {
+      const nqRes = await resolveFrontNqSymbol();
+      this.nqSymbol = nqRes.streamerSymbol;
+      console.log(`[FEED] NQ front streamer=${this.nqSymbol}`);
+    } catch (err) {
+      console.warn('[FEED] NQ resolve failed:', err.message.slice(0, 120));
     }
 
     // Underlying prev close + last from REST (uses class-correct param).
@@ -2070,6 +2081,7 @@ class TastytradeProxy {
     const syms = new Set([this.spotSymbol]);
     if (this.vixSymbol) syms.add(this.vixSymbol);
     if (this.esSymbol) syms.add(this.esSymbol);
+    if (this.nqSymbol) syms.add(this.nqSymbol);
     // In theta mode the option streamerSymbols are SYNTHETIC (not real dxLink
     // symbols) and option data comes from Theta — never subscribe them to dxLink.
     // dxLink carries spot + ES/NQ candles only.
@@ -2173,6 +2185,26 @@ class TastytradeProxy {
     if (px > 0) marketState.setAux({ esFut: Math.round(px * 4) / 4 });
     // Display SPX rides on ES off-hours; recompute it whenever ES moves.
     this._publishSpotDisplay();
+  }
+
+  _publishNqFut() {
+    const q = this.nqQuote || {};
+    const bid = Number(q.bid) || 0;
+    const ask = Number(q.ask) || 0;
+    const last = Number(this.nqLastTrade) || 0;
+    let px = 0;
+    if (last > 0 && bid > 0 && ask > 0 && ask >= bid) {
+      px = Math.min(Math.max(last, bid), ask);
+    } else if (bid > 0 && ask > 0 && ask >= bid) {
+      px = (bid + ask) / 2;
+    } else if (last > 0) {
+      px = last;
+    } else if (bid > 0) {
+      px = bid;
+    } else if (ask > 0) {
+      px = ask;
+    }
+    if (px > 0) marketState.setAux({ nqFut: Math.round(px * 4) / 4 });
   }
 
   /**
@@ -2342,12 +2374,13 @@ class TastytradeProxy {
         return;
       }
       if (sym === this.esSymbol) {
-        // Keep the live bid/ask so ES Trade ticks can be classified as
-        // aggressive-buy (>= ask) vs aggressive-sell (<= bid) for the footprint.
         if (bid > 0 || ask > 0) this.esQuote = { bid, ask, mid };
-        // Re-publish on each Quote so a moving spread drags the price with the
-        // live market (clamps a stale last-trade into the new bid/ask).
         this._publishEsFut();
+        return;
+      }
+      if (sym === this.nqSymbol) {
+        if (bid > 0 || ask > 0) this.nqQuote = { bid, ask, mid };
+        this._publishNqFut();
         return;
       }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize), t: Date.now() });
@@ -2371,8 +2404,12 @@ class TastytradeProxy {
       // which can lag a session. Prefer it for the ES day-change baseline.
       if (sym === this.esSymbol && pc > 0) {
         console.log(`[FEED] ES Summary prevDayClosePrice=${pc} (authoritative baseline) sym=${sym}`);
-        this._esSummarySettle = pc; // exchange settle wins over candle-derived
+        this._esSummarySettle = pc;
         marketState.setAux({ esFutPrevClose: pc });
+      }
+      if (sym === this.nqSymbol && pc > 0) {
+        console.log(`[FEED] NQ Summary prevDayClosePrice=${pc} sym=${sym}`);
+        marketState.setAux({ nqFutPrevClose: pc });
       }
       return;
     }
@@ -2395,11 +2432,16 @@ class TastytradeProxy {
       if (sym === this.esSymbol) {
         const px = Number(ev.price);
         if (px > 0) {
-          // ES Trade drives the live price (esFut): last trade CLAMPED into the
-          // live bid/ask, which matches TradingView's last-price display while
-          // tracking the market on a wide spread.
           this.esLastTrade = px;
           this._publishEsFut();
+        }
+        return;
+      }
+      if (sym === this.nqSymbol) {
+        const px = Number(ev.price);
+        if (px > 0) {
+          this.nqLastTrade = px;
+          this._publishNqFut();
         }
         return;
       }

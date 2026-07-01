@@ -183,6 +183,7 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
 
     // Value-driven bandwidth gate: re-runs when shouldConnect flips. Connect when
     // allowed; the cleanup tears down when not (no polling).
+    unmountedRef.current = false;
     if (shouldConnect) connect();
     return () => {
       unmountedRef.current = true;

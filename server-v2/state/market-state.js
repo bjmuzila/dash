@@ -26,11 +26,13 @@ const state = {
   // Underlying prior close (for change calc) and date.
   prevClose: 0,
   prevCloseDate: null,
-  // Auxiliary live quotes: VIX index + front ES future, with prior closes.
+  // Auxiliary live quotes: VIX index + front ES/NQ futures, with prior closes.
   vix: 0,
   esFut: 0,
+  nqFut: 0,
   vixPrevClose: 0,
   esFutPrevClose: 0,
+  nqFutPrevClose: 0,
   // Display SPX: live broker quote during RTH, esFut+cashBasis off-hours. Kept
   // separate from `spot` (broker quote used for all GEX math) so display can be
   // kept live without affecting strike/level pricing.
