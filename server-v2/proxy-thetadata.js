@@ -105,10 +105,12 @@ async function fetchChainTheta(underlying = SYMBOL) {
   const root = thetaRoot(underlying);
   const expJson = await thetaGet(`/v3/option/list/expirations?symbol=${encodeURIComponent(root)}`);
   const expRows = rowsFromV3(expJson);
-  // expiration column is YYYY-MM-DD (Phase 0 confirmed). Only future-or-today.
+  // expiration column is YYYY-MM-DD (Phase 0 confirmed). Only future-or-today,
+  // and cap at 5 years out to strip bogus far-future Theta rows (e.g. 2088-xx-xx).
   const today = new Date().toISOString().slice(0, 10);
+  const maxDate = String(new Date().getFullYear() + 5);
   const expirations = [...new Set(expRows.map((r) => r.expiration))]
-    .filter((e) => e && e >= today)
+    .filter((e) => e && e >= today && e.slice(0, 4) <= maxDate)
     .sort();
 
   const contracts = [];

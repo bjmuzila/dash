@@ -2526,6 +2526,23 @@ class TastytradeProxy {
     if (this.idle) return;
     if (!(this.spot > 0)) return;
 
+    // Auto-roll expiry: advance when the active expiry has passed, OR when
+    // today's 0DTE has expired (after 4:15pm ET the 0DTE has no live OI/greeks
+    // so pre-roll to next session's expiry).
+    const { ymd } = todayYmd();
+    const nowEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const afterClose = nowEt.getHours() > 16 || (nowEt.getHours() === 16 && nowEt.getMinutes() >= 15);
+    const shouldRoll = this.expiry < ymd || (this.expiry === ymd && afterClose);
+    if (shouldRoll) {
+      const expirations = [...new Set([...this.contracts.values()].map(c => c.expiration))].sort();
+      const next = expirations.find(e => e > ymd) || expirations.find(e => e >= ymd);
+      if (next && next !== this.expiry) {
+        console.log(`[FEED] auto-rolling expiry ${this.expiry} → ${next}`);
+        this.setExpiry(next);
+        return; // recompute next tick with new expiry
+      }
+    }
+
     // Pass 1: gather each contract's price/OI/volume and solve IV where the
     // price supports it. Track ATM IV (nearest strike with a good solve) to use
     // as a fallback for deep-ITM / illiquid legs whose IV can't be solved from a

@@ -152,6 +152,19 @@ function handleProxyRest(req, res) {
       sendJson(res, 200, state.flow || {});
       return true;
     case '/proxy/expirations':
+      if (req.method === 'POST') {
+        // POST { expiry: 'YYYY-MM-DD' } to manually switch the active expiry.
+        let body = '';
+        req.on('data', (d) => { body += d; });
+        req.on('end', () => {
+          try {
+            const { expiry } = JSON.parse(body);
+            if (expiry && proxy) { proxy.setExpiry(expiry); sendJson(res, 200, { ok: true, expiry }); }
+            else sendJson(res, 400, { error: 'missing expiry or proxy not ready' });
+          } catch { sendJson(res, 400, { error: 'invalid JSON' }); }
+        });
+        return true;
+      }
       sendJson(res, 200, { expiry: state.expiry, expirations: state.expirations });
       return true;
     case '/proxy/status':
