@@ -224,30 +224,12 @@ function PencilIcon({ size = 18 }: { size?: number }) {
 // ── Maintenance alert (hardcoded window: 2026-07-01 16:00–18:00 ET) ──
 function MaintenanceAlert() {
   const [open, setOpen] = useState(false);
-  const [visible, setVisible] = useState(true);
   const [flash, setFlash] = useState(true);
 
   useEffect(() => {
-    const check = () => {
-      // Hide after 6 PM ET on 2026-07-01
-      const etStr = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
-      const et = new Date(etStr);
-      const end = new Date(2026, 6, 1, 18, 0, 0); // month 6 = July
-      if (et > end) setVisible(false);
-    };
-    check();
-    const id = setInterval(check, 30_000);
-    return () => clearInterval(id);
-  }, []);
-
-  // Flash the emoji every 800ms
-  useEffect(() => {
-    if (!visible) return;
     const id = setInterval(() => setFlash(f => !f), 800);
     return () => clearInterval(id);
-  }, [visible]);
-
-  if (!visible) return null;
+  }, []);
 
   return (
     <div style={{ position: "relative", zIndex: 100, display: "flex", flexShrink: 0 }}>
