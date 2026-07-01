@@ -1878,6 +1878,126 @@ export default function OwnerDashboard() {
     { label: "dxLink",    ok: dxOk,             sub: server.dxLinkState ?? "—" },
   ];
 
+  // Mobile sidebar drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Close drawer when switching to desktop
+  useEffect(() => { if (!isMobile) setDrawerOpen(false); }, [isMobile]);
+
+  // Sidebar content extracted so it can render both in the fixed panel (desktop)
+  // and the slide-in drawer (mobile).
+  const SidebarContent = () => (
+    <>
+      {/* Logo row */}
+      <div style={{
+        padding: "14px 16px 12px",
+        borderBottom: `1px solid ${HOME_THEME.border}`,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+      }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.02em" }}>CB Edge</div>
+          <div style={{ fontSize: 11, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 2 }}>OWNER DASHBOARD</div>
+        </div>
+        {isMobile && (
+          <button
+            onClick={() => setDrawerOpen(false)}
+            style={{ background: "transparent", border: "none", color: HOME_THEME.text, fontSize: 20, cursor: "pointer", padding: "4px 8px", lineHeight: 1 }}
+          >✕</button>
+        )}
+      </div>
+
+      {/* Status dots */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+        {STATUS_ROWS.map((row) => (
+          <div key={row.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{
+                width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                background: row.ok ? HOME_THEME.green : HOME_THEME.red,
+                boxShadow: row.ok ? `0 0 5px ${HOME_THEME.green}88` : `0 0 5px ${HOME_THEME.red}88`,
+              }} />
+              <span style={{ fontSize: 13, color: HOME_THEME.text }}>{row.label}</span>
+            </div>
+            {row.sub && <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.5, fontFamily: "monospace" }}>{row.sub}</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* Nav */}
+      <nav style={{ flex: 1, overflowY: "auto", padding: "8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
+        {NAV_ITEMS.map((item) => {
+          const active = ownerTab === item.id;
+          const badge = item.id === "overview" ? feedbackBadge : item.badge;
+          return (
+            <button
+              key={item.id}
+              className="owner-nav-item"
+              onClick={() => { selectTab(item.id); if (isMobile) setDrawerOpen(false); }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                width: "100%", textAlign: "left",
+                padding: "10px 10px", borderRadius: 7,
+                border: active ? `1px solid ${HOME_THEME.cyan}44` : "1px solid transparent",
+                background: active ? `linear-gradient(135deg, ${HOME_THEME.cyan}18, ${HOME_THEME.cyan}08)` : "transparent",
+                color: active ? HOME_THEME.cyan : HOME_THEME.text,
+                fontSize: 14, cursor: "pointer", fontFamily: "inherit",
+              }}
+            >
+              <span>{item.label}</span>
+              {badge != null && (
+                <span style={{
+                  fontSize: 9, padding: "1px 6px", borderRadius: 10, fontWeight: 600,
+                  background: item.badgeRed ? `${HOME_THEME.red}22` : `${HOME_THEME.cyan}22`,
+                  color: item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan,
+                  border: `1px solid ${item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan}44`,
+                }}>{badge}</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Quick controls */}
+      <div style={{ padding: "10px 8px 14px", borderTop: `1px solid ${HOME_THEME.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
+        {[
+          { key: "idle",    label: isIdle == null ? "Idle mode: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
+          { key: "mvcAuto", label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
+          { key: "maint",   label: maint == null ? "Maintenance: —" : maint ? "● Maint ON — go live" : "○ Maint OFF",   action: toggleMaint },
+          { key: "reconnect", label: "↻ Reconnect feed", action: doReconnect },
+        ].map(({ key, label, action }) => (
+          <button
+            key={key}
+            className="owner-ctrl-btn"
+            onClick={action}
+            disabled={ctlBusy === key}
+            style={{
+              width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 6,
+              fontSize: 13, cursor: ctlBusy === key ? "wait" : "pointer",
+              fontFamily: "inherit",
+              border: `1px solid ${HOME_THEME.border}`,
+              background: "transparent",
+              color: HOME_THEME.text,
+              opacity: ctlBusy === key ? 0.5 : 1,
+            }}
+          >
+            {ctlBusy === key ? "…" : label}
+          </button>
+        ))}
+        {ctlMsg && (
+          <div style={{
+            fontSize: 10, fontFamily: "monospace", padding: "5px 8px", borderRadius: 6, marginTop: 2,
+            background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
+            border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
+            color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
+          }}>
+            {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div style={{ ...homeShellStyle, height: "100dvh", maxHeight: "100dvh", flexDirection: "row" }}>
       <style>{`
@@ -1889,136 +2009,117 @@ export default function OwnerDashboard() {
         .owner-nav-item { transition: background 0.12s, color 0.12s; }
         .owner-nav-item:hover { background: rgba(255,255,255,0.05) !important; }
         .owner-ctrl-btn:hover { background: rgba(255,255,255,0.07) !important; color: ${HOME_THEME.text} !important; }
+        .owner-tab-bar::-webkit-scrollbar { display: none; }
       `}</style>
 
-      {/* ── LEFT SIDEBAR ─────────────────────────────────────────────────────── */}
-      <div style={{
+      {/* ── MOBILE DRAWER OVERLAY ─────────────────────────────────────────────── */}
+      {isMobile && drawerOpen && (
+        <div
+          onClick={() => setDrawerOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)",
+          }}
+        />
+      )}
+      {isMobile && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, bottom: 0,
+          width: 288, zIndex: 201,
+          background: HOME_THEME.panelBg,
+          borderRight: `1px solid ${HOME_THEME.border}`,
+          display: "flex", flexDirection: "column",
+          transform: drawerOpen ? "translateX(0)" : "translateX(-100%)",
+          transition: "transform 0.22s cubic-bezier(0.4,0,0.2,1)",
+          overflowY: "auto",
+        }}>
+          <SidebarContent />
+        </div>
+      )}
+
+      {/* ── LEFT SIDEBAR (desktop only) ───────────────────────────────────────── */}
+      {!isMobile && <div style={{
         width: 248, flexShrink: 0,
         borderRight: `1px solid ${HOME_THEME.border}`,
         background: HOME_THEME.panelBg,
         display: "flex", flexDirection: "column",
         height: "100%", overflow: "hidden",
       }}>
-        {/* Logo row */}
-        <div style={{
-          padding: "14px 16px 12px",
-          borderBottom: `1px solid ${HOME_THEME.border}`,
-        }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.02em" }}>CB Edge</div>
-          <div style={{ fontSize: 11, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 2 }}>OWNER DASHBOARD</div>
-        </div>
-
-        {/* Status dots */}
-        <div style={{ padding: "10px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
-          {STATUS_ROWS.map((row) => (
-            <div key={row.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{
-                  width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                  background: row.ok ? HOME_THEME.green : HOME_THEME.red,
-                  boxShadow: row.ok ? `0 0 5px ${HOME_THEME.green}88` : `0 0 5px ${HOME_THEME.red}88`,
-                }} />
-                <span style={{ fontSize: 13, color: HOME_THEME.text }}>{row.label}</span>
-              </div>
-              {row.sub && <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.5, fontFamily: "monospace" }}>{row.sub}</span>}
-            </div>
-          ))}
-        </div>
-
-        {/* Nav */}
-        <nav style={{ flex: 1, overflowY: "auto", padding: "8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-          <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
-          {NAV_ITEMS.map((item) => {
-            const active = ownerTab === item.id;
-            const badge = item.id === "overview" ? feedbackBadge : item.badge;
-            return (
-              <button
-                key={item.id}
-                className="owner-nav-item"
-                onClick={() => selectTab(item.id)}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  width: "100%", textAlign: "left",
-                  padding: "8px 10px", borderRadius: 7,
-                  border: active ? `1px solid ${HOME_THEME.cyan}44` : "1px solid transparent",
-                  background: active ? `linear-gradient(135deg, ${HOME_THEME.cyan}18, ${HOME_THEME.cyan}08)` : "transparent",
-                  color: active ? HOME_THEME.cyan : HOME_THEME.text,
-                  fontSize: 13, cursor: "pointer", fontFamily: "inherit",
-                }}
-              >
-                <span>{item.label}</span>
-                {badge != null && (
-                  <span style={{
-                    fontSize: 9, padding: "1px 6px", borderRadius: 10, fontWeight: 600,
-                    background: item.badgeRed ? `${HOME_THEME.red}22` : `${HOME_THEME.cyan}22`,
-                    color: item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan,
-                    border: `1px solid ${item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan}44`,
-                  }}>{badge}</span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Quick controls */}
-        <div style={{ padding: "10px 8px 14px", borderTop: `1px solid ${HOME_THEME.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
-          {[
-            { key: "idle",    label: isIdle == null ? "Idle mode: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
-            { key: "mvcAuto", label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
-            { key: "maint",   label: maint == null ? "Maintenance: —" : maint ? "● Maint ON — go live" : "○ Maint OFF",   action: toggleMaint },
-            { key: "reconnect", label: "↻ Reconnect feed", action: doReconnect },
-          ].map(({ key, label, action }) => (
-            <button
-              key={key}
-              className="owner-ctrl-btn"
-              onClick={action}
-              disabled={ctlBusy === key}
-              style={{
-                width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: 6,
-                fontSize: 12, cursor: ctlBusy === key ? "wait" : "pointer",
-                fontFamily: "inherit",
-                border: `1px solid ${HOME_THEME.border}`,
-                background: "transparent",
-                color: HOME_THEME.text,
-                opacity: ctlBusy === key ? 0.5 : 1,
-              }}
-            >
-              {ctlBusy === key ? "…" : label}
-            </button>
-          ))}
-          {ctlMsg && (
-            <div style={{
-              fontSize: 10, fontFamily: "monospace", padding: "5px 8px", borderRadius: 6, marginTop: 2,
-              background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
-              border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
-              color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
-            }}>
-              {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
-            </div>
-          )}
-        </div>
-      </div>
+        <SidebarContent />
+      </div>}
 
       {/* ── RIGHT MAIN ───────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
         {/* Slim top bar */}
-        <div style={{ ...homeHeaderStyle, padding: "10px 18px" }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text }}>
-            {NAV_ITEMS.find(n => n.id === ownerTab)?.label ?? "Overview"}
+        <div style={{ ...homeHeaderStyle, padding: isMobile ? "10px 12px" : "10px 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            {isMobile && (
+              <button
+                onClick={() => setDrawerOpen(true)}
+                aria-label="Open menu"
+                style={{
+                  background: "transparent", border: `1px solid ${HOME_THEME.border}`,
+                  color: HOME_THEME.text, fontSize: 18, cursor: "pointer",
+                  padding: "5px 10px", borderRadius: 7, lineHeight: 1, flexShrink: 0,
+                }}
+              >☰</button>
+            )}
+            <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {isMobile ? "Owner" : (NAV_ITEMS.find(n => n.id === ownerTab)?.label ?? "Overview")}
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {lastRefresh && (
+            {lastRefresh && !isMobile && (
               <span style={{ fontSize: 10, color: `${HOME_THEME.text}55`, fontFamily: "monospace" }}>
                 {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
               </span>
             )}
             <button onClick={refresh} disabled={loading} style={homeButtonStyle}>
-              {loading ? "…" : "Refresh"}
+              {loading ? "…" : "↻"}
             </button>
-            <OwnerQuickLinks current="/dev/owner" />
+            {!isMobile && <OwnerQuickLinks current="/dev/owner" />}
           </div>
         </div>
+        {/* Mobile tab strip */}
+        {isMobile && (
+          <div style={{
+            display: "flex", overflowX: "auto", gap: 4, padding: "6px 10px",
+            borderBottom: `1px solid ${HOME_THEME.border}`,
+            scrollbarWidth: "none" as const,
+          }}
+          className="owner-tab-bar"
+        >
+            <div style={{ display: "flex", gap: 4 }}>
+              {NAV_ITEMS.map((item) => {
+                const active = ownerTab === item.id;
+                const badge = item.id === "overview" ? feedbackBadge : item.badge;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => selectTab(item.id)}
+                    style={{
+                      flexShrink: 0, padding: "6px 12px", borderRadius: 20,
+                      border: active ? `1px solid ${HOME_THEME.cyan}55` : `1px solid ${HOME_THEME.border}`,
+                      background: active ? `${HOME_THEME.cyan}18` : "transparent",
+                      color: active ? HOME_THEME.cyan : HOME_THEME.text,
+                      fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                      display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+                    }}
+                  >
+                    {item.label}
+                    {badge != null && (
+                      <span style={{
+                        fontSize: 9, padding: "0 5px", borderRadius: 10, fontWeight: 700,
+                        background: item.badgeRed ? `${HOME_THEME.red}33` : `${HOME_THEME.cyan}33`,
+                        color: item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan,
+                      }}>{badge}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Scrollable body */}
         <div
@@ -2027,7 +2128,7 @@ export default function OwnerDashboard() {
             flex: 1,
             minHeight: 0,
             overflowY: "auto",
-            padding: "clamp(14px,2vw,24px)",
+            padding: isMobile ? "12px" : "clamp(14px,2vw,24px)",
             display: "flex",
             flexDirection: "column",
             gap: 12,

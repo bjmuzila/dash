@@ -225,44 +225,40 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
   );
 }
 
-// OI cross-check panel: our (TastyTrade) open interest vs Yahoo's for the same
-// contract — the A/B test for our persistent OI discrepancies.
+// OI cross-check panel: Theta OPRA OI (authoritative) vs TT REST OI.
 function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> | undefined; accent?: string }) {
   const ok = data?.ok === true;
   const matched = ok && data?.match === true;
-  const ours = data?.ours as number | null | undefined;
-  const yahoo = data?.yahoo as number | null | undefined;
+  const theta = data?.theta as number | null | undefined;
+  const tt = data?.tt as number | null | undefined;
   const diff = data?.diff as number | null | undefined;
   const pct = data?.pctDiff as number | null | undefined;
-  // Highlight: green if within 2%, amber if 2–10%, red if >10% off.
   const aPct = typeof pct === "number" ? Math.abs(pct) : null;
   const diffColor = aPct == null ? NA : aPct <= 2 ? POS : aPct <= 10 ? WARN : NEG;
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Ours vs CBOE</div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Theta vs TT REST</div>
       {!data && <div style={{ color: C.label, fontFamily: "monospace", fontSize: 13 }}>—</div>}
-      {data && !ok && (
-        <div style={{ color: NEG, fontFamily: "monospace", fontSize: 13 }}>CBOE error: {fmt(data.status)}</div>
-      )}
       {ok && !matched && (
-        <div style={{ color: WARN, fontFamily: "monospace", fontSize: 13 }}>No CBOE match ({fmt(data.yahooContracts)} contracts scanned)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "monospace", fontSize: 13 }}>
+          <div style={{ color: WARN }}>Partial — one source missing</div>
+          {theta != null && <div style={{ color: C.label }}>Theta OI: <span style={{ color: VAL }}>{fmt(theta)}</span></div>}
+          {tt != null && <div style={{ color: C.label }}>TT OI: <span style={{ color: VAL }}>{fmt(tt)}</span></div>}
+        </div>
       )}
       {matched && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "monospace", fontSize: 13.5 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ color: C.label }}>Ours (TT)</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(ours)}</span>
+            <span style={{ color: C.label }}>Theta (OPRA)</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(theta)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ color: C.label }}>CBOE</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(yahoo)}</span>
+            <span style={{ color: C.label }}>TT REST</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(tt)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 2 }}>
-            <span style={{ color: C.label }}>Diff</span>
+            <span style={{ color: C.label }}>Diff (Θ−TT)</span>
             <span style={{ color: diffColor, fontWeight: 800 }}>
               {fmt(diff)}{typeof pct === "number" ? ` (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
             </span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: C.label, marginTop: 2 }}>
-            <span>CBOE vol</span><span>{fmt(data.yahooVolume)}</span>
           </div>
         </div>
       )}
@@ -416,7 +412,7 @@ export default function DevPage() {
           if (oc?.match) {
             const aPct = typeof oc.pctDiff === "number" ? Math.abs(oc.pctDiff) : null;
             const lvl = aPct == null ? "info" : aPct <= 2 ? "ok" : aPct <= 10 ? "warn" : "err";
-            log(lvl, `${name} OI ours=${oc.ours ?? "—"} cboe=${oc.yahoo ?? "—"} diff=${oc.diff ?? "—"}${typeof oc.pctDiff === "number" ? ` (${oc.pctDiff >= 0 ? "+" : ""}${oc.pctDiff.toFixed(1)}%)` : ""}`);
+            log(lvl, `${name} OI theta=${oc.theta ?? "—"} tt=${oc.tt ?? "—"} diff=${oc.diff ?? "—"}${typeof oc.pctDiff === "number" ? ` (${oc.pctDiff >= 0 ? "+" : ""}${oc.pctDiff.toFixed(1)}%)` : ""}`);
           }
         } else {
           log("warn", `${name} ${res.status} ${d?.status || "?"}`);

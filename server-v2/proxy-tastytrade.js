@@ -498,166 +498,184 @@ async function getChainCached(ticker) {
   return p;
 }
 
-// CBOE OI cross-check (cboeSymbol / fetchCboeChain / fetchYahooContractOI) was
-// removed 2026-06-29 (Phase 4 cleanup). It existed solely to A/B TastyTrade OI
-// against CBOE's delayed feed while chasing the persistent-OI discrepancy.
-// ThetaData OPRA OI is now authoritative (178/178 exact vs TT, doc §9b), so the
-// cross-check is dead code. See git history if the CBOE chain fetch is ever
-// needed again.
+// ---------------------------------------------------------------------------
+// probeRest — Theta-primary, TT for OI comparison.
+// Sources: chain=Theta, OI=Theta, greeks=Theta, volume=Theta, spot=Theta.
+// TT REST is fetched in parallel solely for OI comparison (oiCompare panel).
+// Quote (bid/ask) falls back to TT because Theta has no option bid/ask snapshot.
+// ---------------------------------------------------------------------------
+
+// Local key helper matching proxy-thetadata.js convention.
+const _probeKeyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
 
 /**
- * Probe any ticker via REST. Resolves the requested strike to the nearest real
- * chain contract, then fetches its market-data.
+ * Probe any ticker via REST — Theta-primary data source.
+ * Resolves the strike from Theta's chain, fetches OI/greeks/volume from Theta,
+ * and also fetches TT OI so the /dev page can show a Theta vs TT comparison.
  * @param {object} a
- * @param {string} a.ticker   e.g. "AAPL"
+ * @param {string} a.ticker   e.g. "SPXW", "AAPL"
  * @param {string} a.expiry   YYYY-MM-DD
  * @param {'C'|'P'} a.type
  * @param {number} a.strike
  */
 async function probeRest({ ticker, expiry, type, strike }) {
   const reqStrike = Number(strike);
-  const { expirations, contracts } = await getChainCached(ticker);
+  const root = chainTicker(ticker); // SPX, NDX, etc.
 
-  // Nearest real strike for this expiry + side.
+  // Fetch Theta chain (for strike resolution) + TT chain (for OCC symbol → TT OI compare).
+  // Both are cached — this is typically sub-millisecond on a warm cache.
+  const [thetaChain, ttChain] = await Promise.all([
+    thetaAdapter.fetchChainTheta(root).catch(() => null),
+    getChainCached(ticker).catch(() => ({ expirations: [], contracts: [] })),
+  ]);
+
+  // Resolve nearest strike from Theta chain.
+  const thetaContracts = (thetaChain?.contracts || []).filter(
+    (c) => c.expiration === expiry && c.type === type,
+  );
   let best = null, bestDist = Infinity;
-  for (const c of contracts) {
-    if (c.expiration !== expiry || c.type !== type) continue;
+  for (const c of thetaContracts) {
     const d = Math.abs(Number(c.strike) - reqStrike);
     if (d < bestDist) { bestDist = d; best = c; }
   }
   if (!best) {
-    // Help the caller: report whether the expiry even exists for this ticker,
-    // and a few valid expiries to pick from.
-    const expiryExists = expirations.includes(expiry);
+    const expiryExists = (thetaChain?.expirations || []).includes(expiry);
     return {
       found: false,
       status: expiryExists ? 'no-strike' : 'no-expiry',
-      source: 'rest',
-      chainTicker: chainTicker(ticker),
+      source: 'theta',
+      chainTicker: root,
       requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
       resolvedStrike: null,
-      availableExpirations: expirations.slice(0, 12),
+      availableExpirations: (thetaChain?.expirations || []).slice(0, 12),
     };
   }
 
+  // Find matching TT contract for its OCC symbol (needed to query TT by-type).
+  const ttContract = (ttChain?.contracts || []).find(
+    (c) => c.expiration === expiry && c.type === type &&
+           Math.abs(Number(c.strike) - best.strike) < 0.01,
+  );
+  const occSymbol = ttContract?.occSymbol || null;
+  const streamerSymbol = ttContract?.streamerSymbol || `${root}_${expiry}_${type}${best.strike}`;
+
   const meta = {
-    resolvedSymbol: best.streamerSymbol,
-    occSymbol: best.occSymbol,
+    resolvedSymbol: streamerSymbol,
+    occSymbol,
     snapped: Number.isFinite(reqStrike) && best.strike !== reqStrike,
     requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
     resolvedStrike: best.strike,
+    source: 'theta',
   };
 
-  // Contract-level market data for the OCC symbol. The by-type item carries
-  // quote, trade, summary AND greek fields — group them into the four feed
-  // types the dev page renders, and pass the raw item through so nothing hides.
-  // NOTE: TastyTrade REST by-type prices SPX/NDX index options under
-  // equity-option[] (confirmed working); index-option[] returned nothing.
-  const qs = `equity-option[]=${encodeURIComponent(best.occSymbol)}`;
-  const json = await ttGet(`/market-data/by-type?${qs}`);
-  const it = json?.data?.items?.[0] || null;
-  if (!it) {
-    return { ...meta, found: false, status: 'no-data', source: 'rest' };
-  }
+  const probeKey = _probeKeyOf(expiry, best.strike, type);
+
+  // Fetch all Theta snapshots + TT market-data (for quote + OI compare) in parallel.
+  const [oiMap, greekMap, volMap, ttIt, spot] = await Promise.all([
+    thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
+    thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
+    thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
+    occSymbol
+      ? ttGet(`/market-data/by-type?equity-option[]=${encodeURIComponent(occSymbol)}`)
+          .then((j) => j?.data?.items?.[0] || null)
+          .catch(() => null)
+      : Promise.resolve(null),
+    (async () => {
+      try {
+        if (INDEX_ROOTS.has(root)) return await thetaAdapter.fetchIndexPriceTheta(root);
+        const q = await thetaAdapter.fetchStockQuoteTheta(root);
+        return q?.last || q?.mark || null;
+      } catch { return null; }
+    })(),
+  ]);
+
+  const thetaOI = oiMap.get(probeKey)?.oi ?? null;
+  const thetaVol = volMap.get(probeKey) ?? null;
+  const g = greekMap.get(probeKey) || {};
+
   const n = firstFiniteNumber;
-  const bid = n(it.bid);
-  const ask = n(it.ask);
+
+  // Quote: from TT (Theta has no per-option bid/ask snapshot). Label shows source.
+  const bid = n(ttIt?.bid);
+  const ask = n(ttIt?.ask);
   const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
 
   const feeds = {
     Quote: {
-      bid,
-      ask,
-      mid,
-      mark: n(it.mark) || mid,
-      bidSize: n(it['bid-size']),
-      askSize: n(it['ask-size']),
+      bid,            // TT REST
+      ask,            // TT REST
+      mid,            // TT REST
+      mark: n(ttIt?.mark) || mid,
+      bidSize: n(ttIt?.['bid-size']),
+      askSize: n(ttIt?.['ask-size']),
+      _src: 'TT REST',
     },
     Trade: {
-      last: n(it.last),
-      lastSize: n(it['last-size']),
-      volume: n(it.volume),
-      dayOpen: n(it.open),
-      dayHigh: n(it['day-high-price']) || n(it.high),
-      dayLow: n(it['day-low-price']) || n(it.low),
+      last: n(ttIt?.last),
+      volume: thetaVol,           // Theta OHLC snapshot
+      _volumeSrc: 'Theta',
+      _src: 'TT last / Theta vol',
     },
     Summary: {
-      openInterest: n(it['open-interest']),
-      prevClose: n(it['prev-close']),
-      prevCloseDate: it['prev-close-date'] ?? null,
-      close: n(it.close),
+      openInterest: thetaOI,      // Theta OPRA OI — authoritative
+      prevClose: n(ttIt?.['prev-close']),
+      prevCloseDate: ttIt?.['prev-close-date'] ?? null,
+      _src: 'Theta OI / TT prevClose',
     },
     Greeks: {
-      iv: n(it['implied-volatility']) || n(it.volatility),
-      delta: n(it.delta),
-      gamma: n(it.gamma),
-      theta: n(it.theta),
-      vega: n(it.vega),
-      rho: n(it.rho),
+      iv: g.iv || null,           // Theta
+      delta: g.delta || null,     // Theta
+      gamma: g.gamma || null,     // Theta
+      theta: g.theta || null,     // Theta
+      vega: g.vega || null,       // Theta
+      _src: 'Theta',
     },
   };
 
-  // Underlying spot — needed for net-greek exposures. Best-effort; if it fails
-  // the exposures fall back to null rather than throwing the whole probe.
-  let spot = null;
-  try {
-    const root = chainTicker(ticker);
-    const INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
-    const param = INDEX_ROOTS.has(root) ? `index=${encodeURIComponent(root)}` : `equity=${encodeURIComponent(root)}`;
-    const uj = await ttGet(`/market-data/by-type?${param}`);
-    const u = uj?.data?.items?.[0];
-    spot = n(u?.mark) || n(u?.last) || n(u?.['prev-close']) || null;
-  } catch { /* spot stays null */ }
-
-  // Per-contract NET GREEKS, using the dashboard's exact conventions
-  // (vex-chex.js / gex-calculator.js):
-  //   GEX  = |gamma| × OI × spot²        (call +, put −)
-  //   DEX  = |delta| × OI × 100 × spot   (call +, put −)
-  //   VEX(vega exposure) = vega × OI × 100 × spot   (call +, put −)
-  //   ThetaExp           = theta × OI × 100 × spot  (sign per dashboard charm split)
-  // Vanna/charm exposure need vanna/charm greeks, which this REST feed does not
-  // provide → reported as null.
+  // Exposures use Theta OI + Theta greeks + Theta spot.
   const isCall = type === 'C';
   const sign = isCall ? 1 : -1;
-  const oi = n(it['open-interest']);
-  const vol = n(it.volume);
-  const g = feeds.Greeks;
-  // Vanna/charm are not in the REST greeks feed — derive them from Black-Scholes
-  // exactly as the live path does (_recompute): per-year BS, then unit-scaled
-  // (vanna ÷100 per 1% vol, charm ÷365 per day). Needs IV + time-to-expiry.
+  const oi = thetaOI;
+  const vol = thetaVol;
   const T = yearsToExpiry(best.expiration);
   const bs = (spot > 0 && g.iv > 0 && T > 0)
     ? bsGreeks({ S: spot, K: best.strike, T, sigma: g.iv, r: RISK_FREE, type })
     : null;
-  const exposures = (spot > 0)
+  const exposures = (spot > 0 && oi != null)
     ? {
         spot,
         oi,
         volume: vol,
         gex: sign * Math.abs(g.gamma || 0) * oi * spot * spot,
-        gexVol: sign * Math.abs(g.gamma || 0) * vol * spot * spot,
+        gexVol: sign * Math.abs(g.gamma || 0) * (vol || 0) * spot * spot,
         dex: sign * Math.abs(g.delta || 0) * oi * 100 * spot,
         vex: sign * (g.vega || 0) * oi * 100 * spot,
         thetaExp: sign * (g.theta || 0) * oi * 100 * spot,
         vannaExp: bs ? sign * (bs.vanna / 100) * oi * 100 * spot : null,
         charmExp: bs ? sign * (bs.charm / 365) * oi * 100 * spot : null,
       }
-    : { spot: null, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
+    : { spot, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
 
-  // NOTE: the CBOE/Yahoo OI cross-check (oiCompare) was removed 2026-06-29 — it
-  // existed only to A/B our TT-sourced OI against CBOE during the persistent-OI
-  // discrepancy investigation. ThetaData OPRA OI is now authoritative (validated
-  // 178/178 exact vs TT, doc §9b), so the cross-check is obsolete. fetchCboeChain
-  // / fetchYahooContractOI deleted with it.
+  // OI cross-check: Theta OPRA (authoritative) vs TT REST.
+  const ttOI = n(ttIt?.['open-interest']) || null;
+  let oiCompare = null;
+  if (thetaOI != null && ttOI != null) {
+    const diff = thetaOI - ttOI;
+    const pctDiff = ttOI !== 0 ? (diff / ttOI) * 100 : null;
+    oiCompare = { ok: true, match: true, theta: thetaOI, tt: ttOI, diff, pctDiff };
+  } else {
+    oiCompare = { ok: true, match: false, theta: thetaOI, tt: ttOI };
+  }
+
   const result = {
-    eventType: 'REST',
-    eventSymbol: best.streamerSymbol,
-    occSymbol: best.occSymbol,
+    eventType: 'THETA',
+    eventSymbol: streamerSymbol,
+    occSymbol,
     feeds,
     exposures,
-    raw: it, // full unmodified market-data item — every field, nothing dropped
+    oiCompare,
   };
-  return { ...meta, found: true, status: 'ready', source: 'rest', result };
+  return { ...meta, found: true, status: 'ready', source: 'theta', result };
 }
 
 // ---------------------------------------------------------------------------
