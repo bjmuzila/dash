@@ -98,6 +98,7 @@ export default function TradersDashboardPage() {
   const [quotes, setQuotes] = useState<Record<string, QuoteRow>>({});
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [overview, setOverview] = useState<OverviewRow | null>(null);
+  const [liveMovers, setLiveMovers] = useState<Mover[]>([]);
   const [links, setLinks] = useState<LinkItem[]>(DEFAULT_LINKS);
   const [editSched, setEditSched] = useState(false);
   const [editTasks, setEditTasks] = useState(false);
@@ -172,6 +173,19 @@ export default function TradersDashboardPage() {
         if (r.ok) { const j = await r.json(); if (j.overview) setOverview(j.overview); }
       } catch { /* ignore */ }
     })();
+  }, []);
+
+  // ── Live premarket movers ──
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await fetch("/api/premarket-movers", { cache: "no-store" });
+        if (r.ok) { const j = await r.json(); if (j.movers?.length) setLiveMovers(j.movers); }
+      } catch { /* ignore */ }
+    };
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => clearInterval(id);
   }, []);
 
   // ── Weather ──
@@ -314,10 +328,10 @@ export default function TradersDashboardPage() {
                     })}
                   </div>
 
-                  <div style={{ ...sectionLabel, marginBottom: 10 }}>⚡ Pre-Market Movers</div>
-                  {overview?.movers?.length ? (
+                  <div style={{ ...sectionLabel, marginBottom: 10 }}>🔥 Trending Now</div>
+                  {(liveMovers.length ? liveMovers : overview?.movers ?? []).length ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {overview.movers.map((m) => {
+                      {(liveMovers.length ? liveMovers : overview?.movers ?? []).map((m) => {
                         const displayPct = m.preMarketPct ?? m.pct;
                         const pos = (displayPct ?? 0) >= 0;
                         const color = displayPct == null ? HT.muted : pos ? HT.green : HT.red;

@@ -68,31 +68,27 @@ function extractJson(text) {
 
 async function fetchTopMovers() {
   try {
-    const url =
-      'https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved' +
-      '?scrIds=day_gainers&count=25&fields=symbol,shortName,regularMarketPrice,' +
-      'regularMarketChange,regularMarketChangePercent,preMarketPrice,preMarketChangePercent,regularMarketVolume';
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Origin': 'https://finance.yahoo.com',
-        'Referer': 'https://finance.yahoo.com/',
-      },
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const quotes = data?.finance?.result?.[0]?.quotes ?? data?.finance?.result?.[0]?.results ?? [];
-    return quotes.slice(0, 10).map((q) => ({
-      symbol: String(q.symbol ?? ''),
-      name: String(q.shortName ?? q.longName ?? q.symbol ?? ''),
-      price: typeof q.regularMarketPrice === 'number' ? q.regularMarketPrice : null,
-      pct: typeof q.regularMarketChangePercent === 'number' ? q.regularMarketChangePercent : null,
-      preMarketPrice: typeof q.preMarketPrice === 'number' ? q.preMarketPrice : null,
-      preMarketPct: typeof q.preMarketChangePercent === 'number' ? q.preMarketChangePercent : null,
-    }));
+    const HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Origin': 'https://finance.yahoo.com',
+      'Referer': 'https://finance.yahoo.com/',
+    };
+    const FIELDS = 'symbol,shortName,regularMarketPrice,regularMarketChange,regularMarketChangePercent,preMarketPrice,preMarketChangePercent,regularMarketVolume';
+    const trendRes = await fetch(`https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=trending&count=10&fields=${FIELDS}`, { headers: HEADERS });
+    if (!trendRes.ok) return [];
+    const td = await trendRes.json().catch(() => ({}));
+    const allQuotes = td?.finance?.result?.[0]?.quotes ?? td?.finance?.result?.[0]?.results ?? [];
+    return allQuotes.slice(0, 10).map((q) => ({
+        symbol: String(q.symbol ?? ''),
+        name: String(q.shortName ?? q.longName ?? q.symbol ?? ''),
+        price: typeof q.regularMarketPrice === 'number' ? q.regularMarketPrice : null,
+        pct: typeof q.regularMarketChangePercent === 'number' ? q.regularMarketChangePercent : null,
+        preMarketPrice: typeof q.preMarketPrice === 'number' ? q.preMarketPrice : null,
+        preMarketPct: typeof q.preMarketChangePercent === 'number' ? q.preMarketChangePercent : null,
+      }));
   } catch (e) {
     console.warn('[overview] movers fetch failed:', e.message);
     return [];

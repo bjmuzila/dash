@@ -20,47 +20,41 @@ export interface Mover {
 
 export async function GET() {
   try {
-    const url =
-      "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved" +
-      "?scrIds=day_gainers&count=25&fields=symbol,shortName,regularMarketPrice," +
-      "regularMarketChange,regularMarketChangePercent,preMarketPrice," +
-      "preMarketChangePercent,regularMarketVolume";
+    const HEADERS = {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      Accept: "application/json",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+      Origin: "https://finance.yahoo.com",
+      Referer: "https://finance.yahoo.com/",
+    };
+    const FIELDS =
+      "symbol,shortName,regularMarketPrice,regularMarketChange," +
+      "regularMarketChangePercent,preMarketPrice,preMarketChangePercent,regularMarketVolume";
 
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        Accept: "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-        Origin: "https://finance.yahoo.com",
-        Referer: "https://finance.yahoo.com/",
-      },
-      cache: "no-store",
-    });
+    const trendRes = await fetch(
+      `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=trending&count=10&fields=${FIELDS}`,
+      { headers: HEADERS, cache: "no-store" }
+    );
 
-    if (!res.ok) {
+    if (!trendRes.ok) {
       return NextResponse.json(
-        { error: `Yahoo screener returned ${res.status}` },
+        { error: `Yahoo screener returned ${trendRes.status}` },
         { status: 502 }
       );
     }
 
-    const data = await res.json();
-    const quotes: unknown[] =
-      data?.finance?.result?.[0]?.quotes ??
-      data?.finance?.result?.[0]?.results ??
-      [];
+    const trendData = await trendRes.json();
+    const allQuotes = (
+      trendData?.finance?.result?.[0]?.quotes ??
+      trendData?.finance?.result?.[0]?.results ??
+      []
+    ) as Record<string, unknown>[];
 
-    // Filter out ETFs/funds that clutter the list, keep equities
-    const filtered = (quotes as Record<string, unknown>[])
-      .filter((q) => {
-        const qt = String(q.quoteType ?? "");
-        return qt === "EQUITY" || qt === "" || qt === "ETF";
-      })
-      .slice(0, 10);
+    const filtered = allQuotes.slice(0, 10);
 
     const movers: Mover[] = filtered.map((q) => ({
       symbol: String(q.symbol ?? ""),
