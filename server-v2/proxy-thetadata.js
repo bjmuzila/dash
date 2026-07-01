@@ -634,6 +634,7 @@ class ThetaStreamClient {
     // gamma must not clobber the BS fallback path in _recompute (same guard as the
     // REST snapshot path). iv field names vary by Theta version; accept all aliases.
     if (type === 'GREEKS' && msg.greeks && this.onGreeks) {
+      if (!this._loggedGreeksKeys) { this._loggedGreeksKeys = true; console.log('[THETA-WS] first GREEKS msg keys:', Object.keys(msg.greeks).join(','), JSON.stringify(msg.greeks).slice(0, 200)); }
       const g = msg.greeks;
       const gamma = Number(g.gamma);
       const delta = Number(g.delta);
