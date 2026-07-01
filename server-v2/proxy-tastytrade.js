@@ -1856,6 +1856,12 @@ class TastytradeProxy {
     if (!active.length) return;
     let filled = 0;
 
+    // When expiry is next-day (not today's 0DTE), Theta WS won't push GREEKS —
+    // refresh via REST on every OI poll so greeks stay current.
+    if (useTheta() && this.expiry !== todayYmd().ymd) {
+      this._refreshGreeksTheta().catch(() => {});
+    }
+
     if (useTheta()) {
       // Theta path: one whole-expiry OPRA OI snapshot, matched to the active
       // contracts by strike+type (Theta has no streamerSymbol/OCC). OI keyed by
@@ -2113,6 +2119,8 @@ class TastytradeProxy {
     // Backfill the new expiry's OI immediately, and resume fast polling until the
     // new expiry's coverage is ready again.
     this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
+    // Re-seed greeks for the new expiry (WS stream only pushes for same-day 0DTE).
+    this._refreshGreeksTheta().catch(() => {});
   }
 
   /**
