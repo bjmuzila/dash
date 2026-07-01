@@ -475,7 +475,7 @@ function PremarketCard() {
 function EconCalendarCard() {
   return (
     <Card accent="cyan" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 420 }}>
-      <EconCalendarPanel todayOnly />
+      <EconCalendarPanel todayOnly hideToolbar />
     </Card>
   );
 }
@@ -523,7 +523,7 @@ function segmentAt(timeline: MvcSegment[] | undefined, targetMin: number): MvcSe
 
 // MVC checkpoints the card pins hit/miss against.
 const MVC_CHECKPOINTS: Array<{ label: string; min: number }> = [
-  { label: "9:35", min: 9 * 60 + 35 },
+  { label: "9:45", min: 9 * 60 + 45 },
   { label: "10:30", min: 10 * 60 + 30 },
   { label: "12:00", min: 12 * 60 },
 ];
@@ -561,17 +561,10 @@ function ConfidenceCard() {
   const load = useCallback(async () => {
     setError(null);
     try {
+      // Always score today — show empty state if no snapshots yet rather than
+      // falling back to a prior session.
       const today = etDateISO();
-      // Score today if it has MVC snapshots, else the most recent available
-      // (the 11pm pre-open seed, or the last session).
-      let date = today;
-      const [latestRes, todayRes] = await Promise.all([
-        fetch("/api/snapshots/mvc?limit=1", { cache: "no-store" }),
-        fetch(`/api/snapshots/mvc?date=${today}&limit=1`, { cache: "no-store" }),
-      ]);
-      const latest = (await latestRes.json())?.rows?.[0] ?? null;
-      const hasToday = ((await todayRes.json())?.rows?.length ?? 0) > 0;
-      if (!hasToday && latest?.date) date = String(latest.date);
+      const date = today;
 
       const res = await fetch(`/api/confidence?date=${date}`, { cache: "no-store" });
       const json = (await res.json()) as ConfidenceResp;
@@ -621,7 +614,7 @@ function ConfidenceCard() {
   const px = data?.price ?? data?.spx ?? null;
   const distToMvc = mvc != null && px != null ? px - mvc : null; // +above / −below
   const today = etDateISO();
-  const isStale = forDate != null && forDate !== today;
+  const isStale = false; // always scoring today
   const band =
     s == null ? "—"
     : (s.hit ?? 0) >= (s.pivot ?? 0) && (s.hit ?? 0) >= (s.chop ?? 0) ? "HIT"
@@ -637,12 +630,12 @@ function ConfidenceCard() {
           Confidence Score
           <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
         </span>
-        {isStale && forDate && (
-          <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>pre-open · {forDate}</span>
+        {forDate && (
+          <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{forDate}</span>
         )}
       </Row>
       {loading || error || score == null ? (
-        <CardState loading={loading} error={error} empty="No CB - Core Bullseye snapshot yet for scoring." />
+        <CardState loading={loading} error={error} empty="Waiting for today's first CB snapshot." />
       ) : (
         <>
           <Row>

@@ -116,7 +116,7 @@ function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   return false;
 }
 
-export default function EconCalendarPanel({ todayOnly = false }: { todayOnly?: boolean }) {
+export default function EconCalendarPanel({ todayOnly = false, hideToolbar = false }: { todayOnly?: boolean; hideToolbar?: boolean }) {
   const [events,        setEvents]        = useState<CalEvent[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState<string | null>(null);
@@ -334,72 +334,86 @@ export default function EconCalendarPanel({ todayOnly = false }: { todayOnly?: b
     <div ref={containerRef} style={{ ...homeShellStyle, background: "transparent", height: "100%", overflow: "hidden" }}>
 
       {/* Header */}
-      <div style={{
-        padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)",
-        borderBottom: `1px solid ${HT.border}`,
-        display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
-        position: "relative", zIndex: 30,
-      }}>
-        <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
-          📅 Econ Calendar
-        </span>
-        <span style={{ fontSize: 9, color: "#3a5570", marginLeft: 2 }}>{today}</span>
-
-        {/* Multi-select dropdown */}
-        <div ref={dropRef} style={{ position: "relative", marginLeft: "auto" }}>
-          <button
-            onClick={() => setDropOpen(o => !o)}
-            style={{
-              ...homeButtonStyle,
-              display: "flex", alignItems: "center", gap: 4,
-            }}
-          >
-            {filterLabel} <span style={{ fontSize: 7 }}>▾</span>
-          </button>
-          {dropOpen && (
-            <div style={{
-              position: "absolute", right: 0, top: "calc(100% + 3px)", zIndex: 200,
-              background: HT.panelBgStrong, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 4,
-              padding: "3px 0", minWidth: 140, boxShadow: "0 8px 24px rgba(0,0,0,0.7)",
-            }}>
-              {FILTER_OPTS.map(o => {
-                const on = activeFilters.has(o.value);
-                return (
-                  <div
-                    key={o.value}
-                    onClick={() => toggleFilter(o.value)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "6px 12px", cursor: "pointer",
-                      background: on ? "rgba(33,158,188,0.08)" : "transparent",
-                    }}
-                  >
-                    <span style={{
-                      width: 12, height: 12, borderRadius: 2, flexShrink: 0,
-                      border: `2px solid ${o.color}`,
-                      background: on ? o.color : "transparent",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8, color: "#05080d", fontWeight: 900,
-                    }}>{on ? "✓" : ""}</span>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? "#fff" : "#6b7280" }}>
-                      {o.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {hideToolbar ? (
+        <div style={{
+          padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)",
+          borderBottom: `1px solid ${HT.border}`,
+          display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+          position: "relative", zIndex: 30,
+        }}>
+          <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
+            Economic Calendar
+          </span>
+          <span style={{ fontSize: 9, color: "#3a5570", marginLeft: 2 }}>{today}</span>
         </div>
+      ) : (
+        <div style={{
+          padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)",
+          borderBottom: `1px solid ${HT.border}`,
+          display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+          position: "relative", zIndex: 30,
+        }}>
+          <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
+            📅 Econ Calendar
+          </span>
+          <span style={{ fontSize: 9, color: "#3a5570", marginLeft: 2 }}>{today}</span>
 
-        <button onClick={trigger} style={{ ...homeButtonStyle }}>
-          {btnLabel}
-        </button>
-        <EconCalendarTemplateCopyBtn />
-        <EconCalendarDiscordBtn />
-      </div>
+          {/* Multi-select dropdown */}
+          <div ref={dropRef} style={{ position: "relative", marginLeft: "auto" }}>
+            <button
+              onClick={() => setDropOpen(o => !o)}
+              style={{
+                ...homeButtonStyle,
+                display: "flex", alignItems: "center", gap: 4,
+              }}
+            >
+              {filterLabel} <span style={{ fontSize: 7 }}>▾</span>
+            </button>
+            {dropOpen && (
+              <div style={{
+                position: "absolute", right: 0, top: "calc(100% + 3px)", zIndex: 200,
+                background: HT.panelBgStrong, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 4,
+                padding: "3px 0", minWidth: 140, boxShadow: "0 8px 24px rgba(0,0,0,0.7)",
+              }}>
+                {FILTER_OPTS.map(o => {
+                  const on = activeFilters.has(o.value);
+                  return (
+                    <div
+                      key={o.value}
+                      onClick={() => toggleFilter(o.value)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        padding: "6px 12px", cursor: "pointer",
+                        background: on ? "rgba(33,158,188,0.08)" : "transparent",
+                      }}
+                    >
+                      <span style={{
+                        width: 12, height: 12, borderRadius: 2, flexShrink: 0,
+                        border: `2px solid ${o.color}`,
+                        background: on ? o.color : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 8, color: "#05080d", fontWeight: 900,
+                      }}>{on ? "✓" : ""}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: on ? "#fff" : "#6b7280" }}>
+                        {o.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
-      {/* Quote */}
-      {quote && (
+          <button onClick={trigger} style={{ ...homeButtonStyle }}>
+            {btnLabel}
+          </button>
+          <EconCalendarTemplateCopyBtn />
+          <EconCalendarDiscordBtn />
+        </div>
+      )}
+
+      {/* Quote — only shown when toolbar is visible */}
+      {!hideToolbar && quote && (
         <div style={{ padding: "5px 10px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0, position: "relative", zIndex: 10 }}>
           <p style={{ margin: 0, fontSize: 15, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "left" }}>
             &ldquo;{quote}&rdquo;

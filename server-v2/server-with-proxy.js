@@ -138,6 +138,7 @@ function handleProxyRest(req, res) {
         prevClose: state.prevClose,
         prevCloseDate: state.prevCloseDate,
         expiry: state.expiry,
+        expirations: state.expirations,
         gexRows: state.gexRows,
         totals: state.totals,
         callWall: state.callWall,
