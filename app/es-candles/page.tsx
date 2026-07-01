@@ -259,47 +259,8 @@ export default function EsCandlesPage() {
   };
 
   const [showProfile, setShowProfile] = useState(false);
-  const [showWeekGex, setShowWeekGex] = useState(true); // week's cumulative GEX per strike as horizontal bars
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
-
-  // Aggregate GEX for the current week: sum |net_gex| per strike across all
-  // snapshots from the past 5 trading days, for the front expiry. Displayed as
-  // horizontal bars on the left edge of the price chart so you can see at a
-  // glance where gamma has been concentrated all week (complementary to the
-  // intraday heatmap which shows how GEX evolved over time today).
-  const [weekGexBars, setWeekGexBars] = useState<Array<{ strike: number; net: number }>>([]);
-  const weekGexExpiry = selectedExpiry || feedExpiry;
-  useEffect(() => {
-    if (!showWeekGex || !weekGexExpiry) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=7200&expiry=${encodeURIComponent(weekGexExpiry)}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) return;
-        const json = await res.json();
-        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }> };
-        const raw: RawCol[] = Array.isArray(json.columns) ? json.columns : [];
-        if (cancelled || !raw.length) return;
-        // Accumulate absolute net GEX per strike across all columns this week.
-        const acc = new Map<number, number>();
-        for (const col of raw) {
-          for (const c of col.cells) {
-            if (!(c.strike > 0) || !Number.isFinite(c.net)) continue;
-            acc.set(c.strike, (acc.get(c.strike) ?? 0) + c.net);
-          }
-        }
-        const bars = [...acc.entries()]
-          .map(([strike, net]) => ({ strike, net }))
-          .sort((a, b) => a.strike - b.strike);
-        if (!cancelled) setWeekGexBars(bars);
-      } catch { /* keep last */ }
-    })();
-    return () => { cancelled = true; };
-  }, [showWeekGex, weekGexExpiry]);
 
 
   // ── Embedded-card control channel ──────────────────────────────────────────
@@ -308,16 +269,15 @@ export default function EsCandlesPage() {
   // card's dropdown stays in sync. Same-origin only (parent is the same app).
   const OVERLAY_SETTERS: Record<string, (v: boolean) => void> = useMemo(() => ({
     heatmap: setShowHeatmap,
-    weekgex: setShowWeekGex,
     profile: setShowProfile,
     mvc: setShowMvcLine,
     levels: setShowLevels,
     pdhon: setShowSessions,
   }), []);
   const overlayState = useMemo(() => ({
-    heatmap: showHeatmap, weekgex: showWeekGex, profile: showProfile, mvc: showMvcLine,
+    heatmap: showHeatmap, profile: showProfile, mvc: showMvcLine,
     levels: showLevels, pdhon: showSessions,
-  }), [showHeatmap, showWeekGex, showProfile, showMvcLine, showLevels, showSessions]);
+  }), [showHeatmap, showProfile, showMvcLine, showLevels, showSessions]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
@@ -469,7 +429,7 @@ export default function EsCandlesPage() {
           // Keep ~2 full days of 1-min slots (a 24h day = 1440 slots). The old
           // 200 cap chopped off the morning columns mid-session, making the
           // all-day heatmap vanish from the left.
-          if (map.size > 3000) {
+          if (map.size > 10000) {
             const oldest = Math.min(...map.keys());
             map.delete(oldest);
           }
@@ -528,7 +488,7 @@ export default function EsCandlesPage() {
     (async () => {
       try {
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=1440&expiry=${encodeURIComponent(heatmapExpiry)}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=7200&expiry=${encodeURIComponent(heatmapExpiry)}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -1065,42 +1025,6 @@ export default function EsCandlesPage() {
         lvl(profile.lvn, "rgba(245,158,11,.9)", "LVN");
       }
 
-      // ── 2b) Weekly GEX bars — per-strike accumulated net GEX for this week ──
-      // Drawn on the LEFT edge of the plot, mirroring the volume profile on the
-      // right. Positive GEX (call-heavy) = cyan bars, negative (put-heavy) = red.
-      // Bar width scales to the largest magnitude so the dominant walls stand out.
-      if (showWeekGex && weekGexBars.length) {
-        let scaleWL = 0;
-        try { scaleWL = chart.priceScale("right").width(); } catch {}
-        const plotLeft = 0;
-        const maxBarW = Math.min(120, (w - scaleWL) * 0.12);
-        const maxMag = Math.max(...weekGexBars.map((b) => Math.abs(b.net)), 1);
-        for (const b of weekGexBars) {
-          if (!Number.isFinite(b.net) || b.net === 0) continue;
-          const yTop = series.priceToCoordinate(b.strike + 5 + basis);
-          const yBot = series.priceToCoordinate(b.strike + basis);
-          if (yTop == null || yBot == null) continue;
-          const top = Math.min(yTop, yBot);
-          const cellH = Math.max(1, Math.abs(yBot - yTop) - 0.5);
-          const barW = (Math.abs(b.net) / maxMag) * maxBarW;
-          const pos = b.net >= 0;
-          ctx.fillStyle = pos ? "rgba(41,182,246,0.28)" : "rgba(255,71,87,0.28)";
-          ctx.fillRect(plotLeft, top, barW, cellH);
-        }
-        // Label the top-3 dominant strikes
-        const top3 = [...weekGexBars]
-          .sort((a, b2) => Math.abs(b2.net) - Math.abs(a.net))
-          .slice(0, 3);
-        ctx.font = "bold 9px Inter, system-ui, sans-serif";
-        for (const b of top3) {
-          const y = series.priceToCoordinate(b.strike + basis);
-          if (y == null) continue;
-          const pos = b.net >= 0;
-          ctx.fillStyle = pos ? "rgba(41,182,246,0.85)" : "rgba(255,71,87,0.85)";
-          ctx.fillText(`${b.strike}`, 4, y - 2);
-        }
-      }
-
       // ── 3) MVC history as horizontal step segments (no vertical connectors) ──
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
@@ -1172,7 +1096,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showWeekGex, weekGexBars, showMvcLine, showLevels, mvcHistory]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showMvcLine, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1262,8 +1186,7 @@ export default function EsCandlesPage() {
 
           {/* overlay toggles — each keeps its accent color */}
           <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
-          <ToggleTile label="W-GEX"   on={showWeekGex}  onClick={() => setShowWeekGex((v) => !v)}   accent="#29b6f6" title="Week's cumulative GEX per strike" />
-          <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
+<ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
           <ToggleTile label="CB"     on={showMvcLine}   onClick={() => setShowMvcLine((v) => !v)}  accent="#ffffff" />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
@@ -1287,7 +1210,7 @@ export default function EsCandlesPage() {
       </div>
 
 
-      <div ref={captureRef} className="flex flex-col" style={{ flex: 1, minHeight: 0 }}>
+      <div className="flex flex-col" style={{ flex: 1, minHeight: 0 }}>
       <div className="flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
           const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
@@ -1320,7 +1243,7 @@ export default function EsCandlesPage() {
         })()}
       </div>
 
-      <div className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+      <div ref={captureRef} className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
           {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
@@ -1365,7 +1288,7 @@ export default function EsCandlesPage() {
         </div>
 
       </div>
-      </div>{/* end captureRef wrapper */}
+      </div>
     </div>
   );
 }
