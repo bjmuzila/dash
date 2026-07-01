@@ -34,6 +34,27 @@ const DEFAULT_SCHEDULE: ScheduleItem[] = [
   { id: "s4", time: "09:30 AM", label: "Market Open" },
 ];
 
+const ALL_PAGES: { label: string; href: string }[] = [
+  { label: "Home", href: "/home" },
+  { label: "Multi Greek", href: "/mult-greek" },
+  { label: "Options Chain", href: "/options-chain" },
+  { label: "Estimated Moves", href: "/em" },
+  { label: "Flow", href: "/flow" },
+  { label: "Analytics", href: "/analytics" },
+  { label: "ES Candles", href: "/es-candles" },
+  { label: "Scanner", href: "/scanner" },
+  { label: "Market Scanner", href: "/market-scanner" },
+  { label: "ICT", href: "/ict" },
+  { label: "Journal", href: "/trading" },
+  { label: "Order Flow", href: "/order-flow" },
+  { label: "Greeks", href: "/greeks" },
+  { label: "Confidence", href: "/confidence-score" },
+  { label: "Fails", href: "/fails" },
+  { label: "Premarket", href: "/premarket" },
+  { label: "Economic Calendar", href: "/economic-calendar" },
+  { label: "Traders Dashboard", href: "/traders-dashboard" },
+];
+
 const DEFAULT_LINKS: LinkItem[] = [
   { id: "l1", label: "Home", href: "/home" },
   { id: "l2", label: "Multi Greek", href: "/mult-greek" },
@@ -354,8 +375,16 @@ export default function TradersDashboardPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {links.map((l) => editLinks ? (
                   <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input value={l.label} onChange={(e) => updLinks(links.map((x) => x.id === l.id ? { ...x, label: e.target.value } : x))} placeholder="Label" style={{ ...inputStyle, width: 90 }} />
-                    <input value={l.href} onChange={(e) => updLinks(links.map((x) => x.id === l.id ? { ...x, href: e.target.value } : x))} placeholder="/path or https://…" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+                    <select
+                      value={l.href}
+                      onChange={(e) => {
+                        const page = ALL_PAGES.find((p) => p.href === e.target.value);
+                        updLinks(links.map((x) => x.id === l.id ? { ...x, href: e.target.value, label: page?.label ?? x.label } : x));
+                      }}
+                      style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                    >
+                      {ALL_PAGES.map((p) => <option key={p.href} value={p.href}>{p.label}</option>)}
+                    </select>
                     <button onClick={() => updLinks(links.filter((x) => x.id !== l.id))} style={{ ...miniBtn, color: HT.red }}>✕</button>
                   </div>
                 ) : (
@@ -372,7 +401,7 @@ export default function TradersDashboardPage() {
                 ))}
               </div>
               {editLinks && (
-                <button onClick={() => updLinks([...links, { id: uid(), label: "New link", href: "/" }])} style={{ ...miniBtn, marginTop: 12 }}>+ Add</button>
+                <button onClick={() => { const p = ALL_PAGES.find((p) => !links.some((l) => l.href === p.href)) ?? ALL_PAGES[0]; updLinks([...links, { id: uid(), label: p.label, href: p.href }]); }} style={{ ...miniBtn, marginTop: 12 }}>+ Add</button>
               )}
             </Card>
 

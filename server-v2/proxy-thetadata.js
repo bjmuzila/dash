@@ -159,24 +159,43 @@ async function fetchOpenInterestTheta(underlying = SYMBOL, expiration) {
 // response (pre-open / weekend) is "no update" — caller preserves prior volume.
 // Feeds netVolGEX (the Vol-Only column); without it Volume Net GEX is blank.
 // ---------------------------------------------------------------------------
+// Check Theta's calendar to confirm the market is open today.
+// Returns true if type === 'open' (full session) or 'early_close'.
+// Cached for the session — no need to re-fetch every 2 min.
+let _calendarOpenCache = null;
+async function isThetaMarketOpen() {
+  if (_calendarOpenCache !== null) return _calendarOpenCache;
+  try {
+    const json = await thetaGet('/v3/calendar/today');
+    // Response is an array; we want the first entry's type field.
+    const rows = json?.response ?? (Array.isArray(json) ? json : []);
+    const type = rows[0]?.type ?? '';
+    _calendarOpenCache = type === 'open' || type === 'early_close';
+  } catch {
+    _calendarOpenCache = false;
+  }
+  return _calendarOpenCache;
+}
+
 async function fetchVolumeTheta(underlying = SYMBOL, expiration) {
+  // Only fetch intraday volume when Theta confirms the market is open today.
+  // If the calendar says closed/weekend, return empty so caller preserves prior.
+  const marketOpen = await isThetaMarketOpen().catch(() => false);
+  if (!marketOpen) return new Map();
+
   const root = thetaRoot(underlying);
   const out = new Map();
   const json = await thetaGet(
     `/v3/option/snapshot/ohlc?symbol=${encodeURIComponent(root)}&expiration=${expiration}`,
   );
-  // The OHLC snapshot returns each contract's LAST available bar. For strikes
-  // that traded today the bar is today's; for untraded strikes it's a stale bar
-  // from a prior session (e.g. last week). Counting that stale volume spikes
-  // vol-GEX on near-untraded expiries, so only keep volume whose bar timestamp
-  // is today's date — otherwise treat it as 0 (no volume this session).
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // When the market is confirmed open today, all volume from the OHLC snapshot
+  // is current-session volume — no stale-bar filtering needed.
+  // The snapshot's `timestamp` field is YYYY-MM-DDTHH:mm:ss.SSS (ET, no Z).
   for (const row of flatSnapshotRows(json)) {
     const type = rightToType(row.right);
     const strike = Number(row.strike);
     if (!(strike > 0)) continue;
-    const isToday = String(row.timestamp || '').slice(0, 10) === todayIso;
-    const vol = isToday ? (Number(row.volume ?? row.day_volume) || 0) : 0;
+    const vol = Number(row.volume ?? row.day_volume) || 0;
     out.set(keyOf(row.expiration || expiration, strike, type), vol);
   }
   return out; // may be empty pre-open — caller treats empty as "no update"
@@ -639,6 +658,7 @@ class ThetaStreamClient {
 }
 
 module.exports = {
+  resetCalendarCache: () => { _calendarOpenCache = null; },
   thetaRoot,
   thetaGet,
   rowsFromV3,

@@ -467,7 +467,7 @@ function AccordionCard({
 }) {
   void open; void onToggle; void id; void accent;
   return (
-    <div style={{ ...homePanelStyle, overflow: "visible", background: "linear-gradient(180deg, #0a0a0a 0%, #000 100%)", borderTop: `1px solid ${HOME_THEME.border}`, borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
+    <div style={{ ...homePanelStyle, overflow: "visible", background: "transparent" }}>
       <div
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
@@ -1902,13 +1902,9 @@ export default function OwnerDashboard() {
         <div style={{
           padding: "14px 16px 12px",
           borderBottom: `1px solid ${HOME_THEME.border}`,
-          display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.02em" }}>CB Edge</div>
-            <div style={{ fontSize: 10, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 1 }}>OWNER DASHBOARD</div>
-          </div>
-          <OwnerQuickLinks current="/dev/owner" />
+          <div style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.02em" }}>CB Edge</div>
+          <div style={{ fontSize: 11, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 2 }}>OWNER DASHBOARD</div>
         </div>
 
         {/* Status dots */}
@@ -1921,16 +1917,16 @@ export default function OwnerDashboard() {
                   background: row.ok ? HOME_THEME.green : HOME_THEME.red,
                   boxShadow: row.ok ? `0 0 4px ${HOME_THEME.green}88` : `0 0 4px ${HOME_THEME.red}88`,
                 }} />
-                <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.75 }}>{row.label}</span>
+                <span style={{ fontSize: 12, color: HOME_THEME.text }}>{row.label}</span>
               </div>
-              {row.sub && <span style={{ fontSize: 9.5, color: HOME_THEME.muted, opacity: 0.45, fontFamily: "monospace" }}>{row.sub}</span>}
+              {row.sub && <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.5, fontFamily: "monospace" }}>{row.sub}</span>}
             </div>
           ))}
         </div>
 
         {/* Nav */}
         <nav style={{ flex: 1, overflowY: "auto", padding: "8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-          <div style={{ fontSize: 9, color: `${HOME_THEME.muted}55`, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
+          <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
           {NAV_ITEMS.map((item) => {
             const active = ownerTab === item.id;
             const badge = item.id === "overview" ? feedbackBadge : item.badge;
@@ -1942,11 +1938,11 @@ export default function OwnerDashboard() {
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   width: "100%", textAlign: "left",
-                  padding: "7px 10px", borderRadius: 7,
+                  padding: "8px 10px", borderRadius: 7,
                   border: active ? `1px solid ${HOME_THEME.cyan}44` : "1px solid transparent",
                   background: active ? `linear-gradient(135deg, ${HOME_THEME.cyan}18, ${HOME_THEME.cyan}08)` : "transparent",
-                  color: active ? HOME_THEME.cyan : `${HOME_THEME.text}99`,
-                  fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                  color: active ? HOME_THEME.cyan : HOME_THEME.text,
+                  fontSize: 13, cursor: "pointer", fontFamily: "inherit",
                 }}
               >
                 <span>{item.label}</span>
@@ -1965,7 +1961,7 @@ export default function OwnerDashboard() {
 
         {/* Quick controls */}
         <div style={{ padding: "10px 8px 14px", borderTop: `1px solid ${HOME_THEME.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontSize: 9, color: `${HOME_THEME.muted}55`, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
+          <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
           {[
             { key: "idle",    label: isIdle == null ? "Idle mode: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
             { key: "mvcAuto", label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
@@ -1978,12 +1974,12 @@ export default function OwnerDashboard() {
               onClick={action}
               disabled={ctlBusy === key}
               style={{
-                width: "100%", textAlign: "left", padding: "6px 10px", borderRadius: 6,
-                fontSize: 10.5, cursor: ctlBusy === key ? "wait" : "pointer",
+                width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: 6,
+                fontSize: 12, cursor: ctlBusy === key ? "wait" : "pointer",
                 fontFamily: "inherit",
                 border: `1px solid ${HOME_THEME.border}`,
                 background: "transparent",
-                color: `${HOME_THEME.text}77`,
+                color: HOME_THEME.text,
                 opacity: ctlBusy === key ? 0.5 : 1,
               }}
             >
@@ -2019,17 +2015,7 @@ export default function OwnerDashboard() {
             <button onClick={refresh} disabled={loading} style={homeButtonStyle}>
               {loading ? "…" : "Refresh"}
             </button>
-            <a
-              href="/dev/admin"
-              style={{
-                padding: "5px 10px", fontSize: 10, fontWeight: 700, borderRadius: 6, letterSpacing: "0.08em",
-                cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4,
-                background: "transparent", color: HOME_THEME.purple,
-                border: `1px solid ${HOME_THEME.purple}66`,
-              }}
-            >
-              Admin ↗
-            </a>
+            <OwnerQuickLinks current="/dev/owner" />
           </div>
         </div>
 

@@ -1745,6 +1745,7 @@ class TastytradeProxy {
         if (this.optSessionKey && key !== this.optSessionKey) {
           console.log(`[SESSION] SPX rollover ${this.optSessionKey} → ${key}: clearing stale volume + re-arming OI`);
           this.volumes.clear();
+          thetaAdapter.resetCalendarCache(); // force re-check tomorrow's market open status
           this.warmedExpiries.clear(); // prior session's warm cache is now stale — force re-warm
           this.oiReady = false;
           this.oiPlateauHits = 0;

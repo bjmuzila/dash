@@ -754,13 +754,16 @@ function ConfidenceCard() {
                   const live = isToday && !future && !laterChanged;
                   // Did the CB change from the previous checkpoint to this one?
                   const cbChanged = seg != null && prevSeg != null && seg.strike !== prevSeg.strike;
+                  // Priority: future → pending. Past with outcome → show it.
+                  // Only fall through to "pending" when the checkpoint has passed
+                  // but the segment has no outcome yet (still in-progress).
                   const chip = future
                     ? { text: "pending", color: T.muted }
-                    : live
-                      ? (cbChanged
-                          ? { text: "CB CHANGED · PENDING", color: T.orange }
-                          : { text: "pending", color: T.muted })
-                      : outcomeChip(seg?.outcome ?? null);
+                    : seg?.outcome != null
+                      ? outcomeChip(seg.outcome)
+                      : live && cbChanged
+                        ? { text: "CB CHANGED · PENDING", color: T.orange }
+                        : { text: "pending", color: T.muted };
                   return (
                     <div
                       key={cp.label}
@@ -1584,10 +1587,33 @@ function SectionTitle({ children, color }: { children: ReactNode; color: string 
   );
 }
 
+// True while current ET wall-clock is between 09:00 and 16:00 on a weekday.
+function isStrategyWindow(): boolean {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+  const wd = get("weekday");
+  if (wd === "Sat" || wd === "Sun") return false;
+  const mins = Number(get("hour")) * 60 + Number(get("minute"));
+  return mins >= 9 * 60 && mins < 16 * 60;
+}
+
 function StrategyBuilderCard() {
+  // Only fetch during the 9:00–16:00 ET window on weekdays.
+  const [active, setActive] = useState(isStrategyWindow);
+
+  // Re-check every minute so the card gates itself in/out without a reload.
+  useEffect(() => {
+    const id = setInterval(() => setActive(isStrategyWindow()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   // 5-min poll — the plan only changes once a day, but this keeps a freshly
-  // generated plan showing up without a manual reload.
-  const { data, loading, error, lastUpdated } = useLiveData<StrategyResp>("/api/strategy", 5 * 60_000);
+  // generated plan showing up without a manual reload. Pass null when outside
+  // the window so useLiveData skips fetching entirely.
+  const { data, loading, error, lastUpdated } = useLiveData<StrategyResp>(active ? "/api/strategy" : null, 5 * 60_000);
   const s = data?.strategy ?? null;
   const plan = s?.plan ?? null;
   const planDate = s?.date ?? null;
@@ -1603,14 +1629,15 @@ function StrategyBuilderCard() {
           Strategy Builder
           <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
         </span>
-        {planDate && (
+        {planDate && active && (
           <span style={{ fontSize: 11, fontFamily: "monospace", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
             {isStale ? `last · ${planDate}` : planDate}
           </span>
         )}
       </Row>
-
-      {loading || error || !ready ? (
+      {!active ? (
+        <Placeholder>Available 9:00 AM – 4:00 PM ET on weekdays.</Placeholder>
+      ) : loading || error || !ready ? (
         <CardState
           loading={loading}
           error={error ?? data?.error ?? null}
@@ -1714,40 +1741,6 @@ function StrategyBuilderCard() {
 export default function AnalyticsPage() {
   return (
     <PageShell>
-      {/* TEST: drop ONLY the colored accent strip (keep glass bg + top glow).
-          Scoped to this page; shared theme untouched. */}
-      <style>{`
-        .analytics-flat .card-hover {
-          border-top: 1px solid ${T.border} !important;
-          position: relative;
-        }
-        /* Cursor-follow cyan glow — CSS-var driven, no React re-render. */
-        .analytics-flat .card-hover::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: inherit;
-          pointer-events: none;
-          opacity: 0;
-          transition: opacity 0.2s ease;
-          background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 0%), rgba(33,158,188,0.16), transparent 70%);
-          z-index: 0;
-        }
-        .analytics-flat .card-hover:hover::after { opacity: 1; }
-        /* keep card content above the glow */
-        .analytics-flat .card-hover > * { position: relative; z-index: 1; }
-      `}</style>
-      <div
-        className="analytics-flat"
-        style={{ display: "contents" }}
-        onMouseMove={(e) => {
-          const card = (e.target as HTMLElement).closest(".card-hover") as HTMLElement | null;
-          if (!card) return;
-          const r = card.getBoundingClientRect();
-          card.style.setProperty("--mx", `${e.clientX - r.left}px`);
-          card.style.setProperty("--my", `${e.clientY - r.top}px`);
-        }}
-      >
       <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
@@ -1763,7 +1756,6 @@ export default function AnalyticsPage() {
         <StrategyBuilderCard />
 
         <ContractLookupCard />
-      </div>
       </div>
     </PageShell>
   );

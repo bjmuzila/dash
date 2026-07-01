@@ -19,12 +19,14 @@ function CustomDropdown<T extends string | number>({
   options,
   onChange,
   formatLabel,
+  triggerLabel,
   accentCyan,
 }: {
   value: T;
   options: T[] | readonly T[];
   onChange: (v: T) => void;
   formatLabel?: (v: T) => string;
+  triggerLabel?: string;
   accentCyan?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -32,7 +34,7 @@ function CustomDropdown<T extends string | number>({
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
-  const label = formatLabel ? formatLabel(value) : String(value);
+  const label = triggerLabel ?? (formatLabel ? formatLabel(value) : String(value));
 
   // Anchor the portal'd menu under the trigger.
   useEffect(() => {
@@ -69,14 +71,18 @@ function CustomDropdown<T extends string | number>({
         ref={btnRef}
         onClick={() => setOpen(o => !o)}
         style={{
-          fontSize: 10, fontWeight: 800, padding: "4px 8px",
-          border: `1px solid ${accentCyan !== false ? "rgba(33,158,188,.3)" : HT.border}`,
-          borderRadius: 4,
-          background: "rgba(0,0,0,0.4)",
+          fontSize: 10, fontWeight: 700, padding: "5px 10px",
+          border: `1px solid ${accentCyan !== false ? "rgba(33,158,188,.25)" : HT.border}`,
+          borderRadius: 6,
+          background: accentCyan !== false
+            ? "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))"
+            : "rgba(255,255,255,0.04)",
           color,
           cursor: "pointer", outline: "none",
           display: "flex", alignItems: "center", gap: 5,
           whiteSpace: "nowrap",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
         }}
       >
         {label}
@@ -995,16 +1001,17 @@ export default function OptionsChainPage() {
           autoComplete="off"
           spellCheck={false}
           style={{
-            fontSize: 10,
-            fontWeight: 800,
-            padding: "4px 8px",
-            border: `1px solid rgba(33,158,188,.4)`,
-            borderRadius: 4,
-            background: "rgba(0,0,0,0.4)",
+            fontSize: 11,
+            fontWeight: 700,
+            padding: "5px 10px",
+            border: `1px solid rgba(33,158,188,.25)`,
+            borderRadius: 6,
+            background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
             color: HT.cyan,
             outline: "none",
-            width: 88,
+            width: 80,
             textTransform: "uppercase",
+            letterSpacing: "0.08em",
           }}
         />
         <datalist id="options-chain-tickers">
@@ -1015,7 +1022,7 @@ export default function OptionsChainPage() {
           value={displayPercent}
           options={DISPLAY_PERCENTS}
           onChange={setDisplayPercent}
-          formatLabel={v => `${v}% of strikes`}
+          formatLabel={v => `${v}% strikes`}
         />
 
         <button
@@ -1027,14 +1034,13 @@ export default function OptionsChainPage() {
         </button>
 
         {recentTickers.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "nowrap" }}>
-            <span style={{ fontSize: 8, fontWeight: 800, color: HT.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>Recent</span>
-            {recentTickers.map((t) => (
-              <button key={t} onClick={() => selectTicker(t)} title={`Load ${t}`} style={segBtnStyle(t === activeTicker)}>
-                {t}
-              </button>
-            ))}
-          </div>
+          <CustomDropdown
+            value={activeTicker}
+            options={recentTickers as string[]}
+            onChange={(t) => selectTicker(t as string)}
+            triggerLabel="Recent"
+            accentCyan={false}
+          />
         )}
 
         {autoPercentNote ? (

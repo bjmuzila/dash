@@ -7,6 +7,7 @@ import type { GexBaselines } from "@/hooks/useStrikeGexHistory";
 export type PopupStyle = "card" | "drawer" | "modal";
 
 // Cache AI summaries by strike so repeated opens don't re-call the API.
+// Keyed by strike — cleared on page reload automatically (module-level Map).
 const summaryCache = new Map<number, string>();
 
 interface Props {

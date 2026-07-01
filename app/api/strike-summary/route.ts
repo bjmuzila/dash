@@ -5,7 +5,8 @@ export const dynamic = "force-dynamic";
 const MODEL = "claude-haiku-4-5-20251001";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-const SYSTEM = `You are a concise SPX options market analyst for CB Edge. Given a single strike's GEX data, write 1-2 tight sentences describing what the dealer positioning at this level implies for price behavior. Focus on: is this a support/resistance level, is gamma positive (dealers buy dips/sell rips) or negative (dealers amplify moves), and what the OTM contract price signals about hedging demand. No fluff, no disclaimers, trader-to-trader tone.`;
+const SYSTEM = `You are CB Edge, an SPX GEX desk. Write exactly 1-2 sentences about this strike level. Format: "[strike] is a [CB/support/resistance/flip] level. [What price should do here based on net GEX — reach/pivot/pin/amplify]." Be blunt and specific. Use the actual numbers. No disclaimers, no fluff. Example tone: "7540 CB level here. Market should reach or pivot if net GEX stays positive."`;
+
 
 export async function POST(req: NextRequest) {
   try {
