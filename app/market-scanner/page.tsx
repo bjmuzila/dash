@@ -1,3 +1,7 @@
+import { notFound } from "next/navigation";
+export default function MarketScannerPage() { notFound(); }
+/* page removed */
+function _removed() {
 "use client";
 
 import { useState, useEffect, useCallback } from "react";

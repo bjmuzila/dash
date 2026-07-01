@@ -132,7 +132,8 @@ export default function LandingClient() {
           <div style={cardGlow} aria-hidden />
 
           <div style={badge} className="launch-badge">
-            Launching{" "}
+            <span style={{ color: T.green, fontWeight: 800 }}>Beta is LIVE</span>
+            {" · Full Launch "}
             <span style={{ color: "#E0162B", fontWeight: 800 }}>July</span>{" "}
             <span style={{ color: "#FFFFFF", fontWeight: 800 }}>4th</span>{" "}
             <span style={{ color: "#3C6FE0", fontWeight: 800 }}>Weekend</span>
@@ -230,12 +231,21 @@ export default function LandingClient() {
             </span>
           </div>
 
+          {/* Promo code callout */}
+          <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 10, background: "rgba(33,158,188,0.08)", border: "1px solid rgba(33,158,188,0.25)", textAlign: "center" }}>
+            <span style={{ fontSize: 13, color: T.muted }}>Use code </span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>CB-BETA</span>
+            <span style={{ fontSize: 13, color: T.muted }}> for </span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>50% off</span>
+          </div>
+
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <Link href="/sign-in" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
               Sign in to dashboard
             </Link>
-            <Link href="/pricing?from=landing" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
-              Join the beta
+            <Link href="/pricing?from=landing" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.2" }}>
+              <span style={{ display: "block" }}>Join the Beta</span>
+              <span style={{ display: "block", fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Code: CB-Beta</span>
             </Link>
           </div>
         </div>

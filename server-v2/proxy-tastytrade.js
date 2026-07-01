@@ -1759,7 +1759,7 @@ class TastytradeProxy {
       try {
         const r = await fetch(`http://localhost:${port}/api/snapshots/premium`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}) },
           body: JSON.stringify({
             timestamp: now,
             callPremium: callAcc,
