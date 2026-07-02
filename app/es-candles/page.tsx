@@ -375,7 +375,12 @@ export default function EsCandlesPage() {
     mvc: number | null;
     spx: number | null;
     esFut: number | null;
-  }>({ callWall: null, putWall: null, gexFlip: null, mvc: null, spx: null, esFut: null });
+    // Server-computed esFut-spot, only updated when both feeds were fresh
+    // within a small window of each other (see market-state.js). Preferred
+    // over deriving basis client-side from esFut/spx, which arrive on two
+    // independent WS messages and can momentarily be out of sync.
+    basis: number | null;
+  }>({ callWall: null, putWall: null, gexFlip: null, mvc: null, spx: null, esFut: null, basis: null });
 
   const status = connected ? "live" : "offline";
 
@@ -388,6 +393,11 @@ export default function EsCandlesPage() {
     const apply = (d: Record<string, unknown>) => {
       const spx = Number(d.spot ?? 0);
       const esFut = Number(d.esFut ?? 0);
+      // Authoritative basis from the server (esFut-spot, freshness-gated —
+      // see market-state.js _recomputeBasis). NaN/0 means this message didn't
+      // carry a real value (e.g. the heavy 'gex' frame doesn't include it).
+      const rawBasis = Number(d.basis);
+      const dBasis = Number.isFinite(rawBasis) && Math.abs(rawBasis) > 0.01 ? rawBasis : null;
       const exp = typeof d.expiry === "string" ? d.expiry : "";
       if (exp) setFeedExpiry((cur) => cur || exp);
       if (Array.isArray(d.expirations) && d.expirations.length) {
@@ -402,12 +412,19 @@ export default function EsCandlesPage() {
       setLevels((prev) => {
         const nextSpx = spx > 0 ? spx : prev.spx;
         const nextEs = esFut > 0 ? esFut : prev.esFut;
-        if (nextSpx != null && nextEs != null) basisRef.current = nextEs - nextSpx;
+        // Prefer the server's freshness-gated basis. Only fall back to a
+        // client-side esFut-spx diff (which can be a stale/fresh mismatch —
+        // this was the source of the jumpy basis / Put Wall line) when the
+        // server hasn't published one yet at all.
+        const nextBasis = dBasis != null ? dBasis : prev.basis;
+        if (nextBasis != null) basisRef.current = nextBasis;
+        else if (nextSpx != null && nextEs != null) basisRef.current = nextEs - nextSpx;
         return {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
           gexFlip:  computedFlip != null ? computedFlip : (d.gexFlip != null ? Number(d.gexFlip) || null : prev.gexFlip),
           mvc:      prev.mvc,
+          basis:    nextBasis,
           spx:      nextSpx,
           esFut:    nextEs,
         };
@@ -495,8 +512,13 @@ export default function EsCandlesPage() {
     drawOverlayRef.current();
     (async () => {
       try {
+        // Front (live) mode = rolling 0DTE, a different expiry string every
+        // trading day, so ask the server to ignore the expiry filter and pull
+        // by time window alone (anyExpiry=1) — otherwise backfill only ever
+        // matches today. An explicit DTE pick keeps the exact expiry match.
+        const isFront = !selectedExpiry;
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=7200&expiry=${encodeURIComponent(heatmapExpiry)}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=7200&expiry=${encodeURIComponent(heatmapExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -760,15 +782,22 @@ export default function EsCandlesPage() {
     const onRange = () => updateLiveSpxRef.current();
     chart?.timeScale().subscribeVisibleLogicalRangeChange(onRange);
     return () => { chart?.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); };
-  }, [rows, prevCloses, levels.esFut, levels.spx]);
+  }, [rows, prevCloses, levels.basis, levels.esFut, levels.spx]);
 
   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
-  // WS frame has arrived recently. basis = esFut − spx.
+  // WS frame has arrived recently. Mirrors the server's authoritative
+  // levels.basis (see apply()); only re-derives esFut − spx client-side when
+  // the server hasn't published a basis yet at all. Previously this recomputed
+  // esFut − spx on every change to EITHER field, which fires independently
+  // (they arrive on separate 'spot'/'aux' WS messages) and was the source of
+  // the jumpy basis / Put Wall line.
   useEffect(() => {
-    if (levels.esFut != null && levels.spx != null) {
+    if (levels.basis != null) {
+      basisRef.current = levels.basis;
+    } else if (levels.esFut != null && levels.spx != null) {
       basisRef.current = levels.esFut - levels.spx;
     }
-  }, [levels.esFut, levels.spx]);
+  }, [levels.basis, levels.esFut, levels.spx]);
 
   // Frozen prior-day basis for the overnight / pre-open right axis.
   // prior-day ES 16:00 close (es_candles) − prior-day SPX 16:00 close (eod_gex).
@@ -816,7 +845,12 @@ export default function EsCandlesPage() {
     for (const pl of priceLinesRef.current) { try { series.removePriceLine(pl); } catch {} }
     priceLinesRef.current = [];
 
-    const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
+    // Was: raw levels.esFut - levels.spx, recomputed on every `levels` change
+    // (even ones unrelated to basis) from two independently-timed fields —
+    // this is what made the Put Wall line jump around. effectiveBasis()
+    // reads the server's freshness-gated basisRef (falling back to the
+    // frozen prior-day basis) instead.
+    const basis = effectiveBasis();
     const toEs = (spxLevel: number | null) => (spxLevel != null ? spxLevel + basis : null);
 
     const defs: Array<{ price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [];
@@ -856,7 +890,7 @@ export default function EsCandlesPage() {
       });
       priceLinesRef.current.push(pl);
     }
-  }, [levels, showLevels, showSessions, sessionLevels]);
+  }, [levels, showLevels, showSessions, sessionLevels, effectiveBasis]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
@@ -1139,7 +1173,9 @@ export default function EsCandlesPage() {
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
             <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: "#ff5b5b", whiteSpace: "nowrap" }}>ES 5m Candles</span>
             {(() => {
-              const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
+              // Server-authoritative basis (see apply()); this badge was reading
+              // the raw independently-timed esFut/spx diff before.
+              const basis = levels.basis ?? effectiveBasis();
               return (
                 <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
                   ES Basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}
@@ -1220,7 +1256,7 @@ export default function EsCandlesPage() {
       <div className="flex flex-col" style={{ flex: 1, minHeight: 0 }}>
       <div className="flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
-          const basis = levels.esFut != null && levels.spx != null ? levels.esFut - levels.spx : 0;
+          const basis = levels.basis ?? effectiveBasis();
           const es = (v: number | null) => (v != null ? (v + basis).toFixed(2) : "—");
           const StatBox = ({ c, label, v }: { c: string; label: string; v: number | null }) => (
             <div

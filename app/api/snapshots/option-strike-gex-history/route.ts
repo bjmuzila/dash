@@ -6,6 +6,7 @@ import {
   getOptionStrikeNetGexAtOpen,
   getOptionStrikeGexSlots,
   getOptionStrikeGexSlotsWindow,
+  getOptionStrikeGexSlotsWindowAny,
   insertOptionStrikeGexRows,
 } from "@/lib/db";
 
@@ -70,12 +71,22 @@ export async function GET(req: NextRequest) {
     // the ES Candles heatmap backfill so history shows immediately on load.
     if (mode === "heatmap") {
       // Rolling window (minutes) overrides the single-ET-day read so the heatmap
-      // spans across midnight. Defaults to 24h; capped at 48h. Pass minutes=0 to
-      // fall back to the legacy today-only behavior.
+      // spans across midnight. Defaults to 24h; capped at 5 trading days
+      // (7200min) so ES Candles backfill can go as far back as the candles do.
+      // Pass minutes=0 to fall back to the legacy today-only behavior.
       const winParam = searchParams.get("minutes");
-      const winMin = winParam == null ? 1440 : Math.max(0, Math.min(2880, Number(winParam)));
+      const winMin = winParam == null ? 1440 : Math.max(0, Math.min(7200, Number(winParam)));
+      // anyExpiry=1 → front/live (0DTE) mode. Each trading day is written under
+      // that day's own front expiry (a different string every day), so a
+      // literal expiry match only ever returns today's rows and multi-day
+      // backfill comes back empty. Drop the expiry filter and key on the time
+      // window alone — one distinct expiry per calendar date in practice, so
+      // this is safe. Explicit (non-front) expiry picks keep the exact match.
+      const anyExpiry = searchParams.get("anyExpiry") === "1";
       const slots = winMin > 0
-        ? await getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry)
+        ? anyExpiry
+          ? await getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000)
+          : await getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry)
         : await getOptionStrikeGexSlots(date, expiry);
       const bySlot = new Map<number, Array<{ strike: number; net: number; netVol: number }>>();
       for (const r of slots) {

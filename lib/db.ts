@@ -200,6 +200,20 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
 
+    -- One row per ticker interaction (scanner + anywhere tickers are shown).
+    -- event = 'click' (user opened it) | 'render' (it appeared in a list).
+    -- Per-event log so counts can be sliced by day/user/event; pruned on insert.
+    CREATE TABLE IF NOT EXISTS ticker_events (
+      id SERIAL PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      event TEXT NOT NULL,
+      source TEXT,
+      user_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ticker_events_created ON ticker_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ticker_events_ticker ON ticker_events(ticker, event);
+
     CREATE TABLE IF NOT EXISTS budget_profiles (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
@@ -1654,6 +1668,70 @@ export async function getRecentPageVisits(limit = 100): Promise<PageVisitRecord[
   );
 }
 
+// ── Ticker events (click / render tracking) ────────────────────────────────────
+
+export interface TickerEventRecord {
+  id?: number;
+  ticker?: string | null;
+  event?: string | null;   // 'click' | 'render'
+  source?: string | null;  // e.g. 'scanner'
+  user_id?: string | null;
+  created_at?: string | null;
+}
+
+export interface TickerEventCount {
+  ticker: string;
+  clicks: number;
+  renders: number;
+}
+
+// Keep the ticker-event log bounded (renders are high-volume).
+const TICKER_EVENTS_KEEP = 50000;
+
+export async function insertTickerEvent(
+  r: Pick<TickerEventRecord, "ticker" | "event" | "source" | "user_id">
+): Promise<void> {
+  if (!r.ticker || !r.event) return;
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO ticker_events (ticker, event, source, user_id)
+     VALUES ($1, $2, $3, $4)`,
+    [String(r.ticker).toUpperCase(), r.event, r.source ?? null, r.user_id ?? null]
+  );
+  // Opportunistic prune: keep only the newest TICKER_EVENTS_KEEP rows.
+  await pool.query(
+    `DELETE FROM ticker_events
+     WHERE id < (
+       SELECT MIN(id) FROM (
+         SELECT id FROM ticker_events ORDER BY id DESC LIMIT $1
+       ) keep
+     )`,
+    [TICKER_EVENTS_KEEP]
+  );
+}
+
+// Aggregated click/render counts per ticker. Optional sinceDays window (e.g. 7).
+export async function getTickerEventCounts(sinceDays?: number): Promise<TickerEventCount[]> {
+  const pool = await getDb();
+  const where = sinceDays && sinceDays > 0
+    ? `WHERE created_at >= NOW() - INTERVAL '${Math.floor(sinceDays)} days'`
+    : "";
+  const { rows } = await pool.query(
+    `SELECT ticker,
+            COUNT(*) FILTER (WHERE event = 'click')  AS clicks,
+            COUNT(*) FILTER (WHERE event = 'render') AS renders
+     FROM ticker_events
+     ${where}
+     GROUP BY ticker
+     ORDER BY clicks DESC, renders DESC`
+  );
+  return rows.map((r: { ticker: string; clicks: string; renders: string }) => ({
+    ticker: r.ticker,
+    clicks: Number(r.clicks),
+    renders: Number(r.renders),
+  }));
+}
+
 // ── ES Candles ────────────────────────────────────────────────────────────────
 
 export interface EsCandleDbRecord {
@@ -2161,6 +2239,38 @@ export async function getOptionStrikeGexSlotsWindow(
         AND expiry = $2
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
     [sinceTs, expiry]
+  );
+  return result.rows.map((row) => ({
+    slot_ts: Number(row.slot_ts ?? 0),
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
+  }));
+}
+
+/**
+ * Same as getOptionStrikeGexSlotsWindow but with NO expiry filter. The writer
+ * tags every row with that day's front (0DTE) expiry, which is a different
+ * string each trading day — so a literal `expiry =` match only ever returns
+ * today's rows and multi-day heatmap backfill silently comes back empty for
+ * older candles. Front/live mode wants "whichever expiry was active that
+ * day," which in practice is one distinct expiry per calendar date, so
+ * dropping the filter and keying purely on the time window is safe.
+ */
+export async function getOptionStrikeGexSlotsWindowAny(
+  sinceTs: number
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
+            (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
+            strike,
+            net_gex,
+            net_vol_gex
+       FROM option_strike_gex_history
+      WHERE timestamp >= $1
+      ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
+    [sinceTs]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),

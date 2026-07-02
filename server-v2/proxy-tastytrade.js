@@ -129,6 +129,14 @@ const OI_READY_GRACE_MS = Number(process.env.OI_READY_GRACE_MS || 90000);
 // independent of the heavier GEX recompute loop.
 const FLOW_AGGREGATE_MS = Number(process.env.FLOW_AGGREGATE_MS || 500);
 
+// Flow subscription strategy. Default (0) = per-contract STREAM per active window
+// (cheap for few roots). Set FLOW_BULK_STREAM=1 to instead use ONE STREAM_BULK
+// OPTION TRADE firehose filtered client-side to the roots we track (SPXW +
+// FLOW_TICKERS). Bulk stops the JVM sub-count from scaling with ticker count —
+// use it once FLOW_TICKERS / the scanner push you to many roots. Trade-off: Node
+// parses the whole OPRA tape, so only flip it when going wide.
+const FLOW_BULK_STREAM = process.env.FLOW_BULK_STREAM === '1';
+
 // ES 5-minute candle broadcast cadence. The forming bar updates on nearly every
 // flush while ES is live, so this is effectively how often the live candle
 // repaints. 10s keeps it visibly live without one delta every ~5s.
@@ -1996,9 +2004,17 @@ class TastytradeProxy {
    */
   _subscribeThetaFlow() {
     if (!useTheta() || !this.thetaStream) return;
+    const root = thetaAdapter.thetaRoot(SYMBOL);
+    // Bulk mode: don't enumerate SPXW contracts — the firehose covers them. Just
+    // register SPXW in the keep-list and arm the single bulk subscription once.
+    // (subscribeBulkTrades is idempotent-safe: re-calling only re-sends the sub.)
+    if (FLOW_BULK_STREAM) {
+      this.thetaStream.addBulkRoot(root);
+      if (!this._bulkArmed) { this.thetaStream.subscribeBulkTrades(); this._bulkArmed = true; }
+      return;
+    }
     const active = this._activeContracts();
     if (!active.length) return;
-    const root = thetaAdapter.thetaRoot(SYMBOL);
     // active contracts carry {strike,type,expiration}; only this expiry's legs
     const legs = active
       .filter((c) => c.expiration === this.expiry)

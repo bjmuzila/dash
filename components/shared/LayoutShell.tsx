@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import GlobalToolbar from "./GlobalToolbar";
+import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
 import NotesDock from "./NotesDock";
 import { HOME_THEME } from "./homeTheme";
 import { MobileNavProvider } from "./MobileNavContext";
@@ -34,6 +35,10 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   const { key, label } = pageMetaFromPath(pathname);
   usePageLoadStatus({ pageKey: key, pageLabel: label, path: pathname });
 
+  // Owner + backend routes get the shared left rail here (single mount point), so
+  // root-level backend pages (/database, /logs, …) no longer lose it.
+  const showOwnerRail = isOwnerChromePath(pathname);
+
   return (
     <div
       style={{
@@ -51,6 +56,11 @@ function ShellInner({ children }: { children: React.ReactNode }) {
           hamburger dropdown (NavMenu) — there is no persistent sidebar. */}
       <GlobalToolbar />
       <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}>
+        {showOwnerRail && (
+          <Suspense fallback={null}>
+            <OwnerSidebar />
+          </Suspense>
+        )}
         <main style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, position: "relative", zIndex: 1 }}>
           {children}
         </main>

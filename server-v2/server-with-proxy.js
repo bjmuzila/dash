@@ -39,6 +39,7 @@ const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
+const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool } = require('./scanner-recorder');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -811,6 +812,47 @@ async function main() {
         return;
       }
 
+      // ── Multi-ticker GEX Scanner ──────────────────────────────────────────
+      // GET /proxy/scanner?sort=gex|flip&limit=50
+      //   Latest row per ticker for today, ranked by |total net GEX| (default)
+      //   or distance of spot from the GEX flip.
+      if (pathname === '/proxy/scanner' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await scannerEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = scannerGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const sort  = ['gex', 'flip'].includes(u.searchParams.get('sort')) ? u.searchParams.get('sort') : 'gex';
+            const limit = Math.min(200, Number(u.searchParams.get('limit') || 50));
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            const sql = `
+              SELECT DISTINCT ON (symbol)
+                     symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes
+              FROM scanner_snapshots
+              WHERE date = $1
+              ORDER BY symbol, ts DESC`;
+            const { rows } = await p.query(sql, [today]);
+            rows.sort((a, b) => {
+              if (sort === 'flip') {
+                const da = a.gex_flip != null ? Math.abs(a.spot - a.gex_flip) : Infinity;
+                const db = b.gex_flip != null ? Math.abs(b.spot - b.gex_flip) : Infinity;
+                return da - db;
+              }
+              return Math.abs(b.total_net_gex ?? 0) - Math.abs(a.total_net_gex ?? 0);
+            });
+            sendJson(res, 200, { ok: true, sort, rows: rows.slice(0, limit) });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual sweep fire: POST /proxy/scanner-run
+      if (pathname === '/proxy/scanner-run' && req.method === 'POST') {
+        runScannerSweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // ── Volatility Pinning Scanner ────────────────────────────────────────
       // GET /proxy/vol-pin-scanner?limit=25&minSnapshots=3
       //
@@ -1198,6 +1240,9 @@ async function main() {
     startGreekScannerRecorder(PORT);
     // Vol-pin snapshots: ATM IV, RV, pin strike, range per equity ticker every 5m.
     startVolPinRecorder();
+    // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
+    // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
+    startScannerRecorder();
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
     startGreeksTsWriter(PORT);

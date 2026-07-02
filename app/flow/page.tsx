@@ -39,7 +39,9 @@ function fmtPremium(val: number): string {
 }
 
 function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(ts).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
 }
 
 // Streamer roots carry suffixes chips don't (SPX streams as "SPXW", etc.).
@@ -322,7 +324,7 @@ export default function FlowPage() {
   return (
     <PageShell className="no-card-lift">
       {/* ── Filters ─────────────────────────────────────────────────── */}
-      <Card accent="cyan" title="Options Flow — Filters" subtitle="Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape.">
+      <Card accent="cyan" title="Options Flow — Filters" subtitle="Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape." style={{ flexShrink: 0 }}>
         <div style={{ marginBottom: 18 }}>
           <label style={labelStyle}>Watchlist ({tickerList.length})</label>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
@@ -432,7 +434,7 @@ export default function FlowPage() {
       </Card>
 
       {/* ── Net Premium chart ───────────────────────────────────────── */}
-      <Card accent="orange" padding={0}>
+      <Card accent="orange" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
             Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
@@ -464,7 +466,7 @@ export default function FlowPage() {
       </Card>
 
       {/* ── Tape ────────────────────────────────────────────────────── */}
-      <Card accent="purple" padding={0} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <Card accent="purple" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {active}</span>
@@ -488,7 +490,7 @@ export default function FlowPage() {
           <span style={{ textAlign: "right" }}>Expiry</span>
         </div>
 
-        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 360px)" }}>
+        <div>
           {filtered.length === 0 ? (
             <p style={{ fontSize: 13, padding: 24, color: C.muted }}>
               {status === "LIVE" ? `No ${active} flow matches the current filters.` : "Connecting to feed…"}

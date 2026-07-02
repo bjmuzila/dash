@@ -453,6 +453,34 @@ class ThetaStreamClient {
     // remember subscriptions so we can resubscribe on reconnect
     this.subs = []; // [{root, expInt, strikeTenthCents, right}]
     this.indexSubs = []; // ["SPX","VIX"] index roots to (re)subscribe
+    // Bulk (STREAM_BULK) mode: ONE option-trade subscription for the whole OPRA
+    // tape, filtered client-side to bulkRoots. Used instead of per-contract subs
+    // when scaling to many flow roots. Empty/false = per-contract mode (default).
+    this.bulkTrades = false;
+    this.bulkRoots = new Set(); // Theta roots to KEEP from the firehose (e.g. "SPXW","QQQ")
+  }
+
+  /** Add a Theta root to the bulk-stream keep-list (drops everything else). */
+  addBulkRoot(root) {
+    if (root) this.bulkRoots.add(String(root).toUpperCase());
+  }
+
+  /**
+   * Subscribe the full OPRA option-trade firehose (STREAM_BULK). Every US option
+   * trade arrives on this one subscription; _onMessage drops any root not in
+   * bulkRoots. Trades TRADE only (no QUOTE) to match the per-contract path.
+   */
+  subscribeBulkTrades() {
+    this.bulkTrades = true;
+    if (!this.connected) return; // re-armed on open
+    this._send({
+      msg_type: 'STREAM_BULK',
+      sec_type: 'OPTION',
+      req_type: 'TRADE',
+      add: true,
+      id: this.nextId++,
+    });
+    console.log(`[THETA-WS] STREAM_BULK OPTION TRADE subscribed; keep-roots=${[...this.bulkRoots].join(',') || '(none)'}`);
   }
 
   _ckey(root, expInt, strikeTenthCents, right) {
@@ -474,6 +502,8 @@ class ThetaStreamClient {
       const idx = this.indexSubs.slice();
       this.indexSubs = [];
       for (const root of idx) this.subscribeIndex(root, /*record*/ true);
+      // Re-arm the bulk firehose if it was active (bulkRoots persists across reconnects).
+      if (this.bulkTrades) this.subscribeBulkTrades();
     });
     ws.on('message', (buf) => this._onMessage(buf));
     ws.on('close', () => {
@@ -586,6 +616,9 @@ class ThetaStreamClient {
     }
 
     const root = contract.root;
+    // Bulk mode: the firehose carries the whole OPRA tape. Drop any root we don't
+    // track BEFORE building a cache entry — this is the hot path, keep it cheap.
+    if (this.bulkTrades && !this.bulkRoots.has(String(root).toUpperCase())) return;
     const expInt = contract.expiration;
     const strikeTenthCents = contract.strike;
     const right = String(contract.right).toUpperCase().startsWith('C') ? 'C' : 'P';

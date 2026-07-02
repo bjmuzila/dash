@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback, Fragment } from "react";
+import { useSearchParams } from "next/navigation";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import {
   OWNER_THEME as HOME_THEME,
@@ -1043,6 +1044,18 @@ export default function OwnerDashboard() {
     try { localStorage.setItem("owner-tab", t); } catch { /* ignore */ }
   }, []);
 
+  // The owner rail navigates sections via ?tab=… — react to that (client-side nav
+  // keeps this page mounted, so the mount effect above won't re-run).
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const VALID_TABS: OwnerTab[] = ["overview","infra","database","controls","eodgex","auth","activity"];
+    const param = searchParams.get("tab") as OwnerTab | null;
+    if (param && VALID_TABS.includes(param)) {
+      setOwnerTab(param);
+      try { localStorage.setItem("owner-tab", param); } catch { /* ignore */ }
+    }
+  }, [searchParams]);
+
   // Section cards: multi-open. ALL sections start expanded on page load. Each
   // card toggles independently (no longer an accordion). Persisted so a reload
   // keeps the user's open/closed choices; first-ever load defaults to all open.
@@ -1999,7 +2012,7 @@ export default function OwnerDashboard() {
   );
 
   return (
-    <div style={{ ...homeShellStyle, height: "100dvh", maxHeight: "100dvh", flexDirection: "row" }}>
+    <div style={{ ...homeShellStyle, height: "100%", maxHeight: "100%", flexDirection: "row" }}>
       <style>{`
         .owner-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
         .owner-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -2037,16 +2050,9 @@ export default function OwnerDashboard() {
         </div>
       )}
 
-      {/* ── LEFT SIDEBAR (desktop only) ───────────────────────────────────────── */}
-      {!isMobile && <div style={{
-        width: 248, flexShrink: 0,
-        borderRight: `1px solid ${HOME_THEME.border}`,
-        background: HOME_THEME.panelBg,
-        display: "flex", flexDirection: "column",
-        height: "100%", overflow: "hidden",
-      }}>
-        <SidebarContent />
-      </div>}
+      {/* Desktop section nav + status + quick controls now live in the shared
+          owner rail (LayoutShell → OwnerSidebar) and the OpsBar header below.
+          The internal desktop sidebar was removed to kill the duplicate rail. */}
 
       {/* ── RIGHT MAIN ───────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
@@ -2080,6 +2086,66 @@ export default function OwnerDashboard() {
             {!isMobile && <OwnerQuickLinks current="/owner/dev/owner" />}
           </div>
         </div>
+
+        {/* Desktop OpsBar — live status dots + quick controls (relocated from the
+            old internal sidebar; section nav now lives in the shared owner rail). */}
+        {!isMobile && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+            padding: "8px 18px",
+            borderBottom: `1px solid ${HOME_THEME.border}`,
+            background: HOME_THEME.panelBg,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", minWidth: 0 }}>
+              {STATUS_ROWS.map((row) => (
+                <span key={row.label} title={row.sub ? `${row.label}: ${row.sub}` : row.label}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.text }}>
+                  <span style={{
+                    width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                    background: row.ok ? HOME_THEME.green : HOME_THEME.red,
+                    boxShadow: row.ok ? `0 0 5px ${HOME_THEME.green}88` : `0 0 5px ${HOME_THEME.red}88`,
+                  }} />
+                  {row.label}
+                  {row.sub && <span style={{ opacity: 0.5, fontFamily: "monospace", fontSize: 11 }}>{row.sub}</span>}
+                </span>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexWrap: "wrap" }}>
+              {[
+                { key: "idle",      label: isIdle == null ? "Idle: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
+                { key: "mvcAuto",   label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
+                { key: "maint",     label: maint == null ? "Maint: —" : maint ? "● Maint ON — go live" : "○ Maint OFF",       action: toggleMaint },
+                { key: "reconnect", label: "↻ Reconnect feed", action: doReconnect },
+              ].map(({ key, label, action }) => (
+                <button
+                  key={key}
+                  className="owner-ctrl-btn"
+                  onClick={action}
+                  disabled={ctlBusy === key}
+                  style={{
+                    padding: "6px 10px", borderRadius: 6, fontSize: 12,
+                    cursor: ctlBusy === key ? "wait" : "pointer", fontFamily: "inherit",
+                    border: `1px solid ${HOME_THEME.border}`, background: "transparent",
+                    color: HOME_THEME.text, opacity: ctlBusy === key ? 0.5 : 1, whiteSpace: "nowrap",
+                  }}
+                >
+                  {ctlBusy === key ? "…" : label}
+                </button>
+              ))}
+            </div>
+            {ctlMsg && (
+              <div style={{
+                width: "100%", fontSize: 10, fontFamily: "monospace", padding: "5px 8px", borderRadius: 6,
+                background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
+                border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
+                color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
+              }}>
+                {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Mobile tab strip */}
         {isMobile && (
           <div style={{

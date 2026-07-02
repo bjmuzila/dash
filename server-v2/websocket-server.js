@@ -60,6 +60,7 @@ function buildSnapshot(state) {
     prevClose: state.prevClose,
     vix: state.vix,
     esFut: state.esFut,
+    basis: state.basis,
     vixPrevClose: state.vixPrevClose,
     esFutPrevClose: state.esFutPrevClose,
     expiry: state.expiry,
@@ -315,15 +316,19 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     // slotKey merge ingests it unchanged, carrying only the bars that moved.
     if (changed.has('esCandles')) out.push(msg('esCandles', state.esCandles, state.symbol));
     if (changed.has('esCandlesDelta')) out.push(msg('esCandles', state.esCandlesDelta, state.symbol));
-    if (changed.has('spot') || changed.has('prevClose')) {
-      out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose }, state.symbol));
+    if (changed.has('spot') || changed.has('prevClose') || changed.has('basis')) {
+      // basis rides on the 'spot' message too (not just 'aux') so a client
+      // that only just connected/re-subscribed gets the authoritative value
+      // on whichever of the two messages happens to fire first.
+      out.push(msg('spot', { spot: state.spot, prevClose: state.prevClose, basis: state.basis }, state.symbol));
     }
     if (changed.has('vix') || changed.has('esFut') ||
         changed.has('vixPrevClose') || changed.has('esFutPrevClose') ||
-        changed.has('spotDisplay')) {
+        changed.has('spotDisplay') || changed.has('basis')) {
       out.push(msg('aux', {
         vix: state.vix,
         esFut: state.esFut,
+        basis: state.basis,
         vixPrevClose: state.vixPrevClose,
         esFutPrevClose: state.esFutPrevClose,
         spotDisplay: state.spotDisplay,

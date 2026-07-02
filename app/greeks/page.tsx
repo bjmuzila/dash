@@ -812,6 +812,71 @@ function evaluateGamma(history: GreekPoint[], vol?: VolData | null): GammaSignal
   return sigs.sort((a, b) => a.priority - b.priority);
 }
 
+// ── Greek gauge (C×D hybrid: split ring + glowing value arc, 0 at 12 o'clock) ──
+// Left half = negative (red), right half = positive (green), zero pinned at top.
+// Self-scaling: `fullScale` is the max |value| seen today, so the arc stays
+// readable regardless of the greek's magnitude.
+function GreeksGauge({
+  label, value, fmt, fullScale,
+}: {
+  label: string; value: number | null; fmt: (v: number | null) => string; fullScale: number;
+}) {
+  const cx = 66, cy = 70, r = 50;
+  const GREEN = "#00e676", RED = "#ff5252";
+  const uid = `gg-${label}`;
+  // deg measured clockwise from top (0 = 12 o'clock).
+  const pt = (deg: number) => ({
+    x: cx + r * Math.sin((deg * Math.PI) / 180),
+    y: cy - r * Math.cos((deg * Math.PI) / 180),
+  });
+  const arc = (d0: number, d1: number) => {
+    const a = pt(d0), b = pt(d1);
+    const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
+    const sweep = d1 > d0 ? 1 : 0;
+    return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
+  };
+  const v = value ?? 0;
+  const f = fullScale > 0 ? Math.max(-1, Math.min(1, v / fullScale)) : 0;
+  const valDeg = f * 135;
+  const pos = v > 0, neg = v < 0;
+  const col = pos ? GREEN : neg ? RED : "#9fb3c8";
+  const valuePath = f >= 0 ? arc(0, valDeg) : arc(valDeg, 0);
+  const has = value != null && isFinite(value);
+
+  return (
+    <div className="card-hover" style={{
+      border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${col}d9`,
+      background: `radial-gradient(circle at 50% 0%, ${col}1f 0%, transparent 62%), ${HOME_THEME.panelBg}`,
+      backdropFilter: "blur(16px)", borderRadius: 14, padding: "12px 8px 10px",
+      display: "flex", flexDirection: "column", alignItems: "center",
+    }}>
+      <svg viewBox="0 0 132 108" width="100%" style={{ display: "block", maxWidth: 150 }}>
+        <defs>
+          <filter id={uid} x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="2.4" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        {/* negative half track (left) */}
+        <path d={arc(-135, 0)} fill="none" stroke="#2a1a20" strokeWidth={8} strokeLinecap="round" />
+        {/* positive half track (right) */}
+        <path d={arc(0, 135)} fill="none" stroke="#15242b" strokeWidth={8} strokeLinecap="round" />
+        {/* glowing value arc */}
+        {has && Math.abs(valDeg) > 0.5 && (
+          <path d={valuePath} fill="none" stroke={col} strokeWidth={8} strokeLinecap="round" filter={`url(#${uid})`} />
+        )}
+        {/* zero marker at top */}
+        <line x1={cx} y1={cy - r - 8} x2={cx} y2={cy - r + 2} stroke="#fff" strokeWidth={1.5} />
+        <circle cx={cx} cy={cy - r} r={2.6} fill="#fff" />
+        <text x={cx} y={cy + 2} textAnchor="middle" fontSize={19} fontWeight={800} fill="#fff" fontFamily="monospace">
+          {has ? fmt(value) : "--"}
+        </text>
+        <text x={cx} y={cy + 20} textAnchor="middle" fontSize={10} letterSpacing="2" fill="#9fb3c8">{label}</text>
+      </svg>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function GreeksPage() {
   const [history, setHistory] = useState<GreekPoint[]>([]);
@@ -971,6 +1036,17 @@ export default function GreeksPage() {
   const chexData   = history2.map(r => ({ ts: r.ts, value: r.chex }));
   const vexData    = history2.map(r => ({ ts: r.ts, value: r.vex }));
 
+  // Gauge full-scale = today's max |value| per greek (falls back to |current|),
+  // so each gauge self-scales to its own magnitude with 0 pinned at the top.
+  const scaleOf = (arr: { value: number }[], cur: number | null) => {
+    const m = Math.max(0, ...arr.map(p => Math.abs(p.value)), Math.abs(cur ?? 0));
+    return m > 0 ? m : 1;
+  };
+  const gexScale  = scaleOf(gexData, gexVal);
+  const dexScale  = scaleOf(dexData, dexVal);
+  const chexScale = scaleOf(chexData, chexVal);
+  const vexScale  = scaleOf(vexData, vexVal);
+
   // Per-Greek velocity (~10 min Δ) shown on each card.
   const velStr = (dv: number, f: (v: number | null) => string) =>
     history2.length < 2 ? "" : `${dv > 0 ? "↑" : dv < 0 ? "↓" : "→"} ${f(dv)}/10m`;
@@ -1017,46 +1093,20 @@ export default function GreeksPage() {
             onChange={(v) => setGexBasis(v as GexBasis)}
           />
           <DockGap />
-          <SegGroup
-            options={[{ label: "Line", value: "line" }, { label: "Bars", value: "bars" }]}
-            active={mode}
-            onChange={(v) => setMode(v as GraphMode)}
-          />
-          <DockGap />
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         </Dock>
       </div>
 
+      {/* Greek gauges — 0 at 12 o'clock, positive green / negative red */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10, marginBottom: 14 }}>
+        <GreeksGauge label="GEX"  value={gexVal}  fmt={fmtB} fullScale={gexScale} />
+        <GreeksGauge label="DEX"  value={dexVal}  fmt={fmtB} fullScale={dexScale} />
+        <GreeksGauge label="CHEX" value={chexVal} fmt={fmtM} fullScale={chexScale} />
+        <GreeksGauge label="VEX"  value={vexVal}  fmt={fmtM} fullScale={vexScale} />
+      </div>
+
       {/* Regime matrix — live regime highlighted, one-flip neighbors dimly lit */}
       <RegimeMatrix gex={gexVal} dex={dexVal} chex={chexVal} vex={vexVal} hasData={!!d} updatedTs={d ? (latestView?.ts ?? null) : null} />
-
-      {/* Cards */}
-      <div className="greeks-cards" style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
-        <GreekCard
-          icon="■" label="GEX" subtitle={basisSub("Gamma Exposure")} mode={mode} fmt={fmtB} accent="#22d3ee"
-          valueStr={fmtB(gexVal)} value={gexVal} velocity={gexVelStr} data={gexData}
-          positiveMsg="Dealers long gamma — they trade against moves (buy dips, sell rips). Volatility suppressed, ranges compressed."
-          negativeMsg="Dealers short gamma — they chase moves in both directions. Volatility amplified; small pushes can cascade."
-          neutralMsg="Waiting for the first reading." />
-        <GreekCard
-          icon="▲" label="DEX" subtitle={basisSub("Delta Exposure")} mode={mode} fmt={fmtB} accent="#a78bfa"
-          valueStr={fmtB(dexVal)} value={dexVal} velocity={dexVelStr} data={dexData}
-          positiveMsg="Dealers net long underlying — directional bias to the upside in hedging flows."
-          negativeMsg="Dealers net short underlying — protective put positioning active, bias to the downside."
-          neutralMsg="Waiting for the first reading." />
-        <GreekCard
-          icon="◆" label="CHEX" subtitle={basisSub("Charm Exposure")} mode={mode} fmt={fmtM} accent="#2dd4bf"
-          valueStr={fmtM(chexVal)} value={chexVal} velocity={chexVelStr} data={chexData}
-          positiveMsg="Charm decay adding to dealer long-delta — drift-supportive hedging into expiry."
-          negativeMsg="Charm decay driving dynamic delta hedging — time decay pulls hedges, often pinning toward expiry."
-          neutralMsg="Waiting for the first reading." />
-        <GreekCard
-          icon="◈" label="VEX" subtitle={basisSub("Vanna Exposure")} mode={mode} fmt={fmtM} accent="#e879f9"
-          valueStr={fmtM(vexVal)} value={vexVal} velocity={vexVelStr} data={vexData}
-          positiveMsg="Positive vanna — rising IV fuels dealer buying momentum; IV crush supports upside."
-          negativeMsg="Negative vanna — rising IV pressures dealers to sell; falling IV is supportive."
-          neutralMsg="Waiting for the first reading." />
-      </div>
 
       {/* Volatility / IV context */}
       <VolCard vol={vol} />

@@ -37,6 +37,14 @@ const state = {
   // separate from `spot` (broker quote used for all GEX math) so display can be
   // kept live without affecting strike/level pricing.
   spotDisplay: 0,
+  // ES/SPX basis (esFut - spot), computed HERE so the client never has to
+  // stitch it together from two independently-timed feeds (Theta index for
+  // spot, TT/dxLink for esFut). Null until both sides have been seen fresh
+  // together at least once. See _recomputeBasis below.
+  basis: null,
+  // Last-update timestamps for spot/esFut, used only to gate basis recompute.
+  spotAt: 0,
+  esFutAt: 0,
   // Active expiry 'YYYY-MM-DD'
   expiry: '',
   // All available expiries for the toolbar
@@ -122,6 +130,22 @@ function onChange(fn) {
   return () => emitter.off('change', fn);
 }
 
+// Both sides of the basis (spot from Theta's index feed, esFut from TT/dxLink)
+// update independently on their own feeds' cadence. If one side is stale
+// relative to the other by more than this, hold the last good basis instead
+// of publishing a skewed reading — this is what was making the ES Candles
+// basis badge / ES-converted Put Wall jump around.
+const BASIS_FRESH_WINDOW_MS = 4000;
+
+/** Recompute `basis` iff spot and esFut were both updated within the fresh window of each other. */
+function _recomputeBasis() {
+  const { spot, esFut, spotAt, esFutAt } = state;
+  if (!(spot > 0) || !(esFut > 0) || !spotAt || !esFutAt) return;
+  if (Math.abs(spotAt - esFutAt) > BASIS_FRESH_WINDOW_MS) return; // one side stale — hold last good basis
+  const basis = Math.round((esFut - spot) * 100) / 100;
+  if (state.basis !== basis) setState({ basis });
+}
+
 /** Record a full GEX computation result. */
 function setGexUpdate({
   gexRows,
@@ -133,6 +157,7 @@ function setGexUpdate({
   gexFlip,
   totalNetGex,
 }) {
+  if (spot > 0) setStateSilent({ spotAt: Date.now() });
   setState({
     gexRows: gexRows ?? state.gexRows,
     spot: spot ?? state.spot,
@@ -144,6 +169,7 @@ function setGexUpdate({
     totalNetGex: totalNetGex ?? state.totalNetGex,
     updatedAt: Date.now(),
   });
+  if (spot > 0) _recomputeBasis();
   clearError();
 }
 
@@ -154,7 +180,10 @@ function setFlow(flow) {
 
 /** Update spot independently of a full GEX recompute. */
 function setSpot(spot) {
-  if (spot > 0) setState({ spot });
+  if (!(spot > 0)) return;
+  setStateSilent({ spotAt: Date.now() });
+  setState({ spot });
+  _recomputeBasis();
 }
 
 /** Current authoritative spot (broker scale). 0 until first quote/GEX recompute. */
@@ -166,11 +195,12 @@ function getSpot() {
 function setAux(patch) {
   const next = {};
   if (patch.vix > 0) next.vix = patch.vix;
-  if (patch.esFut > 0) next.esFut = patch.esFut;
+  if (patch.esFut > 0) { next.esFut = patch.esFut; setStateSilent({ esFutAt: Date.now() }); }
   if (patch.vixPrevClose > 0) next.vixPrevClose = patch.vixPrevClose;
   if (patch.esFutPrevClose > 0) next.esFutPrevClose = patch.esFutPrevClose;
   if (patch.spotDisplay > 0) next.spotDisplay = patch.spotDisplay;
   if (Object.keys(next).length) setState(next);
+  if (patch.esFut > 0) _recomputeBasis();
 }
 
 /** Update available expirations list. */

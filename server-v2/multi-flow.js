@@ -34,6 +34,9 @@ const FLOW_STRIKE_WINDOW_PCT = Number(process.env.FLOW_STRIKE_WINDOW_PCT || 0.06
 const FLOW_MAX_CONTRACTS = Number(process.env.FLOW_MAX_CONTRACTS || 120);
 // How often to re-pick each root's window as spot moves (ms).
 const FLOW_WINDOW_REFRESH_MS = Number(process.env.FLOW_WINDOW_REFRESH_MS || 5 * 60 * 1000);
+// Match proxy-tastytrade: 1 = single STREAM_BULK firehose filtered to our roots,
+// so adding tickers costs zero new subscriptions. Default = per-contract windows.
+const FLOW_BULK_STREAM = process.env.FLOW_BULK_STREAM === '1';
 
 function parseFlowTickers() {
   return String(process.env.FLOW_TICKERS || '')
@@ -102,6 +105,16 @@ class MultiFlowManager {
   async _subscribeRoot(root) {
     if (!this.thetaStream) return;
     const thetaR = thetaAdapter.thetaRoot(root);
+    // Bulk mode: no per-contract subs. Register the root in the firehose keep-list
+    // and just refresh spot so isOtm tagging stays correct. Adding a ticker here
+    // costs one Set entry + a spot lookup — no subscription growth on the JVM.
+    if (FLOW_BULK_STREAM) {
+      this.thetaStream.addBulkRoot(thetaR);
+      const spot = await this._resolveSpot(root);
+      if (spot > 0 && this.thetaStream.rootSpot) this.thetaStream.rootSpot.set(thetaR, spot);
+      this.state.set(root, { spot, mode: 'bulk' });
+      return;
+    }
     let chain;
     try {
       chain = await thetaAdapter.fetchChainTheta(root);

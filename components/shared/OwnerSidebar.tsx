@@ -7,8 +7,9 @@
  * shows up on every owner page, no per-page gating or nav edits needed.
  */
 
+import { Fragment } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { HOME_THEME } from "./homeTheme";
 
 type OwnerLink = { label: string; href: string; glyph: string };
@@ -51,8 +52,34 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
   },
 ];
 
+// The Control Panel (/owner/dev/owner) is a single page with URL-driven sections
+// (?tab=). These render as sub-links under the rail's "Control Panel" entry, so
+// the page no longer needs its own tab bar / internal rail.
+export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "infra",    label: "Infra" },
+  { id: "database", label: "Database" },
+  { id: "controls", label: "Controls" },
+  { id: "auth",     label: "Users" },
+  { id: "activity", label: "Activity" },
+];
+
+// Root-level backend routes that live outside /owner but should still show the
+// owner rail (they were "losing" the left toolbar because the rail was mounted
+// only by app/owner/layout.tsx).
+const OWNER_CHROME_EXTRA = ["/database", "/estimated-move", "/logs", "/changelog", "/social-media"];
+
+/** True for any route that should render the owner left rail (owner + backend). */
+export function isOwnerChromePath(pathname: string): boolean {
+  if (!pathname) return false;
+  if (pathname === "/owner" || pathname.startsWith("/owner/")) return true;
+  return OWNER_CHROME_EXTRA.some((r) => pathname === r || pathname.startsWith(r + "/"));
+}
+
 export default function OwnerSidebar() {
   const pathname = usePathname() || "";
+  const searchParams = useSearchParams();
+  const activeTab = searchParams.get("tab") || "overview";
   const isActive = (href: string) =>
     href === "/owner" ? pathname === "/owner" : pathname === href || pathname.startsWith(href + "/");
 
@@ -86,30 +113,69 @@ export default function OwnerSidebar() {
           </div>
           {group.links.map((link) => {
             const here = isActive(link.href);
+            const isControl = link.href === "/owner/dev/owner";
             return (
-              <Link
-                key={link.href}
-                href={link.href}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "7px 10px",
-                  borderRadius: 8,
-                  fontSize: 12,
-                  fontWeight: here ? 800 : 600,
-                  textDecoration: "none",
-                  whiteSpace: "nowrap",
-                  color: here ? group.accent : HOME_THEME.text,
-                  background: here ? `${group.accent}1f` : "transparent",
-                  border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
-                }}
-              >
-                <span aria-hidden style={{ width: 16, textAlign: "center", opacity: 0.85 }}>
-                  {link.glyph}
-                </span>
-                {link.label}
-              </Link>
+              <Fragment key={link.href}>
+                <Link
+                  href={link.href}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "7px 10px",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: here ? 800 : 600,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                    color: here ? group.accent : HOME_THEME.text,
+                    background: here ? `${group.accent}1f` : "transparent",
+                    border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
+                  }}
+                >
+                  <span aria-hidden style={{ width: 16, textAlign: "center", opacity: 0.85 }}>
+                    {link.glyph}
+                  </span>
+                  {link.label}
+                </Link>
+
+                {/* Control Panel section sub-links (folded-in tab bar). */}
+                {isControl && here && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                      margin: "2px 0 4px 20px",
+                      paddingLeft: 8,
+                      borderLeft: `1px solid ${HOME_THEME.border}`,
+                    }}
+                  >
+                    {OWNER_CONTROL_SECTIONS.map((s) => {
+                      const sActive = activeTab === s.id;
+                      return (
+                        <Link
+                          key={s.id}
+                          href={`/owner/dev/owner?tab=${s.id}`}
+                          style={{
+                            padding: "5px 9px",
+                            borderRadius: 7,
+                            fontSize: 11.5,
+                            fontWeight: sActive ? 800 : 600,
+                            textDecoration: "none",
+                            whiteSpace: "nowrap",
+                            color: sActive ? group.accent : HOME_THEME.text,
+                            background: sActive ? `${group.accent}1a` : "transparent",
+                            border: `1px solid ${sActive ? `${group.accent}44` : "transparent"}`,
+                          }}
+                        >
+                          {s.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </Fragment>
             );
           })}
         </div>

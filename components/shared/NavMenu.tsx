@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME, DOCK_THEME } from "./homeTheme";
 import { useMobileNav } from "./MobileNavContext";
 
@@ -70,6 +71,7 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/scanner": "🔍︎",
   "/trading": "✎",
   "/order-flow": "⇅",
+  "/owner": "✪",
 };
 const routeSymbol = (href: string) => ROUTE_SYMBOL[href] ?? "•";
 
@@ -99,6 +101,12 @@ function NavGlyph({ href }: { href: string }) {
 // hamburger button's bounding rect (so the panel lines up under it).
 export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   const pathname = usePathname();
+  const { isSignedIn, user } = useAuth();
+  // Owner Hub link is owner-only. Baked at build via NEXT_PUBLIC_OWNER_USER_ID
+  // (same value the WS lifecycle uses). If unset, fall back to any signed-in user
+  // so the owner isn't locked out — middleware still hard-blocks /owner/*.
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
   const { menuOpen, closeMenu } = useMobileNav();
 
   const [mounted, setMounted] = useState(false);
@@ -244,6 +252,23 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
           </Link>
         );
       })}
+
+      {/* Owner Hub — owner-gated (hidden from non-owner accounts; middleware also blocks /owner/*) */}
+      {isOwner && (
+        <>
+          <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
+          <Link
+            href="/owner"
+            prefetch={false}
+            onClick={closeMenu}
+            className={`nav-row${isActive("/owner") ? " nav-active" : ""}`}
+            style={rowLink(isActive("/owner"))}
+          >
+            <NavGlyph href="/owner" />
+            <span>Owner</span>
+          </Link>
+        </>
+      )}
 
       {/* What's New (customer-facing changelog) — visible to everyone */}
       <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
