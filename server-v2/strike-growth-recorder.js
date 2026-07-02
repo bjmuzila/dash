@@ -200,6 +200,18 @@ async function ensureSchema() {
       [sym, seedHot.has(sym), idx++]
     );
   }
+  // Bootstrap the hot lane ONCE: if no rows are hot yet (e.g. the hot column was
+  // just added to a pre-existing table, so the seed's ON CONFLICT DO NOTHING left
+  // everything hot=FALSE), promote the default hot set. Guarded on "0 hot" so it
+  // never clobbers the user's later hot-list edits.
+  const { rows: hotCount } = await p.query(`SELECT count(*)::int AS n FROM strike_growth_watchlist WHERE hot = TRUE`);
+  if (hotCount[0].n === 0) {
+    await p.query(
+      `UPDATE strike_growth_watchlist SET hot = TRUE WHERE symbol = ANY($1)`,
+      [[...seedHot]]
+    );
+    console.log(`[strike-growth] hot lane bootstrapped — ${seedHot.size} default hot names`);
+  }
   _schemaReady = true;
   console.log(`[strike-growth] schema ready — watchlist seeded (${roster.length} symbols, all active, ${seedHot.size} hot)`);
   return true;
