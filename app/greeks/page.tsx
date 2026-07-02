@@ -877,6 +877,20 @@ function GreeksGauge({
   );
 }
 
+// ── Zero-cross detection ──────────────────────────────────────────────────────
+// Times a series flips sign (through 0). Derived from persisted history, so
+// today's crossings reconstruct on reload without a dedicated table.
+interface ZeroCross { ts: number; label: string; up: boolean } // up = − → +
+function zeroCrossings(pts: { ts: number; value: number }[], label: string): ZeroCross[] {
+  const out: ZeroCross[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1].value, b = pts[i].value;
+    if (!isFinite(a) || !isFinite(b) || a === 0 || b === 0) continue;
+    if ((a < 0 && b > 0) || (a > 0 && b < 0)) out.push({ ts: pts[i].ts, label, up: b > 0 });
+  }
+  return out;
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function GreeksPage() {
   const [history, setHistory] = useState<GreekPoint[]>([]);
@@ -885,6 +899,7 @@ export default function GreeksPage() {
   const [lastPoll, setLastPoll] = useState("--"); // last auto-poll attempt (alive-check, independent of data)
   const [stale, setStale] = useState(false);
   const [mode, setMode] = useState<GraphMode>("line");
+  const [dataOn, setDataOn] = useState(true); // live poll gate — flip off to stop the feed
   const [gexBasis, setGexBasis] = useState<GexBasis>("oivol");
   const [vol, setVol] = useState<VolData | null>(null);
   const [feed, setFeed] = useState<(GammaSignal & { time: string; key: number })[]>([]);
@@ -992,12 +1007,15 @@ export default function GreeksPage() {
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
-  // Poll every 30s.
+  // Poll every 60s — only while live data is toggled ON. When OFF, no fetch/
+  // interval runs (page still paints from persisted history). Flipping ON fetches
+  // immediately.
   useEffect(() => {
+    if (!dataOn) return;
     doRefresh();
     const t = setInterval(() => { if (mountedRef.current) doRefresh(); }, 60_000);
     return () => clearInterval(t);
-  }, [doRefresh]);
+  }, [doRefresh, dataOn]);
 
   // Basis toggle: OI+Vol (heatmap / mult-greek) by default, or Volume-only.
   // Each greek already holds the OI+Vol value in its base field; when Vol-only is
@@ -1047,6 +1065,12 @@ export default function GreeksPage() {
   const chexScale = scaleOf(chexData, chexVal);
   const vexScale  = scaleOf(vexData, vexVal);
 
+  // Today's GEX/DEX zero-line crossings, newest first (derived from persisted history).
+  const zeroCross = [
+    ...zeroCrossings(gexData, "GEX"),
+    ...zeroCrossings(dexData, "DEX"),
+  ].sort((a, b) => b.ts - a.ts);
+
   // Per-Greek velocity (~10 min Δ) shown on each card.
   const velStr = (dv: number, f: (v: number | null) => string) =>
     history2.length < 2 ? "" : `${dv > 0 ? "↑" : dv < 0 ? "↓" : "→"} ${f(dv)}/10m`;
@@ -1093,6 +1117,12 @@ export default function GreeksPage() {
             onChange={(v) => setGexBasis(v as GexBasis)}
           />
           <DockGap />
+          <DockButton
+            onClick={() => setDataOn(v => !v)}
+            title={dataOn ? "Live data ON — click to stop the feed" : "Live data OFF — click to start"}
+            style={{ color: dataOn ? "#00e676" : "#ff5252" }}
+          >{dataOn ? "● DATA ON" : "○ DATA OFF"}</DockButton>
+          <DockGap />
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         </Dock>
       </div>
@@ -1111,9 +1141,8 @@ export default function GreeksPage() {
       {/* Volatility / IV context */}
       <VolCard vol={vol} />
 
-      {/* Gamma-logic signal feed */}
+      {/* GEX / DEX zero-line crossings — recorded from today's history */}
       <style>{`
-        @keyframes greekPulse { 0%,100%{background:rgba(255,59,59,.05);} 50%{background:rgba(255,59,59,.22);} }
         .greek-feed-scroll::-webkit-scrollbar{width:8px;}
         .greek-feed-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:4px;}
       `}</style>
@@ -1126,49 +1155,35 @@ export default function GreeksPage() {
           padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,.08)",
         }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Gamma Logic Feed</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Zero-Line Crossings</div>
             <div style={{ fontSize: 10, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>
-              If-this-then-that signals · {activeSignals.length} active
+              GEX / DEX sign flips · {zeroCross.length} today
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "#00e676", fontWeight: 800 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e676", boxShadow: "0 0 8px #00e676" }} />
-            LIVE
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: dataOn ? "#00e676" : "#7e8ea0", fontWeight: 800 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: dataOn ? "#00e676" : "#7e8ea0", boxShadow: dataOn ? "0 0 8px #00e676" : "none" }} />
+            {dataOn ? "LIVE" : "PAUSED"}
           </div>
         </div>
 
-        {/* Active-now strip */}
-        {activeSignals.length > 0 && (
-          <div style={{ padding: "10px 16px", display: "flex", gap: 8, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
-            {activeSignals.map(s => (
-              <span key={s.id} style={{
-                fontSize: 10, fontWeight: 800, letterSpacing: ".03em", padding: "4px 9px", borderRadius: 5,
-                color: s.color, border: `1px solid ${s.color}55`, background: `${s.color}14`,
-              }}>{s.title}</span>
-            ))}
-          </div>
-        )}
-
         {/* Scrolling history */}
         <div className="greek-feed-scroll" style={{ maxHeight: 320, overflowY: "auto" }}>
-          {feed.length === 0 ? (
+          {zeroCross.length === 0 ? (
             <div style={{ padding: "24px 16px", fontSize: 12, color: "#9fb3c8", textAlign: "center" }}>
-              Waiting for the first signal…
+              No GEX/DEX crossings recorded today.
             </div>
-          ) : feed.map(s => (
-            <div key={s.key} style={{
-              display: "flex", gap: 12, padding: "11px 16px",
+          ) : zeroCross.map((c, i) => (
+            <div key={`${c.label}-${c.ts}-${i}`} style={{
+              display: "flex", alignItems: "center", gap: 12, padding: "11px 16px",
               borderBottom: "1px solid rgba(255,255,255,.05)",
-              animation: s.pulse ? "greekPulse 1.4s ease-in-out infinite" : undefined,
-              borderLeft: `3px solid ${s.color}`,
+              borderLeft: `3px solid ${c.up ? "#00e676" : "#ff5252"}`,
             }}>
-              <div style={{ fontSize: 10, color: "#7e8ea0", fontFamily: "monospace", minWidth: 62, paddingTop: 2 }}>{s.time}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: s.color }}>{s.title}</div>
-                <div style={{ fontSize: 12, color: "#d7e6e8", marginTop: 2, lineHeight: 1.45 }}>{s.desc}</div>
-                <div style={{ fontSize: 11, color: "#9fb3c8", marginTop: 3, lineHeight: 1.45 }}>
-                  <span style={{ color: "#67e8f9", fontWeight: 700 }}>Edge: </span>{s.edge}
-                </div>
+              <div style={{ fontSize: 11, color: "#7e8ea0", fontFamily: "monospace", minWidth: 74 }}>
+                {new Date(c.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true })}
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#eef7ff", minWidth: 44 }}>{c.label}</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: c.up ? "#00e676" : "#ff5252", fontFamily: "monospace" }}>
+                {c.up ? "− → +  crossed positive" : "+ → −  crossed negative"}
               </div>
             </div>
           ))}

@@ -197,6 +197,18 @@ function classifyFromSpxSeries(level: number, spxSeries: number[]): Outcome {
   return classifyDay(level, spxSeries).outcome;
 }
 
+/**
+ * Smallest |realSpx - level| among realized snapshot prints at/after `fromMin`.
+ * Used to VETO touches inferred from the ES→SPX reconstruction: the converted
+ * series can overstate highs (single close-anchored basis drifts intraday), so a
+ * touch only counts if the real index actually came within HIT_PTS too.
+ */
+function realClosest(real: TimedPx[], level: number, fromMin: number): number {
+  let c = Infinity;
+  for (const s of real) if (s.min >= fromMin) c = Math.min(c, Math.abs(s.px - level));
+  return c;
+}
+
 /** Per-segment interaction stats for one MVC strike over its own window. */
 interface SegmentStats extends OutcomeDetail {
   closestApproach: number;   // smallest |price - strike| seen in window (pts)
@@ -572,6 +584,11 @@ export async function GET(req: NextRequest) {
       // Drop spot:0 / garbage prints (feed not yet populated). 0 is finite so it
       // passes num(); left in, it poisons every segment's distance → all blank.
       .filter((s): s is TimedPx => s.min != null && s.px != null && s.px > 1000);
+    // Realized index prints only (never ES-derived) — the veto series for touches.
+    const realTimed: TimedPx[] = [...spxTimed];
+    if (Number.isFinite(cur.spx) && cur.spx > 1000) {
+      realTimed.push({ min: realTimed.length ? realTimed[realTimed.length - 1].min : RTH_CLOSE_MIN, px: cur.spx });
+    }
     let seriesSource: "es5m" | "snapshots" = "snapshots";
     let basis: number | null = null;
     try {
@@ -625,6 +642,11 @@ export async function GET(req: NextRequest) {
 
     const spxSeriesForDay = spxTimed.map((s) => s.px);
     const dayDetail = classifyDay(cur.level, spxSeriesForDay);
+    // Veto ES-inferred touch if real SPX never came within HIT_PTS of the level.
+    if (dayDetail.touched && realTimed.length && realClosest(realTimed, cur.level, RTH_OPEN_MIN) > HIT_PTS) {
+      dayDetail.touched = false;
+      dayDetail.outcome = "miss";
+    }
     const scenario = buildDayScenario(
       dayDetail, curRegime, cur.level, refPrice, !isFinal,
     );
@@ -671,6 +693,11 @@ export async function GET(req: NextRequest) {
       // Window-forward series: from this strike's activation onward (its own life).
       const win = spxTimed.filter((s) => s.min >= seg.fromMin);
       const stats = classifySegment(seg.strike, win, seg.fromMin);
+      // Veto ES-inferred touch unless real SPX also reached within HIT_PTS.
+      if (stats.touched && realTimed.length && realClosest(realTimed, seg.strike, seg.fromMin) > HIT_PTS) {
+        stats.touched = false;
+        stats.outcome = "miss";
+      }
       const sc = buildDayScenario(stats, Math.sign(seg.act.netGex) || curRegime, seg.strike, refPrice, !isFinal && isLast);
 
       // Fresh confidence score for THIS strike using its activation-snapshot stats.
@@ -700,7 +727,7 @@ export async function GET(req: NextRequest) {
       // Was the strike touched at ANY point during the full day (even after this
       // segment ended / a new MVC became active)? Only meaningful for non-current
       // segments that registered as "untouched" during their own window.
-      const fullDayTouched = spxTimed.some((s) => Math.abs(s.px - seg.strike) <= HIT_PTS);
+      const fullDayTouched = realTimed.some((s) => Math.abs(s.px - seg.strike) <= HIT_PTS);
       const touchedLater = !stats.touched && fullDayTouched;
 
       return {

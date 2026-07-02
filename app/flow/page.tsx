@@ -18,8 +18,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ColorType, LineSeries, createChart } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, UTCTimestamp, LineData, WhitespaceData } from "lightweight-charts";
+import { ColorType, HistogramSeries, LineSeries, createChart } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, UTCTimestamp, LineData, WhitespaceData, HistogramData } from "lightweight-charts";
 import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -29,6 +29,8 @@ const C = HOME_THEME;
 const BUY_GREEN = "#22c55e";
 const BULLISH = BUY_GREEN; // calls / buys
 const BEARISH = C.red; //     puts / sells
+const VOL_GREEN = "rgba(34,197,94,0.55)";
+const VOL_RED = "rgba(239,68,68,0.55)";
 
 function fmtPremium(val: number): string {
   const a = Math.abs(val);
@@ -236,7 +238,7 @@ export default function FlowPage() {
     const { openSec, closeSec } = rthBoundsToday();
 
     // Collect this ticker's signed prints (buy +, sell −), split call/put.
-    const evts: { sec: number; call: number; put: number }[] = [];
+    const evts: { sec: number; call: number; put: number; callSz: number; putSz: number }[] = [];
     for (const o of merged) {
       if (normTicker(o.underlying) !== active) continue;
       if (otmOnly && !o.isOtm) continue;
@@ -249,7 +251,14 @@ export default function FlowPage() {
         if (dteMax != null && d > dteMax) continue;
       }
       const signed = (o.side === "buy" ? 1 : -1) * (o.premium || 0);
-      evts.push({ sec: Math.floor(o.ts / 1000), call: o.type === "C" ? signed : 0, put: o.type === "C" ? 0 : signed });
+      const sz = Number(o.size || 0);
+      evts.push({
+        sec: Math.floor(o.ts / 1000),
+        call: o.type === "C" ? signed : 0,
+        put: o.type === "C" ? 0 : signed,
+        callSz: o.type === "C" ? sz : 0,
+        putSz: o.type === "C" ? 0 : sz,
+      });
     }
     evts.sort((a, b) => a.sec - b.sec);
     const hasData = evts.length > 0;
@@ -260,18 +269,27 @@ export default function FlowPage() {
     const nowSec = Math.floor(Date.now() / 1000);
     const callPts: (LineData | WhitespaceData)[] = [];
     const putPts: (LineData | WhitespaceData)[] = [];
+    const volPts: (HistogramData | WhitespaceData)[] = [];
     let call = 0, put = 0, i = 0;
     for (let t = openSec; t <= closeSec; t += BIN_SEC) {
-      while (i < evts.length && evts[i].sec <= t) { call += evts[i].call; put += evts[i].put; i++; }
+      let binCallSz = 0, binPutSz = 0;
+      while (i < evts.length && evts[i].sec <= t) {
+        call += evts[i].call; put += evts[i].put;
+        binCallSz += evts[i].callSz; binPutSz += evts[i].putSz;
+        i++;
+      }
       if (t <= nowSec + BIN_SEC) {
         callPts.push({ time: t as UTCTimestamp, value: call });
         putPts.push({ time: t as UTCTimestamp, value: put });
+        // Per-bin contract volume, tinted by call/put dominance in that bin.
+        volPts.push({ time: t as UTCTimestamp, value: binCallSz + binPutSz, color: binCallSz >= binPutSz ? VOL_GREEN : VOL_RED });
       } else {
         callPts.push({ time: t as UTCTimestamp });
         putPts.push({ time: t as UTCTimestamp });
+        volPts.push({ time: t as UTCTimestamp });
       }
     }
-    return { callPts, putPts, lastCall: call, lastPut: put, openSec, closeSec, hasData };
+    return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData };
   }, [merged, active, otmOnly, minSize, expiry, dteMin, dteMax, nowTick]);
 
   // ── lightweight-charts setup ──
@@ -279,6 +297,7 @@ export default function FlowPage() {
   const chartRef = useRef<IChartApi | null>(null);
   const callSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const putSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
 
   useEffect(() => {
     const host = chartHostRef.current;
@@ -318,16 +337,24 @@ export default function FlowPage() {
     });
     const callSeries = chart.addSeries(LineSeries, { color: BULLISH, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
     const putSeries = chart.addSeries(LineSeries, { color: BEARISH, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+    // Volume histogram docked to the bottom ~22% (its own overlay price scale).
+    const volSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false, priceFormat: { type: "volume" },
+    });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.08, bottom: 0.26 } });
     chartRef.current = chart;
     callSeriesRef.current = callSeries;
     putSeriesRef.current = putSeries;
-    return () => { chart.remove(); chartRef.current = null; callSeriesRef.current = null; putSeriesRef.current = null; };
+    volSeriesRef.current = volSeries;
+    return () => { chart.remove(); chartRef.current = null; callSeriesRef.current = null; putSeriesRef.current = null; volSeriesRef.current = null; };
   }, []);
 
   // Push data whenever the active-ticker series changes.
   useEffect(() => {
     callSeriesRef.current?.setData(netSeries.callPts);
     putSeriesRef.current?.setData(netSeries.putPts);
+    volSeriesRef.current?.setData(netSeries.volPts);
     // All 9:30–4:00 bins are present (values up to now, whitespace after), so
     // fitContent shows the whole session proportionally, full width.
     chartRef.current?.timeScale().fitContent();
