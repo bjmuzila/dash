@@ -274,7 +274,7 @@ export default function FlowPage() {
         volPts.push({ time: t as UTCTimestamp });
       }
     }
-    return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData };
+    return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData, byBin };
   }, [netBins]);
 
   // ── lightweight-charts setup ──
@@ -283,11 +283,26 @@ export default function FlowPage() {
   const callSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const putSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const volSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const binMapRef = useRef<Map<number, NetBin>>(new Map());
 
   useEffect(() => {
     const host = chartHostRef.current;
     if (!host) return;
     host.innerHTML = "";
+    host.style.position = "relative";
+
+    // Floating hover tooltip — shows what was hit in the crosshair minute.
+    const tooltip = document.createElement("div");
+    Object.assign(tooltip.style, {
+      position: "absolute", display: "none", pointerEvents: "none", zIndex: "20",
+      padding: "8px 10px", borderRadius: "8px", fontSize: "12px", lineHeight: "1.5",
+      background: "rgba(10,14,20,0.94)", border: "1px solid rgba(255,255,255,.12)",
+      color: "rgba(255,255,255,.85)", whiteSpace: "nowrap",
+      fontFamily: "var(--font-mono)", boxShadow: "0 6px 20px rgba(0,0,0,.5)",
+    } as CSSStyleDeclaration);
+    host.appendChild(tooltip);
+    tooltipRef.current = tooltip;
     const chart = createChart(host, {
       autoSize: true,
       layout: {
@@ -328,15 +343,39 @@ export default function FlowPage() {
     });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.08, bottom: 0.26 } });
+
+    chart.subscribeCrosshairMove((param) => {
+      const tip = tooltipRef.current;
+      if (!tip) return;
+      const t = typeof param.time === "number" ? param.time : null;
+      const bin = t != null ? binMapRef.current.get(t) : undefined;
+      if (!param.point || t == null || !bin || (bin.callVol === 0 && bin.putVol === 0)) {
+        tip.style.display = "none";
+        return;
+      }
+      const et = new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" });
+      tip.innerHTML =
+        `<div style="color:rgba(255,255,255,.55);margin-bottom:2px">${et}</div>` +
+        `<div style="color:${BULLISH}">Calls&nbsp;&nbsp;${bin.callVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.callNet)}</div>` +
+        `<div style="color:${BEARISH}">Puts&nbsp;&nbsp;&nbsp;${bin.putVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.putNet)}</div>`;
+      tip.style.display = "block";
+      const hostW = host.clientWidth, tipW = tip.offsetWidth;
+      let left = param.point.x + 16;
+      if (left + tipW > hostW) left = param.point.x - tipW - 16;
+      tip.style.left = `${Math.max(4, left)}px`;
+      tip.style.top = `${Math.max(4, param.point.y - 10)}px`;
+    });
+
     chartRef.current = chart;
     callSeriesRef.current = callSeries;
     putSeriesRef.current = putSeries;
     volSeriesRef.current = volSeries;
-    return () => { chart.remove(); chartRef.current = null; callSeriesRef.current = null; putSeriesRef.current = null; volSeriesRef.current = null; };
+    return () => { chart.remove(); chartRef.current = null; callSeriesRef.current = null; putSeriesRef.current = null; volSeriesRef.current = null; tooltipRef.current = null; };
   }, []);
 
   // Push data whenever the active-ticker series changes.
   useEffect(() => {
+    binMapRef.current = netSeries.byBin;
     callSeriesRef.current?.setData(netSeries.callPts);
     putSeriesRef.current?.setData(netSeries.putPts);
     volSeriesRef.current?.setData(netSeries.volPts);
@@ -353,19 +392,15 @@ export default function FlowPage() {
   // ── Summary of the filtered tape. ──
   const totals = useMemo(() => {
     let prem = 0, callPrem = 0, putPrem = 0;
+    let buyCall = 0, buyPut = 0, sellCall = 0, sellPut = 0;
     for (const o of filtered) {
-      prem += o.premium || 0;
-      if (o.type === "C") callPrem += o.premium || 0; else putPrem += o.premium || 0;
+      const p = o.premium || 0;
+      prem += p;
+      if (o.type === "C") { callPrem += p; if (o.side === "buy") buyCall += p; else sellCall += p; }
+      else { putPrem += p; if (o.side === "buy") buyPut += p; else sellPut += p; }
     }
-    return { count: filtered.length, prem, callPrem, putPrem };
+    return { count: filtered.length, prem, callPrem, putPrem, buyCall, buyPut, sellCall, sellPut };
   }, [filtered]);
-
-  // Net premium split (macro call/put positioning) from the drift lines.
-  const split = useMemo(() => {
-    const c = Math.abs(netSeries.lastCall), p = Math.abs(netSeries.lastPut);
-    const tot = c + p || 1;
-    return { callPct: (c / tot) * 100, putPct: (p / tot) * 100 };
-  }, [netSeries]);
 
   function resetFilters() {
     setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0);
@@ -529,16 +564,21 @@ export default function FlowPage() {
             {status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
           </p>
         )}
-        {/* Net premium split bar (macro call/put positioning) */}
+        {/* Premium split — four cards: buy/sell × call/put */}
         <div style={{ padding: "6px 20px 20px" }}>
-          <label style={labelStyle}>Net Premium Split (Calls vs Puts)</label>
-          <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", border: `1px solid ${C.border}`, fontSize: 11, fontWeight: 800 }}>
-            <div style={{ width: `${split.callPct}%`, background: BULLISH, color: C.bg, display: "flex", alignItems: "center", padding: "0 8px", whiteSpace: "nowrap" }}>
-              C {fmtPremium(Math.abs(netSeries.lastCall))}
-            </div>
-            <div style={{ width: `${split.putPct}%`, background: BEARISH, color: "#fff", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "0 8px", whiteSpace: "nowrap" }}>
-              {fmtPremium(Math.abs(netSeries.lastPut))} P
-            </div>
+          <label style={labelStyle}>Premium Split (Filtered Tape)</label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            {([
+              { label: "BUY CALLS", value: totals.buyCall, color: BULLISH },
+              { label: "BUY PUTS", value: totals.buyPut, color: BEARISH },
+              { label: "SELL CALL", value: totals.sellCall, color: BULLISH },
+              { label: "SELL PUT", value: totals.sellPut, color: BEARISH },
+            ] as const).map((c) => (
+              <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: c.color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
+              </div>
+            ))}
           </div>
         </div>
       </Card>
