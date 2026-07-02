@@ -5,61 +5,83 @@
 
 type Src = { id: string; label: string; color: string; pages: { label: string; href: string }[] };
 
-// Grouped by primary backend source (a page may appear under its main source).
+// Grouped by primary backend source. Traced from each page's actual fetch calls
+// (see components/hooks for pages that fetch via hooks). Keep in sync with routes.
 const SOURCES: Src[] = [
   {
+    // Home/HomeClient, es-candles+fails (useEsCandles), greeks — all live off the socket.
     id: "ws", label: "WS /ws/gex", color: "#22d3ee",
     pages: [
-      { label: "Home", href: "/home" }, { label: "Home2", href: "/home2" },
-      { label: "ES Candles", href: "/es-candles" },
+      { label: "Home", href: "/home" }, { label: "ES Candles", href: "/es-candles" },
+      { label: "Fails", href: "/fails" }, { label: "Greeks", href: "/greeks" },
     ],
   },
   {
-    id: "gex", label: "proxy/gex · chains", color: "#2dd4bf",
+    // /api/chains + /api/expirations — chain-build endpoints.
+    id: "chains", label: "api/chains · expirations", color: "#2dd4bf",
     pages: [
       { label: "Multi Greek", href: "/mult-greek" }, { label: "Options Chain", href: "/options-chain" },
-      { label: "Premarket", href: "/premarket" }, { label: "Analytics", href: "/analytics" },
+      { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    id: "insights", label: "api/insights · greeks-ts", color: "#38bdf8",
-    pages: [{ label: "Greeks", href: "/greeks" }, { label: "Home (gex)", href: "/home" }],
+    // /api/insights/gex + /api/insights/vix.
+    id: "insights", label: "api/insights", color: "#38bdf8",
+    pages: [{ label: "Greeks", href: "/greeks" }, { label: "Home", href: "/home" }],
   },
   {
+    // /api/snapshots/* (option-strike-gex-history, mvc, greeks).
     id: "snap", label: "api/snapshots · mvc", color: "#60a5fa",
     pages: [
-      { label: "Confidence", href: "/confidence-score" }, { label: "Journal", href: "/trading" },
-      { label: "Greeks", href: "/greeks" }, { label: "ICT", href: "/ict" },
+      { label: "Home", href: "/home" }, { label: "ES Candles", href: "/es-candles" },
+      { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    id: "levels", label: "api/levels · ref-levels", color: "#0ea5e9",
+    // /api/levels + /api/em* + /api/ref-levels + /api/eod-gex.
+    id: "levels", label: "api/levels · em · ref-levels", color: "#0ea5e9",
     pages: [
-      { label: "EM Front End", href: "/em" }, { label: "Analytics", href: "/analytics" },
-      { label: "Home (levels)", href: "/home" },
+      { label: "EM Front End", href: "/em" }, { label: "Multi Greek", href: "/mult-greek" },
+      { label: "Options Chain", href: "/options-chain" }, { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    id: "es", label: "proxy/es-stats · dxlink", color: "#5eead4",
-    pages: [{ label: "ES Candles", href: "/es-candles" }, { label: "Fails", href: "/fails" }],
-  },
-  {
-    id: "scanner", label: "proxy/scanner · strike-growth", color: "#a5b4fc",
+    // /api/confidence + /api/confidence/calibration.
+    id: "conf", label: "api/confidence", color: "#5eead4",
     pages: [
-      { label: "Market Scanner", href: "/owner/market-scanner" }, { label: "Strike Query", href: "/owner/dev/strike-query" },
+      { label: "Confidence", href: "/confidence-score" }, { label: "EM Front End", href: "/em" },
+      { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    id: "td", label: "api/overview · yahoo-quotes", color: "#7dd3fc",
+    // /proxy/strike-growth/{by-expiry,watchlist}.
+    id: "strike", label: "proxy/strike-growth", color: "#a5b4fc",
     pages: [
-      { label: "Traders Dashboard", href: "/traders-dashboard" }, { label: "Econ Calendar", href: "/economic-calendar" },
+      { label: "Options Chain", href: "/options-chain" }, { label: "Strike Query", href: "/owner/dev/strike-query" },
     ],
   },
   {
-    id: "misc", label: "api/db · budget · proxy", color: "#818cf8",
+    // /api/calendar(-quote), /api/earnings-today, /api/yahoo-quotes, /api/traders-dashboard*, /api/weather, /api/premarket-movers.
+    id: "td", label: "api/calendar · yahoo · traders-dash", color: "#7dd3fc",
+    pages: [
+      { label: "Traders Dashboard", href: "/traders-dashboard" }, { label: "Premarket", href: "/premarket" },
+      { label: "Econ Calendar", href: "/economic-calendar" },
+    ],
+  },
+  {
+    // /api/db, /api/budget, /proxy/status + owner control routes.
+    id: "ctrl", label: "api/db · budget · proxy-ctrl", color: "#818cf8",
     pages: [
       { label: "Budget", href: "/owner/budget" }, { label: "Database", href: "/database" },
-      { label: "Owner", href: "/owner/dev/owner" }, { label: "Chat", href: "/chat" },
+      { label: "Owner", href: "/owner/dev/owner" },
+    ],
+  },
+  {
+    // Chat = Supabase Realtime (direct, no route). ICT = /api/ict-prefs. Journal = localStorage.
+    id: "client", label: "Supabase · ict-prefs · local", color: "#c4b5fd",
+    pages: [
+      { label: "Chat", href: "/chat" }, { label: "ICT", href: "/ict" },
+      { label: "Journal", href: "/trading" },
     ],
   },
 ];

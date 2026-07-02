@@ -405,6 +405,44 @@ async function fetchStockEodTheta(symbol, date) {
   return close > 0 ? close : null;
 }
 
+// Daily EOD OHLC bars over a date range, for the weekly-candle zone/eval math.
+// Returns [{ time(ms, ET session date), open, high, low, close }] ascending.
+// `date` column is a YYYYMMDD int; anchor each bar at that ET calendar day 00:00.
+function _mapDailyOhlc(json) {
+  return rowsFromV3(json)
+    .map((r) => {
+      const ymd = String(r.date ?? r.Date ?? '');
+      const time = ymd.length === 8
+        ? Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00.000-05:00`)
+        : NaN;
+      return {
+        time,
+        open: Number(r.open),
+        high: Number(r.high),
+        low: Number(r.low),
+        close: Number(r.close),
+      };
+    })
+    .filter((b) =>
+      Number.isFinite(b.time) && Number.isFinite(b.open) && Number.isFinite(b.high)
+      && Number.isFinite(b.low) && Number.isFinite(b.close) && b.close > 0)
+    .sort((a, b) => a.time - b.time);
+}
+
+async function fetchIndexDailyHistoryTheta(symbol, startDate, endDate) {
+  const json = await thetaGet(
+    `/v3/index/history/eod?symbol=${encodeURIComponent(symbol)}&start_date=${ymdCompact(startDate)}&end_date=${ymdCompact(endDate)}`,
+  );
+  return _mapDailyOhlc(json);
+}
+
+async function fetchStockDailyHistoryTheta(symbol, startDate, endDate) {
+  const json = await thetaGet(
+    `/v3/stock/history/eod?symbol=${encodeURIComponent(String(symbol).toUpperCase())}&start_date=${ymdCompact(startDate)}&end_date=${ymdCompact(endDate)}`,
+  );
+  return _mapDailyOhlc(json);
+}
+
 // ---------------------------------------------------------------------------
 // Streaming symbology helpers
 // ---------------------------------------------------------------------------
@@ -722,6 +760,8 @@ module.exports = {
   fetchOiHistoryTheta,
   fetchIndexEodTheta,
   fetchStockEodTheta,
+  fetchIndexDailyHistoryTheta,
+  fetchStockDailyHistoryTheta,
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,

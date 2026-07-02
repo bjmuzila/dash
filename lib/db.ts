@@ -2091,8 +2091,15 @@ export interface IctSetupSummary {
   graded: number;       // wins + losses (chop excluded from win-rate)
   total: number;
   win_rate: number | null; // wins / graded
-  avg_r: number | null;    // mean r_multiple over graded (win+loss) rows
+  avg_r: number | null;    // mean peak-R (max favorable / risk) over resolved rows
   avg_mfe: number | null;  // mean max-favorable-excursion (pts) over all rows
+  resolved: number;        // win + loss + chop (rows with a final R)
+  hit1: number;            // resolved rows that ran ≥ 1R
+  hit2: number;            // ≥ 2R
+  hit3: number;            // ≥ 3R
+  rate1: number | null;    // hit1 / resolved
+  rate2: number | null;
+  rate3: number | null;
 }
 
 /** Summary grouped by kind. Filters:
@@ -2113,23 +2120,35 @@ export async function getIctSetupSummary(opts?: { date?: string; sinceDate?: str
       COUNT(*) FILTER (WHERE outcome = 'pending')::int AS pending,
       COUNT(*) FILTER (WHERE outcome IN ('win','loss'))::int AS graded,
       COUNT(*)::int AS total,
-      AVG(r_multiple) FILTER (WHERE outcome IN ('win','loss')) AS avg_r,
+      COUNT(*) FILTER (WHERE outcome IN ('win','loss','chop'))::int AS resolved,
+      COUNT(*) FILTER (WHERE outcome IN ('win','loss','chop') AND r_multiple >= 1)::int AS hit1,
+      COUNT(*) FILTER (WHERE outcome IN ('win','loss','chop') AND r_multiple >= 2)::int AS hit2,
+      COUNT(*) FILTER (WHERE outcome IN ('win','loss','chop') AND r_multiple >= 3)::int AS hit3,
+      AVG(r_multiple) FILTER (WHERE outcome IN ('win','loss','chop')) AS avg_r,
       AVG(mfe) AS avg_mfe
     FROM ict_setups ${where}
     GROUP BY kind ORDER BY total DESC, kind ASC
   `, params);
-  return result.rows.map((r) => ({
-    kind: r.kind,
-    wins: Number(r.wins ?? 0),
-    losses: Number(r.losses ?? 0),
-    chop: Number(r.chop ?? 0),
-    pending: Number(r.pending ?? 0),
-    graded: Number(r.graded ?? 0),
-    total: Number(r.total ?? 0),
-    win_rate: Number(r.graded) > 0 ? Number(r.wins) / Number(r.graded) : null,
-    avg_r: r.avg_r != null ? Number(r.avg_r) : null,
-    avg_mfe: r.avg_mfe != null ? Number(r.avg_mfe) : null,
-  }));
+  return result.rows.map((r) => {
+    const resolved = Number(r.resolved ?? 0);
+    const hit1 = Number(r.hit1 ?? 0), hit2 = Number(r.hit2 ?? 0), hit3 = Number(r.hit3 ?? 0);
+    return {
+      kind: r.kind,
+      wins: Number(r.wins ?? 0),
+      losses: Number(r.losses ?? 0),
+      chop: Number(r.chop ?? 0),
+      pending: Number(r.pending ?? 0),
+      graded: Number(r.graded ?? 0),
+      total: Number(r.total ?? 0),
+      win_rate: Number(r.graded) > 0 ? Number(r.wins) / Number(r.graded) : null,
+      avg_r: r.avg_r != null ? Number(r.avg_r) : null,
+      avg_mfe: r.avg_mfe != null ? Number(r.avg_mfe) : null,
+      resolved, hit1, hit2, hit3,
+      rate1: resolved > 0 ? hit1 / resolved : null,
+      rate2: resolved > 0 ? hit2 / resolved : null,
+      rate3: resolved > 0 ? hit3 / resolved : null,
+    };
+  });
 }
 
 // ── Expirations Cache ─────────────────────────────────────────────────────────

@@ -449,7 +449,7 @@ async function estimateMove(ticker, targetExp, engine) {
   return { ticker, close: displayClose, em, up: indexClose + em + basis, down: indexClose - em + basis, expiration: effectiveExp, strike };
 }
 
-async function fetchWeeklyHistory(engine, symbol) {
+async function fetchWeeklyHistoryDx(engine, symbol) {
   const start = Date.now() - (140 * 24 * 60 * 60 * 1000);
   const url = `${engine.base}/api/dxlink/candles?symbol=${encodeURIComponent(symbol)}&start=${start}&count=12`;
   const r = await ifetch(url);
@@ -458,11 +458,61 @@ async function fetchWeeklyHistory(engine, symbol) {
   return parseHistoryItems(JSON.parse(text));
 }
 
+// Aggregate daily OHLC bars into Monday-anchored weekly bars matching the
+// dxLink weekly shape { time, open, high, low, close }. `time` is set to the
+// week's Monday 00:00 ET so getWeekKey() + the canonical-bar check downstream
+// resolve to the correct week.
+function weeklyFromDaily(daily) {
+  const byWeek = new Map();
+  for (const b of daily) {
+    const wk = getWeekKey(new Date(b.time));
+    let g = byWeek.get(wk);
+    if (!g) { g = { wk, bars: [] }; byWeek.set(wk, g); }
+    g.bars.push(b);
+  }
+  return Array.from(byWeek.values())
+    .map(({ wk, bars }) => {
+      bars.sort((a, b) => a.time - b.time);
+      return {
+        time: Date.parse(`${wk}T04:00:00.000Z`), // Monday 00:00 ET
+        open: bars[0].open,
+        close: bars[bars.length - 1].close,
+        high: Math.max(...bars.map((x) => x.high)),
+        low: Math.min(...bars.map((x) => x.low)),
+      };
+    })
+    .sort((a, b) => a.time - b.time);
+}
+
+// Theta weekly history. Index route for SPX/NDX, stock route for equities.
+// Futures (ESM/NQM) have no Theta feed and are handled by the dxLink path.
+async function fetchWeeklyHistoryTheta(ticker, daysBack = 140) {
+  const theta = require('./proxy-thetadata');
+  const end = new Date();
+  const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+  let daily;
+  if (ticker === 'SPX' || ticker === 'NDX') {
+    daily = await theta.fetchIndexDailyHistoryTheta(ticker === 'SPX' ? '$SPX' : '$NDX', start, end);
+  } else {
+    daily = await theta.fetchStockDailyHistoryTheta(ticker, start, end);
+  }
+  return weeklyFromDaily(daily);
+}
+
+// Dispatch: futures stay on dxLink; index + equities pull from Theta.
+// `ticker` is the candle ticker (SPX/NDX/ESM/NQM/equity), NOT the {=w} symbol.
+async function fetchWeeklyHistory(engine, ticker, daysBack = 140) {
+  if (ticker === 'ESM' || ticker === 'NQM') {
+    return fetchWeeklyHistoryDx(engine, zoneSymbol(ticker));
+  }
+  return fetchWeeklyHistoryTheta(ticker, daysBack);
+}
+
 // Zones for ONE ticker from last week's weekly candle. Shared by the weekly
 // publisher and the on-demand /em-zones lookup so the math never drifts.
 async function computeZonesForTicker(engine, ticker) {
   const targetWeek = getCompletedWeekKey();
-  const bars = await fetchWeeklyHistory(engine, zoneSymbol(ticker));
+  const bars = await fetchWeeklyHistory(engine, ticker);
   const exact = bars.find((i) => getWeekKey(new Date(i.time)) === targetWeek);
   const candidates = bars.filter((i) => getWeekKey(new Date(i.time)) <= targetWeek);
   const selected = exact || candidates[candidates.length - 1] || bars[bars.length - 1];
@@ -604,7 +654,7 @@ async function computeAllLevels(base, opts = {}) {
  * candle whose week == targetWeek (falls back to the latest <= targetWeek).
  */
 async function fetchWeeklyClose(engine, ticker, targetWeek) {
-  const bars = await fetchWeeklyHistory(engine, zoneSymbol(ticker));
+  const bars = await fetchWeeklyHistory(engine, ticker);
 
   // A finalized weekly bar is anchored to the week's MONDAY open. While a week is
   // still trading, the feed also returns a SECOND, partial bar for that same week

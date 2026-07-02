@@ -32,7 +32,7 @@ const GROUPS: Group[] = [
     pages: [
       { label: "Owner", href: "/owner/dev/owner" }, { label: "Results", href: "/owner/dev/results" },
       { label: "Admin", href: "/owner/dev/admin" }, { label: "Tree", href: "/owner/dev/tree" },
-      { label: "Market Scanner", href: "/owner/market-scanner" }, { label: "Strike Query", href: "/owner/dev/strike-query" },
+      { label: "Strike Query", href: "/owner/dev/strike-query" },
       { label: "Social Media", href: "/social-media" }, { label: "Changelog", href: "/changelog" },
     ],
   },

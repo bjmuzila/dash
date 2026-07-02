@@ -68,26 +68,48 @@ function extractSetups(candles: IctCandle[]): Detected[] {
   const out: Detected[] = [];
   const lastClose = candles.length ? candles[candles.length - 1].close : 0;
 
-  // Nearest unswept liquidity pool beyond `price` in `dir` → a natural target.
-  const drawTarget = (dir: "bull" | "bear", price: number): number | null => {
-    const pools = a.liquidity.filter((p) => !p.swept);
-    const cands = pools
-      .map((p) => p.price)
-      .filter((lvl) => (dir === "bull" ? lvl > price : lvl < price));
-    if (!cands.length) return a.range ? (dir === "bull" ? a.range.high : a.range.low) : null;
-    return dir === "bull" ? Math.min(...cands) : Math.max(...cands);
+  // Trigger-bar lookup + 5m ATR(14) for the stop buffer (avoids wick stop-outs).
+  const byTs = new Map<number, IctCandle>(candles.map((c) => [c.timestamp, c]));
+  const atr = (() => {
+    const n = Math.min(14, candles.length - 1);
+    if (n <= 0) return 2;
+    let sum = 0;
+    for (let i = candles.length - n; i < candles.length; i++) {
+      const c = candles[i], p = candles[i - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+    }
+    return Math.max(1, sum / n);
+  })();
+  const buf = Math.max(1, atr * 0.15);
+
+  // Structure-based stop: the nearest swing pivot on the WRONG side of entry
+  // (the level that, if lost, invalidates the idea), buffered beyond by ATR.
+  // Falls back to 1 ATR from entry when no qualifying pivot exists.
+  const structuralStop = (dir: "bull" | "bear", entry: number, ts: number): number => {
+    if (dir === "bull") {
+      const lows = a.pivots.filter((p) => p.type === "low" && p.ts <= ts && p.price < entry).map((p) => p.price);
+      const lvl = lows.length ? Math.max(...lows) : entry - atr;
+      return lvl - buf;
+    }
+    const highs = a.pivots.filter((p) => p.type === "high" && p.ts <= ts && p.price > entry).map((p) => p.price);
+    const lvl = highs.length ? Math.min(...highs) : entry + atr;
+    return lvl + buf;
   };
 
-  // Generic event push with structure-derived target/invalidation.
+  // Generic event push. entry = trigger-bar close; invalidation = structural stop.
+  // Reward is now measured in R by the grader (MFE / risk), so no fixed target.
   const pushEvent = (
     kind: string, label: string, dir: "bull" | "bear",
-    ts: number, price: number, note: string,
+    ts: number, level: number, note: string,
   ) => {
-    const target = drawTarget(dir, price);
-    // Invalidation = a buffer beyond the trigger level on the wrong side.
-    const buf = Math.max(2, Math.abs((target ?? price) - price) * 0.5);
-    const invalidation = dir === "bull" ? price - buf : price + buf;
-    out.push({ kind, label, dir, trigger_ts: ts, price, note, target, invalidation });
+    const bar = byTs.get(ts);
+    const entry = bar ? bar.close : level;
+    const invalidation = structuralStop(dir, entry, ts);
+    // Guard against a degenerate (wrong-side) stop → force a ≥1×buf risk.
+    const inval = dir === "bull"
+      ? Math.min(invalidation, entry - buf)
+      : Math.max(invalidation, entry + buf);
+    out.push({ kind, label, dir, trigger_ts: ts, price: round2(entry), note, target: null, invalidation: inval });
   };
 
   // Structure breaks: BOS / CHOCH / MSS
@@ -164,11 +186,13 @@ function extractSetups(candles: IctCandle[]): Detected[] {
 }
 
 /**
- * Grade one pending setup against the bars that came AFTER its trigger.
- * win  = price reached `target` before touching `invalidation`
- * loss = price touched `invalidation` first
- * chop = neither hit, but ≥ GRADE_AFTER bars have elapsed (or session ended)
- * Tracks MFE/MAE (favorable/adverse excursion, pts) and an R multiple on win.
+ * Grade one setup against the bars after its trigger, tracked like the fails
+ * page: reward is measured in R (MFE / risk), where risk = entry→structural stop.
+ *   r_multiple = max favorable R reached before the stop was hit (peak MFE / risk)
+ *   win  = ran ≥ 1R before the structural stop was touched
+ *   loss = stopped out having reached < 1R
+ *   chop = never stopped and never reached 1R after GRADE_AFTER_BARS / session end
+ * Tier hit-rates (1R/2R/3R) are derived downstream from r_multiple.
  */
 const GRADE_AFTER_BARS = 12; // ~1h of 5m bars with no resolution → call it chop
 function gradeSetup(
@@ -180,10 +204,9 @@ function gradeSetup(
   const dir = row.dir as "bull" | "bear" | "neutral";
   const after = candles.filter((c) => c.timestamp > row.trigger_ts);
   const entry = row.price ?? 0;
-  const target = row.target;
   const inval = row.invalidation;
-  if (dir === "neutral" || target == null || inval == null || !after.length) {
-    return { outcome: "pending", mfe: row.mfe, mae: row.mae, r_multiple: null,
+  if (dir === "neutral" || inval == null || !after.length) {
+    return { outcome: "pending", mfe: row.mfe, mae: row.mae, r_multiple: row.r_multiple ?? null,
       resolved_ts: null, resolved_price: null };
   }
   const risk = Math.abs(entry - inval) || 1;
@@ -193,25 +216,22 @@ function gradeSetup(
     const adv = dir === "bull" ? entry - c.low : c.high - entry;     // worst adverse
     if (fav > mfe) mfe = fav;
     if (adv > mae) mae = adv;
-    const hitTarget = dir === "bull" ? c.high >= target : c.low <= target;
-    const hitInval  = dir === "bull" ? c.low <= inval  : c.high >= inval;
-    // If both happen on the same bar, treat the closer-to-entry level (invalidation)
-    // as hit first — conservative.
-    if (hitInval) {
-      return { outcome: "loss", mfe, mae, r_multiple: -1,
+    const hitStop = dir === "bull" ? c.low <= inval : c.high >= inval;
+    if (hitStop) {
+      const maxR = round2(mfe / risk);
+      // Banked ≥1R before the stop = win; otherwise the stop truncated it = loss.
+      return { outcome: maxR >= 1 ? "win" : "loss", mfe, mae, r_multiple: maxR,
         resolved_ts: c.timestamp, resolved_price: inval };
     }
-    if (hitTarget) {
-      const r = Math.abs(target - entry) / risk;
-      return { outcome: "win", mfe, mae, r_multiple: round2(r),
-        resolved_ts: c.timestamp, resolved_price: target };
-    }
   }
+  const maxR = round2(mfe / risk);
   if (after.length >= GRADE_AFTER_BARS || sessionClosed) {
-    return { outcome: "chop", mfe, mae, r_multiple: round2(mfe / risk),
+    // Resolved without stopping: ≥1R reached = win, else chop (went nowhere).
+    return { outcome: maxR >= 1 ? "win" : "chop", mfe, mae, r_multiple: maxR,
       resolved_ts: after[after.length - 1].timestamp, resolved_price: after[after.length - 1].close };
   }
-  return { outcome: "pending", mfe, mae, r_multiple: null, resolved_ts: null, resolved_price: null };
+  // Still live — keep the peak R so the log shows how far it's run so far.
+  return { outcome: "pending", mfe, mae, r_multiple: maxR, resolved_ts: null, resolved_price: null };
 }
 
 export async function GET(req: NextRequest) {

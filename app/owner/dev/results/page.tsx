@@ -31,7 +31,11 @@ type SummaryRow = {
   wins: number; losses: number; chop: number; pending: number;
   graded: number; total: number;
   win_rate: number | null; avg_r: number | null; avg_mfe: number | null;
+  resolved: number; hit1: number; hit2: number; hit3: number;
+  rate1: number | null; rate2: number | null; rate3: number | null;
 };
+
+const R_TIERS = [1, 2, 3] as const;
 
 // Individual setup row (a single logged/graded play) from /api/ict-setups.
 type SetupRow = {
@@ -105,13 +109,31 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
 
       <SplitBar w={r.wins} l={r.losses} c={r.chop} />
 
+      {/* R-target hit rates — how often the setup ran ≥1R / 2R / 3R (fails-style) */}
+      <div style={{ display: "flex", gap: 6 }}>
+        {R_TIERS.map((t) => {
+          const rate = t === 1 ? r.rate1 : t === 2 ? r.rate2 : r.rate3;
+          const hits = t === 1 ? r.hit1 : t === 2 ? r.hit2 : r.hit3;
+          const ac = wrColor(rate);
+          return (
+            <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
+                {rate != null ? `${Math.round(rate * 100)}%` : "—"}
+              </div>
+              <div style={{ fontSize: 10, color: C.label, fontFamily: "var(--font-mono)" }}>{r.resolved > 0 ? `${hits}/${r.resolved}` : ""}</div>
+            </div>
+          );
+        })}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
         <Metric label="Wins" value={String(r.wins)} color={GREEN} />
         <Metric label="Losses" value={String(r.losses)} color={RED} />
         <Metric label="Chop" value={String(r.chop)} color={MUTED} />
         <Metric label="Live" value={String(r.pending)} color={AMBER} />
-        <Metric label="Avg R" value={r.avg_r != null ? `${r.avg_r > 0 ? "+" : ""}${r.avg_r.toFixed(2)}R` : "—"}
-          color={r.avg_r == null ? MUTED : r.avg_r >= 0 ? GREEN : RED} />
+        <Metric label="Avg max R" value={r.avg_r != null ? `${r.avg_r > 0 ? "+" : ""}${r.avg_r.toFixed(2)}R` : "—"}
+          color={r.avg_r == null ? MUTED : r.avg_r >= 1 ? GREEN : r.avg_r >= 0.5 ? AMBER : RED} />
         <Metric label="Avg MFE" value={r.avg_mfe != null ? `${r.avg_mfe.toFixed(1)} pt` : "—"} color="#cfe" />
       </div>
     </div>
