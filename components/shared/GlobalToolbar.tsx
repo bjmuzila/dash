@@ -253,7 +253,7 @@ function MaintenanceAlert() {
           transition: "opacity 0.2s",
         }}
       >
-        <span style={{ opacity: flash ? 1 : 0.15, color: "#ef4444", transition: "opacity 0.15s" }}>?</span>
+        <span style={{ opacity: flash ? 1 : 0.15, color: "#ef4444", transition: "opacity 0.15s" }}>!</span>
       </button>
 
       {open && (
@@ -278,10 +278,10 @@ function MaintenanceAlert() {
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 18 }}>🔴</span>
-              <span style={{ fontWeight: 700, color: "#f87171", fontSize: 14 }}>Scheduled Maintenance</span>
+              <span style={{ fontWeight: 700, color: "#f87171", fontSize: 14 }}>Heads up</span>
             </div>
             <p style={{ margin: 0, color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
-              Tonight major updates incoming. If a <strong style={{ color: "#f87171" }}>502</strong> page is shown, refresh in a few minutes.
+              Lots of UI upgrades today — bare with us.
             </p>
           </div>
         </>

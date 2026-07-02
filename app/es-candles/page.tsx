@@ -1236,6 +1236,16 @@ export default function EsCandlesPage() {
 
           {/* overlay toggles — each keeps its accent color */}
           <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
+          {/* Heatmap backfill range, right next to the Heatmap toggle it
+              controls. 5D pulls/renders far more history and visibly slows
+              the chart, so it's opt-in rather than default. */}
+          <div title="Heatmap backfill range">
+            <SegGroup
+              options={[{ label: "1D", value: "1" }, { label: "5D", value: "5" }]}
+              active={String(heatmapDays)}
+              onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
+            />
+          </div>
 <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
@@ -1248,16 +1258,6 @@ export default function EsCandlesPage() {
             active={gexMetric}
             onChange={(v) => setGexMetric(v as typeof gexMetric)}
           />
-
-          {/* Heatmap backfill range — 5D pulls/renders far more history and
-              visibly slows the chart, so it's opt-in rather than default. */}
-          <div title="Heatmap backfill range">
-            <SegGroup
-              options={[{ label: "1D", value: "1" }, { label: "5D", value: "5" }]}
-              active={String(heatmapDays)}
-              onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
-            />
-          </div>
 
           {/* intensity slider */}
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />

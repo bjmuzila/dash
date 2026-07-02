@@ -654,8 +654,11 @@ function StrikeQueryScanner() {
 
   useEffect(() => { load(); }, [load]);
 
+  const INDICES = new Set(["SPX", "SPY", "QQQ", "IWM", "NDX"]);
+
   const displayRows = (() => {
     let f = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
+    if (cardScope === "exidx") f = f.filter((r) => !INDICES.has(r.symbol));
     f = [...f].sort((a, b) => {
       const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
       const cmp = colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
@@ -666,8 +669,6 @@ function StrikeQueryScanner() {
 
   const showSymbol = symbol === "ALL";
   const showExpiry = expiry === "ALL";
-
-  const INDICES = new Set(["SPX", "SPY", "QQQ", "IWM", "NDX"]);
 
   // Top 10 cards across all rows — ranked by active sort metric, SPX capped at 1 slot.
   const topCards = (() => {

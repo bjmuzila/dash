@@ -120,10 +120,13 @@ export default function FlowPage() {
     return () => clearInterval(id);
   }, []);
 
-  // ── Backfill today's persisted flow once on mount. ──
+  // ── Backfill the ACTIVE ticker's full session whenever it changes. ──
+  // Per-ticker so the whole day is returned (an unfiltered newest-N cap drops a
+  // ticker's early prints once the full roster is recording).
   useEffect(() => {
     let cancelled = false;
-    fetch("/proxy/flow-history")
+    setHistory([]);
+    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (cancelled || !j || !Array.isArray(j.tape)) return;
@@ -131,7 +134,7 @@ export default function FlowPage() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [active]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -298,8 +301,6 @@ export default function FlowPage() {
         borderColor: "rgba(255,255,255,.10)",
         timeVisible: true,
         secondsVisible: false,
-        fixLeftEdge: true,
-        fixRightEdge: true,
         // Axis tick labels in ET (tickMarkFormatter drives the axis; the
         // localization.timeFormatter only affects the crosshair label).
         tickMarkFormatter: (time: unknown) =>
@@ -327,13 +328,9 @@ export default function FlowPage() {
   useEffect(() => {
     callSeriesRef.current?.setData(netSeries.callPts);
     putSeriesRef.current?.setData(netSeries.putPts);
-    // Lock the view to the full RTH session at all times.
-    try {
-      chartRef.current?.timeScale().setVisibleRange({
-        from: netSeries.openSec as UTCTimestamp,
-        to: netSeries.closeSec as UTCTimestamp,
-      });
-    } catch {}
+    // All 9:30–4:00 bins are present (values up to now, whitespace after), so
+    // fitContent shows the whole session proportionally, full width.
+    chartRef.current?.timeScale().fitContent();
   }, [netSeries]);
 
   // ── Summary of the filtered tape. ──

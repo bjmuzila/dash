@@ -298,9 +298,17 @@ async function handleGexHistory(req, res) {
 // ── /proxy/flow-history ────────────────────────────────────────────────────
 // Returns persisted flow prints for a date (default today ET), shaped as the
 // client FlowOrder[] so the /flow page can seed before the live WS takes over.
+// Root variants so an "SPX" filter also matches the streamer root "SPXW", etc.
+const FLOW_TICKER_ROOTS = { SPX: ['SPX', 'SPXW'], NDX: ['NDX', 'NDXP'], RUT: ['RUT', 'RUTW'], XSP: ['XSP', 'XSPW'] };
+function flowRootsFor(t) {
+  const up = String(t || '').toUpperCase();
+  return FLOW_TICKER_ROOTS[up] || [up];
+}
+
 async function handleFlowHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const date = searchParams.get('date') || todayYmdET();
+  const underlying = searchParams.get('underlying') || searchParams.get('symbol') || '';
   let limit = Number(searchParams.get('limit') || 5000);
   if (!Number.isFinite(limit) || limit <= 0) limit = 5000;
   limit = Math.min(limit, 20000);
@@ -308,17 +316,29 @@ async function handleFlowHistory(req, res) {
   const pool = getHistPool();
   if (!pool) return sendJson(res, 200, { date, tape: [] });
 
+  // Optional per-ticker filter. With the full roster recording, an unfiltered
+  // newest-N cap drops a single ticker's early-session prints — so when the
+  // client asks for one ticker, pull THAT ticker's whole day instead.
+  const params = [date];
+  let where = 'date = $1';
+  if (underlying) {
+    params.push(flowRootsFor(underlying));
+    where += ` AND upper(underlying) = ANY($${params.length})`;
+  }
+  params.push(limit);
+  const limitIdx = params.length;
+
   // Newest `limit` rows, then re-sorted oldest-first to match the live tape.
   const { rows } = await pool.query(
     `SELECT * FROM (
        SELECT ts, symbol, underlying, expiration, strike, type, side, action,
               bucket, price, size, premium, is_otm
          FROM flow_prints
-        WHERE date = $1
+        WHERE ${where}
         ORDER BY ts DESC
-        LIMIT $2
+        LIMIT $${limitIdx}
      ) t ORDER BY ts ASC`,
-    [date, limit]
+    params
   );
 
   const tape = rows.map((r) => ({
