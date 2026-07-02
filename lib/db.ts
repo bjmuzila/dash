@@ -81,6 +81,21 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_conflog_date ON confidence_log(date);
     CREATE INDEX IF NOT EXISTS idx_conflog_graded ON confidence_log(graded_at);
 
+    -- Cached reference levels (PDH/PDL written EOD, PWH/PWL written Sunday) so
+    -- the analytics Levels card stops recomputing them from 20 days of candles.
+    -- kind='day'  key=session date (YYYY-MM-DD)
+    -- kind='week' key=that week's Monday date (YYYY-MM-DD)
+    CREATE TABLE IF NOT EXISTS ref_levels (
+      symbol TEXT NOT NULL,
+      kind   TEXT NOT NULL,
+      key    TEXT NOT NULL,
+      high   REAL NOT NULL,
+      low    REAL NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (symbol, kind, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ref_levels_lookup ON ref_levels(symbol, kind, key);
+
     CREATE TABLE IF NOT EXISTS premium_flow (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       time TEXT, "callPremium" REAL, "putPremium" REAL, "netPremium" REAL, "spxPrice" REAL

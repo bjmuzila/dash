@@ -335,28 +335,34 @@ input.dte-range::-moz-range-track {
   /* GEX chart panel — top. */
   .home-col-left > div:first-child {
     order: 1;
+    display: flex !important;
     flex: 0 0 auto !important;
-    height: 360px !important;
+    height: 380px !important;
     width: 100% !important;
   }
-  /* Heatmap panel — directly under the chart. */
+  /* Heatmap panel — directly under the chart. Explicit height (not just
+     min-height) so the `flex:1` body can't collapse to zero on mobile. */
   .home-col-right > div:last-of-type {
     order: 2;
+    display: flex !important;
     flex: 0 0 auto !important;
-    min-height: 420px !important;
+    height: 480px !important;
+    min-height: 480px !important;
     width: 100% !important;
     margin-top: 0 !important;
   }
   /* Ticker strip — below the heatmap. */
   .home-col-right > div:first-of-type {
     order: 3;
+    flex: 0 0 auto !important;
     width: 100% !important;
   }
-  /* Flow tabs panel — last. */
+  /* Flow tabs / econ panel — last. */
   .home-col-left > div:last-child {
     order: 4;
+    display: flex !important;
     flex: 0 0 auto !important;
-    height: 320px !important;
+    height: 420px !important;
     width: 100% !important;
     margin-top: 0 !important;
   }
@@ -512,6 +518,16 @@ input.dte-range::-moz-range-track {
   main [style*="flex-direction: row"],
   main [style*="flex-direction:row"] {
     flex-wrap: wrap !important;
+  }
+
+  /* Analytics: force a clean single-column stack on phones. The generic 4-col
+     collapse above only takes it to 2 columns, which crushes these dense cards
+     and lets stretched grid rows overlap. Top-align so rows never stretch into
+     each other. Placed last so it wins the specificity tie with the generic
+     grid-collapse rule. */
+  main .analytics-grid {
+    grid-template-columns: 1fr !important;
+    align-items: start !important;
   }
 }
 

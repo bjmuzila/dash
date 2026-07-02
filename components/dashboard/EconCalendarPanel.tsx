@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
 interface CalEvent {
@@ -356,7 +355,6 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
             📅 Econ Calendar
           </span>
-          <span style={{ fontSize: 9, color: "#3a5570", marginLeft: 2 }}>{today}</span>
 
           {/* Multi-select dropdown */}
           <div ref={dropRef} style={{ position: "relative", marginLeft: "auto" }}>
@@ -407,8 +405,6 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           <button onClick={trigger} style={{ ...homeButtonStyle }}>
             {btnLabel}
           </button>
-          <EconCalendarTemplateCopyBtn />
-          <EconCalendarDiscordBtn />
         </div>
       )}
 

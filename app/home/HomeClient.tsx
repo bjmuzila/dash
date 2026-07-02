@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
 import FitScale from "@/components/shared/FitScale";
@@ -950,7 +951,11 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                     {tab.icon}{tab.label}
                   </button>
                 ))}
-                <button onClick={() => setEconCollapsed((v) => !v)} aria-label={econCollapsed ? "Expand" : "Collapse"} style={{ marginLeft: "auto", display: "flex", alignItems: "center", padding: "12px 16px", background: "none", border: "none", cursor: "pointer", color: "#fff" }}>
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 4 }}>
+                  <EconCalendarTemplateCopyBtn />
+                  <EconCalendarDiscordBtn />
+                </div>
+                <button onClick={() => setEconCollapsed((v) => !v)} aria-label={econCollapsed ? "Expand" : "Collapse"} style={{ display: "flex", alignItems: "center", padding: "12px 16px", background: "none", border: "none", cursor: "pointer", color: "#fff" }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: econCollapsed ? "rotate(-90deg)" : "none", transition: "transform 0.2s" }}><polyline points="6 9 12 15 18 9" /></svg>
                 </button>
               </div>

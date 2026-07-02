@@ -976,7 +976,19 @@ function LevelsCard() {
   // when the prior-session/week RTH bars are present, so we feed the COMBINED set
   // into computeRefLevels — otherwise only Overnight H/L (which live in today's
   // pre-open bars) would ever appear.
-  const { candles, historical, connected } = useEsCandles(true);
+  // PD/PW levels come from the cached /api/ref-levels route (written EOD +
+  // Sunday), so we no longer pull 20 days of candles — 2 days is enough for the
+  // overnight globex block that feeds ON-H/ON-L.
+  const { candles, historical, connected } = useEsCandles(true, 2);
+  const [cachedLevels, setCachedLevels] = useState<{ pdh: number | null; pdl: number | null; pwh: number | null; pwl: number | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/ref-levels?symbol=ES", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive && j && !j.error) setCachedLevels({ pdh: j.pdh, pdl: j.pdl, pwh: j.pwh, pwl: j.pwl }); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const grace = useGrace();
   const today = etDateISO();
   const lastUpdated = candles.length ? Number(candles[candles.length - 1].timestamp) : null;
@@ -1000,7 +1012,8 @@ function LevelsCard() {
     // streaming; otherwise the last historical date, e.g. Friday).
     const lastDate = merged[merged.length - 1]?.date ?? today;
     const refDate = merged.some((c) => c.date === today) ? today : lastDate;
-    const levels = computeRefLevels(merged, refDate);
+    const cached = cachedLevels ?? undefined;
+    const levels = computeRefLevels(merged, refDate, cached);
 
     const todayBars = candles.filter((c) => (c.date ?? "") === today);
     const liveSpot = todayBars.length ? Number(todayBars[todayBars.length - 1].close) : null;
@@ -1008,8 +1021,8 @@ function LevelsCard() {
     const { statuses } = scanToday(levels, todayBars.length ? todayBars : merged);
     // Active setups (entry/stop/target triggers) — same source as the IB card,
     // computed off the same ES feed so the Levels card surfaces them too.
-    const amt = computeAmt(todayBars.length ? todayBars : merged, refDate);
-    const setups = detectTriggers(todayBars.length ? todayBars : merged, refDate, amt).filter((t) => t.active);
+    const amt = computeAmt(todayBars.length ? todayBars : merged, refDate, cached);
+    const setups = detectTriggers(todayBars.length ? todayBars : merged, refDate, amt, cached).filter((t) => t.active);
     // Fallback spot for distance display when closed = last available close.
     const fallbackSpot = merged.length ? Number(merged[merged.length - 1].close) : null;
     return { spot: liveSpot ?? fallbackSpot, statuses, hasLiveSpot: liveSpot != null, setups };
@@ -1501,7 +1514,7 @@ function StrategyBuilderCard() {
 export default function AnalyticsPage() {
   return (
     <PageShell>
-      <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+      <div className="analytics-grid" style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))", alignItems: "start" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
         <PremarketCard />

@@ -8,6 +8,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
+// ── Response cache (analogs scan is ~120 seq queries; snapshots land every 30m) ─
+const CACHE_TTL_MS = 60_000;
+const _cache = new Map<string, { at: number; body: unknown }>();
+
 // ── Tunables (SPX points) ───────────────────────────────────────────────────
 const HIT_PTS = 8;            // SPX pts within the MVC strike to count as a touch
 const PIVOT_PTS = 10;         // reversal of >= this many pts after touch = pivot
@@ -379,6 +383,13 @@ export async function GET(req: NextRequest) {
     const emParam = searchParams.get("em");
     const emOverride = emParam != null ? num(emParam) : null;
     const isOpexOr0DTE = searchParams.get("opex") === "1";
+
+    // Serve from cache if fresh (keyed on full query: date/em/opex).
+    const cacheKey = searchParams.toString();
+    const hit = _cache.get(cacheKey);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+      return NextResponse.json(hit.body, { headers: { "x-cache": "hit" } });
+    }
 
     // 1) Current level = latest MVC snapshot for the date.
     // Fall back to the most recent prior day with data (weekend / pre-market /
@@ -779,7 +790,7 @@ export async function GET(req: NextRequest) {
       engaged: mvcTimeline.filter((s) => s.touched).length,
     };
 
-    return NextResponse.json({
+    const body = {
       date: effDate,
       requestedDate: date,
       stale: effDate !== date,
@@ -815,7 +826,9 @@ export async function GET(req: NextRequest) {
         todaySnapshots: todayRows.length,
         dropped: drop,
       },
-    });
+    };
+    _cache.set(cacheKey, { at: Date.now(), body });
+    return NextResponse.json(body, { headers: { "x-cache": "miss" } });
   } catch (err) {
     console.error("[/api/confidence]", err);
     return NextResponse.json({ error: "Confidence error", detail: String(err) }, { status: 500 });

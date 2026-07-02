@@ -1395,6 +1395,10 @@ async function main() {
     // setup (same analyzeICT the /ict page renders), records new ones, and grades
     // pending ones by follow-through → /api/ict-setups.
     require('./ict-setup-tracker').startIctSetupTracker(PORT);
+    // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
+    // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
+    // via /api/ref-levels instead of recomputing from 20 days of ES candles.
+    require('./ref-levels-recorder').startRefLevelsRecorder(PORT);
 
     // Traders Dashboard overnight overview: at ~07:00 ET (weekdays) Claude
     // web-searches what moved markets overnight and writes td_overview.

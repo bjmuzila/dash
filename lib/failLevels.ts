@@ -142,7 +142,17 @@ function hiLo(bars: EsCandle[]): { high: number; low: number } | null {
  *   prev-day H/L   — last completed RTH session before today
  *   prev-week H/L  — full range of the most recent completed prior week
  */
-export function computeRefLevels(candles: EsCandle[], todayDate: string): RefLevel[] {
+/** Pre-computed PDH/PDL/PWH/PWL from the /api/ref-levels cache (EOD + Sunday). */
+export interface CachedRefLevels {
+  pdh?: number | null; pdl?: number | null;
+  pwh?: number | null; pwl?: number | null;
+}
+
+export function computeRefLevels(
+  candles: EsCandle[],
+  todayDate: string,
+  cached?: CachedRefLevels,
+): RefLevel[] {
   const out: RefLevel[] = [];
   if (!candles.length) return out;
 
@@ -169,32 +179,43 @@ export function computeRefLevels(candles: EsCandle[], todayDate: string): RefLev
     out.push({ kind: "onLow",  label: "Overnight Low",  short: "ON-L", price: on.low,  side: "below" });
   }
 
-  // Previous day RTH H/L. NOTE: the nearest calendar date < today can be a
-  // session with NO RTH bars (e.g. Sunday-evening globex open, or a holiday),
-  // which would silently drop PDH/PDL. Walk back to the most recent prior date
-  // that actually has RTH bars.
-  const prevRthDate = dates
-    .filter((d) => d < todayDate)
-    .reverse()
-    .find((d) => rthBarsForDate(candles, d).length > 0);
-  if (prevRthDate) {
-    const pd = hiLo(rthBarsForDate(candles, prevRthDate));
-    if (pd) {
-      out.push({ kind: "pdHigh", label: "Prev Day High", short: "PDH", price: pd.high, side: "above" });
-      out.push({ kind: "pdLow",  label: "Prev Day Low",  short: "PDL", price: pd.low,  side: "below" });
+  // Previous day RTH H/L. Prefer the cached values (written EOD by
+  // ref-levels-recorder → /api/ref-levels) so we don't need 20 days of candles.
+  // Fall back to computing from candles only when the cache is unavailable.
+  if (cached && cached.pdh != null && cached.pdl != null) {
+    out.push({ kind: "pdHigh", label: "Prev Day High", short: "PDH", price: cached.pdh, side: "above" });
+    out.push({ kind: "pdLow",  label: "Prev Day Low",  short: "PDL", price: cached.pdl, side: "below" });
+  } else {
+    // NOTE: the nearest calendar date < today can be a session with NO RTH bars
+    // (Sunday-evening globex, holiday) — walk back to the last date with RTH bars.
+    const prevRthDate = dates
+      .filter((d) => d < todayDate)
+      .reverse()
+      .find((d) => rthBarsForDate(candles, d).length > 0);
+    if (prevRthDate) {
+      const pd = hiLo(rthBarsForDate(candles, prevRthDate));
+      if (pd) {
+        out.push({ kind: "pdHigh", label: "Prev Day High", short: "PDH", price: pd.high, side: "above" });
+        out.push({ kind: "pdLow",  label: "Prev Day Low",  short: "PDL", price: pd.low,  side: "below" });
+      }
     }
   }
 
-  // Previous week full range (most recent completed week before today's week).
-  const thisWeek = weekKey(todayDate);
-  const priorWeeks = [...new Set(dates.map(weekKey))].filter((w) => w < thisWeek).sort();
-  const lastWeek = priorWeeks.pop();
-  if (lastWeek) {
-    const pwBars = candles.filter((c) => isRthBar(c.timestamp) && weekKey(etSessionDate(c)) === lastWeek);
-    const pw = hiLo(pwBars);
-    if (pw) {
-      out.push({ kind: "pwHigh", label: "Prev Week High", short: "PWH", price: pw.high, side: "above" });
-      out.push({ kind: "pwLow",  label: "Prev Week Low",  short: "PWL", price: pw.low,  side: "below" });
+  // Previous week full range. Prefer the cached values (written Sunday).
+  if (cached && cached.pwh != null && cached.pwl != null) {
+    out.push({ kind: "pwHigh", label: "Prev Week High", short: "PWH", price: cached.pwh, side: "above" });
+    out.push({ kind: "pwLow",  label: "Prev Week Low",  short: "PWL", price: cached.pwl, side: "below" });
+  } else {
+    const thisWeek = weekKey(todayDate);
+    const priorWeeks = [...new Set(dates.map(weekKey))].filter((w) => w < thisWeek).sort();
+    const lastWeek = priorWeeks.pop();
+    if (lastWeek) {
+      const pwBars = candles.filter((c) => isRthBar(c.timestamp) && weekKey(etSessionDate(c)) === lastWeek);
+      const pw = hiLo(pwBars);
+      if (pw) {
+        out.push({ kind: "pwHigh", label: "Prev Week High", short: "PWH", price: pw.high, side: "above" });
+        out.push({ kind: "pwLow",  label: "Prev Week Low",  short: "PWL", price: pw.low,  side: "below" });
+      }
     }
   }
 
@@ -595,8 +616,8 @@ function computeIb(todayBars: EsCandle[]): InitialBalance | null {
  * AMT read for today: IB interaction, day-type classification, and per-level
  * acceptance reads — no value area.
  */
-export function computeAmt(candles: EsCandle[], todayDate: string): AmtResult {
-  const levels = computeRefLevels(candles, todayDate);
+export function computeAmt(candles: EsCandle[], todayDate: string, cached?: CachedRefLevels): AmtResult {
+  const levels = computeRefLevels(candles, todayDate, cached);
   const todayBars = candles
     .filter((c) => c.date === todayDate)
     .sort((a, b) => a.timestamp - b.timestamp);
@@ -719,9 +740,10 @@ export function detectTriggers(
   candles: EsCandle[],
   todayDate: string,
   amt?: AmtResult,
+  cached?: CachedRefLevels,
 ): Trigger[] {
-  const ctx = amt ?? computeAmt(candles, todayDate);
-  const levels = computeRefLevels(candles, todayDate);
+  const ctx = amt ?? computeAmt(candles, todayDate, cached);
+  const levels = computeRefLevels(candles, todayDate, cached);
   const bars = candles
     .filter((c) => c.date === todayDate && isRthBar(c.timestamp))
     .sort((a, b) => a.timestamp - b.timestamp);

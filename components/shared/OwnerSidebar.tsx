@@ -7,10 +7,12 @@
  * shows up on every owner page, no per-page gating or nav edits needed.
  */
 
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { HOME_THEME } from "./homeTheme";
+import { useMobileNav } from "./MobileNavContext";
 
 type OwnerLink = { label: string; href: string; glyph: string };
 type OwnerGroup = { label: string; accent: string; links: OwnerLink[] };
@@ -80,12 +82,39 @@ export default function OwnerSidebar() {
   const pathname = usePathname() || "";
   const searchParams = useSearchParams();
   const activeTab = searchParams.get("tab") || "overview";
+  const { isMobile } = useMobileNav();
+  const [open, setOpen] = useState(false);
   const isActive = (href: string) =>
     href === "/owner" ? pathname === "/owner" : pathname === href || pathname.startsWith(href + "/");
 
-  return (
-    <aside
-      style={{
+  // Close the drawer whenever the route (or active tab) changes on mobile.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname, activeTab]);
+
+  const asideStyle: CSSProperties = isMobile
+    ? {
+        // Off-canvas slide-in drawer — no longer occupies layout width.
+        position: "fixed",
+        top: 0,
+        bottom: 0,
+        left: 0,
+        zIndex: 120,
+        width: "min(78vw, 260px)",
+        transform: open ? "translateX(0)" : "translateX(-100%)",
+        transition: "transform 0.22s ease",
+        boxShadow: open ? "0 0 40px rgba(0,0,0,0.6)" : "none",
+        display: "flex",
+        flexDirection: "column",
+        gap: 18,
+        padding: "18px 12px",
+        paddingTop: "max(18px, env(safe-area-inset-top, 0px))",
+        overflowY: "auto",
+        background: "rgba(10,13,20,0.98)",
+        backdropFilter: "blur(16px)",
+        borderRight: `1px solid ${HOME_THEME.border}`,
+      }
+    : {
         width: 224,
         flexShrink: 0,
         display: "flex",
@@ -95,8 +124,10 @@ export default function OwnerSidebar() {
         overflowY: "auto",
         background: HOME_THEME.panelBgStrong,
         borderRight: `1px solid ${HOME_THEME.border}`,
-      }}
-    >
+      };
+
+  const rail = (
+    <aside style={asideStyle}>
       {OWNER_SIDEBAR_GROUPS.map((group) => (
         <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
@@ -181,5 +212,49 @@ export default function OwnerSidebar() {
         </div>
       ))}
     </aside>
+  );
+
+  // Desktop: plain in-flow rail (unchanged behavior).
+  if (!isMobile) return rail;
+
+  // Mobile: floating toggle button + backdrop + off-canvas drawer, so the rail
+  // no longer eats half the screen width.
+  return (
+    <>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Owner menu"
+        aria-expanded={open}
+        style={{
+          position: "fixed",
+          left: 12,
+          bottom: "max(16px, env(safe-area-inset-bottom, 0px))",
+          zIndex: 121,
+          width: 48,
+          height: 48,
+          borderRadius: "50%",
+          border: `1px solid ${HOME_THEME.cyan}80`,
+          background: "rgba(10,13,20,0.96)",
+          color: HOME_THEME.cyan,
+          fontSize: 22,
+          fontWeight: 800,
+          lineHeight: 1,
+          cursor: "pointer",
+          boxShadow: "0 6px 18px rgba(0,0,0,0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {open ? "✕" : "☰"}
+      </button>
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 119, background: "rgba(0,0,0,0.5)" }}
+        />
+      )}
+      {rail}
+    </>
   );
 }
