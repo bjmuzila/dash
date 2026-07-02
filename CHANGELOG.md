@@ -1,5 +1,23 @@
 # Changelog
 
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-02 — Greeks page: gauges + single WS feed + zero-cross log; frozen-spot root cause + guards + owner health/link
+
+Reworked `app/greeks/page.tsx`: replaced the four GEX/DEX/CHEX/VEX sparkline cards with a 4-across center-zero gauge cluster (new `GreeksGauge`, 0 at 12 o'clock, green +/red −) under the toolbar; removed the Gamma Logic Feed and put a GEX/DEX **Zero-Line Crossings** log in its slot (new `zeroCrossings` state machine with an 8%-of-scale deadband + 2-sample confirm to reject frozen-spot outliers). Converted the greeks feed from the `/api/insights/gex` 60s REST poll to the single `/ws/gex` WebSocket (new `pointFromTotals`; reads gex/snapshot totals + spot frames, ignores flow tape), gated by a new DATA on/off toggle; VIX/IV stays a 60s `/api/insights/vix` poll; history de-dup widened 5s→15s bucket, cap 300→1500; dropped the page's `saveGreeksSnapshot` write (was double-writing `greeks_ts` on a conflicting basis). Root-caused false zero-crosses to a frozen SPX spot (7483.23 in ~81% of `greeks_ts` rows): added `spotAt`/`spotAgeMs` to `/proxy/gex` + `/proxy/status` (`server-v2/server-with-proxy.js`), `server-v2/greeks-ts-writer.js` now skips writes when spot is stale (`SPOT_STALE_MS`/`GREEKS_TS_SPOT_STALE_MS`, 120s), and `app/owner/dev/owner/page.tsx` gained a `SpotFeedHealth` card (polls `/proxy/status`, HEALTHY/SLOW/STALE) plus an "Open Greeks →" link. Repointed `discord-bot.js` `exposure-stack` `/insights`→`/home`; the dead `/insights` redirect stub (`app/insights/`) still needs manual deletion (sandbox delete unavailable). STILL OPEN: index-stream watchdog to auto re-subscribe after a Theta bounce; all edits UNVERIFIED / not pushed.
+
+## 2026-07-02 — Options Flow page redesign: per-ticker Net Drift chart + scalable aggregation
+
+Rebuilt `app/flow/page.tsx` into a per-ticker Net Drift (Premium) view: watchlist chips + add, premium slider, cumulative call/put net-premium lines on a hardcoded 9:30–4:00 ET axis (`lightweight-charts` v5, fixed 1-min bins, ET `tickMarkFormatter`), volume histogram pane, call/put split bar, and a raw tape scoped to the active ticker. Because SPX prints are hundreds of thousands/day (20k rows = ~6 min), moved the chart off raw prints to a new server-aggregated endpoint `/proxy/flow-netprem` (SQL `GROUP BY` 1-min bins, per-ticker via `flowRootsFor`, 4s in-memory cache) in `server-v2/server-with-proxy.js`, polled every 5s (self-heals transient DB blanks); also added per-ticker `underlying` filter to `/proxy/flow-history` and pinned all tape/axis times to ET. Ops: set `FLOW_TICKERS=EM` + `FLOW_BULK_STREAM=1` on VPS to record the full EM roster. Needs VPS rebuild.
+
+## 2026-07-02 — Analytics page duplicate candle fetch dedupe
+
+Diagnosed the analytics-page waterfall: `app/analytics/page.tsx` mounts `useEsCandles(true)` twice (lines 867 + 979), so both `queryEsCandlesToday` (`candles?date=…&limit=2000`) and `queryEsCandlesHistorical` (`candles?daysBack=20&limit=10000`, ~139 kB) fired twice on load. Added a 5s in-flight/TTL dedupe (`_dedupeCandles`) in `lib/snapdb.ts` so concurrent hook mounts share one request; global fix, live bars still stream via /ws/gex. Needs VPS rebuild.
+
 ## 2026-06-30 — Home GEX SSR first-paint + 0DTE Volume Net GEX fix + @supabase/ssr dep (502)
 
 Made `app/home/page.tsx` a server component that reads the hot `/proxy/gex` snapshot and seeds `app/home/HomeClient.tsx` via an `initial` prop, so the GEX chart paints from the first HTML frame instead of the client hydrate→open `/ws/gex`→await-first-frame waterfall; `HEAVY_FRAME_MS` 1500→750 (env `NEXT_PUBLIC_HEAVY_FRAME_MS`) and added env-tunable `GEX_GATE_DISABLED` (paint on first recompute, skip readiness gate) + `GEX_DEBUG` (logs `_recompute` active/oiHits/gkHits) in `server-v2/proxy-tastytrade.js`, plus paid-Theta speed env (`THETA_GREEKS_MS=2000`, `OI_REFRESH_MS=30000`, `OI_READY_GRACE_MS=8000`) since the old readiness brakes existed to ration the free dxLink/TT feed (now on paid Theta Pro). Fixed 0DTE blank Volume Net GEX: `server-v2/proxy-thetadata.js fetchVolumeTheta` keeps only today-timestamped OHLC bars (stale prior-session bars → 0) and `proxy-tastytrade.js _recompute` uses `Math.max(liveVol, restVol)` so a 0/partial live-stream value no longer shadows the real Theta REST volume — verified live (`netVolGEX -1746` at 6870). Added `@supabase/ssr`+`@supabase/supabase-js` to `package.json` (was uninstalled → `tsc` errors + prod 502). NOTE: see the feed-always-warm entry below — the spot:0 boot failures this session traced to Theta JVM OOM, fixed there.

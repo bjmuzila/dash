@@ -35,7 +35,7 @@ const {
   fetchStockQuoteTheta,
   fetchIndexPriceTheta,
 } = require('./proxy-thetadata');
-const { SPECIAL_TICKERS, EQUITY_TICKERS } = require('./em-tickers');
+const { SCANNER_TICKERS, SCANNER_HOT } = require('./scanner-tickers');
 
 // Cash indices price off the index snapshot endpoint, NOT the stock-quote one
 // (which returns "no data" for them). Equities/ETFs use the stock quote.
@@ -186,34 +186,29 @@ async function ensureSchema() {
   // a fresh DB/redeploy records the entire EM list from the start — the roster is
   // bounded (SPECIAL_TICKERS + EQUITY_TICKERS, well under MAX_ACTIVE). Pacing
   // (TICKER_DELAY_MS) + theta-terminal heap are the load levers, not the count.
-  // A short "hot" default set — the most liquid names — seeded into the fast lane.
-  const seedHot = new Set(['SPX', 'SPY', 'QQQ', 'IWM', 'NDX', 'NVDA', 'TSLA',
-    'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'AMD', 'PLTR', 'NFLX']);
-  const roster = [...new Set([...SPECIAL_TICKERS, ...EQUITY_TICKERS])]
-    .filter(Boolean).map((s) => String(s).toUpperCase());
-  // Bulk insert, do nothing on conflict so user edits are never clobbered.
+  // RECONCILE the watchlist to the curated scanner universe on every boot. This
+  // is the source of truth: to change the scanner/flow universe, edit
+  // scanner-tickers.js and redeploy. MAIN = hot (fast lane); everything else in
+  // the list = active on the 5-min sweep; anything NOT in the list is deactivated
+  // (kept as a row so history survives, but no longer swept).
+  const roster = [...new Set(SCANNER_TICKERS)].map((s) => String(s).toUpperCase());
+  const hotSet = new Set(SCANNER_HOT.map((s) => String(s).toUpperCase()));
   let idx = 0;
   for (const sym of roster) {
     await p.query(
       `INSERT INTO strike_growth_watchlist (symbol, active, hot, sort_idx)
-       VALUES ($1, TRUE, $2, $3) ON CONFLICT (symbol) DO NOTHING`,
-      [sym, seedHot.has(sym), idx++]
+       VALUES ($1, TRUE, $2, $3)
+       ON CONFLICT (symbol) DO UPDATE SET active = TRUE, hot = EXCLUDED.hot, sort_idx = EXCLUDED.sort_idx`,
+      [sym, hotSet.has(sym), idx++]
     );
   }
-  // Bootstrap the hot lane ONCE: if no rows are hot yet (e.g. the hot column was
-  // just added to a pre-existing table, so the seed's ON CONFLICT DO NOTHING left
-  // everything hot=FALSE), promote the default hot set. Guarded on "0 hot" so it
-  // never clobbers the user's later hot-list edits.
-  const { rows: hotCount } = await p.query(`SELECT count(*)::int AS n FROM strike_growth_watchlist WHERE hot = TRUE`);
-  if (hotCount[0].n === 0) {
-    await p.query(
-      `UPDATE strike_growth_watchlist SET hot = TRUE WHERE symbol = ANY($1)`,
-      [[...seedHot]]
-    );
-    console.log(`[strike-growth] hot lane bootstrapped — ${seedHot.size} default hot names`);
-  }
+  // Deactivate everything not in the curated list (replace-universe semantics).
+  const off = await p.query(
+    `UPDATE strike_growth_watchlist SET active = FALSE, hot = FALSE WHERE symbol <> ALL($1)`,
+    [roster]
+  );
   _schemaReady = true;
-  console.log(`[strike-growth] schema ready — watchlist seeded (${roster.length} symbols, all active, ${seedHot.size} hot)`);
+  console.log(`[strike-growth] schema ready — universe reconciled to scanner list (${roster.length} active, ${hotSet.size} hot, ${off.rowCount} deactivated)`);
   return true;
 }
 

@@ -24,6 +24,7 @@
 
 const thetaAdapter = require('./proxy-thetadata');
 const { SYMBOLS: EM_SYMBOLS } = require('./em-tickers');
+const { SCANNER_TICKERS } = require('./scanner-tickers');
 
 // Indices priced via /index snapshot; everything else via /stock snapshot.
 const INDEX_ROOTS = new Set(['SPX', 'SPXW', 'NDX', 'NDXP', 'VIX', 'RUT', 'XSP', 'DJX']);
@@ -45,9 +46,21 @@ const FLOW_BULK_STREAM = process.env.FLOW_BULK_STREAM === '1';
 // have no OPRA option chain. SPX/SPXW are dropped downstream (core engine owns them).
 const FLOW_FROM_EM = process.env.FLOW_FROM_EM === '1'
   || String(process.env.FLOW_TICKERS || '').trim().toUpperCase() === 'EM';
+// FLOW_TICKERS=SCANNER sources flow roots from the curated scanner universe
+// (scanner-tickers.js) so the flow tape and the /scanner page share one list.
+const FLOW_FROM_SCANNER = String(process.env.FLOW_TICKERS || '').trim().toUpperCase() === 'SCANNER';
 const EM_FLOW_EXCLUDE = new Set(['ESM', 'NQM', 'ESU', 'NQU']);
 
 function parseFlowTickers() {
+  if (FLOW_FROM_SCANNER) {
+    // ~100 roots — per-contract subscribing that many is a JVM sub meltdown, so
+    // require bulk stream mode, same guard as the EM path.
+    if (!FLOW_BULK_STREAM) {
+      console.error('[MULTIFLOW] FLOW_TICKERS=SCANNER set but FLOW_BULK_STREAM!=1 — refusing to per-contract-subscribe ~100 roots. Set FLOW_BULK_STREAM=1. Staying SPX-only.');
+      return [];
+    }
+    return SCANNER_TICKERS.filter((t) => !EM_FLOW_EXCLUDE.has(t));
+  }
   if (FLOW_FROM_EM) {
     // The EM roster is ~200 roots. Per-contract subscribing that many would be
     // thousands of JVM subs (each root × up to FLOW_MAX_CONTRACTS) — the exact

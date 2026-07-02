@@ -2608,8 +2608,13 @@ export default function OwnerDashboard() {
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {/* SPX index-feed health (frozen-spot detector) */}
-            <SpotFeedHealth />
+            {/* SPX index-feed health (frozen-spot detector) + quick link to the page */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 260px", minWidth: 260 }}><SpotFeedHealth /></div>
+              <a href="/greeks" style={{ ...homeSecondaryButtonStyle, padding: "8px 16px", borderRadius: 8, textDecoration: "none", fontSize: 12, whiteSpace: "nowrap" }}>
+                Open Greeks →
+              </a>
+            </div>
             {/* Toggles */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
               {/* Idle */}

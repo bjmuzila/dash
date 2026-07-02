@@ -626,8 +626,6 @@ function StrikeQueryScanner() {
   const [colSort, setColSort] = useState<{ col: SqCol; dir: "desc" | "asc" }>({ col: "gex_now", dir: "desc" });
   const [cardScope, setCardScope] = useState<"all" | "exidx">("all");
 
-  const [activating, setActivating] = useState(false);
-
   const symbolList = watchlist.length > 0 ? watchlist : SQ_FALLBACK;
 
   const refreshWatchlist = useCallback(() => {
@@ -640,19 +638,6 @@ function StrikeQueryScanner() {
       })
       .catch(() => {});
   }, []);
-
-  const activateAllEm = useCallback(async () => {
-    setActivating(true);
-    try {
-      await fetch("/proxy/strike-growth/watchlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ activateAll: true }),
-      });
-      await refreshWatchlist();
-    } catch { /* noop */ }
-    finally { setActivating(false); }
-  }, [refreshWatchlist]);
 
   const toggleSort = (col: SqCol) =>
     setColSort((p) => (p.col === col ? { col, dir: p.dir === "desc" ? "asc" : "desc" } : { col, dir: "desc" }));
@@ -755,9 +740,6 @@ function StrikeQueryScanner() {
             options={[10, 25, 50, 100].map((l) => ({ value: String(l), label: String(l) }))} />
         </div>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <button onClick={activateAllEm} disabled={activating} style={seg(false)}>
-          {activating ? "Activating…" : `Record all EM (${symbolList.length} active)`}
-        </button>
         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
       </div>
 
@@ -774,7 +756,7 @@ function StrikeQueryScanner() {
               <button onClick={() => setCardScope("exidx")} style={seg(cardScope === "exidx")}>All − Indices</button>
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
             {topCards.map((r, i) => {
               const v = sqVal(r, colSort.col);
               const pos = v >= 0;

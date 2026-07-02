@@ -199,26 +199,52 @@ export default function TradersDashboardPage() {
   useEffect(() => { if (zip) loadWeather(zip); }, [zip, loadWeather]);
 
   // ── Derived ──
-  const { countdown, targetLabel } = useMemo(() => {
-    if (!now) return { countdown: "--:--:--", targetLabel: "9:30 AM EST" };
-    const target = new Date(now);
-    target.setHours(9, 30, 0, 0);
-    if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1);
-    // Roll forward to the next trading day (skip weekends + market holidays).
-    let guard = 0;
-    while (!isTradingDay(target) && guard++ < 14) target.setDate(target.getDate() + 1);
-    let s = Math.floor((target.getTime() - now.getTime()) / 1000);
+  const { countdown, targetLabel, phase } = useMemo(() => {
+    if (!now) return { countdown: "--:--:--", targetLabel: "9:30 AM EST", phase: "open" as const };
+    // Current time-of-day in ET seconds (timezone-correct regardless of browser TZ).
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(now);
+    const get = (t: string) => Number(p.find((x) => x.type === t)?.value ?? 0);
+    let hh = get("hour"); if (hh === 24) hh = 0;
+    const nowSec = hh * 3600 + get("minute") * 60 + get("second");
+    const OPEN = 9 * 3600 + 30 * 60; // 9:30 AM ET
+    const CLOSE = 16 * 3600;         // 4:00 PM ET
+    const tradingToday = isTradingDay(now);
+    const isOpen = tradingToday && nowSec >= OPEN && nowSec < CLOSE;
+
+    let deltaSec: number;
+    let label: string;
+    let phase: "open" | "close";
+
+    if (isOpen) {
+      // Market is open → count down to the 4:00 PM ET close.
+      phase = "close";
+      deltaSec = CLOSE - nowSec;
+      label = "Target: 4:00 PM EST";
+    } else {
+      // Market is closed → count down to the next 9:30 AM ET open.
+      phase = "open";
+      if (tradingToday && nowSec < OPEN) {
+        deltaSec = OPEN - nowSec;
+        label = "Target: 9:30 AM EST";
+      } else {
+        const secToMidnight = 86400 - nowSec;
+        const dayCursor = new Date(now);
+        let addedDays = 0;
+        do { dayCursor.setDate(dayCursor.getDate() + 1); addedDays++; } while (!isTradingDay(dayCursor) && addedDays < 14);
+        deltaSec = secToMidnight + (addedDays - 1) * 86400 + OPEN;
+        const wd = dayCursor.toLocaleDateString("en-US", { weekday: "long", timeZone: "America/New_York" });
+        label = `Target: ${wd} 9:30 AM EST`;
+      }
+    }
+
+    let s = Math.max(0, deltaSec);
     const days = Math.floor(s / 86400);
     s %= 86400;
     const h = String(Math.floor(s / 3600)).padStart(2, "0");
     s %= 3600;
     const m = String(Math.floor(s / 60)).padStart(2, "0");
     const hms = `${h}:${m}:${String(s % 60).padStart(2, "0")}`;
-    const isToday = etDateStr(target) === etDateStr(now);
-    const label = isToday
-      ? "Target: 9:30 AM EST"
-      : `Target: ${target.toLocaleDateString("en-US", { weekday: "long" })} 9:30 AM EST`;
-    return { countdown: days > 0 ? `${days}d ${hms}` : hms, targetLabel: label };
+    return { countdown: days > 0 ? `${days}d ${hms}` : hms, targetLabel: label, phase };
   }, [now]);
 
   const dateStr = now
@@ -285,7 +311,7 @@ export default function TradersDashboardPage() {
 
             {/* Countdown */}
             <Card accent="orange" padding="28px 20px" style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>Countdown to Market Open</div>
+              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>{phase === "close" ? "Countdown to Market Close" : "Countdown to Market Open"}</div>
               <div style={{ fontSize: "clamp(48px,8vw,84px)", fontWeight: 800, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{countdown}</div>
               <div style={{ color: HT.muted, fontSize: 13, marginTop: 8 }}>{targetLabel}</div>
             </Card>
@@ -424,6 +450,7 @@ export default function TradersDashboardPage() {
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.red }}>🕐 Morning Schedule</div>
                 <button onClick={() => setEditSched((v) => !v)} style={miniBtn}>{editSched ? "Done" : "Edit"}</button>
               </div>
+              <div style={{ fontSize: 11, color: HT.muted, marginBottom: 12 }}>These are sample times — tap <span style={{ color: HT.cyan, fontWeight: 700 }}>Edit</span> to swap in your own routine.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {schedule.map((s, i) => editSched ? (
                   <div key={s.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -449,6 +476,7 @@ export default function TradersDashboardPage() {
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.green }}>✅ Pre-Market Tasks</div>
                 <button onClick={() => setEditTasks((v) => !v)} style={miniBtn}>{editTasks ? "Done" : "Edit"}</button>
               </div>
+              <div style={{ fontSize: 11, color: HT.muted, marginBottom: 12 }}>Sample tasks — tap <span style={{ color: HT.green, fontWeight: 700 }}>Edit</span> to make them your own.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {tasks.map((t) => editTasks ? (
                   <div key={t.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>

@@ -2,6 +2,17 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 7/2/2026
+
+* Analytics page loads a bit faster — removed a duplicate data pull that was fetching the same chart history twice.
+* Redesigned the Options Flow page — pick any watched ticker to see its live "Net Drift" chart of call vs put premium across the full 9:30–4:00 trading day, with a volume bar and a raw order stream below.
+* Options Flow now tracks the full watchlist of tickers, and the chart fills in the whole day's history from the market open instead of only what's happened since you opened the page.
+* Redesigned the Greeks page — GEX, DEX, CHEX and VEX now show as clean dial gauges (zero at top, green for positive, red for negative) instead of the old mini-charts.
+* Added a live GEX/DEX zero-line crossings log so you can see exactly when dealer positioning flips sign, with noise filtering so brief blips don't create false flips.
+* Added a Data On/Off button on the Greeks page so you can pause the live feed when you're not watching.
+* Fixed false "flips" caused by a stale price feed — the SPX price is now checked for freshness before it's used, plus a live feed-health indicator on the owner page.
+* Greeks now update in real time from a single live feed instead of refreshing once a minute.
+
 ## Tuesday 6/30/2026
 
 * Dashboard loads faster — the live feed warms up on its own and reconnects automatically if data hiccups.

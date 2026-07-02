@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import {
   OWNER_THEME as T,
   homeButtonStyle,
@@ -284,6 +285,79 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   );
 }
 
+// Signed up (Supabase account) but never converted to a paid plan. Sourced from
+// /api/admin/send-email (GET), which resolves every auth user's paid status — so
+// this list is always current, no manual upkeep. Emails feed the broadcast page.
+function NotPayingPanel() {
+  const [emails, setEmails] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/send-email");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setEmails((j.recipients?.notPaying as string[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const copyAll = async () => {
+    if (!emails?.length) return;
+    try {
+      await navigator.clipboard.writeText(emails.join(", "));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked — ignore */ }
+  };
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Signed Up · Not Paying</span>
+        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
+          {emails ? emails.length : "—"}
+        </span>
+        <span style={{ fontSize: 11, color: T.textSecondary }}>accounts created without an active subscription</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "…" : "↻"}
+          </button>
+          <button onClick={copyAll} disabled={!emails?.length} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: emails?.length ? 1 : 0.5 }}>
+            {copied ? "✓ Copied" : "Copy emails"}
+          </button>
+          <Link href="/owner/admin/emails?audience=not_paying" style={{ ...homeButtonStyle, padding: "4px 14px", fontSize: 11, textDecoration: "none" }}>
+            Email these →
+          </Link>
+        </div>
+      </div>
+      <div style={{ maxHeight: 300, overflowY: "auto", padding: "6px 0" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+        ) : loading && !emails ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+        ) : emails && emails.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Everyone who signed up is paying 🎉</div>
+        ) : (
+          emails?.map((email) => (
+            <div key={email} style={{ padding: "6px 16px", fontSize: 12, color: T.text, fontFamily: "var(--font-mono)", borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
+              {email}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -346,6 +420,9 @@ export default function AdminDashboard() {
             Loading Stripe data…
           </div>
         )}
+
+        {/* Always shown — sourced from Supabase auth, independent of Stripe config. */}
+        <NotPayingPanel />
 
         {data && !data.configured && <SetupBanner />}
 

@@ -89,14 +89,16 @@ export async function GET(req: NextRequest) {
     const recipients = await listRecipients();
     const all = recipients.map((r) => r.email);
     const subscribers = recipients.filter((r) => r.paid).map((r) => r.email);
+    // Signed up (has a Supabase account) but never converted to a paid plan.
+    const notPaying = recipients.filter((r) => !r.paid).map((r) => r.email);
     let waitlist: string[] = [];
     try { waitlist = await listWaitlistEmails(); } catch { /* table optional */ }
     return NextResponse.json({
       ok: true,
       configured: !!RESEND_API_KEY,
       from: FROM_EMAIL,
-      counts: { all: all.length, subscribers: subscribers.length, waitlist: waitlist.length },
-      recipients: { all, subscribers, waitlist },
+      counts: { all: all.length, subscribers: subscribers.length, notPaying: notPaying.length, waitlist: waitlist.length },
+      recipients: { all, subscribers, notPaying, waitlist },
     });
   } catch (err) {
     return NextResponse.json({ error: "Recipient load failed", detail: String(err) }, { status: 500 });
@@ -130,9 +132,13 @@ export async function POST(req: NextRequest) {
 
     // Resolve recipients.
     let to: string[] = [];
-    if (audience === "all" || audience === "subscribers") {
+    if (audience === "all" || audience === "subscribers" || audience === "not_paying") {
       const recipients = await listRecipients();
-      to = (audience === "subscribers" ? recipients.filter((r) => r.paid) : recipients).map((r) => r.email);
+      const picked =
+        audience === "subscribers" ? recipients.filter((r) => r.paid)
+        : audience === "not_paying" ? recipients.filter((r) => !r.paid)
+        : recipients;
+      to = picked.map((r) => r.email);
     } else if (audience === "waitlist") {
       to = await listWaitlistEmails();
     } else {
