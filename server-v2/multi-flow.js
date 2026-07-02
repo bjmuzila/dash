@@ -23,6 +23,7 @@
  */
 
 const thetaAdapter = require('./proxy-thetadata');
+const { SYMBOLS: EM_SYMBOLS } = require('./em-tickers');
 
 // Indices priced via /index snapshot; everything else via /stock snapshot.
 const INDEX_ROOTS = new Set(['SPX', 'SPXW', 'NDX', 'NDXP', 'VIX', 'RUT', 'XSP', 'DJX']);
@@ -38,7 +39,25 @@ const FLOW_WINDOW_REFRESH_MS = Number(process.env.FLOW_WINDOW_REFRESH_MS || 5 * 
 // so adding tickers costs zero new subscriptions. Default = per-contract windows.
 const FLOW_BULK_STREAM = process.env.FLOW_BULK_STREAM === '1';
 
+// FLOW_FROM_EM=1 (or FLOW_TICKERS=EM) sources the flow roots from the Estimated-
+// Moves roster (em-tickers.js SYMBOLS) instead of a hand-maintained FLOW_TICKERS
+// list, so the two stay in sync. Futures (ESM/NQM = ESU/NQU) are excluded — they
+// have no OPRA option chain. SPX/SPXW are dropped downstream (core engine owns them).
+const FLOW_FROM_EM = process.env.FLOW_FROM_EM === '1'
+  || String(process.env.FLOW_TICKERS || '').trim().toUpperCase() === 'EM';
+const EM_FLOW_EXCLUDE = new Set(['ESM', 'NQM', 'ESU', 'NQU']);
+
 function parseFlowTickers() {
+  if (FLOW_FROM_EM) {
+    // The EM roster is ~200 roots. Per-contract subscribing that many would be
+    // thousands of JVM subs (each root × up to FLOW_MAX_CONTRACTS) — the exact
+    // meltdown bulk mode exists to avoid. Refuse unless bulk is on.
+    if (!FLOW_BULK_STREAM) {
+      console.error('[MULTIFLOW] FLOW_FROM_EM set but FLOW_BULK_STREAM!=1 — refusing to per-contract-subscribe the full EM roster. Set FLOW_BULK_STREAM=1. Staying SPX-only.');
+      return [];
+    }
+    return EM_SYMBOLS.filter((t) => !EM_FLOW_EXCLUDE.has(t));
+  }
   return String(process.env.FLOW_TICKERS || '')
     .split(/[,\s]+/)
     .map((s) => s.trim().toUpperCase())
