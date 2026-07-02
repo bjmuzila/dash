@@ -626,12 +626,18 @@ export default function EsCandlesPage() {
           borderColor: "rgba(255,255,255,.10)",
           timeVisible: true,
           secondsVisible: false,
+          // Axis tick labels in Eastern Time. tickMarkType 2/3 = day/month
+          // boundary → show the ET date; otherwise show ET HH:MM.
+          tickMarkFormatter: (t: unknown, tickMarkType: number) => {
+            if (typeof t !== "number") return "";
+            const d = new Date(t * 1000);
+            if (tickMarkType === 2 || tickMarkType === 3) {
+              return d.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+            }
+            return d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
+          },
         },
-        crosshair: {
-          mode: CrosshairMode.Normal,
-          vertLine: { visible: false, labelVisible: false },
-          horzLine: { visible: false, labelVisible: false },
-        },
+        crosshair: { mode: CrosshairMode.Normal },
         localization: {
           // Right axis carries ES only (clean). The SPX equivalent is shown as
           // a badge at the live price + on the crosshair label (see below).

@@ -1317,6 +1317,19 @@ function biasColor(b?: string): string {
   return T.muted;
 }
 
+// Strategy prices are always SPX cash (generator is SPX-only). Append an SPX tag
+// to a level/entry/stop/target value; blank/missing → em dash.
+function withSpx(v?: string | number | null): ReactNode {
+  const s = v == null ? "" : String(v).trim();
+  if (!s) return "—";
+  return (
+    <>
+      {s}
+      <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, opacity: 0.65, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
+    </>
+  );
+}
+
 // Colored section header for the Strategy Builder card.
 function SectionTitle({ children, color }: { children: ReactNode; color: string }) {
   return (
@@ -1414,10 +1427,18 @@ function StrategyBuilderCard() {
               ) : (
                 plan!.levels!.map((lv, i) => (
                   <div key={i} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6, display: "flex", flexDirection: "column", gap: 2 }}>
-                    <Row>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>{lv.label ?? "—"}</span>
-                      <Value size={15} color={T.text}>{lv.price != null ? String(lv.price) : "—"}</Value>
-                    </Row>
+                      {lv.price != null && String(lv.price) !== "" && (
+                        <>
+                          <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
+                          <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: T.text }}>
+                            {String(lv.price)}
+                            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, opacity: 0.65, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
+                          </span>
+                        </>
+                      )}
+                    </div>
                     {lv.note && <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.45 }}>{lv.note}</span>}
                   </div>
                 ))
@@ -1435,9 +1456,9 @@ function StrategyBuilderCard() {
                     </span>
                   </Row>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                    <Stat label="Entry" value={plan!.idea.entry ?? "—"} size={16} />
-                    <Stat label="Stop" value={plan!.idea.stop ?? "—"} color={T.red} size={16} />
-                    <Stat label="Target" value={plan!.idea.target ?? "—"} color={POS_GREEN} size={16} />
+                    <Stat label="Entry" value={withSpx(plan!.idea.entry)} size={16} />
+                    <Stat label="Stop" value={withSpx(plan!.idea.stop)} color={T.red} size={16} />
+                    <Stat label="Target" value={withSpx(plan!.idea.target)} color={POS_GREEN} size={16} />
                   </div>
                   {plan!.idea.rationale && (
                     <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.5 }}>{plan!.idea.rationale}</span>

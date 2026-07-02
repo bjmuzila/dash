@@ -60,11 +60,11 @@ const volOnlyNet = (r) => Number(r.netVolGEX ?? 0);
 const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
 // Strikes to keep each side of spot per ticker (28 total at 14). Caps Theta work.
 const STRIKES_EACH_SIDE = Number(process.env.STRIKE_GROWTH_STRIKES_SIDE || 14);
-// How many front expiries to snapshot per ticker. 14 = the full options-chain
-// matrix so every column gets 15/30/60 change. THIS IS THE LOAD MULTIPLIER:
-// each expiry = a full greeks/OI/vol fetch from Theta, so 14 ≈ 14× the calls of
-// the original front-expiry-only recorder. Dial DOWN via env if Theta OOMs.
-const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 14);
+// How many front expiries to snapshot per ticker. 1 = nearest expiration only —
+// keeps Theta load minimal across the full ~380-name EM roster. THIS IS THE LOAD
+// MULTIPLIER: each expiry = a full greeks/OI/vol fetch, so N ≈ N× the calls.
+// Raise via env (e.g. 14 for the full chain matrix) if load headroom allows.
+const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 1);
 // Delay between expiry fetches within one ticker (ms) — extra pacing for Theta.
 const EXPIRY_DELAY_MS = Number(process.env.STRIKE_GROWTH_EXPIRY_DELAY_MS || 150);
 // Delay between tickers in a sweep (ms) — paces the standalone theta-terminal.
@@ -175,12 +175,10 @@ async function ensureSchema() {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
                  ON strike_growth (date, symbol, expiry, strike, ts DESC);`);
 
-  // Seed watchlist once from the EM roster. Index/ETF core defaults ACTIVE; the
-  // long tail is seeded inactive so the 30m sweep stays bounded until the user
-  // toggles names on from the page. (Per "all EM, slow cadence" we still allow
-  // the whole list, but seeding the tail inactive avoids a cold-start stampede.)
-  const seedActive = new Set(['SPY', 'QQQ', 'IWM', 'SPX', 'NDX', 'NVDA', 'TSLA',
-    'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'AMD', 'PLTR', 'NFLX']);
+  // Seed watchlist once from the full EM roster (~380 names). All seed ACTIVE so
+  // a fresh DB/redeploy records the entire EM list from the start — the roster is
+  // bounded (SPECIAL_TICKERS + EQUITY_TICKERS, well under MAX_ACTIVE). Pacing
+  // (TICKER_DELAY_MS) + theta-terminal heap are the load levers, not the count.
   const roster = [...new Set([...SPECIAL_TICKERS, ...EQUITY_TICKERS])]
     .filter(Boolean).map((s) => String(s).toUpperCase());
   // Bulk insert, do nothing on conflict so user edits are never clobbered.
@@ -188,12 +186,12 @@ async function ensureSchema() {
   for (const sym of roster) {
     await p.query(
       `INSERT INTO strike_growth_watchlist (symbol, active, sort_idx)
-       VALUES ($1, $2, $3) ON CONFLICT (symbol) DO NOTHING`,
-      [sym, seedActive.has(sym), idx++]
+       VALUES ($1, TRUE, $2) ON CONFLICT (symbol) DO NOTHING`,
+      [sym, idx++]
     );
   }
   _schemaReady = true;
-  console.log(`[strike-growth] schema ready — watchlist seeded (${roster.length} symbols, ${seedActive.size} active by default)`);
+  console.log(`[strike-growth] schema ready — watchlist seeded (${roster.length} symbols, all active)`);
   return true;
 }
 

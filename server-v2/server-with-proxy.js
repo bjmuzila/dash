@@ -720,6 +720,13 @@ async function main() {
               if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
               const p = getPool();
               const j = JSON.parse(body || '{}');
+              // Bulk activate every seeded EM ticker so the whole roster is recorded.
+              //   { activateAll:true }  → set active=TRUE on all rows
+              if (j.activateAll) {
+                const r = await p.query(`UPDATE strike_growth_watchlist SET active = TRUE WHERE active = FALSE`);
+                sendJson(res, 200, { ok: true, activated: r.rowCount });
+                return;
+              }
               const symbol = String(j.symbol || '').toUpperCase().trim();
               if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
               if (j.remove) {

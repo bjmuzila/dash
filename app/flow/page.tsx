@@ -355,9 +355,14 @@ export default function FlowPage() {
     callSeriesRef.current?.setData(netSeries.callPts);
     putSeriesRef.current?.setData(netSeries.putPts);
     volSeriesRef.current?.setData(netSeries.volPts);
-    // All 9:30–4:00 bins are present (values up to now, whitespace after), so
-    // fitContent shows the whole session proportionally, full width.
-    chartRef.current?.timeScale().fitContent();
+    // Pin the axis to the exact 9:30–4:00 window (fitContent trims trailing
+    // whitespace and re-scrolls, floating the data to the right).
+    try {
+      chartRef.current?.timeScale().setVisibleRange({
+        from: netSeries.openSec as UTCTimestamp,
+        to: netSeries.closeSec as UTCTimestamp,
+      });
+    } catch {}
   }, [netSeries]);
 
   // ── Summary of the filtered tape. ──
