@@ -295,6 +295,17 @@ function TickerPanel({
     ? computeTotals(strikes, liveData, spot, contractMode)
     : null;
 
+  // Highest |GEX| strike on each side of spot → 📍 pin (possible pin/explosive level).
+  let pinAbove: number | null = null, pinBelow: number | null = null;
+  if (computed) {
+    let aAbs = 0, bAbs = 0;
+    computed.rows.forEach(r => {
+      const a = Math.abs(r.gex);
+      if (r.strike > computed.atmStrike && a > aAbs) { aAbs = a; pinAbove = r.strike; }
+      else if (r.strike < computed.atmStrike && a > bAbs) { bAbs = a; pinBelow = r.strike; }
+    });
+  }
+
   // Auto-scroll to ATM
   useEffect(() => {
     if (!bodyRef.current || !computed?.atmStrike || userScrolledRef.current) return;
@@ -401,6 +412,9 @@ function TickerPanel({
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: r.isATM ? "rgba(255,179,0,.12)" : "transparent",
               }}>
+                {(r.strike === pinAbove || r.strike === pinBelow) && (
+                  <span title="Possible pin or explosive level" style={{ fontSize: 10, cursor: "help", lineHeight: 1, marginRight: 2 }}>📍</span>
+                )}
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>
               {NET_COLS.map(c => {

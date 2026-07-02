@@ -849,6 +849,22 @@ export default function OptionsChainPage() {
     });
   }, [columns, visibleStrikes]);
 
+  // Highest |GEX| strike on each side of spot (front expiry) → 📍 pin marker.
+  const pinStrikes = useMemo(() => {
+    const front = columns[0];
+    if (!front || !nearestStrike) return { above: null as number | null, below: null as number | null };
+    let above: number | null = null, aAbs = 0, below: number | null = null, bAbs = 0;
+    visibleStrikes.forEach(s => {
+      if (s == null) return;
+      const g = front.cells.get(s)?.gex;
+      if (g == null) return;
+      const a = Math.abs(g);
+      if (s > nearestStrike && a > aAbs) { aAbs = a; above = s; }
+      else if (s < nearestStrike && a > bAbs) { bAbs = a; below = s; }
+    });
+    return { above, below };
+  }, [columns, visibleStrikes, nearestStrike]);
+
   // Weekly EM for the active ticker (DB-backed via /api/levels). Refetched on
   // ticker change and on each manual refresh so the bands track intraday EM.
   useEffect(() => {
@@ -1223,6 +1239,9 @@ export default function OptionsChainPage() {
                         background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
                         color: isATM ? "#0a0e14" : "#ffffff",
                       }}>{emTag}</span>
+                    )}
+                    {(strike === pinStrikes.above || strike === pinStrikes.below) && (
+                      <span title="Possible pin or explosive level" style={{ fontSize: 10, cursor: "help", lineHeight: 1 }}>📍</span>
                     )}
                     {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
                   </div>

@@ -165,6 +165,9 @@ export default function GexHeatmap({
     : null;
   const rankAbove = rankSide(aboveATM);
   const rankBelow = rankSide(belowATM);
+  // Highest |NET GEX| strike on each side of spot → 📍 pin (possible pin/explosive level).
+  const pinAbove = aboveATM.length ? aboveATM.reduce((b, r) => (Math.abs(r.netGEX) > Math.abs(b.netGEX) ? r : b)).strike : null;
+  const pinBelow = belowATM.length ? belowATM.reduce((b, r) => (Math.abs(r.netGEX) > Math.abs(b.netGEX) ? r : b)).strike : null;
   const rankColors: Record<number, string> = { 1: "#ffd700", 2: "#c0c0c0", 3: "#cd7f32", 4: "#4a7a99", 5: "#3a5570" };
 
   useEffect(() => {
@@ -264,6 +267,9 @@ export default function GexHeatmap({
                   <span style={{ fontSize: 8, fontWeight: 800, color: rankColors[rank], background: `${rankColors[rank]}22`, padding: "0 3px", borderRadius: 2, border: `1px solid ${rankColors[rank]}44` }}>
                     #{rank}
                   </span>
+                )}
+                {(row.strike === pinAbove || row.strike === pinBelow) && (
+                  <span title="Possible pin or explosive level" style={{ fontSize: 10, cursor: "help", lineHeight: 1 }}>📍</span>
                 )}
               </div>
 
