@@ -105,12 +105,14 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
             <div style={{ fontSize: 9, color: C.pos, letterSpacing: "0.08em", marginBottom: 3 }}>CALL</div>
             <InputRow label="gamma" value={fmtRaw(row.callGamma)} />
             <InputRow label="OI" value={fmtRaw(row.callOI)} />
+            <InputRow label="volume" value={fmtRaw(row.callVolume)} />
             <InputRow label="callGEX = |γ|·OI·S²" value={fmtGex(row.callGEX)} strong />
           </div>
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
             <div style={{ fontSize: 9, color: C.neg, letterSpacing: "0.08em", marginBottom: 3 }}>PUT</div>
             <InputRow label="gamma" value={fmtRaw(row.putGamma)} />
             <InputRow label="OI" value={fmtRaw(row.putOI)} />
+            <InputRow label="volume" value={fmtRaw(row.putVolume)} />
             <InputRow label="putGEX = −|γ|·OI·S²" value={fmtGex(row.putGEX)} strong />
           </div>
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>

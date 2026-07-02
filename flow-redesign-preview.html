@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Options Flow — Net Premium (Design Preview)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:#05060A; --panel:#0D1119; --cyan:#219EBC; --purple:#126783;
+    --orange:#FB8501; --green:#8ECAE6; --red:#EF4444; --text:#FFFFFF;
+    --muted:rgba(255,255,255,0.55); --border:rgba(255,255,255,0.10);
+    --panelBg:rgba(13,17,25,0.55); --buy:#22c55e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg);
+    background-image:radial-gradient(circle at 15% 50%, rgba(33,158,188,0.05) 0%, transparent 50%),
+                     radial-gradient(circle at 85% 30%, rgba(18,103,131,0.06) 0%, transparent 50%);
+    color:var(--text); font-family:'Inter','Helvetica Neue',Arial,sans-serif;
+    padding:20px; min-height:100vh;
+  }
+  .card {
+    background:radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), var(--panelBg);
+    border:1px solid var(--border); border-radius:16px; margin-bottom:20px;
+    backdrop-filter:blur(16px); overflow:hidden;
+  }
+  .card.cyan { border-top:2px solid rgba(33,158,188,0.5); }
+  .card.orange { border-top:2px solid rgba(251,133,1,0.5); }
+  .card.purple { border-top:2px solid rgba(18,103,131,0.6); }
+  .card-head { padding:16px 20px; border-bottom:1px solid var(--border); }
+  .card-head h2 { margin:0; font-size:14px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+  .card-head p { margin:4px 0 0; font-size:12px; color:var(--muted); }
+  .card-body { padding:18px 20px; }
+  label.lbl { font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--green); margin-bottom:4px; display:block; }
+  .chip {
+    padding:6px 12px; font-size:11px; font-weight:700; letter-spacing:.04em; border-radius:6px;
+    border:1px solid var(--border); background:rgba(0,0,0,0.4); color:var(--text); cursor:pointer;
+  }
+  .chip.active { background:var(--cyan); border-color:var(--cyan); color:var(--bg); }
+  input, select {
+    font-size:13px; padding:8px 12px; border:1px solid var(--border); border-radius:6px;
+    background:rgba(0,0,0,0.4); color:var(--text); outline:none;
+  }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
+  .seg { display:flex; border:1px solid var(--border); border-radius:6px; background:rgba(0,0,0,0.4); overflow:hidden; }
+  .seg button { flex:1; padding:8px 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; border:none; background:transparent; color:var(--muted); cursor:pointer; }
+  .seg button.active { background:var(--cyan); color:var(--bg); }
+  /* net-premium chart header */
+  .np-tabs { display:flex; gap:2px; padding:0 20px; overflow-x:auto; border-bottom:1px solid var(--border); }
+  .np-tab { padding:12px 16px; font-size:13px; font-weight:700; color:var(--muted); border:none; background:transparent; cursor:pointer; white-space:nowrap; border-bottom:2px solid transparent; }
+  .np-tab.active { color:var(--text); border-bottom-color:var(--cyan); }
+  .np-tab .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--buy); margin-right:6px; }
+  .np-legend { display:flex; gap:22px; justify-content:center; padding:12px; font-size:13px; font-weight:700; }
+  .np-legend .k { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  /* tape */
+  .tape-head, .tape-row { display:grid; grid-template-columns:78px 56px 1fr 90px 60px 80px 100px 90px; gap:8px; padding:8px 20px; align-items:center; }
+  .tape-head { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--border); }
+  .tape-row { font-size:14px; font-family:monospace; border-bottom:1px solid var(--border); }
+  .r { text-align:right; } .c { text-align:center; }
+  .status { font-size:11px; font-family:monospace; padding:2px 10px; border-radius:4px; background:rgba(33,158,188,0.12); color:var(--cyan); }
+  .summary { display:flex; gap:22px; align-items:baseline; flex-wrap:wrap; font-size:12px; color:var(--muted); }
+  .summary strong { color:var(--text); }
+</style>
+</head>
+<body>
+
+<h1 style="font-size:18px;font-weight:800;letter-spacing:.04em;margin:0 0 4px;">Options Flow — Net Premium by Ticker</h1>
+<p style="color:var(--muted);font-size:12px;margin:0 0 20px;">Local design preview · net-drift chart + watchlist filters + raw stream · sample data</p>
+
+<!-- ── Filters ── -->
+<div class="card cyan">
+  <div class="card-head"><h2>Filters</h2><p>Pick a watched ticker or add one. Filters apply to the chart + stream.</p></div>
+  <div class="card-body">
+    <label class="lbl">Watchlist <span id="wlcount" style="color:var(--muted)"></span></label>
+    <div id="tickerBar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:18px;">
+      <input id="addTicker" placeholder="+ add ticker" style="width:120px;" />
+    </div>
+    <div class="grid">
+      <div><label class="lbl">Side</label><div class="seg" id="segSide">
+        <button data-v="all" class="active">All</button><button data-v="buy">Buy</button><button data-v="sell">Sell</button></div></div>
+      <div><label class="lbl">Type</label><div class="seg" id="segType">
+        <button data-v="all" class="active">All</button><button data-v="C">Call</button><button data-v="P">Put</button></div></div>
+      <div style="grid-column:span 2"><label class="lbl">Min Premium <span id="thVal" style="color:var(--cyan)">$50K</span></label>
+        <input id="premSlider" type="range" min="0" max="1000000" step="10000" value="50000" style="width:100%;padding:0;background:transparent" /></div>
+      <div><label class="lbl">Min Size</label><input type="number" placeholder="100" value="100" /></div>
+      <div><label class="lbl">Expiry</label><select><option>All</option><option>2026-07-01</option><option>2026-07-03</option><option>2026-07-18</option></select></div>
+      <div><label class="lbl">Moneyness</label><div class="seg"><button class="active">All</button><button>OTM</button></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Net Premium chart ── -->
+<div class="card orange">
+  <div class="np-tabs" id="npTabs"></div>
+  <div style="padding:16px 20px 8px;text-align:center;">
+    <div style="font-size:15px;font-weight:800;">Net Drift (Premium) — <span id="npTitle">META</span></div>
+  </div>
+  <div class="np-legend">
+    <span style="color:var(--buy);"><span class="k" style="background:var(--buy)"></span>Calls <span id="lgCall">$15.96M</span></span>
+    <span style="color:var(--red);"><span class="k" style="background:var(--red)"></span>Puts <span id="lgPut">-$1.52M</span></span>
+    <span style="color:var(--cyan);"><span class="k" style="background:var(--cyan)"></span><span id="lgSym">META</span> <span id="lgPx">$604.70</span></span>
+  </div>
+  <div style="padding:0 16px 8px;"><canvas id="npChart" height="120"></canvas></div>
+  <div style="padding:0 16px 16px;"><canvas id="npVol" height="46"></canvas></div>
+  <!-- Net Premium split bar (macro call/put positioning) -->
+  <div style="padding:0 20px 18px;">
+    <label class="lbl">Net Premium Split (Calls vs Puts)</label>
+    <div style="display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--border);font-size:11px;font-weight:800;">
+      <div id="barCall" style="background:var(--buy);color:#05060A;display:flex;align-items:center;justify-content:flex-start;padding:0 8px;"></div>
+      <div id="barPut" style="background:var(--red);color:#fff;display:flex;align-items:center;justify-content:flex-end;padding:0 8px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Raw stream ── -->
+<div class="card purple">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+    <div class="summary">
+      <span style="font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--text);">Flow Tape</span>
+      <span><strong id="sCount">—</strong> orders</span>
+      <span>Total <strong id="sTot">—</strong></span>
+      <span>Calls <strong id="sCall" style="color:var(--buy)">—</strong></span>
+      <span>Puts <strong id="sPut" style="color:var(--red)">—</strong></span>
+    </div>
+    <span class="status">LIVE</span>
+  </div>
+  <div class="tape-head">
+    <span>Time</span><span>Side</span><span>Underlying</span><span class="r">Strike</span><span class="c">Type</span><span class="r">Size</span><span class="r">Premium</span><span class="r">Expiry</span>
+  </div>
+  <div id="tape" style="max-height:420px;overflow:auto;"></div>
+</div>
+
+<script>
+const C = { cyan:'#219EBC', buy:'#22c55e', red:'#EF4444', muted:'rgba(255,255,255,0.55)', border:'rgba(255,255,255,0.10)' };
+const TICKERS = ['META','TSLA','AMZN','SPY','AAPL','NVDA','QQQ','SPX'];
+let active = 'META';
+
+// ---- sample per-ticker series (9:30–9:52, 1-min) ----
+const LABELS = Array.from({length:23}, (_,i)=>{const m=30+i;return `9:${m<10?'0'+m:m}`;});
+function seed(n){let s=n;return ()=> (s=(s*9301+49297)%233280)/233280;}
+function genTicker(base){
+  const r=seed(base.length*7+base.charCodeAt(0));
+  let call=0,put=0,px=base==='META'?597:base==='TSLA'?250:base==='SPY'?560:base==='SPX'?7500:180;
+  const calls=[],puts=[],price=[],vol=[];
+  for(let i=0;i<23;i++){
+    call+=(r()*3-0.6)*1e6; put+=(r()*0.6-0.4)*1e6;
+    px+=(r()*3-1.4); calls.push(call); puts.push(put); price.push(px);
+    vol.push(2000+r()*13000);
+  }
+  return {calls,puts,price,vol};
+}
+const DATA = Object.fromEntries(TICKERS.map(t=>[t,genTicker(t)]));
+
+// ---- ticker chips ----
+const bar = document.getElementById('tickerBar');
+const add = document.getElementById('addTicker');
+function renderChips(){
+  [...bar.querySelectorAll('.chip')].forEach(c=>c.remove());
+  TICKERS.forEach(t=>{
+    const b=document.createElement('button');
+    b.className='chip'+(t===active?' active':''); b.textContent=t;
+    b.onclick=()=>{active=t;draw();renderChips();renderTabs();};
+    bar.insertBefore(b, add);
+  });
+  document.getElementById('wlcount').textContent='('+TICKERS.length+')';
+}
+add.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&add.value.trim()){
+    const t=add.value.trim().toUpperCase();
+    if(!TICKERS.includes(t)){TICKERS.push(t);DATA[t]=genTicker(t);}
+    active=t;add.value='';renderChips();renderTabs();draw();
+  }
+});
+// ---- browser-tab strip (like screenshot) ----
+const tabs=document.getElementById('npTabs');
+function renderTabs(){
+  tabs.innerHTML='';
+  TICKERS.slice(0,6).forEach(t=>{
+    const b=document.createElement('button');
+    b.className='np-tab'+(t===active?' active':'');
+    b.innerHTML='<span class="dot"></span>'+t+' Net Drift';
+    b.onclick=()=>{active=t;draw();renderChips();renderTabs();};
+    tabs.appendChild(b);
+  });
+}
+
+// ---- charts ----
+let npChart, npVol;
+function fmt(v){const a=Math.abs(v);return (v<0?'-':'')+'$'+(a>=1e6?(a/1e6).toFixed(2)+'M':(a/1e3).toFixed(1)+'K');}
+function draw(){
+  const d=DATA[active];
+  document.getElementById('npTitle').textContent=active;
+  document.getElementById('lgSym').textContent=active;
+  document.getElementById('lgCall').textContent=fmt(d.calls.at(-1));
+  document.getElementById('lgPut').textContent=fmt(d.puts.at(-1));
+  document.getElementById('lgPx').textContent='$'+d.price.at(-1).toFixed(2);
+  // net premium split bar
+  const cAbs=Math.abs(d.calls.at(-1)), pAbs=Math.abs(d.puts.at(-1)), tot=cAbs+pAbs||1;
+  document.getElementById('barCall').style.width=(cAbs/tot*100)+'%';
+  document.getElementById('barPut').style.width=(pAbs/tot*100)+'%';
+  document.getElementById('barCall').textContent='C '+fmt(cAbs);
+  document.getElementById('barPut').textContent=fmt(pAbs)+' P';
+  const ds=[
+    {label:'Calls',data:d.calls,borderColor:C.buy,backgroundColor:'transparent',yAxisID:'y',tension:.35,pointRadius:0,borderWidth:2},
+    {label:'Puts',data:d.puts,borderColor:C.red,backgroundColor:'transparent',yAxisID:'y',tension:.35,pointRadius:0,borderWidth:2},
+    {label:active,data:d.price,borderColor:C.cyan,backgroundColor:'transparent',yAxisID:'y1',tension:.35,pointRadius:0,borderWidth:2},
+  ];
+  const grid={color:C.border}, tick={color:C.muted,font:{size:10}};
+  if(!npChart){
+    npChart=new Chart(document.getElementById('npChart'),{type:'line',data:{labels:LABELS,datasets:ds},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{x:{grid,ticks:tick},
+          y:{position:'left',grid,ticks:{...tick,callback:v=>fmt(v)}},
+          y1:{position:'right',grid:{drawOnChartArea:false},ticks:{...tick,callback:v=>'$'+v.toFixed(0)}}}}});
+  } else { npChart.data.labels=LABELS; npChart.data.datasets=ds; npChart.update(); }
+  const vds=[{label:'Vol',data:d.vol,borderColor:C.buy,backgroundColor:'rgba(34,197,94,0.25)',fill:true,tension:.35,pointRadius:0,borderWidth:1.5}];
+  if(!npVol){
+    npVol=new Chart(document.getElementById('npVol'),{type:'line',data:{labels:LABELS,datasets:vds},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{x:{display:false},y:{grid,ticks:{...tick,callback:v=>(v/1000).toFixed(0)+'K'}}}}});
+  } else { npVol.data.datasets=vds; npVol.update(); }
+  renderTape();
+}
+
+// ---- raw stream ----
+let THRESH=50000;
+// Pre-generate a deterministic tape per ticker (OTM 0DTE prints), filter by THRESH on render.
+function buildOrders(t){
+  const d=DATA[t], r=seed(t.charCodeAt(0)*3), out=[];
+  const px=d.price.at(-1), strikeBase=Math.round(px/5)*5;
+  for(let i=0;i<60;i++){
+    const buy=r()>0.4, call=r()>0.45;
+    // OTM only: call strikes above spot, put strikes below (matches logic §5)
+    const off=Math.round(r()*18+1)*5;
+    const strike=call?strikeBase+off:strikeBase-off;
+    const size=Math.round(r()*900+100);        // >=100 (size filter)
+    const prem=size*Math.round(r()*400+50)*1;   // notional-ish
+    out.push({buy,call,strike,size,prem,
+      t:`9:${(52-Math.floor(i/3))<10?'0':''}${52-Math.floor(i/3)}:${(59-(i*7)%60)}`});
+  }
+  return out;
+}
+const ORDERS=Object.fromEntries(TICKERS.map(t=>[t,buildOrders(t)]));
+function renderTape(){
+  if(!ORDERS[active])ORDERS[active]=buildOrders(active);
+  const tape=document.getElementById('tape'); tape.innerHTML='';
+  let cP=0,pP=0,n=0;
+  ORDERS[active].filter(o=>o.prem>=THRESH).forEach(o=>{
+    n++; if(o.call)cP+=o.prem;else pP+=o.prem;
+    const col=o.buy?C.buy:C.red;
+    const row=document.createElement('div'); row.className='tape-row';
+    row.innerHTML=`<span style="color:${C.muted}">${o.t}</span>
+      <span style="color:${col};font-weight:700">${o.buy?'BUY':'SELL'}</span>
+      <span>${active}</span>
+      <span class="r">${o.strike.toLocaleString()}</span>
+      <span class="c" style="color:${col};font-weight:700">${o.call?'C':'P'}</span>
+      <span class="r">${o.size}</span>
+      <span class="r" style="color:${col};font-weight:700">${fmt(o.prem)}</span>
+      <span class="r" style="color:${C.muted}">07-01</span>`;
+    tape.appendChild(row);
+  });
+  document.getElementById('sCount').textContent=n;
+  document.getElementById('sTot').textContent=fmt(cP+pP);
+  document.getElementById('sCall').textContent=fmt(cP);
+  document.getElementById('sPut').textContent=fmt(pP);
+}
+// slider → threshold → live re-filter (logic §7 Component 2)
+document.getElementById('premSlider').addEventListener('input',e=>{
+  THRESH=Number(e.target.value);
+  document.getElementById('thVal').textContent=THRESH===0?'Any':fmt(THRESH);
+  renderTape();
+});
+
+// segmented toggles (visual only)
+document.querySelectorAll('.seg').forEach(s=>s.addEventListener('click',e=>{
+  if(e.target.tagName==='BUTTON'){s.querySelectorAll('button').forEach(b=>b.classList.remove('active'));e.target.classList.add('active');}
+}));
+
+renderChips(); renderTabs(); draw();
+</script>
+</body>
+</html>
