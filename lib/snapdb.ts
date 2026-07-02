@@ -376,17 +376,29 @@ function normalizeCandle(r: EsCandleRecord): EsCandleRecord {
   };
 }
 
+// Short-TTL in-flight dedupe: concurrent hook mounts (e.g. two useEsCandles on
+// one page) share a single network request instead of each re-fetching the same
+// candle payload. TTL keeps this load-time-only; live bars still stream /ws/gex.
+const _candleCache = new Map<string, { at: number; p: Promise<EsCandleRecord[]> }>();
+const _CANDLE_TTL = 5000;
+function _dedupeCandles(url: string): Promise<EsCandleRecord[]> {
+  const hit = _candleCache.get(url);
+  if (hit && Date.now() - hit.at < _CANDLE_TTL) return hit.p;
+  const p = fetch(url)
+    .then((res) => res.json())
+    .then((json) => ((json.rows ?? []) as EsCandleRecord[]).map(normalizeCandle))
+    .catch((e) => { _candleCache.delete(url); throw e; });
+  _candleCache.set(url, { at: Date.now(), p });
+  return p;
+}
+
 export async function queryEsCandlesToday(): Promise<EsCandleRecord[]> {
   const today = etDateStr();
-  const res   = await fetch(`/api/snapshots/candles?date=${today}&limit=2000`);
-  const json  = await res.json();
-  return ((json.rows ?? []) as EsCandleRecord[]).map(normalizeCandle);
+  return _dedupeCandles(`/api/snapshots/candles?date=${today}&limit=2000`);
 }
 
 export async function queryEsCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
-  const res  = await fetch(`/api/snapshots/candles?daysBack=${daysBack}&limit=10000`);
-  const json = await res.json();
-  return ((json.rows ?? []) as EsCandleRecord[]).map(normalizeCandle);
+  return _dedupeCandles(`/api/snapshots/candles?daysBack=${daysBack}&limit=10000`);
 }
 
 // ── IB Levels (locked Initial Balance per day) ──────────────────────────────────

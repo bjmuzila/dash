@@ -394,9 +394,13 @@ let _timer = null;
 // minute is a multiple of SWEEP_MINS and we're inside RTH, de-duped per minute.
 let _lastSweepKey = null;
 let _lastHotKey = null;
-// Mutex: only ONE sweep (full or hot) may hit Theta at a time. The full-roster
-// sweep can run long, so the hot lane skips rather than piling on if busy.
-let _sweeping = false;
+// SEPARATE guards so the fast lane isn't starved by a long full sweep. The full
+// roster (~400 names) can take ~10 min; if the hot lane shared one mutex it would
+// almost never fire. Each guard only blocks a second sweep OF THE SAME KIND, so
+// a 15-name hot sweep can run concurrently with the full sweep — at most 2 paced
+// Theta requests overlap, well under the burst that OOMs theta-terminal.
+let _fullSweeping = false;
+let _hotSweeping = false;
 
 function startStrikeGrowthRecorder(_port) {
   console.log(`[strike-growth] enabled — ${SWEEP_MINS}m full sweeps + ${HOT_MINS}m hot-lane during RTH, ${STRIKES_EACH_SIDE}±strikes/ticker, ${TICKER_DELAY_MS}ms/ticker pacing`);
@@ -404,27 +408,27 @@ function startStrikeGrowthRecorder(_port) {
     if (!isRthWindow()) return;
     const { hour, minute } = etParts();
 
-    // Fast lane: hot list every HOT_MINS. Skips if a sweep is already running.
+    // Fast lane: hot list every HOT_MINS. Independent of the full sweep.
     if (minute % HOT_MINS === 0) {
       const hotKey = `${etDateStr()} ${hour}:${minute}`;
-      if (hotKey !== _lastHotKey && !_sweeping) {
+      if (hotKey !== _lastHotKey && !_hotSweeping) {
         _lastHotKey = hotKey;
-        _sweeping = true;
-        try { await runSweep({ onlyHot: true }); }
-        catch (e) { console.warn('[strike-growth] hot sweep error:', e.message); }
-        finally { _sweeping = false; }
+        _hotSweeping = true;
+        runSweep({ onlyHot: true })
+          .catch((e) => console.warn('[strike-growth] hot sweep error:', e.message))
+          .finally(() => { _hotSweeping = false; });
       }
     }
 
     // Full roster every SWEEP_MINS.
     if (minute % SWEEP_MINS === 0) {
       const key = `${etDateStr()} ${hour}:${minute}`;
-      if (key !== _lastSweepKey && !_sweeping) {
+      if (key !== _lastSweepKey && !_fullSweeping) {
         _lastSweepKey = key;
-        _sweeping = true;
-        try { await runSweep(); }
-        catch (e) { console.warn('[strike-growth] sweep error:', e.message); }
-        finally { _sweeping = false; }
+        _fullSweeping = true;
+        runSweep()
+          .catch((e) => console.warn('[strike-growth] sweep error:', e.message))
+          .finally(() => { _fullSweeping = false; });
       }
     }
   };
