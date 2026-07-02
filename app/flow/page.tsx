@@ -40,6 +40,13 @@ function fmtPremium(val: number): string {
   return `${sign}$${a.toFixed(0)}`;
 }
 
+// Directional read of an order: bullish = buy calls / sell puts,
+// bearish = sell calls / buy puts.
+function isBullish(side: string, type: string): boolean {
+  const buy = side === "buy", call = type === "C";
+  return (buy && call) || (!buy && !call);
+}
+
 function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -364,10 +371,12 @@ export default function FlowPage() {
       const MAX_ROWS = 8;
       const rows = orders.slice(0, MAX_ROWS).map((o) => {
         const buy = o.side === "buy";
-        const col = buy ? BULLISH : BEARISH;
-        const tint = buy ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)";
+        const bull = isBullish(o.side, o.type);
+        const col = bull ? BULLISH : BEARISH;
+        const tint = bull ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)";
         return (
           `<div style="display:flex;align-items:center;gap:8px;border-left:3px solid ${col};background:${tint};border-radius:0 6px 6px 0;padding:5px 8px">` +
+          `<span style="color:${col};font-weight:700;width:12px;text-align:center">${bull ? "▲" : "▼"}</span>` +
           `<span style="color:${col};font-weight:700;width:32px">${buy ? "BUY" : "SELL"}</span>` +
           `<span style="color:#fff;flex:1">${o.strike.toLocaleString()}${o.type} ×${o.size.toLocaleString()}</span>` +
           `<span style="color:${col}">${fmtPremium(o.premium)}</span>` +
@@ -466,7 +475,7 @@ export default function FlowPage() {
     };
   }
 
-  const GRID = "78px 56px 90px 80px 90px 100px 90px";
+  const GRID = "78px 56px 90px 80px 90px 100px 90px 74px";
 
   return (
     <PageShell className="no-card-lift">
@@ -598,22 +607,39 @@ export default function FlowPage() {
             {status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
           </p>
         )}
-        {/* Premium split — four cards: buy/sell × call/put */}
+        {/* Premium split — four cards: buy/sell × call/put, colored & heat-barred
+            by directional bias (buy calls / sell puts = bullish). */}
         <div style={{ padding: "6px 20px 20px" }}>
           <label style={labelStyle}>Premium Split (Filtered Tape)</label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            {([
-              { label: "BUY CALLS", value: totals.buyCall, color: BULLISH },
-              { label: "BUY PUTS", value: totals.buyPut, color: BEARISH },
-              { label: "SELL CALL", value: totals.sellCall, color: BULLISH },
-              { label: "SELL PUT", value: totals.sellPut, color: BEARISH },
-            ] as const).map((c) => (
-              <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
-                <span style={{ fontSize: 20, fontWeight: 800, color: c.color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
+          {(() => {
+            const cards = [
+              { label: "BUY CALLS", value: totals.buyCall, bull: true },
+              { label: "BUY PUTS", value: totals.buyPut, bull: false },
+              { label: "SELL CALL", value: totals.sellCall, bull: false },
+              { label: "SELL PUT", value: totals.sellPut, bull: true },
+            ];
+            const max = Math.max(1, ...cards.map((c) => c.value));
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                {cards.map((c) => {
+                  const color = c.bull ? BULLISH : BEARISH;
+                  const pct = Math.max(2, (c.value / max) * 100);
+                  return (
+                    <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
+                        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
+                      </div>
+                      <span style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
+                      <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </div>
       </Card>
 
@@ -640,6 +666,7 @@ export default function FlowPage() {
           <span style={{ textAlign: "right" }}>Size</span>
           <span style={{ textAlign: "right" }}>Premium</span>
           <span style={{ textAlign: "right" }}>Expiry</span>
+          <span style={{ textAlign: "center" }}>Bias</span>
         </div>
 
         <div>
@@ -650,6 +677,8 @@ export default function FlowPage() {
           ) : (
             filtered.map((o, i) => {
               const sideColor = o.side === "buy" ? BULLISH : BEARISH;
+              const bull = isBullish(o.side, o.type);
+              const biasColor = bull ? BULLISH : BEARISH;
               return (
                 <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center" }}>
                   <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
@@ -662,6 +691,9 @@ export default function FlowPage() {
                   </span>
                   <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
                   <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
+                  <span style={{ textAlign: "center", fontWeight: 800, fontSize: 11, color: biasColor }}>
+                    {bull ? "▲ BULL" : "▼ BEAR"}
+                  </span>
                 </div>
               );
             })

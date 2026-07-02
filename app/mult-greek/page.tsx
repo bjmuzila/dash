@@ -448,8 +448,14 @@ function TickerPanel({
                     )}
                     {c === "gex" && (r.strike === pinAbove || r.strike === pinBelow) && (
                       <span title="Possible pin or explosive level" style={{
-                        position: "absolute", top: 1, left: 2, fontSize: 11, lineHeight: 1, pointerEvents: "none",
-                      }}>📍</span>
+                        position: "absolute", top: 1, left: 2, lineHeight: 1, pointerEvents: "none",
+                        display: "inline-flex",
+                      }}>
+                        <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
+                          <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
+                          <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
+                        </svg>
+                      </span>
                     )}
                     <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                   </div>

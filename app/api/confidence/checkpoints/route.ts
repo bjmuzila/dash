@@ -139,12 +139,15 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // Closest SPX got to the strike within [checkpoint, windowEnd].
+        // Closest SPX got to the strike from the checkpoint to END OF DAY.
+        // A strike that becomes the CB is "in play" for the rest of the session:
+        // if price reaches it later (even after the CB migrates), that's a hit.
+        // `changed`/`windowEndMin` are kept for display only, not to truncate.
+        void windowEndMin;
         let closest: number | null = null;
         if (strike != null) {
           for (const t of timed) {
             if (t.min < cp.min - MATCH_WINDOW) continue;
-            if (windowEndMin != null && t.min > windowEndMin) continue;
             if (t.spx == null || t.spx <= 0) continue;
             const d = Math.abs(t.spx - strike);
             if (closest == null || d < closest) closest = d;

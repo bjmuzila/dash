@@ -1287,7 +1287,14 @@ export default function OptionsChainPage() {
                         }}
                       >
                         {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
-                        {isPin && <span title="Possible pin or explosive level" style={{ cursor: "help", marginRight: 3 }}>📍</span>}
+                        {isPin && (
+                          <span title="Possible pin or explosive level" style={{ cursor: "help", marginRight: 3, display: "inline-flex", verticalAlign: "middle" }}>
+                            <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
+                              <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
+                              <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
+                            </svg>
+                          </span>
+                        )}
                         {value == null ? "·" : fmtMoney(value)}
                       </div>
                     );
