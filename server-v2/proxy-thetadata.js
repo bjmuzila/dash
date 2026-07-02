@@ -496,15 +496,17 @@ class ThetaStreamClient {
   }
 
   /**
-   * Subscribe TRADE + QUOTE + GREEKS for one contract.
-   * GREEKS replaces the 5s REST poll (_refreshGreeksTheta) — the stream pushes
-   * gamma/delta/theta/vega/iv on every change so _recompute always has fresh data.
+   * Subscribe TRADE only for one contract.
+   * QUOTE + GREEKS pushes were dropped to cut JVM CPU: at ~700 contracts the
+   * per-change QUOTE/GREEKS firehose dominated. Greeks now come from the 5s
+   * bulk REST poll (_refreshGreeksTheta); inferSide falls back to the tick rule
+   * when the quote cache stays null.
    * @param {{root,expInt,strikeTenthCents,right}} c
    */
   subscribeContract(c, record = true) {
     if (record) this.subs.push(c);
     if (!this.connected) return; // will flush on open
-    for (const req_type of ['TRADE', 'QUOTE', 'GREEKS']) {
+    for (const req_type of ['TRADE']) {
       this._send({
         msg_type: 'STREAM',
         sec_type: 'OPTION',
@@ -543,7 +545,7 @@ class ThetaStreamClient {
       });
       this.subscribeContract({ root, expInt, strikeTenthCents, right });
     }
-    console.log(`[THETA-WS] subscribed ${contracts.length} contracts (TRADE+QUOTE) root=${root}`);
+    console.log(`[THETA-WS] subscribed ${contracts.length} contracts (TRADE only) root=${root}`);
   }
 
   /**

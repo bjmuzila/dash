@@ -58,7 +58,7 @@ const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
 // than a fixed point window. Default: 8% of spot.
 const STRIKE_WINDOW_PCT = Number(process.env.STRIKE_WINDOW_PCT || 0.08);
 const STRIKE_WINDOW = process.env.STRIKE_WINDOW ? Number(process.env.STRIKE_WINDOW) : null;
-const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 2000);
+const RECOMPUTE_MS = Number(process.env.RECOMPUTE_MS || 5000);
 // Off-hours recompute cadence — SPX options barely move, no need for 2s grind.
 const RECOMPUTE_MS_OFFHOURS = Number(process.env.RECOMPUTE_MS_OFFHOURS || 15000);
 // SPX/SPXW reopen for the next ~23h session at 6PM ET. At that boundary the prior
@@ -1667,13 +1667,25 @@ class TastytradeProxy {
     this.optSessionKey = this._sessionKey();
     this._scheduleSessionRoll();
 
-    // Theta greeks: streamed via FPSS GREEKS subscription (one push per change)
-    // instead of the old 5s REST poll. The REST poll (_refreshGreeksTheta) and its
-    // self-rescheduling timer are REMOVED — streaming is fresher and eliminates
-    // 12 REST calls/min during RTH. Seed once from REST on startup so _recompute
-    // has data before the first stream tick arrives (~1-2s after subscribe).
+    // Theta greeks: 5s bulk REST poll (_refreshGreeksTheta = one greeks/all
+    // snapshot per poll). The per-contract GREEKS stream was removed — at ~700
+    // contracts its per-change push firehose dominated JVM CPU. One bulk REST
+    // call every 5s is far cheaper and fully covers the SPX-single-symbol GEX.
+    // Seed once immediately so _recompute has data before the first poll.
     if (useTheta()) {
-      await this._refreshGreeksTheta().catch(() => {}); // one-time seed only
+      await this._refreshGreeksTheta().catch(() => {}); // immediate seed
+
+      // Self-rescheduling greeks REST poll (replaces the per-contract stream).
+      // 5s RTH / 60s off-hours (THETA_GREEKS_MS[_OFFHOURS]).
+      clearTimeout(this.greeksTimer);
+      const scheduleGreeks = () => {
+        const ms = isRthEt() ? THETA_GREEKS_MS : THETA_GREEKS_MS_OFFHOURS;
+        this.greeksTimer = setTimeout(async () => {
+          if (!this.idle && useTheta()) await this._refreshGreeksTheta().catch(() => {});
+          scheduleGreeks();
+        }, ms);
+      };
+      scheduleGreeks();
 
       // FPSS option Trade+Quote+Greeks stream. Trades → FlowProcessor (unchanged).
       // Greeks → this.greeks map directly, replacing the REST poll entirely.
