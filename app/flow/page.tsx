@@ -285,6 +285,7 @@ export default function FlowPage() {
   const volSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const binMapRef = useRef<Map<number, NetBin>>(new Map());
+  const ordersByMinRef = useRef<Map<number, FlowOrder[]>>(new Map());
 
   useEffect(() => {
     const host = chartHostRef.current;
@@ -354,10 +355,19 @@ export default function FlowPage() {
         return;
       }
       const et = new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" });
+      const orders = ordersByMinRef.current.get(t) ?? [];
+      const MAX_ROWS = 8;
+      const rows = orders.slice(0, MAX_ROWS).map((o) => {
+        const col = o.side === "buy" ? BULLISH : BEARISH;
+        const et2 = new Date(o.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        return `<div style="color:${col}">${et2}&nbsp;&nbsp;${o.side.toUpperCase()}&nbsp;${o.strike.toLocaleString()}${o.type}&nbsp;&nbsp;×${o.size.toLocaleString()}&nbsp;&nbsp;${fmtPremium(o.premium)}</div>`;
+      }).join("");
+      const more = orders.length > MAX_ROWS ? `<div style="color:rgba(255,255,255,.45);margin-top:2px">+${orders.length - MAX_ROWS} more…</div>` : "";
       tip.innerHTML =
         `<div style="color:rgba(255,255,255,.55);margin-bottom:2px">${et}</div>` +
         `<div style="color:${BULLISH}">Calls&nbsp;&nbsp;${bin.callVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.callNet)}</div>` +
-        `<div style="color:${BEARISH}">Puts&nbsp;&nbsp;&nbsp;${bin.putVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.putNet)}</div>`;
+        `<div style="color:${BEARISH}">Puts&nbsp;&nbsp;&nbsp;${bin.putVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.putNet)}</div>` +
+        (rows ? `<div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.12);font-size:11px">${rows}${more}</div>` : "");
       tip.style.display = "block";
       const hostW = host.clientWidth, tipW = tip.offsetWidth;
       let left = param.point.x + 16;
@@ -376,6 +386,16 @@ export default function FlowPage() {
   // Push data whenever the active-ticker series changes.
   useEffect(() => {
     binMapRef.current = netSeries.byBin;
+    // Index the visible tape by minute-bin so the chart hover can list the
+    // actual orders that printed in the crosshair minute (biggest first).
+    const idx = new Map<number, FlowOrder[]>();
+    for (const o of filtered) {
+      const minSec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC;
+      const arr = idx.get(minSec);
+      if (arr) arr.push(o); else idx.set(minSec, [o]);
+    }
+    for (const arr of idx.values()) arr.sort((a, b) => (b.premium || 0) - (a.premium || 0));
+    ordersByMinRef.current = idx;
     callSeriesRef.current?.setData(netSeries.callPts);
     putSeriesRef.current?.setData(netSeries.putPts);
     volSeriesRef.current?.setData(netSeries.volPts);
@@ -387,7 +407,7 @@ export default function FlowPage() {
         to: netSeries.closeSec as UTCTimestamp,
       });
     } catch {}
-  }, [netSeries]);
+  }, [netSeries, filtered]);
 
   // ── Summary of the filtered tape. ──
   const totals = useMemo(() => {

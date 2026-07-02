@@ -38,11 +38,14 @@ const MARKET_HOLIDAYS = new Set([
   '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
 ]);
 
+const { SCANNER_TICKERS: DEFAULT_SCANNER_TICKERS } = require('./scanner-tickers');
+
 function parseScannerTickers() {
-  return String(process.env.SCANNER_TICKERS || '')
-    .split(/[,\s]+/)
-    .map((s) => s.trim().toUpperCase())
-    .filter(Boolean);
+  const env = String(process.env.SCANNER_TICKERS || '').trim();
+  // Default to the curated scanner universe; env override still wins if set.
+  if (!env) return [...DEFAULT_SCANNER_TICKERS];
+  if (env.toUpperCase() === 'SCANNER') return [...DEFAULT_SCANNER_TICKERS];
+  return env.split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
 }
 
 // ── PG pool ──────────────────────────────────────────────────────────────────

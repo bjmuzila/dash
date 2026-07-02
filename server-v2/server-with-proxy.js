@@ -757,6 +757,11 @@ async function main() {
                   ORDER BY h.ts DESC LIMIT 1
                 ) b ON TRUE
                 WHERE sg.date = $1 AND sg.symbol <> ALL($2)
+                  -- Only the active (curated) universe — skips deactivated old-roster
+                  -- rows still present in today's table, which is what made this slow.
+                  AND sg.symbol IN (SELECT symbol FROM strike_growth_watchlist WHERE active = TRUE)
+                  -- Bound to recent history so the scan stays fast late in the session.
+                  AND sg.ts > (now() - INTERVAL '4 hours')
               ),
               stats AS (
                 SELECT symbol, expiry, strike,
