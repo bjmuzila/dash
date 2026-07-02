@@ -849,21 +849,23 @@ export default function OptionsChainPage() {
     });
   }, [columns, visibleStrikes]);
 
-  // Highest |GEX| strike on each side of spot (front expiry) → 📍 pin marker.
-  const pinStrikes = useMemo(() => {
-    const front = columns[0];
-    if (!front || !nearestStrike) return { above: null as number | null, below: null as number | null };
-    let above: number | null = null, aAbs = 0, below: number | null = null, bAbs = 0;
-    visibleStrikes.forEach(s => {
-      if (s == null) return;
-      const g = front.cells.get(s)?.gex;
-      if (g == null) return;
-      const a = Math.abs(g);
-      if (s > nearestStrike && a > aAbs) { aAbs = a; above = s; }
-      else if (s < nearestStrike && a > bAbs) { bAbs = a; below = s; }
+  // Per-expiration 📍 pins: the highest |active-greek| strike on each side of spot,
+  // for every column. Keyed colIdx → { above, below }.
+  const pinByCol = useMemo(() => {
+    return columns.map(col => {
+      if (!col || !nearestStrike) return { above: null as number | null, below: null as number | null };
+      let above: number | null = null, aAbs = 0, below: number | null = null, bAbs = 0;
+      visibleStrikes.forEach(s => {
+        if (s == null) return;
+        const v = valueAt(col, s);
+        if (v == null) return;
+        const a = Math.abs(v);
+        if (s > nearestStrike && a > aAbs) { aAbs = a; above = s; }
+        else if (s < nearestStrike && a > bAbs) { bAbs = a; below = s; }
+      });
+      return { above, below };
     });
-    return { above, below };
-  }, [columns, visibleStrikes, nearestStrike]);
+  }, [columns, visibleStrikes, nearestStrike, valueAt]);
 
   // Weekly EM for the active ticker (DB-backed via /api/levels). Refetched on
   // ticker change and on each manual refresh so the bands track intraday EM.
@@ -1240,9 +1242,6 @@ export default function OptionsChainPage() {
                         color: isATM ? "#0a0e14" : "#ffffff",
                       }}>{emTag}</span>
                     )}
-                    {(strike === pinStrikes.above || strike === pinStrikes.below) && (
-                      <span title="Possible pin or explosive level" style={{ fontSize: 10, cursor: "help", lineHeight: 1 }}>📍</span>
-                    )}
                     {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
                   </div>
                   {/* One value cell per expiration */}
@@ -1260,6 +1259,8 @@ export default function OptionsChainPage() {
                       ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
                       : scale;
                     const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
+                    const pin = pinByCol[colIdx];
+                    const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
                     const isFirst = posInRow === 0;
                     const isLast = posInRow === renderIdx.length - 1;
                     // ATM box: use box-shadow so it overlays without shifting layout.
@@ -1286,6 +1287,7 @@ export default function OptionsChainPage() {
                         }}
                       >
                         {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", marginRight: 4 }}>★</span>}
+                        {isPin && <span title="Possible pin or explosive level" style={{ cursor: "help", marginRight: 3 }}>📍</span>}
                         {value == null ? "·" : fmtMoney(value)}
                       </div>
                     );

@@ -268,15 +268,13 @@ export default function GexHeatmap({
                     #{rank}
                   </span>
                 )}
-                {(row.strike === pinAbove || row.strike === pinBelow) && (
-                  <span title="Possible pin or explosive level" style={{ fontSize: 10, cursor: "help", lineHeight: 1 }}>📍</span>
-                )}
               </div>
 
               {COLS.map(c => {
                 const v = vals[c.key];
                 const topRank = topRanksByCol[c.key].get(row.strike) ?? 0;
                 const isGexPeak = c.key === "netGEX" && row.strike === peakNetGexStrike;
+                const isPin = c.key === "netGEX" && (row.strike === pinAbove || row.strike === pinBelow);
                 return (
                   <div key={c.key} style={{
                     padding: "4px 6px",
@@ -289,9 +287,10 @@ export default function GexHeatmap({
                     outline: isGexPeak ? "2px solid #ffd700" : undefined,
                     outlineOffset: isGexPeak ? "-2px" : undefined,
                     boxShadow: isGexPeak ? "0 0 6px rgba(255,215,0,0.6)" : undefined,
-                    position: isGexPeak ? "relative" : undefined,
+                    position: (isGexPeak || isPin) ? "relative" : undefined,
                     zIndex: isGexPeak ? 1 : undefined,
                   }}>
+                    {isPin && <span title="Possible pin or explosive level" style={{ marginRight: 3, cursor: "help" }}>📍</span>}
                     {fmtG(v)}
                   </div>
                 );

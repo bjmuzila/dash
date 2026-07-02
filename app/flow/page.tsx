@@ -140,7 +140,7 @@ export default function FlowPage() {
   useEffect(() => {
     let cancelled = false;
     setHistory([]);
-    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=2000`)
+    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (cancelled || !j || !Array.isArray(j.tape)) return;
@@ -297,10 +297,13 @@ export default function FlowPage() {
     const tooltip = document.createElement("div");
     Object.assign(tooltip.style, {
       position: "absolute", display: "none", pointerEvents: "none", zIndex: "20",
-      padding: "8px 10px", borderRadius: "8px", fontSize: "12px", lineHeight: "1.5",
-      background: "rgba(10,14,20,0.94)", border: "1px solid rgba(255,255,255,.12)",
-      color: "rgba(255,255,255,.85)", whiteSpace: "nowrap",
-      fontFamily: "var(--font-mono)", boxShadow: "0 6px 20px rgba(0,0,0,.5)",
+      minWidth: "230px", padding: "0", borderRadius: "12px", overflow: "hidden",
+      fontSize: "12px", lineHeight: "1.4",
+      background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.10) 0%, transparent 60%), rgba(10,13,20,0.96)",
+      border: `1px solid ${C.border}`, borderTop: "2px solid rgba(33,158,188,0.5)",
+      color: C.text, whiteSpace: "nowrap",
+      fontFamily: "var(--font-mono)",
+      boxShadow: "0 10px 30px rgba(0,0,0,.55)", backdropFilter: "blur(6px)",
     } as CSSStyleDeclaration);
     host.appendChild(tooltip);
     tooltipRef.current = tooltip;
@@ -354,20 +357,30 @@ export default function FlowPage() {
         tip.style.display = "none";
         return;
       }
-      const et = new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" });
       const orders = ordersByMinRef.current.get(t) ?? [];
+      // Nothing OTM printed this minute → don't show an empty tooltip.
+      if (orders.length === 0) { tip.style.display = "none"; return; }
+      const et = new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" });
       const MAX_ROWS = 8;
       const rows = orders.slice(0, MAX_ROWS).map((o) => {
-        const col = o.side === "buy" ? BULLISH : BEARISH;
-        const et2 = new Date(o.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        return `<div style="color:${col}">${et2}&nbsp;&nbsp;${o.side.toUpperCase()}&nbsp;${o.strike.toLocaleString()}${o.type}&nbsp;&nbsp;×${o.size.toLocaleString()}&nbsp;&nbsp;${fmtPremium(o.premium)}</div>`;
+        const buy = o.side === "buy";
+        const col = buy ? BULLISH : BEARISH;
+        const tint = buy ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)";
+        return (
+          `<div style="display:flex;align-items:center;gap:8px;border-left:3px solid ${col};background:${tint};border-radius:0 6px 6px 0;padding:5px 8px">` +
+          `<span style="color:${col};font-weight:700;width:32px">${buy ? "BUY" : "SELL"}</span>` +
+          `<span style="color:#fff;flex:1">${o.strike.toLocaleString()}${o.type} ×${o.size.toLocaleString()}</span>` +
+          `<span style="color:${col}">${fmtPremium(o.premium)}</span>` +
+          `</div>`
+        );
       }).join("");
-      const more = orders.length > MAX_ROWS ? `<div style="color:rgba(255,255,255,.45);margin-top:2px">+${orders.length - MAX_ROWS} more…</div>` : "";
+      const more = orders.length > MAX_ROWS ? `<div style="color:rgba(255,255,255,.45);font-family:var(--font-mono);font-size:11px;padding:4px 8px 0">+${orders.length - MAX_ROWS} more…</div>` : "";
       tip.innerHTML =
-        `<div style="color:rgba(255,255,255,.55);margin-bottom:2px">${et}</div>` +
-        `<div style="color:${BULLISH}">Calls&nbsp;&nbsp;${bin.callVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.callNet)}</div>` +
-        `<div style="color:${BEARISH}">Puts&nbsp;&nbsp;&nbsp;${bin.putVol.toLocaleString()} ct&nbsp;&nbsp;${fmtPremium(bin.putNet)}</div>` +
-        (rows ? `<div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.12);font-size:11px">${rows}${more}</div>` : "");
+        `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.08)">` +
+          `<span style="color:#fff;font-weight:500;font-size:13px">${et}</span>` +
+          `<span style="color:rgba(255,255,255,.5);font-size:10px;font-family:var(--font-mono);letter-spacing:.06em">OTM · ${orders.length} print${orders.length === 1 ? "" : "s"}</span>` +
+        `</div>` +
+        `<div style="padding:8px 10px;font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:5px">${rows}${more}</div>`;
       tip.style.display = "block";
       const hostW = host.clientWidth, tipW = tip.offsetWidth;
       let left = param.point.x + 16;
@@ -390,6 +403,7 @@ export default function FlowPage() {
     // actual orders that printed in the crosshair minute (biggest first).
     const idx = new Map<number, FlowOrder[]>();
     for (const o of filtered) {
+      if (!o.isOtm) continue; // tooltip lists OTM prints only
       const minSec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC;
       const arr = idx.get(minSec);
       if (arr) arr.push(o); else idx.set(minSec, [o]);

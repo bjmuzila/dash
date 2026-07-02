@@ -412,9 +412,6 @@ function TickerPanel({
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: r.isATM ? "rgba(255,179,0,.12)" : "transparent",
               }}>
-                {(r.strike === pinAbove || r.strike === pinBelow) && (
-                  <span title="Possible pin or explosive level" style={{ fontSize: 10, cursor: "help", lineHeight: 1, marginRight: 2 }}>📍</span>
-                )}
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>
               {NET_COLS.map(c => {
@@ -448,6 +445,11 @@ function TickerPanel({
                         position: "absolute", top: 1, right: 2, fontSize: 12, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
                       }}>★</span>
+                    )}
+                    {c === "gex" && (r.strike === pinAbove || r.strike === pinBelow) && (
+                      <span title="Possible pin or explosive level" style={{
+                        position: "absolute", top: 1, left: 2, fontSize: 11, lineHeight: 1, pointerEvents: "none",
+                      }}>📍</span>
                     )}
                     <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                   </div>
