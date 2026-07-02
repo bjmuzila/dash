@@ -5,39 +5,35 @@ import Link from "next/link";
 type Page = { label: string; href: string };
 type Group = { label: string; href?: string; color: string; pages: Page[] };
 
+// Mirror of NAV_GROUPS in components/NavMenu.tsx (keep in sync).
 const GROUPS: Group[] = [
   {
     label: "GEX", color: "#22d3ee", // cyan
     pages: [
-      { label: "Home", href: "/home" }, { label: "Home2", href: "/home2" },
-      { label: "Multi Greek", href: "/mult-greek" }, { label: "Options Chain", href: "/options-chain" },
-      { label: "Greeks", href: "/greeks" }, { label: "Confidence", href: "/confidence-score" },
-      { label: "EM Front End", href: "/em" },
+      { label: "Home", href: "/home" }, { label: "Traders Dashboard", href: "/traders-dashboard" },
+      { label: "Options Chain", href: "/options-chain" }, { label: "Estimated Moves", href: "/em" },
+      { label: "Analytics", href: "/analytics" }, { label: "ES Candles", href: "/es-candles" },
+      { label: "ICT", href: "/ict" }, { label: "Journal", href: "/trading" },
     ],
   },
   {
-    label: "Futures", color: "#2dd4bf", // teal
-    pages: [{ label: "ES Candles", href: "/es-candles" }, { label: "Fails", href: "/fails" }],
-  },
-  {
-    label: "Stock Market", color: "#38bdf8", // sky blue
-    pages: [{ label: "Premarket", href: "/premarket" }, { label: "Econ Calendar", href: "/economic-calendar" }],
-  },
-  {
-    label: "Personal", color: "#60a5fa", // blue
+    label: "Backend", color: "#2dd4bf", // teal
     pages: [
-      { label: "Journal", href: "/trading" }, { label: "Budget", href: "/owner/budget" },
-      { label: "To-Do", href: "/owner/personal/todo" },
+      { label: "Multi Greek", href: "/mult-greek" }, { label: "Greeks", href: "/greeks" },
+      { label: "Confidence", href: "/confidence-score" }, { label: "Fails", href: "/fails" },
+      { label: "Premarket", href: "/premarket" }, { label: "Econ Calendar", href: "/economic-calendar" },
+      { label: "Database", href: "/database" }, { label: "Dev", href: "/owner/dev" },
+      { label: "EM BE", href: "/estimated-move" }, { label: "Budget", href: "/owner/budget" },
+      { label: "To-Do", href: "/owner/personal/todo" }, { label: "Logs", href: "/logs" },
     ],
   },
   {
-    label: "Admin", color: "#0ea5e9", // sky-600 blue
+    label: "Owner", color: "#0ea5e9", // sky-600 blue
     pages: [
-      { label: "Owner", href: "/owner/dev/owner" }, { label: "Admin", href: "/owner/dev/admin" },
-      { label: "Tree", href: "/owner/dev/tree" }, { label: "Database", href: "/database" },
-      { label: "Dev", href: "/owner/dev" }, { label: "EM BE", href: "/estimated-move" },
-      { label: "Social", href: "/social-media" }, { label: "Logs", href: "/logs" },
-      { label: "Changelog", href: "/changelog" },
+      { label: "Owner", href: "/owner/dev/owner" }, { label: "Results", href: "/owner/dev/results" },
+      { label: "Admin", href: "/owner/dev/admin" }, { label: "Tree", href: "/owner/dev/tree" },
+      { label: "Market Scanner", href: "/owner/market-scanner" }, { label: "Strike Query", href: "/owner/dev/strike-query" },
+      { label: "Social Media", href: "/social-media" }, { label: "Changelog", href: "/changelog" },
     ],
   },
 ];

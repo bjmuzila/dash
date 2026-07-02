@@ -15,40 +15,51 @@ const SOURCES: Src[] = [
     ],
   },
   {
-    id: "gex", label: "api/gex · chains", color: "#2dd4bf",
+    id: "gex", label: "proxy/gex · chains", color: "#2dd4bf",
     pages: [
       { label: "Multi Greek", href: "/mult-greek" }, { label: "Options Chain", href: "/options-chain" },
-      { label: "Premarket", href: "/premarket" },
+      { label: "Premarket", href: "/premarket" }, { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    id: "insights", label: "api/insights", color: "#38bdf8",
+    id: "insights", label: "api/insights · greeks-ts", color: "#38bdf8",
     pages: [{ label: "Greeks", href: "/greeks" }, { label: "Home (gex)", href: "/home" }],
   },
   {
-    id: "snap", label: "api/snapshots", color: "#60a5fa",
+    id: "snap", label: "api/snapshots · mvc", color: "#60a5fa",
     pages: [
       { label: "Confidence", href: "/confidence-score" }, { label: "Journal", href: "/trading" },
-      { label: "Greeks", href: "/greeks" },
+      { label: "Greeks", href: "/greeks" }, { label: "ICT", href: "/ict" },
     ],
   },
   {
-    id: "levels", label: "api/levels · em", color: "#0ea5e9",
-    pages: [{ label: "EM Front End", href: "/em" }, { label: "Home (levels)", href: "/home" }],
+    id: "levels", label: "api/levels · ref-levels", color: "#0ea5e9",
+    pages: [
+      { label: "EM Front End", href: "/em" }, { label: "Analytics", href: "/analytics" },
+      { label: "Home (levels)", href: "/home" },
+    ],
   },
   {
-    id: "es", label: "api/es-stats · dxlink", color: "#5eead4",
+    id: "es", label: "proxy/es-stats · dxlink", color: "#5eead4",
     pages: [{ label: "ES Candles", href: "/es-candles" }, { label: "Fails", href: "/fails" }],
   },
   {
-    id: "cal", label: "api calendars", color: "#7dd3fc",
-    pages: [{ label: "Econ Calendar", href: "/economic-calendar" }],
+    id: "scanner", label: "proxy/scanner · strike-growth", color: "#a5b4fc",
+    pages: [
+      { label: "Market Scanner", href: "/owner/market-scanner" }, { label: "Strike Query", href: "/owner/dev/strike-query" },
+    ],
+  },
+  {
+    id: "td", label: "api/overview · yahoo-quotes", color: "#7dd3fc",
+    pages: [
+      { label: "Traders Dashboard", href: "/traders-dashboard" }, { label: "Econ Calendar", href: "/economic-calendar" },
+    ],
   },
   {
     id: "misc", label: "api/db · budget · proxy", color: "#818cf8",
     pages: [
       { label: "Budget", href: "/owner/budget" }, { label: "Database", href: "/database" },
-      { label: "Owner", href: "/owner/dev/owner" },
+      { label: "Owner", href: "/owner/dev/owner" }, { label: "Chat", href: "/chat" },
     ],
   },
 ];

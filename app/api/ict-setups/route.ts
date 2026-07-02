@@ -229,7 +229,7 @@ export async function GET(req: NextRequest) {
       ? (sinceDate ? { sinceDate } : {})
       : { date };
     const [setups, summary] = await Promise.all([
-      getIctSetups(all ? undefined : date, 300),
+      getIctSetups({ date: all ? undefined : date, sinceDate: all ? sinceDate ?? undefined : undefined, limit: 2000 }),
       getIctSetupSummary(summaryOpts),
     ]);
     return NextResponse.json({ date, sinceDate, setups, summary });

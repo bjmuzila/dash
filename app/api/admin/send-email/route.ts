@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getServerUserId } from "@/lib/supabase/server";
 import { getSubscription, PAID_STATUSES, listWaitlist, addEmailSend, listEmailSends } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
+import { loadLegacyEmails } from "@/lib/emails/legacyEmails";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
 // returns the resolvable recipient lists (all signed-up users / paid subscribers
@@ -93,12 +94,16 @@ export async function GET(req: NextRequest) {
     const notPaying = recipients.filter((r) => !r.paid).map((r) => r.email);
     let waitlist: string[] = [];
     try { waitlist = await listWaitlistEmails(); } catch { /* table optional */ }
+    const { oldEmails, oldEmails2 } = loadLegacyEmails();
     return NextResponse.json({
       ok: true,
       configured: !!RESEND_API_KEY,
       from: FROM_EMAIL,
-      counts: { all: all.length, subscribers: subscribers.length, notPaying: notPaying.length, waitlist: waitlist.length },
-      recipients: { all, subscribers, notPaying, waitlist },
+      counts: {
+        all: all.length, subscribers: subscribers.length, notPaying: notPaying.length,
+        waitlist: waitlist.length, oldEmails: oldEmails.length, oldEmails2: oldEmails2.length,
+      },
+      recipients: { all, subscribers, notPaying, waitlist, oldEmails, oldEmails2 },
     });
   } catch (err) {
     return NextResponse.json({ error: "Recipient load failed", detail: String(err) }, { status: 500 });
@@ -141,6 +146,9 @@ export async function POST(req: NextRequest) {
       to = picked.map((r) => r.email);
     } else if (audience === "waitlist") {
       to = await listWaitlistEmails();
+    } else if (audience === "old_emails" || audience === "old_emails2") {
+      const { oldEmails, oldEmails2 } = loadLegacyEmails();
+      to = audience === "old_emails2" ? oldEmails2 : oldEmails;
     } else {
       to = Array.isArray(body?.to) ? body.to.map((x: unknown) => String(x).trim()) : [];
     }

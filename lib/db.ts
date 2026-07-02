@@ -2052,11 +2052,20 @@ export async function updateIctSetupGrade(r: {
 }
 
 /** Feed for the recap panel: newest-first, optionally one ET date. */
-export async function getIctSetups(date?: string, limit = 200): Promise<IctSetupRecord[]> {
-  if (date) {
+export async function getIctSetups(
+  opts?: { date?: string; sinceDate?: string; limit?: number }
+): Promise<IctSetupRecord[]> {
+  const limit = opts?.limit ?? 200;
+  if (opts?.date) {
     return queryAll<IctSetupRecord>(
       `SELECT * FROM ict_setups WHERE date = ? ORDER BY trigger_ts DESC LIMIT ?`,
-      [date, limit]
+      [opts.date, limit]
+    );
+  }
+  if (opts?.sinceDate) {
+    return queryAll<IctSetupRecord>(
+      `SELECT * FROM ict_setups WHERE date >= ? ORDER BY trigger_ts DESC LIMIT ?`,
+      [opts.sinceDate, limit]
     );
   }
   return queryAll<IctSetupRecord>(
