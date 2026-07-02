@@ -83,6 +83,10 @@ type TypeFilter = "all" | "C" | "P";
 
 const PREMIUM_MAX = 1_000_000;
 
+// Net-drift chart bucket size (seconds). Fixed bins across the whole RTH session
+// give a proportional, hardcoded 9:30–4:00 x-axis and a smooth line.
+const BIN_SEC = 60;
+
 const DEFAULT_TICKERS = [
   "SPX", "SPY", "QQQ", "META", "TSLA", "AMZN", "AAPL", "NVDA", "MSFT", "GOOGL", "AMD", "NDX",
 ] as const;
@@ -108,6 +112,13 @@ export default function FlowPage() {
   const [otmOnly, setOtmOnly] = useState(false);
 
   const [history, setHistory] = useState<FlowOrder[]>([]);
+  // Advances the chart's "now" edge every 5s so the line extends with time even
+  // between prints (cheaper + smoother than redrawing on every WS frame).
+  const [nowTick, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
 
   // ── Backfill today's persisted flow once on mount. ──
   useEffect(() => {
@@ -218,8 +229,11 @@ export default function FlowPage() {
   // shows both sides) — but premium/size/expiry/dte/otm DO apply for consistency
   // with the tape's "what am I looking at" framing.
   const netSeries = useMemo(() => {
-    const bySec = new Map<number, { call: number; put: number }>();
-    let call = 0, put = 0;
+    void nowTick; // recompute on the 5s tick so the "now" edge advances
+    const { openSec, closeSec } = rthBoundsToday();
+
+    // Collect this ticker's signed prints (buy +, sell −), split call/put.
+    const evts: { sec: number; call: number; put: number }[] = [];
     for (const o of merged) {
       if (normTicker(o.underlying) !== active) continue;
       if (otmOnly && !o.isOtm) continue;
@@ -232,34 +246,30 @@ export default function FlowPage() {
         if (dteMax != null && d > dteMax) continue;
       }
       const signed = (o.side === "buy" ? 1 : -1) * (o.premium || 0);
-      if (o.type === "C") call += signed; else put += signed;
-      bySec.set(Math.floor(o.ts / 1000), { call, put });
+      evts.push({ sec: Math.floor(o.ts / 1000), call: o.type === "C" ? signed : 0, put: o.type === "C" ? 0 : signed });
     }
-    const secs = [...bySec.keys()].sort((a, b) => a - b);
-    const { openSec, closeSec } = rthBoundsToday();
+    evts.sort((a, b) => a.sec - b.sec);
+    const hasData = evts.length > 0;
 
-    // Anchor the x-axis to the full RTH session so 9:30–4:00 always shows and the
-    // lines fill in as prints arrive: value-0 point at the open, whitespace pad
-    // at the close (extends the axis without drawing).
+    // Fixed 1-min bins across the whole RTH session → proportional, hardcoded
+    // 9:30–4:00 axis. Bins up to "now" carry the running cumulative; future bins
+    // are whitespace so the axis still spans to the close before data arrives.
+    const nowSec = Math.floor(Date.now() / 1000);
     const callPts: (LineData | WhitespaceData)[] = [];
     const putPts: (LineData | WhitespaceData)[] = [];
-    if (!secs.length || secs[0] > openSec) {
-      callPts.push({ time: openSec as UTCTimestamp, value: 0 });
-      putPts.push({ time: openSec as UTCTimestamp, value: 0 });
+    let call = 0, put = 0, i = 0;
+    for (let t = openSec; t <= closeSec; t += BIN_SEC) {
+      while (i < evts.length && evts[i].sec <= t) { call += evts[i].call; put += evts[i].put; i++; }
+      if (t <= nowSec + BIN_SEC) {
+        callPts.push({ time: t as UTCTimestamp, value: call });
+        putPts.push({ time: t as UTCTimestamp, value: put });
+      } else {
+        callPts.push({ time: t as UTCTimestamp });
+        putPts.push({ time: t as UTCTimestamp });
+      }
     }
-    for (const s of secs) {
-      callPts.push({ time: s as UTCTimestamp, value: bySec.get(s)!.call });
-      putPts.push({ time: s as UTCTimestamp, value: bySec.get(s)!.put });
-    }
-    if (!secs.length || secs[secs.length - 1] < closeSec) {
-      callPts.push({ time: closeSec as UTCTimestamp });
-      putPts.push({ time: closeSec as UTCTimestamp });
-    }
-
-    const lastCall = secs.length ? bySec.get(secs[secs.length - 1])!.call : 0;
-    const lastPut = secs.length ? bySec.get(secs[secs.length - 1])!.put : 0;
-    return { callPts, putPts, lastCall, lastPut, openSec, closeSec, hasData: secs.length > 0 };
-  }, [merged, active, otmOnly, minSize, expiry, dteMin, dteMax]);
+    return { callPts, putPts, lastCall: call, lastPut: put, openSec, closeSec, hasData };
+  }, [merged, active, otmOnly, minSize, expiry, dteMin, dteMax, nowTick]);
 
   // ── lightweight-charts setup ──
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -284,7 +294,19 @@ export default function FlowPage() {
       },
       rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
       leftPriceScale: { visible: false },
-      timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)",
+        timeVisible: true,
+        secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+        // Axis tick labels in ET (tickMarkFormatter drives the axis; the
+        // localization.timeFormatter only affects the crosshair label).
+        tickMarkFormatter: (time: unknown) =>
+          typeof time === "number"
+            ? new Date(time * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
+            : "",
+      },
       localization: {
         priceFormatter: (p: number) => fmtPremium(p),
         timeFormatter: (time: unknown) =>

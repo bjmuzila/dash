@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -608,6 +609,7 @@ function StrikeQueryScanner() {
   const [err, setErr] = useState<string | null>(null);
   const [limit, setLimit] = useState(25);
   const [colSort, setColSort] = useState<{ col: SqCol; dir: "desc" | "asc" }>({ col: "gex_now", dir: "desc" });
+  const [cardScope, setCardScope] = useState<"all" | "exidx">("all");
 
   const symbolList = watchlist.length > 0 ? watchlist : SQ_FALLBACK;
 
@@ -665,17 +667,21 @@ function StrikeQueryScanner() {
   const showSymbol = symbol === "ALL";
   const showExpiry = expiry === "ALL";
 
+  const INDICES = new Set(["SPX", "SPY", "QQQ", "IWM", "NDX"]);
+
   // Top 10 cards across all rows — ranked by active sort metric, SPX capped at 1 slot.
   const topCards = (() => {
-    const base = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
+    let base = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
+    if (cardScope === "exidx") base = base.filter((r) => !INDICES.has(r.symbol));
     const ranked = [...base].sort((a, b) => {
       const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
       return colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
     });
+    const CAP_ONE = new Set(["SPX", "SPY", "QQQ"]);
+    const used = new Set<string>();
     const out: SqRow[] = [];
-    let spxUsed = false;
     for (const r of ranked) {
-      if (r.symbol === "SPX") { if (spxUsed) continue; spxUsed = true; }
+      if (CAP_ONE.has(r.symbol)) { if (used.has(r.symbol)) continue; used.add(r.symbol); }
       out.push(r);
       if (out.length === 10) break;
     }
@@ -691,46 +697,46 @@ function StrikeQueryScanner() {
     { key: "delta_abs", label: "Delta Abs" },
   ];
 
-  const ctrlSelect: React.CSSProperties = {
-    fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)",
-    color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)", cursor: "pointer",
+  const lbl: React.CSSProperties = {
+    fontSize: 11, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em",
   };
 
   return (
     <Card accent={HOME_THEME.cyan} title="Strike GEX Query"
       subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${loading ? " · loading…" : ""}`}>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
-          ticker
-          <select value={symbol} onChange={(e) => setSymbol(e.target.value)} style={ctrlSelect}>
-            <option value="ALL">ALL</option>
-            {symbolList.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
-          expiry
-          <select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={ctrlSelect}>
-            <option value="ALL">All Expiries</option>
-            {expiries.map((e) => <option key={e} value={e}>{e}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
-          limit
-          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} style={ctrlSelect}>
-            {[10, 25, 50, 100].map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
-        </label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={lbl}>Ticker</span>
+          <ThemedSelect ariaLabel="Ticker" width={130} value={symbol} onChange={setSymbol}
+            options={[{ value: "ALL", label: "ALL" }, ...symbolList.map((s) => ({ value: s, label: s }))]} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={lbl}>Expiry</span>
+          <ThemedSelect ariaLabel="Expiry" width={150} value={expiry} onChange={setExpiry}
+            options={[{ value: "ALL", label: "All Expiries" }, ...expiries.map((e) => ({ value: e, label: e }))]} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={lbl}>Limit</span>
+          <ThemedSelect ariaLabel="Limit" width={90} value={String(limit)} onChange={(v) => setLimit(Number(v))}
+            options={[10, 25, 50, 100].map((l) => ({ value: String(l), label: String(l) }))} />
+        </div>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>click a column header to sort</span>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
       </div>
 
       {err && <div style={{ color: HOME_THEME.red, marginBottom: 12, fontSize: 13 }}>{err}</div>}
 
       {topCards.length > 0 && (
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 11, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
-            Top 10 · {cols.find((c) => c.key === colSort.col)?.label} · SPX 1 slot
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Top 10 · {cols.find((c) => c.key === colSort.col)?.label} · SPX/SPY/QQQ 1 slot each
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setCardScope("all")} style={seg(cardScope === "all")}>All</button>
+              <button onClick={() => setCardScope("exidx")} style={seg(cardScope === "exidx")}>All − Indices</button>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
             {topCards.map((r, i) => {
