@@ -1992,6 +1992,13 @@ class TastytradeProxy {
       };
       this.greeks.set(c.streamerSymbol, entry);
       if (entry.gamma !== undefined) filled++;
+      // Contract mark rides along on the greeks/all snapshot NBBO. Quote streaming
+      // is off (TRADE-only sub) so this is the only live mark source — write it
+      // into restOI (preserving oi/volume) for the strike-detail popup price.
+      if (Number.isFinite(g.mark) && g.mark > 0) {
+        const prev = this.restOI.get(c.streamerSymbol) || {};
+        this.restOI.set(c.streamerSymbol, { ...prev, mark: g.mark });
+      }
     }
     console.log(`[GREEKS][theta] greeks/all: ${filled}/${active.length} strikes with non-zero gamma`);
   }

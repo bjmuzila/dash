@@ -198,6 +198,10 @@ export default function EsCandlesPage() {
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
   const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
+  // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
+  // history columns than 1-day and visibly slows the chart, so default to
+  // the fast 1-day window and let the user opt into 5-day when they want it.
+  const [heatmapDays, setHeatmapDays] = useState<1 | 5>(1);
   const [intensity, setIntensity] = useState(0.65); // page-local default; tuned with gexColor so light zones read clearly
   // Heatmap metric: "voloi" = gamma×(OI+vol), "vol" = gamma×vol only. Mirrored
   // in a ref so the WS-driven overlay draw reads it without re-subscribing.
@@ -502,12 +506,13 @@ export default function EsCandlesPage() {
 
   // Heatmap history backfill. Effective expiry = the DTE picker selection, or
   // the live front expiry when nothing is picked. Re-runs whenever the picker
-  // changes: clears the column map and reloads that expiry's day of history.
+  // OR the 1D/5D range toggle changes: clears the column map and reloads.
   const heatmapExpiry = selectedExpiry || feedExpiry;
   useEffect(() => {
     if (!heatmapExpiry) return;
     let cancelled = false;
-    // When the picker changes, wipe the existing columns so we don't mix expiries.
+    // When the picker or range changes, wipe the existing columns so we don't
+    // mix expiries or leave stale far-back columns after switching to 1D.
     columnsRef.current.clear();
     drawOverlayRef.current();
     (async () => {
@@ -517,8 +522,9 @@ export default function EsCandlesPage() {
         // by time window alone (anyExpiry=1) — otherwise backfill only ever
         // matches today. An explicit DTE pick keeps the exact expiry match.
         const isFront = !selectedExpiry;
+        const minutes = heatmapDays * 1440;
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=7200&expiry=${encodeURIComponent(heatmapExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(heatmapExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -545,7 +551,7 @@ export default function EsCandlesPage() {
       } catch { /* live feed still populates the front expiry going forward */ }
     })();
     return () => { cancelled = true; };
-  }, [heatmapExpiry]);
+  }, [heatmapExpiry, heatmapDays]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
   // ES conversion happens at draw time with the live basis.
@@ -1242,6 +1248,16 @@ export default function EsCandlesPage() {
             active={gexMetric}
             onChange={(v) => setGexMetric(v as typeof gexMetric)}
           />
+
+          {/* Heatmap backfill range — 5D pulls/renders far more history and
+              visibly slows the chart, so it's opt-in rather than default. */}
+          <div title="Heatmap backfill range">
+            <SegGroup
+              options={[{ label: "1D", value: "1" }, { label: "5D", value: "5" }]}
+              active={String(heatmapDays)}
+              onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
+            />
+          </div>
 
           {/* intensity slider */}
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />

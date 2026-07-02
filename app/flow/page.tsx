@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ColorType, LineSeries, createChart } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, UTCTimestamp, LineData } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, UTCTimestamp, LineData, WhitespaceData } from "lightweight-charts";
 import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -57,6 +57,24 @@ function dteOf(o: FlowOrder): number | null {
   if (Number.isNaN(exp.getTime())) return null;
   const now = new Date();
   return Math.round((exp.getTime() - new Date(now.toDateString()).getTime()) / 86_400_000);
+}
+
+// ── RTH session bounds (9:30–16:00 America/New_York) for TODAY, as UTC seconds.
+// Handles EDT/EST automatically by correcting a UTC guess against the ET offset.
+function etDateParts(now: Date): { y: number; m: number; d: number } {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const get = (t: string) => Number(p.find((x) => x.type === t)!.value);
+  return { y: get("year"), m: get("month"), d: get("day") };
+}
+function etWallToUtcSec(y: number, m: number, d: number, hh: number, mm: number): number {
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  const asET = new Date(new Date(guess).toLocaleString("en-US", { timeZone: "America/New_York" })).getTime();
+  const asUTC = new Date(new Date(guess).toLocaleString("en-US", { timeZone: "UTC" })).getTime();
+  return Math.floor((guess + (asUTC - asET)) / 1000);
+}
+function rthBoundsToday(): { openSec: number; closeSec: number } {
+  const { y, m, d } = etDateParts(new Date());
+  return { openSec: etWallToUtcSec(y, m, d, 9, 30), closeSec: etWallToUtcSec(y, m, d, 16, 0) };
 }
 
 // ── Filter state ────────────────────────────────────────────────────────────
@@ -218,11 +236,29 @@ export default function FlowPage() {
       bySec.set(Math.floor(o.ts / 1000), { call, put });
     }
     const secs = [...bySec.keys()].sort((a, b) => a - b);
-    const callPts: LineData[] = secs.map((s) => ({ time: s as UTCTimestamp, value: bySec.get(s)!.call }));
-    const putPts: LineData[] = secs.map((s) => ({ time: s as UTCTimestamp, value: bySec.get(s)!.put }));
-    const lastCall = callPts.length ? callPts[callPts.length - 1].value : 0;
-    const lastPut = putPts.length ? putPts[putPts.length - 1].value : 0;
-    return { callPts, putPts, lastCall, lastPut };
+    const { openSec, closeSec } = rthBoundsToday();
+
+    // Anchor the x-axis to the full RTH session so 9:30–4:00 always shows and the
+    // lines fill in as prints arrive: value-0 point at the open, whitespace pad
+    // at the close (extends the axis without drawing).
+    const callPts: (LineData | WhitespaceData)[] = [];
+    const putPts: (LineData | WhitespaceData)[] = [];
+    if (!secs.length || secs[0] > openSec) {
+      callPts.push({ time: openSec as UTCTimestamp, value: 0 });
+      putPts.push({ time: openSec as UTCTimestamp, value: 0 });
+    }
+    for (const s of secs) {
+      callPts.push({ time: s as UTCTimestamp, value: bySec.get(s)!.call });
+      putPts.push({ time: s as UTCTimestamp, value: bySec.get(s)!.put });
+    }
+    if (!secs.length || secs[secs.length - 1] < closeSec) {
+      callPts.push({ time: closeSec as UTCTimestamp });
+      putPts.push({ time: closeSec as UTCTimestamp });
+    }
+
+    const lastCall = secs.length ? bySec.get(secs[secs.length - 1])!.call : 0;
+    const lastPut = secs.length ? bySec.get(secs[secs.length - 1])!.put : 0;
+    return { callPts, putPts, lastCall, lastPut, openSec, closeSec, hasData: secs.length > 0 };
   }, [merged, active, otmOnly, minSize, expiry, dteMin, dteMax]);
 
   // ── lightweight-charts setup ──
@@ -269,7 +305,13 @@ export default function FlowPage() {
   useEffect(() => {
     callSeriesRef.current?.setData(netSeries.callPts);
     putSeriesRef.current?.setData(netSeries.putPts);
-    if (netSeries.callPts.length) chartRef.current?.timeScale().fitContent();
+    // Lock the view to the full RTH session at all times.
+    try {
+      chartRef.current?.timeScale().setVisibleRange({
+        from: netSeries.openSec as UTCTimestamp,
+        to: netSeries.closeSec as UTCTimestamp,
+      });
+    } catch {}
   }, [netSeries]);
 
   // ── Summary of the filtered tape. ──
@@ -446,7 +488,7 @@ export default function FlowPage() {
           <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
         </div>
         <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
-        {netSeries.callPts.length === 0 && (
+        {!netSeries.hasData && (
           <p style={{ fontSize: 13, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
             {status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
           </p>

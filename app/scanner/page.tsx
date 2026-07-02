@@ -43,7 +43,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gex" | "greeks" | "volpin";
+type MainTab = "gex" | "greeks" | "volpin" | "strike";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -575,6 +575,241 @@ function VolPinScanner() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  STRIKE QUERY SCANNER (new tab) — top movers by strike, per-ticker or ALL
+// ══════════════════════════════════════════════════════════════════════════════
+
+const SQ_FALLBACK = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "AMZN", "META", "MSFT", "GOOGL"];
+
+type SqRow = {
+  symbol: string;
+  expiry: string;
+  strike: number;
+  gex_now: number;
+  delta_abs: number;
+  chg15: number | null;
+  chg30: number | null;
+  chg60: number | null;
+};
+
+type SqCol = "strike" | "gex_now" | "chg15" | "chg30" | "chg60" | "delta_abs";
+
+const sqVal = (r: SqRow, c: SqCol): number => {
+  const v = c === "strike" ? r.strike : r[c];
+  return v == null ? 0 : Number(v);
+};
+
+function StrikeQueryScanner() {
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [symbol, setSymbol] = useState("ALL");
+  const [expiry, setExpiry] = useState("ALL");
+  const [expiries, setExpiries] = useState<string[]>([]);
+  const [rows, setRows] = useState<SqRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [limit, setLimit] = useState(25);
+  const [colSort, setColSort] = useState<{ col: SqCol; dir: "desc" | "asc" }>({ col: "gex_now", dir: "desc" });
+
+  const symbolList = watchlist.length > 0 ? watchlist : SQ_FALLBACK;
+
+  const toggleSort = (col: SqCol) =>
+    setColSort((p) => (p.col === col ? { col, dir: p.dir === "desc" ? "asc" : "desc" } : { col, dir: "desc" }));
+
+  // watchlist once
+  useEffect(() => {
+    fetch("/proxy/strike-growth/watchlist")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.ok) return;
+        const active: string[] = d.rows.filter((r: { active: boolean }) => r.active).map((r: { symbol: string }) => r.symbol).sort();
+        if (active.length > 0) setWatchlist(active);
+      })
+      .catch(() => {});
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const targets = symbol === "ALL" ? symbolList : [symbol];
+      const results = await Promise.all(
+        targets.map(async (sym) => {
+          try {
+            const res = await fetch(`/proxy/strike-growth/by-expiry?symbol=${sym}`, { cache: "no-store" });
+            const j = await res.json();
+            if (!j.ok) return [] as SqRow[];
+            return (j.rows as SqRow[]).map((r) => ({ ...r, symbol: sym }));
+          } catch { return [] as SqRow[]; }
+        })
+      );
+      const all = results.flat();
+      setRows(all);
+      const exps = [...new Set<string>(all.map((r) => r.expiry))].sort();
+      setExpiries(exps);
+      setExpiry((prev) => (prev === "ALL" || exps.includes(prev) ? prev : "ALL"));
+    } catch (e: any) { setErr(String(e?.message || e)); }
+    finally { setLoading(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, watchlist.length]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const displayRows = (() => {
+    let f = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
+    f = [...f].sort((a, b) => {
+      const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
+      const cmp = colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
+      return colSort.dir === "desc" ? cmp : -cmp;
+    });
+    return f.slice(0, limit);
+  })();
+
+  const showSymbol = symbol === "ALL";
+  const showExpiry = expiry === "ALL";
+
+  // Top 10 cards across all rows — ranked by active sort metric, SPX capped at 1 slot.
+  const topCards = (() => {
+    const base = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
+    const ranked = [...base].sort((a, b) => {
+      const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
+      return colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
+    });
+    const out: SqRow[] = [];
+    let spxUsed = false;
+    for (const r of ranked) {
+      if (r.symbol === "SPX") { if (spxUsed) continue; spxUsed = true; }
+      out.push(r);
+      if (out.length === 10) break;
+    }
+    return out;
+  })();
+
+  const cols: { key: SqCol; label: string }[] = [
+    { key: "strike", label: "Strike" },
+    { key: "gex_now", label: "GEX Now" },
+    { key: "chg15", label: "Δ 15m" },
+    { key: "chg30", label: "Δ 30m" },
+    { key: "chg60", label: "Δ 60m" },
+    { key: "delta_abs", label: "Delta Abs" },
+  ];
+
+  const ctrlSelect: React.CSSProperties = {
+    fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)",
+    color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)", cursor: "pointer",
+  };
+
+  return (
+    <Card accent={HOME_THEME.cyan} title="Strike GEX Query"
+      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${loading ? " · loading…" : ""}`}>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+          ticker
+          <select value={symbol} onChange={(e) => setSymbol(e.target.value)} style={ctrlSelect}>
+            <option value="ALL">ALL</option>
+            {symbolList.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+          expiry
+          <select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={ctrlSelect}>
+            <option value="ALL">All Expiries</option>
+            {expiries.map((e) => <option key={e} value={e}>{e}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+          limit
+          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} style={ctrlSelect}>
+            {[10, 25, 50, 100].map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </label>
+        <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>click a column header to sort</span>
+      </div>
+
+      {err && <div style={{ color: HOME_THEME.red, marginBottom: 12, fontSize: 13 }}>{err}</div>}
+
+      {topCards.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
+            Top 10 · {cols.find((c) => c.key === colSort.col)?.label} · SPX 1 slot
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
+            {topCards.map((r, i) => {
+              const v = sqVal(r, colSort.col);
+              const pos = v >= 0;
+              const metricCol = colSort.col === "strike" || colSort.col === "gex_now" || colSort.col === "delta_abs"
+                ? HOME_THEME.text : pos ? HOME_THEME.green : HOME_THEME.red;
+              return (
+                <div key={`${r.symbol}-${r.expiry}-${r.strike}-${i}`} style={{
+                  border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "10px 12px",
+                  background: i % 2 ? "rgba(255,255,255,0.02)" : "rgba(33,158,188,0.06)",
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <span style={{ fontWeight: 800, fontSize: 14, color: HOME_THEME.text }}>{r.symbol}</span>
+                    <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>#{i + 1}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: HOME_THEME.cyan, fontWeight: 700, margin: "2px 0" }}>
+                    ${r.strike} <span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}>{r.expiry}</span>
+                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: metricCol }}>
+                    {colSort.col === "strike" ? r.strike : fmtB(v)}
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>
+                    {cols.find((c) => c.key === colSort.col)?.label}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+              {showSymbol && <th style={{ ...th, textAlign: "left" }}>Symbol</th>}
+              {showExpiry && <th style={{ ...th, textAlign: "left" }}>Expiry</th>}
+              {cols.map((c) => {
+                const active = colSort.col === c.key;
+                const arrow = active ? (colSort.dir === "desc" ? " ↓" : " ↑") : " ⇅";
+                return (
+                  <th key={c.key} onClick={() => toggleSort(c.key)} style={{
+                    ...th, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+                    color: active ? HOME_THEME.cyan : HOME_THEME.green,
+                  }}>
+                    {c.label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 10 }}>{arrow}</span>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((r, i) => (
+              <tr key={`${r.symbol}-${r.expiry}-${r.strike}-${i}`}
+                style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                {showSymbol && <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>}
+                {showExpiry && <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{r.expiry}</td>}
+                <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
+                <td style={td}>{fmtB(r.gex_now)}</td>
+                <td style={{ ...td, color: r.chg15 == null ? HOME_THEME.text : r.chg15 >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{r.chg15 == null ? "—" : fmtB(r.chg15)}</td>
+                <td style={{ ...td, color: r.chg30 == null ? HOME_THEME.text : r.chg30 >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{r.chg30 == null ? "—" : fmtB(r.chg30)}</td>
+                <td style={{ ...td, color: r.chg60 == null ? HOME_THEME.text : r.chg60 >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{r.chg60 == null ? "—" : fmtB(r.chg60)}</td>
+                <td style={td}>{fmtB(r.delta_abs)}</td>
+              </tr>
+            ))}
+            {!displayRows.length && !loading && !err && (
+              <tr><td colSpan={cols.length + (showSymbol ? 1 : 0) + (showExpiry ? 1 : 0)} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                No rows yet. Needs recorder history for the selected ticker(s).
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  PAGE SHELL — tab switcher
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -600,11 +835,13 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "volpin" ? HOME_THEME.purple : "rgba(255,255,255,0.1)"}`,
           background: tab === "volpin" ? `${HOME_THEME.purple}22` : "transparent",
         }}>Vol Pin</button>
+        <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
       </div>
 
       {tab === "gex"    && <GexScanner />}
       {tab === "greeks" && <GreeksScanner />}
       {tab === "volpin" && <VolPinScanner />}
+      {tab === "strike" && <StrikeQueryScanner />}
     </PageShell>
   );
 }

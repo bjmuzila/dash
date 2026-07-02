@@ -223,6 +223,11 @@ async function fetchGreeksTheta(underlying = SYMBOL, expiration) {
     const type = rightToType(row.right);
     const strike = Number(row.strike);
     if (!(strike > 0)) continue;
+    // Snapshot rows also carry the contract NBBO — derive a mark (mid, else last)
+    // so the strike-detail popup can show the OTM contract price without a second
+    // REST call. Absent bid/ask (older snapshots) → mark 0, caller keeps prior.
+    const bid = Number(row.bid), ask = Number(row.ask);
+    const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : Number(row.last ?? row.close ?? 0);
     out.set(keyOf(row.expiration || expiration, strike, type), {
       gamma: Number(row.gamma),
       delta: Number(row.delta),
@@ -231,6 +236,7 @@ async function fetchGreeksTheta(underlying = SYMBOL, expiration) {
       // Theta names it implied_vol (first_order) / implied_volatility (varies);
       // accept either.
       iv: Number(row.implied_vol ?? row.implied_volatility ?? row.iv),
+      mark: Number.isFinite(mark) && mark > 0 ? mark : 0,
     });
   }
   return out;
