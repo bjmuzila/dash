@@ -322,7 +322,7 @@ export default function TodoPage() {
                   padding: 12, cursor: "pointer",
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 10, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: ".05em", fontFamily: "monospace" }}>{t.id}</span>
+                    <span style={{ fontSize: 10, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: ".05em", fontFamily: "var(--font-mono)" }}>{t.id}</span>
                     <PBadge p={t.priority} />
                   </div>
                   <div style={{ fontSize: 13, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "6px 0 10px" }}>{t.subject}</div>
@@ -385,7 +385,7 @@ export default function TodoPage() {
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
-          <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.85, fontFamily: "monospace" }}>
+          <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
             {checked}/{total} habits · {pct}%
           </span>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>

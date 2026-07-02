@@ -1058,7 +1058,7 @@ export default function OptionsChainPage() {
           onChange={(event) => setIntensity(Number(event.target.value))}
           style={{ width: 80, height: 3, accentColor: HT.cyan }}
         />
-        <span style={{ fontSize: 10, color: HT.cyan, fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
+        <span style={{ fontSize: 10, color: HT.cyan, fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>
           {intensity.toFixed(2)}x
         </span>
 
@@ -1159,7 +1159,7 @@ export default function OptionsChainPage() {
               return (
                 <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
-                  <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "monospace", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
                   </div>
                 </div>
@@ -1207,7 +1207,7 @@ export default function OptionsChainPage() {
                   {/* Shared strike label (sticky left) */}
                   <div title={emTip || undefined} style={{
                     position: "sticky", left: 0, zIndex: 2,
-                    padding: "4px 8px", fontSize: 11, fontWeight: 800, fontFamily: "monospace", textAlign: "right",
+                    padding: "4px 8px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
                     background: isATM ? "#ffb300" : HT.panelBgStrong,
                     borderRight: `1px solid ${HT.border}`,
@@ -1258,7 +1258,7 @@ export default function OptionsChainPage() {
                         key={`${strike}-${colIdx}`}
                         className={isMvc ? "mvc-peak-cell" : undefined}
                         style={{
-                          padding: "4px 8px", fontSize: 11, fontFamily: "monospace", textAlign: "right", fontWeight: 700,
+                          padding: "4px 8px", fontSize: 11, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                           color: value == null ? "#3a4a5e" : "#ffffff",
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,

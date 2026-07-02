@@ -58,6 +58,10 @@ const volOnlyNet = (r) => Number(r.netVolGEX ?? 0);
 // (3/6/12 sweeps back) but is the heaviest on the standalone theta-terminal —
 // keep the ACTIVE watchlist tight at 5m to avoid OOM. Raise via env if needed.
 const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
+// Fast-lane cadence for the small "hot" watchlist — swept far more often than the
+// full ~380-name roster so a handful of names stay near-live. Keep the hot list
+// short (a few dozen max) or this loses its speed advantage.
+const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
 // Strikes to keep each side of spot per ticker (28 total at 14). Caps Theta work.
 const STRIKES_EACH_SIDE = Number(process.env.STRIKE_GROWTH_STRIKES_SIDE || 14);
 // How many front expiries to snapshot per ticker. 1 = nearest expiration only —
@@ -127,10 +131,13 @@ async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS strike_growth_watchlist (
       symbol    TEXT PRIMARY KEY,
       active    BOOLEAN NOT NULL DEFAULT TRUE,
+      hot       BOOLEAN NOT NULL DEFAULT FALSE,
       sort_idx  INTEGER NOT NULL DEFAULT 0,
       added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // MIGRATION: add hot column to pre-existing tables (idempotent).
+  await p.query(`ALTER TABLE strike_growth_watchlist ADD COLUMN IF NOT EXISTS hot BOOLEAN NOT NULL DEFAULT FALSE;`);
   await p.query(`
     CREATE TABLE IF NOT EXISTS strike_growth (
       date       DATE        NOT NULL,
@@ -179,19 +186,22 @@ async function ensureSchema() {
   // a fresh DB/redeploy records the entire EM list from the start — the roster is
   // bounded (SPECIAL_TICKERS + EQUITY_TICKERS, well under MAX_ACTIVE). Pacing
   // (TICKER_DELAY_MS) + theta-terminal heap are the load levers, not the count.
+  // A short "hot" default set — the most liquid names — seeded into the fast lane.
+  const seedHot = new Set(['SPX', 'SPY', 'QQQ', 'IWM', 'NDX', 'NVDA', 'TSLA',
+    'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'AMD', 'PLTR', 'NFLX']);
   const roster = [...new Set([...SPECIAL_TICKERS, ...EQUITY_TICKERS])]
     .filter(Boolean).map((s) => String(s).toUpperCase());
   // Bulk insert, do nothing on conflict so user edits are never clobbered.
   let idx = 0;
   for (const sym of roster) {
     await p.query(
-      `INSERT INTO strike_growth_watchlist (symbol, active, sort_idx)
-       VALUES ($1, TRUE, $2) ON CONFLICT (symbol) DO NOTHING`,
-      [sym, idx++]
+      `INSERT INTO strike_growth_watchlist (symbol, active, hot, sort_idx)
+       VALUES ($1, TRUE, $2, $3) ON CONFLICT (symbol) DO NOTHING`,
+      [sym, seedHot.has(sym), idx++]
     );
   }
   _schemaReady = true;
-  console.log(`[strike-growth] schema ready — watchlist seeded (${roster.length} symbols, all active)`);
+  console.log(`[strike-growth] schema ready — watchlist seeded (${roster.length} symbols, all active, ${seedHot.size} hot)`);
   return true;
 }
 
@@ -302,10 +312,11 @@ async function snapshotTicker(chainTicker) {
 
 // ── Sweep ────────────────────────────────────────────────────────────────────
 
-async function getActiveSymbols(p) {
+async function getActiveSymbols(p, onlyHot = false) {
+  const where = onlyHot ? 'active = TRUE AND hot = TRUE' : 'active = TRUE';
   const { rows } = await p.query(
     `SELECT symbol FROM strike_growth_watchlist
-     WHERE active = TRUE ORDER BY sort_idx ASC, symbol ASC LIMIT $1`,
+     WHERE ${where} ORDER BY sort_idx ASC, symbol ASC LIMIT $1`,
     [MAX_ACTIVE]
   );
   return rows.map((r) => r.symbol);
@@ -335,17 +346,18 @@ async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
  */
 async function runSweep(opts = {}) {
   const force = !!opts.force;
+  const onlyHot = !!opts.onlyHot;
   if (!force && !isRthWindow()) return { skipped: 'outside RTH' };
   if (!(await ensureSchema())) return { skipped: 'no DB' };
 
   const p = getPool();
   const date = etDateStr();
   const ts = new Date().toISOString();
-  const symbols = await getActiveSymbols(p);
+  const symbols = await getActiveSymbols(p, onlyHot);
   const done = [];
   const failed = [];
 
-  console.log(`[strike-growth] sweep ${date} — ${symbols.length} active symbols`);
+  console.log(`[strike-growth] ${onlyHot ? 'HOT ' : ''}sweep ${date} — ${symbols.length} symbols`);
   for (const symbol of symbols) {
     try {
       const { spot, expiries } = await snapshotTicker(symbol);
@@ -369,18 +381,40 @@ let _timer = null;
 // Run sweeps aligned-ish to the cadence: poll each minute, fire when the ET
 // minute is a multiple of SWEEP_MINS and we're inside RTH, de-duped per minute.
 let _lastSweepKey = null;
+let _lastHotKey = null;
+// Mutex: only ONE sweep (full or hot) may hit Theta at a time. The full-roster
+// sweep can run long, so the hot lane skips rather than piling on if busy.
+let _sweeping = false;
 
 function startStrikeGrowthRecorder(_port) {
-  console.log(`[strike-growth] enabled — ${SWEEP_MINS}m sweeps during RTH, ${STRIKES_EACH_SIDE}±strikes/ticker, ${TICKER_DELAY_MS}ms/ticker pacing`);
+  console.log(`[strike-growth] enabled — ${SWEEP_MINS}m full sweeps + ${HOT_MINS}m hot-lane during RTH, ${STRIKES_EACH_SIDE}±strikes/ticker, ${TICKER_DELAY_MS}ms/ticker pacing`);
   const tick = async () => {
     if (!isRthWindow()) return;
     const { hour, minute } = etParts();
-    if (minute % SWEEP_MINS !== 0) return;
-    const key = `${etDateStr()} ${hour}:${minute}`;
-    if (key === _lastSweepKey) return; // already swept this minute
-    _lastSweepKey = key;
-    try { await runSweep(); }
-    catch (e) { console.warn('[strike-growth] sweep error:', e.message); }
+
+    // Fast lane: hot list every HOT_MINS. Skips if a sweep is already running.
+    if (minute % HOT_MINS === 0) {
+      const hotKey = `${etDateStr()} ${hour}:${minute}`;
+      if (hotKey !== _lastHotKey && !_sweeping) {
+        _lastHotKey = hotKey;
+        _sweeping = true;
+        try { await runSweep({ onlyHot: true }); }
+        catch (e) { console.warn('[strike-growth] hot sweep error:', e.message); }
+        finally { _sweeping = false; }
+      }
+    }
+
+    // Full roster every SWEEP_MINS.
+    if (minute % SWEEP_MINS === 0) {
+      const key = `${etDateStr()} ${hour}:${minute}`;
+      if (key !== _lastSweepKey && !_sweeping) {
+        _lastSweepKey = key;
+        _sweeping = true;
+        try { await runSweep(); }
+        catch (e) { console.warn('[strike-growth] sweep error:', e.message); }
+        finally { _sweeping = false; }
+      }
+    }
   };
   _timer = setInterval(() => { void tick(); }, 60_000);
   _timer.unref?.();

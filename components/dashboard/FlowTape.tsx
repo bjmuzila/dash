@@ -117,7 +117,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
                 borderRadius: 4,
                 padding: "2px 6px",
                 fontSize: 11,
-                fontFamily: "monospace",
+                fontFamily: "var(--font-mono)",
                 outline: "none",
               }}
               title="Minimum premium required to appear in the feed"

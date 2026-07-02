@@ -971,27 +971,27 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", width: "100%", minWidth: 0, paddingLeft: 13 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoneyB(netGex)}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoneyB(netGex)}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.green }}>{(callWallOiVol ?? callWall) ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—"}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.green }}>{(callWallOiVol ?? callWall) ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.red }}>{(putWallOiVol ?? putWall) ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—"}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.red }}>{(putWallOiVol ?? putWall) ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: "#FB8501" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: "#FB8501" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CB</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
                   </div>
               </div>
              </div>
@@ -1011,7 +1011,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                         onChange={(e) => setIntensity(Number(e.target.value))}
                         style={{ width: 80, height: 3, accentColor: "#219EBC" }}
                       />
-                      <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>{intensity.toFixed(2)}x</span>
+                      <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1047,7 +1047,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
-                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "10%" }} />
                     <col style={{ width: "22.5%" }} />

@@ -59,9 +59,13 @@ type GexRow = {
   sd_chg: number;
   n: number;
   z: number | null;
+  spot: number;
+  otm_dist: number;
+  weighted_chg: number;
+  pct_open: number | null;
 };
-type Win = 15 | 30 | 60;
-type GexSort = "z" | "abs";
+type Win = 5 | 15 | 30 | 60;
+type GexSort = "z" | "abs" | "otm" | "pct";
 type ColSort = { col: "latest_chg" | "mean_chg" | "z"; dir: "desc" | "asc" } | null;
 
 function GexScanner() {
@@ -116,7 +120,7 @@ function GexScanner() {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 6 }}>
-          {([15, 30, 60] as Win[]).map((w) => (
+          {([5, 15, 30, 60] as Win[]).map((w) => (
             <button key={w} onClick={() => setWin(w)} style={seg(win === w)}>{w}m</button>
           ))}
         </div>
@@ -124,6 +128,8 @@ function GexScanner() {
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => setSort("z")} style={seg(sort === "z")}>Most unusual (z)</button>
           <button onClick={() => setSort("abs")} style={seg(sort === "abs")}>Biggest (size)</button>
+          <button onClick={() => setSort("otm")} style={seg(sort === "otm")}>OTM-weighted</button>
+          <button onClick={() => setSort("pct")} style={seg(sort === "pct")}>% vs open</button>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
           min z
@@ -164,12 +170,15 @@ function GexScanner() {
                   </th>
                 );
               })}
+              <th style={th}>OTM%</th>
+              <th style={th}>%vsOpen</th>
             </tr>
           </thead>
           <tbody>
             {displayRows.map((r, i) => {
               const up = r.latest_chg >= 0;
               const col = up ? HOME_THEME.green : HOME_THEME.red;
+              const otmPct = (r.otm_dist ?? 0) * 100;
               return (
                 <tr key={`${r.symbol}-${r.expiry}-${r.strike}`}
                   style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
@@ -182,11 +191,17 @@ function GexScanner() {
                   <td style={{ ...td, color: zColor(r.z), fontWeight: 800 }}>
                     {r.z == null ? "—" : `${r.z >= 0 ? "+" : ""}${r.z.toFixed(1)}σ`}
                   </td>
+                  <td style={{ ...td, color: otmPct >= 5 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>
+                    {otmPct.toFixed(1)}%
+                  </td>
+                  <td style={{ ...td, color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                    {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}%`}
+                  </td>
                 </tr>
               );
             })}
             {!rows.length && !loading && (
-              <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+              <tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                 No qualifying moves yet. Needs ≥3 snapshots spanning the window — give the recorder ~{win + 10} min of history.
               </td></tr>
             )}

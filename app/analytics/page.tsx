@@ -27,7 +27,7 @@ function Label({ children }: { children: ReactNode }) {
 }
 
 function Value({ children, color = T.text, size = 21 }: { children: ReactNode; color?: string; size?: number }) {
-  return <span style={{ fontFamily: "monospace", fontSize: size, fontWeight: 800, color }}>{children}</span>;
+  return <span style={{ fontFamily: "var(--font-mono)", fontSize: size, fontWeight: 800, color }}>{children}</span>;
 }
 
 // True green for positives on this page only. HOME_THEME.green (#8ECAE6) reads
@@ -113,7 +113,7 @@ function UpdatedStamp({ at }: { at: number | null }) {
         timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
       }).format(at) + " ET";
   return (
-    <span style={{ fontSize: 9, fontFamily: "monospace", color: T.muted, opacity: 0.55, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
+    <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.55, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
       updated {text}
     </span>
   );
@@ -238,7 +238,7 @@ function MultiGreekCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>peak strike</span>
+        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>peak strike</span>
       </Row>
       <PillSelect value={tk} options={["SPX", "QQQ", "SPY"] as const} onChange={setTk} />
       {loading || error || !hasAny ? (
@@ -251,7 +251,7 @@ function MultiGreekCard() {
               <div key={k} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 3 }}>
                 <Label>{k} · peak strike</Label>
                 <Value color={pk ? signColor(pk.value) : T.muted} size={20}>{pk ? pk.strike.toLocaleString() : "—"}</Value>
-                <span style={{ fontSize: 16, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "monospace" }}>
+                <span style={{ fontSize: 16, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
                   {pk ? fmtBig(pk.value) : "—"}
                 </span>
               </div>
@@ -320,7 +320,7 @@ function EstimatedMoveCard() {
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>weekly</span>
+          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>weekly</span>
           <Link
             href="/em"
             style={{
@@ -443,7 +443,7 @@ function PremarketCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
+        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
       </Row>
       {loading || error || bullets.length === 0 || isStale ? (
         <CardState loading={loading} error={error ?? data?.error ?? null} empty={emptyMsg} />
@@ -457,7 +457,7 @@ function PremarketCard() {
       {gapPts != null && (
         <>
           <div style={divider} />
-          <span style={{ fontSize: 14, color: T.muted, opacity: 0.8, fontFamily: "monospace" }}>
+          <span style={{ fontSize: 14, color: T.muted, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
             /ES gap: <span style={{ color: up ? POS_GREEN : T.red }}>{up ? "+" : ""}{gapPts.toFixed(2)} pts</span>
             {g?.prior_close ? ` (${((gapPts / g.prior_close) * 100).toFixed(2)}%)` : ""}
           </span>
@@ -631,7 +631,7 @@ function ConfidenceCard() {
           <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
         </span>
         {forDate && (
-          <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{forDate}</span>
+          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{forDate}</span>
         )}
       </Row>
       {loading || error || score == null ? (
@@ -700,7 +700,7 @@ function ConfidenceCard() {
                         paddingBottom: 6,
                       }}
                     >
-                      <span style={{ fontSize: 15, fontFamily: "monospace", color: T.muted }}>{cp.label}</span>
+                      <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", color: T.muted }}>{cp.label}</span>
                       <span style={{ textAlign: "right" }}>
                         <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
                       </span>
@@ -719,7 +719,7 @@ function ConfidenceCard() {
               {hitAfterChange ? (
                 <span style={{ color: POS_GREEN, fontWeight: 700 }}>hit ✓</span>
               ) : (
-                <span style={{ color: T.muted, fontFamily: "monospace" }}>
+                <span style={{ color: T.muted, fontFamily: "var(--font-mono)" }}>
                   {fmtElapsed(now - changedAt!)} — awaiting hit
                 </span>
               )}
@@ -795,7 +795,7 @@ function GreeksCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
-        <span style={{ fontSize: 10, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>
+        <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
           {usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
         </span>
       </Row>
@@ -812,7 +812,7 @@ function GreeksCard() {
               <div key={g} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 5 }}>
                 <Label>{g}</Label>
                 <Value color={nowVal > 0 ? POS_GREEN : nowVal < 0 ? T.red : T.text} size={28}>{fmtBig(nowVal)}</Value>
-                <div style={{ display: "flex", gap: 10, fontFamily: "monospace", fontSize: 13 }}>
+                <div style={{ display: "flex", gap: 10, fontFamily: "var(--font-mono)", fontSize: 13 }}>
                   <span style={{ opacity: d15 == null ? 0.5 : 1 }}>
                     <span style={{ color: T.text }}>15m</span>{" "}
                     <span style={{ color: d15 == null ? T.muted : signColor(d15) }}>{d15 == null ? "—" : fmtBig(d15)}</span>
@@ -898,11 +898,11 @@ function IbCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>ES</span>
+        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
       </Row>
 
       {/* Countdown bar (9:30–10:30 ET IB window). */}
-      <div style={{ fontSize: 12, fontFamily: "monospace", color: cd.phase === "forming" ? T.orange : cd.phase === "done" ? POS_GREEN : T.muted }}>
+      <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: cd.phase === "forming" ? T.orange : cd.phase === "done" ? POS_GREEN : T.muted }}>
         {cd.text}
       </div>
 
@@ -1034,7 +1034,7 @@ function LevelsCard() {
     <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
+        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
           {hasLiveSpot ? "live · ES" : connected ? "ES · closed" : "loading…"}
         </span>
       </Row>
@@ -1091,7 +1091,7 @@ function LevelsCard() {
                       </span>
                       <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
                     </Row>
-                    <span style={{ fontSize: 12, fontFamily: "monospace", color: T.muted }}>
+                    <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted }}>
                       entry {fmt(s.entry)} · stop {fmt(s.stop)} · tgt {fmt(s.target)}
                     </span>
                   </div>
@@ -1228,7 +1228,7 @@ function ContractLookupCard() {
     <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
-        {loaded && <span style={{ fontSize: 11, fontFamily: "monospace", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
+        {loaded && <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
       </Row>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1382,7 +1382,7 @@ function StrategyBuilderCard() {
           <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
         </span>
         {planDate && active && (
-          <span style={{ fontSize: 11, fontFamily: "monospace", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
+          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
             {isStale ? `last · ${planDate}` : planDate}
           </span>
         )}
@@ -1432,7 +1432,7 @@ function StrategyBuilderCard() {
                       {lv.price != null && String(lv.price) !== "" && (
                         <>
                           <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
-                          <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, color: T.text }}>
+                          <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: T.text }}>
                             {String(lv.price)}
                             <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, opacity: 0.65, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
                           </span>

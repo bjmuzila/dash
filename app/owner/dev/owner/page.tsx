@@ -332,7 +332,7 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
         gap: 5,
         padding: "3px 9px",
         borderRadius: 999,
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 500,
         letterSpacing: "0.01em",
         background: ok ? `${HOME_THEME.green}1f` : `${HOME_THEME.red}1f`,
@@ -408,7 +408,7 @@ function StatCard({
       gap: 6,
       borderRadius: 12,
     }}>
-      <div style={{ fontSize: 11, fontWeight: 400, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
       <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -423,6 +423,61 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 8 }}>
       {children}
+    </div>
+  );
+}
+
+/**
+ * Live SPX index-feed health. Polls /proxy/status every 5s and reads spotAgeMs
+ * (how long since the Theta index stream last moved spot). A frozen feed was
+ * silently recording thousands of dead-spot rows into greeks_ts; this surfaces it.
+ *   < 20s  → HEALTHY (green)   feed ticking
+ *   20–120s → SLOW (amber)     lagging
+ *   > 120s / never → STALE (red)  index stream frozen — needs a Theta re-subscribe
+ */
+function SpotFeedHealth() {
+  const [ageMs, setAgeMs] = useState<number | null | undefined>(undefined);
+  const [spot, setSpot] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const r = await fetch("/proxy/status", { cache: "no-store" });
+        const j = await r.json();
+        if (!alive) return;
+        setAgeMs(j?.spotAgeMs ?? null);
+        setSpot(Number(j?.spot) || null);
+      } catch { if (alive) setAgeMs(null); }
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const stale = ageMs == null || ageMs > 120_000;
+  const slow = !stale && ageMs != null && ageMs > 20_000;
+  const color = stale ? "#ff5252" : slow ? "#facc15" : "#00e676";
+  const label = ageMs === undefined ? "…" : stale ? "STALE" : slow ? "SLOW" : "HEALTHY";
+  const ageStr = ageMs == null ? "no ticks" : ageMs < 1000 ? "<1s ago" : `${Math.round(ageMs / 1000)}s ago`;
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
+      borderRadius: 12, border: `1px solid ${color}59`, background: `${color}12`,
+    }}>
+      <span style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color }}>SPX Index Feed · {label}</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
+          spot {spot != null ? spot.toFixed(2) : "--"} · updated {ageStr}
+        </div>
+      </div>
+      {stale && ageMs !== undefined && (
+        <div style={{ marginLeft: "auto", fontSize: 12, color: "#ff5252", opacity: 1, maxWidth: 220, textAlign: "right" }}>
+          Index stream frozen — re-subscribe Theta / recreate dashboard.
+        </div>
+      )}
     </div>
   );
 }
@@ -484,7 +539,7 @@ function AccordionCard({
             {title}
           </span>
           {subtitle != null && (
-            <span style={{ fontSize: 11, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {subtitle}
             </span>
           )}
@@ -547,7 +602,7 @@ function LineChartCard({
     <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text }}>{title}</div>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em", marginTop: 2 }}>{subtitle}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", marginTop: 2 }}>{subtitle}</div>
       </div>
       <div style={{ position: "relative", width: "100%" }}>
       <svg viewBox={`0 0 ${W} ${vbH}`} preserveAspectRatio="none" style={{ width: "100%", height: 190, display: "block" }}>
@@ -609,14 +664,14 @@ function LineChartCard({
             zIndex: 2,
           }}
         >
-          <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace" }}>{labels[hover]}</div>
-          <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>
-            {ptsA[hover].v.toLocaleString()} <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, opacity: 0.55 }}>visits</span>
+          <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{labels[hover]}</div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>
+            {ptsA[hover].v.toLocaleString()} <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, opacity: 1 }}>visits</span>
           </div>
         </div>
       )}
       </div>
-      <div style={{ display: "flex", gap: 16, fontSize: 10, color: HOME_THEME.text, opacity: 0.55, fontWeight: 700 }}>
+      <div style={{ display: "flex", gap: 16, fontSize: 12, color: HOME_THEME.text, opacity: 1, fontWeight: 700 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 3, borderRadius: 2, background: HOME_THEME.purple }} /> Page loads</span>
         {hasB && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 3, borderRadius: 2, background: HOME_THEME.cyan }} /> Previous</span>}
       </div>
@@ -636,7 +691,7 @@ function BarChartCard({
     <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text }}>{title}</div>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em", marginTop: 2 }}>{subtitle}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", marginTop: 2 }}>{subtitle}</div>
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 150, paddingTop: 6 }}>
         {bars.map((v, i) => (
@@ -647,18 +702,18 @@ function BarChartCard({
                 ? `linear-gradient(180deg, ${HOME_THEME.green} 0%, ${HOME_THEME.green}99 100%)`
                 : `linear-gradient(180deg, ${HOME_THEME.green}aa 0%, ${HOME_THEME.green}66 100%)`,
             }} />
-            <span style={{ fontSize: 8, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace" }}>{labels[i]}</span>
+            <span style={{ fontSize: 8, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{labels[i]}</span>
           </div>
         ))}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
-          <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.55, fontWeight: 400, letterSpacing: "0.01em" }}>Minimum</div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>{footerMin}</div>
+          <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Minimum</div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{footerMin}</div>
         </div>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
-          <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.55, fontWeight: 400, letterSpacing: "0.01em" }}>Maximum</div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace" }}>{footerMax}</div>
+          <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Maximum</div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{footerMax}</div>
         </div>
       </div>
     </div>
@@ -676,10 +731,10 @@ function BigMetricCard({ label, value, delta, accent }: { label: string; value: 
       <div style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}1a`, border: `1px solid ${accent}33`, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: accent }} />
       </div>
-      <div style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <span style={{ fontSize: 30, fontWeight: 500, color: HOME_THEME.text, lineHeight: 1 }}>{value}</span>
-        {delta ? <span style={{ fontSize: 11, fontWeight: 500, color: `${HOME_THEME.text}88` }}>{delta}</span> : null}
+        {delta ? <span style={{ fontSize: 12, fontWeight: 500, color: `${HOME_THEME.text}` }}>{delta}</span> : null}
       </div>
     </div>
   );
@@ -691,9 +746,9 @@ function StatChip({ icon, label, value, accent }: { icon: string; label: string;
     <div style={{ ...homePanelStyle, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
       <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, background: `${accent}1a`, border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{icon}</div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 11, fontWeight: 400, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+        <div style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
       </div>
-      <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, fontFamily: "monospace", flexShrink: 0 }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>{value}</div>
     </div>
   );
 }
@@ -707,10 +762,10 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
-        <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
       </div>
       {status && (
-        <span style={{ fontSize: 8.5, fontWeight: 500, color: `${HOME_THEME.text}88`, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
+        <span style={{ fontSize: 8.5, fontWeight: 500, color: `${HOME_THEME.text}`, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
       )}
     </div>
   );
@@ -859,7 +914,7 @@ function OverviewSection({ metrics }: {
             <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: pc(i), flexShrink: 0 }} />{r.label}
             </span>
-            <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>{r.n.toLocaleString()}</span>
+            <span style={{ color: HOME_THEME.text, opacity: 1 }}>{r.n.toLocaleString()}</span>
           </div>
           <div style={{ height: 7, background: TRACK, borderRadius: 4, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${Math.round((r.n / max) * 100)}%`, background: pc(i), borderRadius: 4 }} />
@@ -874,7 +929,7 @@ function OverviewSection({ metrics }: {
       <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: HOME_THEME.text, width: 96 }}>
         <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />{label}
       </span>
-      <span style={{ fontSize: 14, fontWeight: 500, fontFamily: "monospace", width: 78, color: HOME_THEME.text }}>{value}</span>
+      <span style={{ fontSize: 14, fontWeight: 500, fontFamily: "var(--font-mono)", width: 78, color: HOME_THEME.text }}>{value}</span>
       <div style={{ marginLeft: "auto", width: 64 }}><Sparkline data={spark} accent={color} height={20} /></div>
     </div>
   );
@@ -882,7 +937,7 @@ function OverviewSection({ metrics }: {
   const OpsRow = ({ label, children, last }: { label: string; children: React.ReactNode; last?: boolean }) => (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, padding: "10px 0", borderBottom: last ? "none" : `0.5px solid ${HOME_THEME.border}`, color: HOME_THEME.text }}>
       <span>{label}</span>
-      <span style={{ fontSize: 13, fontWeight: 500, fontFamily: "monospace" }}>{children}</span>
+      <span style={{ fontSize: 13, fontWeight: 500, fontFamily: "var(--font-mono)" }}>{children}</span>
     </div>
   );
 
@@ -899,8 +954,8 @@ function OverviewSection({ metrics }: {
           { l: "WS out/hr", v: infra.wsPerHr },
         ].map((k, i) => (
           <div key={k.l} style={{ ...homePanelStyle, padding: "11px 13px" }}>
-            <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.55, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k.l}</div>
-            <div style={{ fontSize: 19, fontWeight: 500, fontFamily: "monospace", color: HOME_THEME.text, lineHeight: 1 }}>{k.v}</div>
+            <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k.l}</div>
+            <div style={{ fontSize: 19, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text, lineHeight: 1 }}>{k.v}</div>
           </div>
         ))}
       </div>
@@ -913,7 +968,7 @@ function OverviewSection({ metrics }: {
             <path d={`${trafficPath} L100,32 L0,32 Z`} fill={pc(3) + "22"} stroke="none" />
             <path d={trafficPath} fill="none" stroke={pc(3)} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.text, opacity: 0.55 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
             <span>{totalVisits.toLocaleString()} visits</span>
             {trafficDelta != null && <span style={{ color: trafficDelta >= 0 ? pc(1) : HOME_THEME.red }}>{trafficDelta >= 0 ? "▲" : "▼"} {Math.abs(trafficDelta)}%</span>}
           </div>
@@ -925,7 +980,7 @@ function OverviewSection({ metrics }: {
               <div key={i} style={{ flex: 1, background: pc(1), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / wkMax) * 82))}px` }} />
             ))}
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.text, opacity: 0.55 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
             <span>{weekly.counts.reduce((a, b) => a + b, 0)} new</span>
             <span style={{ color: pc(1) }}>▲ {weekly.counts[weekly.counts.length - 1] ?? 0} this wk</span>
           </div>
@@ -936,7 +991,7 @@ function OverviewSection({ metrics }: {
             <path d={`${cumPath} L100,32 L0,32 Z`} fill={pc(0) + "22"} stroke="none" />
             <path d={cumPath} fill="none" stroke={pc(0)} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.text, opacity: 0.55 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
             <span>{users != null ? `${users.toLocaleString()} total` : "—"}</span>
             <span>{activeSessions != null ? `${activeSessions} active now` : ""}</span>
           </div>
@@ -948,7 +1003,7 @@ function OverviewSection({ metrics }: {
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: pc(3) }} />Top pages · by loads</div>
           {topPages.length === 0
-            ? <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55 }}>No page loads recorded yet.</div>
+            ? <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>No page loads recorded yet.</div>
             : <BarList rows={topPages.map((p) => ({ label: p.label, n: p.loads }))} max={topMax} mono />}
         </div>
         <div style={cardStyle}>
@@ -961,16 +1016,16 @@ function OverviewSection({ metrics }: {
       <div style={cardStyle}>
         <div style={{ ...titleStyle, display: "flex", justifyContent: "space-between" }}>
           <span>Hourly load heatmap · visits by hour × weekday (ET)</span>
-          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace" }}>sample</span>
+          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>sample</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "32px repeat(24, 1fr)", gap: 2 }}>
           <div />
           {Array.from({ length: 24 }, (_, h) => (
-            <div key={"h" + h} style={{ fontSize: 8, color: HOME_THEME.text, opacity: 0.55, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
+            <div key={"h" + h} style={{ fontSize: 8, color: HOME_THEME.text, opacity: 1, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
           ))}
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, di) => (
             <Fragment key={d}>
-              <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.55, lineHeight: "30px" }}>{d}</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, lineHeight: "30px" }}>{d}</div>
               {Array.from({ length: 24 }, (_, h) => {
                 const v = (h >= 13 && h <= 21 && di < 5) ? 0.28 + ((h * 7 + di * 13) % 10) / 14 : 0.06 + ((h * 3 + di * 5) % 6) / 36;
                 return <div key={d + h} style={{ height: 30, borderRadius: 2, background: `rgba(91,155,213,${v.toFixed(2)})` }} />;
@@ -989,24 +1044,24 @@ function OverviewSection({ metrics }: {
           <InfraRow label="Host net 1h" value={infra.hostNet.value} spark={infra.hostNet.spark} color={pc(3)} />
           <InfraRow label="CF egress 24h" value={infra.cfEgress.value} spark={infra.cfEgress.spark} color={pc(6)} />
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0" }}>
-            <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.55, width: 96 }}>WS split</span>
-            <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace" }}>{infra.wsSplit}</span>
+            <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 1, width: 96 }}>WS split</span>
+            <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{infra.wsSplit}</span>
           </div>
         </div>
         <div style={cardStyle}>
           <div style={titleStyle}>Ops queues</div>
           <OpsRow label="Feedback open">{ops.feedbackOpen}</OpsRow>
-          <OpsRow label="Levels published">{ops.levelsCount} <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>· {fmtLastRun(ops.levelsRun)}</span></OpsRow>
+          <OpsRow label="Levels published">{ops.levelsCount} <span style={{ color: HOME_THEME.text, opacity: 1 }}>· {fmtLastRun(ops.levelsRun)}</span></OpsRow>
           <OpsRow label="Stale EM tickers">
             {ops.staleEm > 0
               ? <span style={{ color: HOME_THEME.red }}>{ops.staleEm}</span>
-              : <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>0</span>}
+              : <span style={{ color: HOME_THEME.text, opacity: 1 }}>0</span>}
           </OpsRow>
           <OpsRow label="EOD GEX today">
-            {ops.eodToday > 0 ? `${ops.eodToday} saved` : <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>not yet · fires 3:55pm</span>}
+            {ops.eodToday > 0 ? `${ops.eodToday} saved` : <span style={{ color: HOME_THEME.text, opacity: 1 }}>not yet · fires 3:55pm</span>}
           </OpsRow>
           <OpsRow label="Maintenance" last>
-            {ops.maintenance ? <span style={{ color: HOME_THEME.red }}>ON</span> : <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>off</span>}
+            {ops.maintenance ? <span style={{ color: HOME_THEME.red }}>ON</span> : <span style={{ color: HOME_THEME.text, opacity: 1 }}>off</span>}
           </OpsRow>
         </div>
       </div>
@@ -1908,7 +1963,7 @@ export default function OwnerDashboard() {
       }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.02em" }}>CB Edge</div>
-          <div style={{ fontSize: 11, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 2 }}>OWNER DASHBOARD</div>
+          <div style={{ fontSize: 12, color: `${HOME_THEME.cyan}cc`, letterSpacing: "0.08em", marginTop: 2 }}>OWNER DASHBOARD</div>
         </div>
         {isMobile && (
           <button
@@ -1930,14 +1985,14 @@ export default function OwnerDashboard() {
               }} />
               <span style={{ fontSize: 13, color: HOME_THEME.text }}>{row.label}</span>
             </div>
-            {row.sub && <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.5, fontFamily: "monospace" }}>{row.sub}</span>}
+            {row.sub && <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{row.sub}</span>}
           </div>
         ))}
       </div>
 
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: "auto", padding: "8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px 6px" }}>SECTIONS</div>
         {NAV_ITEMS.map((item) => {
           const active = ownerTab === item.id;
           const badge = item.id === "overview" ? feedbackBadge : item.badge;
@@ -1972,7 +2027,7 @@ export default function OwnerDashboard() {
 
       {/* Quick controls */}
       <div style={{ padding: "10px 8px 14px", borderTop: `1px solid ${HOME_THEME.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.12em", textTransform: "uppercase", padding: "0 8px 4px" }}>QUICK CONTROLS</div>
         {[
           { key: "idle",    label: isIdle == null ? "Idle mode: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
           { key: "mvcAuto", label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
@@ -1999,7 +2054,7 @@ export default function OwnerDashboard() {
         ))}
         {ctlMsg && (
           <div style={{
-            fontSize: 10, fontFamily: "monospace", padding: "5px 8px", borderRadius: 6, marginTop: 2,
+            fontSize: 12, fontFamily: "var(--font-mono)", padding: "5px 8px", borderRadius: 6, marginTop: 2,
             background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
             border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
             color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
@@ -2076,7 +2131,7 @@ export default function OwnerDashboard() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {lastRefresh && !isMobile && (
-              <span style={{ fontSize: 10, color: `${HOME_THEME.text}55`, fontFamily: "monospace" }}>
+              <span style={{ fontSize: 12, color: `${HOME_THEME.text}`, fontFamily: "var(--font-mono)" }}>
                 {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
               </span>
             )}
@@ -2106,7 +2161,7 @@ export default function OwnerDashboard() {
                     boxShadow: row.ok ? `0 0 5px ${HOME_THEME.green}88` : `0 0 5px ${HOME_THEME.red}88`,
                   }} />
                   {row.label}
-                  {row.sub && <span style={{ opacity: 0.5, fontFamily: "monospace", fontSize: 11 }}>{row.sub}</span>}
+                  {row.sub && <span style={{ opacity: 1, fontFamily: "var(--font-mono)", fontSize: 11 }}>{row.sub}</span>}
                 </span>
               ))}
             </div>
@@ -2135,7 +2190,7 @@ export default function OwnerDashboard() {
             </div>
             {ctlMsg && (
               <div style={{
-                width: "100%", fontSize: 10, fontFamily: "monospace", padding: "5px 8px", borderRadius: 6,
+                width: "100%", fontSize: 12, fontFamily: "var(--font-mono)", padding: "5px 8px", borderRadius: 6,
                 background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
                 border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
                 color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
@@ -2224,7 +2279,7 @@ export default function OwnerDashboard() {
               >
                 {feedbackRefreshLabel}
               </button>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: HOME_THEME.text, cursor: "pointer" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.text, cursor: "pointer" }}>
                 <input
                   type="checkbox"
                   checked={feedbackShowResolved}
@@ -2237,7 +2292,7 @@ export default function OwnerDashboard() {
             {(() => {
               const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
               if (visible.length === 0) {
-                return <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6 }}>No feedback yet.</span>;
+                return <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>No feedback yet.</span>;
               }
               const catColor: Record<string, string> = {
                 bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
@@ -2267,11 +2322,11 @@ export default function OwnerDashboard() {
                         }}>
                           {f.category}
                         </span>
-                        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
+                        <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>
                           {f.email || f.clerk_user_id || "unknown"}
                         </span>
                         {f.created_at && (
-                          <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.45 }}>
+                          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>
                             {new Date(f.created_at).toLocaleString()}
                           </span>
                         )}
@@ -2337,7 +2392,7 @@ export default function OwnerDashboard() {
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.55, fontWeight: 400, letterSpacing: "0.01em" }}>Window</div>
+            <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Window</div>
             <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
               {(["live", "weekly", "monthly"] as const).map(w => (
                 <button
@@ -2378,7 +2433,7 @@ export default function OwnerDashboard() {
               accent={HOME_THEME.orange}
               mono
               footer={cfMetrics?.unconfigured && cfMetrics.egress.value == null
-                ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.55, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
+                ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
                 : <Sparkline data={cfMetrics?.egress.spark ?? []} accent={HOME_THEME.orange} />}
             />
             <StatCard
@@ -2393,7 +2448,7 @@ export default function OwnerDashboard() {
               accent={HOME_THEME.cyan}
               mono
               footer={renderMetrics?.unconfigured && renderMetrics.bandwidth.value == null
-                ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.55, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
+                ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
                 : <Sparkline data={renderMetrics?.bandwidth.spark ?? []} accent={HOME_THEME.cyan} />}
             />
             <StatCard
@@ -2417,8 +2472,8 @@ export default function OwnerDashboard() {
               footer={<Sparkline data={renderMetrics?.cpu.spark ?? []} accent={cpuAccent} />}
             />
             <div style={{ containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px", overflow: "hidden" }}>
-              <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>Updated</div>
-              <div style={{ fontSize: "clamp(8px, 7.5cqw, 11px)", fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.55, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>Updated</div>
+              <div style={{ fontSize: "clamp(8px, 7.5cqw, 11px)", fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {renderMetrics?.fetchedAt
                   ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
                   : "—"}
@@ -2430,10 +2485,10 @@ export default function OwnerDashboard() {
               host bandwidth card can't show). Live trailing-60s window. */}
           <div style={{ marginTop: 12 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 500, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em" }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>
                 /ws/gex Outbound · Live (last 60s)
               </div>
-              <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.55 }}>
+              <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                 {wsBw ? `${wsBw.clients} client${wsBw.clients === 1 ? "" : "s"}` : "—"}
               </div>
             </div>
@@ -2472,7 +2527,7 @@ export default function OwnerDashboard() {
                         accent={ACCENT[t] ?? HOME_THEME.text}
                         mono
                         footer={
-                          <div style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.55 }}>
+                          <div style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                             {wsBw && total > 0 ? `${(((lastMin[t] ?? 0) / total) * 100).toFixed(0)}% of out` : "—"}
                           </div>
                         }
@@ -2484,7 +2539,7 @@ export default function OwnerDashboard() {
                     <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                       {entries.filter(([t]) => !["flow", "gex", "snapshot"].includes(t)).map(([t, b]) => (
                         <span key={t} style={{
-                          fontSize: 9.5, fontFamily: "monospace", fontWeight: 700,
+                          fontSize: 9.5, fontFamily: "var(--font-mono)", fontWeight: 700,
                           color: ACCENT[t] ?? HOME_THEME.text,
                           border: `1px solid ${ACCENT[t] ?? HOME_THEME.text}44`,
                           background: `${ACCENT[t] ?? HOME_THEME.text}10`,
@@ -2495,7 +2550,7 @@ export default function OwnerDashboard() {
                       ))}
                     </div>
                   )}
-                  <div style={{ fontSize: 9.5, color: HOME_THEME.text, opacity: 0.55, marginTop: 8, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 9.5, color: HOME_THEME.text, opacity: 1, marginTop: 8, lineHeight: 1.5 }}>
                     Projected from the trailing 60s × open clients. If <b style={{ color: HOME_THEME.orange }}>FLOW</b> dominates and the
                     number is high while the market is closed, the flow-tape dedupe regressed. Cross-check Cloudflare Outbound.
                   </div>
@@ -2528,13 +2583,13 @@ export default function OwnerDashboard() {
                   padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
                   overflow: "hidden",
                 }}>
-                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 500, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 500, fontFamily: "monospace", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
-                  <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: HOME_THEME.text, opacity: 0.45, whiteSpace: "nowrap" }}>rows today</div>
+                  <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: HOME_THEME.text, opacity: 1, whiteSpace: "nowrap" }}>rows today</div>
                 </div>
               );
             })}
@@ -2553,6 +2608,8 @@ export default function OwnerDashboard() {
           onToggle={toggleSection}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {/* SPX index-feed health (frozen-spot detector) */}
+            <SpotFeedHealth />
             {/* Toggles */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
               {/* Idle */}
@@ -2611,7 +2668,7 @@ export default function OwnerDashboard() {
                 onClick={doReconnect}
                 disabled={ctlBusy === "reconnect"}
                 title="Tear down and re-establish the TT/dxLink feed (recovers from a dropped socket or expired auth without a Render restart)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "reconnect" ? 0.6 : 1, cursor: ctlBusy === "reconnect" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 12, opacity: ctlBusy === "reconnect" ? 0.6 : 1, cursor: ctlBusy === "reconnect" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "reconnect" ? "Reconnecting…" : "↻ Reconnect Feed"}
               </button>
@@ -2619,7 +2676,7 @@ export default function OwnerDashboard() {
                 onClick={doEodRun}
                 disabled={ctlBusy === "eod"}
                 title="Manually fire the EOD GEX recorder for $SPX/SPY/QQQ (in case the 3:55–4:05 ET window was missed)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "eod" ? 0.6 : 1, cursor: ctlBusy === "eod" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 12, opacity: ctlBusy === "eod" ? 0.6 : 1, cursor: ctlBusy === "eod" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "eod" ? "Recording…" : "▶ Run EOD GEX now"}
               </button>
@@ -2627,7 +2684,7 @@ export default function OwnerDashboard() {
                 onClick={doMvcSnapshot}
                 disabled={ctlBusy === "mvcSnap"}
                 title="Write a single CB - Core Bullseye snapshot right now (overrides the outside-RTH guard; still needs a live chain)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 12, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "mvcSnap" ? "Snapshotting (may reconnect)…" : "📸 CB Snapshot now"}
               </button>
@@ -2635,7 +2692,7 @@ export default function OwnerDashboard() {
                 onClick={doPremarketRun}
                 disabled={ctlBusy === "premarket"}
                 title="Generate the Analytics Premarket card's 5-bullet AI summary now (instead of waiting for the ~8am ET run)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 12, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
               </button>
@@ -2643,7 +2700,7 @@ export default function OwnerDashboard() {
                 onClick={doStrategyRun}
                 disabled={ctlBusy === "strategy"}
                 title="Generate the Analytics Strategy Builder card's full daily AI plan now (instead of waiting for the hourly run)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "strategy" ? 0.6 : 1, cursor: ctlBusy === "strategy" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 12, opacity: ctlBusy === "strategy" ? 0.6 : 1, cursor: ctlBusy === "strategy" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "strategy" ? "Generating…" : "🎯 Strategy now"}
               </button>
@@ -2651,7 +2708,7 @@ export default function OwnerDashboard() {
                 onClick={doClearChat}
                 disabled={ctlBusy === "clearChat"}
                 title="Permanently delete ALL subscriber chat messages. Cannot be undone."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 11, opacity: ctlBusy === "clearChat" ? 0.6 : 1, cursor: ctlBusy === "clearChat" ? "wait" : "pointer" }}
+                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 12, opacity: ctlBusy === "clearChat" ? 0.6 : 1, cursor: ctlBusy === "clearChat" ? "wait" : "pointer" }}
               >
                 {ctlBusy === "clearChat" ? "Erasing…" : "🗑️ Erase all chat"}
               </button>
@@ -2660,7 +2717,7 @@ export default function OwnerDashboard() {
             {/* Result message */}
             {ctlMsg && (
               <div style={{
-                fontSize: 11, fontFamily: "monospace", padding: "8px 10px", borderRadius: 8,
+                fontSize: 12, fontFamily: "var(--font-mono)", padding: "8px 10px", borderRadius: 8,
                 background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.10)",
                 border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
                 color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
@@ -2684,7 +2741,7 @@ export default function OwnerDashboard() {
         >
           <div>
             {eodGex.length === 0 ? (
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace" }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
                 Not yet recorded today — fires 3:55–4:05 PM ET
               </div>
             ) : (
@@ -2725,10 +2782,10 @@ export default function OwnerDashboard() {
                       </div>
                       {row ? (
                         <>
-                          <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "monospace", color: HOME_THEME.text }}>
+                          <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>
                             {fmtGex(row.total_gex)}
                           </div>
-                          <div style={{ fontSize: 10, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.55 }}>
+                          <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                             spot {row.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                           {tStr && (
@@ -2736,7 +2793,7 @@ export default function OwnerDashboard() {
                           )}
                         </>
                       ) : (
-                        <div style={{ fontSize: 12, color: HOME_THEME.red, fontFamily: "monospace" }}>not saved</div>
+                        <div style={{ fontSize: 12, color: HOME_THEME.red, fontFamily: "var(--font-mono)" }}>not saved</div>
                       )}
                     </div>
                   );
@@ -2759,19 +2816,19 @@ export default function OwnerDashboard() {
               />
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Last Published</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.lastRun)}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.lastRun)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>EM Grabbed</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.emGrabbed)}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.emGrabbed)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Tickers</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{levels.count}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{levels.count}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Schedule</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: HOME_THEME.text, fontFamily: "monospace" }}>Sat ~09:00 ET</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>Sat ~09:00 ET</span>
               </div>
               <button
                 onClick={triggerPublish}
@@ -2781,7 +2838,7 @@ export default function OwnerDashboard() {
                   ...homeButtonStyle,
                   padding: "6px 16px",
                   borderRadius: 8,
-                  fontSize: 11,
+                  fontSize: 12,
                   marginLeft: "auto",
                   opacity: (publishing || pubRun.running) ? 0.6 : 1,
                   cursor: (publishing || pubRun.running) ? "not-allowed" : "pointer",
@@ -2796,7 +2853,7 @@ export default function OwnerDashboard() {
 
             {/* Last manual/weekly run result */}
             {(pubRun.running || pubRun.at) && (
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 11, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
                 {pubRun.running ? (
                   <span style={{ fontWeight: 500, color: HOME_THEME.cyan }}>● Running… computing levels (this can take a few minutes)</span>
                 ) : (
@@ -2805,29 +2862,29 @@ export default function OwnerDashboard() {
                       {pubRun.error ? "✗ Failed" : "✓ Last run OK"}
                     </span>
                     {pubRun.emTotal != null && (
-                      <span style={{ color: HOME_THEME.text, fontFamily: "monospace" }}>
+                      <span style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>
                         EM <b style={{ color: (pubRun.failedEm.length ? HOME_THEME.orange : HOME_THEME.green) }}>{pubRun.emOk}/{pubRun.emTotal}</b>
                         {pubRun.posted != null ? <> · {pubRun.posted} rows</> : null}
                       </span>
                     )}
-                    {pubRun.ms != null && <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>in {Math.round((pubRun.ms ?? 0) / 1000)}s</span>}
-                    {pubRun.at && <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>{fmtLastRun(pubRun.at)}</span>}
-                    {pubRun.reason && <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>({pubRun.reason})</span>}
+                    {pubRun.ms != null && <span style={{ color: HOME_THEME.text, opacity: 1 }}>in {Math.round((pubRun.ms ?? 0) / 1000)}s</span>}
+                    {pubRun.at && <span style={{ color: HOME_THEME.text, opacity: 1 }}>{fmtLastRun(pubRun.at)}</span>}
+                    {pubRun.reason && <span style={{ color: HOME_THEME.text, opacity: 1 }}>({pubRun.reason})</span>}
                     {pubRun.error && <span style={{ color: HOME_THEME.red }}>{pubRun.error}</span>}
                   </>
                 )}
               </div>
             )}
             {!pubRun.running && pubRun.failedEm.length > 0 && (
-              <div style={{ fontSize: 10, color: HOME_THEME.orange, lineHeight: 1.6 }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.orange, lineHeight: 1.6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                   <b>No EM priced ({pubRun.failedEm.length}):</b>
                   <button
                     onClick={triggerRetry}
                     disabled={retrying || publishing}
                     style={{
-                      fontSize: 10, fontWeight: 500, padding: "3px 10px", borderRadius: 6, cursor: (retrying || publishing) ? "default" : "pointer",
-                      color: (retrying || publishing) ? `${HOME_THEME.text}66` : "#000",
+                      fontSize: 12, fontWeight: 500, padding: "3px 10px", borderRadius: 6, cursor: (retrying || publishing) ? "default" : "pointer",
+                      color: (retrying || publishing) ? `${HOME_THEME.text}` : "#000",
                       background: (retrying || publishing) ? "rgba(255,255,255,0.06)" : HOME_THEME.orange,
                       border: `1px solid ${HOME_THEME.orange}`, opacity: (retrying || publishing) ? 0.6 : 1,
                     }}
@@ -2839,10 +2896,10 @@ export default function OwnerDashboard() {
                 {pubRun.failedEm.map((f) => (
                   <span key={f.ticker} style={{ marginRight: 10, whiteSpace: "nowrap" }}>
                     <b style={{ color: HOME_THEME.text }}>{f.ticker}</b>
-                    {f.reason ? <span style={{ color: HOME_THEME.text, opacity: 0.55 }}> ({f.reason})</span> : null}
+                    {f.reason ? <span style={{ color: HOME_THEME.text, opacity: 1 }}> ({f.reason})</span> : null}
                   </span>
                 ))}
-                <div style={{ color: HOME_THEME.text, opacity: 0.55, marginTop: 3 }}>
+                <div style={{ color: HOME_THEME.text, opacity: 1, marginTop: 3 }}>
                   Usually illiquid / no quoted weekly straddle, or after-hours. Retry once liquidity returns.
                 </div>
               </div>
@@ -2850,7 +2907,7 @@ export default function OwnerDashboard() {
             {levels.tickers.length > 0 && (
               <>
                 {levels.tickers.some((t) => t.stale) && (
-                  <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.orange, display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.orange, display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.orange, display: "inline-block" }} />
                     {levels.tickers.filter((t) => t.stale).length} ticker(s) showing a STALE EM — straddle didn’t price this run; /em is serving the prior week’s value.
                   </div>
@@ -2862,7 +2919,7 @@ export default function OwnerDashboard() {
                     disabled={copyingAll}
                     title={`Copy ONE combined indicator for the core EM watchlist (${CORE_EM_TICKERS.join(", ")})`}
                     style={{
-                      fontSize: 10,
+                      fontSize: 12,
                       fontWeight: 700,
                       cursor: copyingAll ? "wait" : "pointer",
                       color: copiedTicker === "__ALL__" ? HOME_THEME.green : HOME_THEME.cyan,
@@ -2870,7 +2927,7 @@ export default function OwnerDashboard() {
                       border: `1px solid ${copiedTicker === "__ALL__" ? HOME_THEME.green + "66" : HOME_THEME.cyan + "66"}`,
                       padding: "3px 10px",
                       borderRadius: 6,
-                      fontFamily: "monospace",
+                      fontFamily: "var(--font-mono)",
                     }}
                   >
                     {copiedTicker === "__ALL__" ? "✓ copied core" : copyingAll ? "copying…" : "⧉ Copy Core EM"}
@@ -2884,7 +2941,7 @@ export default function OwnerDashboard() {
                       onClick={() => void copyPine(t.ticker)}
                       title={`Click to copy Pine script.\n${t.stale ? "EM is stale — carried over from a previous run (this week’s straddle failed to price)" : "EM freshly computed this run"}`}
                       style={{
-                        fontSize: 10,
+                        fontSize: 12,
                         fontWeight: 700,
                         cursor: "pointer",
                         color: copied ? HOME_THEME.text : `${HOME_THEME.muted}99`,
@@ -2892,7 +2949,7 @@ export default function OwnerDashboard() {
                         border: `1px solid ${copied ? HOME_THEME.cyan + "88" : HOME_THEME.border}`,
                         padding: "3px 8px",
                         borderRadius: 6,
-                        fontFamily: "monospace",
+                        fontFamily: "var(--font-mono)",
                       }}
                     >
                       {copied ? "✓ copied" : `${t.ticker}${t.stale ? " ⚠" : ""}`}
@@ -2918,7 +2975,7 @@ export default function OwnerDashboard() {
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {clerk == null ? (
-              <span style={{ fontSize: 11, color: HOME_THEME.text, fontFamily: "monospace" }}>Loading…</span>
+              <span style={{ fontSize: 12, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>Loading…</span>
             ) : (
               <>
               {/* Key status row */}
@@ -2926,7 +2983,7 @@ export default function OwnerDashboard() {
                 <StatusBadge ok={clerk.configured} label={clerk.configured ? "Configured" : "Not configured"} />
                 {/* Environment badge: live = amber (be careful), test = cyan. */}
                 <span style={{
-                  fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase",
+                  fontSize: 12, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase",
                   padding: "3px 9px", borderRadius: 20,
                   color: clerk.environment === "live" ? HOME_THEME.orange : clerk.environment === "test" ? HOME_THEME.cyan : HOME_THEME.text,
                   background: clerk.environment === "live" ? `${HOME_THEME.orange}1a` : clerk.environment === "test" ? `${HOME_THEME.cyan}1a` : "transparent",
@@ -2937,8 +2994,8 @@ export default function OwnerDashboard() {
 
                 {/* Auth provider (Supabase). Secrets never leave the server. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.text, opacity: 0.55, letterSpacing: "0.01em" }}>Provider</span>
-                  <span style={{ fontSize: 11, fontFamily: "monospace", color: clerk.configured ? HOME_THEME.green : HOME_THEME.red }}>
+                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Provider</span>
+                  <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: clerk.configured ? HOME_THEME.green : HOME_THEME.red }}>
                     {clerk.provider === "supabase" ? "Supabase Auth" : clerk.provider || "supabase"}
                   </span>
                 </div>
@@ -2952,7 +3009,7 @@ export default function OwnerDashboard() {
                   // Show an error hint if the admin API was configured but didn't answer.
                   if (clerk.statsError) {
                     return (
-                      <div style={{ fontSize: 10, color: HOME_THEME.orange, fontFamily: "monospace" }}>
+                      <div style={{ fontSize: 12, color: HOME_THEME.orange, fontFamily: "var(--font-mono)" }}>
                         Admin API unavailable: {clerk.statsError}
                       </div>
                     );
@@ -2964,14 +3021,14 @@ export default function OwnerDashboard() {
                     {/* Stat chips */}
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
-                        <span style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 0.6, letterSpacing: "0.01em" }}>Users</span>
-                        <span style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.cyan, fontFamily: "monospace" }}>
+                        <span style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Users</span>
+                        <span style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>
                           {s!.userCount != null ? s!.userCount.toLocaleString() : "—"}
                         </span>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.green}14`, border: `1px solid ${HOME_THEME.green}33` }}>
-                        <span style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 0.6, letterSpacing: "0.01em" }}>Active sessions</span>
-                        <span style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.green, fontFamily: "monospace" }}>
+                        <span style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Active sessions</span>
+                        <span style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.green, fontFamily: "var(--font-mono)" }}>
                           {s!.activeSessions != null ? s!.activeSessions.toLocaleString() : "—"}
                         </span>
                       </div>
@@ -2996,9 +3053,9 @@ export default function OwnerDashboard() {
                               <span style={{ fontSize: 13, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
                                 {u.name ? <b style={{ fontWeight: 700 }}>{u.name}</b> : null}
                                 {u.name && u.email ? "  " : null}
-                                {u.email ? <span style={{ fontFamily: "monospace", color: "#c8d8e8" }}>{u.email}</span> : (!u.name ? <span style={{ color: HOME_THEME.text, opacity: 0.55 }}>(no email)</span> : null)}
+                                {u.email ? <span style={{ fontFamily: "var(--font-mono)", color: "#c8d8e8" }}>{u.email}</span> : (!u.name ? <span style={{ color: HOME_THEME.text, opacity: 1 }}>(no email)</span> : null)}
                               </span>
-                              <span style={{ fontSize: 9, color: HOME_THEME.text, fontFamily: "monospace", flexShrink: 0 }}>
+                              <span style={{ fontSize: 9, color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>
                                 {u.createdAt ? fmtAgo(new Date(u.createdAt).toISOString()) : "—"}
                               </span>
                             </div>
@@ -3042,7 +3099,7 @@ export default function OwnerDashboard() {
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <SectionLabel>Page Activity</SectionLabel>
-              <span style={{ fontSize: 9, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.55 }}>
+              <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                 {totalVisits.toLocaleString()} visits · {activeCount} active now
               </span>
             </div>
@@ -3051,7 +3108,7 @@ export default function OwnerDashboard() {
           {(
           <div style={{ padding: "14px", display: "flex", flexDirection: "column", gap: 14 }}>
             {/* Legend — what the three states mean + counter caveat */}
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 10, color: HOME_THEME.text, opacity: 0.55 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: HOME_THEME.green, boxShadow: `0 0 6px ${HOME_THEME.green}` }} />
                 <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Open now</b> — a tab has it open
@@ -3078,16 +3135,16 @@ export default function OwnerDashboard() {
                 background: "rgba(13,17,25,0.60)",
               }}>
                 <span style={{ fontSize: 13 }}>🛰️</span>
-                <span style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
+                <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                   Recent Activity
                 </span>
-                <span style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.55, marginLeft: "auto", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
                   newest first
                 </span>
               </div>
               <div style={{ maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin" }}>
                 {feed.length === 0 ? (
-                  <div style={{ padding: "12px 14px", fontSize: 11, color: HOME_THEME.text, opacity: 0.55 }}>
+                  <div style={{ padding: "12px 14px", fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>
                     No page loads recorded yet.
                   </div>
                 ) : feed.map((p) => {
@@ -3099,7 +3156,7 @@ export default function OwnerDashboard() {
                         display: "flex", alignItems: "center", gap: 10,
                         padding: "6px 14px",
                         borderBottom: `1px solid ${HOME_THEME.border}`,
-                        fontFamily: "monospace", fontSize: 11,
+                        fontFamily: "var(--font-mono)", fontSize: 12,
                       }}
                     >
                       <span style={{
@@ -3110,7 +3167,7 @@ export default function OwnerDashboard() {
                       <span style={{ color: HOME_THEME.text, fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                         {labelFor(p.pageKey)}
                       </span>
-                      <span style={{ color: HOME_THEME.text, opacity: 0.55, flexShrink: 0 }}>
+                      <span style={{ color: HOME_THEME.text, opacity: 1, flexShrink: 0 }}>
                         {(p.totalLoads ?? 0).toLocaleString()}×
                       </span>
                       <span style={{ color: active ? HOME_THEME.green : "#fff", flexShrink: 0, minWidth: 64, textAlign: "right" }}>
@@ -3135,7 +3192,7 @@ export default function OwnerDashboard() {
                     background: "rgba(13,17,25,0.60)",
                   }}>
                     <span style={{ fontSize: 15 }}>{group.emoji}</span>
-                    <span style={{ fontSize: 10, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                       {group.label}
                     </span>
                   </div>
@@ -3185,7 +3242,7 @@ export default function OwnerDashboard() {
                               title={`${loads.toLocaleString()} total loads`}
                               style={{
                                 fontSize: 9,
-                                fontFamily: "monospace",
+                                fontFamily: "var(--font-mono)",
                                 fontWeight: 700,
                                 padding: "2px 6px",
                                 borderRadius: 4,
@@ -3199,10 +3256,10 @@ export default function OwnerDashboard() {
                             {status ? (
                               <StatusBadge ok={active} label={active ? "Open now" : "Seen before"} />
                             ) : (
-                              <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.55 }}>never visited</span>
+                              <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>never visited</span>
                             )}
                             {seen && (
-                              <span style={{ fontSize: 9, color: HOME_THEME.text, opacity: 0.55, fontFamily: "monospace" }}>
+                              <span style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
                                 {fmtAgo(seen)}
                               </span>
                             )}

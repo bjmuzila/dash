@@ -335,7 +335,7 @@ export function LiveIb() {
   const stat = (label: string, value: string, color: string = HOME_THEME.text) => (
     <div style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: "18px 20px", background: rgba(HOME_THEME.text, 0.02) }}>
       <div style={{ fontSize: 14, color: HOME_THEME.text, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace", marginTop: 8 }}>{value}</div>
+      <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "var(--font-mono)", marginTop: 8 }}>{value}</div>
     </div>
   );
 
@@ -362,11 +362,11 @@ export function LiveIb() {
           <span className={flashing ? "ib-alert-flash" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: breakColor, opacity: broke ? 1 : 0.7, border: `1px solid ${rgba(breakColor, 0.33)}`, background: rgba(breakColor, 0.1), padding: "5px 10px", borderRadius: 6, animation: flashing ? "ibAlertFlash 1.1s ease-in-out infinite" : undefined }}>
             {breakLabel}
             {broke && breakTimeLabel && (
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", textTransform: "none", color: breakColor, opacity: .9, fontFamily: "monospace", paddingLeft: 6, borderLeft: `1px solid ${rgba(breakColor, 0.33)}` }}>{breakTimeLabel}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", textTransform: "none", color: breakColor, opacity: .9, fontFamily: "var(--font-mono)", paddingLeft: 6, borderLeft: `1px solid ${rgba(breakColor, 0.33)}` }}>{breakTimeLabel}</span>
             )}
           </span>
           {ib.doubleBreak && (
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: HOME_THEME.text, border: `1px solid ${rgba(HOME_THEME.text, 0.12)}`, padding: "5px 10px", borderRadius: 6, fontFamily: "monospace" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: HOME_THEME.text, border: `1px solid ${rgba(HOME_THEME.text, 0.12)}`, padding: "5px 10px", borderRadius: 6, fontFamily: "var(--font-mono)" }}>
               ⬆ {etTimeLabel(ib.brokeHighTs) || "—"} · ⬇ {etTimeLabel(ib.brokeLowTs) || "—"}
             </span>
           )}

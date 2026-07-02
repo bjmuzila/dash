@@ -248,7 +248,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           boxShadow: faded ? "none" : `inset -1px 0 8px ${col}18`,
           gap: 2,
         }}>
-          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : "#fff", fontFamily: "monospace" }}>
+          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : "#fff", fontFamily: "var(--font-mono)" }}>
             {ev.time_formatted || ev.time || "TBD"}
           </span>
         </div>
@@ -274,17 +274,17 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           {(ev.actual || ev.forecast || ev.previous) && (
             <div style={{ display: "flex", gap: 10, marginTop: 1 }}>
               {ev.actual && (
-                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "var(--font-mono)" }}>
                   A: <strong>{ev.actual}</strong>
                 </span>
               )}
               {ev.forecast && (
-                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "var(--font-mono)" }}>
                   F: {ev.forecast}
                 </span>
               )}
               {ev.previous && (
-                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "var(--font-mono)" }}>
                   P: {ev.previous}
                 </span>
               )}
@@ -509,7 +509,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
                 </span>
                 <span style={{
                   fontSize: 9, fontWeight: 700, color: "#fff",
-                  fontFamily: "monospace", letterSpacing: "0.02em",
+                  fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
                   maxWidth: 44, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                 }}>
                   {e.symbol}
@@ -532,7 +532,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
                 }}>
                   +{hidden}
                 </span>
-                <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
                   MORE
                 </span>
               </div>

@@ -76,7 +76,7 @@ export default function PersonalPage() {
                   boxShadow: i < pin.length ? "0 0 8px rgba(33,158,188,.2)" : "none",
                   borderRadius: 2, fontSize: 22, fontWeight: 700, color: "#219EBC",
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  fontFamily: "monospace", transition: "border-color .2s, box-shadow .2s",
+                  fontFamily: "var(--font-mono)", transition: "border-color .2s, box-shadow .2s",
                 }}>
                   {i < pin.length ? "●" : ""}
                 </div>

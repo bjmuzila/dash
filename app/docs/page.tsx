@@ -79,7 +79,7 @@ function UI({ children }: { children: React.ReactNode }) {
   return (
     <span
       style={{
-        fontFamily: "monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: 12.5,
         fontWeight: 700,
         color: C.cyan,
@@ -133,7 +133,7 @@ function LegendRow({ color, name, children, soft }: { color: string; name: strin
 function DefRow({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "9px 0", borderBottom: `1px solid ${C.border}` }}>
-      <span style={{ minWidth: 150, flexShrink: 0, fontSize: 13, fontWeight: 800, color: C.cyan, fontFamily: "monospace" }}>{term}</span>
+      <span style={{ minWidth: 150, flexShrink: 0, fontSize: 13, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>{term}</span>
       <span style={{ fontSize: 13, lineHeight: 1.6, color: C.text }}>{children}</span>
     </div>
   );
@@ -427,7 +427,7 @@ function GreekMiniCard({ icon, label, sub, accent, value, sign }: {
         <span style={{ fontSize: 7.5, color: signColor, border: `1px solid ${signColor}59`, padding: "2px 5px", borderRadius: 4, fontWeight: 800 }}>{sign}</span>
       </div>
       <div style={{ fontSize: 7.5, color: "#c9d7db", textTransform: "uppercase", letterSpacing: ".08em" }}>Current Value</div>
-      <div style={{ fontSize: 20, fontWeight: 900, color: accent, fontFamily: "monospace", lineHeight: 1.15 }}>{value}</div>
+      <div style={{ fontSize: 20, fontWeight: 900, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1.15 }}>{value}</div>
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="30" style={{ marginTop: 6, display: "block" }} preserveAspectRatio="none">
         <line x1="0" y1={base - 0.4 * (h - 6)} x2={w} y2={base - 0.4 * (h - 6)} stroke="rgba(255,255,255,0.12)" strokeWidth="1" strokeDasharray="3 3" />
         <path d={`${d} L${w},${base} L0,${base} Z`} fill={`${accent}22`} />
@@ -469,7 +469,7 @@ function MultiGreekExample() {
   const totals = ["+$94.5B", "−$12.3B", "+$420M", "−$85M"];
   const totalPos = [true, false, true, false];
   return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", fontFamily: "monospace" }}>
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", fontFamily: "var(--font-mono)" }}>
       {/* header */}
       <div style={{ display: "grid", gridTemplateColumns: grid, background: "rgba(13,17,25,0.9)", borderBottom: `1px solid ${C.border}` }}>
         <div style={{ padding: "5px 4px", fontSize: 8, color: "#94a3b8", textAlign: "center", fontWeight: 800 }}>STRIKE</div>
@@ -673,7 +673,7 @@ function OptionsChainExample() {
     { k: "5270", atm: false, cBid: "35.1", cMid: "35.7", pBid: "19.0", pMid: "19.6" },
   ];
   const cell = (v: string, color: string, bold = false) => (
-    <td style={{ padding: "5px 6px", fontSize: 10, color, textAlign: "center", fontWeight: bold ? 700 : 400, fontFamily: "monospace" }}>{v}</td>
+    <td style={{ padding: "5px 6px", fontSize: 10, color, textAlign: "center", fontWeight: bold ? 700 : 400, fontFamily: "var(--font-mono)" }}>{v}</td>
   );
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
@@ -714,7 +714,7 @@ function TradersDashboardExample() {
     </div>
   );
   const line = (a: string, b: string, bc: string) => (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, padding: "2px 0", color: "#cdd8e6", fontFamily: "monospace" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, padding: "2px 0", color: "#cdd8e6", fontFamily: "var(--font-mono)" }}>
       <span>{a}</span><span style={{ color: bc, fontWeight: 700 }}>{b}</span>
     </div>
   );

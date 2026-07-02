@@ -305,11 +305,11 @@ export default function FailsPage() {
                     </span>
                   </div>
                   <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>{s.level.label}</span>
-                  <span style={{ fontSize: 28, fontWeight: 800, lineHeight: 1, fontFamily: "monospace", color: HOME_THEME.text }}>{fmt(s.level.price)}</span>
+                  <span style={{ fontSize: 28, fontWeight: 800, lineHeight: 1, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{fmt(s.level.price)}</span>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13, marginTop: 2 }}>
                     <span style={{ color: HOME_THEME.text }}>
                       {dist != null ? (
-                        <>dist <span style={{ fontFamily: "monospace", color: dist >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{dist >= 0 ? "+" : ""}{dist.toFixed(2)}</span></>
+                        <>dist <span style={{ fontFamily: "var(--font-mono)", color: dist >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{dist >= 0 ? "+" : ""}{dist.toFixed(2)}</span></>
                       ) : "—"}
                     </span>
                     <span style={{ color: HOME_THEME.text, opacity: 0.8 }}>
@@ -346,19 +346,19 @@ export default function FailsPage() {
               <div style={{ ...homeGlossPanelStyle(HOME_THEME.orange), padding: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 24 }}>
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>Wins</span>
-                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: HOME_THEME.green }}>{todayTotals.wins}</span>
+                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "var(--font-mono)", color: HOME_THEME.green }}>{todayTotals.wins}</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>Losses</span>
-                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: HOME_THEME.red }}>{todayTotals.losses}</span>
+                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "var(--font-mono)", color: HOME_THEME.red }}>{todayTotals.losses}</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>Win Rate</span>
-                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: HOME_THEME.text }}>{todayTotals.winRate}%</span>
+                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{todayTotals.winRate}%</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>Net R</span>
-                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: todayTotals.netR >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                  <span style={{ fontSize: 24, fontWeight: 900, fontFamily: "var(--font-mono)", color: todayTotals.netR >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                     {todayTotals.netR >= 0 ? "+" : ""}{todayTotals.netR.toFixed(2)}R
                   </span>
                 </div>
@@ -366,7 +366,7 @@ export default function FailsPage() {
                   <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>Fails by Level</span>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {todayTotals.byLevel.map(([short, n]) => (
-                      <span key={short} style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: HOME_THEME.text,
+                      <span key={short} style={{ fontSize: 14, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.text,
                         padding: "4px 10px", borderRadius: 6, background: "rgba(255,255,255,0.06)", border: `1px solid ${HOME_THEME.border}` }}>
                         {short} <span style={{ color: HOME_THEME.orange, fontWeight: 900 }}>{n}</span>
                       </span>
@@ -436,7 +436,7 @@ function FailTable({
                     {e.oppositeLevel == null ? <span style={{ color: rgba(HOME_THEME.text, 0.4) }}>—</span> : (
                       <span style={{ display: "inline-flex", gap: 5 }}>
                         {[1, 2, 3].map((n) => (
-                          <span key={n} style={{ fontSize: 11, fontWeight: 800, fontFamily: "monospace",
+                          <span key={n} style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                             padding: "2px 6px", borderRadius: 4, color: tierColor(n),
                             border: `1px solid ${tiers >= n ? rgba(HOME_THEME.green, 0.4) : rgba(HOME_THEME.text, 0.15)}`,
                             background: tiers >= n ? rgba(HOME_THEME.green, 0.1) : "transparent" }}>
@@ -506,7 +506,7 @@ function Stat({ label, val, color }: { label: string; val: string; color: string
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
       <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: HOME_THEME.text }}>{label}</span>
-      <span style={{ fontSize: 15, fontWeight: 800, fontFamily: "monospace", color }}>{val}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", color }}>{val}</span>
     </div>
   );
 }

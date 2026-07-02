@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { queryGreeksToday, saveGreeksSnapshot } from "@/lib/snapdb";
+import { queryGreeksToday } from "@/lib/snapdb";
 import RegimeMatrix from "@/components/greeks/RegimeMatrix";
 import { Dock, SegGroup, DockButton, DockGap } from "@/components/shared/DockToolbar";
 import { HOME_THEME, homeShellStyle } from "@/components/shared/homeTheme";
@@ -371,10 +371,10 @@ function ZeroCrossGraph({
           background: "rgba(8,12,18,.95)", border: `1px solid ${hover.value >= 0 ? "rgba(0,230,118,.5)" : "rgba(255,82,82,.5)"}`,
           borderRadius: 6, padding: "4px 8px", pointerEvents: "none", whiteSpace: "nowrap", zIndex: 2,
         }}>
-          <div style={{ fontSize: 13, fontWeight: 800, fontFamily: "monospace", color: hover.value >= 0 ? "#00e676" : "#ff5252" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)", color: hover.value >= 0 ? "#00e676" : "#ff5252" }}>
             {fmt(hover.value)}
           </div>
-          <div style={{ fontSize: 10, color: "#9fb3c8", fontFamily: "monospace" }}>
+          <div style={{ fontSize: 10, color: "#9fb3c8", fontFamily: "var(--font-mono)" }}>
             {new Date(hover.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true })} ET
           </div>
         </div>
@@ -426,10 +426,10 @@ function GreekCard({
       </div>
       <div style={{ fontSize: 10, color: "#c9d7db", marginBottom: 2, textTransform: "uppercase", letterSpacing: ".08em" }}>Current Value</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 30, fontWeight: 900, color: accent, fontFamily: "monospace" }}>{valueStr}</div>
+        <div style={{ fontSize: 30, fontWeight: 900, color: accent, fontFamily: "var(--font-mono)" }}>{valueStr}</div>
         {velocity && (
           <div style={{
-            fontSize: 12, fontWeight: 800, fontFamily: "monospace",
+            fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)",
             color: velocity.startsWith("↑") ? "#00e676" : velocity.startsWith("↓") ? "#ff5252" : "#9fb3c8",
           }} title="Rate of change over ~10 min">{velocity}</div>
         )}
@@ -445,7 +445,7 @@ function VolStat({ label, value, suffix = "", color }: { label: string; value?: 
   return (
     <div style={{ flex: "1 1 120px", minWidth: 110 }}>
       <div style={{ fontSize: 9.5, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 900, color, fontFamily: "monospace" }}>
+      <div style={{ fontSize: 26, fontWeight: 900, color, fontFamily: "var(--font-mono)" }}>
         {value != null && isFinite(value) ? value.toFixed(value < 1 ? 2 : 1) : "--"}<span style={{ fontSize: 13 }}>{suffix}</span>
       </div>
     </div>
@@ -880,15 +880,84 @@ function GreeksGauge({
 // ── Zero-cross detection ──────────────────────────────────────────────────────
 // Times a series flips sign (through 0). Derived from persisted history, so
 // today's crossings reconstruct on reload without a dedicated table.
+//
+// Noise-hardened so a single outlier tick near zero can't register a flip:
+//   1. Deadband (hysteresis) — the value must clear ±CROSS_BAND_FRAC of today's
+//      scale past zero. Ticks inside the band are "neutral" and change nothing.
+//   2. Confirmation — a new side must hold for CROSS_CONFIRM consecutive samples
+//      before the flip is recorded. A lone spike (count 1) is ignored.
+// The recorded time is the FIRST sample of the confirmed run (true crossing),
+// not the confirming sample.
+const CROSS_BAND_FRAC = 0.08; // must clear 8% of today's |scale| past zero
+const CROSS_CONFIRM = 2;      // consecutive samples on the new side to confirm
+
 interface ZeroCross { ts: number; label: string; up: boolean } // up = − → +
-function zeroCrossings(pts: { ts: number; value: number }[], label: string): ZeroCross[] {
+function zeroCrossings(pts: { ts: number; value: number }[], label: string, fullScale: number): ZeroCross[] {
+  const band = Math.max(1e-9, (fullScale || 0) * CROSS_BAND_FRAC);
   const out: ZeroCross[] = [];
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1].value, b = pts[i].value;
-    if (!isFinite(a) || !isFinite(b) || a === 0 || b === 0) continue;
-    if ((a < 0 && b > 0) || (a > 0 && b < 0)) out.push({ ts: pts[i].ts, label, up: b > 0 });
+  let committed = 0;                       // -1 / 0 / +1 : the confirmed side
+  let pendSign = 0, pendCount = 0, pendTs = 0;
+
+  for (const p of pts) {
+    const v = p.value;
+    if (!isFinite(v)) continue;
+    const side = v > band ? 1 : v < -band ? -1 : 0; // 0 = inside deadband
+    if (side === 0) { pendSign = 0; pendCount = 0; continue; }
+
+    if (committed === 0) {
+      // Establish the initial side (no crossing recorded for the first commit).
+      if (side === pendSign) pendCount++;
+      else { pendSign = side; pendCount = 1; pendTs = p.ts; }
+      if (pendCount >= CROSS_CONFIRM) { committed = side; pendSign = 0; pendCount = 0; }
+      continue;
+    }
+
+    if (side === committed) { pendSign = 0; pendCount = 0; continue; } // still on side
+
+    // Opposing side — candidate flip, needs confirmation.
+    if (side === pendSign) pendCount++;
+    else { pendSign = side; pendCount = 1; pendTs = p.ts; }
+    if (pendCount >= CROSS_CONFIRM) {
+      out.push({ ts: pendTs, label, up: side > 0 });
+      committed = side; pendSign = 0; pendCount = 0;
+    }
   }
   return out;
+}
+
+// ── totals → GreekPoint ───────────────────────────────────────────────────────
+// Shared mapping from a market-state `totals` object (same shape whether it
+// arrives via the WS gex/snapshot frame or the old REST route) into a GreekPoint
+// carrying all three bases. Returns null if every greek is zero (empty/partial).
+function pointFromTotals(
+  t: Record<string, number> | null | undefined,
+  spotVal: number | null | undefined,
+  updatedAtRaw: number | null | undefined,
+): GreekPoint | null {
+  if (!t) return null;
+  const dexOi    = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
+  const dexOiVol = Number(t.totalDeltaOiVol ?? dexOi);
+  const dexVol   = Number(t.totalDeltaVol ?? 0);
+  const vexOi    = Number(t.totalVEX ?? 0);
+  const vexOiVol = Number(t.totalVEXOiVol ?? vexOi);
+  const vexVol   = Number(t.totalVEXVol ?? 0);
+  const chexOi    = Number(t.totalCHEX ?? 0);
+  const chexOiVol = Number(t.totalCHEXOiVol ?? chexOi);
+  const chexVol   = Number(t.totalCHEXVol ?? 0);
+  let ts = Number(updatedAtRaw);
+  if (!Number.isFinite(ts) || ts <= 0) ts = Date.now();
+  else if (ts < 1e12) ts = ts * 1000; // seconds → ms
+  const gexOiVolB = Number(t.totalGEXOiVol ?? t.totalGEX ?? 0) / 1e9;
+  const gexVolB   = Number(t.totalGEXVol ?? 0) / 1e9;
+  const snap: GreekPoint = {
+    ts,
+    gex: gexOiVolB, gexOiVol: gexOiVolB, gexVol: gexVolB,
+    dex: dexOiVol / 1e9, dexOiVol: dexOiVol / 1e9, dexVol: dexVol / 1e9,
+    chex: chexOiVol / 1e6, chexOiVol: chexOiVol / 1e6, chexVol: chexVol / 1e6,
+    vex: vexOiVol / 1e6, vexOiVol: vexOiVol / 1e6, vexVol: vexVol / 1e6,
+    spot: Number(spotVal ?? 0) || 0,
+  };
+  return (snap.gex || snap.dex || snap.chex || snap.vex) ? snap : null;
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -934,88 +1003,100 @@ export default function GreeksPage() {
     setLatest(snap);
     setStale(false);
     setHistory(prev => {
-      // de-dup into 5s buckets so rapid polls don't pile up
-      const bucket = Math.floor(snap.ts / 5000);
-      const filtered = prev.filter(r => Math.floor(r.ts / 5000) !== bucket);
-      return [...filtered, snap].sort((a, b) => a.ts - b.ts).slice(-300);
+      // De-dup into 15s buckets so the ~2s WS feed doesn't pile up, while keeping
+      // enough points (cap 1500 ≈ 6h at 15s) to cover a full session for the chart
+      // and zero-cross log.
+      const bucket = Math.floor(snap.ts / 15000);
+      const filtered = prev.filter(r => Math.floor(r.ts / 15000) !== bucket);
+      return [...filtered, snap].sort((a, b) => a.ts - b.ts).slice(-1500);
     });
-    saveGreeksSnapshot(snap.gex, snap.dex, snap.chex, snap.vex,
-      snap.dex >= 0 ? 61 : 39, snap.dex >= 0 ? 39 : 61, snap.spot).catch(() => {});
+    // NOTE: this page no longer writes to greeks_ts. The server-v2 greeks-ts-writer
+    // owns that table 24/7 on the canonical OI+Vol basis. The page's own write used
+    // a different basis (/api/insights/gex totals) and only ran while the page was
+    // open, injecting conflicting-sign rows every 60s. Display stays in-memory only.
     setLastRefresh(etTime(snap.ts));
   }, []);
 
+  // Greeks now arrive over the /ws/gex WebSocket (see the WS effect below), the
+  // single feed the home/flow pages use. This callback only refreshes the VIX/IV
+  // side (not on the WS) and stamps the poll clock; the manual Refresh button
+  // re-pulls VIX on demand.
   const doRefresh = useCallback(async () => {
-    // Stamp every attempt so the header proves the poll loop is alive even when
-    // the payload is unchanged/empty (separates "loop dead" from "no new data").
     setLastPoll(etTime());
-    // Vol data (VIX / IV) fetched alongside — non-blocking, best-effort.
     fetch("/api/insights/vix", { cache: "no-store" })
       .then(res => res.ok ? res.json() : null)
       .then(j => { if (j && mountedRef.current) setVol((j?.data ?? j) as VolData); })
       .catch(() => {});
-    try {
-      const r = await fetch("/api/insights/gex", { cache: "no-store" });
-      if (!r.ok) { setStale(true); return; }
-      const json = await r.json();
-      const payload = (json?.data ?? json) as Record<string, unknown>;
-      const t = payload?.totals as Record<string, number> | null | undefined;
-      if (!t) { setStale(true); return; }
-      // DEX three bases. OI net = call + put (put stored negative).
-      const dexOi    = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
-      const dexOiVol = Number(t.totalDeltaOiVol ?? dexOi);
-      const dexVol   = Number(t.totalDeltaVol ?? 0);
-      // VEX (vanna) three bases.
-      const vexOi    = Number(t.totalVEX ?? 0);
-      const vexOiVol = Number(t.totalVEXOiVol ?? vexOi);
-      const vexVol   = Number(t.totalVEXVol ?? 0);
-      // CHEX (charm) three bases.
-      const chexOi    = Number(t.totalCHEX ?? 0);
-      const chexOiVol = Number(t.totalCHEXOiVol ?? chexOi);
-      const chexVol   = Number(t.totalCHEXVol ?? 0);
-      // Normalize updatedAt: may be ms, seconds, or absent. Anything not in a
-      // sane recent range falls back to now so the tooltip never shows a bad date.
-      let ts = Number(payload?.updatedAt);
-      if (!Number.isFinite(ts) || ts <= 0) ts = Date.now();
-      else if (ts < 1e12) ts = ts * 1000; // seconds → ms
-      const gexOiVolB = Number(t.totalGEXOiVol ?? t.totalGEX ?? 0) / 1e9;
-      const gexVolB = Number(t.totalGEXVol ?? 0) / 1e9;
-      const snap: GreekPoint = {
-        ts,
-        // Default basis = OI+Vol (matches heatmap / mult-greek) for every greek.
-        gex: gexOiVolB,
-        gexOiVol: gexOiVolB,
-        gexVol: gexVolB,
-        dex: dexOiVol / 1e9,
-        dexOiVol: dexOiVol / 1e9,
-        dexVol: dexVol / 1e9,
-        chex: chexOiVol / 1e6,
-        chexOiVol: chexOiVol / 1e6,
-        chexVol: chexVol / 1e6,
-        vex: vexOiVol / 1e6,
-        vexOiVol: vexOiVol / 1e6,
-        vexVol: vexVol / 1e6,
-        spot: Number(payload?.spot ?? 0) || 0,
-      };
-      // Only accept if at least one greek is non-zero (avoids wiping the cards
-      // with an empty/unsubscribed response — the old "hit or miss" symptom).
-      if (snap.gex || snap.dex || snap.chex || snap.vex) applySnap(snap);
-      else setStale(true);
-    } catch {
-      setStale(true);
-    }
-  }, [applySnap]);
+  }, []);
 
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
 
-  // Poll every 60s — only while live data is toggled ON. When OFF, no fetch/
-  // interval runs (page still paints from persisted history). Flipping ON fetches
-  // immediately.
+  // VIX/IV poll every 60s while live data is ON (greeks themselves stream over WS).
   useEffect(() => {
     if (!dataOn) return;
     doRefresh();
     const t = setInterval(() => { if (mountedRef.current) doRefresh(); }, 60_000);
     return () => clearInterval(t);
   }, [doRefresh, dataOn]);
+
+  // ── Greeks feed: single /ws/gex WebSocket ────────────────────────────────────
+  // Reads the gex/snapshot frames (totals) + spot frames; ignores the flow tape.
+  // Gated by the DATA toggle: ON connects, OFF closes the socket (page keeps
+  // painting from persisted history). Same feed home/flow use — no more REST poll.
+  useEffect(() => {
+    if (!dataOn) { setStale(true); return; }
+    let unmounted = false;
+    let ws: WebSocket | null = null;
+    let reconnect: ReturnType<typeof setTimeout> | null = null;
+    const latest: { totals: Record<string, number> | null; spot: number | null; updatedAt: number } =
+      { totals: null, spot: null, updatedAt: 0 };
+
+    const tryApply = () => {
+      if (!latest.totals || !mountedRef.current) return;
+      const snap = pointFromTotals(latest.totals, latest.spot, latest.updatedAt || Date.now());
+      if (snap) applySnap(snap);
+    };
+
+    const handle = (raw: string) => {
+      let m: Record<string, unknown>;
+      try { m = JSON.parse(raw); } catch { return; }
+      const type = String(m.type ?? "");
+      const d = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
+      if (type === "snapshot" || type === "gex") {
+        if (d.totals) latest.totals = d.totals as Record<string, number>;
+        if (type === "snapshot" && d.spot != null) latest.spot = Number(d.spot);
+        if (d.updatedAt) latest.updatedAt = Number(d.updatedAt);
+        tryApply();
+      } else if (type === "spot") {
+        if (d.spot != null) { latest.spot = Number(d.spot); tryApply(); }
+      }
+      // 'flow' / 'esCandles' / 'status' frames are ignored here.
+    };
+
+    const scheduleReconnect = () => {
+      if (unmounted) return;
+      if (reconnect) clearTimeout(reconnect);
+      reconnect = setTimeout(connect, 2000);
+    };
+
+    function connect() {
+      if (unmounted) return;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
+      catch { scheduleReconnect(); return; }
+      ws.onopen = () => { setStale(false); };
+      ws.onmessage = (evt) => handle(String(evt.data));
+      ws.onerror = () => { try { ws?.close(); } catch {} };
+      ws.onclose = () => { if (!unmounted) { setStale(true); scheduleReconnect(); } };
+    }
+
+    connect();
+    return () => {
+      unmounted = true;
+      if (reconnect) clearTimeout(reconnect);
+      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
+    };
+  }, [dataOn, applySnap]);
 
   // Basis toggle: OI+Vol (heatmap / mult-greek) by default, or Volume-only.
   // Each greek already holds the OI+Vol value in its base field; when Vol-only is
@@ -1067,8 +1148,8 @@ export default function GreeksPage() {
 
   // Today's GEX/DEX zero-line crossings, newest first (derived from persisted history).
   const zeroCross = [
-    ...zeroCrossings(gexData, "GEX"),
-    ...zeroCrossings(dexData, "DEX"),
+    ...zeroCrossings(gexData, "GEX", gexScale),
+    ...zeroCrossings(dexData, "DEX", dexScale),
   ].sort((a, b) => b.ts - a.ts);
 
   // Per-Greek velocity (~10 min Δ) shown on each card.
@@ -1178,11 +1259,11 @@ export default function GreeksPage() {
               borderBottom: "1px solid rgba(255,255,255,.05)",
               borderLeft: `3px solid ${c.up ? "#00e676" : "#ff5252"}`,
             }}>
-              <div style={{ fontSize: 11, color: "#7e8ea0", fontFamily: "monospace", minWidth: 74 }}>
+              <div style={{ fontSize: 11, color: "#7e8ea0", fontFamily: "var(--font-mono)", minWidth: 74 }}>
                 {new Date(c.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true })}
               </div>
               <div style={{ fontSize: 13, fontWeight: 800, color: "#eef7ff", minWidth: 44 }}>{c.label}</div>
-              <div style={{ fontSize: 12, fontWeight: 800, color: c.up ? "#00e676" : "#ff5252", fontFamily: "monospace" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: c.up ? "#00e676" : "#ff5252", fontFamily: "var(--font-mono)" }}>
                 {c.up ? "− → +  crossed positive" : "+ → −  crossed negative"}
               </div>
             </div>

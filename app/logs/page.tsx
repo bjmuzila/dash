@@ -112,7 +112,7 @@ function Column({
             padding: 10,
             color: HOME_THEME.text,
             fontSize: 12,
-            fontFamily: "monospace",
+            fontFamily: "var(--font-mono)",
             resize: "none",
             boxSizing: "border-box",
           }}

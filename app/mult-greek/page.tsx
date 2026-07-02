@@ -321,7 +321,7 @@ function TickerPanel({
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 10, fontFamily: "monospace", color: "#94a3b8" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 10, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
           {spot > 0 && (
             <>
               <span style={{ color: "#219EBC", fontWeight: 700 }}>{spot.toFixed(2)}</span>
@@ -347,7 +347,7 @@ function TickerPanel({
           const fmt = totals ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c} style={{
-              padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "monospace",
+              padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
@@ -397,7 +397,7 @@ function TickerPanel({
                 }}>{is1x ? "EM" : "2× EM"}</span>
               )}
               <div style={{
-                padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "monospace",
+                padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: r.isATM ? "rgba(255,179,0,.12)" : "transparent",
               }}>
@@ -414,7 +414,7 @@ function TickerPanel({
                 const isGexPeak = c === "gex" && r.strike === computed.mvcStrike;
                 return (
                   <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
-                    padding: "4px 4px", fontSize: 11, fontFamily: "monospace",
+                    padding: "4px 4px", fontSize: 11, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: "#ffffff",
                     background: metricBg(r[c], computed.maxAbs[c], topRank, intensity),

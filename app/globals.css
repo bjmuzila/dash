@@ -13,6 +13,12 @@
   --yellow: #fb8501;
   --text: #ffffff;
   --muted: #ffffff;
+  /* Native system font stacks — no web-font download, instant paint. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Back-compat alias: legacy `var(--font-inter)` references now resolve to the
+     system sans stack (Inter web-font removed). */
+  --font-inter: var(--font-sans);
 }
 
 /* Public marketing pages (landing card → feature preview, pricing) render
@@ -27,7 +33,7 @@
 
 * {
   box-sizing: border-box;
-  font-family: var(--font-inter), "Inter", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
 }
 
 html,

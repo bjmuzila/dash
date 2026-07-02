@@ -89,6 +89,9 @@ const PREMIUM_MAX = 1_000_000;
 // give a proportional, hardcoded 9:30–4:00 x-axis and a smooth line.
 const BIN_SEC = 60;
 
+// Per-bin aggregate from /proxy/flow-netprem (server-side GROUP BY).
+type NetBin = { sec: number; callNet: number; putNet: number; callVol: number; putVol: number };
+
 const DEFAULT_TICKERS = [
   "SPX", "SPY", "QQQ", "META", "TSLA", "AMZN", "AAPL", "NVDA", "MSFT", "GOOGL", "AMD", "NDX",
 ] as const;
@@ -114,13 +117,22 @@ export default function FlowPage() {
   const [otmOnly, setOtmOnly] = useState(false);
 
   const [history, setHistory] = useState<FlowOrder[]>([]);
-  // Advances the chart's "now" edge every 5s so the line extends with time even
-  // between prints (cheaper + smoother than redrawing on every WS frame).
-  const [nowTick, setNowTick] = useState(0);
+  // Aggregated per-bin net premium for the ACTIVE ticker — the chart's source.
+  // Polled every 5s: advances the "now" edge, and self-heals a transient DB blip
+  // (an empty response just gets replaced by the next poll).
+  const [netBins, setNetBins] = useState<NetBin[]>([]);
   useEffect(() => {
-    const id = setInterval(() => setNowTick((n) => n + 1), 5000);
-    return () => clearInterval(id);
-  }, []);
+    let cancelled = false;
+    const load = () =>
+      fetch(`/proxy/flow-netprem?underlying=${encodeURIComponent(active)}&bin=${BIN_SEC}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (!cancelled && j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]); })
+        .catch(() => {});
+    setNetBins([]);
+    load();
+    const id = setInterval(load, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [active]);
 
   // ── Backfill the ACTIVE ticker's full session whenever it changes. ──
   // Per-ticker so the whole day is returned (an unfiltered newest-N cap drops a
@@ -128,7 +140,7 @@ export default function FlowPage() {
   useEffect(() => {
     let cancelled = false;
     setHistory([]);
-    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000`)
+    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=2000`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (cancelled || !j || !Array.isArray(j.tape)) return;
@@ -234,55 +246,28 @@ export default function FlowPage() {
   // shows both sides) — but premium/size/expiry/dte/otm DO apply for consistency
   // with the tape's "what am I looking at" framing.
   const netSeries = useMemo(() => {
-    void nowTick; // recompute on the 5s tick so the "now" edge advances
     const { openSec, closeSec } = rthBoundsToday();
-
-    // Collect this ticker's signed prints (buy +, sell −), split call/put.
-    const evts: { sec: number; call: number; put: number; callSz: number; putSz: number }[] = [];
-    for (const o of merged) {
-      if (normTicker(o.underlying) !== active) continue;
-      if (otmOnly && !o.isOtm) continue;
-      if (Number(o.size || 0) < minSize) continue;
-      if (expiry !== "all" && o.expiration !== expiry) continue;
-      if (dteMin > 0 || dteMax != null) {
-        const d = dteOf(o);
-        if (d == null) continue;
-        if (d < dteMin) continue;
-        if (dteMax != null && d > dteMax) continue;
-      }
-      const signed = (o.side === "buy" ? 1 : -1) * (o.premium || 0);
-      const sz = Number(o.size || 0);
-      evts.push({
-        sec: Math.floor(o.ts / 1000),
-        call: o.type === "C" ? signed : 0,
-        put: o.type === "C" ? 0 : signed,
-        callSz: o.type === "C" ? sz : 0,
-        putSz: o.type === "C" ? 0 : sz,
-      });
-    }
-    evts.sort((a, b) => a.sec - b.sec);
-    const hasData = evts.length > 0;
+    const byBin = new Map<number, NetBin>();
+    for (const b of netBins) byBin.set(b.sec, b);
+    const hasData = netBins.length > 0;
 
     // Fixed 1-min bins across the whole RTH session → proportional, hardcoded
-    // 9:30–4:00 axis. Bins up to "now" carry the running cumulative; future bins
-    // are whitespace so the axis still spans to the close before data arrives.
+    // 9:30–4:00 axis. Walk the aggregate into cumulative net-drift lines; bins up
+    // to "now" carry the running total, future bins are whitespace (axis still
+    // spans to the close before data arrives).
     const nowSec = Math.floor(Date.now() / 1000);
     const callPts: (LineData | WhitespaceData)[] = [];
     const putPts: (LineData | WhitespaceData)[] = [];
     const volPts: (HistogramData | WhitespaceData)[] = [];
-    let call = 0, put = 0, i = 0;
+    let call = 0, put = 0;
     for (let t = openSec; t <= closeSec; t += BIN_SEC) {
-      let binCallSz = 0, binPutSz = 0;
-      while (i < evts.length && evts[i].sec <= t) {
-        call += evts[i].call; put += evts[i].put;
-        binCallSz += evts[i].callSz; binPutSz += evts[i].putSz;
-        i++;
-      }
+      const b = byBin.get(t);
+      if (b) { call += b.callNet; put += b.putNet; }
       if (t <= nowSec + BIN_SEC) {
         callPts.push({ time: t as UTCTimestamp, value: call });
         putPts.push({ time: t as UTCTimestamp, value: put });
-        // Per-bin contract volume, tinted by call/put dominance in that bin.
-        volPts.push({ time: t as UTCTimestamp, value: binCallSz + binPutSz, color: binCallSz >= binPutSz ? VOL_GREEN : VOL_RED });
+        const cv = b ? b.callVol : 0, pv = b ? b.putVol : 0;
+        volPts.push({ time: t as UTCTimestamp, value: cv + pv, color: cv >= pv ? VOL_GREEN : VOL_RED });
       } else {
         callPts.push({ time: t as UTCTimestamp });
         putPts.push({ time: t as UTCTimestamp });
@@ -290,7 +275,7 @@ export default function FlowPage() {
       }
     }
     return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData };
-  }, [merged, active, otmOnly, minSize, expiry, dteMin, dteMax, nowTick]);
+  }, [netBins]);
 
   // ── lightweight-charts setup ──
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -568,7 +553,7 @@ export default function FlowPage() {
             <span style={{ fontSize: 12, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
             <span style={{ fontSize: 12, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
           </div>
-          <span style={{ fontSize: 11, fontFamily: "monospace", padding: "2px 10px", borderRadius: 4, background: status === "LIVE" ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: status === "LIVE" ? C.cyan : C.red }}>
+          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: status === "LIVE" ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: status === "LIVE" ? C.cyan : C.red }}>
             {status}
           </span>
         </div>
@@ -592,7 +577,7 @@ export default function FlowPage() {
             filtered.map((o, i) => {
               const sideColor = o.side === "buy" ? BULLISH : BEARISH;
               return (
-                <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontFamily: "monospace", alignItems: "center" }}>
+                <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center" }}>
                   <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
                   <span style={{ color: sideColor, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>

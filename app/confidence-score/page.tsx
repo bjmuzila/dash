@@ -264,7 +264,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
         <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: col }}>
           <Tip text="Net Wall Bias = Pivot − Break. Positive = expect defense; negative = respect the break.">Net Wall Bias</Tip>
         </span>
-        <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "monospace", color: col, textShadow: `0 0 16px ${rgba(col, 0.4)}` }}>
+        <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "var(--font-mono)", color: col, textShadow: `0 0 16px ${rgba(col, 0.4)}` }}>
           {v >= 0 ? "+" : ""}{v}
         </span>
       </div>
@@ -275,7 +275,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
           background: `linear-gradient(90deg, ${rgba(col, 0.45)}, ${col})`,
           boxShadow: `0 0 10px ${rgba(col, 0.5)}`, transition: "all .45s cubic-bezier(.4,0,.2,1)" }} />
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "monospace",
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "var(--font-mono)",
         textTransform: "uppercase", letterSpacing: ".06em", color: HOME_THEME.muted }}>
         <span style={{ color: rgba(HOME_THEME.red, 0.8) }}>← Break</span>
         <span style={{ color: rgba(HOME_THEME.green, 0.8) }}>Defend →</span>
@@ -318,7 +318,7 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
           transition: "width .45s cubic-bezier(.4,0,.2,1)",
         }} />
       </div>
-      <span style={{ width: 48, textAlign: "right", fontSize: 11, fontFamily: "monospace", fontWeight: 700, color }}>
+      <span style={{ width: 48, textAlign: "right", fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700, color }}>
         {signed ? (value >= 0 ? "+" : "") : ""}{(value * 100).toFixed(0)}
       </span>
     </div>
@@ -355,7 +355,7 @@ function MvcHero({
     pct <= 0 ? null : (
       <div title={`${label} ${pct}%`} style={{ width: `${pct}%`, background: `linear-gradient(180deg, ${rgba(color, 0.85)}, ${color})`,
         display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
-        {pct >= 12 && <span style={{ fontSize: 11, fontWeight: 800, color: "#0b0e14", fontFamily: "monospace" }}>{pct}%</span>}
+        {pct >= 12 && <span style={{ fontSize: 11, fontWeight: 800, color: "#0b0e14", fontFamily: "var(--font-mono)" }}>{pct}%</span>}
       </div>
     );
 
@@ -367,8 +367,8 @@ function MvcHero({
         {/* MVC level */}
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: HOME_THEME.muted }}>CB · {wallLabel}</span>
-          <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, fontFamily: "monospace", color: HOME_THEME.text, textShadow: `0 0 24px ${rgba(leanColor, 0.3)}` }}>{fmt(level)}</span>
-          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7, fontFamily: "monospace" }}>
+          <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, fontFamily: "var(--font-mono)", color: HOME_THEME.text, textShadow: `0 0 24px ${rgba(leanColor, 0.3)}` }}>{fmt(level)}</span>
+          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
             SPX {fmt(spx)}{dist != null && <> · <strong style={{ color: leanColor }}>{dist} pts</strong> away</>}
           </span>
         </div>
@@ -399,7 +399,7 @@ function MvcHero({
           <Seg pct={chopP} color={METRIC.chop} label="Chop" />
           <Seg pct={breakP} color={METRIC.break} label="Break" />
         </div>
-        <div style={{ display: "flex", gap: 16, fontSize: 10, fontFamily: "monospace", color: HOME_THEME.muted, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 16, fontSize: 10, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, flexWrap: "wrap" }}>
           <span><span style={{ color: METRIC.pivot }}>■</span> Reject {reject}%</span>
           <span><span style={{ color: METRIC.chop }}>■</span> Chop {chopP}%</span>
           <span><span style={{ color: METRIC.break }}>■</span> Break {breakP}%</span>
@@ -420,7 +420,7 @@ function MvcHero({
       {/* Mechanics strip — folded in from the old Read panel */}
       {metrics && (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", paddingTop: 4, borderTop: `1px solid ${HOME_THEME.border}`,
-          fontSize: 11, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.85 }}>
+          fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.85 }}>
           <span>Net GEX {fmt(metrics.netGex, 0)}</span>
           <span>Net DEX {fmt(metrics.netDex, 0)}</span>
           <span>Flip {fmt(metrics.gexFlip)}</span>
@@ -470,7 +470,7 @@ function SoFarRollup({ timeline }: { timeline: MvcSegment[] }) {
         {chips.length === 0 ? (
           <span style={{ fontSize: 12, color: HOME_THEME.muted }}>none resolved yet</span>
         ) : chips.map((x) => (
-          <span key={x.label} style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+          <span key={x.label} style={{ fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
             padding: "2px 8px", borderRadius: 4, color: x.color,
             background: rgba(x.color, 0.1), border: `1px solid ${rgba(x.color, 0.3)}` }}>
             {x.n} {x.label}
@@ -493,7 +493,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
   const Stat = ({ label, value }: { label: string; value: string }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
       <span style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
-      <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
+      <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
     </div>
   );
   return (
@@ -505,8 +505,8 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
           padding: "9px 12px", background: "transparent", border: "none", cursor: "pointer", color: HOME_THEME.text, textAlign: "left" }}>
         <span style={{ color: HOME_THEME.muted, fontSize: 11, width: 12 }}>{open ? "▾" : "▸"}</span>
         <span style={{ color: sc.color, fontSize: 17, width: 18, textAlign: "center" }}>{sc.icon}</span>
-        <span style={{ fontFamily: "monospace", fontWeight: 700, width: 64 }}>{fmt(seg.strike)}</span>
-        <span style={{ fontFamily: "monospace", fontSize: 12, opacity: 0.6, width: 108 }}>{win}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, width: 64 }}>{fmt(seg.strike)}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, opacity: 0.6, width: 108 }}>{win}</span>
         <span style={{ color: sc.color, fontWeight: 700 }}>{seg.title}</span>
         {(() => {
           // Plain-language interaction verb. Touched-but-classified-approaching
@@ -529,7 +529,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
               : ` · SPX held ${start} pts away the whole time this was the MVC`;
           return (
             <span title={`Level ${verb.toLowerCase()}${distTip}`}
-              style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
+              style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
                 textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
                 color: sc.color, background: rgba(sc.color, 0.1), border: `1px solid ${rgba(sc.color, 0.3)}` }}>
               {verb}{distLabel}
@@ -549,14 +549,14 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
             : part(startPx, seg.distAtStart);
           return (
             <span title="SPX price (distance from strike): start of reign → handoff to next CB - Core Bullseye"
-              style={{ fontFamily: "monospace", fontSize: 11, color: HOME_THEME.text, whiteSpace: "nowrap" }}>
+              style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: HOME_THEME.text, whiteSpace: "nowrap" }}>
               {text}
             </span>
           );
         })()}
         {!seg.current && !seg.touched && !seg.touchedLater && (
           <span title="This CB - Core Bullseye strike was never touched before the magnet migrated to a new strike"
-            style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
+            style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
               textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
               color: HOME_THEME.muted, background: rgba(HOME_THEME.muted, 0.12), border: `1px dashed ${rgba(HOME_THEME.muted, 0.4)}` }}>
             → new CB
@@ -564,13 +564,13 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
         )}
         {!seg.current && seg.touchedLater && (
           <span title="Strike was not hit while it was the active CB, but price reached it later in the session"
-            style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
+            style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 800, letterSpacing: ".04em",
               textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
               color: HOME_THEME.cyan, background: rgba(HOME_THEME.cyan, 0.1), border: `1px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>
             ✓ Hit later
           </span>
         )}
-        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700 }}>
           <span style={{ color: METRIC.hit }}>{seg.score.hit}</span>
           <span style={{ color: METRIC.pivot }}>{seg.score.pivot}</span>
           <span style={{ color: METRIC.chop }}>{seg.score.chop}</span>
@@ -677,7 +677,7 @@ function ReliabilityBlock({ title, accent, table }: { title: string; accent: str
     <div style={{ flex: 1, minWidth: 240, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
         <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: accent }}>{title}</span>
-        <span style={{ fontSize: 10, fontFamily: "monospace", color: v.color }}>
+        <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: v.color }}>
           Brier {table.brier ?? "—"} · {v.text}
         </span>
       </div>
@@ -690,7 +690,7 @@ function ReliabilityBlock({ title, accent, table }: { title: string; accent: str
             const err = Math.abs(r.predicted - r.actual);
             const errColor = err <= 10 ? HOME_THEME.green : err <= 20 ? METRIC.chop : HOME_THEME.red;
             return (
-              <div key={r.bucket} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontFamily: "monospace" }}>
+              <div key={r.bucket} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontFamily: "var(--font-mono)" }}>
                 <span style={{ width: 64, color: HOME_THEME.muted }}>{r.bucket}</span>
                 <div style={{ flex: 1, height: 14, position: "relative", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>
                   {/* predicted marker */}
@@ -756,7 +756,7 @@ function CalibrationPanel() {
             </span>
           ) : (
             <>
-              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, fontFamily: "monospace", color: HOME_THEME.text, opacity: 0.85 }}>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.85 }}>
                 <span>{data.gradedDays} graded days</span>
                 <span>{data.touchedDays} reached the level</span>
                 {data.netWallBias.accuracy != null && (
@@ -853,13 +853,13 @@ export default function ConfidenceScorePage() {
               boxShadow: isToday ? `0 0 8px ${rgba(HOME_THEME.green, 0.8)}` : "none",
               animation: isToday ? "confPulse 1.6s ease-in-out infinite" : undefined }} />
             {isToday ? "LIVE" : "HISTORY"}
-            {updatedAt && <span style={{ opacity: 0.6, fontFamily: "monospace" }}>· {updatedAt.toLocaleTimeString("en-US", { hour12: false })}</span>}
+            {updatedAt && <span style={{ opacity: 0.6, fontFamily: "var(--font-mono)" }}>· {updatedAt.toLocaleTimeString("en-US", { hour12: false })}</span>}
           </span>
           <span className="text-xs font-mono" style={{ color: HOME_THEME.text }}>
             {loading ? "Computing…" : data ? `CB ${fmt(data.level)} · SPX ${fmt(data.spx)}` : ""}
           </span>
           {data?.mvcTimestamp != null && (
-            <span style={{ opacity: 0.6, fontSize: 10, fontFamily: "monospace" }}
+            <span style={{ opacity: 0.6, fontSize: 10, fontFamily: "var(--font-mono)" }}
               title="When the latest CB - Core Bullseye snapshot was captured">
               CB found {new Date(typeof data.mvcTimestamp === "string" ? Number(data.mvcTimestamp) : data.mvcTimestamp)
                 .toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} ET
@@ -1042,7 +1042,7 @@ export default function ConfidenceScorePage() {
                             {data.mvcSummary.distinctStrikes} strikes · {data.mvcSummary.changes} change{data.mvcSummary.changes === 1 ? "" : "s"} · {data.mvcSummary.engaged} engaged
                           </span>
                         )}
-                        <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "monospace", opacity: 0.6, display: "flex", gap: 6 }}>
+                        <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--font-mono)", opacity: 0.6, display: "flex", gap: 6 }}>
                           <span style={{ color: METRIC.hit }}>Hit</span>
                           <span style={{ color: METRIC.pivot }}>Pivot</span>
                           <span style={{ color: METRIC.chop }}>Chop</span>
@@ -1061,7 +1061,7 @@ export default function ConfidenceScorePage() {
                   )}
 
                   {/* Data-source provenance (mechanics now live in the timeline rows) */}
-                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: HOME_THEME.text, fontFamily: "monospace", opacity: 0.85 }}>
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: HOME_THEME.text, fontFamily: "var(--font-mono)", opacity: 0.85 }}>
                     <span title={o.seriesSource === "es5m"
                       ? `True 5-min SPX reconstructed from ES candles · basis ${o.basis ?? "—"} · ${o.bars ?? "?"} bars`
                       : `30-min MVC snapshots (no ES candles for this date) · ${o.bars ?? "?"} pts`}
@@ -1100,7 +1100,7 @@ export default function ConfidenceScorePage() {
                     ] as const).map(([k, v, d]) => (
                       <div key={k} title={d} className="conf-hover" style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
                         <div style={{ fontSize: 9, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".06em" }}>{k}</div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "monospace" }}>{v}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{v}</div>
                       </div>
                     ))}
                   </div>

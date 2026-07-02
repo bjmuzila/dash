@@ -827,7 +827,7 @@ export default function GexChart({
             top: 8, left: "50%", transform: "translateX(-50%)",
             background: "rgba(13,17,25,0.92)", border: "1px solid rgba(33,158,188,0.25)",
             borderRadius: 6, padding: "6px 12px",
-            fontSize: 11, fontFamily: "monospace",
+            fontSize: 11, fontFamily: "var(--font-mono)",
             color: "#fff", display: "flex", gap: 12, backdropFilter: "blur(8px)",
           }}>
             <span style={{ color: "#8B94A7" }}>Strike</span>

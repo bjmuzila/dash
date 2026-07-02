@@ -222,7 +222,7 @@ export function NqIbLive() {
   const stat = (label: string, value: string, color = "#eef7ff") => (
     <div style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, padding: "18px 20px", background: "rgba(255,255,255,.02)" }}>
       <div style={{ fontSize: 11, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "monospace", marginTop: 8 }}>{value}</div>
+      <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "var(--font-mono)", marginTop: 8 }}>{value}</div>
     </div>
   );
 

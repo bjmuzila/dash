@@ -97,7 +97,7 @@ export default async function HomeFastPage() {
       <div style={{ fontSize: 11, letterSpacing: 0.5, color: "#8B94A7", textTransform: "uppercase" }}>
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: accent ?? "#E6EDF5", marginTop: 4, fontFamily: "monospace" }}>
+      <div style={{ fontSize: 22, fontWeight: 700, color: accent ?? "#E6EDF5", marginTop: 4, fontFamily: "var(--font-mono)" }}>
         {value}
       </div>
     </div>

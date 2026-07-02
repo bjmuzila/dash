@@ -433,7 +433,7 @@ export default function TradersDashboardPage() {
                   </div>
                 ) : (
                   <div key={s.id} style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                    <span style={{ fontFamily: "monospace", fontSize: 11, color: HT.muted, fontWeight: 700, whiteSpace: "nowrap" }}>{s.time}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: HT.muted, fontWeight: 700, whiteSpace: "nowrap" }}>{s.time}</span>
                     <span style={{ fontWeight: i === schedule.length - 1 ? 700 : 500 }}>{s.label}</span>
                   </div>
                 ))}

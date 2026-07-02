@@ -130,7 +130,7 @@ export default function RecipesPage() {
                 border: "1px solid rgba(255,255,255,0.1)",
                 background: "rgba(0,0,0,0.4)",
                 color: "#fff",
-                fontFamily: "monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: 11,
                 outline: "none",
                 marginBottom: 16,

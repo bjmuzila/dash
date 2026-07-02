@@ -66,11 +66,11 @@ function Pill({
       <span style={{ fontSize: 15, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
         {label}
       </span>
-      <span style={{ fontFamily: "monospace", fontSize: 23, fontWeight: 800, color }}>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 23, fontWeight: 800, color }}>
         {price > 0 ? (quarter ? fmtEsQuarter(price) : fmt(price)) : "—"}
       </span>
       {c && (
-        <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: c.up ? UP : DOWN }}>
+        <span className="ticker-chg" style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: c.up ? UP : DOWN }}>
           {c.text}
         </span>
       )}

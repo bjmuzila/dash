@@ -86,7 +86,7 @@ export default function OwnerSidebar() {
   return (
     <aside
       style={{
-        width: 208,
+        width: 224,
         flexShrink: 0,
         display: "flex",
         flexDirection: "column",
@@ -101,12 +101,12 @@ export default function OwnerSidebar() {
         <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
             style={{
-              fontSize: 10,
+              fontSize: 12,
               fontWeight: 800,
               letterSpacing: "0.14em",
               textTransform: "uppercase",
               color: group.accent,
-              padding: "0 8px 4px",
+              padding: "0 8px 5px",
             }}
           >
             {group.label}
@@ -122,9 +122,9 @@ export default function OwnerSidebar() {
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
-                    padding: "7px 10px",
+                    padding: "8px 10px",
                     borderRadius: 8,
-                    fontSize: 12,
+                    fontSize: 14,
                     fontWeight: here ? 800 : 600,
                     textDecoration: "none",
                     whiteSpace: "nowrap",
@@ -133,7 +133,7 @@ export default function OwnerSidebar() {
                     border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
                   }}
                 >
-                  <span aria-hidden style={{ width: 16, textAlign: "center", opacity: 0.85 }}>
+                  <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 15 }}>
                     {link.glyph}
                   </span>
                   {link.label}
@@ -158,9 +158,9 @@ export default function OwnerSidebar() {
                           key={s.id}
                           href={`/owner/dev/owner?tab=${s.id}`}
                           style={{
-                            padding: "5px 9px",
+                            padding: "6px 9px",
                             borderRadius: 7,
-                            fontSize: 11.5,
+                            fontSize: 13,
                             fontWeight: sActive ? 800 : 600,
                             textDecoration: "none",
                             whiteSpace: "nowrap",

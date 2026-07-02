@@ -136,6 +136,10 @@ function handleProxyRest(req, res) {
       sendJson(res, 200, {
         symbol: state.symbol,
         spot: state.spot,
+        // Spot freshness — how long ago the index feed last moved spot. Consumers
+        // (greeks writer, owner health) use this to detect a frozen index stream.
+        spotAt: state.spotAt || 0,
+        spotAgeMs: state.spotAt ? Date.now() - state.spotAt : null,
         prevClose: state.prevClose,
         prevCloseDate: state.prevCloseDate,
         expiry: state.expiry,
@@ -169,7 +173,13 @@ function handleProxyRest(req, res) {
       sendJson(res, 200, { expiry: state.expiry, expirations: state.expirations });
       return true;
     case '/proxy/status':
-      sendJson(res, 200, { ...state.status, updatedAt: state.updatedAt });
+      sendJson(res, 200, {
+        ...state.status,
+        spot: state.spot,
+        spotAt: state.spotAt || 0,
+        spotAgeMs: state.spotAt ? Date.now() - state.spotAt : null,
+        updatedAt: state.updatedAt,
+      });
       return true;
     case '/proxy/health':
       sendJson(res, 200, { ok: true, ts: Date.now() });
@@ -212,6 +222,16 @@ function handleProxyRest(req, res) {
   if (pathname === '/proxy/flow-history') {
     handleFlowHistory(req, res).catch((e) => {
       sendJson(res, 500, { error: 'flow-history failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
+  // /proxy/flow-netprem?underlying=SPX&date=YYYY-MM-DD&bin=60
+  // Per-bin net premium + volume for one ticker (aggregated server-side so the
+  // chart never has to pull raw prints — SPX alone is hundreds of k/day).
+  if (pathname === '/proxy/flow-netprem') {
+    handleFlowNetPrem(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'flow-netprem failed', detail: String(e?.message || e) });
     });
     return true;
   }
@@ -358,6 +378,71 @@ async function handleFlowHistory(req, res) {
   }));
 
   sendJson(res, 200, { date, tape });
+}
+
+// ── /proxy/flow-netprem ────────────────────────────────────────────────────
+// Per-bin (default 60s) net premium + contract volume for one ticker, computed
+// in SQL. Net = buy premium − sell premium, split call/put. The client walks
+// these bins into cumulative net-drift lines on a fixed 9:30–4:00 grid, so the
+// browser never pulls raw prints (SPX alone is hundreds of thousands/day).
+// Tiny in-memory cache so N concurrent /flow pages polling the same ticker every
+// 5s collapse to one GROUP BY per key per TTL. Keyed by date|underlying|bin.
+const _netPremCache = new Map(); // key -> { at: ms, payload }
+const NETPREM_TTL_MS = 4000;
+
+async function handleFlowNetPrem(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const date = searchParams.get('date') || todayYmdET();
+  const underlying = searchParams.get('underlying') || searchParams.get('symbol') || '';
+  let binSec = Number(searchParams.get('bin') || 60);
+  if (!Number.isFinite(binSec) || binSec <= 0) binSec = 60;
+  const binMs = Math.round(binSec) * 1000;
+
+  const cacheKey = `${date}|${underlying.toUpperCase()}|${binMs}`;
+  const hit = _netPremCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < NETPREM_TTL_MS) return sendJson(res, 200, hit.payload);
+
+  const pool = getHistPool();
+  if (!pool) return sendJson(res, 200, { date, binSec, bins: [] });
+
+  const params = [date];
+  let where = 'date = $1';
+  if (underlying) {
+    params.push(flowRootsFor(underlying));
+    where += ` AND upper(underlying) = ANY($${params.length})`;
+  }
+  params.push(binMs);
+  const binIdx = params.length;
+
+  const { rows } = await pool.query(
+    `SELECT (ts / $${binIdx}::bigint) * $${binIdx}::bigint AS binms,
+            sum(CASE WHEN type = 'C' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS call_net,
+            sum(CASE WHEN type = 'P' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS put_net,
+            sum(CASE WHEN type = 'C' THEN size ELSE 0 END) AS call_vol,
+            sum(CASE WHEN type = 'P' THEN size ELSE 0 END) AS put_vol
+       FROM flow_prints
+      WHERE ${where}
+      GROUP BY 1
+      ORDER BY 1`,
+    params
+  );
+
+  const bins = rows.map((r) => ({
+    sec: Math.floor(Number(r.binms) / 1000),
+    callNet: Number(r.call_net) || 0,
+    putNet: Number(r.put_net) || 0,
+    callVol: Number(r.call_vol) || 0,
+    putVol: Number(r.put_vol) || 0,
+  }));
+
+  const payload = { date, binSec, bins };
+  _netPremCache.set(cacheKey, { at: Date.now(), payload });
+  // Bound the map: drop anything older than a minute so old ticker keys don't pile up.
+  if (_netPremCache.size > 400) {
+    const cutoff = Date.now() - 60_000;
+    for (const [k, v] of _netPremCache) if (v.at < cutoff) _netPremCache.delete(k);
+  }
+  sendJson(res, 200, payload);
 }
 
 // ---------------------------------------------------------------------------
@@ -644,19 +729,25 @@ async function main() {
             if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
             const p = getPool();
             const u = new URL(req.url, `http://localhost:${PORT}`);
-            const win = [15, 30, 60].includes(Number(u.searchParams.get('window'))) ? Number(u.searchParams.get('window')) : 15;
+            const win = [5, 15, 30, 60].includes(Number(u.searchParams.get('window'))) ? Number(u.searchParams.get('window')) : 15;
             const limit = Math.min(100, Number(u.searchParams.get('limit') || 10));
-            const sort = (u.searchParams.get('sort') || 'z').toLowerCase(); // z | abs
+            const sort = (u.searchParams.get('sort') || 'z').toLowerCase(); // z | abs | otm | pct
             const minZ = Number(u.searchParams.get('minZ') || 0);
+            // OTM weight aggressiveness: weight = 1 + otmDist * k. Higher k pushes
+            // far-OTM strikes up the ranking harder. Tunable via ?otmK= or env.
+            const otmK = Number(u.searchParams.get('otmK') || process.env.STRIKE_GROWTH_OTM_K || 8);
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
             // Indices/ETFs excluded — stocks only.
             const EXCLUDE = ['SPX','NDX','VIX','RUT','XSP','SPY','QQQ','IWM','DIA'];
             // changes: every snapshot's Δ-vs-(window)-min-ago, per symbol/expiry/strike.
             // Then per strike: latest Δ + mean/stddev of today's Δ series → z-score.
-            const orderCol = sort === 'abs' ? 'ABS(latest_chg)' : 'ABS(z_score)';
+            const orderCol = sort === 'abs' ? 'ABS(latest_chg)'
+                           : sort === 'otm' ? 'ABS(weighted_chg)'
+                           : sort === 'pct' ? 'ABS(pct_open)'
+                           : 'ABS(z_score)';
             const sql = `
               WITH changes AS (
-                SELECT sg.symbol, sg.expiry, sg.strike, sg.ts,
+                SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct,
                        (sg.gex_now - b.gex_now) AS chg
                 FROM strike_growth sg
                 JOIN LATERAL (
@@ -671,21 +762,27 @@ async function main() {
                 SELECT symbol, expiry, strike,
                        avg(chg) AS mean_chg, stddev_pop(chg) AS sd_chg,
                        count(*) AS n,
-                       (array_agg(chg ORDER BY ts DESC))[1] AS latest_chg,
-                       (array_agg(ts  ORDER BY ts DESC))[1] AS latest_ts
+                       (array_agg(chg       ORDER BY ts DESC))[1] AS latest_chg,
+                       (array_agg(spot      ORDER BY ts DESC))[1] AS spot,
+                       (array_agg(delta_pct ORDER BY ts DESC))[1] AS pct_open,
+                       (array_agg(ts        ORDER BY ts DESC))[1] AS latest_ts
                 FROM changes GROUP BY symbol, expiry, strike
               ),
               scored AS (
-                SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.mean_chg, s.sd_chg, s.n,
-                       CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE 0.0 END AS z_score
+                SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.mean_chg, s.sd_chg, s.n, s.spot, s.pct_open,
+                       CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE 0.0 END AS z_score,
+                       CASE WHEN s.spot > 0 THEN ABS(s.strike - s.spot) / s.spot ELSE 0.0 END AS otm_dist,
+                       s.latest_chg * (1 + (CASE WHEN s.spot > 0 THEN ABS(s.strike - s.spot) / s.spot ELSE 0.0 END) * $5) AS weighted_chg
                 FROM stats s
                 WHERE s.n >= 2 AND s.latest_chg IS NOT NULL
                   AND (CASE WHEN s.sd_chg > 0 THEN ABS((s.latest_chg - s.mean_chg)/s.sd_chg) ELSE 0 END) >= $3
               )
-              SELECT * FROM scored
+              SELECT symbol, expiry, strike, latest_chg, mean_chg, sd_chg, n, spot,
+                     z_score AS z, otm_dist, weighted_chg, pct_open
+              FROM scored
               ORDER BY ${orderCol} DESC NULLS LAST
               LIMIT $4`;
-            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit]);
+            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit, otmK]);
             sendJson(res, 200, { ok: true, window: win, sort, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -699,8 +796,8 @@ async function main() {
             if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
             const p = getPool();
             const { rows } = await p.query(
-              `SELECT symbol, active, sort_idx FROM strike_growth_watchlist
-               ORDER BY active DESC, sort_idx ASC, symbol ASC`
+              `SELECT symbol, active, hot, sort_idx FROM strike_growth_watchlist
+               ORDER BY hot DESC, active DESC, sort_idx ASC, symbol ASC`
             );
             sendJson(res, 200, { ok: true, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
@@ -731,6 +828,13 @@ async function main() {
               if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
               if (j.remove) {
                 await p.query(`DELETE FROM strike_growth_watchlist WHERE symbol = $1`, [symbol]);
+              } else if (typeof j.hot === 'boolean') {
+                // Toggle fast-lane membership without touching active.
+                await p.query(
+                  `INSERT INTO strike_growth_watchlist (symbol, active, hot, sort_idx)
+                   VALUES ($1, TRUE, $2, 0) ON CONFLICT (symbol) DO UPDATE SET hot = EXCLUDED.hot`,
+                  [symbol, j.hot]
+                );
               } else {
                 const active = j.active !== false;
                 await p.query(

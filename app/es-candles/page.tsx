@@ -1189,7 +1189,7 @@ export default function EsCandlesPage() {
               // the raw independently-timed esFut/spx diff before.
               const basis = levels.basis ?? effectiveBasis();
               return (
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
                   ES Basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}
                 </span>
               );
@@ -1293,7 +1293,7 @@ export default function EsCandlesPage() {
               }}
             >
               <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap" }}>{label}</span>
-              <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "monospace", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
+              <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "var(--font-mono)", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
             </div>
           );
           return (

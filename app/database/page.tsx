@@ -250,7 +250,7 @@ export default function DatabasePage() {
                 {dateFilter && <div style={{ fontSize: 10 }}>Try clearing the date filter (All)</div>}
               </div>
             ) : (
-              <table style={{ width: "100%", fontSize: 11, fontFamily: "monospace", borderCollapse: "collapse" }}>
+              <table style={{ width: "100%", fontSize: 11, fontFamily: "var(--font-mono)", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "rgba(13,17,25,0.88)", position: "sticky", top: 0, zIndex: 1, backdropFilter: "blur(16px)" }}>
                     {cols.map((c) => (

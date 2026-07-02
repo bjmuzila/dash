@@ -282,19 +282,19 @@ export default function LevelsPublish() {
         />
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Last Published</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.lastRun)}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.lastRun)}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>EM Grabbed</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{fmtLastRun(levels.emGrabbed)}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.emGrabbed)}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Tickers</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "monospace" }}>{levels.count}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{levels.count}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "monospace" }}>Sat ~09:00 ET</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "var(--font-mono)" }}>Sat ~09:00 ET</span>
         </div>
         <button
           onClick={triggerPublish}
@@ -323,7 +323,7 @@ export default function LevelsPublish() {
                 {pubRun.error ? "✗ Failed" : "✓ Last run OK"}
               </span>
               {pubRun.emTotal != null && (
-                <span style={{ color: "#fff", fontFamily: "monospace" }}>
+                <span style={{ color: "#fff", fontFamily: "var(--font-mono)" }}>
                   EM <b style={{ color: (pubRun.failedEm.length ? HOME_THEME.orange : HOME_THEME.green) }}>{pubRun.emOk}/{pubRun.emTotal}</b>
                   {pubRun.posted != null ? <> · {pubRun.posted} rows</> : null}
                 </span>
@@ -384,7 +384,7 @@ export default function LevelsPublish() {
                 color: copiedTicker === "__ALL__" ? HOME_THEME.green : HOME_THEME.cyan,
                 background: copiedTicker === "__ALL__" ? "rgba(34,197,94,0.14)" : "rgba(33,158,188,0.15)",
                 border: `1px solid ${copiedTicker === "__ALL__" ? HOME_THEME.green + "66" : HOME_THEME.cyan + "66"}`,
-                padding: "3px 10px", borderRadius: 6, fontFamily: "monospace",
+                padding: "3px 10px", borderRadius: 6, fontFamily: "var(--font-mono)",
               }}
             >
               {copiedTicker === "__ALL__" ? "✓ copied core" : copyingAll ? "copying…" : "⧉ Copy Core EM"}
@@ -402,7 +402,7 @@ export default function LevelsPublish() {
                     color: copied ? HOME_THEME.green : t.stale ? HOME_THEME.orange : HOME_THEME.cyan,
                     background: copied ? "rgba(34,197,94,0.14)" : t.stale ? "rgba(249,115,22,0.12)" : "rgba(33,158,188,0.08)",
                     border: `1px solid ${copied ? HOME_THEME.green + "66" : t.stale ? HOME_THEME.orange + "66" : HOME_THEME.border}`,
-                    padding: "3px 8px", borderRadius: 6, fontFamily: "monospace",
+                    padding: "3px 8px", borderRadius: 6, fontFamily: "var(--font-mono)",
                   }}
                 >
                   {copied ? "✓ copied" : `${t.ticker}${t.stale ? " ⚠" : ""}`}

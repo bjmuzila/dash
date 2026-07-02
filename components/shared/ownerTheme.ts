@@ -30,9 +30,9 @@ export const OWNER_THEME = {
   panelInset: "#0e0f14",     // inset rows / sub-surfaces
   border: "#2a2b32",                      // default hairline
   borderStrong: "rgba(255,255,255,0.18)", // hover / emphasis hairline
-  text: "#E7E9ED",           // primary text
-  textSecondary: "#9AA1AC",  // supporting text
-  textMuted: "#6B7280",      // hints / labels / mono stamps
+  text: "#F4F6F9",           // primary text (brightened to near-white)
+  textSecondary: "#F4F6F9",  // supporting text — whitened per request (was #9AA1AC)
+  textMuted: "#E7E9ED",      // hints / labels / mono stamps — whitened (was #6B7280)
   // ── Metabase-style multi-color palette ──
   // Tokens map to the same categorical hues the command center uses, so the whole
   // owner dashboard (Overview command center + FE/BE StatCards + section cards)
@@ -44,7 +44,7 @@ export const OWNER_THEME = {
   green: "#5DBB8E",     // green — ok / healthy / positive
   red: "#E06C5E",       // coral-red — error / down / fail
   // ── Drop-in aliases so OWNER_THEME can stand in for HOME_THEME ──
-  muted: "#9AA1AC",                  // alias of textSecondary (was bright #FFF)
+  muted: "#F4F6F9",                  // whitened per request (was #9AA1AC)
   panelBg: "#111217",                // flat slate (no rgba translucency)
   panelBgStrong: "#16181f",
 } as const;
@@ -100,7 +100,7 @@ export function homeGlossPanelStyle(_accent: string = OWNER_THEME.cyan): CSSProp
 
 // ── Inputs (drop-in for homeInputStyle) ──────────────────────────────────────
 export const homeInputStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 15,
   padding: "8px 12px",
   border: `1px solid ${OWNER_THEME.border}`,
   borderRadius: 8,
@@ -116,7 +116,7 @@ export const homeButtonStyle: CSSProperties = {
   border: `1px solid ${ownerRgba(OWNER_THEME.cyan, 0.4)}`,
   background: ownerRgba(OWNER_THEME.cyan, 0.1),
   color: OWNER_THEME.cyan,
-  fontSize: 12,
+  fontSize: 14,
   fontWeight: 500,
   letterSpacing: "0.01em",
   cursor: "pointer",
@@ -127,8 +127,8 @@ export const homeSecondaryButtonStyle: CSSProperties = {
   borderRadius: 8,
   border: `1px solid ${OWNER_THEME.border}`,
   background: OWNER_THEME.panelInset,
-  color: OWNER_THEME.textSecondary,
-  fontSize: 12,
+  color: OWNER_THEME.text,
+  fontSize: 14,
   fontWeight: 500,
   letterSpacing: "0.01em",
   cursor: "pointer",
@@ -143,17 +143,17 @@ export function ownerPanel(): CSSProperties {
 
 /** Quiet section/card header text: 13px, weight 500, normal case. */
 export const ownerHeaderText: CSSProperties = {
-  fontSize: 13,
+  fontSize: 15,
   fontWeight: 500,
   color: OWNER_THEME.text,
   letterSpacing: "0.01em",
 };
 
-/** Small muted label (replaces the 9px ALL-CAPS 800 labels). */
+/** Small label — whitened + slightly larger per request. */
 export const ownerLabelText: CSSProperties = {
-  fontSize: 12,
+  fontSize: 13,
   fontWeight: 400,
-  color: OWNER_THEME.textMuted,
+  color: OWNER_THEME.text,
   letterSpacing: "0.01em",
 };
 

@@ -95,7 +95,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 30, fontWeight: 800, color: accent, fontFamily: "monospace", lineHeight: 1 }}>
+        <span style={{ fontSize: 30, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
           {wr != null ? `${Math.round(wr * 100)}%` : "—"}
         </span>
         <span style={{ fontSize: 11, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -105,7 +105,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
 
       <SplitBar w={r.wins} l={r.losses} c={r.chop} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", fontFamily: "monospace", fontSize: 12.5 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
         <Metric label="Wins" value={String(r.wins)} color={GREEN} />
         <Metric label="Losses" value={String(r.losses)} color={RED} />
         <Metric label="Chop" value={String(r.chop)} color={MUTED} />
@@ -214,7 +214,7 @@ export default function ResultsPage() {
       </div>
 
       {/* Overall roll-up */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 16, margin: "14px 0 20px", flexWrap: "wrap", fontFamily: "monospace" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 16, margin: "14px 0 20px", flexWrap: "wrap", fontFamily: "var(--font-mono)" }}>
         <span style={{ fontSize: 13, color: C.label }}>Overall</span>
         <span style={{ fontSize: 22, fontWeight: 800, color: wrColor(totals.wr) }}>
           {totals.wr != null ? `${Math.round(totals.wr * 100)}%` : "—"}
@@ -224,7 +224,7 @@ export default function ResultsPage() {
         </span>
       </div>
 
-      {err && <div style={{ color: RED, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>Couldn&apos;t load results: {err}</div>}
+      {err && <div style={{ color: RED, fontSize: 13, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load results: {err}</div>}
 
       {!loaded ? (
         <div style={{ color: C.label, fontSize: 13 }}>Loading results…</div>
@@ -272,7 +272,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
   }, [onClose]);
 
   const th: React.CSSProperties = { padding: "8px 12px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
-  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 13, whiteSpace: "nowrap", fontFamily: "monospace" };
+  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 13, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   const oc = (o: SetupRow["outcome"]) =>
     o === "win" ? GREEN : o === "loss" ? RED : o === "chop" ? MUTED : AMBER;
@@ -378,7 +378,7 @@ function FailsView() {
         <span style={{ fontSize: 18, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Fail Rate</span>
         <span style={{ fontSize: 12, color: C.label }}>Per-level fail rate · last ~20 sessions (ESU)</span>
         {stats.length > 0 && (
-          <span style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, fontFamily: "monospace", color: C.purple }}>
+          <span style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", color: C.purple }}>
             {tot.fails} fails / {tot.tests} tests · {tot.tests ? `${pct}%` : "—"}
           </span>
         )}
@@ -397,12 +397,12 @@ function FailsView() {
               <div key={st.kind} style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{st.label}</span>
-                  <span style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
+                  <span style={{ fontSize: 20, fontWeight: 800, fontFamily: "var(--font-mono)", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
                 </div>
                 <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
                   <div style={{ width: `${p}%`, height: "100%", background: accent }} />
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: C.label, fontFamily: "monospace" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: C.label, fontFamily: "var(--font-mono)" }}>
                   <span>{st.fails} fails</span>
                   <span>{st.breaks} breaks</span>
                   <span>{st.tests} tests</span>
@@ -485,7 +485,7 @@ function CheckpointsView() {
   };
 
   const th: React.CSSProperties = { padding: "10px 14px", fontSize: 12.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
-  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "monospace" };
+  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   return (
     <>
@@ -510,14 +510,14 @@ function CheckpointsView() {
                 <span style={{ fontSize: 12, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 34, fontWeight: 800, color: accent, fontFamily: "monospace", lineHeight: 1 }}>
+                <span style={{ fontSize: 34, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
                   {s.hitRate != null ? `${Math.round(s.hitRate * 100)}%` : "—"}
                 </span>
                 <span style={{ fontSize: 13, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   hit rate{s.samples > 0 ? ` · ${s.hits}/${s.samples}` : ""}
                 </span>
               </div>
-              <div style={{ fontSize: 14, color: C.label, fontFamily: "monospace" }}>
+              <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>
                 avg closest: <span style={{ color: distColor(s.avgClosest), fontWeight: 700 }}>{s.avgClosest != null ? `${s.avgClosest.toFixed(1)} pt` : "—"}</span>
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -528,10 +528,10 @@ function CheckpointsView() {
                   return (
                     <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "monospace", lineHeight: 1.2 }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                         {rate != null ? `${Math.round(rate * 100)}%` : "—"}
                       </div>
-                      <div style={{ fontSize: 10, color: C.label, fontFamily: "monospace" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
+                      <div style={{ fontSize: 10, color: C.label, fontFamily: "var(--font-mono)" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
                     </div>
                   );
                 })}
@@ -541,7 +541,7 @@ function CheckpointsView() {
         })}
       </div>
 
-      {err && <div style={{ color: RED, fontSize: 13, marginBottom: 14, fontFamily: "monospace" }}>Couldn&apos;t load checkpoints: {err}</div>}
+      {err && <div style={{ color: RED, fontSize: 13, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load checkpoints: {err}</div>}
 
       {!loaded ? (
         <div style={{ color: C.label, fontSize: 13 }}>Loading checkpoints…</div>
@@ -653,9 +653,9 @@ function FailLogTable({ rows }: { rows: FailEvent[] }) {
                   <td style={{ ...td, color: C.label }}>{etClock(e.failTs)}</td>
                   <td style={{ ...td, color: "#fff", fontWeight: 700 }}>{e.short}</td>
                   <td style={{ ...td, color: tradeColor, fontWeight: 700 }}>{trade}</td>
-                  <td style={{ ...td, textAlign: "right", fontFamily: "monospace", color: "#fff" }}>{e.level.toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: "right", fontFamily: "monospace", color: AMBER }}>{e.riskPts.toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: "right", fontFamily: "monospace", color: maxR == null ? C.label : maxR >= 2 ? GREEN : maxR >= 1 ? AMBER : RED }}>{maxR == null ? "—" : `${maxR.toFixed(2)}R`}</td>
+                  <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: "#fff" }}>{e.level.toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: AMBER }}>{e.riskPts.toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: maxR == null ? C.label : maxR >= 2 ? GREEN : maxR >= 1 ? AMBER : RED }}>{maxR == null ? "—" : `${maxR.toFixed(2)}R`}</td>
                   <td style={{ ...td, textAlign: "right" }}>
                     <span style={{ fontSize: 12, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59` }}>
                       {win ? "WIN" : open ? "OPEN" : "LOSS"}

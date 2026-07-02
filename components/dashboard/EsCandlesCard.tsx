@@ -128,7 +128,7 @@ export default function EsCandlesCard() {
         </div>
       )}
       {last && (
-        <div style={{ position: "absolute", left: 8, top: 6, fontSize: 11, fontFamily: "monospace", color: "#dbe7f0", background: "rgba(5,8,13,.6)", padding: "2px 7px", borderRadius: 6, pointerEvents: "none" }}>
+        <div style={{ position: "absolute", left: 8, top: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#dbe7f0", background: "rgba(5,8,13,.6)", padding: "2px 7px", borderRadius: 6, pointerEvents: "none" }}>
           ES {last.close.toFixed(2)}
         </div>
       )}

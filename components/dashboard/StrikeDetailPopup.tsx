@@ -59,7 +59,7 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
 
 
   return (
-    <div style={{ fontFamily: "monospace", color: "#fff" }}>
+    <div style={{ fontFamily: "var(--font-mono)", color: "#fff" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
         <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.02em" }}>

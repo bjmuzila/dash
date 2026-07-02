@@ -211,7 +211,7 @@ export default function EconomicCalendarPage() {
           boxShadow: faded ? "none" : `inset -1px 0 8px ${col}18`,
           gap: 2,
         }}>
-          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : HT.text, fontFamily: "monospace" }}>
+          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : HT.text, fontFamily: "var(--font-mono)" }}>
             {ev.time_formatted || ev.time || "TBD"}
           </span>
         </div>
@@ -229,9 +229,9 @@ export default function EconomicCalendarPage() {
           </div>
           {(ev.actual || ev.forecast || ev.previous) && (
             <div style={{ display: "flex", gap: 14, marginTop: 2 }}>
-              {ev.actual   && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "monospace" }}>A: <strong>{ev.actual}</strong></span>}
-              {ev.forecast && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "monospace" }}>F: {ev.forecast}</span>}
-              {ev.previous && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "monospace" }}>P: {ev.previous}</span>}
+              {ev.actual   && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "var(--font-mono)" }}>A: <strong>{ev.actual}</strong></span>}
+              {ev.forecast && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "var(--font-mono)" }}>F: {ev.forecast}</span>}
+              {ev.previous && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "var(--font-mono)" }}>P: {ev.previous}</span>}
             </div>
           )}
         </div>
@@ -286,7 +286,7 @@ export default function EconomicCalendarPage() {
             📅 Economic Calendar
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 11, color: HT.text, fontFamily: "monospace", background: HT.panelBg, padding: "2px 8px", borderRadius: 3 }}>
+            <span style={{ fontSize: 11, color: HT.text, fontFamily: "var(--font-mono)", background: HT.panelBg, padding: "2px 8px", borderRadius: 3 }}>
               {today}
             </span>
           )}
@@ -438,7 +438,7 @@ export default function EconomicCalendarPage() {
                           }}
                         />
                       </span>
-                      <span style={{ fontSize: 9, fontWeight: 700, color: HT.text, fontFamily: "monospace", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {e.symbol}
                       </span>
                     </a>
@@ -448,7 +448,7 @@ export default function EconomicCalendarPage() {
                       <span style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(33,158,188,0.10)", border: `1px solid ${HT.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: HT.cyan }}>
                         +{hidden}
                       </span>
-                      <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "monospace" }}>MORE</span>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)" }}>MORE</span>
                     </div>
                   )}
                 </>

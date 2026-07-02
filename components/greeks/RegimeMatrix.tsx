@@ -313,7 +313,7 @@ export default function RegimeMatrix({
                   background: live ? "rgba(33,158,188,.08)" : "rgba(255,255,255,.02)",
                   borderRadius: 8, padding: "6px 6px", textAlign: "center",
                 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{c.label}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "var(--font-mono)" }}>{c.label}</div>
                   <div style={{ fontSize: 9, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{c.sub}</div>
                 </div>
               );
@@ -359,7 +359,7 @@ export default function RegimeMatrix({
               textTransform: "uppercase",
             }}>Behavior Demonstration</div>
             {updatedTs != null && hasData && (
-              <div style={{ fontSize: 10, color: "#7e8ea0", fontWeight: 700, fontFamily: "monospace", letterSpacing: ".04em" }}>
+              <div style={{ fontSize: 10, color: "#7e8ea0", fontWeight: 700, fontFamily: "var(--font-mono)", letterSpacing: ".04em" }}>
                 updated {etMinute(updatedTs)} ET
               </div>
             )}
@@ -443,7 +443,7 @@ function RowFragment({
         background: liveRowHdr ? "rgba(33,158,188,.08)" : "rgba(255,255,255,.02)",
         borderRadius: 8, padding: "6px 6px", display: "flex", flexDirection: "column", justifyContent: "center",
       }}>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "monospace" }}>{rd.label}</div>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "var(--font-mono)" }}>{rd.label}</div>
         <div style={{ fontSize: 9, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{rd.sub}</div>
       </div>
 
@@ -543,7 +543,7 @@ function SignDial({ label, value }: { label: string; value: number | null }) {
         </div>
       </div>
       <span style={{
-        fontSize: 11, fontWeight: 800, letterSpacing: ".1em", color: col, fontFamily: "monospace",
+        fontSize: 11, fontWeight: 800, letterSpacing: ".1em", color: col, fontFamily: "var(--font-mono)",
       }}>{label}</span>
     </div>
   );

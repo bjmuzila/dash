@@ -348,10 +348,10 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
           <span style={{ fontSize: 15, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
             {pill?.label ?? "NQU"}
           </span>
-          <span style={{ fontFamily: "monospace", fontSize: 23, fontWeight: 800, color: "#fff" }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 23, fontWeight: 800, color: "#fff" }}>
             {fmtPrice(pill?.last ?? null)}
           </span>
-          <span className="ticker-chg" style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: pillColor }}>
+          <span className="ticker-chg" style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: pillColor }}>
             {pillChg && <span style={{ marginRight: 4 }}>{pillChg}</span>}({fmtPct(pill?.pct ?? null)})
           </span>
         </span>
@@ -436,9 +436,9 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
                     <span style={{ fontSize: 15, color: "#fff", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>{r.label}</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 17.5, fontWeight: 900, color: "#fff" }}>{fmtPrice(r.last)}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 17.5, fontWeight: 900, color: "#fff" }}>{fmtPrice(r.last)}</span>
                   </div>
-                  <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color }}>
                     {chg && <span style={{ marginRight: 5 }}>{chg}</span>}({fmtPct(r.pct)})
                   </div>
                 </div>

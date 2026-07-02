@@ -644,12 +644,12 @@ export default function EmTrackerAdmin() {
                     {m.combinedPct != null ? m.combinedPct.toFixed(1) + "%" : "—"}
                   </span>
                 </div>
-                <span style={{ textAlign: "right", color: HOME_THEME.muted, fontFamily: "monospace" }}>{m.histHits}/{m.histTotal}</span>
-                <span style={{ textAlign: "right", fontFamily: "monospace", color: m.liveEval ? "#fff" : HOME_THEME.muted }}>
+                <span style={{ textAlign: "right", color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>{m.histHits}/{m.histTotal}</span>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: m.liveEval ? "#fff" : HOME_THEME.muted }}>
                   {m.liveHits}/{m.liveEval}
                 </span>
-                <span style={{ textAlign: "right", fontFamily: "monospace", color: "#fff" }}>{m.totalHits}/{m.totalEval}</span>
-                <span style={{ textAlign: "right", fontFamily: "monospace", color: HOME_THEME.cyan }}>{fmt(m.latestEm)}</span>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: "#fff" }}>{m.totalHits}/{m.totalEval}</span>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.cyan }}>{fmt(m.latestEm)}</span>
               </div>
 
               {open && (
@@ -679,14 +679,14 @@ export default function EmTrackerAdmin() {
                         return (
                           <div key={r.id} style={{ display: "contents" }}>
                             <span style={{ color: "#fff", fontWeight: 700 }}>{r.week_label}</span>
-                            <span style={{ textAlign: "right", fontFamily: "monospace", color: HOME_THEME.cyan }}>{fmt(r.em)}</span>
-                            <span style={{ textAlign: "right", fontFamily: "monospace", color: HOME_THEME.muted }}>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.cyan }}>{fmt(r.em)}</span>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.muted }}>
                               {down != null ? fmt(down) : "—"} <span style={{ color: "#5a657a" }}>→</span> {up != null ? fmt(up) : "—"}
                             </span>
-                            <span style={{ textAlign: "right", fontFamily: "monospace", color: close != null ? "#fff" : HOME_THEME.muted }}>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: close != null ? "#fff" : HOME_THEME.muted }}>
                               {close != null ? fmt(close) : "—"}
                             </span>
-                            <span style={{ textAlign: "right", fontFamily: "monospace", color: edge == null ? HOME_THEME.muted : edge >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: edge == null ? HOME_THEME.muted : edge >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                               {edge == null ? "—" : (edge >= 0 ? "+" : "") + fmt(edge)}
                             </span>
                             <span style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: r.breach == null ? HOME_THEME.muted : r.breach ? HOME_THEME.orange : HOME_THEME.green }}>

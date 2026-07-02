@@ -44,7 +44,7 @@ const PAGES = {
   'snapshot-flow':  '/home',
   'signals':        '/home',
   'mvc':            '/home',
-  'exposure-stack': '/insights',
+  'exposure-stack': '/home',
   'multi-greek':    '/mult-greek',
 };
 

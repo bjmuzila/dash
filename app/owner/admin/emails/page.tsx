@@ -214,7 +214,7 @@ export default function AdminEmailsPage() {
             {showList && audience !== "custom" && lists && (
               <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.25)" }}>
                 {(audience === "all" ? lists.all : audience === "waitlist" ? lists.waitlist : lists.subscribers).map((email) => (
-                  <div key={email} style={{ fontSize: 12, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "monospace" }}>
+                  <div key={email} style={{ fontSize: 12, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "var(--font-mono)" }}>
                     {email}
                   </div>
                 ))}

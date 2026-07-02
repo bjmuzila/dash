@@ -1,7 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
-
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 import "./globals.css";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import LayoutShell from "@/components/shared/LayoutShell";
@@ -37,7 +34,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={inter.variable} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
         <AuthProvider>
           <LayoutShell>{children}</LayoutShell>

@@ -92,14 +92,14 @@ function SetupBanner() {
       <div style={{ fontSize: 13, color: T.muted, maxWidth: 480, margin: "0 auto 20px", lineHeight: 1.6 }}>
         Add your Stripe secret key to enable real subscription data, MRR tracking, customer management, and live transaction logs.
       </div>
-      <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 8, padding: "14px 18px", fontFamily: "monospace", fontSize: 12, color: T.cyan, textAlign: "left", maxWidth: 420, margin: "0 auto 20px", border: `1px solid ${T.border}` }}>
+      <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 8, padding: "14px 18px", fontFamily: "var(--font-mono)", fontSize: 12, color: T.cyan, textAlign: "left", maxWidth: 420, margin: "0 auto 20px", border: `1px solid ${T.border}` }}>
         <div style={{ color: T.muted, marginBottom: 6 }}># Add to .env.local on VPS</div>
         <div>STRIPE_SECRET_KEY=sk_live_...</div>
         <div>STRIPE_WEBHOOK_SECRET=whsec_...</div>
         <div style={{ color: T.muted, marginTop: 6 }}>NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...</div>
       </div>
       <div style={{ fontSize: 11, color: T.muted }}>
-        Then rebuild: <code style={{ color: T.cyan, fontFamily: "monospace" }}>docker compose up -d --build dashboard</code>
+        Then rebuild: <code style={{ color: T.cyan, fontFamily: "var(--font-mono)" }}>docker compose up -d --build dashboard</code>
       </div>
     </div>
   );
@@ -171,7 +171,7 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
                 <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{row.label}</span>
                 {row.note && <span style={{ fontSize: 10, color: T.muted, marginLeft: 4 }}>{row.note}</span>}
               </div>
-              <span style={{ fontSize: 12, fontWeight: 700, color: row.color, fontFamily: "monospace" }}>{fmtMoney(row.mrr)}/mo</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: row.color, fontFamily: "var(--font-mono)" }}>{fmtMoney(row.mrr)}/mo</span>
             </div>
             <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${Math.round((row.mrr / (monthlyMrr + yearlyMrr || 1)) * 100)}%`, background: row.color, borderRadius: 3 }} />
@@ -227,7 +227,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 </div>
               )}
             </div>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "monospace", fontSize: 12 }}>
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 12 }}>
               {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
             </span>
             <span>
@@ -392,7 +392,7 @@ export default function AdminDashboard() {
         {data?.error && data.configured && (
           <div style={{ ...homePanelStyle, padding: "16px 18px", border: `1px solid ${T.red}44` }}>
             <div style={{ fontSize: 12, color: T.red, fontWeight: 600, marginBottom: 4 }}>Stripe API Error</div>
-            <div style={{ fontSize: 11, color: T.muted, fontFamily: "monospace" }}>{data.error}</div>
+            <div style={{ fontSize: 11, color: T.muted, fontFamily: "var(--font-mono)" }}>{data.error}</div>
           </div>
         )}
 

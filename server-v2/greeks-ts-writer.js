@@ -23,6 +23,13 @@
 
 const MIN_POPULATED_STRIKES = 20;
 
+// Reject a write when the index feed hasn't moved spot within this window — a
+// frozen/unsubscribed SPX index stream was silently recording thousands of
+// identical-spot rows (spot stuck at one value for ~81% of the day). Skipping
+// keeps stale spot out of greeks_ts. Overnight (index not trading) this also
+// naturally pauses the writer, which is desired.
+const SPOT_STALE_MS = Number(process.env.GREEKS_TS_SPOT_STALE_MS || 120_000);
+
 // Writer runs ~24/7 (every 1m) except: weekends, market holidays, and the daily
 // maintenance window 16:00–18:00 ET. (Previously RTH-only 09:30–16:00.)
 const MAINT_OPEN_MINS  = 16 * 60;      // 960  — 4:00 PM ET
@@ -134,6 +141,14 @@ async function fetchSpxGreeks(base) {
   const gexRows = Array.isArray(v2.gexRows) ? v2.gexRows : [];
   const spot = Number(v2.spot ?? 0);
   if (!(spot > 0)) throw new Error('spot is 0 in market-state');
+
+  // Guard against a frozen index feed: if spot hasn't updated within the stale
+  // window, skip the write rather than record a dead price. spotAgeMs is null
+  // until the index stream has ticked at least once.
+  const spotAgeMs = v2.spotAgeMs;
+  if (spotAgeMs == null || spotAgeMs > SPOT_STALE_MS) {
+    throw new Error(`spot stale (${spotAgeMs == null ? 'never' : Math.round(spotAgeMs / 1000) + 's'} old) — index feed frozen, skipping`);
+  }
 
   const populated = gexRows.filter(
     (r) => (r.callGamma > 0 || r.putGamma > 0) && (r.callOI > 0 || r.putOI > 0)
