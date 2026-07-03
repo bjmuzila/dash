@@ -5,9 +5,11 @@ import { usePathname } from "next/navigation";
 import GlobalToolbar from "./GlobalToolbar";
 import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
 import NotesDock from "./NotesDock";
+import GexDock from "./GexDock";
 import { HOME_THEME } from "./homeTheme";
 import { MobileNavProvider } from "./MobileNavContext";
 import { NotesPanelProvider } from "./NotesPanelContext";
+import { GexPanelProvider } from "./GexPanelContext";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 
 // Routes that render full-bleed without the dashboard chrome.
@@ -64,6 +66,7 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         <main style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, position: "relative", zIndex: 1 }}>
           {children}
         </main>
+        <GexDock />
         <NotesDock />
       </div>
     </div>
@@ -106,7 +109,9 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   return (
     <MobileNavProvider>
       <NotesPanelProvider>
-        <ShellInner>{children}</ShellInner>
+        <GexPanelProvider>
+          <ShellInner>{children}</ShellInner>
+        </GexPanelProvider>
       </NotesPanelProvider>
     </MobileNavProvider>
   );

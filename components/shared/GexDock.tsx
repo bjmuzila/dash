@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { HOME_THEME } from "./homeTheme";
+import { useGexPanel } from "./GexPanelContext";
 
 /**
  * GexDock — large right-side pop-out (~3/5 of the page) launched from the
- * GlobalToolbar (button next to Notes). Pure UI for now: controlled via `open`
- * + `onClose` props; wiring (context + LayoutShell mount + toolbar button) comes
- * later. Body is a 7-tile grid of GEX-group selectors (emoji + title).
+ * GlobalToolbar (button next to Notes). Flex sibling of <main> (see LayoutShell);
+ * pushes content rather than floating. Body is a 7-tile grid of GEX-group
+ * selectors (emoji + title). No data wired yet — links only.
  */
 
 const CYAN = HOME_THEME.cyan;
@@ -27,7 +28,9 @@ const GROUPS: GexGroup[] = [
 
 const PANEL_WIDTH = "60vw";
 
-export default function GexDock({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function GexDock() {
+  const { open, closePanel } = useGexPanel();
+  const onClose = closePanel;
   return (
     <aside
       aria-label="GEX groups"
