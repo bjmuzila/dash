@@ -811,11 +811,16 @@ async function seedUpcomingWeek(base, payloads) {
  * be looked up by their Monday ISO date.
  */
 async function fetchWeeklyOhlcMap(engine, ticker, daysBack = 1100, count = 170) {
-  const start = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
-  const url = `${engine.base}/api/dxlink/candles?symbol=${encodeURIComponent(zoneSymbol(ticker))}&start=${start}&count=${count}`;
-  const r = await ifetch(url);
-  if (!r.ok) throw new Error(`History failed for ${ticker}`);
-  const bars = parseHistoryItems(JSON.parse(await r.text()));
+  let bars;
+  if (ticker === 'ESM' || ticker === 'NQM') {
+    const start = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
+    const url = `${engine.base}/api/dxlink/candles?symbol=${encodeURIComponent(zoneSymbol(ticker))}&start=${start}&count=${count}`;
+    const r = await ifetch(url);
+    if (!r.ok) throw new Error(`History failed for ${ticker}`);
+    bars = parseHistoryItems(JSON.parse(await r.text()));
+  } else {
+    bars = await fetchWeeklyHistoryTheta(ticker, daysBack);
+  }
   const map = {};
   for (const b of bars) map[getWeekKey(new Date(b.time))] = { open: b.open, high: b.high, low: b.low, close: b.close };
   return map;
