@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ThemedMonthPicker } from "@/components/shared/ThemedMonthPicker";
@@ -101,6 +101,7 @@ export default function BudgetPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"register" | "amazon">("register");
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   // Add-row composer
   const [rwDate, setRwDate] = useState(todayIso());
@@ -133,6 +134,11 @@ export default function BudgetPage() {
   useEffect(() => {
     void refresh(month);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month]);
+
+  // Reset the calendar selection when the month changes.
+  useEffect(() => {
+    setSelectedDate(null);
   }, [month]);
 
   const post = async (payload: Record<string, unknown>) => {
@@ -307,15 +313,15 @@ export default function BudgetPage() {
           ))}
         </div>
 
-        {/* Projection chart + top expenses */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 14 }}>
+        {/* Projection chart + cashflow calendar */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 14 }}>
           <div style={{ ...cardAccent(0), padding: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
             <ProjectionChart series={computed.series} currency={currency} />
           </div>
           <div style={{ ...cardAccent(1), padding: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>TOP EXPENSES</div>
-            <TopExpenses items={computed.topExpenses} currency={currency} />
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
+            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
           </div>
         </div>
 
@@ -346,7 +352,14 @@ export default function BudgetPage() {
         {/* Content */}
         <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
           {tab === "register" ? (
-            <CalendarRegister month={month} groups={computed.groups} beginningBalance={computed.anyBeginning ? computed.beginningBalance : null} currency={currency} onEdit={editRow} onDelete={deleteRow} />
+            <MonthlyRegister
+              groups={computed.groups}
+              beginningBalance={computed.anyBeginning ? computed.beginningBalance : null}
+              currency={currency}
+              selectedDate={selectedDate}
+              onEdit={editRow}
+              onDelete={deleteRow}
+            />
           ) : (
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
           )}
@@ -559,138 +572,144 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
   );
 }
 
-// Horizontal red bars, biggest expense first.
-function TopExpenses({ items, currency }: { items: { label: string; amount: number }[]; currency: string }) {
-  if (!items.length) return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 12 }}>No expenses yet.</div>;
-  const max = Math.max(...items.map((i) => i.amount), 1);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {items.map((it) => (
-        <div key={it.label} style={{ display: "grid", gridTemplateColumns: "78px 1fr", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 11, color: HOME_THEME.muted, textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={it.label}>{it.label}</span>
-          <div style={{ position: "relative", height: 16, background: "rgba(255,255,255,0.04)", borderRadius: 5 }}>
-            <div style={{ width: `${Math.max(6, (it.amount / max) * 100)}%`, height: "100%", borderRadius: 5, background: "linear-gradient(90deg, rgba(244,148,142,0.45), rgba(244,148,142,0.85))" }} />
-            <span style={{ position: "absolute", right: 6, top: 0, lineHeight: "16px", fontSize: 10, fontWeight: 700, color: HOME_THEME.text }}>{fmtMoney(it.amount, currency)}</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Calendar cashflow: a month grid where each day shows its net change (green
-// surplus / red deficit). Clicking a day expands that day's transactions below,
-// with the same inline edit + delete as the list view.
-function CalendarRegister({
+// Cashflow calendar grid: a month of days, each tinted + labelled with its net
+// change (green surplus / red deficit). Clicking a day lifts the selection to
+// the page so the transactions panel below can show that day.
+function CalendarGrid({
   month,
   groups,
-  beginningBalance,
   currency,
-  onEdit,
-  onDelete,
+  selected,
+  onSelect,
 }: {
   month: string;
   groups: DayGroup[];
-  beginningBalance: number | null;
   currency: string;
-  onEdit: (id: number, patch: Record<string, unknown>) => void;
-  onDelete: (id: number) => void;
+  selected: string | null;
+  onSelect: (date: string) => void;
 }) {
   const [y, m] = month.split("-").map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
   const firstWeekday = new Date(y, m - 1, 1).getDay(); // 0 = Sun
   const byDate = new Map(groups.map((g) => [g.date, g]));
   const iso = (d: number) => `${month}-${String(d).padStart(2, "0")}`;
-
-  // Default the selection to the first day that has activity.
-  const firstActive = groups.length ? groups[0].date : null;
-  const [selected, setSelected] = useState<string | null>(firstActive);
-  const sel = selected ? byDate.get(selected) : null;
-
-  const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const WD = ["S", "M", "T", "W", "T", "F", "S"];
   const cells: (number | null)[] = [
     ...Array(firstWeekday).fill(null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
+      {WD.map((w, i) => (
+        <div key={i} style={{ textAlign: "center", fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+      ))}
+      {cells.map((d, i) => {
+        if (d === null) return <div key={`e${i}`} />;
+        const g = byDate.get(iso(d));
+        const net = g?.dailyNet ?? 0;
+        const isSel = selected === iso(d);
+        const pos = net > 0, neg = net < 0;
+        const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+        return (
+          <button
+            key={d}
+            onClick={() => g && onSelect(iso(d))}
+            disabled={!g}
+            style={{
+              textAlign: "left", minHeight: 46, padding: "5px 6px", borderRadius: 9, cursor: g ? "pointer" : "default",
+              background: tint,
+              border: `1px solid ${isSel ? "#7dd3fc" : g ? HOME_THEME.border : "transparent"}`,
+              boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : "none",
+              color: HOME_THEME.text, transition: "all 0.12s ease",
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
+            {g && <div style={{ fontSize: 10, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// The whole month's running transaction list, always visible below the
+// calendar. Every day is shown (header: net + EOD) with its rows and the single
+// running balance carried down. The day picked in the calendar is highlighted
+// and scrolled into view; inline edit + delete work per row.
+function MonthlyRegister({
+  groups,
+  beginningBalance,
+  currency,
+  selectedDate,
+  onEdit,
+  onDelete,
+}: {
+  groups: DayGroup[];
+  beginningBalance: number | null;
+  currency: string;
+  selectedDate: string | null;
+  onEdit: (id: number, patch: Record<string, unknown>) => void;
+  onDelete: (id: number) => void;
+}) {
+  const selRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selectedDate && selRef.current) {
+      selRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selectedDate]);
+
   const longDate = (isoStr: string) => {
     const [yy, mm, dd] = isoStr.split("-").map(Number);
-    return new Date(yy, mm - 1, dd).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+    return new Date(yy, mm - 1, dd).toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric" });
   };
-
+  if (!groups.length && beginningBalance === null) {
+    return <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>Set your starting balances, then add rows below.</div>;
+  }
   return (
-    <div style={{ padding: 14 }}>
+    <div style={{ padding: 16 }}>
       {beginningBalance !== null && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "8px 12px", borderRadius: 10, background: "rgba(126,211,252,0.06)", border: `1px solid ${HOME_THEME.border}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "9px 12px", borderRadius: 10, background: "rgba(126,211,252,0.06)", border: `1px solid ${HOME_THEME.border}` }}>
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
           <span style={{ fontWeight: 900, fontSize: 15, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
         </div>
       )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
-        {WD.map((w) => (
-          <div key={w} style={{ textAlign: "center", fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted, padding: "2px 0 6px" }}>{w.toUpperCase()}</div>
-        ))}
-        {cells.map((d, i) => {
-          if (d === null) return <div key={`e${i}`} />;
-          const g = byDate.get(iso(d));
-          const net = g?.dailyNet ?? 0;
-          const isSel = selected === iso(d);
-          const pos = net > 0, neg = net < 0;
-          const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {groups.map((g) => {
+          const isSel = selectedDate === g.date;
           return (
-            <button
-              key={d}
-              onClick={() => g && setSelected(iso(d))}
-              disabled={!g}
-              style={{
-                textAlign: "left", minHeight: 58, padding: "6px 8px", borderRadius: 10, cursor: g ? "pointer" : "default",
-                background: tint,
-                border: `1px solid ${isSel ? "#7dd3fc" : g ? HOME_THEME.border : "transparent"}`,
-                boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : "none",
-                color: HOME_THEME.text, transition: "all 0.12s ease",
-              }}
+            <div
+              key={g.date}
+              ref={isSel ? selRef : undefined}
+              style={{ borderRadius: 12, border: `1px solid ${isSel ? "#7dd3fc" : HOME_THEME.border}`, boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.35)" : "none", overflow: "hidden" }}
             >
-              <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
-              {g && <div style={{ fontSize: 11, fontWeight: 800, marginTop: 4, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Selected day's transactions */}
-      <div style={{ marginTop: 14, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
-        {!sel ? (
-          <div style={{ textAlign: "center", color: HOME_THEME.muted, padding: "18px 0", fontSize: 13 }}>Select a day to see its transactions.</div>
-        ) : (
-          <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <span style={{ fontWeight: 900, fontSize: 14 }}>{longDate(sel.date)}</span>
-              <span style={{ fontSize: 12 }}>
-                <span style={{ color: sel.dailyNet < 0 ? SOFT_RED : HOME_THEME.green, fontWeight: 700, marginRight: 14 }}>Net: {sel.dailyNet > 0 ? "+" : ""}{fmtMoney(sel.dailyNet, currency)}</span>
-                <span style={{ color: sel.eod < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>EOD: {fmtMoney(sel.eod, currency)}</span>
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {sel.rows.map((r) => {
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.04)" }}>
+                <span style={{ fontWeight: 900, fontSize: 13 }}>{longDate(g.date)}</span>
+                <span style={{ fontSize: 12 }}>
+                  <span style={{ color: g.dailyNet < 0 ? SOFT_RED : HOME_THEME.green, fontWeight: 700, marginRight: 14 }}>Net: {g.dailyNet > 0 ? "+" : ""}{fmtMoney(g.dailyNet, currency)}</span>
+                  <span style={{ color: g.eod < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>EOD: {fmtMoney(g.eod, currency)}</span>
+                </span>
+              </div>
+              {g.rows.map((r) => {
                 const isIncome = r.amount > 0;
                 return (
-                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, alignItems: "center", padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.02)" }}>
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 12, alignItems: "center", padding: "8px 12px", borderTop: `1px solid rgba(255,255,255,0.04)` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {r.recurring
                         ? <span style={{ fontWeight: 700, fontStyle: "italic" }}>{r.label}</span>
                         : <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />}
                       {r.recurring && <span title="Recurring — manage in the Recurring panel" style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.08em", padding: "2px 6px", borderRadius: 999, background: "rgba(126,211,252,0.12)", color: "#7dd3fc" }}>AUTO</span>}
                     </div>
-                    <span style={{ fontWeight: 800, textAlign: "right", color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
+                    <span style={{ fontWeight: 800, textAlign: "right", minWidth: 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
                     </span>
+                    <span style={{ textAlign: "right", minWidth: 100, fontWeight: 800, color: r.balance < 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(r.balance, currency)}</span>
                     <span style={{ width: 30, textAlign: "center" }}>{!r.recurring && <DeleteButton onClick={() => onDelete(r.id)} />}</span>
                   </div>
                 );
               })}
             </div>
-          </>
-        )}
+          );
+        })}
       </div>
     </div>
   );

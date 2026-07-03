@@ -303,7 +303,8 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_budget_recurring_profile ON budget_recurring(profile_id);
 
-    -- Amazon delivery log: one row per work day (date, gross pay, gas cost).
+    -- Amazon delivery log: one row per delivery (date, gross pay, gas cost).
+    -- Multiple rows per work_date are allowed (several trips in one day).
     CREATE TABLE IF NOT EXISTS budget_amazon (
       id SERIAL PRIMARY KEY,
       profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
@@ -311,10 +312,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       pay REAL NOT NULL DEFAULT 0,
       gas REAL NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(profile_id, work_date)
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_budget_amazon_profile ON budget_amazon(profile_id);
+    -- Drop the old one-row-per-day uniqueness so multiple deliveries can share a date.
+    ALTER TABLE budget_amazon DROP CONSTRAINT IF EXISTS budget_amazon_profile_id_work_date_key;
 
     CREATE TABLE IF NOT EXISTS waitlist (
       id SERIAL PRIMARY KEY,
@@ -2640,12 +2642,13 @@ export interface BudgetAmazonRecord {
   updated_at?: string | null;
 }
 
-export async function upsertAmazonRow(input: { profile_id: number; work_date: string; pay: number; gas: number }): Promise<BudgetAmazonRecord> {
+// Each call inserts a new delivery row. Days can hold several rows (multiple
+// trips), so this no longer upserts on (profile, date).
+export async function insertAmazonRow(input: { profile_id: number; work_date: string; pay: number; gas: number }): Promise<BudgetAmazonRecord> {
   const pool = await getDb();
   const result = await pool.query(
     `INSERT INTO budget_amazon (profile_id, work_date, pay, gas)
      VALUES ($1,$2,$3,$4)
-     ON CONFLICT(profile_id, work_date) DO UPDATE SET pay = EXCLUDED.pay, gas = EXCLUDED.gas, updated_at = CURRENT_TIMESTAMP
      RETURNING *`,
     [input.profile_id, input.work_date, input.pay, input.gas]
   );

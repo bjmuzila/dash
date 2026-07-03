@@ -55,6 +55,10 @@ function fmtTime(ts: number): string {
 
 // Streamer roots carry suffixes chips don't (SPX streams as "SPXW", etc.).
 const ROOT_TO_TICKER: Record<string, string> = { SPXW: "SPX", NDXP: "NDX", RUTW: "RUT", XSPW: "XSP" };
+
+// Normalized roots treated as "indices" for the Combined view's "All − Indices"
+// scope (post-normTicker, so SPXW is already SPX here).
+const INDEX_TICKERS = new Set(["SPX", "NDX", "RUT", "XSP", "VIX", "DJX"]);
 function normTicker(u: string | null | undefined): string {
   const up = (u ?? "").toUpperCase();
   return ROOT_TO_TICKER[up] ?? up;
@@ -108,6 +112,10 @@ export default function FlowPage() {
   const [orders, setOrders] = useState<FlowOrder[]>([]);
   const [status, setStatus] = useState<"LIVE" | "RECONNECTING" | "WAITING">("WAITING");
 
+  // ── View: per-ticker vs combined (all tickers) ──
+  const [view, setView] = useState<"ticker" | "combined">("ticker");
+  const [scope, setScope] = useState<"all" | "exIdx">("all"); // combined only
+
   // ── Watchlist + active (chart-focused) ticker ──
   const [tickerList, setTickerList] = useState<string[]>([...DEFAULT_TICKERS]);
   const [active, setActive] = useState<string>(DEFAULT_TICKERS[0]);
@@ -156,6 +164,23 @@ export default function FlowPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [active]);
+
+  // ── Combined view backfill: the whole day's tape (ALL tickers), fetched once
+  // when the Combined tab is opened. Live prints still arrive via the WS `orders`
+  // (already multi-ticker). Polled every 15s to advance the "now" edge. ──
+  const [combinedHistory, setCombinedHistory] = useState<FlowOrder[]>([]);
+  useEffect(() => {
+    if (view !== "combined") return;
+    let cancelled = false;
+    const load = () =>
+      fetch(`/proxy/flow-history?limit=20000`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (!cancelled && j && Array.isArray(j.tape)) setCombinedHistory(j.tape as FlowOrder[]); })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [view]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -245,6 +270,51 @@ export default function FlowPage() {
     });
     return rows.reverse();
   }, [merged, active, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax]);
+
+  // ── Combined tape: ALL tickers (or all − indices), same filters, no ticker
+  // gate. Merges the all-tickers day backfill with the live multi-ticker WS tape
+  // (deduped by coalescing key). ──
+  const mergedCombined = useMemo(() => {
+    const byKey = new Map<string, FlowOrder>();
+    for (const o of combinedHistory) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
+    for (const o of orders) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
+    return [...byKey.values()].sort((a, b) => a.ts - b.ts);
+  }, [combinedHistory, orders]);
+
+  const filteredCombined = useMemo(() => {
+    const rows = mergedCombined.filter((o) => {
+      if (scope === "exIdx" && INDEX_TICKERS.has(normTicker(o.underlying))) return false;
+      if (side !== "all" && o.side !== side) return false;
+      if (optType !== "all" && o.type !== optType) return false;
+      if (otmOnly && !o.isOtm) return false;
+      if (Number(o.premium || 0) < minPremium) return false;
+      if (Number(o.size || 0) < minSize) return false;
+      if (expiry !== "all" && o.expiration !== expiry) return false;
+      if (dteMin > 0 || dteMax != null) {
+        const d = dteOf(o);
+        if (d == null) return false;
+        if (d < dteMin) return false;
+        if (dteMax != null && d > dteMax) return false;
+      }
+      return true;
+    });
+    return rows.reverse();
+  }, [mergedCombined, scope, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax]);
+
+  const combinedExpiryOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of mergedCombined) {
+      if (scope === "exIdx" && INDEX_TICKERS.has(normTicker(o.underlying))) continue;
+      if (o.expiration) set.add(o.expiration);
+    }
+    return [...set].sort();
+  }, [mergedCombined, scope]);
+
+  // Whichever list drives the tape + totals + premium split for the active view.
+  const tapeRows = view === "combined" ? filteredCombined : filtered;
+  // Cap rendered rows (combined can be thousands); totals still span the full set.
+  const MAX_TAPE_ROWS = 800;
+  const visibleRows = tapeRows.slice(0, MAX_TAPE_ROWS);
 
   // ── Net Premium (Net Drift) series for the active ticker. ──
   // Cumulative signed premium: buy = +, sell = −. One point per second (last
@@ -436,14 +506,14 @@ export default function FlowPage() {
   const totals = useMemo(() => {
     let prem = 0, callPrem = 0, putPrem = 0;
     let buyCall = 0, buyPut = 0, sellCall = 0, sellPut = 0;
-    for (const o of filtered) {
+    for (const o of tapeRows) {
       const p = o.premium || 0;
       prem += p;
       if (o.type === "C") { callPrem += p; if (o.side === "buy") buyCall += p; else sellCall += p; }
       else { putPrem += p; if (o.side === "buy") buyPut += p; else sellPut += p; }
     }
-    return { count: filtered.length, prem, callPrem, putPrem, buyCall, buyPut, sellCall, sellPut };
-  }, [filtered]);
+    return { count: tapeRows.length, prem, callPrem, putPrem, buyCall, buyPut, sellCall, sellPut };
+  }, [tapeRows]);
 
   function resetFilters() {
     setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0);
@@ -476,42 +546,97 @@ export default function FlowPage() {
   }
 
   const GRID = "78px 56px 90px 80px 90px 100px 90px 74px";
+  // Combined tape adds a leading Ticker column.
+  const GRID_COMBINED = "64px 78px 56px 90px 80px 90px 100px 90px 74px";
+
+  // Premium split — four cards: buy/sell × call/put, colored & heat-barred by
+  // directional bias (buy calls / sell puts = bullish). Shared by both views.
+  function renderPremiumSplit() {
+    const cards = [
+      { label: "BUY CALLS", value: totals.buyCall, bull: true },
+      { label: "BUY PUTS", value: totals.buyPut, bull: false },
+      { label: "SELL CALL", value: totals.sellCall, bull: false },
+      { label: "SELL PUT", value: totals.sellPut, bull: true },
+    ];
+    const max = Math.max(1, ...cards.map((c) => c.value));
+    return (
+      <div style={{ padding: "6px 20px 20px" }}>
+        <label style={labelStyle}>Premium Split (Filtered Tape)</label>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+          {cards.map((c) => {
+            const color = c.bull ? BULLISH : BEARISH;
+            const pct = Math.max(2, (c.value / max) * 100);
+            return (
+              <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
+                </div>
+                <span style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
+                <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                  <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const combinedLabel = scope === "exIdx" ? "All − Indices" : "All Tickers";
 
   return (
     <PageShell className="no-card-lift">
+      {/* ── View tabs ───────────────────────────────────────────────── */}
+      <div style={{ ...segWrapStyle, maxWidth: 320, flexShrink: 0 }}>
+        <button className="flow-chip" style={segBtn(view === "ticker")} onClick={() => setView("ticker")}>By Ticker</button>
+        <button className="flow-chip" style={segBtn(view === "combined")} onClick={() => setView("combined")}>Combined</button>
+      </div>
+
       {/* ── Filters ─────────────────────────────────────────────────── */}
-      <Card accent="cyan" title="Options Flow — Filters" subtitle="Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape." style={{ flexShrink: 0 }}>
-        <div style={{ marginBottom: 18 }}>
-          <label style={labelStyle}>Watchlist ({tickerList.length})</label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-            {tickerList.map((t) => {
-              const on = t === active;
-              return (
-                <button
-                  key={t}
-                  className="flow-chip"
-                  onClick={() => setActive(t)}
-                  style={{
-                    padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
-                    letterSpacing: "0.04em", borderRadius: 6,
-                    border: `1px solid ${on ? C.cyan : C.border}`,
-                    background: on ? C.cyan : "rgba(0,0,0,0.4)",
-                    color: on ? C.bg : C.text,
-                  }}
-                >
-                  {t}
-                </button>
-              );
-            })}
-            <input
-              style={{ ...homeInputStyle, width: 120 }}
-              placeholder="+ add ticker"
-              value={tickerInput}
-              onChange={(e) => setTickerInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") addTicker(); }}
-            />
+      <Card accent="cyan" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0 }}>
+        {view === "combined" ? (
+          <div style={{ marginBottom: 18 }}>
+            <label style={labelStyle}>Scope</label>
+            <div style={{ ...segWrapStyle, maxWidth: 360 }}>
+              <button className="flow-chip" style={segBtn(scope === "all")} onClick={() => setScope("all")}>All</button>
+              <button className="flow-chip" style={segBtn(scope === "exIdx")} onClick={() => setScope("exIdx")}>All − Indices</button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div style={{ marginBottom: 18 }}>
+            <label style={labelStyle}>Watchlist ({tickerList.length})</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              {tickerList.map((t) => {
+                const on = t === active;
+                return (
+                  <button
+                    key={t}
+                    className="flow-chip"
+                    onClick={() => setActive(t)}
+                    style={{
+                      padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                      letterSpacing: "0.04em", borderRadius: 6,
+                      border: `1px solid ${on ? C.cyan : C.border}`,
+                      background: on ? C.cyan : "rgba(0,0,0,0.4)",
+                      color: on ? C.bg : C.text,
+                    }}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+              <input
+                style={{ ...homeInputStyle, width: 120 }}
+                placeholder="+ add ticker"
+                value={tickerInput}
+                onChange={(e) => setTickerInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addTicker(); }}
+              />
+            </div>
+          </div>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
           <div>
@@ -551,7 +676,7 @@ export default function FlowPage() {
             <label style={labelStyle}>Expiry</label>
             <select style={fieldStyle} value={expiry} onChange={(e) => setExpiry(e.target.value)}>
               <option value="all">All</option>
-              {expiryOptions.map((x) => <option key={x} value={x}>{x}</option>)}
+              {(view === "combined" ? combinedExpiryOptions : expiryOptions).map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </div>
 
@@ -589,65 +714,46 @@ export default function FlowPage() {
         </div>
       </Card>
 
-      {/* ── Net Premium chart ───────────────────────────────────────── */}
-      <Card accent="orange" padding={0} style={{ flexShrink: 0 }}>
-        <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
-          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
-            Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
+      {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
+           Combined view so the once-created lightweight-chart keeps its ref. ── */}
+      <div style={{ display: view === "ticker" ? "contents" : "none" }}>
+        <Card accent="orange" padding={0} style={{ flexShrink: 0 }}>
+          <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
+              Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
+            </div>
           </div>
-        </div>
-        <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
-          <span style={{ color: BULLISH }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
-          <span style={{ color: BEARISH }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
-          <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
-        </div>
-        <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
-        {!netSeries.hasData && (
-          <p style={{ fontSize: 13, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
-            {status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
-          </p>
-        )}
-        {/* Premium split — four cards: buy/sell × call/put, colored & heat-barred
-            by directional bias (buy calls / sell puts = bullish). */}
-        <div style={{ padding: "6px 20px 20px" }}>
-          <label style={labelStyle}>Premium Split (Filtered Tape)</label>
-          {(() => {
-            const cards = [
-              { label: "BUY CALLS", value: totals.buyCall, bull: true },
-              { label: "BUY PUTS", value: totals.buyPut, bull: false },
-              { label: "SELL CALL", value: totals.sellCall, bull: false },
-              { label: "SELL PUT", value: totals.sellPut, bull: true },
-            ];
-            const max = Math.max(1, ...cards.map((c) => c.value));
-            return (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-                {cards.map((c) => {
-                  const color = c.bull ? BULLISH : BEARISH;
-                  const pct = Math.max(2, (c.value / max) * 100);
-                  return (
-                    <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
-                        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
-                      </div>
-                      <span style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
-                      <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-                        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
-        </div>
-      </Card>
+          <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
+            <span style={{ color: BULLISH }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
+            <span style={{ color: BEARISH }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
+            <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
+          </div>
+          <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
+          {!netSeries.hasData && (
+            <p style={{ fontSize: 13, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
+              {status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
+            </p>
+          )}
+          {view === "ticker" && renderPremiumSplit()}
+        </Card>
+      </div>
+
+      {view === "combined" && (
+        <Card accent="orange" padding={0} style={{ flexShrink: 0 }}>
+          <div style={{ padding: "16px 20px 4px", textAlign: "center" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
+              Premium Split — <span style={{ color: C.cyan }}>{combinedLabel}</span>
+            </div>
+          </div>
+          {renderPremiumSplit()}
+        </Card>
+      )}
 
       {/* ── Tape ────────────────────────────────────────────────────── */}
       <Card accent="purple" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {active}</span>
+            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>
             <span style={{ fontSize: 12, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
             <span style={{ fontSize: 12, color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtPremium(totals.prem)}</strong></span>
             <span style={{ fontSize: 12, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
@@ -658,7 +764,8 @@ export default function FlowPage() {
           </span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
+          {view === "combined" && <span>Ticker</span>}
           <span>Time</span>
           <span>Side</span>
           <span style={{ textAlign: "right" }}>Strike</span>
@@ -670,17 +777,18 @@ export default function FlowPage() {
         </div>
 
         <div>
-          {filtered.length === 0 ? (
+          {tapeRows.length === 0 ? (
             <p style={{ fontSize: 13, padding: 24, color: C.muted }}>
-              {status === "LIVE" ? `No ${active} flow matches the current filters.` : "Connecting to feed…"}
+              {status === "LIVE" ? `No ${view === "combined" ? combinedLabel : active} flow matches the current filters.` : "Connecting to feed…"}
             </p>
           ) : (
-            filtered.map((o, i) => {
+            visibleRows.map((o, i) => {
               const sideColor = o.side === "buy" ? BULLISH : BEARISH;
               const bull = isBullish(o.side, o.type);
               const biasColor = bull ? BULLISH : BEARISH;
               return (
-                <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center" }}>
+                <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center" }}>
+                  {view === "combined" && <span style={{ color: C.cyan, fontWeight: 700 }}>{normTicker(o.underlying)}</span>}
                   <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
                   <span style={{ color: sideColor, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
@@ -697,6 +805,11 @@ export default function FlowPage() {
                 </div>
               );
             })
+          )}
+          {tapeRows.length > MAX_TAPE_ROWS && (
+            <p style={{ fontSize: 12, padding: "10px 20px", color: C.muted, textAlign: "center" }}>
+              Showing newest {MAX_TAPE_ROWS.toLocaleString()} of {tapeRows.length.toLocaleString()} — tighten filters to narrow.
+            </p>
           )}
         </div>
       </Card>

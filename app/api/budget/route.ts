@@ -16,7 +16,7 @@ import {
   updateRecurring,
   deleteRecurring,
   listRecurring,
-  upsertAmazonRow,
+  insertAmazonRow,
   deleteAmazonRow,
   listAmazonRows,
   type RegisterBank,
@@ -200,7 +200,7 @@ export async function POST(req: NextRequest) {
 
     // ── Amazon delivery row (date / pay / gas) ──
     if (action === "amazon") {
-      const row = await upsertAmazonRow({
+      const row = await insertAmazonRow({
         profile_id: profile.id,
         work_date: String(body?.date ?? "").trim(),
         pay: Number(body?.pay ?? 0),
