@@ -12,6 +12,9 @@ const PUBLIC_PATTERNS: RegExp[] = [
   /^\/sign-in(\/.*)?$/,
   /^\/sign-up(\/.*)?$/,
   /^\/auth\/callback$/,
+  // Enforced auth endpoints must be reachable while signed OUT (they're how you
+  // sign in). They do their own Turnstile + rate-limit gating internally.
+  /^\/api\/auth\/(login|signup)$/,
   /^\/api\/waitlist(\/.*)?$/,
   /^\/api\/unsubscribe(\/.*)?$/,
   /^\/unsubscribe$/,
@@ -121,6 +124,7 @@ export async function middleware(req: NextRequest) {
     path.startsWith("/sign-in") ||
     path.startsWith("/sign-up") ||
     path.startsWith("/auth/callback") ||
+    path.startsWith("/api/auth/") ||
     path.startsWith("/api/waitlist") ||
     path.startsWith("/api/unsubscribe") ||
     path === "/unsubscribe" ||

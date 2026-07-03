@@ -1,20 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 /**
- * Themed email/password + Google auth form (replaces Clerk's <SignIn>/<SignUp>).
- * mode="signin" → password sign-in; mode="signup" → create account.
+ * Themed email/password + Google auth form.
  *
- * Google uses OAuth with a redirect back to /auth/callback (which exchanges the
- * code for a session). Email/password sign-in routes to /home on success; sign-
- * up either lands on /home (if email confirmation is OFF) or shows a
- * check-your-email notice (if confirmation is ON in the Supabase dashboard).
+ * Email/password now POSTs to the server routes /api/auth/login and
+ * /api/auth/signup, which enforce Turnstile CAPTCHA + per-IP rate limiting
+ * before signing in (can't be bypassed by scripting Supabase directly). The
+ * server sets the session cookies; on success we hard-navigate to /home so the
+ * middleware and browser client hydrate the new session.
+ *
+ * Google still uses client OAuth (redirects to /auth/callback).
+ *
+ * Turnstile is only rendered when NEXT_PUBLIC_TURNSTILE_SITE_KEY is set, so
+ * local/dev builds without the key keep working (the server also skips captcha
+ * verification when TURNSTILE_SECRET_KEY is unset).
  */
+
+const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
+
+// Minimal typing for the Turnstile global we script-inject below.
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, opts: Record<string, unknown>) => string;
+      reset: (id?: string) => void;
+    };
+    onTurnstileLoad?: () => void;
+  }
+}
+
 export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
   const supabase = getSupabaseBrowser();
   const router = useRouter();
@@ -23,8 +43,50 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+
+  const widgetRef = useRef<HTMLDivElement | null>(null);
+  const widgetId = useRef<string | null>(null);
 
   const isSignup = mode === "signup";
+  const captchaRequired = !!TURNSTILE_SITE_KEY;
+
+  // Load the Turnstile script once and render the widget into our container.
+  useEffect(() => {
+    if (!captchaRequired) return;
+
+    function renderWidget() {
+      if (!widgetRef.current || !window.turnstile || widgetId.current) return;
+      widgetId.current = window.turnstile.render(widgetRef.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        callback: (token: string) => setCaptchaToken(token),
+        "expired-callback": () => setCaptchaToken(null),
+        "error-callback": () => setCaptchaToken(null),
+        theme: "dark",
+      });
+    }
+
+    if (window.turnstile) {
+      renderWidget();
+      return;
+    }
+    window.onTurnstileLoad = renderWidget;
+    const existing = document.getElementById("cf-turnstile-script");
+    if (!existing) {
+      const s = document.createElement("script");
+      s.id = "cf-turnstile-script";
+      s.src =
+        "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
+      s.async = true;
+      s.defer = true;
+      document.head.appendChild(s);
+    }
+  }, [captchaRequired]);
+
+  function resetCaptcha() {
+    setCaptchaToken(null);
+    if (window.turnstile && widgetId.current) window.turnstile.reset(widgetId.current);
+  }
 
   async function withGoogle() {
     setError(null);
@@ -34,32 +96,61 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
       options: { redirectTo },
     });
     if (error) setError(error.message);
-    // On success the browser is redirected by Supabase; nothing else to do.
   }
 
   async function withEmail(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
+
+    if (captchaRequired && !captchaToken) {
+      setError("Please complete the captcha.");
+      return;
+    }
+
     setBusy(true);
     try {
       if (isSignup) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=/home` },
+        const res = await fetch("/api/auth/signup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email,
+            password,
+            turnstileToken: captchaToken,
+            emailRedirectTo: `${window.location.origin}/auth/callback?next=/home`,
+          }),
         });
-        if (error) { setError(error.message); return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(data?.error || "Sign-up failed.");
+          resetCaptcha();
+          return;
+        }
         if (data.session) {
-          router.push("/home");
+          window.location.assign("/home");
         } else {
           setNotice("Check your email to confirm your account, then sign in.");
+          resetCaptcha();
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) { setError(error.message); return; }
-        router.push("/home");
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, password, turnstileToken: captchaToken }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(data?.error || "Sign-in failed.");
+          resetCaptcha();
+          return;
+        }
+        // Hard navigation so middleware + browser client pick up the new session.
+        window.location.assign("/home");
       }
+    } catch {
+      setError("Network error. Please try again.");
+      resetCaptcha();
     } finally {
       setBusy(false);
     }
@@ -124,7 +215,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
         <div style={{ flex: 1, height: 1, background: T.border }} />
       </div>
 
-      <form method="post" onSubmit={withEmail} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <form onSubmit={withEmail} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input
           type="email"
           required
@@ -142,9 +233,12 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
           onChange={(e) => setPassword(e.target.value)}
           style={inputStyle}
         />
+
+        {captchaRequired && <div ref={widgetRef} style={{ minHeight: 65 }} />}
+
         <button
           type="submit"
-          disabled={busy}
+          disabled={busy || (captchaRequired && !captchaToken)}
           style={{
             width: "100%",
             padding: "11px",
@@ -155,6 +249,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
             fontSize: 14,
             fontWeight: 700,
             cursor: busy ? "default" : "pointer",
+            opacity: captchaRequired && !captchaToken ? 0.6 : 1,
           }}
         >
           {busy ? "…" : isSignup ? "Create account" : "Sign in"}
