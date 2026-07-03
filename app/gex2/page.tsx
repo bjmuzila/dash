@@ -15,34 +15,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-
-// ── budget theme constants ──────────────────────────────────────────────────
-const LIGHT_BLUE = "#7dd3fc"; // the single accent
-const SOFT_RED = "#f4948e";   // desaturated red for negatives/puts
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
+// Dissolve card from the shared theme (see BUDGET_UI_STYLE.md) + page-local layout.
 const cardStyle: CSSProperties = {
-  // Softer, more diffuse surface — the card fades into the page rather than
-  // sitting on a hard-edged panel. Lower fill opacity + heavy blur + a feathered
-  // outer glow (instead of a crisp drop shadow) reads like a gaussian bloom.
-  // Fill fades out toward the edges (radial alpha ramp) so there's no hard card
-  // boundary — the surface dissolves into the page. Heavier backdrop blur + an
-  // edge mask feather the transition further.
-  background: `radial-gradient(120% 130% at 50% 0%, ${rgba("#0D1119", 0.34)} 0%, ${rgba("#0D1119", 0.22)} 45%, ${rgba("#0D1119", 0.06)} 80%, transparent 100%)`,
-  backdropFilter: "blur(44px) saturate(1.15)",
-  WebkitBackdropFilter: "blur(44px) saturate(1.15)",
-  borderRadius: 28,
-  border: "none",
-  boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
-  maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
-  WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+  ...dissolveCardStyle,
   padding: 24,
   position: "relative",
 };

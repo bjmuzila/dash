@@ -18,7 +18,7 @@
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { HOME_THEME, homeShellStyle, homeContentStyle, homeGlossPanelStyle } from "./homeTheme";
+import { HOME_THEME, homeShellStyle, homeContentStyle, homeGlossPanelStyle, classicCardStyle, dissolveCardStyle } from "./homeTheme";
 
 // Named theme accents so call sites read nicely (accent="orange") instead of
 // passing raw hex. Any hex string is also accepted.
@@ -88,6 +88,7 @@ export function PageShell({
 export function Card({
   children,
   accent = "cyan",
+  variant = "gloss",
   title,
   subtitle,
   padding = 24,
@@ -96,6 +97,13 @@ export function Card({
 }: {
   children?: ReactNode;
   accent?: AccentName | string;
+  /**
+   * Surface treatment (see BUDGET_UI_STYLE.md):
+   *   "gloss"    — original top-accent glossy panel (default, unchanged).
+   *   "classic"  — frosted dark card with a contained hairline edge (dense tables).
+   *   "dissolve" — borderless, edge-feathered glass (chart/overview panels).
+   */
+  variant?: "gloss" | "classic" | "dissolve";
   title?: ReactNode;
   subtitle?: ReactNode;
   padding?: number | string;
@@ -103,10 +111,17 @@ export function Card({
   className?: string;
 }) {
   const accentColor = resolveAccent(accent);
+  const base =
+    variant === "dissolve" ? dissolveCardStyle :
+    variant === "classic"  ? classicCardStyle  :
+    homeGlossPanelStyle(accentColor);
+  // The hover lift only reads right on the contained (gloss/classic) cards; the
+  // dissolve card has no edge so it opts out.
+  const hoverClass = variant === "dissolve" ? "" : "card-hover";
   return (
     <div
-      className={`card-hover${className ? ` ${className}` : ""}`}
-      style={{ ...homeGlossPanelStyle(accentColor), padding, ...style }}
+      className={`${hoverClass}${className ? ` ${className}` : ""}`.trim()}
+      style={{ ...base, padding, ...style }}
     >
       {(title != null || subtitle != null) && (
         <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 2 }}>

@@ -479,6 +479,13 @@ export default function MultGreekPage() {
   const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
   const [intensity, setIntensity] = useState(1.75);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>({ state: "idle", msg: "READY" });
+  // Embedded in the GEX drawer (?embed=1): keep the SPX/SPY/QQQ panels side by
+  // side even though the iframe viewport is below the mobile stack breakpoint.
+  const [embed, setEmbed] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
+  }, []);
 
   // Per-ticker state
   const [strikes, setStrikes]   = useState<Record<Ticker, StrikeRow[]>>({ SPX: [], SPY: [], QQQ: [] });
@@ -732,7 +739,13 @@ export default function MultGreekPage() {
       </div>
 
       {/* Panels */}
-      <div className="mg-panels" style={{ flex: 1, display: "flex", gap: 8, padding: 8, overflow: "hidden", minHeight: 0 }}>
+      {embed && (
+        <style>{`
+          .mg-panels.mg-embed { flex-direction: row !important; overflow: hidden !important; height: auto !important; }
+          .mg-panels.mg-embed > div { flex: 1 1 0 !important; width: auto !important; min-height: 0 !important; }
+        `}</style>
+      )}
+      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: 1, display: "flex", gap: 8, padding: 8, overflow: "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}

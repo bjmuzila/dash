@@ -57,7 +57,7 @@ const SOURCES: Src[] = [
     // /proxy/strike-growth/{by-expiry,watchlist}.
     id: "strike", label: "proxy/strike-growth", color: "#a5b4fc",
     pages: [
-      { label: "Options Chain", href: "/options-chain" }, { label: "Strike Query", href: "/owner/dev/strike-query" },
+      { label: "Options Chain", href: "/options-chain" },
     ],
   },
   {

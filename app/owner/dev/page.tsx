@@ -146,43 +146,57 @@ const NET_ROWS: { key: string; label: string }[] = [
   { key: "oi", label: "Σ OI (call + put)" },
   { key: "volume", label: "Σ Volume (call + put)" },
 ];
-// Build a Discord/clipboard-friendly summary block for the net (call+put) card.
-function buildNetShareText(data: Record<string, unknown> | undefined, ticker: string, strike: string): string {
-  const lines = [`**Net Greeks · Call + Put** — ${ticker || "?"} ${strike || "?"}`];
-  if (!data) { lines.push("—"); return lines.join("\n"); }
-  for (const { key, label } of NET_ROWS) {
-    const v = data[key];
-    const isCount = key === "oi" || key === "volume";
-    lines.push(`${label}: ${v == null ? "n/a" : isCount ? fmt(v) : fmtExp(v)}`);
-  }
-  lines.push(`spot: ${fmt(data.spot)}`);
-  return lines.join("\n");
+// Screenshot the net card element to a PNG data-URL. Buttons inside the card are
+// marked data-html2canvas-ignore so they don't appear in the shot.
+async function captureNetCard(el: HTMLElement): Promise<string> {
+  const { default: html2canvas } = await import("html2canvas");
+  const canvas = await html2canvas(el, {
+    backgroundColor: HOME_THEME.bg,
+    useCORS: true,
+    allowTaint: true,
+    scale: 2,
+    logging: false,
+  });
+  return canvas.toDataURL("image/png");
 }
 
-function ShareActions({ text }: { text: string }) {
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+
+// Copy + Discord now share a PNG SCREENSHOT of the net card (not text).
+function ShareActions({ targetRef, caption }: { targetRef: React.RefObject<HTMLDivElement | null>; caption: string }) {
   const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<null | "ok" | "err">(null);
 
   async function copy() {
-    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+    if (!targetRef.current) return;
+    try {
+      const png = await captureNetCard(targetRef.current);
+      const blob = new Blob([dataUrlToBytes(png)], { type: "image/png" });
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      setCopied(true); setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard/image unsupported — ignore */ }
   }
   async function share() {
+    if (!targetRef.current) return;
     setSending(true); setSent(null);
     try {
-      const r = await fetch("/api/discord-share", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: "```\n" + text + "\n```" }),
-      });
+      const png = await captureNetCard(targetRef.current);
+      const form = new FormData();
+      form.append("payload_json", JSON.stringify({ content: caption }));
+      form.append("files[0]", new Blob([dataUrlToBytes(png)], { type: "image/png" }), "net-greeks.png");
+      const r = await fetch("/api/discord-share", { method: "POST", body: form });
       setSent(r.ok ? "ok" : "err");
     } catch { setSent("err"); }
     finally { setSending(false); setTimeout(() => setSent(null), 2500); }
   }
   const btn: React.CSSProperties = { fontSize: 11, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };
   return (
-    <div style={{ display: "flex", gap: 8 }}>
-      <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? POS : VAL }}>{copied ? "✓ Copied" : "⧉ Copy"}</button>
+    <div style={{ display: "flex", gap: 8 }} data-html2canvas-ignore="true">
+      <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? POS : VAL }}>{copied ? "✓ Copied" : "⧉ Copy img"}</button>
       <button onClick={share} disabled={sending} style={{ ...btn, background: "rgba(255,255,255,0.06)", color: HOME_THEME.text, borderColor: HOME_THEME.borderStrong, opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         {sending ? "Sending…" : sent === "ok" ? "✓ Sent" : sent === "err" ? "✗ Failed" : "↗ Discord"}
       </button>
@@ -191,14 +205,16 @@ function ShareActions({ text }: { text: string }) {
 }
 
 function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unknown> | undefined; ticker: string; strike: string }) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const caption = `**Net Greeks · Call + Put** — ${ticker || "?"} · ${strike || "?"}`;
   return (
-    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${NET}`, borderRadius: 8, padding: "14px 18px" }}>
+    <div ref={cardRef} style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${NET}`, borderRadius: 8, padding: "14px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Net Greeks · Call + Put</span>
           <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
         </div>
-        <ShareActions text={buildNetShareText(data, ticker, strike)} />
+        <ShareActions targetRef={cardRef} caption={caption} />
       </div>
       {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 13 }}>—</div>}
       {data && (

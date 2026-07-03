@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
@@ -10,26 +10,13 @@ import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
-import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
+import FitScale from "@/components/shared/FitScale";
+import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 
 
-// ── Budget UI style constants (see BUDGET_UI_STYLE.md) ──────────────────────
-// One accent only — light blue. Soft red replaces the harsh #EF4444 for chrome.
-const LIGHT_BLUE = "#7dd3fc";
-const SOFT_RED = "#f4948e";
-// Dissolve card: borderless, edge-feathered surface for chart/overview panels.
-const dissolveCard: CSSProperties = {
-  background:
-    "radial-gradient(120% 130% at 50% 0%, rgba(13,17,25,0.34) 0%, rgba(13,17,25,0.22) 45%, rgba(13,17,25,0.06) 80%, transparent 100%)",
-  backdropFilter: "blur(44px) saturate(1.15)",
-  WebkitBackdropFilter: "blur(44px) saturate(1.15)",
-  borderRadius: 28,
-  border: "none",
-  boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
-  maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
-  WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
-};
+// Card/accent styling now sourced from the shared theme (see BUDGET_UI_STYLE.md).
+const dissolveCard = dissolveCardStyle;
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
@@ -1246,8 +1233,9 @@ export default function EsCandlesPage() {
 
   return (
     <div className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
-      <div className="flex items-center justify-center px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
-        <Dock className="dock-noscroll" style={{ maxWidth: "100%", minWidth: 0 }}>
+      <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
+        <FitScale align="center" min={0.4}>
+        <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
             <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
             {(() => {
@@ -1339,6 +1327,7 @@ export default function EsCandlesPage() {
           <BoxSnapBtn targetRef={captureRef} label="ES Candles" />
           <BoxDiscordBtn targetRef={captureRef} label="ES Candles" />
         </Dock>
+        </FitScale>
       </div>
 
 

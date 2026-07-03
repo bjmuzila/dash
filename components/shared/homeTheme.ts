@@ -77,6 +77,61 @@ export function homeGlossPanelStyle(accent: string = HOME_THEME.cyan): CSSProper
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Card surfaces — the Budget/gex2 visual language (see BUDGET_UI_STYLE.md).
+// SINGLE SOURCE OF TRUTH for the two card generations + the two page accents.
+// Use CLASSIC for dense tables (contained edge), DISSOLVE for chart/overview
+// panels (borderless, edge-feathered). Never re-declare these locally.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The one card accent — light blue. Replaces rotating per-card colors. */
+export const LIGHT_BLUE = "#7dd3fc";
+/** Desaturated red for amounts/deficits/delete — softer than HOME_THEME.red. */
+export const SOFT_RED = "#f4948e";
+
+/** Classic card: frosted dark surface with a contained hairline edge (tables). */
+export const classicCardStyle: CSSProperties = {
+  background: HOME_THEME.panelBg,
+  backdropFilter: "blur(16px)",
+  WebkitBackdropFilter: "blur(16px)",
+  borderRadius: 18,
+  border: `1px solid ${HOME_THEME.border}`,
+  boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+};
+
+/** Classic card + faint light-blue radial highlight on the body (no top bar). */
+export const classicCardAccentStyle: CSSProperties = {
+  ...classicCardStyle,
+  background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+};
+
+/**
+ * Dissolve card: no border, the fill ramps its alpha to nothing toward the edges
+ * and a radial mask feathers the corners so the panel melts into the background.
+ * For chart/overview panels you want to float.
+ */
+export const dissolveCardStyle: CSSProperties = {
+  background:
+    "radial-gradient(120% 130% at 50% 0%, rgba(13,17,25,0.34) 0%, rgba(13,17,25,0.22) 45%, rgba(13,17,25,0.06) 80%, transparent 100%)",
+  backdropFilter: "blur(44px) saturate(1.15)",
+  WebkitBackdropFilter: "blur(44px) saturate(1.15)",
+  borderRadius: 28,
+  border: "none",
+  boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
+  maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+  WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+};
+
+/** Stat/metric tile: dissolve idea at small scale — no border, faint highlight. */
+export const statTileStyle: CSSProperties = {
+  background:
+    "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.20)",
+  backdropFilter: "blur(20px)",
+  WebkitBackdropFilter: "blur(20px)",
+  border: "none",
+  borderRadius: 16,
+};
+
 export const homeInputStyle: CSSProperties = {
   fontSize: 13,
   padding: "8px 12px",

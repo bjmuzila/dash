@@ -81,7 +81,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Estimated Moves BE", href: "/estimated-move" },
       { label: "Budget", href: "/budget" },
       { label: "To-Do", href: "/personal/todo" },
-      { label: "Logs", href: "/logs" },
     ],
   },
   {

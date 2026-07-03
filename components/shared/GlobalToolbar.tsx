@@ -108,7 +108,6 @@ const QUICK_META: Record<string, { label: string; emoji: string }> = {
   "/owner/budget": { label: "Budget", emoji: "⚖" },
   "/owner/dev": { label: "Dev", emoji: "⚙" },
   "/owner/dev/owner": { label: "Owner", emoji: "★" },
-  "/owner/personal": { label: "Personal", emoji: "☺" },
   "/owner/personal/todo": { label: "To-Do", emoji: "☑" },
   "/feedback": { label: "Feedback", emoji: "✉" },
 };

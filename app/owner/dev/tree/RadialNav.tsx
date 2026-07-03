@@ -24,7 +24,7 @@ const GROUPS: Group[] = [
       { label: "Premarket", href: "/premarket" }, { label: "Econ Calendar", href: "/economic-calendar" },
       { label: "Database", href: "/database" }, { label: "Dev", href: "/owner/dev" },
       { label: "EM BE", href: "/estimated-move" }, { label: "Budget", href: "/owner/budget" },
-      { label: "To-Do", href: "/owner/personal/todo" }, { label: "Logs", href: "/logs" },
+      { label: "To-Do", href: "/owner/personal/todo" },
     ],
   },
   {
@@ -32,7 +32,6 @@ const GROUPS: Group[] = [
     pages: [
       { label: "Owner", href: "/owner/dev/owner" }, { label: "Results", href: "/owner/dev/results" },
       { label: "Admin", href: "/owner/dev/admin" }, { label: "Tree", href: "/owner/dev/tree" },
-      { label: "Strike Query", href: "/owner/dev/strike-query" },
       { label: "Social Media", href: "/social-media" }, { label: "Changelog", href: "/changelog" },
     ],
   },

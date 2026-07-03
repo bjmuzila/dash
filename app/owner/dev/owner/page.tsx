@@ -11,7 +11,6 @@ import {
   homeShellStyle,
   homeSecondaryButtonStyle,
 } from "@/components/shared/ownerTheme";
-import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
 // Mobile detection so the fixed-column grids below can collapse instead of
@@ -223,7 +222,6 @@ const NAV_GROUPS: { id: string; label: string; emoji: string; items: { label: st
       { label: "Database", href: "/database" },
       { label: "Dev", href: "/owner/dev" },
       { label: "Est. Moves BE", href: "/estimated-move" },
-      { label: "Logs", href: "/logs" },
       { label: "Changelog", href: "/changelog" },
     ],
   },
@@ -408,10 +406,10 @@ function StatCard({
       gap: 6,
       borderRadius: 12,
     }}>
-      <div style={{ fontSize: 12, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </div>
-      <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.text, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {value}
       </div>
       {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
@@ -487,8 +485,11 @@ const SECTION_TAB = {
   system:   "infra",
   hosting:  "infra",
   database: "database",
-  controls: "controls",
+  // Controls moved under the Infra tab (its own tab was removed).
+  controls: "infra",
   eodgex:   "database",
+  // Users/auth section removed from the UI — mapped to a dead tab so it never
+  // renders (kept as a key so the JSX referencing authStatus stays valid).
   auth:     "auth",
   activity: "activity",
 } as const;
@@ -767,6 +768,73 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
       {status && (
         <span style={{ fontSize: 8.5, fontWeight: 500, color: `${HOME_THEME.text}`, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
       )}
+    </div>
+  );
+}
+
+// Flow ticker visit tracker — ranks tickers by how often they've been opened
+// (click) across the flow/scanner surfaces, from the ticker_events log via
+// GET /api/ticker-event. Self-contained (own fetch) so it can drop into the
+// Activity section without touching the parent's state.
+function TickerVisitsCard() {
+  const [rows, setRows] = useState<{ ticker: string; clicks: number; renders: number }[] | null>(null);
+  const [days, setDays] = useState<number>(7);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setRows(null); setErr(null);
+    fetch(`/api/ticker-event?sinceDays=${days}`)
+      .then((r) => r.json())
+      .then((j) => { if (alive) setRows((j.rows as typeof rows) ?? []); })
+      .catch((e) => { if (alive) setErr(String(e)); });
+    return () => { alive = false; };
+  }, [days]);
+
+  const ranked = (rows ?? []).slice().sort((a, b) => b.clicks - a.clicks).slice(0, 20);
+  const max = ranked.length ? Math.max(...ranked.map((r) => r.clicks), 1) : 1;
+
+  return (
+    <div style={{ ...homePanelStyle, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${HOME_THEME.border}`, background: "rgba(13,17,25,0.60)" }}>
+        <span style={{ fontSize: 15 }}>📡</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow · Ticker Visits</span>
+        <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+          {[1, 7, 30].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              style={{
+                padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
+                border: `1px solid ${days === d ? HOME_THEME.cyan : HOME_THEME.border}`,
+                background: days === d ? `${HOME_THEME.cyan}18` : "transparent",
+                color: days === d ? HOME_THEME.cyan : HOME_THEME.text,
+              }}
+            >
+              {d === 1 ? "24h" : `${d}d`}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ maxHeight: 320, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {err ? (
+          <div style={{ fontSize: 13, color: HOME_THEME.red }}>{err}</div>
+        ) : rows == null ? (
+          <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>Loading…</div>
+        ) : ranked.length === 0 ? (
+          <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>No ticker visits recorded in this window.</div>
+        ) : ranked.map((r, i) => (
+          <div key={r.ticker} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.5, width: 18, flexShrink: 0 }}>{i + 1}</span>
+            <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.text, width: 70, flexShrink: 0 }}>{r.ticker}</span>
+            <div style={{ flex: 1, height: 9, background: "rgba(255,255,255,0.06)", borderRadius: 5, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${Math.round((r.clicks / max) * 100)}%`, background: HOME_THEME.cyan, borderRadius: 5 }} />
+            </div>
+            <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, width: 54, textAlign: "right", flexShrink: 0 }}>{r.clicks.toLocaleString()}</span>
+            <span title="impressions" style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.45, width: 60, textAlign: "right", flexShrink: 0 }}>{r.renders.toLocaleString()} imp</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1083,7 +1151,7 @@ export default function OwnerDashboard() {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
-      const VALID_TABS: OwnerTab[] = ["overview","infra","database","controls","eodgex","auth","activity"];
+      const VALID_TABS: OwnerTab[] = ["overview","infra","database","activity"];
       const param = new URLSearchParams(window.location.search).get("tab") as OwnerTab | null;
       if (param && VALID_TABS.includes(param)) {
         setOwnerTab(param);
@@ -1103,7 +1171,7 @@ export default function OwnerDashboard() {
   // keeps this page mounted, so the mount effect above won't re-run).
   const searchParams = useSearchParams();
   useEffect(() => {
-    const VALID_TABS: OwnerTab[] = ["overview","infra","database","controls","eodgex","auth","activity"];
+    const VALID_TABS: OwnerTab[] = ["overview","infra","database","activity"];
     const param = searchParams.get("tab") as OwnerTab | null;
     if (param && VALID_TABS.includes(param)) {
       setOwnerTab(param);
@@ -2138,68 +2206,12 @@ export default function OwnerDashboard() {
             <button onClick={refresh} disabled={loading} style={homeButtonStyle}>
               {loading ? "…" : "↻"}
             </button>
-            {!isMobile && <OwnerQuickLinks current="/owner/dev/owner" />}
           </div>
         </div>
 
-        {/* Desktop OpsBar — live status dots + quick controls (relocated from the
-            old internal sidebar; section nav now lives in the shared owner rail). */}
-        {!isMobile && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-            padding: "8px 18px",
-            borderBottom: `1px solid ${HOME_THEME.border}`,
-            background: HOME_THEME.panelBg,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", minWidth: 0 }}>
-              {STATUS_ROWS.map((row) => (
-                <span key={row.label} title={row.sub ? `${row.label}: ${row.sub}` : row.label}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.text }}>
-                  <span style={{
-                    width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                    background: row.ok ? HOME_THEME.green : HOME_THEME.red,
-                    boxShadow: row.ok ? `0 0 5px ${HOME_THEME.green}88` : `0 0 5px ${HOME_THEME.red}88`,
-                  }} />
-                  {row.label}
-                  {row.sub && <span style={{ opacity: 1, fontFamily: "var(--font-mono)", fontSize: 11 }}>{row.sub}</span>}
-                </span>
-              ))}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexWrap: "wrap" }}>
-              {[
-                { key: "idle",      label: isIdle == null ? "Idle: —" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause", action: toggleIdle },
-                { key: "mvcAuto",   label: mvcAuto == null ? "CB Auto: —" : mvcAuto ? "● CB Auto ON" : "○ CB Auto OFF",       action: toggleMvcAuto },
-                { key: "maint",     label: maint == null ? "Maint: —" : maint ? "● Maint ON — go live" : "○ Maint OFF",       action: toggleMaint },
-                { key: "reconnect", label: "↻ Reconnect feed", action: doReconnect },
-              ].map(({ key, label, action }) => (
-                <button
-                  key={key}
-                  className="owner-ctrl-btn"
-                  onClick={action}
-                  disabled={ctlBusy === key}
-                  style={{
-                    padding: "6px 10px", borderRadius: 6, fontSize: 12,
-                    cursor: ctlBusy === key ? "wait" : "pointer", fontFamily: "inherit",
-                    border: `1px solid ${HOME_THEME.border}`, background: "transparent",
-                    color: HOME_THEME.text, opacity: ctlBusy === key ? 0.5 : 1, whiteSpace: "nowrap",
-                  }}
-                >
-                  {ctlBusy === key ? "…" : label}
-                </button>
-              ))}
-            </div>
-            {ctlMsg && (
-              <div style={{
-                width: "100%", fontSize: 12, fontFamily: "var(--font-mono)", padding: "5px 8px", borderRadius: 6,
-                background: ctlMsg.ok ? "rgba(255,255,255,0.04)" : `${HOME_THEME.red}15`,
-                border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
-                color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
-              }}>
-                {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
-              </div>
-            )}
-          </div>
-        )}
+        {/* OpsBar removed — its live status dots now render as a dedicated "Status"
+            card, and its on/off toggles live in the "Controls" card, both under
+            the Infra tab. */}
 
         {/* Mobile tab strip */}
         {isMobile && (
@@ -2351,13 +2363,38 @@ export default function OwnerDashboard() {
         </AccordionCard>
         )}
 
+        {/* ── Live status dots (relocated from the old OpsBar into its own card) ── */}
+        {SECTION_TAB.system === ownerTab && (
+        <AccordionCard
+          accent={HOME_THEME.cyan}
+          id="status"
+          title="Status"
+          open={openSet.has("status")}
+          onToggle={toggleSection}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+            {STATUS_ROWS.map((row) => (
+              <span key={row.label} title={row.sub ? `${row.label}: ${row.sub}` : row.label}
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, color: HOME_THEME.text }}>
+                <span style={{
+                  width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                  background: row.ok ? HOME_THEME.green : HOME_THEME.red,
+                  boxShadow: row.ok ? `0 0 6px ${HOME_THEME.green}88` : `0 0 6px ${HOME_THEME.red}88`,
+                }} />
+                {row.label}
+                {row.sub && <span style={{ opacity: 1, fontFamily: "var(--font-mono)", fontSize: 13 }}>{row.sub}</span>}
+              </span>
+            ))}
+          </div>
+        </AccordionCard>
+        )}
+
         {/* ── System KPIs ── */}
         {SECTION_TAB.system === ownerTab && (
         <AccordionCard
           accent={HOME_THEME.cyan}
           id="system"
           title="System"
-          subtitle={`uptime ${displayUptime != null ? fmtUptime(displayUptime) : "—"} · ${dbHealth?.ok ? "pg OK" : "pg —"} · spot ${server.spot != null ? server.spot.toFixed(0) : "—"}`}
           open={openSet.has("system")}
           onToggle={toggleSection}
         >
@@ -2583,13 +2620,13 @@ export default function OwnerDashboard() {
                   padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
                   overflow: "hidden",
                 }}>
-                  <div style={{ fontSize: "clamp(6px, 7.5cqw, 11px)", fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(8px, 8cqw, 13px)", fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {label}
                   </div>
-                  <div style={{ fontSize: "clamp(10px, 13cqw, 20px)", fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "clamp(13px, 14cqw, 24px)", fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {count != null ? fmtNum(count) : "—"}
                   </div>
-                  <div style={{ fontSize: "clamp(6px, 6.5cqw, 9px)", color: HOME_THEME.text, opacity: 1, whiteSpace: "nowrap" }}>rows today</div>
+                  <div style={{ fontSize: "clamp(8px, 7cqw, 11px)", color: HOME_THEME.text, opacity: 1, whiteSpace: "nowrap" }}>rows today</div>
                 </div>
               );
             })}
@@ -3104,7 +3141,7 @@ export default function OwnerDashboard() {
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <SectionLabel>Page Activity</SectionLabel>
-              <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
+              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                 {totalVisits.toLocaleString()} visits · {activeCount} active now
               </span>
             </div>
@@ -3139,11 +3176,11 @@ export default function OwnerDashboard() {
                 borderBottom: `1px solid ${HOME_THEME.border}`,
                 background: "rgba(13,17,25,0.60)",
               }}>
-                <span style={{ fontSize: 13 }}>🛰️</span>
-                <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
+                <span style={{ fontSize: 15 }}>🛰️</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                   Recent Activity
                 </span>
-                <span style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
+                <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 1, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
                   newest first
                 </span>
               </div>
@@ -3161,11 +3198,11 @@ export default function OwnerDashboard() {
                         display: "flex", alignItems: "center", gap: 10,
                         padding: "6px 14px",
                         borderBottom: `1px solid ${HOME_THEME.border}`,
-                        fontFamily: "var(--font-mono)", fontSize: 12,
+                        fontFamily: "var(--font-mono)", fontSize: 13,
                       }}
                     >
                       <span style={{
-                        width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                        width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
                         background: active ? HOME_THEME.green : `${HOME_THEME.text}44`,
                         boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : "none",
                       }} />
@@ -3184,6 +3221,9 @@ export default function OwnerDashboard() {
               </div>
             </div>
 
+            {/* Flow ticker visit tracker */}
+            <TickerVisitsCard />
+
             {/* Per-group grid */}
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, 1fr)", gap: 10 }}>
             {NAV_GROUPS.map((group) => {
@@ -3196,8 +3236,8 @@ export default function OwnerDashboard() {
                     borderBottom: `1px solid ${HOME_THEME.border}`,
                     background: "rgba(13,17,25,0.60)",
                   }}>
-                    <span style={{ fontSize: 15 }}>{group.emoji}</span>
-                    <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
+                    <span style={{ fontSize: 16 }}>{group.emoji}</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
                       {group.label}
                     </span>
                   </div>
@@ -3239,17 +3279,17 @@ export default function OwnerDashboard() {
                                 />
                               );
                             })()}
-                            <span style={{ fontSize: 12, fontWeight: 600, color: HOME_THEME.text, opacity: active ? 1 : 0.55, whiteSpace: "nowrap" }}>{item.label}</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: HOME_THEME.text, opacity: active ? 1 : 0.55, whiteSpace: "nowrap" }}>{item.label}</span>
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                             {/* Visit count pill */}
                             <span
                               title={`${loads.toLocaleString()} total loads`}
                               style={{
-                                fontSize: 9,
+                                fontSize: 11,
                                 fontFamily: "var(--font-mono)",
                                 fontWeight: 700,
-                                padding: "2px 6px",
+                                padding: "2px 7px",
                                 borderRadius: 4,
                                 color: loads > 0 ? HOME_THEME.cyan : `${HOME_THEME.text}44`,
                                 background: loads > 0 ? `${HOME_THEME.cyan}14` : "transparent",

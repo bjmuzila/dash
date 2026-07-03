@@ -78,9 +78,9 @@ const STATUS_COLORS: Record<string, string> = {
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 10, fontWeight: 500, color: T.muted, letterSpacing: "0.01em" }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: T.textSecondary }}>{sub}</div>}
+      <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 32, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 13, color: T.textSecondary }}>{sub}</div>}
     </div>
   );
 }
@@ -106,20 +106,42 @@ function SetupBanner() {
   );
 }
 
-// Build last-12-months signup buckets from real subscription created timestamps
+type Granularity = "daily" | "weekly" | "monthly";
+
+// Build signup buckets from real subscription created timestamps, at the chosen
+// granularity: last 30 days / last 12 weeks / last 12 months.
 function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
+  const [gran, setGran] = useState<Granularity>("monthly");
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const now = new Date();
 
-  // Build 12 monthly buckets (oldest → newest)
-  const buckets = Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
-    return { label: `${MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`, y: d.getFullYear(), m: d.getMonth(), mrr: 0, count: 0 };
+  // Bucket key + label for a given signup date, at the active granularity.
+  function keyFor(d: Date): { key: string; label: string } {
+    if (gran === "daily") {
+      return { key: `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`, label: `${d.getMonth() + 1}/${d.getDate()}` };
+    }
+    if (gran === "weekly") {
+      const wk = new Date(d); wk.setDate(d.getDate() - d.getDay()); // week's Sunday
+      return { key: `${wk.getFullYear()}-${wk.getMonth()}-${wk.getDate()}`, label: `${wk.getMonth() + 1}/${wk.getDate()}` };
+    }
+    return { key: `${d.getFullYear()}-${d.getMonth()}`, label: `${MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}` };
+  }
+
+  // Empty buckets (oldest → newest) covering the visible window.
+  const spanCount = gran === "daily" ? 30 : 12;
+  const buckets = Array.from({ length: spanCount }, (_, i) => {
+    const d = new Date(now);
+    if (gran === "daily") d.setDate(now.getDate() - (spanCount - 1 - i));
+    else if (gran === "weekly") d.setDate(now.getDate() - (spanCount - 1 - i) * 7);
+    else d.setMonth(now.getMonth() - (spanCount - 1 - i));
+    const { key, label } = keyFor(d);
+    return { key, label, mrr: 0, count: 0 };
   });
 
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
   for (const sub of subs) {
     const d = new Date(sub.created * 1000);
-    const bucket = buckets.find(b => b.y === d.getFullYear() && b.m === d.getMonth());
+    const bucket = byKey.get(keyFor(d).key);
     if (!bucket) continue;
     const monthlyAmount = sub.interval === "year" ? Math.round(sub.amount / 12) : sub.amount;
     bucket.mrr += monthlyAmount;
@@ -136,13 +158,38 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
-      {/* Bar chart: new MRR by signup month */}
-      <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 2 }}>New Subscriptions by Month</div>
-        <div style={{ fontSize: 10, color: T.muted, marginBottom: 16 }}>Based on signup date · last 12 months</div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 140 }}>
+      {/* Bar chart: new subscriptions by signup period */}
+      <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 3 }}>New Subscriptions</div>
+            <div style={{ fontSize: 12, color: T.muted }}>
+              By signup date · {gran === "daily" ? "last 30 days" : gran === "weekly" ? "last 12 weeks" : "last 12 months"}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {(["daily", "weekly", "monthly"] as const).map((g) => (
+              <button
+                key={g}
+                onClick={() => setGran(g)}
+                style={{
+                  ...homeSecondaryButtonStyle,
+                  padding: "5px 12px",
+                  fontSize: 12,
+                  fontWeight: gran === g ? 700 : 500,
+                  borderColor: gran === g ? T.cyan : undefined,
+                  color: gran === g ? T.cyan : undefined,
+                  textTransform: "capitalize",
+                }}
+              >
+                {g}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: gran === "daily" ? 3 : 6, height: 150, marginTop: 14 }}>
           {buckets.map((b, i) => {
-            const barH = Math.max(4, (b.mrr / maxMrr) * 120);
+            const barH = Math.max(4, (b.mrr / maxMrr) * 128);
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                 <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR`} style={{
@@ -152,7 +199,10 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
                   borderRadius: "3px 3px 0 0",
                   cursor: "default",
                 }} />
-                <span style={{ fontSize: 8, color: T.muted, whiteSpace: "nowrap" }}>{b.label}</span>
+                {/* Daily view is dense — label every 5th bar to avoid clutter. */}
+                <span style={{ fontSize: 9, color: T.muted, whiteSpace: "nowrap" }}>
+                  {gran === "daily" ? (i % 5 === 0 ? b.label : "") : b.label}
+                </span>
               </div>
             );
           })}
@@ -161,7 +211,7 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
 
       {/* Billing interval breakdown */}
       <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Billing Intervals</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Billing Intervals</div>
         {[
           { label: "Monthly", count: monthly.length, mrr: monthlyMrr, color: T.cyan },
           { label: "Yearly", count: yearly.length, mrr: yearlyMrr, color: T.green, note: "(÷12)" },
@@ -193,10 +243,10 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: 10, fontWeight: 500, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
-        <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
+        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 9, fontWeight: 500, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
         <span>Amount</span>
         <span>Status</span>
@@ -214,26 +264,26 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
               display: "grid",
               gridTemplateColumns: "1fr 80px 90px 90px",
               gap: 8,
-              padding: "8px 16px",
+              padding: "9px 16px",
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
-              fontSize: 12,
+              fontSize: 13,
               alignItems: "center",
             }}
           >
             <div style={{ minWidth: 0 }}>
               <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</div>
               {s.plan_name && s.plan_name !== "—" && (
-                <div style={{ fontSize: 10, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
+                <div style={{ fontSize: 11, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
                   {s.plan_name.startsWith("price_") ? s.plan_name.slice(0, 18) + "…" : s.plan_name}
                 </div>
               )}
             </div>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 13 }}>
               {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
             </span>
             <span>
               <span style={{
-                fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
+                fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
                 background: `${STATUS_COLORS[s.status] || T.muted}18`,
                 border: `1px solid ${STATUS_COLORS[s.status] || T.muted}44`,
                 color: STATUS_COLORS[s.status] || T.muted,
@@ -241,7 +291,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 {s.status}
               </span>
             </span>
-            <span style={{ color: T.text, fontSize: 11 }}>{fmtDateShort(s.current_period_end)}</span>
+            <span style={{ color: T.text, fontSize: 12 }}>{fmtDateShort(s.current_period_end)}</span>
           </div>
         ))}
       </div>
@@ -252,7 +302,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
     <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: T.text, marginBottom: 12 }}>Recent Customers</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 12 }}>Recent Customers</div>
       {customers.length === 0 ? (
         <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 12 }}>No customers yet</div>
       ) : (
@@ -260,8 +310,8 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
           {customers.filter(c => c.email && c.email !== "—").map((c) => (
             <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
-                <div style={{ fontSize: 10, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                <div style={{ fontSize: 11, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
               </div>
               <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                 {c.subscriptions.length === 0 ? (
@@ -534,11 +584,11 @@ export default function AdminDashboard() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: "0.01em", color: T.text }}>
+          <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
             Admin · Stripe
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 10, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
+            <span style={{ fontSize: 12, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

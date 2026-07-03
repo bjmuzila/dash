@@ -36,10 +36,8 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: HOME_THEME.orange,
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙" },
-      { label: "Strike Query", href: "/owner/dev/strike-query", glyph: "≡" },
       { label: "Database", href: "/database", glyph: "⛁" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄" },
-      { label: "Logs", href: "/logs", glyph: "❏" },
       { label: "Changelog", href: "/changelog", glyph: "↻" },
       { label: "Social Media", href: "/social-media", glyph: "🗨︎" },
     ],
@@ -49,7 +47,6 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: HOME_THEME.green,
     links: [
       { label: "Budget", href: "/owner/budget", glyph: "⚖" },
-      { label: "Personal", href: "/owner/personal", glyph: "☺" },
       { label: "To-Do", href: "/owner/personal/todo", glyph: "☑" },
     ],
   },
@@ -62,15 +59,13 @@ export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "infra",    label: "Infra" },
   { id: "database", label: "Database" },
-  { id: "controls", label: "Controls" },
-  { id: "auth",     label: "Users" },
   { id: "activity", label: "Activity" },
 ];
 
 // Root-level backend routes that live outside /owner but should still show the
 // owner rail (they were "losing" the left toolbar because the rail was mounted
 // only by app/owner/layout.tsx).
-const OWNER_CHROME_EXTRA = ["/database", "/estimated-move", "/logs", "/changelog", "/social-media"];
+const OWNER_CHROME_EXTRA = ["/database", "/estimated-move", "/changelog", "/social-media"];
 
 /** True for any route that should render the owner left rail (owner + backend). */
 export function isOwnerChromePath(pathname: string): boolean {
@@ -85,8 +80,11 @@ export default function OwnerSidebar() {
   const activeTab = searchParams.get("tab") || "overview";
   const { isMobile } = useMobileNav();
   const [open, setOpen] = useState(false);
-  const isActive = (href: string) =>
-    href === "/owner" ? pathname === "/owner" : pathname === href || pathname.startsWith(href + "/");
+  // Exact-match only: a link is active solely on its own page, so a parent path
+  // (e.g. /owner/dev) never lights up while you're on a child (/owner/dev/admin).
+  // Only ONE link is ever highlighted at a time. The Control Panel's ?tab= views
+  // share its pathname, so it stays lit across its sub-sections.
+  const isActive = (href: string) => pathname === href;
 
   // Close the drawer whenever the route (or active tab) changes on mobile.
   useEffect(() => {
