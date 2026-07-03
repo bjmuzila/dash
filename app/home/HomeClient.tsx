@@ -881,7 +881,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
-            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
+            <div ref={gexContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
               {/* Full-featured toolbar — scales to fit instead of scrolling */}
               <FitScale min={0.6}>
               <GexToolbar
@@ -942,7 +942,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
               </div>
             </div>
 
-            <div style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, display: "flex", flexDirection: "column", flex: econCollapsed ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
+            <div style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econCollapsed ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
               <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
@@ -1002,7 +1002,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
              </div>
             </div>
 
-            <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+            <div ref={heatmapContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>

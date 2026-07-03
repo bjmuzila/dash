@@ -7,7 +7,7 @@
  * shows up on every owner page, no per-page gating or nav edits needed.
  */
 
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -24,7 +24,11 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Hub", href: "/owner", glyph: "⌂" },
       { label: "Watch", href: "/owner/watch", glyph: "◉" },
-      { label: "Control Panel", href: "/owner/dev/owner", glyph: "★" },
+      // Control Panel sections promoted to top-level entries (no longer nested).
+      { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞" },
+      { label: "Infra", href: "/owner/dev/owner?tab=infra", glyph: "◈" },
+      { label: "Database", href: "/owner/dev/owner?tab=database", glyph: "⛁" },
+      { label: "Activity", href: "/owner/dev/owner?tab=activity", glyph: "📡" },
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤" },
@@ -82,9 +86,13 @@ export default function OwnerSidebar() {
   const [open, setOpen] = useState(false);
   // Exact-match only: a link is active solely on its own page, so a parent path
   // (e.g. /owner/dev) never lights up while you're on a child (/owner/dev/admin).
-  // Only ONE link is ever highlighted at a time. The Control Panel's ?tab= views
-  // share its pathname, so it stays lit across its sub-sections.
-  const isActive = (href: string) => pathname === href;
+  // Only ONE link is ever highlighted at a time. Control Panel section links
+  // (/owner/dev/owner?tab=…) share one pathname, so they disambiguate on the tab.
+  const isActive = (href: string) => {
+    const q = href.indexOf("?tab=");
+    if (q >= 0) return pathname === href.slice(0, q) && activeTab === href.slice(q + 5);
+    return pathname === href;
+  };
 
   // Close the drawer whenever the route (or active tab) changes on mobile.
   useEffect(() => {
@@ -143,69 +151,30 @@ export default function OwnerSidebar() {
           </div>
           {group.links.map((link) => {
             const here = isActive(link.href);
-            const isControl = link.href === "/owner/dev/owner";
             return (
-              <Fragment key={link.href}>
-                <Link
-                  href={link.href}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    fontSize: 14,
-                    fontWeight: here ? 800 : 600,
-                    textDecoration: "none",
-                    whiteSpace: "nowrap",
-                    color: here ? group.accent : HOME_THEME.text,
-                    background: here ? `${group.accent}1f` : "transparent",
-                    border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
-                  }}
-                >
-                  <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 15 }}>
-                    {link.glyph}
-                  </span>
-                  {link.label}
-                </Link>
-
-                {/* Control Panel section sub-links (folded-in tab bar). */}
-                {isControl && here && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 2,
-                      margin: "2px 0 4px 20px",
-                      paddingLeft: 8,
-                      borderLeft: `1px solid ${HOME_THEME.border}`,
-                    }}
-                  >
-                    {OWNER_CONTROL_SECTIONS.map((s) => {
-                      const sActive = activeTab === s.id;
-                      return (
-                        <Link
-                          key={s.id}
-                          href={`/owner/dev/owner?tab=${s.id}`}
-                          style={{
-                            padding: "6px 9px",
-                            borderRadius: 7,
-                            fontSize: 13,
-                            fontWeight: sActive ? 800 : 600,
-                            textDecoration: "none",
-                            whiteSpace: "nowrap",
-                            color: sActive ? group.accent : HOME_THEME.text,
-                            background: sActive ? `${group.accent}1a` : "transparent",
-                            border: `1px solid ${sActive ? `${group.accent}44` : "transparent"}`,
-                          }}
-                        >
-                          {s.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </Fragment>
+              <Link
+                key={link.href}
+                href={link.href}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  fontSize: 14,
+                  fontWeight: here ? 800 : 600,
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                  color: here ? group.accent : HOME_THEME.text,
+                  background: here ? `${group.accent}1f` : "transparent",
+                  border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
+                }}
+              >
+                <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 15 }}>
+                  {link.glyph}
+                </span>
+                {link.label}
+              </Link>
             );
           })}
         </div>

@@ -115,7 +115,7 @@ function GexScanner() {
   useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
 
   return (
-    <Card accent={NEUTRAL} title="GEX Change Scanner"
+    <Card variant="budget" title="GEX Change Scanner"
       subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : " by size"}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
@@ -295,7 +295,7 @@ function GreeksScanner() {
   const isTg = mode === "tg";
 
   return (
-    <Card accent={meta.accent} title="Greeks Sensitivity Scanner"
+    <Card variant="budget" title="Greeks Sensitivity Scanner"
       subtitle={`SPX · ${meta.label} · ${win}m window${loading ? " · refreshing…" : ""}`}>
 
       {/* Mode selector */}
@@ -476,7 +476,7 @@ function VolPinScanner() {
   useEffect(() => { const t = setInterval(() => load(), 90_000); return () => clearInterval(t); }, [load]);
 
   return (
-    <Card accent={HOME_THEME.purple} title="Volatility Pin Scanner"
+    <Card variant="budget" title="Volatility Pin Scanner"
       subtitle={`Stocks · IV-RV spread + range contraction → pin candidates${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
@@ -720,7 +720,7 @@ function StrikeQueryScanner() {
   };
 
   return (
-    <Card accent={HOME_THEME.cyan} title="Strike GEX Query"
+    <Card variant="budget" title="Strike GEX Query"
       subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${loading ? " · loading…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>

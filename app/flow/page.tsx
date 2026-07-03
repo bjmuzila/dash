@@ -613,7 +613,7 @@ export default function FlowPage() {
       </div>
 
       {/* ── Filters ─────────────────────────────────────────────────── */}
-      <Card accent="cyan" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0 }}>
+      <Card variant="budget" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0 }}>
         {view === "combined" ? (
           <div style={{ marginBottom: 18 }}>
             <label style={labelStyle}>Scope</label>
@@ -737,7 +737,7 @@ export default function FlowPage() {
       {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
            Combined view so the once-created lightweight-chart keeps its ref. ── */}
       <div style={{ display: view === "ticker" ? "contents" : "none" }}>
-        <Card accent="orange" padding={0} style={{ flexShrink: 0 }}>
+        <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
           <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
               Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
@@ -759,7 +759,7 @@ export default function FlowPage() {
       </div>
 
       {view === "combined" && (
-        <Card accent="orange" padding={0} style={{ flexShrink: 0 }}>
+        <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
           <div style={{ padding: "16px 20px 4px", textAlign: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
               Premium Split — <span style={{ color: C.cyan }}>{combinedLabel}</span>
@@ -770,7 +770,7 @@ export default function FlowPage() {
       )}
 
       {/* ── Tape ────────────────────────────────────────────────────── */}
-      <Card accent="purple" padding={0} style={{ flexShrink: 0 }}>
+      <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>

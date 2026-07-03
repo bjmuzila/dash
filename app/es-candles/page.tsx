@@ -1234,7 +1234,7 @@ export default function EsCandlesPage() {
   return (
     <div className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
       <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
-        <FitScale align="center" min={0.4}>
+        <FitScale align="center" min={0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
             <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>

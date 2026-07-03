@@ -12,6 +12,10 @@ import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiry
 const TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = typeof TICKERS[number];
 
+// Softer than pure #ffffff — the bright white value text was harsh on the dark
+// metric-tinted cells. Used for neutral numeric values / signs.
+const SOFT_WHITE = "#c3ccda";
+
 const NET_COLS  = ["gex", "dex", "chex", "vex"] as const;
 type NetCol = typeof NET_COLS[number];
 
@@ -326,7 +330,7 @@ function TickerPanel({
   }, []);
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 16, overflow: "hidden" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HT.panelBg}`, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 16, overflow: "hidden" }}>
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
       {/* Panel header */}
@@ -363,7 +367,7 @@ function TickerPanel({
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
             }}>
-              <span style={{ color: v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : "#ffffff" }}>{fmt.sign}</span>{fmt.value}
+              <span style={{ color: v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE }}>{fmt.sign}</span>{fmt.value}
             </div>
           );
         })}
@@ -421,13 +425,13 @@ function TickerPanel({
                   ? `outline:1px solid ${r[c] >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"};outline-offset:-1px`
                   : "";
                 const formatted = fmtMoney(r[c]);
-                const signColor = r[c] > 0 ? "#22c55e" : r[c] < 0 ? "#ef4444" : "#ffffff";
+                const signColor = r[c] > 0 ? "#22c55e" : r[c] < 0 ? "#ef4444" : SOFT_WHITE;
                 const isGexPeak = c === "gex" && r.strike === computed.mvcStrike;
                 return (
                   <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
                     padding: "4px 4px", fontSize: 11, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                    textAlign: "center", color: "#ffffff",
+                    textAlign: "center", color: SOFT_WHITE,
                     background: metricBg(r[c], computed.maxAbs[c], topRank, intensity),
                     fontWeight: weight,
                     position: "relative",

@@ -601,7 +601,7 @@ function CalendarGrid({
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
       {WD.map((w, i) => (
-        <div key={i} style={{ textAlign: "center", fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+        <div key={i} style={{ textAlign: "center", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
       ))}
       {cells.map((d, i) => {
         if (d === null) return <div key={`e${i}`} />;
@@ -616,15 +616,15 @@ function CalendarGrid({
             onClick={() => g && onSelect(iso(d))}
             disabled={!g}
             style={{
-              textAlign: "left", minHeight: 46, padding: "5px 6px", borderRadius: 9, cursor: g ? "pointer" : "default",
+              textAlign: "left", minHeight: 56, padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
               background: tint,
               border: `1px solid ${isSel ? "#7dd3fc" : g ? HOME_THEME.border : "transparent"}`,
               boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : "none",
               color: HOME_THEME.text, transition: "all 0.12s ease",
             }}
           >
-            <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
-            {g && <div style={{ fontSize: 10, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
+            {g && <div style={{ fontSize: 12, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
         );
       })}
@@ -684,10 +684,6 @@ function MonthlyRegister({
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.04)" }}>
                 <span style={{ fontWeight: 900, fontSize: 13 }}>{longDate(g.date)}</span>
-                <span style={{ fontSize: 12 }}>
-                  <span style={{ color: g.dailyNet < 0 ? SOFT_RED : HOME_THEME.green, fontWeight: 700, marginRight: 14 }}>Net: {g.dailyNet > 0 ? "+" : ""}{fmtMoney(g.dailyNet, currency)}</span>
-                  <span style={{ color: g.eod < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>EOD: {fmtMoney(g.eod, currency)}</span>
-                </span>
               </div>
               {g.rows.map((r) => {
                 const isIncome = r.amount > 0;
@@ -697,7 +693,6 @@ function MonthlyRegister({
                       {r.recurring
                         ? <span style={{ fontWeight: 700, fontStyle: "italic" }}>{r.label}</span>
                         : <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />}
-                      {r.recurring && <span title="Recurring — manage in the Recurring panel" style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.08em", padding: "2px 6px", borderRadius: 999, background: "rgba(126,211,252,0.12)", color: "#7dd3fc" }}>AUTO</span>}
                     </div>
                     <span style={{ fontWeight: 800, textAlign: "right", minWidth: 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}

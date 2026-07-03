@@ -18,7 +18,7 @@
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { HOME_THEME, homeShellStyle, homeContentStyle, homeGlossPanelStyle, classicCardStyle, dissolveCardStyle } from "./homeTheme";
+import { HOME_THEME, homeShellStyle, homeContentStyle, homeGlossPanelStyle, classicCardStyle, classicCardAccentStyle, dissolveCardStyle } from "./homeTheme";
 
 // Named theme accents so call sites read nicely (accent="orange") instead of
 // passing raw hex. Any hex string is also accepted.
@@ -101,9 +101,10 @@ export function Card({
    * Surface treatment (see BUDGET_UI_STYLE.md):
    *   "gloss"    — original top-accent glossy panel (default, unchanged).
    *   "classic"  — frosted dark card with a contained hairline edge (dense tables).
+   *   "budget"   — classic card + faint light-blue radial highlight, no top bar (the Budget page look).
    *   "dissolve" — borderless, edge-feathered glass (chart/overview panels).
    */
-  variant?: "gloss" | "classic" | "dissolve";
+  variant?: "gloss" | "classic" | "budget" | "dissolve";
   title?: ReactNode;
   subtitle?: ReactNode;
   padding?: number | string;
@@ -113,6 +114,7 @@ export function Card({
   const accentColor = resolveAccent(accent);
   const base =
     variant === "dissolve" ? dissolveCardStyle :
+    variant === "budget"   ? classicCardAccentStyle :
     variant === "classic"  ? classicCardStyle  :
     homeGlossPanelStyle(accentColor);
   // The hover lift only reads right on the contained (gloss/classic) cards; the

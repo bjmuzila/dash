@@ -235,7 +235,7 @@ function MultiGreekCard() {
   const hasAny = peaks ? order.some((k) => peaks[k] != null) : false;
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>peak strike</span>
@@ -316,7 +316,7 @@ function EstimatedMoveCard() {
   const crossed = near < 0;
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -440,7 +440,7 @@ function PremarketCard() {
   const up = (gapPts ?? 0) > 0;
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
@@ -474,7 +474,7 @@ function PremarketCard() {
 // stale-event fading, filter dropdown, and the earnings logo strip at the bottom.
 function EconCalendarCard() {
   return (
-    <Card accent="cyan" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 420 }}>
+    <Card variant="budget" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 420 }}>
       <EconCalendarPanel todayOnly hideToolbar />
     </Card>
   );
@@ -624,7 +624,7 @@ function ConfidenceCard() {
   const showChange = changedAt != null;
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Confidence Score
@@ -792,7 +792,7 @@ function GreeksCard() {
   ];
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
         <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
@@ -895,7 +895,7 @@ function IbCard() {
   const rangePts = ib ? ib.high - ib.low : null;
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
@@ -1044,7 +1044,7 @@ function LevelsCard() {
   })();
 
   return (
-    <Card accent="cyan" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
@@ -1238,7 +1238,7 @@ function ContractLookupCard() {
   ];
 
   return (
-    <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
+    <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
         {loaded && <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
@@ -1388,7 +1388,7 @@ function StrategyBuilderCard() {
   const ready = !!plan && (!!plan.summary || !!plan.headline);
 
   return (
-    <Card accent="cyan" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
+    <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Strategy Builder

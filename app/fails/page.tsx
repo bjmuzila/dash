@@ -245,7 +245,7 @@ export default function FailsPage() {
         <LiveIb />
 
         {/* Active AMT setups */}
-        <Card accent="cyan" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card variant="budget" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <SectionTitle text="Active Setups" accent={HOME_THEME.cyan} big />
             <span style={{ fontSize: 10, color: HOME_THEME.text }}>AMT entry triggers · first 2h strongest</span>
@@ -279,7 +279,7 @@ export default function FailsPage() {
         </Card>
 
         {/* live status panel */}
-        <Card accent="cyan" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card variant="budget" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <SectionTitle text="Live Status" accent={HOME_THEME.cyan} big />
             <span style={{ fontSize: 11, color: HOME_THEME.text }}>
@@ -337,7 +337,7 @@ export default function FailsPage() {
         </Card>
 
         {/* today's fail log */}
-        <Card accent="orange" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Card variant="budget" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionTitle text={`Today's Fails${todayEvents.length ? ` (${todayEvents.length})` : ""}`} accent={HOME_THEME.orange} big />
           {todayEvents.length === 0 ? (
             <div style={{ ...homePanelStyle, padding: 16, fontSize: 13, color: HOME_THEME.text }}>No fails logged today yet.</div>

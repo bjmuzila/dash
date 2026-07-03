@@ -18,17 +18,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Valid 5-digit US ZIP required" }, { status: 400 });
   }
   try {
-    const geoRes = await fetch(`https://api.zippopotam.us/us/${zip}`, { cache: "no-store" });
-    if (!geoRes.ok) return NextResponse.json({ error: "ZIP not found" }, { status: 404 });
-    const geo = await geoRes.json();
-    const place0 = geo?.places?.[0];
-    if (!place0) return NextResponse.json({ error: "ZIP not found" }, { status: 404 });
-    const loc = {
-      latitude: place0.latitude,
-      longitude: place0.longitude,
-      name: place0["place name"],
-      admin1: place0["state abbreviation"],
-    };
+    // Primary geocoder: zippopotam. Falls back to Nominatim if it fails/throws.
+    let loc: { latitude: string; longitude: string; name: string; admin1: string } | null = null;
+    try {
+      const geoRes = await fetch(`https://api.zippopotam.us/us/${zip}`, { cache: "no-store" });
+      if (geoRes.ok) {
+        const geo = await geoRes.json();
+        const p = geo?.places?.[0];
+        if (p) loc = { latitude: p.latitude, longitude: p.longitude, name: p["place name"], admin1: p["state abbreviation"] };
+      }
+    } catch { /* fall through to Nominatim */ }
+
+    if (!loc) {
+      const nomRes = await fetch(
+        `https://nominatim.openstreetmap.org/search?postalcode=${zip}&country=US&format=json&addressdetails=1&limit=1`,
+        { cache: "no-store", headers: { "User-Agent": "cbedge-traders-dashboard/1.0" } }
+      );
+      if (nomRes.ok) {
+        const arr = await nomRes.json();
+        const n = Array.isArray(arr) ? arr[0] : null;
+        if (n) loc = { latitude: n.lat, longitude: n.lon, name: n.address?.town || n.address?.city || n.address?.village || n.display_name?.split(",")[0] || zip, admin1: n.address?.["ISO3166-2-lvl4"]?.split("-")[1] || "" };
+      }
+    }
+
+    if (!loc) return NextResponse.json({ error: "ZIP not found" }, { status: 404 });
 
     const wRes = await fetch(
       `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}` +
