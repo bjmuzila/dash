@@ -250,14 +250,6 @@ function fmtUptime(s: number): string {
   return `${sec}s`;
 }
 
-function fmtGex(v: number): string {
-  const abs = Math.abs(v);
-  const sign = v >= 0 ? "+" : "-";
-  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
-  return `${sign}$${(abs / 1e3).toFixed(2)}K`;
-}
-
 /** "Jun 21, 09:00 (2h ago)" style for the levels last-run stamp. */
 function fmtLastRun(iso: string | null): string {
   if (!iso) return "never";
@@ -1146,7 +1138,7 @@ export default function OwnerDashboard() {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
-      const VALID_TABS: OwnerTab[] = ["overview","infra","database","activity"];
+      const VALID_TABS: OwnerTab[] = ["overview","infra","activity"];
       const param = new URLSearchParams(window.location.search).get("tab") as OwnerTab | null;
       if (param && VALID_TABS.includes(param)) {
         setOwnerTab(param);
@@ -1166,7 +1158,7 @@ export default function OwnerDashboard() {
   // keeps this page mounted, so the mount effect above won't re-run).
   const searchParams = useSearchParams();
   useEffect(() => {
-    const VALID_TABS: OwnerTab[] = ["overview","infra","database","activity"];
+    const VALID_TABS: OwnerTab[] = ["overview","infra","activity"];
     const param = searchParams.get("tab") as OwnerTab | null;
     if (param && VALID_TABS.includes(param)) {
       setOwnerTab(param);
@@ -1990,7 +1982,6 @@ export default function OwnerDashboard() {
   const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
     { id: "overview",  label: "Overview" },
     { id: "infra",     label: "Infra" },
-    { id: "database",  label: "Database" },
     { id: "controls",  label: "Controls" },
     { id: "auth",      label: "Supabase / Users", badge: clerk?.stats?.userCount ?? undefined },
     { id: "activity",  label: "Activity" },
@@ -2593,17 +2584,7 @@ export default function OwnerDashboard() {
         </AccordionCard>
         )}
 
-        {/* ── DB row counts moved to the backend /database page ── */}
-        {SECTION_TAB.database === ownerTab && (
-          <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 14, color: HOME_THEME.text }}>
-              Database row counts now live on the backend Database page.
-            </div>
-            <a href="/database" style={{ ...homeSecondaryButtonStyle, padding: "8px 16px", borderRadius: 8, textDecoration: "none", fontSize: 13, whiteSpace: "nowrap" }}>
-              Open Database →
-            </a>
-          </div>
-        )}
+        {/* ── Database tab removed — all DB surfaces live on the backend /database page ── */}
 
         {/* ── Controls ── */}
         {SECTION_TAB.controls === ownerTab && (
@@ -2742,80 +2723,7 @@ export default function OwnerDashboard() {
         </AccordionCard>
         )}
 
-        {/* ── EOD GEX save status ── */}
-        {SECTION_TAB.eodgex === ownerTab && (
-        <AccordionCard
-          accent="#4FB3C9"
-          id="eodgex"
-          title="EOD GEX · Today"
-          subtitle={eodGex.length === 0 ? "not yet recorded" : `${eodGex.length} symbol(s) saved`}
-          open={openSet.has("eodgex")}
-          onToggle={toggleSection}
-        >
-          <div>
-            {eodGex.length === 0 ? (
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
-                Not yet recorded today — fires 3:55–4:05 PM ET
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {(["$SPX", "SPY", "QQQ"] as const).map((sym) => {
-                  const row = eodGex.find((r) => r.symbol === sym);
-                  const ok = !!row;
-                  const tStr = row?.computed_at
-                    ? new Date(row.computed_at).toLocaleTimeString("en-US", {
-                        hour12: false, hour: "2-digit", minute: "2-digit",
-                        timeZone: "America/New_York",
-                      }) + " ET"
-                    : null;
-                  return (
-                    <div
-                      key={sym}
-                      style={{
-                        ...homePanelStyle,
-                        padding: "12px 16px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 4,
-                        borderLeft: `3px solid ${ok ? HOME_THEME.green : HOME_THEME.red}55`,
-                        background: `linear-gradient(135deg, ${ok ? HOME_THEME.green : HOME_THEME.red}14 0%, transparent 100%)`,
-                        minWidth: 160,
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{
-                          width: 7, height: 7, borderRadius: "50%",
-                          background: ok ? HOME_THEME.green : HOME_THEME.red,
-                          boxShadow: ok ? `0 0 6px ${HOME_THEME.green}` : `0 0 6px ${HOME_THEME.red}`,
-                          flexShrink: 0,
-                        }} />
-                        <span style={{ fontSize: 12, fontWeight: 500, color: ok ? HOME_THEME.green : HOME_THEME.red, letterSpacing: "0.1em" }}>
-                          {sym}
-                        </span>
-                      </div>
-                      {row ? (
-                        <>
-                          <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>
-                            {fmtGex(row.total_gex)}
-                          </div>
-                          <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
-                            spot {row.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </div>
-                          {tStr && (
-                            <div style={{ fontSize: 9, color: `${HOME_THEME.green}88` }}>{tStr}</div>
-                          )}
-                        </>
-                      ) : (
-                        <div style={{ fontSize: 12, color: HOME_THEME.red, fontFamily: "var(--font-mono)" }}>not saved</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </AccordionCard>
-        )}
+        {/* ── EOD GEX save status moved to the backend /database page ── */}
 
         {/* ── Levels auto-publish moved to Estimated Moves → EM Tracker tab ── */}
         {/* Section relocated to /estimated-move (EM Tracker tab) — see components/dashboard/LevelsPublish.tsx */}

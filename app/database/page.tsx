@@ -154,6 +154,88 @@ function todayET() {
     .slice(0, 10);
 }
 
+/** Compact GEX formatter: +$1.23B / -$45.6M / +$789K. */
+function fmtGex(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v >= 0 ? "+" : "-";
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  return `${sign}$${(abs / 1e3).toFixed(2)}K`;
+}
+
+interface EodGexRow { symbol: string; total_gex: number; spot: number; computed_at: string }
+
+/**
+ * EOD GEX save status for today ($SPX/SPY/QQQ). Moved here from the owner
+ * dashboard so all DB surfaces live on the backend Database page. The recorder
+ * fires 3:55–4:05 PM ET; before that this shows "not yet recorded".
+ */
+function EodGexToday() {
+  const [rows, setRows] = useState<EodGexRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadEod = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/eod-gex?date=${todayET()}`, { cache: "no-store" });
+      if (r.ok) { const j = await r.json(); setRows((j.rows ?? []) as EodGexRow[]); }
+    } catch { /* non-fatal */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void loadEod(); }, [loadEod]);
+
+  return (
+    <div style={{ ...homePanelStyle, padding: "14px 16px", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, letterSpacing: "0.01em" }}>EOD GEX · Today</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
+          {loading ? "loading…" : rows.length === 0 ? "not yet recorded" : `${rows.length} symbol(s) saved`}
+        </span>
+      </div>
+      {rows.length === 0 && !loading ? (
+        <div style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
+          Not yet recorded today — fires 3:55–4:05 PM ET
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {(["$SPX", "SPY", "QQQ"] as const).map((sym) => {
+            const row = rows.find((r) => r.symbol === sym);
+            const ok = !!row;
+            const tStr = row?.computed_at
+              ? new Date(row.computed_at).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) + " ET"
+              : null;
+            return (
+              <div key={sym} style={{
+                ...homePanelStyle, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 4,
+                borderLeft: `3px solid ${ok ? HOME_THEME.green : HOME_THEME.red}55`,
+                background: `linear-gradient(135deg, ${ok ? HOME_THEME.green : HOME_THEME.red}14 0%, transparent 100%)`,
+                minWidth: 160,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: ok ? HOME_THEME.green : HOME_THEME.red, boxShadow: `0 0 6px ${ok ? HOME_THEME.green : HOME_THEME.red}` }} />
+                  <span style={{ fontSize: 12, fontWeight: 500, color: ok ? HOME_THEME.green : HOME_THEME.red, letterSpacing: "0.1em" }}>{sym}</span>
+                </div>
+                {row ? (
+                  <>
+                    <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{fmtGex(row.total_gex)}</div>
+                    <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.9 }}>
+                      spot {row.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    {tStr && <div style={{ fontSize: 9, color: `${HOME_THEME.green}88` }}>{tStr}</div>}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: HOME_THEME.red, fontFamily: "var(--font-mono)" }}>not saved</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DatabasePage() {
   const [tab, setTab] = useState<TableId>("eod_gex");
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -257,6 +339,7 @@ export default function DatabasePage() {
       </div>
 
       <div style={homeContentStyle}>
+        <EodGexToday />
         <RowCountsToday />
         <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
           <div className="flex flex-shrink-0 overflow-x-auto" style={{ gap: 6, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>

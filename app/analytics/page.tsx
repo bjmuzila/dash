@@ -1514,7 +1514,7 @@ function StrategyBuilderCard() {
 export default function AnalyticsPage() {
   return (
     <PageShell>
-      <div className="analytics-grid" style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))", alignItems: "stretch" }}>
+      <div className="analytics-grid" style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", alignItems: "start" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
         <PremarketCard />
