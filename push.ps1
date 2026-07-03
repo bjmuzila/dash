@@ -82,11 +82,11 @@ $deployLines = @(
     "git pull",
     # Export ONLY the vars compose interpolates - .env.local holds multiline/
     # quoted secrets that a blanket `export $(... | xargs)` chokes on.
-    'for v in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY NEXT_PUBLIC_OWNER_USER_ID APP_PORT; do',
+    'for v in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY NEXT_PUBLIC_OWNER_USER_ID NEXT_PUBLIC_TURNSTILE_SITE_KEY APP_PORT; do',
     '  val=$(grep -m1 "^${v}=" .env.local | cut -d= -f2- | sed -e ''s/^"//'' -e ''s/"$//'')',
     '  export "${v}=${val}"',
     'done',
-    "docker compose $composeFiles build $buildFlags --build-arg NEXT_PUBLIC_SUPABASE_URL=`$NEXT_PUBLIC_SUPABASE_URL --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=`$NEXT_PUBLIC_SUPABASE_ANON_KEY --build-arg NEXT_PUBLIC_OWNER_USER_ID=`$NEXT_PUBLIC_OWNER_USER_ID",
+    "docker compose $composeFiles build $buildFlags --build-arg NEXT_PUBLIC_SUPABASE_URL=`$NEXT_PUBLIC_SUPABASE_URL --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=`$NEXT_PUBLIC_SUPABASE_ANON_KEY --build-arg NEXT_PUBLIC_OWNER_USER_ID=`$NEXT_PUBLIC_OWNER_USER_ID --build-arg NEXT_PUBLIC_TURNSTILE_SITE_KEY=`$NEXT_PUBLIC_TURNSTILE_SITE_KEY",
     "docker compose $composeFiles up -d",
     "docker compose $composeFiles ps"
 )
