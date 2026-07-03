@@ -568,6 +568,40 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       symbols       JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Owner options watchlist (the /owner/watch tracker). One row per watched
+    -- contract; live greeks/price/flow are captured into watch_snapshots.
+    CREATE TABLE IF NOT EXISTS watch_options (
+      id            SERIAL PRIMARY KEY,
+      ticker        TEXT NOT NULL,
+      expiration    TEXT NOT NULL,          -- YYYY-MM-DD
+      strike        REAL NOT NULL,
+      side          TEXT NOT NULL,          -- 'C' | 'P'
+      note          TEXT,
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (ticker, expiration, strike, side)
+    );
+
+    -- Time series of live values for each watched contract (greeks, quote, flow).
+    CREATE TABLE IF NOT EXISTS watch_snapshots (
+      id            SERIAL PRIMARY KEY,
+      watch_id      INTEGER NOT NULL REFERENCES watch_options(id) ON DELETE CASCADE,
+      ts            BIGINT NOT NULL,        -- epoch ms
+      spot          REAL,
+      bid           REAL,
+      ask           REAL,
+      mark          REAL,
+      last          REAL,
+      iv            REAL,
+      delta         REAL,
+      gamma         REAL,
+      theta         REAL,
+      vega          REAL,
+      open_interest REAL,
+      volume        REAL,
+      net_prem      REAL                    -- volume * mark * 100 (flow proxy)
+    );
+    CREATE INDEX IF NOT EXISTS idx_watch_snapshots_wid_ts ON watch_snapshots(watch_id, ts);
   `);
 }
 
@@ -599,6 +633,97 @@ export async function upsertQuoteSymbols(clerkUserId: string, symbols: QuoteSymP
        symbols = EXCLUDED.symbols, updated_at = CURRENT_TIMESTAMP`,
     [clerkUserId, JSON.stringify(symbols)]
   );
+}
+
+// ── Options watchlist (/owner/watch tracker) ────────────────────────────────
+
+export interface WatchOption {
+  id: number;
+  ticker: string;
+  expiration: string;
+  strike: number;
+  side: string;            // 'C' | 'P'
+  note?: string | null;
+  created_at?: string;
+}
+
+export interface WatchSnapshot {
+  id?: number;
+  watch_id: number;
+  ts: number;
+  spot?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  mark?: number | null;
+  last?: number | null;
+  iv?: number | null;
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  open_interest?: number | null;
+  volume?: number | null;
+  net_prem?: number | null;
+}
+
+export async function getWatchOptions(): Promise<WatchOption[]> {
+  await getDb();
+  return queryAll<WatchOption>(
+    `SELECT * FROM watch_options ORDER BY ticker ASC, expiration ASC, strike ASC, side ASC`
+  );
+}
+
+/** Add a contract. Idempotent on (ticker, expiration, strike, side). */
+export async function insertWatchOption(r: {
+  ticker: string; expiration: string; strike: number; side: string; note?: string | null;
+}): Promise<WatchOption | undefined> {
+  await getDb();
+  const rows = await queryAll<WatchOption>(
+    `INSERT INTO watch_options (ticker, expiration, strike, side, note)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (ticker, expiration, strike, side)
+       DO UPDATE SET note = EXCLUDED.note
+     RETURNING *`,
+    [r.ticker, r.expiration, r.strike, r.side, r.note ?? null]
+  );
+  return rows[0];
+}
+
+export async function deleteWatchOption(id: number): Promise<void> {
+  await getDb();
+  await queryAll(`DELETE FROM watch_options WHERE id = ?`, [id]);
+}
+
+export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO watch_snapshots
+       (watch_id, ts, spot, bid, ask, mark, last, iv, delta, gamma, theta, vega, open_interest, volume, net_prem)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [s.watch_id, s.ts, s.spot ?? null, s.bid ?? null, s.ask ?? null, s.mark ?? null,
+     s.last ?? null, s.iv ?? null, s.delta ?? null, s.gamma ?? null, s.theta ?? null,
+     s.vega ?? null, s.open_interest ?? null, s.volume ?? null, s.net_prem ?? null]
+  );
+}
+
+/** Latest snapshot per watched contract (one row each). */
+export async function getLatestWatchSnapshots(): Promise<WatchSnapshot[]> {
+  await getDb();
+  return queryAll<WatchSnapshot>(
+    `SELECT DISTINCT ON (watch_id) *
+       FROM watch_snapshots
+      ORDER BY watch_id, ts DESC`
+  );
+}
+
+/** Time series for one contract (oldest→newest), capped. */
+export async function getWatchHistory(watchId: number, limit = 300): Promise<WatchSnapshot[]> {
+  await getDb();
+  const rows = await queryAll<WatchSnapshot>(
+    `SELECT * FROM watch_snapshots WHERE watch_id = ? ORDER BY ts DESC LIMIT ?`,
+    [watchId, limit]
+  );
+  return rows.reverse();
 }
 
 // ── ICT glossary card prefs (per-user show/hide) ────────────────────────────

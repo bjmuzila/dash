@@ -293,6 +293,11 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
+  // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
+  // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
+  // chart down to nothing and only the GEX bars remain visible.
+  const [railFits, setRailFits] = useState(true);
+  const RAIL_MIN_WIDTH = 560; // total chart-area px below which the rail is hidden
   // Live per-strike net GEX for the vertical rail (SPX-strike space). Metric
   // follows the heatmap's Vol+OI / Vol toggle. Updated from each /ws/gex frame.
   const [railRows, setRailRows] = useState<RailRow[]>([]);
@@ -353,6 +358,19 @@ export default function EsCandlesPage() {
   // the next 16:00 close. Depends on `rows` AND a 60s clock so it rolls forward.
   const [clockTick, setClockTick] = useState(0);
   useEffect(() => { const id = setInterval(() => setClockTick((n) => n + 1), 60_000); return () => clearInterval(id); }, []);
+
+  // Track the chart-area width so the fixed-width GEX rail can auto-collapse when
+  // there isn't room for both it and a usable candle chart.
+  useEffect(() => {
+    const el = captureRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setRailFits(el.clientWidth >= RAIL_MIN_WIDTH);
+    });
+    ro.observe(el);
+    setRailFits(el.clientWidth >= RAIL_MIN_WIDTH);
+    return () => ro.disconnect();
+  }, []);
   const sessionLevels = useMemo(() => {
     if (!rows.length) return null;
     void clockTick; // re-evaluate on the clock so the window rolls forward
@@ -1405,8 +1423,10 @@ export default function EsCandlesPage() {
         </div>
        </div>
 
-        {/* Vertical GEX-by-strike rail, styled like the home GEX chart. */}
-        {showRail ? (
+        {/* Vertical GEX-by-strike rail, styled like the home GEX chart.
+            Auto-hidden when the chart area is too narrow (railFits) so the
+            candle chart doesn't get starved down to nothing. */}
+        {showRail && railFits ? (
           <div style={{ width: 230, flexShrink: 0, minHeight: 320 }}>
             <EsGexRail
               rows={railRows}

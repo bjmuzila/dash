@@ -15,17 +15,20 @@ import { useGexPanel } from "./GexPanelContext";
 const CYAN = HOME_THEME.cyan;
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 
-// Seven GEX groups (Flow + Scanner to be merged later → single tile for now).
-// `embed` = route rendered inside the drawer when the tile is selected.
+// Every non-owner-gated page from the nav dropdown, EXCLUDING Options Chain and
+// the not-yet-live "coming soon" routes (ICT, Journal, Order Flow). Each renders
+// inside the drawer via its `embed` route (?embed=1 = full-bleed, no chrome).
 export type GexGroup = { id: string; emoji: string; title: string; embed?: string };
 const GROUPS: GexGroup[] = [
-  { id: "home",          emoji: "🏠", title: "Home GEX" },
-  { id: "greeks",        emoji: "Δ",  title: "Greeks" },
-  { id: "mult-greek",    emoji: "∇",  title: "Multi Greek" },
-  { id: "analytics",     emoji: "📊", title: "Analytics" },
-  { id: "es-candles",    emoji: "🕯️", title: "ES Candles", embed: "/es-candles?embed=1" },
-  { id: "strike-growth", emoji: "📈", title: "Strike Growth" },
-  { id: "flow",          emoji: "🌊", title: "Flow / Scanner" },
+  { id: "home",              emoji: "🏠", title: "Home",         embed: "/home?embed=1" },
+  { id: "gex2",              emoji: "🎲", title: "Prob + Gamma", embed: "/gex2?embed=1" },
+  { id: "mult-greek",        emoji: "∇",  title: "Multi Greek",  embed: "/mult-greek?embed=1" },
+  { id: "traders-dashboard", emoji: "🗓️", title: "Traders Dash", embed: "/traders-dashboard?embed=1" },
+  { id: "em",                emoji: "↔️", title: "Est. Moves",   embed: "/em?embed=1" },
+  { id: "flow",              emoji: "🌊", title: "Flow",         embed: "/flow?embed=1" },
+  { id: "analytics",         emoji: "📊", title: "Analytics",    embed: "/analytics?embed=1" },
+  { id: "es-candles",        emoji: "🕯️", title: "ES Candles",   embed: "/es-candles?embed=1" },
+  { id: "scanner",           emoji: "🔍", title: "Scanner",      embed: "/scanner?embed=1" },
 ];
 
 const PANEL_WIDTH = "40vw";
@@ -79,13 +82,13 @@ export default function GexDock() {
           </button>
         </div>
 
-        {/* 7-tile selector row (one row, fixed height) */}
+        {/* Page selector — single row, one column per page */}
         <div
           style={{
             flexShrink: 0,
             display: "grid",
-            gridTemplateColumns: "repeat(7, 1fr)",
-            gap: 8,
+            gridTemplateColumns: `repeat(${GROUPS.length}, 1fr)`,
+            gap: 6,
             marginBottom: 16,
           }}
         >
@@ -101,15 +104,15 @@ export default function GexDock() {
                   flexDirection: "column",
                   alignItems: "center",
                   textAlign: "center",
-                  gap: 6,
-                  padding: "12px 6px",
-                  borderRadius: 12,
+                  gap: 4,
+                  padding: "8px 3px",
+                  borderRadius: 10,
                   border: `1px solid ${active ? cyanA(0.6) : cyanA(0.28)}`,
                   background: active ? cyanA(0.14) : "rgba(255,255,255,0.04)",
                   color: HOME_THEME.text,
                   cursor: "pointer",
                   minWidth: 0,
-                  minHeight: 96,
+                  minHeight: 62,
                   boxShadow: active ? `0 8px 22px -6px ${cyanA(0.5)}` : "none",
                   transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
                 }}
@@ -126,8 +129,8 @@ export default function GexDock() {
                   e.currentTarget.style.transform = "none";
                 }}
               >
-                <span aria-hidden style={{ fontSize: 24, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{g.emoji}</span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: CYAN, lineHeight: 1.2 }}>{g.title}</span>
+                <span aria-hidden style={{ fontSize: 18, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{g.emoji}</span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: CYAN, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{g.title}</span>
               </button>
             );
           })}

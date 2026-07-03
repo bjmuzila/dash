@@ -23,6 +23,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: HOME_THEME.cyan,
     links: [
       { label: "Hub", href: "/owner", glyph: "⌂" },
+      { label: "Watch", href: "/owner/watch", glyph: "◉" },
       { label: "Control Panel", href: "/owner/dev/owner", glyph: "★" },
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉" },

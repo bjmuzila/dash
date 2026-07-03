@@ -1408,6 +1408,10 @@ async function main() {
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.
     require('./ref-levels-recorder').startRefLevelsRecorder(PORT);
+    // Owner options watchlist: every 60s during market hours, refreshes every
+    // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
+    // so the /owner/watch history keeps filling even when the page is closed.
+    require('./watch-recorder').startWatchRecorder(PORT);
 
     // Traders Dashboard overnight overview: at ~07:00 ET (weekdays) Claude
     // web-searches what moved markets overnight and writes td_overview.

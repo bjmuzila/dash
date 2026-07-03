@@ -11,17 +11,10 @@ live GEX heatmap with ES candles plotted right on top. you watch price hit the w
 
 stop guessing where price goes. cb edge.
 
-**2.**
-gamma flip is the only line that matters and most traders can't even see it.
-
-we plot it live. above it = mean reversion. below it = trend. know which regime you're in before you click buy.
-
-cbedge.net
-
 **3.**
-📊 CB Core Bullseye — 7-day hit rate is in.
-67% at 9:45. 67% at 10:30. 67% at noon.
-avg within 6 pts of the level.
+📊 CB Core Bullseye — last 6 sessions are in.
+9:45 · 10:30 · 12:00 — 67% hit rate at every checkpoint.
+hit = within 8 pts. avg closest: 6.0 / 7.4 / 5.8 pt.
 
 the data doesn't lie. find your edge. 🎯
 Join CB Edge → cbedge.net
@@ -84,13 +77,6 @@ cb edge.
 levels published before you wake up.
 
 PDH, PDL, prior week high/low, EM zones — all live on the dash before the bell. do your homework in 30 seconds. cbedge.net
-
-**13.**
-the flip point flipped at 10:14 today.
-
-chop turned to trend and the move ran clean to the next zone. the people watching cb edge weren't surprised. they were positioned.
-
-cbedge.net
 
 **14.**
 confidence score: 0–100 on every key level.
