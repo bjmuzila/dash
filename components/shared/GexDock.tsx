@@ -26,7 +26,7 @@ const GROUPS: GexGroup[] = [
   { href: "/flow",          emoji: "🌊", title: "Flow / Scanner", blurb: "Tape + multi-ticker scan" },
 ];
 
-const PANEL_WIDTH = "60vw";
+const PANEL_WIDTH = "40vw";
 
 export default function GexDock() {
   const { open, closePanel } = useGexPanel();
