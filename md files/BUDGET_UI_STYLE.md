@@ -29,6 +29,12 @@ Two deliberate page-local constants:
 
 ## Cards
 
+There are two card generations. The **classic** card is the original
+budget-register look; the **dissolve** card is the newer treatment introduced on
+`/gex2`, where the surface has no edge at all and feathers into the page.
+
+### Classic card (register / tables)
+
 **Base card** (`card()`): frosted dark surface, no accent.
 
 ```
@@ -50,9 +56,37 @@ background: radial-gradient(circle at 50% 0%,
             HOME_THEME.panelBg;
 ```
 
-Stat cards use the same treatment; the metric value keeps its semantic color
-(green/soft-red/light-blue) while the card body carries only the light-blue
-highlight.
+### Dissolve card (glass / chart panels)
+
+The newer look. No border, no hard boundary: the fill ramps its alpha down toward
+the edges and a radial mask feathers the corners, so the panel melts into the
+dark glow background. Heavier backdrop blur deepens the frosted transition. Use
+this for chart/overview panels where you want the content to float; keep the
+classic card for dense tables that need a contained edge.
+
+```
+/* fill fades out toward the perimeter — no solid panel color */
+background: radial-gradient(120% 130% at 50% 0%,
+              rgba(13,17,25,0.34) 0%,
+              rgba(13,17,25,0.22) 45%,
+              rgba(13,17,25,0.06) 80%,
+              transparent 100%);
+backdropFilter: blur(44px) saturate(1.15);
+borderRadius: 28px;
+border: none;
+boxShadow: 0 40px 100px -40px rgba(0,0,0,0.45);   /* feathered glow, not a crisp shadow */
+/* mask feathers the card edge into the background */
+maskImage: radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%);
+```
+
+Stat / metric tiles are the same idea at a smaller scale: no border,
+`blur(20px)`, and a faint light-blue radial over `rgba(13,17,25,0.20)`. The
+metric value keeps its semantic color (green / soft-red / light-blue); the tile
+body carries only the highlight.
+
+Layout note: on `/gex2` the two chart panels sit side by side in a
+`flex-wrap` row (`flex: 1 1 380px; min-width: 320px`) so they collapse to a
+single column on narrow viewports.
 
 ## Controls
 
@@ -108,3 +142,5 @@ day gets the light-blue border + ring and scrolls into view.
 3. Sticky surfaces are opaque; frosted translucency is for non-sticky cards.
 4. Money is green for income, soft-red for spend/deficit, white/muted for neutral.
 5. Source every color from a token or the two named constants — no ad-hoc hex.
+6. Prefer the **dissolve card** (borderless, edge-feathered, `blur(44px)`) for
+   chart/overview panels; reserve the classic bordered card for dense tables.

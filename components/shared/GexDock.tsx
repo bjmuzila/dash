@@ -1,29 +1,31 @@
 "use client";
 
-import Link from "next/link";
+import { useState } from "react";
 import { HOME_THEME } from "./homeTheme";
 import { useGexPanel } from "./GexPanelContext";
 
 /**
- * GexDock — large right-side pop-out (~3/5 of the page) launched from the
- * GlobalToolbar (button next to Notes). Flex sibling of <main> (see LayoutShell);
- * pushes content rather than floating. Body is a 7-tile grid of GEX-group
- * selectors (emoji + title). No data wired yet — links only.
+ * GexDock — right-side pop-out (2/5 of the page) launched from the GlobalToolbar
+ * (button next to Notes). Flex sibling of <main> (see LayoutShell); pushes
+ * content rather than floating. Top: 7-tile GEX-group selector row. Below:
+ * the selected group renders in-drawer via its `embed` route (iframe, embed=1).
+ * Only ES Candles is wired so far — others are placeholders.
  */
 
 const CYAN = HOME_THEME.cyan;
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 
 // Seven GEX groups (Flow + Scanner to be merged later → single tile for now).
-export type GexGroup = { href: string; emoji: string; title: string; blurb: string };
+// `embed` = route rendered inside the drawer when the tile is selected.
+export type GexGroup = { id: string; emoji: string; title: string; embed?: string };
 const GROUPS: GexGroup[] = [
-  { href: "/home",          emoji: "🏠", title: "Home GEX",      blurb: "Live net GEX + walls" },
-  { href: "/greeks",        emoji: "Δ",  title: "Greeks",         blurb: "0DTE GEX / DEX / CHEX / VEX" },
-  { href: "/mult-greek",    emoji: "∇",  title: "Multi Greek",    blurb: "Expiry-selectable greeks" },
-  { href: "/analytics",     emoji: "📊", title: "Analytics",      blurb: "Levels, AMT & triggers" },
-  { href: "/es-candles",    emoji: "🕯️", title: "ES Candles",     blurb: "5m heatmap overlay" },
-  { href: "/strike-growth", emoji: "📈", title: "Strike Growth",  blurb: "Δ$ GEX vs open" },
-  { href: "/flow",          emoji: "🌊", title: "Flow / Scanner", blurb: "Tape + multi-ticker scan" },
+  { id: "home",          emoji: "🏠", title: "Home GEX" },
+  { id: "greeks",        emoji: "Δ",  title: "Greeks" },
+  { id: "mult-greek",    emoji: "∇",  title: "Multi Greek" },
+  { id: "analytics",     emoji: "📊", title: "Analytics" },
+  { id: "es-candles",    emoji: "🕯️", title: "ES Candles", embed: "/es-candles?embed=1" },
+  { id: "strike-growth", emoji: "📈", title: "Strike Growth" },
+  { id: "flow",          emoji: "🌊", title: "Flow / Scanner" },
 ];
 
 const PANEL_WIDTH = "40vw";
@@ -31,6 +33,8 @@ const PANEL_WIDTH = "40vw";
 export default function GexDock() {
   const { open, closePanel } = useGexPanel();
   const onClose = closePanel;
+  const [selectedId, setSelectedId] = useState<string>("es-candles");
+  const selected = GROUPS.find((g) => g.id === selectedId) ?? null;
   return (
     <aside
       aria-label="GEX groups"
@@ -75,56 +79,84 @@ export default function GexDock() {
           </button>
         </div>
 
-        {/* 7-tile selector grid */}
+        {/* 7-tile selector row (one row, fixed height) */}
+        <div
+          style={{
+            flexShrink: 0,
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            gap: 8,
+            marginBottom: 16,
+          }}
+        >
+          {GROUPS.map((g) => {
+            const active = g.id === selectedId;
+            return (
+              <button
+                key={g.id}
+                onClick={() => setSelectedId(g.id)}
+                title={g.title}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  textAlign: "center",
+                  gap: 6,
+                  padding: "12px 6px",
+                  borderRadius: 12,
+                  border: `1px solid ${active ? cyanA(0.6) : cyanA(0.28)}`,
+                  background: active ? cyanA(0.14) : "rgba(255,255,255,0.04)",
+                  color: HOME_THEME.text,
+                  cursor: "pointer",
+                  minWidth: 0,
+                  minHeight: 96,
+                  boxShadow: active ? `0 8px 22px -6px ${cyanA(0.5)}` : "none",
+                  transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
+                }}
+                onMouseEnter={(e) => {
+                  if (active) return;
+                  e.currentTarget.style.background = cyanA(0.12);
+                  e.currentTarget.style.borderColor = cyanA(0.55);
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                }}
+                onMouseLeave={(e) => {
+                  if (active) return;
+                  e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+                  e.currentTarget.style.borderColor = cyanA(0.28);
+                  e.currentTarget.style.transform = "none";
+                }}
+              >
+                <span aria-hidden style={{ fontSize: 24, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{g.emoji}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: CYAN, lineHeight: 1.2 }}>{g.title}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Content area — selected group fills the rest of the drawer */}
         <div
           style={{
             flex: 1,
             minHeight: 0,
-            overflow: "auto",
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-            gap: 14,
-            alignContent: "start",
+            borderRadius: 14,
+            overflow: "hidden",
+            border: `1px solid ${HOME_THEME.border}`,
+            background: HOME_THEME.bg,
+            position: "relative",
           }}
         >
-          {GROUPS.map((g) => (
-            <Link
-              key={g.href}
-              href={g.href}
-              prefetch={false}
-              onClick={onClose}
-              title={g.title}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                padding: "18px 16px",
-                borderRadius: 16,
-                border: `1px solid ${cyanA(0.28)}`,
-                background: "rgba(255,255,255,0.04)",
-                color: HOME_THEME.text,
-                textDecoration: "none",
-                minHeight: 118,
-                transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = cyanA(0.12);
-                e.currentTarget.style.borderColor = cyanA(0.55);
-                e.currentTarget.style.transform = "translateY(-2px)";
-                e.currentTarget.style.boxShadow = `0 8px 22px -6px ${cyanA(0.5)}`;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-                e.currentTarget.style.borderColor = cyanA(0.28);
-                e.currentTarget.style.transform = "none";
-                e.currentTarget.style.boxShadow = "none";
-              }}
-            >
-              <span aria-hidden style={{ fontSize: 30, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{g.emoji}</span>
-              <span style={{ fontSize: 15, fontWeight: 700, color: CYAN }}>{g.title}</span>
-              <span style={{ fontSize: 12, color: HOME_THEME.muted, lineHeight: 1.4 }}>{g.blurb}</span>
-            </Link>
-          ))}
+          {open && selected?.embed ? (
+            <iframe
+              key={selected.id}
+              src={selected.embed}
+              title={selected.title}
+              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+            />
+          ) : (
+            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.muted, fontSize: 13, padding: 24, textAlign: "center" }}>
+              {selected ? `${selected.title} — coming soon` : "Select a group above"}
+            </div>
+          )}
         </div>
       </div>
     </aside>

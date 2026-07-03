@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
@@ -13,6 +13,23 @@ import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/c
 import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 
+
+// ── Budget UI style constants (see BUDGET_UI_STYLE.md) ──────────────────────
+// One accent only — light blue. Soft red replaces the harsh #EF4444 for chrome.
+const LIGHT_BLUE = "#7dd3fc";
+const SOFT_RED = "#f4948e";
+// Dissolve card: borderless, edge-feathered surface for chart/overview panels.
+const dissolveCard: CSSProperties = {
+  background:
+    "radial-gradient(120% 130% at 50% 0%, rgba(13,17,25,0.34) 0%, rgba(13,17,25,0.22) 45%, rgba(13,17,25,0.06) 80%, transparent 100%)",
+  backdropFilter: "blur(44px) saturate(1.15)",
+  WebkitBackdropFilter: "blur(44px) saturate(1.15)",
+  borderRadius: 28,
+  border: "none",
+  boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
+  maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+  WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+};
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
@@ -279,6 +296,17 @@ export default function EsCandlesPage() {
   // Live per-strike net GEX for the vertical rail (SPX-strike space). Metric
   // follows the heatmap's Vol+OI / Vol toggle. Updated from each /ws/gex frame.
   const [railRows, setRailRows] = useState<RailRow[]>([]);
+  // Imperative repaint handle for the rail so scroll/zoom of the candle chart
+  // keeps the strike bars pinned to the chart's price axis.
+  const railDrawRef = useRef<() => void>(() => {});
+  // Maps an ES price to the candle chart pane's Y pixel. The rail canvas shares
+  // the chart's top+height, so the same Y aligns strike-to-strike.
+  const priceToY = useCallback((esPrice: number): number | null => {
+    const s = candleSeriesRef.current;
+    if (!s) return null;
+    const y = s.priceToCoordinate(esPrice);
+    return y == null ? null : (y as number);
+  }, []);
 
 
   // ── Embedded-card control channel ──────────────────────────────────────────
@@ -784,6 +812,7 @@ export default function EsCandlesPage() {
     // cleared frame. Repaint whenever candle data changes.
     drawOverlayRef.current();
     drawLanesRef.current();
+    railDrawRef.current();
   }, [rows]);
 
   // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
@@ -1144,7 +1173,7 @@ export default function EsCandlesPage() {
     let raf = 0;
     const schedule = () => {
       if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; draw(); });
+      raf = requestAnimationFrame(() => { raf = 0; draw(); railDrawRef.current(); });
     };
 
     const ts = chart.timeScale();
@@ -1175,6 +1204,7 @@ export default function EsCandlesPage() {
         drawOverlayRef.current();
         drawLanesRef.current();
         updateLiveSpxRef.current();
+        railDrawRef.current();
       });
     };
     const tsApi = chart.timeScale();
@@ -1192,7 +1222,7 @@ export default function EsCandlesPage() {
       <div className="flex items-center justify-center px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
         <Dock className="dock-noscroll" style={{ maxWidth: "100%", minWidth: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
-            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: "#ff5b5b", whiteSpace: "nowrap" }}>ES 5m Candles</span>
+            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
             {(() => {
               // Server-authoritative basis (see apply()); this badge was reading
               // the raw independently-timed esFut/spx diff before.
@@ -1250,7 +1280,7 @@ export default function EsCandlesPage() {
           <DockGap />
 
           {/* overlay toggles — each keeps its accent color */}
-          <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent="#29b6f6" />
+          <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent={LIGHT_BLUE} />
           {/* Heatmap backfill range, right next to the Heatmap toggle it
               controls. 5D pulls/renders far more history and visibly slows
               the chart, so it's opt-in rather than default. */}
@@ -1261,10 +1291,10 @@ export default function EsCandlesPage() {
               onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
             />
           </div>
-<ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
-          <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
-          <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
-          <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent="#29b6f6" />
+<ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent={LIGHT_BLUE} />
+          <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
+          <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
+          <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
 
           <DockGap />
 
@@ -1290,28 +1320,30 @@ export default function EsCandlesPage() {
         {(() => {
           const basis = levels.basis ?? effectiveBasis();
           const es = (v: number | null) => (v != null ? (v + basis).toFixed(2) : "—");
+          // Dissolve stat tile: borderless, faint light-blue radial, blur(20px).
+          // Value keeps its semantic color; the tile body carries only highlight.
           const StatBox = ({ c, label, v }: { c: string; label: string; v: number | null }) => (
             <div
               style={{
                 flex: "1 1 130px", minWidth: 120,
                 display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                padding: "7px 12px", borderRadius: 12,
-                border: `1px solid ${HOME_THEME.border}`,
-                borderTop: `2px solid ${c}d9`,
-                background: `radial-gradient(circle at 50% 0%, ${c}1f 0%, transparent 70%), ${HOME_THEME.panelBg}`,
-                backdropFilter: "blur(16px)",
+                padding: "9px 14px", borderRadius: 16,
+                border: "none",
+                background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.20)`,
+                backdropFilter: "blur(20px)",
+                WebkitBackdropFilter: "blur(20px)",
               }}
             >
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap" }}>{label}</span>
+              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>{label}</span>
               <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "var(--font-mono)", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
             </div>
           );
           return (
             <>
-              <StatBox c="#30d158" label="Call Wall" v={levels.callWall} />
-              <StatBox c="#ff5b5b" label="Put Wall" v={levels.putWall} />
-              <StatBox c="#f5c518" label="Flip" v={levels.gexFlip} />
-              <StatBox c="#4aa3ff" label="CB" v={levels.mvc} />
+              <StatBox c={HOME_THEME.green} label="Call Wall" v={levels.callWall} />
+              <StatBox c={SOFT_RED} label="Put Wall" v={levels.putWall} />
+              <StatBox c={LIGHT_BLUE} label="Flip" v={levels.gexFlip} />
+              <StatBox c={LIGHT_BLUE} label="CB" v={levels.mvc} />
 
             </>
           );
@@ -1321,7 +1353,7 @@ export default function EsCandlesPage() {
       <div ref={captureRef} className="flex flex-1 flex-row gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
        <div className="flex flex-1 flex-col gap-2" style={{ minWidth: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
-        <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
+        <div className="relative flex-1 overflow-hidden" style={{ ...dissolveCard, minHeight: 320 }}>
           {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
               candlesticks always render on the top visible layer. */}
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
@@ -1374,6 +1406,8 @@ export default function EsCandlesPage() {
               gexFlip={levels.gexFlip}
               spot={levels.spx}
               basis={levels.basis ?? effectiveBasis()}
+              priceToY={priceToY}
+              drawRef={railDrawRef}
             />
           </div>
         ) : null}
