@@ -727,8 +727,17 @@ export default function EsCandlesPage() {
         const w = Math.round(container.clientWidth);
         const h = Math.round(container.clientHeight);
         if (w <= 0 || h <= 0 || (w === lastW && h === lastH)) return;
+        // Grew from a zero/collapsed size (e.g. mounted inside a just-opened
+        // iframe/drawer where the container had 0px at chart-init). The initial
+        // fitContent ran against that empty box and parked the candles off-screen,
+        // so re-fit once real dimensions land.
+        const wasCollapsed = lastW <= 0 || lastH <= 0;
         lastW = w; lastH = h;
         chart.applyOptions({ width: w, height: h });
+        if (wasCollapsed) {
+          chart.timeScale().fitContent();
+          drawOverlayRef.current();
+        }
       });
       ro.observe(container);
       lastW = Math.round(container.clientWidth);
