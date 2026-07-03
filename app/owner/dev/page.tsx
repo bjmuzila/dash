@@ -19,10 +19,12 @@ function PageShell({ children }: { children: ReactNode }) {
 
 // All chrome sourced from the shared theme. Data-encoding colors (calls=green,
 // puts=red, net=purple, pos/neg) are theme tokens too.
+// Budget theme: single light-blue accent + frosted card with a faint light-blue
+// radial highlight (no top/accent bars). See BUDGET_UI_STYLE.md.
 const C = {
-  cyan: HOME_THEME.cyan,
+  cyan: "#7dd3fc",
   border: HOME_THEME.border,
-  card: HOME_THEME.panelBg,
+  card: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
   label: HOME_THEME.text,
 };
 const NA = "rgba(255,255,255,0.45)";        // n/a / muted

@@ -21,15 +21,20 @@ import {
 } from "@/components/shared/ownerTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
-// Page override: no gray text + iColorpalette accent scheme
+// Page override — budget theme (see BUDGET_UI_STYLE.md): single light-blue accent,
+// no rotating card colors, no top bars.
+const LIGHT_BLUE = "#7dd3fc";
 const HOME_THEME = {
   ...HOME_THEME_BASE,
   muted: "#FFFFFF",
-  cyan: "#219EBC",   // bright blue
+  cyan: LIGHT_BLUE,  // single accent (light blue)
   purple: "#126783", // Ideas → deep teal
   green: "#8ECAE6",  // light blue (Completed) — avoids orange-next-to-yellow
   orange: "#FB8501", // orange
 };
+
+// Budget card surface: frosted panel + faint light-blue radial highlight (no top bar).
+const budgetRadial = `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME_BASE.panelBg}`;
 
 // ── Types & defaults ──────────────────────────────────────────────────────────
 
@@ -307,8 +312,7 @@ export default function TodoPage() {
         return (
           <div key={status} style={{
             ...homePanelStyle, flex: 1, display: "flex", flexDirection: "column", minWidth: 260,
-            borderTop: `2px solid ${rgba(col, 0.55)}`,
-            background: `radial-gradient(circle at 50% 0%, ${rgba(col, 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+            background: budgetRadial,
           }}>
             <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
@@ -355,8 +359,8 @@ export default function TodoPage() {
   function MetricCard({ label, value, sub, color }: { label: string; value: ReactNode; sub: ReactNode; color: string }) {
     return (
       <div className="conf-hover" style={{
-        ...homePanelStyle, padding: "14px 18px", borderTop: `2px solid ${rgba(color, 0.55)}`,
-        background: `radial-gradient(circle at 50% 0%, ${rgba(color, 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+        ...homePanelStyle, padding: "14px 18px",
+        background: budgetRadial,
       }}>
         <div style={{ fontSize: 10, color: HOME_THEME.muted, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div>
         <div style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1, textShadow: `0 0 16px ${rgba(color, 0.3)}` }}>{value}</div>
@@ -428,8 +432,7 @@ export default function TodoPage() {
                   return (
                     <div key={box.key} className="conf-hover" style={{
                       ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
-                      borderTop: `2px solid ${rgba(box.color, 0.5)}`,
-                      background: `radial-gradient(circle at 50% 0%, ${rgba(box.color, 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+                      background: budgetRadial,
                     }}>
                       <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />
@@ -489,7 +492,7 @@ export default function TodoPage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <SectionTitle text="Active Goals Board" accent={HOME_THEME.purple} />
+              <SectionTitle text="Active Goals Board" accent={HOME_THEME.cyan} />
               <Board />
             </div>
           </>

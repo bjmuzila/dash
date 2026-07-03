@@ -4,12 +4,17 @@ import FlowDiagram from "./FlowDiagram";
 // Read the filesystem on every request so the view stays in sync.
 export const dynamic = "force-dynamic";
 
+// Budget theme (see BUDGET_UI_STYLE.md): one accent — light blue #7dd3fc — no
+// rotating card colors, no top bars; frosted card + faint light-blue radial.
+const LIGHT_BLUE = "#7dd3fc";
 const C = {
   bg: "#05060A",
   panel: "rgba(13,17,25,0.45)",
+  cardBg: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.45)",
   line: "rgba(255,255,255,0.10)",
   dim: "rgba(255,255,255,0.50)",
   text: "#FFFFFF",
+  accent: LIGHT_BLUE,
 };
 
 export default function TreePage() {
@@ -28,7 +33,7 @@ export default function TreePage() {
           🌳
         </div>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#c4b5fd" }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.accent }}>
             Bzila Architecture
           </h1>
           <div style={{ color: C.dim, fontSize: 13 }}>Project Structure Analysis · live scan</div>
@@ -51,12 +56,12 @@ export default function TreePage() {
           <div
             key={s.label}
             style={{
-              background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14,
-              padding: "16px 18px", borderTop: `2px solid ${s.accent}`,
+              background: C.cardBg, border: `1px solid ${C.line}`, borderRadius: 18,
+              padding: "16px 18px",
             }}
           >
             <div style={{ color: C.dim, fontSize: 12, marginBottom: 6 }}>{s.label}</div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: s.accent }}>{s.value}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: C.accent }}>{s.value}</div>
           </div>
         ))}
       </div>
@@ -74,10 +79,10 @@ export default function TreePage() {
             <div
               style={{
                 display: "flex", alignItems: "center", gap: 8, marginBottom: 12,
-                fontSize: 15, fontWeight: 700, color: col.accent,
+                fontSize: 15, fontWeight: 700, color: C.accent,
               }}
             >
-              <span style={{ width: 8, height: 8, borderRadius: 99, background: col.accent }} />
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: C.accent }} />
               {col.heading}
             </div>
 
@@ -86,13 +91,13 @@ export default function TreePage() {
                 <div
                   key={card.title}
                   style={{
-                    background: C.panel, border: `1px solid ${C.line}`,
-                    borderRadius: 14, padding: "14px 16px",
+                    background: C.cardBg, border: `1px solid ${C.line}`,
+                    borderRadius: 18, padding: "14px 16px",
                   }}
                 >
                   <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 10, display: "flex", gap: 8 }}>
                     <span>{card.icon}</span>
-                    <span style={{ color: col.accent }}>{card.title}</span>
+                    <span style={{ color: C.accent }}>{card.title}</span>
                     <span style={{ marginLeft: "auto", color: C.dim, fontWeight: 400, fontSize: 12 }}>
                       {card.files.length}
                     </span>

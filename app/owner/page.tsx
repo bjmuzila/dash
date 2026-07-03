@@ -14,8 +14,8 @@ import {
   OWNER_THEME as HOME_THEME,
   homeShellStyle,
   homeHeaderStyle,
-  homePanelStyle,
 } from "@/components/shared/ownerTheme";
+import { classicCardAccentStyle, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { OWNER_SIDEBAR_GROUPS } from "@/components/shared/OwnerSidebar";
 
 export default function OwnerHubPage() {
@@ -31,7 +31,7 @@ export default function OwnerHubPage() {
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
+        <div style={{ ...classicCardAccentStyle, padding: "16px 18px" }}>
           <p style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
             All routes under /owner are gated once by the owner layout. Add a new page under
             app/owner/ and it is automatically owner-only and listed in the sidebar config.
@@ -39,8 +39,8 @@ export default function OwnerHubPage() {
         </div>
 
         {OWNER_SIDEBAR_GROUPS.map((group) => (
-          <div key={group.label} style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: group.accent }}>
+          <div key={group.label} style={{ ...classicCardAccentStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE }}>
               {group.label}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 10 }}>
@@ -58,11 +58,11 @@ export default function OwnerHubPage() {
                       borderRadius: 10,
                       textDecoration: "none",
                       color: HOME_THEME.text,
-                      background: `${group.accent}12`,
-                      border: `1px solid ${group.accent}33`,
+                      background: `${LIGHT_BLUE}12`,
+                      border: `1px solid ${LIGHT_BLUE}33`,
                     }}
                   >
-                    <span aria-hidden style={{ fontSize: 17, width: 20, textAlign: "center", color: group.accent }}>
+                    <span aria-hidden style={{ fontSize: 17, width: 20, textAlign: "center", color: LIGHT_BLUE }}>
                       {link.glyph}
                     </span>
                     <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>

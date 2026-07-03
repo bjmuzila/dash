@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { queryGreeksToday } from "@/lib/snapdb";
 import RegimeMatrix from "@/components/greeks/RegimeMatrix";
+import SkewCalculator from "@/components/greeks/SkewCalculator";
 import { Dock, SegGroup, DockButton, DockGap } from "@/components/shared/DockToolbar";
 import { HOME_THEME, homeShellStyle } from "@/components/shared/homeTheme";
 
@@ -1220,6 +1221,9 @@ export default function GreeksPage() {
 
       {/* Volatility / IV context */}
       <VolCard vol={vol} />
+
+      {/* Vol skew calculator + if-this-then-that matrix */}
+      <SkewCalculator />
 
       {/* GEX / DEX zero-line crossings — recorded from today's history */}
       <style>{`

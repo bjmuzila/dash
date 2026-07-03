@@ -2,12 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
+import Confidence7dTracker from "@/components/explore/Confidence7dTracker";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
 // Sells the feature with copy + a frozen static teaser, then drives to
 // /pricing?from=<slug> (the single conversion hub). Signed-out friendly.
 
-export const dynamic = "force-static";
+// ISR: the confidence-score page carries a real last-7-session tracker whose
+// data layer is cached per ET day, so it settles to fresh numbers once at EOD.
+export const revalidate = 21600;
 
 export function generateStaticParams() {
   return EXPLORE_SLUGS.map((slug) => ({ slug }));
@@ -116,6 +119,9 @@ export default async function ExplorePage({
             </p>
           </section>
         </div>
+
+        {/* Real last-7-session tracker (confidence-score only) */}
+        {slug === "confidence-score" && <Confidence7dTracker />}
 
         {/* Join Now CTA → single pricing hub */}
         <div style={ctaBlock}>

@@ -111,7 +111,8 @@ type Granularity = "daily" | "weekly" | "monthly";
 // Build signup buckets from real subscription created timestamps, at the chosen
 // granularity: last 30 days / last 12 weeks / last 12 months.
 function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
-  const [gran, setGran] = useState<Granularity>("monthly");
+  // Fixed to daily (tab switcher removed) — the new-subs view always shows the last 30 days.
+  const gran: Granularity = "daily";
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const now = new Date();
 
@@ -167,25 +168,6 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
               By signup date · {gran === "daily" ? "last 30 days" : gran === "weekly" ? "last 12 weeks" : "last 12 months"}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 4 }}>
-            {(["daily", "weekly", "monthly"] as const).map((g) => (
-              <button
-                key={g}
-                onClick={() => setGran(g)}
-                style={{
-                  ...homeSecondaryButtonStyle,
-                  padding: "5px 12px",
-                  fontSize: 12,
-                  fontWeight: gran === g ? 700 : 500,
-                  borderColor: gran === g ? T.cyan : undefined,
-                  color: gran === g ? T.cyan : undefined,
-                  textTransform: "capitalize",
-                }}
-              >
-                {g}
-              </button>
-            ))}
-          </div>
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: gran === "daily" ? 3 : 6, height: 150, marginTop: 14 }}>
           {buckets.map((b, i) => {
@@ -233,6 +215,11 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
         <div style={{ marginTop: "auto", paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
           <div style={{ fontSize: 10, color: T.muted }}>COMBINED MRR</div>
           <div style={{ fontSize: 22, fontWeight: 500, color: T.text }}>{fmtMoney(monthlyMrr + yearlyMrr)}</div>
+          <div style={{ fontSize: 10, color: T.muted, marginTop: 10 }}>YEARLY REVENUE PROJECTION</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: T.green, fontFamily: "var(--font-mono)" }}>
+            {fmtMoney((monthlyMrr + yearlyMrr) * 12)}
+          </div>
+          <div style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>combined MRR × 12 (current run-rate)</div>
         </div>
       </div>
     </div>

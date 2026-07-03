@@ -128,14 +128,30 @@ function useQuickPages() {
       );
     } catch { setItems([]); }
   }, []);
+  // Persist a new pinned list (customer-side, localStorage). Same key the sidebar
+  // uses, so both stay in sync. In-tab writes don't fire `storage`, so refresh + a
+  // manual same-tab event to notify any other mounted listeners.
+  const save = useCallback((hrefs: string[]) => {
+    const next = hrefs.filter((h) => !!QUICK_META[h]).slice(0, QUICK_MAX);
+    try {
+      localStorage.setItem(QUICK_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent("quick-pages-changed"));
+    } catch { /* ignore */ }
+    setItems(next.map((href) => ({ href, ...QUICK_META[href] })));
+  }, []);
   useEffect(() => {
     refresh();
-    // Re-read when another tab repins (storage only fires cross-tab).
+    // Re-read when another tab repins (storage only fires cross-tab) or when this
+    // tab edits via the toolbar editor (custom same-tab event).
     const onStorage = (e: StorageEvent) => { if (e.key === QUICK_STORAGE_KEY) refresh(); };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("quick-pages-changed", refresh);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("quick-pages-changed", refresh);
+    };
   }, [refresh]);
-  return { items, refresh };
+  return { items, refresh, save };
 }
 
 function LogoMenu() {
@@ -154,56 +170,197 @@ function LogoMenu() {
 }
 
 /**
- * QuickPagesBar — inline emoji-only shortcut buttons for the user's pinned Quick
- * Pages (max 4), sourced from the same store the sidebar uses
- * (`sidebar-quick-pages-v1`). No labels — just the route glyph. Renders nothing
- * until at least one page is pinned.
+ * QuickPagesBar — inline shortcut "emotes": a round glyph button with the page
+ * title underneath, for the user's pinned Quick Pages (max 4). Sourced from the
+ * same customer-side store the sidebar uses (`sidebar-quick-pages-v1`). A trailing
+ * ✎ edit button opens a picker to choose which pages appear; changes persist to
+ * localStorage. Always renders the edit button (even with zero pins) so the user
+ * can add pages from the toolbar.
  */
-function QuickPagesBar() {
-  const { items } = useQuickPages();
-  if (items.length === 0) return null;
+function QuickCircle({
+  href, label, emoji, onClick,
+}: { href?: string; label: string; emoji: string; onClick?: () => void }) {
+  const circle = (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 34,
+        height: 34,
+        borderRadius: "50%",
+        border: `1px solid ${cyanA(0.3)}`,
+        background: "rgba(255,255,255,0.04)",
+        color: HOME_THEME.text,
+        fontSize: 16,
+        lineHeight: 1,
+        fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
+        transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
+      }}
+    >
+      {emoji}
+    </span>
+  );
+  const inner = (
+    <>
+      {circle}
+      <span
+        style={{
+          maxWidth: 64,
+          fontSize: 9,
+          fontWeight: 600,
+          color: HOME_THEME.text,
+          opacity: 0.8,
+          lineHeight: 1.1,
+          textAlign: "center",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {label}
+      </span>
+    </>
+  );
+  const wrapStyle: React.CSSProperties = {
+    display: "inline-flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 3,
+    flexShrink: 0,
+    textDecoration: "none",
+    cursor: "pointer",
+    background: "none",
+    border: "none",
+    padding: 0,
+  };
+  const hoverOn = (e: React.MouseEvent) => {
+    const c = (e.currentTarget as HTMLElement).querySelector("span") as HTMLElement | null;
+    if (c) { c.style.background = cyanA(0.14); c.style.borderColor = cyanA(0.55); c.style.transform = "translateY(-1px)"; c.style.boxShadow = `0 4px 12px -2px ${cyanA(0.45)}`; }
+  };
+  const hoverOff = (e: React.MouseEvent) => {
+    const c = (e.currentTarget as HTMLElement).querySelector("span") as HTMLElement | null;
+    if (c) { c.style.background = "rgba(255,255,255,0.04)"; c.style.borderColor = cyanA(0.3); c.style.transform = "none"; c.style.boxShadow = "none"; }
+  };
+  if (href) {
+    return (
+      <Link href={href} prefetch={false} title={label} aria-label={label} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+        {inner}
+      </Link>
+    );
+  }
   return (
-    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+    <button type="button" title={label} aria-label={label} onClick={onClick} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+      {inner}
+    </button>
+  );
+}
+
+function QuickPagesEditor({
+  selected, onSave, onClose,
+}: { selected: string[]; onSave: (hrefs: string[]) => void; onClose: () => void }) {
+  const [picked, setPicked] = useState<string[]>(selected);
+  const toggle = (href: string) => {
+    setPicked((p) =>
+      p.includes(href) ? p.filter((h) => h !== href) : p.length >= QUICK_MAX ? p : [...p, href]
+    );
+  };
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 199 }} />
+      <div
+        style={{
+          position: "absolute",
+          top: "calc(100% + 10px)",
+          left: 0,
+          zIndex: 200,
+          width: 260,
+          maxHeight: 380,
+          overflowY: "auto",
+          background: "rgba(15,18,28,0.97)",
+          border: `1px solid ${cyanA(0.35)}`,
+          borderRadius: 12,
+          padding: 12,
+          boxShadow: "0 8px 32px -4px rgba(0,0,0,0.7)",
+          backdropFilter: "blur(16px)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ fontWeight: 700, color: HOME_THEME.text, fontSize: 13 }}>Quick Pages</span>
+          <span style={{ fontSize: 11, color: cyanA(0.9) }}>{picked.length}/{QUICK_MAX}</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {Object.entries(QUICK_META).map(([href, meta]) => {
+            const on = picked.includes(href);
+            const disabled = !on && picked.length >= QUICK_MAX;
+            return (
+              <button
+                key={href}
+                type="button"
+                onClick={() => toggle(href)}
+                disabled={disabled}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: `1px solid ${on ? cyanA(0.5) : "transparent"}`,
+                  background: on ? cyanA(0.14) : "transparent",
+                  color: HOME_THEME.text,
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled ? 0.4 : 1,
+                  textAlign: "left",
+                  fontSize: 13,
+                }}
+              >
+                <span aria-hidden style={{ width: 18, textAlign: "center", fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{meta.emoji}</span>
+                <span style={{ flex: 1 }}>{meta.label}</span>
+                {on && <span style={{ color: CYAN }}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button
+            type="button"
+            onClick={() => { onSave(picked); onClose(); }}
+            style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: "none", background: CYAN, color: "#04222b", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.text, fontSize: 13, cursor: "pointer" }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function QuickPagesBar() {
+  const { items, save } = useQuickPages();
+  const [editing, setEditing] = useState(false);
+  return (
+    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
       {items.map((item) => (
-        <Link
-          key={item.href}
-          href={item.href}
-          prefetch={false}
-          title={item.label}
-          aria-label={item.label}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 34,
-            height: 34,
-            flexShrink: 0,
-            borderRadius: "50%",
-            border: `1px solid ${cyanA(0.3)}`,
-            background: "rgba(255,255,255,0.04)",
-            color: HOME_THEME.text,
-            fontSize: 16,
-            lineHeight: 1,
-            textDecoration: "none",
-            fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
-            transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = cyanA(0.14);
-            e.currentTarget.style.borderColor = cyanA(0.55);
-            e.currentTarget.style.transform = "translateY(-1px)";
-            e.currentTarget.style.boxShadow = `0 4px 12px -2px ${cyanA(0.45)}`;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-            e.currentTarget.style.borderColor = cyanA(0.3);
-            e.currentTarget.style.transform = "none";
-            e.currentTarget.style.boxShadow = "none";
-          }}
-        >
-          <span aria-hidden>{item.emoji}</span>
-        </Link>
+        <QuickCircle key={item.href} href={item.href} label={item.label} emoji={item.emoji} />
       ))}
+      <div style={{ position: "relative", display: "flex" }}>
+        <QuickCircle label="Edit" emoji="✎" onClick={() => setEditing((v) => !v)} />
+        {editing && (
+          <QuickPagesEditor
+            selected={items.map((i) => i.href)}
+            onSave={save}
+            onClose={() => setEditing(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }

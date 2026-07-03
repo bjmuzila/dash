@@ -211,12 +211,13 @@ function IconX({ size = 10 }: { size?: number }) {
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
 /** Screenshot the target element and copy PNG to clipboard. */
-export function BoxSnapBtn({ targetRef, title }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string }) {
+export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string; onBeforeCapture?: () => void | Promise<void>; onAfterCapture?: () => void }) {
   const [s, set] = useState<BtnState>("idle");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
+      await onBeforeCapture?.();
       const img = await captureElement(targetRef.current, title);
       // Convert base64 data URL → Blob → ClipboardItem
       const base64 = img.replace(/^data:image\/\w+;base64,/, "");
@@ -225,8 +226,8 @@ export function BoxSnapBtn({ targetRef, title }: { targetRef: RefObject<HTMLElem
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       set("ok");
     } catch (e) { console.error("[snap] capture failed:", e); set("err"); }
-    finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, title]);
+    finally { onAfterCapture?.(); setTimeout(() => set("idle"), 1800); }
+  }, [s, targetRef, title, onBeforeCapture, onAfterCapture]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
@@ -245,6 +246,8 @@ export function BoxDiscordBtn({
   label,
   message,
   title,
+  onBeforeCapture,
+  onAfterCapture,
 }: {
   targetRef: RefObject<HTMLElement | null>;
   label?: string;
@@ -252,6 +255,10 @@ export function BoxDiscordBtn({
   message?: string;
   /** Title baked into the top-left of the screenshot, e.g. "SPX GEX • Fri 6/26" */
   title?: string;
+  /** Run (and await) right before capture — e.g. to trim rows for the shot. */
+  onBeforeCapture?: () => void | Promise<void>;
+  /** Run right after capture — restore the pre-capture view. */
+  onAfterCapture?: () => void;
 }) {
   const [s, set] = useState<BtnState>("idle");
   const isOwner = useIsOwner();
@@ -259,14 +266,15 @@ export function BoxDiscordBtn({
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
+      await onBeforeCapture?.();
       const img = await captureElement(targetRef.current, title);
       const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
       const content = message ?? `📸 **${label || "Panel"}** — ${now} ET`;
       await postToDiscord(img, content);
       set("ok");
     } catch { set("err"); }
-    finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, label, message, title]);
+    finally { onAfterCapture?.(); setTimeout(() => set("idle"), 1800); }
+  }, [s, targetRef, label, message, title, onBeforeCapture, onAfterCapture]);
 
   // Discord share is owner-only (cosmetic gate).
   if (!isOwner) return null;

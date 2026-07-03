@@ -316,7 +316,7 @@ function EstimatedMoveCard() {
   const crossed = near < 0;
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, overflow: "hidden" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -338,11 +338,11 @@ function EstimatedMoveCard() {
         <CardState loading={lvLoading} error={lvError} empty={`No published EM for ${tk}.`} />
       ) : (
         <>
-          <Row>
-            <Stat label="EM Up" value={up!.toLocaleString()} color={POS_GREEN} />
-            <Stat label={spotIsLive ? "Spot" : close != null && close > 0 ? "Close" : "Mid"} value={spot!.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
-            <Stat label="EM Down" value={down!.toLocaleString()} color={T.red} />
-          </Row>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, minWidth: 0 }}>
+            <Stat label="EM Up" value={up!.toLocaleString()} color={POS_GREEN} size={18} />
+            <Stat label={spotIsLive ? "Spot" : close != null && close > 0 ? "Close" : "Mid"} value={spot!.toLocaleString(undefined, { maximumFractionDigits: 2 })} size={18} />
+            <Stat label="EM Down" value={down!.toLocaleString()} color={T.red} size={18} />
+          </div>
           <div style={divider} />
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>Distance to nearer band ({nearerUp ? "Up" : "Down"}){crossed ? " · crossed" : ""}</Label>
@@ -1514,7 +1514,7 @@ function StrategyBuilderCard() {
 export default function AnalyticsPage() {
   return (
     <PageShell>
-      <div className="analytics-grid" style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))", alignItems: "start" }}>
+      <div className="analytics-grid" style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(4, minmax(0, 1fr))", alignItems: "stretch" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
         <PremarketCard />

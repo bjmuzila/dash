@@ -14,8 +14,8 @@ const FEATURES = [
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 
-// Launch: Saturday July 4, 2026 at 12:00 PM ET (UTC-4 in summer)
-const LAUNCH_UTC = new Date("2026-07-04T16:00:00Z");
+// Launch: Monday July 6, 2026 at 12:00 AM ET (midnight, UTC-4 in summer)
+const LAUNCH_UTC = new Date("2026-07-06T04:00:00Z");
 
 function useCountdown() {
   const [parts, setParts] = useState({ d: 0, h: 0, m: 0, s: 0, done: false });
@@ -156,8 +156,8 @@ export default function LandingClient() {
             <span style={{ color: T.green, fontWeight: 800 }}>Beta is LIVE</span>
             {" · Full Launch "}
             <span style={{ color: "#E0162B", fontWeight: 800 }}>July</span>{" "}
-            <span style={{ color: "#FFFFFF", fontWeight: 800 }}>4th</span>{" "}
-            <span style={{ color: "#3C6FE0", fontWeight: 800 }}>Weekend</span>
+            <span style={{ color: "#FFFFFF", fontWeight: 800 }}>6th</span>{" "}
+            <span style={{ color: "#3C6FE0", fontWeight: 800 }}>Midnight</span>
             <span className="fireworks" aria-hidden>
               <span className="fw fw1" />
               <span className="fw fw2" />

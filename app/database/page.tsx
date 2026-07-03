@@ -34,6 +34,59 @@ const TABLES = [
 
 type TableId = typeof TABLES[number]["id"];
 
+/**
+ * Rows-written-today counts per tracked table. Moved here from the owner
+ * dashboard's Database tab so all DB surfaces live on the backend Database page.
+ * Self-contained: fetches its own per-table counts from /api/db countOnly.
+ */
+function RowCountsToday() {
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+
+  const loadCounts = useCallback(async () => {
+    setLoading(true);
+    const today = todayET();
+    const out: Record<string, number> = {};
+    await Promise.all(
+      TABLES.map(async ({ id }) => {
+        try {
+          const r = await fetch(`/api/db?table=${id}&limit=1&date=${today}&countOnly=true`, { cache: "no-store" });
+          const j = await r.json();
+          out[id] = Number(j.count ?? 0);
+        } catch { out[id] = 0; }
+      }),
+    );
+    setCounts(out);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void loadCounts(); }, [loadCounts]);
+
+  return (
+    <div style={{ ...homePanelStyle, padding: "14px 16px", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Database · Today</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
+          {loading ? "loading…" : `${TABLES.length} tables tracked`}
+        </span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
+        {TABLES.map(({ id, label }) => (
+          <div key={id} style={{ ...homePanelStyle, minHeight: 0, padding: "10px 14px", overflow: "hidden" }}>
+            <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, opacity: 0.9, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {label}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {counts[id] != null ? counts[id].toLocaleString() : "—"}
+            </div>
+            <div style={{ fontSize: 11, color: HOME_THEME.muted, whiteSpace: "nowrap" }}>rows today</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function fmtCell(v: unknown, key?: string): string {
   if (v == null) return "-";
   if (typeof v === "number") {
@@ -204,6 +257,7 @@ export default function DatabasePage() {
       </div>
 
       <div style={homeContentStyle}>
+        <RowCountsToday />
         <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
           <div className="flex flex-shrink-0 overflow-x-auto" style={{ gap: 6, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
             {TABLES.map((t) => {

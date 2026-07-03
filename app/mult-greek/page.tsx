@@ -263,7 +263,7 @@ function computeTotals(
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
-  ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm,
+  ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -273,13 +273,28 @@ function TickerPanel({
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
+  /** When set (screenshot mode), render only this many strikes on each side of
+   *  ATM so the shot is centered + compact instead of the full chain. */
+  captureWindow: number | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
-  const computed = strikes.length
+  const computedFull = strikes.length
     ? computeRows(strikes, liveData, spot, contractMode)
     : null;
+
+  // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
+  // capture shows a focused window (ATM in the middle) rather than every strike.
+  const computed = (() => {
+    if (!computedFull || captureWindow == null) return computedFull;
+    const rows = computedFull.rows;
+    const atmIdx = rows.findIndex(r => r.isATM);
+    if (atmIdx < 0) return computedFull;
+    const start = Math.max(0, atmIdx - captureWindow);
+    const end = Math.min(rows.length, atmIdx + captureWindow + 1);
+    return { ...computedFull, rows: rows.slice(start, end) };
+  })();
 
   // EM band strikes (snapped to this panel's strikes). Only when current-week.
   const emStrikes = (showEm && emLevels && computed)
@@ -697,6 +712,17 @@ export default function MultGreekPage() {
 
   const pageRef = useRef<HTMLDivElement>(null);
 
+  // Screenshot mode: trims each panel to ±CAPTURE_WINDOW strikes around ATM so
+  // snaps/Discord shots are centered + compact. Set before capture, cleared after.
+  const CAPTURE_WINDOW = 12; // 25 strikes (ATM ± 12)
+  const [captureWindow, setCaptureWindow] = useState<number | null>(null);
+  const beginCapture = useCallback(() => {
+    setCaptureWindow(CAPTURE_WINDOW);
+    // Wait two frames so React re-renders the trimmed rows before html2canvas runs.
+    return new Promise<void>(res => requestAnimationFrame(() => requestAnimationFrame(() => res())));
+  }, []);
+  const endCapture = useCallback(() => setCaptureWindow(null), []);
+
   return (
     <div ref={pageRef} style={{ ...homeShellStyle, height: "100%", overflow: "hidden" }}>
 
@@ -737,8 +763,8 @@ export default function MultGreekPage() {
         {/* Refresh / Snap / Discord */}
         <DockSpacer />
         <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
-        <BoxSnapBtn targetRef={pageRef} label="📷" />
-        <BoxDiscordBtn targetRef={pageRef} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        <BoxSnapBtn targetRef={pageRef} label="📷" onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
+        <BoxDiscordBtn targetRef={pageRef} onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>
       </div>
 
@@ -761,6 +787,7 @@ export default function MultGreekPage() {
             intensity={intensity}
             emLevels={emByTicker[ticker]}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
+            captureWindow={captureWindow}
           />
         ))}
       </div>

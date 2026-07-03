@@ -250,11 +250,6 @@ function fmtUptime(s: number): string {
   return `${sec}s`;
 }
 
-function fmtNum(v: number | undefined): string {
-  if (v == null) return "—";
-  return v.toLocaleString();
-}
-
 function fmtGex(v: number): string {
   const abs = Math.abs(v);
   const sign = v >= 0 ? "+" : "-";
@@ -954,7 +949,7 @@ function OverviewSection({ metrics }: {
   const pc = (i: number) => PALETTE[i % PALETTE.length];
   const TRACK = "rgba(255,255,255,0.06)";
   const cardStyle: React.CSSProperties = { ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 };
-  const titleStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: HOME_THEME.text, marginBottom: 11 };
+  const titleStyle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: HOME_THEME.text, marginBottom: 11 };
 
   // Traffic line path (12 days).
   const traffic = daily.counts.length ? daily.counts : [0];
@@ -994,10 +989,10 @@ function OverviewSection({ metrics }: {
 
   const InfraRow = ({ label, value, spark, color }: { label: string; value: string; spark: number[]; color: string }) => (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `0.5px solid ${HOME_THEME.border}` }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: HOME_THEME.text, width: 96 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 15, fontWeight: 600, color: HOME_THEME.text, width: 110 }}>
         <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />{label}
       </span>
-      <span style={{ fontSize: 14, fontWeight: 500, fontFamily: "var(--font-mono)", width: 78, color: HOME_THEME.text }}>{value}</span>
+      <span style={{ fontSize: 17, fontWeight: 600, fontFamily: "var(--font-mono)", width: 90, color: HOME_THEME.text }}>{value}</span>
       <div style={{ marginLeft: "auto", width: 64 }}><Sparkline data={spark} accent={color} height={20} /></div>
     </div>
   );
@@ -1022,15 +1017,15 @@ function OverviewSection({ metrics }: {
           { l: "WS out/hr", v: infra.wsPerHr },
         ].map((k, i) => (
           <div key={k.l} style={{ ...homePanelStyle, padding: "11px 13px" }}>
-            <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k.l}</div>
-            <div style={{ fontSize: 19, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text, lineHeight: 1 }}>{k.v}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, opacity: 1, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k.l}</div>
+            <div style={{ fontSize: 24, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.text, lineHeight: 1 }}>{k.v}</div>
           </div>
         ))}
       </div>
 
       {/* Traffic · signups · cumulative */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(3, minmax(0,1fr))", gap: 10 }}>
-        <div style={cardStyle}>
+        <div style={cardStyle} title="Total page loads per day across the site for the last 12 days (ET day buckets). The % is the change from the first day in the window to the most recent.">
           <div style={titleStyle}>Traffic · 12 days</div>
           <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: "100%", height: 90, display: "block" }}>
             <path d={`${trafficPath} L100,32 L0,32 Z`} fill={pc(3) + "22"} stroke="none" />
@@ -1041,7 +1036,7 @@ function OverviewSection({ metrics }: {
             {trafficDelta != null && <span style={{ color: trafficDelta >= 0 ? pc(1) : HOME_THEME.red }}>{trafficDelta >= 0 ? "▲" : "▼"} {Math.abs(trafficDelta)}%</span>}
           </div>
         </div>
-        <div style={cardStyle}>
+        <div style={cardStyle} title="New user registrations bucketed by week for the last 7 weeks. 'this wk' is the count in the current (partial) week.">
           <div style={titleStyle}>Signups · 7 weeks</div>
           <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
             {weekly.counts.map((v, i) => (
@@ -1053,7 +1048,7 @@ function OverviewSection({ metrics }: {
             <span style={{ color: pc(1) }}>▲ {weekly.counts[weekly.counts.length - 1] ?? 0} this wk</span>
           </div>
         </div>
-        <div style={cardStyle}>
+        <div style={cardStyle} title="Running total of registered users over time (each week's signups added to the prior total). Right value is total users; 'active now' is current live sessions.">
           <div style={titleStyle}>Cumulative users</div>
           <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: "100%", height: 90, display: "block" }}>
             <path d={`${cumPath} L100,32 L0,32 Z`} fill={pc(0) + "22"} stroke="none" />
@@ -1112,8 +1107,8 @@ function OverviewSection({ metrics }: {
           <InfraRow label="Host net 1h" value={infra.hostNet.value} spark={infra.hostNet.spark} color={pc(3)} />
           <InfraRow label="CF egress 24h" value={infra.cfEgress.value} spark={infra.cfEgress.spark} color={pc(6)} />
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0" }}>
-            <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 1, width: 96 }}>WS split</span>
-            <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{infra.wsSplit}</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, opacity: 1, width: 110 }}>WS split</span>
+            <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{infra.wsSplit}</span>
           </div>
         </div>
         <div style={cardStyle}>
@@ -2598,40 +2593,16 @@ export default function OwnerDashboard() {
         </AccordionCard>
         )}
 
-        {/* ── DB row counts ── */}
+        {/* ── DB row counts moved to the backend /database page ── */}
         {SECTION_TAB.database === ownerTab && (
-        <AccordionCard
-          accent={HOME_THEME.green}
-          id="database"
-          title="Database · Today"
-          subtitle={`${TABLES.length} tables tracked`}
-          open={openSet.has("database")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : `repeat(${TABLES.length}, minmax(0, 1fr))`, gap: 10 }}>
-            {TABLES.map(({ id, label }) => {
-              const count = (dbStats as Record<string, number>)[id];
-              const accent = HOME_THEME.cyan;
-              return (
-                <div key={id} style={{
-                  ...homePanelStyle,
-                  containerType: "inline-size",
-                  minHeight: 0,
-                  padding: "clamp(5px, 8cqw, 12px) clamp(7px, 10cqw, 16px)",
-                  overflow: "hidden",
-                }}>
-                  <div style={{ fontSize: "clamp(8px, 8cqw, 13px)", fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {label}
-                  </div>
-                  <div style={{ fontSize: "clamp(13px, 14cqw, 24px)", fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {count != null ? fmtNum(count) : "—"}
-                  </div>
-                  <div style={{ fontSize: "clamp(8px, 7cqw, 11px)", color: HOME_THEME.text, opacity: 1, whiteSpace: "nowrap" }}>rows today</div>
-                </div>
-              );
-            })}
+          <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 14, color: HOME_THEME.text }}>
+              Database row counts now live on the backend Database page.
+            </div>
+            <a href="/database" style={{ ...homeSecondaryButtonStyle, padding: "8px 16px", borderRadius: 8, textDecoration: "none", fontSize: 13, whiteSpace: "nowrap" }}>
+              Open Database →
+            </a>
           </div>
-        </AccordionCard>
         )}
 
         {/* ── Controls ── */}
@@ -3141,7 +3112,7 @@ export default function OwnerDashboard() {
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <SectionLabel>Page Activity</SectionLabel>
-              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
+              <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                 {totalVisits.toLocaleString()} visits · {activeCount} active now
               </span>
             </div>
@@ -3150,20 +3121,20 @@ export default function OwnerDashboard() {
           {(
           <div style={{ padding: "14px", display: "flex", flexDirection: "column", gap: 14 }}>
             {/* Legend — what the three states mean + counter caveat */}
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: HOME_THEME.green, boxShadow: `0 0 6px ${HOME_THEME.green}` }} />
-                <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Open now</b> — a tab has it open
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: HOME_THEME.green, boxShadow: `0 0 6px ${HOME_THEME.green}` }} />
+                <b style={{ color: HOME_THEME.green, fontWeight: 700 }}>Open now</b> — a tab has it open
               </span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: HOME_THEME.text, opacity: 0.4 }} />
-                <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Seen before</b> — visited, none open
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: HOME_THEME.orange, boxShadow: `0 0 6px ${HOME_THEME.orange}` }} />
+                <b style={{ color: HOME_THEME.orange, fontWeight: 700 }}>Seen before</b> — visited, none open
               </span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: "rgba(255,255,255,0.15)" }} />
-                <b style={{ color: "#c8d8e8", fontWeight: 700 }}>Never visited</b> — no load recorded yet
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: HOME_THEME.red }} />
+                <b style={{ color: HOME_THEME.red, fontWeight: 700 }}>Never visited</b> — no load recorded yet
               </span>
-              <span style={{ marginLeft: "auto", fontStyle: "italic" }}>
+              <span style={{ marginLeft: "auto", fontStyle: "italic", fontSize: 13 }}>
                 Counts start from this deploy — not backfilled.
               </span>
             </div>
@@ -3198,13 +3169,13 @@ export default function OwnerDashboard() {
                         display: "flex", alignItems: "center", gap: 10,
                         padding: "6px 14px",
                         borderBottom: `1px solid ${HOME_THEME.border}`,
-                        fontFamily: "var(--font-mono)", fontSize: 13,
+                        fontFamily: "var(--font-mono)", fontSize: 14,
                       }}
                     >
                       <span style={{
-                        width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                        background: active ? HOME_THEME.green : `${HOME_THEME.text}44`,
-                        boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : "none",
+                        width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
+                        background: active ? HOME_THEME.green : HOME_THEME.orange,
+                        boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : `0 0 5px ${HOME_THEME.orange}`,
                       }} />
                       <span style={{ color: HOME_THEME.text, fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                         {labelFor(p.pageKey)}
@@ -3264,29 +3235,29 @@ export default function OwnerDashboard() {
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                             {(() => {
-                              const dot = active ? HOME_THEME.green : status ? HOME_THEME.cyan : HOME_THEME.red;
+                              const dot = active ? HOME_THEME.green : status ? HOME_THEME.orange : HOME_THEME.red;
                               return (
                                 <span
                                   style={{
-                                    width: 7,
-                                    height: 7,
+                                    width: 9,
+                                    height: 9,
                                     borderRadius: "50%",
                                     flexShrink: 0,
                                     background: status ? dot : "transparent",
                                     border: status ? "none" : `1px solid ${HOME_THEME.red}66`,
-                                    boxShadow: active ? `0 0 7px ${dot}` : "none",
+                                    boxShadow: active ? `0 0 7px ${dot}` : status ? `0 0 5px ${dot}` : "none",
                                   }}
                                 />
                               );
                             })()}
-                            <span style={{ fontSize: 13, fontWeight: 600, color: HOME_THEME.text, opacity: active ? 1 : 0.55, whiteSpace: "nowrap" }}>{item.label}</span>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, opacity: active ? 1 : 0.7, whiteSpace: "nowrap" }}>{item.label}</span>
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                             {/* Visit count pill */}
                             <span
                               title={`${loads.toLocaleString()} total loads`}
                               style={{
-                                fontSize: 11,
+                                fontSize: 12,
                                 fontFamily: "var(--font-mono)",
                                 fontWeight: 700,
                                 padding: "2px 7px",
@@ -3299,12 +3270,23 @@ export default function OwnerDashboard() {
                               {loads.toLocaleString()}×
                             </span>
                             {status ? (
-                              <StatusBadge ok={active} label={active ? "Open now" : "Seen before"} />
+                              active ? (
+                                <StatusBadge ok label="Open now" />
+                              ) : (
+                                <span style={{
+                                  display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px",
+                                  borderRadius: 999, fontSize: 12, fontWeight: 500,
+                                  background: `${HOME_THEME.orange}1f`, border: `1px solid ${HOME_THEME.orange}55`, color: HOME_THEME.orange,
+                                }}>
+                                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: HOME_THEME.orange }} />
+                                  Seen before
+                                </span>
+                              )
                             ) : (
-                              <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 1 }}>never visited</span>
+                              <span style={{ fontSize: 13, color: HOME_THEME.red, opacity: 1 }}>never visited</span>
                             )}
                             {seen && (
-                              <span style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
+                              <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
                                 {fmtAgo(seen)}
                               </span>
                             )}

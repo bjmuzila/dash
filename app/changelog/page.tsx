@@ -40,17 +40,18 @@ export default async function ChangelogPage() {
           Changelog
         </h1>
         <p style={{ margin: "0 0 20px", fontSize: 13, color: "#FFFFFF" }}>
-          This page shows the current contents of <span style={{ color: "#219EBC" }}>CHANGELOG.md</span> directly.
+          This page shows the current contents of <span style={{ color: "#7dd3fc" }}>CHANGELOG.md</span> directly.
           When that file changes, this page reflects it on the next load.
         </p>
 
         <div
           style={{
-            border: "1px solid rgba(33,158,188,0.16)",
-            borderTop: "2px solid rgba(33,158,188,0.45)",
-            borderRadius: 16,
-            background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.08) 0%, transparent 55%), rgba(13,17,25,0.72)",
-            boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+            border: "1px solid rgba(255,255,255,0.10)",
+            borderRadius: 18,
+            background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.45)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
             overflow: "hidden",
           }}
         >
@@ -58,7 +59,7 @@ export default async function ChangelogPage() {
             <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: "#FFFFFF" }}>
               Source File
             </span>
-            <span style={{ fontSize: 12, color: "#219EBC", fontWeight: 700 }}>
+            <span style={{ fontSize: 12, color: "#7dd3fc", fontWeight: 700 }}>
               CHANGELOG.md
             </span>
           </div>

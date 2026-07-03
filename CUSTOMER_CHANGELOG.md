@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 7/3/2026
+
+* Added a Volatility Skew Calculator to the Greeks page — plug in put, call, and at-the-money implied vol to see the skew instantly, with a plain-English guide on what each skew level means and how to trade it.
+* New quick-access GEX panel — tap the new toolbar button to slide open a side panel and jump between Home, ES Candles, Multi Greek, Flow, Analytics and more without leaving your current page.
+* ES Candles now opens cleanly inside the new panel, with the toolbar and chart resizing to fit the space.
+* Multi Greek keeps SPX, SPY and QQQ side by side in the panel, and its numbers are easier on the eyes with a softer white.
+
 ## Thursday 7/2/2026
 
 * Analytics page loads a bit faster — removed a duplicate data pull that was fetching the same chart history twice.

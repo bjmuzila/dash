@@ -6,11 +6,16 @@ import {
   HOME_THEME,
   homeContentStyle,
   homeHeaderStyle,
-  homePanelStyle,
   homeSecondaryButtonStyle,
   homeShellStyle,
+  classicCardAccentStyle,
+  LIGHT_BLUE,
 } from "@/components/shared/homeTheme";
 import { ToggleTile, DockButton, DockCalendar } from "@/components/shared/DockToolbar";
+
+// Budget-theme card surface: frosted dark card + faint light-blue radial highlight,
+// no top/accent bars. Used for every card on this page (see BUDGET_UI_STYLE.md).
+const budgetCard = classicCardAccentStyle;
 
 interface ScoreFactors {
   proximity: number;
@@ -207,7 +212,7 @@ function Gauge({ label, value, hint, tip, accent }: { label: string; value: numb
   const glow = hot ? 0.85 : 0.5;
   return (
     <div className="conf-hover" style={{
-      ...homePanelStyle,
+      ...budgetCard,
       padding: 20,
       display: "flex",
       flexDirection: "column",
@@ -257,7 +262,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
     : v <= -25 ? "Respect the break — don't fight momentum through"
     : "Neutral — smaller size until a clear reaction at the level";
   return (
-    <div className="conf-hover" style={{ ...homePanelStyle, padding: "14px 18px", display: "flex",
+    <div className="conf-hover" style={{ ...budgetCard, padding: "14px 18px", display: "flex",
       flexDirection: "column", gap: 10, borderTop: `2px solid ${rgba(col, 0.6)}`,
       background: `radial-gradient(circle at ${defend ? "100%" : "0%"} 0%, ${rgba(col, 0.1)} 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -360,7 +365,7 @@ function MvcHero({
     );
 
   return (
-    <div className="conf-hover" style={{ ...homePanelStyle, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16,
+    <div className="conf-hover" style={{ ...budgetCard, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16,
       borderTop: `3px solid ${rgba(leanColor, 0.7)}`,
       background: `radial-gradient(circle at 50% -10%, ${rgba(leanColor, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 24, flexWrap: "wrap" }}>
@@ -458,7 +463,7 @@ function SoFarRollup({ timeline }: { timeline: MvcSegment[] }) {
     { label: "untouched", n: c.abandoned, color: HOME_THEME.muted },
   ].filter((x) => x.n > 0);
   return (
-    <div style={{ ...homePanelStyle, padding: "10px 14px", display: "flex", alignItems: "center",
+    <div style={{ ...budgetCard, padding: "10px 14px", display: "flex", alignItems: "center",
       gap: 12, flexWrap: "wrap", background: "rgba(255,255,255,0.02)", borderLeft: `2px solid ${rgba(SCENARIO[cur.kind].color, 0.5)}` }}>
       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>So far</span>
       <span style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
@@ -729,7 +734,7 @@ function CalibrationPanel() {
   useEffect(() => { if (open && !data) void load(false); }, [open, data, load]);
 
   return (
-    <div style={{ ...homePanelStyle, padding: 16 }}>
+    <div style={{ ...budgetCard, padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <button onClick={() => setOpen((v) => !v)}
           style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0,
@@ -881,15 +886,15 @@ export default function ConfidenceScorePage() {
 
       <div style={{ ...homeContentStyle, overflow: "auto" }}>
         {shifted && (
-          <div style={{ ...homePanelStyle, padding: "10px 16px", borderLeft: `3px solid ${HOME_THEME.cyan}`,
+          <div style={{ ...budgetCard, padding: "10px 16px", borderLeft: `3px solid ${LIGHT_BLUE}`,
             color: HOME_THEME.cyan, fontSize: 12, fontWeight: 700, letterSpacing: ".04em" }}>
             ⚡ Score shifted significantly since last refresh.
           </div>
         )}
         {error ? (
-          <div style={{ ...homePanelStyle, padding: 24, color: HOME_THEME.red, fontSize: 13 }}>{error}</div>
+          <div style={{ ...budgetCard, padding: 24, color: HOME_THEME.red, fontSize: 13 }}>{error}</div>
         ) : !data || !s ? (
-          <div style={{ ...homePanelStyle, padding: 24, color: HOME_THEME.text, fontSize: 13 }}>
+          <div style={{ ...budgetCard, padding: 24, color: HOME_THEME.text, fontSize: 13 }}>
             {loading ? "Computing…" : "No data for this date."}
           </div>
         ) : (
@@ -920,7 +925,7 @@ export default function ConfidenceScorePage() {
 
             {/* 84% open-at-MVC alert — high-priority setup callout */}
             {s.openAtMVC && (
-              <div style={{ ...homePanelStyle, padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+              <div style={{ ...budgetCard, padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
                 borderLeft: `3px solid ${HOME_THEME.green}`,
                 background: `radial-gradient(circle at 0% 0%, ${rgba(HOME_THEME.green, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
                 <span style={{ fontSize: 22, color: HOME_THEME.green }}>⤞</span>
@@ -934,7 +939,7 @@ export default function ConfidenceScorePage() {
             )}
 
             {/* Live Structure — compact factor grid + regime/history badges */}
-            <div className="conf-hover" style={{ ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 12, borderLeft: `2px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>
+            <div className="conf-hover" style={{ ...budgetCard, padding: 16, display: "flex", flexDirection: "column", gap: 12, borderLeft: `2px solid ${rgba(LIGHT_BLUE, 0.4)}` }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                 <SectionTitle text="Live Structure" accent={HOME_THEME.cyan} />
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -969,7 +974,7 @@ export default function ConfidenceScorePage() {
               const o = data.dayOutcome;
               const sc = SCENARIO[o.kind];
               return (
-                <div className="conf-hover" style={{ ...homePanelStyle, padding: 20, display: "flex", flexDirection: "column", gap: 14,
+                <div className="conf-hover" style={{ ...budgetCard, padding: 20, display: "flex", flexDirection: "column", gap: 14,
                   borderLeft: `2px solid ${rgba(sc.color, 0.55)}`,
                   background: `radial-gradient(circle at 0% 0%, ${rgba(sc.color, 0.08)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -1082,7 +1087,7 @@ export default function ConfidenceScorePage() {
 
             {/* Collapsible tuning reference (display-only) */}
             {data.thresholds && (
-              <div style={{ ...homePanelStyle, padding: 16 }}>
+              <div style={{ ...budgetCard, padding: 16 }}>
                 <button onClick={() => setShowTuning((v) => !v)}
                   style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0,
                     fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted,
