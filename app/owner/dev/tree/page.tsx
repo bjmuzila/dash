@@ -5,11 +5,11 @@ import FlowDiagram from "./FlowDiagram";
 export const dynamic = "force-dynamic";
 
 const C = {
-  bg: "#0b1220",
-  panel: "rgba(255,255,255,0.03)",
+  bg: "#05060A",
+  panel: "rgba(13,17,25,0.45)",
   line: "rgba(255,255,255,0.10)",
   dim: "rgba(255,255,255,0.50)",
-  text: "#dce6ee",
+  text: "#FFFFFF",
 };
 
 export default function TreePage() {

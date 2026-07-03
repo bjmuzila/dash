@@ -91,7 +91,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
     <div
       onClick={onClick}
       title="Click to view the logged plays for this setup"
-      style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
+      style={{ background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${C.card}`, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
         <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>

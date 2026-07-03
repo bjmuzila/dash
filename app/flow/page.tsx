@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ColorType, HistogramSeries, LineSeries, createChart } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, UTCTimestamp, LineData, WhitespaceData, HistogramData } from "lightweight-charts";
-import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeInputStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
@@ -172,15 +172,20 @@ export default function FlowPage() {
   useEffect(() => {
     if (view !== "combined") return;
     let cancelled = false;
+    // Push the premium floor to the server so the 20k cap keeps the biggest
+    // prints across the WHOLE session, not just the most recent slice.
+    const premParam = minPremium > 0 ? `&minPremium=${minPremium}` : "";
     const load = () =>
-      fetch(`/proxy/flow-history?limit=20000`)
+      fetch(`/proxy/flow-history?limit=20000${premParam}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => { if (!cancelled && j && Array.isArray(j.tape)) setCombinedHistory(j.tape as FlowOrder[]); })
         .catch(() => {});
-    load();
+    // Debounce the initial pull so dragging the premium slider doesn't spray
+    // requests; the 15s interval then keeps the "now" edge fresh.
+    const kick = setTimeout(load, 400);
     const id = setInterval(load, 15000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [view]);
+    return () => { cancelled = true; clearTimeout(kick); clearInterval(id); };
+  }, [view, minPremium]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -537,11 +542,16 @@ export default function FlowPage() {
   const segWrapStyle: React.CSSProperties = {
     display: "flex", border: `1px solid ${C.border}`, borderRadius: 6, background: "rgba(0,0,0,0.4)", overflow: "hidden",
   };
+  // Dashboard control language (DOCK_THEME): active = cyan gloss tile + cyan text
+  // + glow; inactive = transparent with dimmed text. Matches the toolbar/nav.
   function segBtn(activeState: boolean): React.CSSProperties {
     return {
       flex: 1, padding: "8px 6px", fontSize: 11, fontWeight: 700, cursor: "pointer",
       textTransform: "uppercase", letterSpacing: "0.06em", border: "none",
-      background: activeState ? C.cyan : "transparent", color: activeState ? C.bg : C.muted,
+      background: activeState ? DOCK_THEME.activeTile : "transparent",
+      color: activeState ? C.cyan : "rgba(255,255,255,0.55)",
+      boxShadow: activeState ? DOCK_THEME.activeGlow : "none",
+      transition: "all 0.15s",
     };
   }
 
@@ -586,6 +596,14 @@ export default function FlowPage() {
 
   const combinedLabel = scope === "exIdx" ? "All − Indices" : "All Tickers";
 
+  // Combined flow spans the whole market, so allow a far larger premium floor.
+  const premiumMax = view === "combined" ? 5_000_000 : PREMIUM_MAX;
+  const premiumStep = view === "combined" ? 50_000 : 10_000;
+  // Switching back to a single ticker: clamp the floor to that view's range.
+  useEffect(() => {
+    if (view === "ticker" && minPremium > PREMIUM_MAX) setMinPremium(PREMIUM_MAX);
+  }, [view, minPremium]);
+
   return (
     <PageShell className="no-card-lift">
       {/* ── View tabs ───────────────────────────────────────────────── */}
@@ -618,9 +636,11 @@ export default function FlowPage() {
                     style={{
                       padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
                       letterSpacing: "0.04em", borderRadius: 6,
-                      border: `1px solid ${on ? C.cyan : C.border}`,
-                      background: on ? C.cyan : "rgba(0,0,0,0.4)",
-                      color: on ? C.bg : C.text,
+                      border: `1px solid ${on ? DOCK_THEME.activeBorder : C.border}`,
+                      background: on ? DOCK_THEME.activeTile : "rgba(0,0,0,0.4)",
+                      color: on ? C.cyan : C.text,
+                      boxShadow: on ? DOCK_THEME.activeGlow : "none",
+                      transition: "all 0.15s",
                     }}
                   >
                     {t}
@@ -661,7 +681,7 @@ export default function FlowPage() {
             <label style={labelStyle}>Min Premium <span style={{ color: C.cyan }}>{minPremium === 0 ? "Any" : fmtPremium(minPremium)}</span></label>
             <input
               style={{ width: "100%", accentColor: C.cyan }}
-              type="range" min={0} max={PREMIUM_MAX} step={10_000}
+              type="range" min={0} max={premiumMax} step={premiumStep}
               value={minPremium}
               onChange={(e) => setMinPremium(Number(e.target.value))}
             />

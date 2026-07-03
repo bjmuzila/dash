@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { HOME_THEME, homeInputStyle } from "@/components/shared/homeTheme";
+import { OWNER_THEME as HOME_THEME, homeInputStyle } from "@/components/shared/ownerTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton, type SegOption } from "@/components/shared/DockToolbar";
 import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";

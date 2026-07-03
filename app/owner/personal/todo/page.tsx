@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  HOME_THEME as HOME_THEME_BASE,
+  OWNER_THEME as HOME_THEME_BASE,
   homeButtonStyle,
   homeContentStyle,
   homeHeaderStyle,
@@ -18,7 +18,7 @@ import {
   homePanelStyle,
   homeSecondaryButtonStyle,
   homeShellStyle,
-} from "@/components/shared/homeTheme";
+} from "@/components/shared/ownerTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // Page override: no gray text + iColorpalette accent scheme

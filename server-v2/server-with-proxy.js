@@ -332,6 +332,11 @@ async function handleFlowHistory(req, res) {
   let limit = Number(searchParams.get('limit') || 5000);
   if (!Number.isFinite(limit) || limit <= 0) limit = 5000;
   limit = Math.min(limit, 20000);
+  // Optional premium floor applied IN SQL (before the newest-N cap) so a combined
+  // all-tickers pull can span the whole session: 20k *big* prints reach far
+  // further back than 20k raw prints market-wide.
+  let minPremium = Number(searchParams.get('minPremium') || 0);
+  if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
 
   const pool = getHistPool();
   if (!pool) return sendJson(res, 200, { date, tape: [] });
@@ -344,6 +349,10 @@ async function handleFlowHistory(req, res) {
   if (underlying) {
     params.push(flowRootsFor(underlying));
     where += ` AND upper(underlying) = ANY($${params.length})`;
+  }
+  if (minPremium > 0) {
+    params.push(minPremium);
+    where += ` AND premium >= $${params.length}`;
   }
   params.push(limit);
   const limitIdx = params.length;

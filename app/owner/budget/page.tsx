@@ -555,9 +555,9 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
     <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
         <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
-        <path d={path} fill="none" stroke={HOME_THEME.orange} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={path} fill="none" stroke={HOME_THEME.text} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
         {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
-        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={HOME_THEME.orange} stroke="#05060A" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
+        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={HOME_THEME.text} stroke="#05060A" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
         {ticks.map((p, i) => (
           <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={9} textAnchor="middle">{shortDate(p.date)}</text>
         ))}

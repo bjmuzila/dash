@@ -457,7 +457,7 @@ function SpotFeedHealth() {
 
   const stale = ageMs == null || ageMs > 120_000;
   const slow = !stale && ageMs != null && ageMs > 20_000;
-  const color = stale ? "#ff5252" : slow ? "#facc15" : "#00e676";
+  const color = stale ? HOME_THEME.red : slow ? "#facc15" : "#00e676";
   const label = ageMs === undefined ? "…" : stale ? "STALE" : slow ? "SLOW" : "HEALTHY";
   const ageStr = ageMs == null ? "no ticks" : ageMs < 1000 ? "<1s ago" : `${Math.round(ageMs / 1000)}s ago`;
 
@@ -474,7 +474,7 @@ function SpotFeedHealth() {
         </div>
       </div>
       {stale && ageMs !== undefined && (
-        <div style={{ marginLeft: "auto", fontSize: 12, color: "#ff5252", opacity: 1, maxWidth: 220, textAlign: "right" }}>
+        <div style={{ marginLeft: "auto", fontSize: 12, color: HOME_THEME.red, opacity: 1, maxWidth: 220, textAlign: "right" }}>
           Index stream frozen — re-subscribe Theta / recreate dashboard.
         </div>
       )}
@@ -2723,7 +2723,7 @@ export default function OwnerDashboard() {
             {ctlMsg && (
               <div style={{
                 fontSize: 12, fontFamily: "var(--font-mono)", padding: "8px 10px", borderRadius: 8,
-                background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.10)",
+                background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(244,148,142,0.10)",
                 border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
                 color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
               }}>

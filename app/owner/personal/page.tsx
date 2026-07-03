@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { homePanelStyle, OWNER_THEME } from "@/components/shared/ownerTheme";
 
 const VALID_PINS = ["0312", "9365"];
 
@@ -90,7 +91,7 @@ export default function PersonalPage() {
               <button style={keyStyle} onClick={delDigit}>← Del</button>
             </div>
             <div style={{
-              color: "#ff5252", fontSize: 11, height: 16,
+              color: OWNER_THEME.red, fontSize: 11, height: 16,
               opacity: error ? 1 : 0, transition: "opacity .3s", letterSpacing: ".05em",
             }}>
               Incorrect PIN
@@ -136,18 +137,17 @@ export default function PersonalPage() {
                   onMouseEnter={() => setHover(c.section)}
                   onMouseLeave={() => setHover(null)}
                   style={{
-                    background: hover === c.section ? "#0d1520" : "#0a0f16",
-                    border: `1px solid ${hover === c.section ? "#1e3050" : "#1a2a3a"}`,
-                    borderRadius: 2, padding: 20, cursor: "pointer", transition: "all .18s",
+                    ...homePanelStyle,
+                    border: `1px solid ${hover === c.section ? OWNER_THEME.cyan : OWNER_THEME.border}`,
+                    padding: 20, cursor: "pointer", transition: "all .18s",
                     transform: hover === c.section ? "translateY(-3px)" : "none",
-                    boxShadow: hover === c.section ? "0 8px 24px rgba(0,0,0,.5)" : "none",
                     display: "flex", flexDirection: "column", gap: 10, minHeight: 150,
                   }}
                 >
                   <div style={{ fontSize: 24, lineHeight: 1 }}>{c.icon}</div>
-                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#e8edf5" }}>{c.title}</div>
-                  <div style={{ fontSize: 11, color: "#9fb3c8", flexGrow: 1, lineHeight: 1.5 }}>{c.desc}</div>
-                  <div style={{ fontSize: 10, color: "#5a7a99", textTransform: "uppercase", letterSpacing: ".08em" }}>{c.footer}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: OWNER_THEME.text }}>{c.title}</div>
+                  <div style={{ fontSize: 11, color: OWNER_THEME.muted, flexGrow: 1, lineHeight: 1.5 }}>{c.desc}</div>
+                  <div style={{ fontSize: 10, color: OWNER_THEME.cyan, textTransform: "uppercase", letterSpacing: ".08em" }}>{c.footer}</div>
                 </div>
               ))}
             </div>

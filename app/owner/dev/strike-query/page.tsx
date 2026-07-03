@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
+import { OWNER_THEME as HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/ownerTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
 const FALLBACK_SYMBOLS = ["SPX", "SPY", "QQQ", "NVDA", "AAPL", "TSLA", "AMZN", "META", "MSFT", "GOOGL"];

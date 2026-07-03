@@ -7,7 +7,7 @@
  */
 
 import Link from "next/link";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import { OWNER_THEME as HOME_THEME } from "@/components/shared/ownerTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { OWNER_SIDEBAR_GROUPS } from "@/components/shared/OwnerSidebar";
 
