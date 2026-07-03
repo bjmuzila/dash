@@ -12,6 +12,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Added a Data On/Off button on the Greeks page so you can pause the live feed when you're not watching.
 * Fixed false "flips" caused by a stale price feed — the SPX price is now checked for freshness before it's used, plus a live feed-health indicator on the owner page.
 * Greeks now update in real time from a single live feed instead of refreshing once a minute.
+* Added a Combined view to Options Flow — see order flow across every ticker on one tape, with a one-tap switch to exclude the big indexes (SPX, NDX, etc.).
+* The Combined flow view now lets you filter for the really big trades — the premium slider goes all the way up to $5 million.
+* With a premium filter set, the Combined tape now reaches back across the whole trading day instead of just the most recent activity.
+* Polished the buttons and view switchers on the Options Flow page to match the rest of the dashboard's look.
 
 ## Tuesday 6/30/2026
 

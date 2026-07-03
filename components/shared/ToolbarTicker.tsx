@@ -127,20 +127,25 @@ export default function ToolbarTicker() {
   const [vix, setVix] = useState<Quote>({ price: 0, prev: 0 });
 
   // Mutable live cache — avoids a render on every socket tick.
-  const live = useRef({ esPrice: 0, esPrev: 0, spxPrice: 0, spxPrev: 0, vixPrice: 0, vixPrev: 0 });
+  // spxDisplay = server `spotDisplay`: live broker spot during RTH, esFut+cashBasis
+  // off-hours (16:00–09:30 ET) so SPX tracks the overnight ES move instead of
+  // freezing at the cash close. spxPrice stays the raw broker spot (GEX math basis).
+  const live = useRef({ esPrice: 0, esPrev: 0, spxPrice: 0, spxDisplay: 0, spxPrev: 0, vixPrice: 0, vixPrev: 0 });
 
   const push = () => {
     const L = live.current;
     const esP = L.esPrice > 0 ? Math.round(L.esPrice * 4) / 4 : 0;
     const esPv = L.esPrev > 0 ? Math.round(L.esPrev * 4) / 4 : 0;
     setEs({ price: esP, prev: esPv });
-    // Expose live SPX so other pages can sync to the same number.
+    // Expose live SPX so other pages can sync to the same number (raw broker
+    // spot — GEX math basis, never the ES-derived display value).
     if (typeof window !== "undefined") {
       if (!window.__gexAppState) window.__gexAppState = { chain: [], spotPrice: 0, esPrice: 0, expiration: "", gexFlip: null };
       if (L.spxPrice > 0) window.__gexAppState.spotPrice = L.spxPrice;
       window.__gexAppState.esPrice = esP;
     }
-    setSpx({ price: L.spxPrice, prev: L.spxPrev });
+    // Prefer server spotDisplay (live RTH / ES-derived off-hours); fall back to raw spot.
+    setSpx({ price: L.spxDisplay > 0 ? L.spxDisplay : L.spxPrice, prev: L.spxPrev });
     setVix({ price: L.vixPrice, prev: L.vixPrev });
   };
 
@@ -188,10 +193,12 @@ export default function ToolbarTicker() {
       const esPrev = Number(a.esFutPrevClose ?? 0);
       const v = Number(a.vix ?? 0);
       const vPrev = Number(a.vixPrevClose ?? 0);
+      const disp = Number(a.spotDisplay ?? 0);
       if (esFut > 0) live.current.esPrice = esFut;
       if (esPrev > 0) live.current.esPrev = esPrev;
       if (v > 0) live.current.vixPrice = v;
       if (vPrev > 0) live.current.vixPrev = vPrev;
+      if (disp > 0) live.current.spxDisplay = disp;
     };
     const applySpot = (s: Record<string, unknown>) => {
       const spot = Number(s.spot ?? 0);
