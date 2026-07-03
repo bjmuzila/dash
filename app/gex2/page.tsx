@@ -29,11 +29,20 @@ function rgba(hex: string, a: number): string {
 }
 
 const cardStyle: CSSProperties = {
-  background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.1)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
-  backdropFilter: "blur(16px)",
-  borderRadius: 18,
-  border: `1px solid ${HOME_THEME.border}`,
-  boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+  // Softer, more diffuse surface — the card fades into the page rather than
+  // sitting on a hard-edged panel. Lower fill opacity + heavy blur + a feathered
+  // outer glow (instead of a crisp drop shadow) reads like a gaussian bloom.
+  // Fill fades out toward the edges (radial alpha ramp) so there's no hard card
+  // boundary — the surface dissolves into the page. Heavier backdrop blur + an
+  // edge mask feather the transition further.
+  background: `radial-gradient(120% 130% at 50% 0%, ${rgba("#0D1119", 0.34)} 0%, ${rgba("#0D1119", 0.22)} 45%, ${rgba("#0D1119", 0.06)} 80%, transparent 100%)`,
+  backdropFilter: "blur(44px) saturate(1.15)",
+  WebkitBackdropFilter: "blur(44px) saturate(1.15)",
+  borderRadius: 28,
+  border: "none",
+  boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
+  maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+  WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
   padding: 24,
   position: "relative",
 };
@@ -161,9 +170,10 @@ function derive(s: Snapshot): Derived | null {
 function Metric({ label, value, sub, valueColor }: { label: string; value: string; sub: string; valueColor?: string }) {
   return (
     <div style={{
-      flex: "1 1 160px", minWidth: 150, padding: "14px 16px", borderRadius: 14,
-      border: `1px solid ${HOME_THEME.border}`,
-      background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.1)} 0%, transparent 65%), ${HOME_THEME.panelBg}`,
+      flex: "1 1 160px", minWidth: 150, padding: "14px 16px", borderRadius: 16,
+      border: "none",
+      backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+      background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.07)} 0%, transparent 70%), ${rgba("#0D1119", 0.22)}`,
     }}>
       <div style={labelCap}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 800, color: valueColor ?? HOME_THEME.text, marginTop: 4 }}>{value}</div>
@@ -323,20 +333,26 @@ export default function Gex2Page() {
         )}
       </BudgetCard>
 
-      <BudgetCard title="Options → probability" subtitle={d ? `implied distribution from ATM IV ${fmt2(d.atmIV * 100)}%` : ""}>
-        {d ? <DistributionChart d={d} /> : <Empty note="—" />}
-      </BudgetCard>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
+        <div style={{ flex: "1 1 380px", minWidth: 320 }}>
+          <BudgetCard title="Options → probability" subtitle={d ? `implied distribution from ATM IV ${fmt2(d.atmIV * 100)}%` : ""}>
+            {d ? <DistributionChart d={d} /> : <Empty note="—" />}
+          </BudgetCard>
+        </div>
 
-      <BudgetCard title="Options → gamma density" subtitle={d ? `Density ${d.balanceLabel} (P/C ${fmt2(d.pcGamma)}) — ${d.balanceNote}` : ""}>
-        {d ? <DensityChart rows={rows} d={d} /> : <Empty note="—" />}
-        {d && (
-          <div style={{ display: "flex", gap: 18, marginTop: 12, fontSize: 11, color: rgba(HOME_THEME.text, 0.7) }}>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(LIGHT_BLUE, 0.75), borderRadius: 2, marginRight: 6 }} />calls</span>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(SOFT_RED, 0.75), borderRadius: 2, marginRight: 6 }} />puts</span>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(HOME_THEME.orange, 0.9), borderRadius: 2, marginRight: 6 }} />max pain</span>
-          </div>
-        )}
-      </BudgetCard>
+        <div style={{ flex: "1 1 380px", minWidth: 320 }}>
+          <BudgetCard title="Options → gamma density" subtitle={d ? `Density ${d.balanceLabel} (P/C ${fmt2(d.pcGamma)}) — ${d.balanceNote}` : ""}>
+            {d ? <DensityChart rows={rows} d={d} /> : <Empty note="—" />}
+            {d && (
+              <div style={{ display: "flex", gap: 18, marginTop: 12, fontSize: 11, color: rgba(HOME_THEME.text, 0.7) }}>
+                <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(LIGHT_BLUE, 0.75), borderRadius: 2, marginRight: 6 }} />calls</span>
+                <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(SOFT_RED, 0.75), borderRadius: 2, marginRight: 6 }} />puts</span>
+                <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(HOME_THEME.orange, 0.9), borderRadius: 2, marginRight: 6 }} />max pain</span>
+              </div>
+            )}
+          </BudgetCard>
+        </div>
+      </div>
     </PageShell>
   );
 }
