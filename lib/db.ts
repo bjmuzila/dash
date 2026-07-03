@@ -1810,6 +1810,74 @@ export async function getRecentPageVisits(limit = 100): Promise<PageVisitRecord[
   );
 }
 
+// Per-user engagement rollup from page_visits. total_loads = every logged load;
+// distinct_pages = unique paths; last_seen/first_seen bracket their activity.
+// approx_active_sec is ESTIMATED: consecutive visits are bucketed into sessions
+// (a gap > 30 min starts a new session), and each session's span (last−first
+// visit) is summed. It undercounts the final page of every session (no exit
+// event is recorded) and can't distinguish an idle tab from active use — it's a
+// lower-bound engagement proxy, not a precise dwell time.
+export interface CustomerActivityRow {
+  user_id: string;
+  total_loads: number;
+  distinct_pages: number;
+  session_count: number;
+  approx_active_sec: number;
+  last_seen: string;
+  first_seen: string;
+  top_path: string | null;
+}
+
+export async function getCustomerActivity(): Promise<CustomerActivityRow[]> {
+  const pool = await getDb();
+  const res = await pool.query(`
+    WITH gaps AS (
+      SELECT user_id, path, created_at,
+             EXTRACT(EPOCH FROM (created_at
+               - LAG(created_at) OVER (PARTITION BY user_id ORDER BY created_at))) AS gap_sec
+      FROM page_visits
+      WHERE user_id IS NOT NULL
+    ),
+    sessioned AS (
+      SELECT user_id, path, created_at,
+             SUM(CASE WHEN gap_sec IS NULL OR gap_sec > 1800 THEN 1 ELSE 0 END)
+               OVER (PARTITION BY user_id ORDER BY created_at) AS session_id
+      FROM gaps
+    ),
+    spans AS (
+      SELECT user_id, session_id,
+             EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) AS span_sec
+      FROM sessioned GROUP BY user_id, session_id
+    ),
+    per_user_time AS (
+      SELECT user_id, COUNT(*) AS session_count, COALESCE(SUM(span_sec), 0) AS approx_active_sec
+      FROM spans GROUP BY user_id
+    ),
+    per_user_counts AS (
+      SELECT user_id,
+             COUNT(*) AS total_loads,
+             COUNT(DISTINCT COALESCE(path, page_key)) AS distinct_pages,
+             MAX(created_at) AS last_seen,
+             MIN(created_at) AS first_seen
+      FROM page_visits WHERE user_id IS NOT NULL GROUP BY user_id
+    ),
+    top AS (
+      SELECT DISTINCT ON (user_id) user_id, COALESCE(path, page_key) AS top_path
+      FROM page_visits WHERE user_id IS NOT NULL
+      GROUP BY user_id, COALESCE(path, page_key)
+      ORDER BY user_id, COUNT(*) DESC
+    )
+    SELECT c.user_id, c.total_loads::int, c.distinct_pages::int,
+           t.session_count::int, t.approx_active_sec::float8,
+           c.last_seen, c.first_seen, tp.top_path
+    FROM per_user_counts c
+    JOIN per_user_time t USING (user_id)
+    LEFT JOIN top tp USING (user_id)
+    ORDER BY c.last_seen DESC
+  `);
+  return res.rows as CustomerActivityRow[];
+}
+
 // ── Ticker events (click / render tracking) ────────────────────────────────────
 
 export interface TickerEventRecord {

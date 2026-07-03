@@ -5,7 +5,6 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { OWNER_THEME as HOME_THEME, homeInputStyle } from "@/components/shared/ownerTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton, type SegOption } from "@/components/shared/DockToolbar";
-import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 type Audience = "all" | "subscribers" | "not_paying" | "waitlist" | "old_emails" | "old_emails2" | "custom";
 
@@ -166,9 +165,6 @@ export default function AdminEmailsPage() {
 
   return (
     <PageShell maxWidth={680} align="center">
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
-        <OwnerQuickLinks current="/owner/admin/emails" />
-      </div>
       <Card accent="cyan">
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.02em" }}>📧 Email Broadcast</div>
@@ -205,11 +201,13 @@ export default function AdminEmailsPage() {
 
           <div>
             {label("Audience")}
-            <SegGroup
-              options={AUDIENCE_OPTIONS}
-              active={audience}
-              onChange={(v) => setAudience(v as Audience)}
-            />
+            <div style={{ width: "100%", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", WebkitOverflowScrolling: "touch" }}>
+              <SegGroup
+                options={AUDIENCE_OPTIONS}
+                active={audience}
+                onChange={(v) => setAudience(v as Audience)}
+              />
+            </div>
             <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
               <span>
                 {recipientCount} recipient{recipientCount === 1 ? "" : "s"}

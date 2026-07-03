@@ -9,6 +9,7 @@ const PUBLIC_PATTERNS: RegExp[] = [
   /^\/coming-soon$/,
   /^\/explore(\/.*)?$/,
   /^\/pricing$/,
+  /^\/checkout\/success$/,
   /^\/sign-in(\/.*)?$/,
   /^\/sign-up(\/.*)?$/,
   /^\/auth\/callback$/,
@@ -110,7 +111,7 @@ export async function middleware(req: NextRequest) {
 
   // Resolve the Supabase session ONCE. `res` carries any refreshed-session
   // cookies and must be the object we return on the pass-through paths.
-  const { res, userId, isOwner: ownerClaim } = await getUserFromMiddleware(req);
+  const { res, userId, isOwner: ownerClaim, isPaid } = await getUserFromMiddleware(req);
 
   // Owner = the JWT `is_owner` claim (from the custom access-token hook) OR,
   // as a fallback while the hook is being rolled out, the env id match.
@@ -163,6 +164,17 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // ── Paid-subscription gate (covers EVERY protected route, not just /home) ─────
+  // Owners always pass. Routes needed to actually buy/see pricing stay reachable
+  // for unpaid-but-signed-in users; everything else redirects to /pricing.
+  const PAID_EXEMPT = /^\/(pricing|api\/stripe)(\/.*)?$/;
+  if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/pricing";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
   // ── Owner-only route gate ────────────────────────────────────────────────────
   if (OWNER_USER_ID && isOwnerRoute(path) && !isOwner) {
     const url = req.nextUrl.clone();
@@ -171,6 +183,10 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // bfcache hardening: authed pages must not be restored from the browser
+  // back/forward cache without re-running these gates. Forces a fresh request
+  // (and thus this middleware) on Back after checkout/sign-out.
+  res.headers.set("Cache-Control", "no-store, must-revalidate");
   return res;
 }
 

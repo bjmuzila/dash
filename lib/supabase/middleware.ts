@@ -17,6 +17,7 @@ export async function getUserFromMiddleware(req: NextRequest): Promise<{
   res: NextResponse;
   userId: string | null;
   isOwner: boolean;
+  isPaid: boolean;
 }> {
   let res = NextResponse.next({ request: req });
 
@@ -48,19 +49,21 @@ export async function getUserFromMiddleware(req: NextRequest): Promise<{
   // is sound — we read it from the (local) session access token rather than
   // making another round-trip. Falls back to false when the hook isn't enabled.
   let isOwner = false;
+  let isPaid = false;
   if (user) {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    isOwner = readIsOwnerClaim(session?.access_token);
+    isOwner = readClaim(session?.access_token, "is_owner");
+    isPaid = readClaim(session?.access_token, "is_paid");
   }
 
-  return { res, userId: user?.id ?? null, isOwner };
+  return { res, userId: user?.id ?? null, isOwner, isPaid };
 }
 
-/** Decode a JWT payload and read the boolean `is_owner` claim. No verification
- *  needed here — the caller has already revalidated the token via getUser(). */
-function readIsOwnerClaim(accessToken?: string | null): boolean {
+/** Decode a JWT payload and read a boolean claim. No verification needed here —
+ *  the caller has already revalidated the token via getUser(). */
+function readClaim(accessToken: string | null | undefined, key: string): boolean {
   if (!accessToken) return false;
   try {
     const payload = accessToken.split(".")[1];
@@ -69,7 +72,7 @@ function readIsOwnerClaim(accessToken?: string | null): boolean {
       payload.replace(/-/g, "+").replace(/_/g, "/"),
       "base64",
     ).toString("utf8");
-    return JSON.parse(json)?.is_owner === true;
+    return JSON.parse(json)?.[key] === true;
   } catch {
     return false;
   }

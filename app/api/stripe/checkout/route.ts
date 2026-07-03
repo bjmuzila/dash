@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       metadata: { clerk_user_id: userId },
       subscription_data: { metadata: { clerk_user_id: userId } },
       allow_promotion_codes: true,
-      success_url: `${origin}/?checkout=success`,
+      success_url: `${origin}/checkout/success`,
       cancel_url: `${origin}/pricing?checkout=cancelled`,
     });
 
