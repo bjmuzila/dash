@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { unsubscribeWaitlistEmail } from "@/lib/db";
+import { unsubscribeWaitlistEmail, addUnsubscribe } from "@/lib/db";
 import { verifyUnsubscribe } from "@/lib/unsubscribe";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +11,9 @@ async function doUnsubscribe(email: string, token: string) {
   if (!verifyUnsubscribe(email, token)) {
     return NextResponse.json({ ok: false, error: "Invalid or expired link." }, { status: 403 });
   }
+  // Global suppression (applies to ALL audiences: accounts, subscribers,
+  // legacy lists) + legacy waitlist flag for back-compat.
+  await addUnsubscribe(email, "link");
   await unsubscribeWaitlistEmail(email);
   // Always report success on a valid token — don't leak whether the email exists.
   return NextResponse.json({ ok: true, message: "You've been unsubscribed." });

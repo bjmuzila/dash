@@ -27,14 +27,36 @@ function distColor(d: number | null): string {
 }
 
 export default async function Confidence7dTracker() {
-  let data: CheckpointData;
+  let data: CheckpointData | null = null;
   try {
     data = await getConfidence7dCompleted();
   } catch {
-    return null; // never break the marketing page on a data hiccup
+    data = null; // never break the marketing page on a data hiccup
   }
-  const { days, summary, hitPts } = data;
-  if (!days.length) return null;
+  const days = data?.days ?? [];
+  const summary = data?.summary ?? [];
+  const hitPts = data?.hitPts ?? 8;
+
+  // Visible empty state so "rebuilt, no data yet" is distinguishable from
+  // "not rebuilt" (which would show nothing at all).
+  if (!days.length) {
+    return (
+      <section style={{ marginTop: "clamp(28px,5vw,48px)" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+          <span style={{ fontSize: "clamp(18px,3vw,24px)", fontWeight: 800, color: T.text }}>
+            Live 7-day CB accuracy
+          </span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+            color: T.cyan, border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 9px" }}>
+            Real results · last 7 sessions
+          </span>
+        </div>
+        <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: 0 }}>
+          No completed sessions to show yet — results populate here at the end of each trading day.
+        </p>
+      </section>
+    );
+  }
 
   const th: React.CSSProperties = {
     padding: "9px 12px", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em",

@@ -536,6 +536,130 @@ function CustomerActivityPanel() {
   );
 }
 
+// Global email suppression list. Anyone here is skipped by EVERY broadcast.
+// Rows land automatically when someone clicks unsubscribe (source 'link'); the
+// owner can also add addresses by hand or re-subscribe (remove) them.
+interface UnsubRow {
+  email: string;
+  source: string;
+  created_at: string;
+}
+
+function UnsubscribePanel() {
+  const [rows, setRows] = useState<UnsubRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/unsubscribes");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows((j.unsubscribes as UnsubRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!email) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/unsubscribes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      setNewEmail("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Add failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (email: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/unsubscribes?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Remove failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Unsubscribes · Do Not Email</span>
+        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}>
+          {rows ? rows.length : "—"}
+        </span>
+        <span style={{ fontSize: 11, color: T.textSecondary }}>skipped by every broadcast audience</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "…" : "↻"}
+          </button>
+        </div>
+      </div>
+
+      {/* Manual add */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          type="email"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          placeholder="add email to suppress…"
+          style={{
+            flex: 1, padding: "6px 10px", fontSize: 12, fontFamily: "var(--font-mono)",
+            background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none",
+          }}
+        />
+        <button onClick={add} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 11, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
+          Suppress
+        </button>
+      </div>
+
+      <div style={{ maxHeight: 300, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+        ) : rows && rows.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>No unsubscribes yet</div>
+        ) : (
+          rows?.map((r) => (
+            <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 12 }}>
+              <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: r.source === "manual" ? `${T.orange}18` : `${T.muted}18`, border: `1px solid ${r.source === "manual" ? T.orange : T.muted}44`, color: r.source === "manual" ? T.orange : T.muted, flexShrink: 0 }}>
+                {r.source}
+              </span>
+              <span style={{ fontSize: 10, color: T.muted, flexShrink: 0 }}>{fmtRelative(r.created_at)}</span>
+              <button onClick={() => remove(r.email)} disabled={busy} title="Re-subscribe (remove from list)" style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 10, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+                Re-subscribe
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -604,6 +728,9 @@ export default function AdminDashboard() {
 
         {/* Customer engagement — last login, ~time on site, pages visited. */}
         <CustomerActivityPanel />
+
+        {/* Global email suppression list — who unsubscribed + manual edits. */}
+        <UnsubscribePanel />
 
         {data && !data.configured && <SetupBanner />}
 

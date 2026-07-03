@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getServerUserId } from "@/lib/supabase/server";
-import { getSubscription, PAID_STATUSES, listWaitlist, addEmailSend, listEmailSends } from "@/lib/db";
+import { getSubscription, PAID_STATUSES, listWaitlist, addEmailSend, listEmailSends, getUnsubscribedSet } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 import { loadLegacyEmails } from "@/lib/emails/legacyEmails";
 
@@ -155,6 +155,19 @@ export async function POST(req: NextRequest) {
 
     // De-dupe + validate.
     to = Array.from(new Set(to.filter((e) => EMAIL_RE.test(e))));
+
+    // Honor the global suppression list for EVERY audience — never email anyone
+    // who unsubscribed (or was manually suppressed by the owner).
+    let suppressedCount = 0;
+    try {
+      const suppressed = await getUnsubscribedSet();
+      const before = to.length;
+      to = to.filter((e) => !suppressed.has(e.trim().toLowerCase()));
+      suppressedCount = before - to.length;
+    } catch (e) {
+      console.error("[send-email] suppression load failed:", e);
+    }
+
     if (to.length === 0) return NextResponse.json({ error: "No valid recipients" }, { status: 400 });
 
     // Send PER RECIPIENT so each email carries its own tokenized unsubscribe
@@ -218,6 +231,7 @@ export async function POST(req: NextRequest) {
       ok: failed.length === 0,
       sentCount: sent.length,
       failedCount: to.length - sent.length,
+      suppressedCount,
       failed: failed.length ? failed : undefined,
     });
   } catch (err) {

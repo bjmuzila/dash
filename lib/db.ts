@@ -361,6 +361,18 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_email_sends_created ON email_sends(created_at DESC);
 
+    -- Global email suppression list. ONE source of truth for "do not email".
+    -- Every broadcast audience (accounts, subscribers, waitlist, legacy lists)
+    -- is filtered against this before sending. Populated when anyone clicks an
+    -- unsubscribe link (source='link') or when the owner adds one by hand
+    -- (source='manual'). email is stored normalized (trim + lowercase).
+    CREATE TABLE IF NOT EXISTS email_unsubscribes (
+      email       TEXT PRIMARY KEY,
+      source      TEXT NOT NULL DEFAULT 'link',
+      created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_unsub_created ON email_unsubscribes(created_at DESC);
+
     -- Per-ticker weekly Estimated Move tracking. One row per (ticker, week).
     -- week_label is the human label that matches the EstimatedMoves columns
     -- (e.g. "10/3"); week_start is the Monday ISO date for ordering. em is the
@@ -1258,6 +1270,60 @@ export async function listEmailSends(limit = 100): Promise<EmailSendRecord[]> {
     "SELECT * FROM email_sends ORDER BY created_at DESC LIMIT ?",
     [limit]
   );
+}
+
+// ── Email suppression list (global unsubscribes) ───────────────────────────
+
+export interface UnsubscribeRecord {
+  email: string;
+  source: string;
+  created_at: string;
+}
+
+/** Add an email to the global suppression list. Idempotent (upsert). */
+export async function addUnsubscribe(
+  email: string,
+  source: "link" | "manual" = "link"
+): Promise<{ added: boolean }> {
+  const e = email.trim().toLowerCase();
+  if (!e) return { added: false };
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO email_unsubscribes (email, source)
+     VALUES ($1, $2)
+     ON CONFLICT (email) DO NOTHING
+     RETURNING email`,
+    [e, source]
+  );
+  return { added: (result.rowCount ?? 0) > 0 };
+}
+
+/** Remove an email from the suppression list (owner re-subscribes them). */
+export async function removeUnsubscribe(email: string): Promise<{ removed: boolean }> {
+  const e = email.trim().toLowerCase();
+  if (!e) return { removed: false };
+  const pool = await getDb();
+  const result = await pool.query(
+    `DELETE FROM email_unsubscribes WHERE email = $1`,
+    [e]
+  );
+  return { removed: (result.rowCount ?? 0) > 0 };
+}
+
+export async function listUnsubscribes(limit = 5000): Promise<UnsubscribeRecord[]> {
+  return queryAll<UnsubscribeRecord>(
+    "SELECT email, source, created_at FROM email_unsubscribes ORDER BY created_at DESC LIMIT ?",
+    [limit]
+  );
+}
+
+/** All suppressed emails as a lowercase Set — used to filter every broadcast. */
+export async function getUnsubscribedSet(): Promise<Set<string>> {
+  const rows = await queryAll<{ email: string }>(
+    "SELECT email FROM email_unsubscribes",
+    []
+  );
+  return new Set(rows.map((r) => r.email.trim().toLowerCase()));
 }
 
 // ── Customer feedback ──────────────────────────────────────────────────────
