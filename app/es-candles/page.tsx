@@ -11,6 +11,7 @@ import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
+import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 
 
 function toChartTime(ts: number): UTCTimestamp {
@@ -274,6 +275,10 @@ export default function EsCandlesPage() {
   const [showProfile, setShowProfile] = useState(false);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
+  const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
+  // Live per-strike net GEX for the vertical rail (SPX-strike space). Metric
+  // follows the heatmap's Vol+OI / Vol toggle. Updated from each /ws/gex frame.
+  const [railRows, setRailRows] = useState<RailRow[]>([]);
 
 
   // ── Embedded-card control channel ──────────────────────────────────────────
@@ -452,6 +457,10 @@ export default function EsCandlesPage() {
           cells.push({ strike, netOiVol, netVol: Number.isFinite(netVol) ? netVol : 0 });
         }
         if (cells.length) {
+          // Feed the vertical GEX rail with the current frame's per-strike net,
+          // using the active heatmap metric (Vol+OI vs Vol-only).
+          const metric = gexMetricRef.current;
+          setRailRows(cells.map((c) => ({ strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol })));
           const slotTs = slotFloorMs(Date.now());
           const map = columnsRef.current;
           map.set(slotTs, { slotTs, cells });
@@ -1255,6 +1264,7 @@ export default function EsCandlesPage() {
 <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent="#f59e0b" />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent="#a78bfa" />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent="#60a5fa" />
+          <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent="#29b6f6" />
 
           <DockGap />
 
@@ -1308,7 +1318,8 @@ export default function EsCandlesPage() {
         })()}
       </div>
 
-      <div ref={captureRef} className="flex flex-1 flex-col gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+      <div ref={captureRef} className="flex flex-1 flex-row gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+       <div className="flex flex-1 flex-col gap-2" style={{ minWidth: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="relative flex-1 overflow-hidden rounded-2xl border" style={{ borderColor: "rgba(255,255,255,.08)", background: "rgba(255,255,255,.02)", minHeight: 320 }}>
           {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
@@ -1351,6 +1362,21 @@ export default function EsCandlesPage() {
             </div>
           ) : null}
         </div>
+       </div>
+
+        {/* Vertical GEX-by-strike rail, styled like the home GEX chart. */}
+        {showRail ? (
+          <div style={{ width: 230, flexShrink: 0, minHeight: 320 }}>
+            <EsGexRail
+              rows={railRows}
+              callWall={levels.callWall}
+              putWall={levels.putWall}
+              gexFlip={levels.gexFlip}
+              spot={levels.spx}
+              basis={levels.basis ?? effectiveBasis()}
+            />
+          </div>
+        ) : null}
 
       </div>
       </div>

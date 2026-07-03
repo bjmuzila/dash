@@ -3,21 +3,58 @@
 /**
  * /gex2 — SPX options "probability + gamma" decode (DTC-Lab style).
  *
- * Self-contained: polls /proxy/gex (the live GEX snapshot) and derives:
- *   • Expected move (±1σ) from ATM IV
- *   • Max pain (OI-weighted pin)
- *   • Gamma flip (from the snapshot)
- *   • Put/Call gamma-dollar balance ("density balance")
- *   • Implied lognormal distribution curve
- *   • Per-strike call/put gamma density with call/put walls
+ * Styled to the /owner/budget visual language (BUDGET_UI_STYLE.md):
+ *   • one accent only — light blue #7dd3fc (no rotating card colors, no top bars)
+ *   • reds are always SOFT_RED #f4948e, never #EF4444
+ *   • frosted cards with an inner light-blue radial highlight
+ * All base colors still source from HOME_THEME; the two page-local constants are
+ * the only deliberate non-token hex, exactly as the budget page defines them.
  *
- * Theme comes entirely from homeTheme.ts / PageCard.tsx — no raw palette hex.
+ * Self-contained: polls /proxy/gex and derives EM / max-pain / gamma-flip /
+ * put-call balance + implied distribution + per-strike gamma density.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
-import { PageShell, Card } from "@/components/shared/PageCard";
+import { PageShell } from "@/components/shared/PageCard";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+
+// ── budget theme constants ──────────────────────────────────────────────────
+const LIGHT_BLUE = "#7dd3fc"; // the single accent
+const SOFT_RED = "#f4948e";   // desaturated red for negatives/puts
+
+function rgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+}
+
+const cardStyle: CSSProperties = {
+  background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.1)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+  backdropFilter: "blur(16px)",
+  borderRadius: 18,
+  border: `1px solid ${HOME_THEME.border}`,
+  boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+  padding: 24,
+  position: "relative",
+};
+const labelCap: CSSProperties = {
+  fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: rgba(HOME_THEME.text, 0.75),
+};
+
+function BudgetCard({ title, subtitle, right, children }: { title: string; subtitle?: string; right?: ReactNode; children: ReactNode }) {
+  return (
+    <div style={cardStyle}>
+      {right && <div style={{ position: "absolute", top: 20, right: 20 }}>{right}</div>}
+      {(title || subtitle) && (
+        <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 3 }}>
+          <div style={labelCap}>{title}</div>
+          {subtitle && <div style={{ fontSize: 12, color: HOME_THEME.green }}>{subtitle}</div>}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
 
 // ── snapshot shape (subset of /proxy/gex we use) ────────────────────────────
 type GexRow = {
@@ -46,8 +83,6 @@ type Snapshot = {
 
 const fmt0 = (n: number) => (Number.isFinite(n) ? Math.round(n).toLocaleString() : "—");
 const fmt2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "—");
-
-// standard normal pdf
 const npdf = (z: number) => Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
 
 type Derived = {
@@ -71,8 +106,6 @@ function derive(s: Snapshot): Derived | null {
   const spot = Number(s.spot ?? 0);
   if (!rows.length || !(spot > 0)) return null;
 
-  // ATM IV — nearest strike to spot, average call/put IV (fall back across a
-  // small window if the exact ATM row has no IV yet).
   let atm = rows[0];
   for (const r of rows) if (Math.abs(r.strike - spot) < Math.abs(atm.strike - spot)) atm = r;
   const ivOf = (r: GexRow) => {
@@ -86,7 +119,7 @@ function derive(s: Snapshot): Derived | null {
     if (near.length) atmIV = near.reduce((a, b) => a + b, 0) / near.length;
   }
 
-  const dteDays = Math.max(Number(atm.dte) || 0, 1); // treat 0DTE as ~overnight
+  const dteDays = Math.max(Number(atm.dte) || 0, 1);
   const t = dteDays / 365;
   const sigma = atmIV > 0 ? atmIV * spot * Math.sqrt(t) : 0;
   const emPct = spot > 0 ? (sigma / spot) * 100 : 0;
@@ -102,7 +135,6 @@ function derive(s: Snapshot): Derived | null {
     if (pain < best) { best = pain; maxPain = k.strike; }
   }
 
-  // Put/Call gamma-dollar balance.
   let callG = 0, putG = 0;
   for (const r of rows) {
     callG += (Number(r.callGamma) || 0) * (Number(r.callOI) || 0);
@@ -125,22 +157,16 @@ function derive(s: Snapshot): Derived | null {
   };
 }
 
-// tint helper (theme-derived only)
-function rgba(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
-}
-
-// ── metric tile ─────────────────────────────────────────────────────────────
-function Metric({ label, value, sub, accent }: { label: string; value: string; sub: string; accent: string }) {
+// ── stat card ────────────────────────────────────────────────────────────────
+function Metric({ label, value, sub, valueColor }: { label: string; value: string; sub: string; valueColor?: string }) {
   return (
     <div style={{
-      flex: "1 1 160px", minWidth: 150, padding: "12px 14px", borderRadius: 10,
-      border: `1px solid ${HOME_THEME.border}`, background: rgba(accent, 0.05),
-      borderTop: `2px solid ${rgba(accent, 0.55)}`,
+      flex: "1 1 160px", minWidth: 150, padding: "14px 16px", borderRadius: 14,
+      border: `1px solid ${HOME_THEME.border}`,
+      background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.1)} 0%, transparent 65%), ${HOME_THEME.panelBg}`,
     }}>
-      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: rgba(accent, 0.9) }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.text, marginTop: 4 }}>{value}</div>
+      <div style={labelCap}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: valueColor ?? HOME_THEME.text, marginTop: 4 }}>{value}</div>
       <div style={{ fontSize: 10, color: rgba(HOME_THEME.text, 0.55), marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -148,7 +174,7 @@ function Metric({ label, value, sub, accent }: { label: string; value: string; s
 
 // ── implied distribution curve (SVG) ────────────────────────────────────────
 function DistributionChart({ d }: { d: Derived }) {
-  const W = 720, H = 300, padL = 20, padR = 20, padB = 28, padT = 24;
+  const W = 720, H = 200, padL = 20, padR = 20, padB = 24, padT = 22;
   const { spot, sigma, flip } = d;
   if (!(sigma > 0)) return <Empty note="waiting on ATM IV…" />;
   const lo = spot - 3.2 * sigma, hi = spot + 3.2 * sigma;
@@ -174,18 +200,16 @@ function DistributionChart({ d }: { d: Derived }) {
   );
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 220 }}>
       <defs>
         <linearGradient id="distFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={rgba(HOME_THEME.cyan, 0.35)} />
-          <stop offset="100%" stopColor={rgba(HOME_THEME.cyan, 0.02)} />
+          <stop offset="0%" stopColor={rgba(LIGHT_BLUE, 0.35)} />
+          <stop offset="100%" stopColor={rgba(LIGHT_BLUE, 0.02)} />
         </linearGradient>
       </defs>
-      {/* ±1σ shaded core */}
       <rect x={x(d.lo)} y={padT} width={Math.max(0, x(d.hi) - x(d.lo))} height={H - padT - padB} fill={rgba(HOME_THEME.green, 0.06)} />
       <path d={area} fill="url(#distFill)" />
-      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={2} />
-      {/* spot */}
+      <path d={line} fill="none" stroke={LIGHT_BLUE} strokeWidth={2} />
       <line x1={x(spot)} x2={x(spot)} y1={padT - 4} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1.25} strokeDasharray="2 3" opacity={0.8} />
       <text x={x(spot)} y={padT - 8} fill={HOME_THEME.text} fontSize={10} fontWeight={800} textAnchor="middle">spot {fmt0(spot)}</text>
       {band(`−1σ ${fmt0(d.lo)}`, x(d.lo), HOME_THEME.green, false)}
@@ -197,10 +221,9 @@ function DistributionChart({ d }: { d: Derived }) {
 
 // ── gamma density chart (SVG) ───────────────────────────────────────────────
 function DensityChart({ rows, d }: { rows: GexRow[]; d: Derived }) {
-  const W = 720, H = 300, padL = 20, padR = 20, padB = 30, padT = 20;
+  const W = 720, H = 210, padL = 20, padR = 20, padB = 26, padT = 18;
   const data = rows.filter((r) => Number.isFinite(r.strike)).slice().sort((a, b) => a.strike - b.strike);
   if (!data.length) return <Empty note="no chain rows" />;
-  // window: ±6% around spot for readability
   const lo = d.spot * 0.94, hi = d.spot * 1.06;
   const win = data.filter((r) => r.strike >= lo && r.strike <= hi);
   const shown = win.length > 4 ? win : data;
@@ -223,22 +246,26 @@ function DensityChart({ rows, d }: { rows: GexRow[]; d: Derived }) {
   ) : null;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 230 }}>
       <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
       {shown.map((r) => {
         const cx = x(r.strike);
         return (
           <g key={r.strike}>
-            <rect x={cx - barW} y={y0 - bar(putAbs(r))} width={barW} height={bar(putAbs(r))} fill={rgba(HOME_THEME.red, 0.7)} />
-            <rect x={cx} y={y0 - bar(callAbs(r))} width={barW} height={bar(callAbs(r))} fill={rgba(HOME_THEME.cyan, 0.7)} />
+            <rect x={cx - barW} y={y0 - bar(putAbs(r))} width={barW} height={bar(putAbs(r))} fill={rgba(SOFT_RED, 0.75)} />
+            <rect x={cx} y={y0 - bar(callAbs(r))} width={barW} height={bar(callAbs(r))} fill={rgba(LIGHT_BLUE, 0.75)} />
           </g>
         );
       })}
-      {/* spot */}
       <line x1={x(d.spot)} x2={x(d.spot)} y1={padT} y2={y0} stroke={HOME_THEME.text} strokeWidth={1.25} strokeDasharray="2 3" opacity={0.7} />
-      {wallLine(d.putWall, HOME_THEME.red, "Put wall")}
-      {wallLine(d.callWall, HOME_THEME.cyan, "Call wall")}
-      {/* x ticks */}
+      {wallLine(d.putWall, SOFT_RED, "Put wall")}
+      {wallLine(d.callWall, LIGHT_BLUE, "Call wall")}
+      {d.maxPain > xlo && d.maxPain < xhi && (
+        <g>
+          <line x1={x(d.maxPain)} x2={x(d.maxPain)} y1={padT} y2={y0} stroke={HOME_THEME.orange} strokeWidth={1.5} strokeDasharray="5 3" opacity={0.9} />
+          <text x={x(d.maxPain)} y={y0 - 4} fill={HOME_THEME.orange} fontSize={10} fontWeight={800} textAnchor="middle">Max pain {fmt0(d.maxPain)}</text>
+        </g>
+      )}
       {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
         <text key={i} x={x(k)} y={y0 + 16} fill={rgba(HOME_THEME.text, 0.5)} fontSize={10} textAnchor="middle">{fmt0(k)}</text>
       ))}
@@ -279,40 +306,37 @@ export default function Gex2Page() {
 
   return (
     <PageShell>
-      <Card
-        accent="cyan"
+      <BudgetCard
         title={`${snap?.symbol ?? "SPX"} · Probability + Gamma`}
         subtitle={d ? `${snap?.expiry ?? ""} expiry · spot ${fmt0(d.spot)} · as of ${asOf}` : "loading live snapshot…"}
-        style={{ position: "relative" }}
+        right={<button style={refreshStyle} onClick={trigger}>{label}</button>}
       >
-        <button style={{ ...refreshStyle, position: "absolute", top: 20, right: 20 }} onClick={trigger}>
-          {label}
-        </button>
-        {err && <div style={{ fontSize: 12, color: HOME_THEME.red }}>Feed error: {err}</div>}
+        {err && <div style={{ fontSize: 12, color: SOFT_RED }}>Feed error: {err}</div>}
         {!d && !err && <Empty note="waiting on /proxy/gex…" />}
         {d && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            <Metric label="Expected move" value={`±${fmt0(d.sigma)}`} sub={`±${fmt2(d.emPct)}% · ${fmt0(d.lo)}–${fmt0(d.hi)}`} accent={HOME_THEME.cyan} />
-            <Metric label="Max pain" value={fmt0(d.maxPain)} sub="OI-weighted pin" accent={HOME_THEME.purple} />
-            <Metric label="Gamma flip" value={d.flip ? fmt0(d.flip) : "—"} sub={d.flip && d.spot > d.flip ? "spot above → vol suppressed" : "spot below → vol amplified"} accent={HOME_THEME.orange} />
-            <Metric label="Put / Call γ" value={fmt2(d.pcGamma)} sub={`${d.balanceLabel.toLowerCase()} · gamma$`} accent={HOME_THEME.green} />
+            <Metric label="Expected move" value={`±${fmt0(d.sigma)}`} sub={`±${fmt2(d.emPct)}% · ${fmt0(d.lo)}–${fmt0(d.hi)}`} valueColor={LIGHT_BLUE} />
+            <Metric label="Max pain" value={fmt0(d.maxPain)} sub="OI-weighted pin" valueColor={HOME_THEME.orange} />
+            <Metric label="Gamma flip" value={d.flip ? fmt0(d.flip) : "—"} sub={d.flip && d.spot > d.flip ? "spot above → vol suppressed" : "spot below → vol amplified"} />
+            <Metric label="Put / Call γ" value={fmt2(d.pcGamma)} sub={`${d.balanceLabel.toLowerCase()} · gamma$`} valueColor={d.pcGamma > 1.2 ? SOFT_RED : d.pcGamma < 0.7 ? LIGHT_BLUE : HOME_THEME.green} />
           </div>
         )}
-      </Card>
+      </BudgetCard>
 
-      <Card accent="cyan" title="Options → probability" subtitle={d ? `implied distribution from ATM IV ${fmt2(d.atmIV * 100)}%` : ""}>
+      <BudgetCard title="Options → probability" subtitle={d ? `implied distribution from ATM IV ${fmt2(d.atmIV * 100)}%` : ""}>
         {d ? <DistributionChart d={d} /> : <Empty note="—" />}
-      </Card>
+      </BudgetCard>
 
-      <Card accent="purple" title="Options → gamma density" subtitle={d ? `Density ${d.balanceLabel} (P/C ${fmt2(d.pcGamma)}) — ${d.balanceNote}` : ""}>
+      <BudgetCard title="Options → gamma density" subtitle={d ? `Density ${d.balanceLabel} (P/C ${fmt2(d.pcGamma)}) — ${d.balanceNote}` : ""}>
         {d ? <DensityChart rows={rows} d={d} /> : <Empty note="—" />}
         {d && (
           <div style={{ display: "flex", gap: 18, marginTop: 12, fontSize: 11, color: rgba(HOME_THEME.text, 0.7) }}>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(HOME_THEME.cyan, 0.7), borderRadius: 2, marginRight: 6 }} />calls</span>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(HOME_THEME.red, 0.7), borderRadius: 2, marginRight: 6 }} />puts</span>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(LIGHT_BLUE, 0.75), borderRadius: 2, marginRight: 6 }} />calls</span>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(SOFT_RED, 0.75), borderRadius: 2, marginRight: 6 }} />puts</span>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(HOME_THEME.orange, 0.9), borderRadius: 2, marginRight: 6 }} />max pain</span>
           </div>
         )}
-      </Card>
+      </BudgetCard>
     </PageShell>
   );
 }
